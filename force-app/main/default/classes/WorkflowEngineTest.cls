@@ -702,4 +702,82 @@ public class WorkflowEngineTest {
         System.assertEquals('Completed', completedInst.Status__c);
         System.assertEquals('"Approved"', completedInst.Output__c);
     }
+
+    public class ParallelWorkflow implements WorkflowDefinition {
+        public String getInitialStep() {
+            return 'WorkflowEngineTest.SplitStep';
+        }
+        public String getNextStep(String currentStepName, StepResult stepResult) {
+            if (currentStepName == 'WorkflowEngineTest.SplitStep') {
+                return 'WorkflowEngineTest.JoinStep';
+            }
+            return null;
+        }
+    }
+
+    public class SplitStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            return StepResult.split(new List<String>{
+                'WorkflowEngineTest.ParallelStep1',
+                'WorkflowEngineTest.ParallelStep2'
+            }, 'BranchInput');
+        }
+    }
+
+    public class ParallelStep1 implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            String input = (String)JSON.deserialize(ctx.inputJson, String.class);
+            return StepResult.complete(null, input + '_P1Done');
+        }
+    }
+
+    public class ParallelStep2 implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            String input = (String)JSON.deserialize(ctx.inputJson, String.class);
+            return StepResult.complete(null, input + '_P2Done');
+        }
+    }
+
+    public class JoinStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            Map<String, Object> inputMap = (Map<String, Object>)JSON.deserializeUntyped(ctx.inputJson);
+            String out1 = (String)inputMap.get('WorkflowEngineTest.ParallelStep1');
+            String out2 = (String)inputMap.get('WorkflowEngineTest.ParallelStep2');
+            return StepResult.complete(null, out1 + '+' + out2);
+        }
+    }
+
+    @isTest
+    static void testParallelExecution() {
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.ParallelWorkflow', 'ParallelKey', null);
+        
+        // Run initial SplitStep
+        new WorkflowOrchestrator(instanceId).execute(null);
+
+        Workflow_Instance__c inst = [
+            SELECT Status__c, Current_Step__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :instanceId
+        ];
+        System.assertEquals('Running', inst.Status__c);
+        System.assertEquals('WorkflowEngineTest.ParallelStep1,WorkflowEngineTest.ParallelStep2', inst.Current_Step__c);
+
+        // Run ParallelStep1 manually
+        new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.ParallelStep1').execute(null);
+
+        // Verify workflow is still running and waiting for ParallelStep2
+        inst = [SELECT Status__c, Current_Step__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Running', inst.Status__c);
+
+        // Run ParallelStep2 manually
+        new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.ParallelStep2').execute(null);
+
+        // Run JoinStep manually
+        new WorkflowOrchestrator(instanceId).execute(null);
+
+        // Verify JoinStep has executed and completed the workflow
+        inst = [SELECT Status__c, Output__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Completed', inst.Status__c);
+        System.assertEquals('"BranchInput_P1Done+BranchInput_P2Done"', inst.Output__c);
+    }
 }

@@ -1,8 +1,14 @@
 public class WorkflowOrchestrator implements Queueable, Database.AllowsCallouts {
     private Id instanceId;
+    private String stepName;
 
     public WorkflowOrchestrator(Id instanceId) {
         this.instanceId = instanceId;
+    }
+
+    public WorkflowOrchestrator(Id instanceId, String stepName) {
+        this.instanceId = instanceId;
+        this.stepName = stepName;
     }
 
     public void execute(QueueableContext ctx) {
@@ -12,6 +18,6 @@ public class WorkflowOrchestrator implements Queueable, Database.AllowsCallouts 
         }
         
         // Execute step
-        WorkflowEngine.runStep(this.instanceId);
+        WorkflowEngine.runStep(this.instanceId, this.stepName);
     }
 }

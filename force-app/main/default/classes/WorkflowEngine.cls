@@ -76,6 +76,10 @@ public with sharing class WorkflowEngine {
      * Executes the active step for a workflow instance. Designed to run in a Queueable context.
      */
     public static void runStep(Id instanceId) {
+        runStep(instanceId, null);
+    }
+
+    public static void runStep(Id instanceId, String stepName) {
         // 1. Lock and fetch instance state
         List<Workflow_Instance__c> instances = [
             SELECT Id, Workflow_Name__c, Status__c, Current_Step__c, Input__c, Correlation_Key__c, Parent_Instance__c 
@@ -109,12 +113,15 @@ public with sharing class WorkflowEngine {
             update instance;
         }
 
+        // Determine step name to execute
+        String activeStepName = String.isNotBlank(stepName) ? stepName : instance.Current_Step__c;
+
         // 3. Retrieve or create Step Execution log
         List<Workflow_Step_Execution__c> stepExecs = [
             SELECT Id, Status__c, Input__c, Output__c, Retry_Count__c
             FROM Workflow_Step_Execution__c
             WHERE Workflow_Instance__c = :instanceId
-            AND Step_Name__c = :instance.Current_Step__c
+            AND Step_Name__c = :activeStepName
             ORDER BY CreatedDate DESC
             LIMIT 1
         ];
@@ -123,7 +130,7 @@ public with sharing class WorkflowEngine {
         if (stepExecs.isEmpty()) {
             stepExec = new Workflow_Step_Execution__c();
             stepExec.Workflow_Instance__c = instanceId;
-            stepExec.Step_Name__c = instance.Current_Step__c;
+            stepExec.Step_Name__c = activeStepName;
             stepExec.Status__c = 'Running';
             stepExec.Retry_Count__c = 0;
             
@@ -140,7 +147,7 @@ public with sharing class WorkflowEngine {
         } else {
             stepExec = stepExecs[0];
             if (stepExec.Status__c == 'Completed') {
-                throw new WorkflowException('Current step ' + instance.Current_Step__c + ' is already completed.');
+                throw new WorkflowException('Current step ' + activeStepName + ' is already completed.');
             }
             stepExec.Status__c = 'Running';
             update stepExec;
@@ -148,31 +155,45 @@ public with sharing class WorkflowEngine {
 
         // 4. Resolve previous step output & step state (for yielded/resumed executions)
         String prevOutput = null;
-        List<Workflow_Step_Execution__c> lastCompleted = [
-            SELECT Output__c FROM Workflow_Step_Execution__c
-            WHERE Workflow_Instance__c = :instanceId
-            AND Status__c = 'Completed'
-            ORDER BY CreatedDate DESC
-            LIMIT 1
-        ];
+        List<Workflow_Step_Execution__c> lastCompleted;
+        if (String.isNotBlank(stepName) && String.isNotBlank(instance.Current_Step__c) && instance.Current_Step__c.contains(',')) {
+            List<String> activeParallelSteps = instance.Current_Step__c.split(',');
+            lastCompleted = [
+                SELECT Output__c FROM Workflow_Step_Execution__c
+                WHERE Workflow_Instance__c = :instanceId
+                AND Status__c = 'Completed'
+                AND Step_Name__c NOT IN :activeParallelSteps
+                ORDER BY CreatedDate DESC
+                LIMIT 1
+            ];
+        } else {
+            lastCompleted = [
+                SELECT Output__c FROM Workflow_Step_Execution__c
+                WHERE Workflow_Instance__c = :instanceId
+                AND Status__c = 'Completed'
+                AND Step_Name__c != :activeStepName
+                ORDER BY CreatedDate DESC
+                LIMIT 1
+            ];
+        }
         if (!lastCompleted.isEmpty()) {
             prevOutput = lastCompleted[0].Output__c;
         }
 
         // 5. Invoke Step Execution
-        Type stepType = Type.forName(instance.Current_Step__c);
+        Type stepType = Type.forName(activeStepName);
         if (stepType == null) {
-            throw new WorkflowException('Could not resolve class for step: ' + instance.Current_Step__c);
+            throw new WorkflowException('Could not resolve class for step: ' + activeStepName);
         }
         WorkflowStep stepInstance = (WorkflowStep)stepType.newInstance();
         
         StepContext context = new StepContext(
             instanceId,
             instance.Workflow_Name__c,
-            instance.Current_Step__c,
-            instance.Input__c,
+            activeStepName,
+            stepExec.Input__c,
             prevOutput,
-            stepExec.Output__c // If yielded or resumed, output field holds the intermediate state
+            stepExec.Output__c
         );
 
         // Determine step timeout if configured
@@ -183,10 +204,10 @@ public with sharing class WorkflowEngine {
 
         // Schedule timeout watch job if configured
         if (timeoutSeconds != null && timeoutSeconds > 0) {
-            WorkflowTimeoutJob job = new WorkflowTimeoutJob(instanceId, instance.Current_Step__c);
+            WorkflowTimeoutJob job = new WorkflowTimeoutJob(instanceId, activeStepName);
             Datetime runTime = Datetime.now().addSeconds(timeoutSeconds);
             String cronStr = runTime.second() + ' ' + runTime.minute() + ' ' + runTime.hour() + ' ' + runTime.day() + ' ' + runTime.month() + ' ? ' + runTime.year();
-            String cleanStepName = instance.Current_Step__c.replaceAll('[^a-zA-Z0-9]', '_');
+            String cleanStepName = activeStepName.replaceAll('[^a-zA-Z0-9]', '_');
             String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
             System.schedule(jobName, cronStr, job);
         }
@@ -197,7 +218,7 @@ public with sharing class WorkflowEngine {
         } finally {
             // Cancel timeout watch job if it hasn't run yet
             if (timeoutSeconds != null && timeoutSeconds > 0) {
-                cancelTimeoutJob(instanceId, instance.Current_Step__c);
+                cancelTimeoutJob(instanceId, activeStepName);
             }
         }
 
@@ -220,26 +241,110 @@ public with sharing class WorkflowEngine {
             stepExec.Output__c = result.outputJson;
             update stepExec;
 
-            // Determine next step
-            Type wflowType = Type.forName(instance.Workflow_Name__c);
-            WorkflowDefinition def = (WorkflowDefinition)wflowType.newInstance();
-            String nextStepName = def.getNextStep(instance.Current_Step__c, result);
+            Boolean isParallel = String.isNotBlank(instance.Current_Step__c) && instance.Current_Step__c.contains(',');
+            if (isParallel) {
+                List<String> activeParallelSteps = instance.Current_Step__c.split(',');
+                List<Workflow_Step_Execution__c> parallelExecs = [
+                    SELECT Step_Name__c, Status__c, Output__c 
+                    FROM Workflow_Step_Execution__c 
+                    WHERE Workflow_Instance__c = :instance.Id 
+                    AND Step_Name__c IN :activeParallelSteps
+                ];
+                
+                Boolean allDone = true;
+                for (String ps : activeParallelSteps) {
+                    Boolean found = false;
+                    for (Workflow_Step_Execution__c pe : parallelExecs) {
+                        if (pe.Step_Name__c == ps && pe.Status__c == 'Completed') {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        allDone = false;
+                        break;
+                    }
+                }
 
-            if (String.isBlank(nextStepName)) {
-                // Workflow is finished
-                instance.Status__c = 'Completed';
-                instance.Output__c = result.outputJson;
-                instance.Current_Step__c = null;
-                update instance;
+                if (allDone) {
+                    // All parallel steps completed. Proceed to Join step.
+                    List<Workflow_Step_Execution__c> spawningSteps = [
+                        SELECT Step_Name__c, Output__c 
+                        FROM Workflow_Step_Execution__c
+                        WHERE Workflow_Instance__c = :instance.Id
+                        AND Status__c = 'Completed'
+                        AND Step_Name__c NOT IN :activeParallelSteps
+                        ORDER BY CreatedDate DESC
+                        LIMIT 1
+                    ];
 
-                // Notify parent completion if this is a child workflow
-                notifyParentCompletion(instance);
+                    Type wflowType = Type.forName(instance.Workflow_Name__c);
+                    WorkflowDefinition def = (WorkflowDefinition)wflowType.newInstance();
+                    
+                    String spawningStepName = !spawningSteps.isEmpty() ? spawningSteps[0].Step_Name__c : '';
+                    StepResult mockResult = StepResult.complete(null, !spawningSteps.isEmpty() ? spawningSteps[0].Output__c : null);
+                    String nextStepName = def.getNextStep(spawningStepName, mockResult);
+
+                    Map<String, Object> joinInput = new Map<String, Object>();
+                    for (Workflow_Step_Execution__c pe : parallelExecs) {
+                        Object outputVal = null;
+                        if (String.isNotBlank(pe.Output__c)) {
+                            try {
+                                outputVal = JSON.deserializeUntyped(pe.Output__c);
+                            } catch (Exception ex) {
+                                outputVal = pe.Output__c;
+                            }
+                        }
+                        joinInput.put(pe.Step_Name__c, outputVal);
+                    }
+                    String joinInputJson = JSON.serialize(joinInput);
+
+                    if (String.isNotBlank(nextStepName)) {
+                        Workflow_Step_Execution__c joinStepExec = new Workflow_Step_Execution__c();
+                        joinStepExec.Workflow_Instance__c = instance.Id;
+                        joinStepExec.Step_Name__c = nextStepName;
+                        joinStepExec.Status__c = 'Pending';
+                        joinStepExec.Input__c = joinInputJson;
+                        joinStepExec.Retry_Count__c = 0;
+                        insert joinStepExec;
+
+                        instance.Current_Step__c = nextStepName;
+                        update instance;
+
+                        if (!Test.isRunningTest()) {
+                            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+                        }
+                    } else {
+                        instance.Status__c = 'Completed';
+                        instance.Output__c = joinInputJson;
+                        instance.Current_Step__c = null;
+                        update instance;
+
+                        notifyParentCompletion(instance);
+                    }
+                }
             } else {
-                // Advance to next step
-                instance.Current_Step__c = nextStepName;
-                update instance;
-                if (!Test.isRunningTest()) {
-                    System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+                // Determine next step
+                Type wflowType = Type.forName(instance.Workflow_Name__c);
+                WorkflowDefinition def = (WorkflowDefinition)wflowType.newInstance();
+                String nextStepName = def.getNextStep(instance.Current_Step__c, result);
+
+                if (String.isBlank(nextStepName)) {
+                    // Workflow is finished
+                    instance.Status__c = 'Completed';
+                    instance.Output__c = result.outputJson;
+                    instance.Current_Step__c = null;
+                    update instance;
+
+                    // Notify parent completion if this is a child workflow
+                    notifyParentCompletion(instance);
+                } else {
+                    // Advance to next step
+                    instance.Current_Step__c = nextStepName;
+                    update instance;
+                    if (!Test.isRunningTest()) {
+                        System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+                    }
                 }
             }
             
@@ -294,6 +399,34 @@ public with sharing class WorkflowEngine {
 
             instance.Status__c = 'Suspended';
             update instance;
+
+        } else if (result.action == StepResult.ActionType.SPLIT) {
+            stepExec.Status__c = 'Completed';
+            stepExec.Output__c = result.parallelInputJson != null ? result.parallelInputJson : result.outputJson;
+            update stepExec;
+
+            String parallelStepsStr = String.join(result.parallelStepNames, ',');
+            instance.Current_Step__c = parallelStepsStr;
+            instance.Status__c = 'Running';
+            update instance;
+
+            List<Workflow_Step_Execution__c> parallelExecs = new List<Workflow_Step_Execution__c>();
+            for (String ps : result.parallelStepNames) {
+                Workflow_Step_Execution__c pe = new Workflow_Step_Execution__c();
+                pe.Workflow_Instance__c = instance.Id;
+                pe.Step_Name__c = ps;
+                pe.Status__c = 'Pending';
+                pe.Input__c = result.parallelInputJson != null ? result.parallelInputJson : stepExec.Output__c;
+                pe.Retry_Count__c = 0;
+                parallelExecs.add(pe);
+            }
+            insert parallelExecs;
+
+            for (String ps : result.parallelStepNames) {
+                if (!Test.isRunningTest()) {
+                    System.enqueueJob(new WorkflowOrchestrator(instance.Id, ps));
+                }
+            }
 
         } else if (result.action == StepResult.ActionType.RETRY) {
             // Step requested retry

@@ -1,5 +1,5 @@
 public class StepResult {
-    public enum ActionType { COMPLETE, SUSPEND, YIELD, RETRY, SLEEP, START_CHILD, WAIT_FOR_APPROVAL }
+    public enum ActionType { COMPLETE, SUSPEND, YIELD, RETRY, SLEEP, START_CHILD, WAIT_FOR_APPROVAL, SPLIT }
     
     public ActionType action { get; set; }
     public String nextStepName { get; set; }
@@ -13,6 +13,8 @@ public class StepResult {
     public String childInputJson { get; set; }
     public String approvalKey { get; set; }
     public String approvalRole { get; set; }
+    public List<String> parallelStepNames { get; set; }
+    public String parallelInputJson { get; set; }
 
     public static StepResult complete(String nextStepName, Object output) {
         StepResult r = new StepResult();
@@ -79,6 +81,21 @@ public class StepResult {
         r.action = ActionType.WAIT_FOR_APPROVAL;
         r.approvalKey = key;
         r.approvalRole = role;
+        return r;
+    }
+
+    public static StepResult split(List<String> stepNames) {
+        StepResult r = new StepResult();
+        r.action = ActionType.SPLIT;
+        r.parallelStepNames = stepNames;
+        return r;
+    }
+
+    public static StepResult split(List<String> stepNames, Object input) {
+        StepResult r = new StepResult();
+        r.action = ActionType.SPLIT;
+        r.parallelStepNames = stepNames;
+        r.parallelInputJson = (input != null) ? JSON.serialize(input) : null;
         return r;
     }
 }
