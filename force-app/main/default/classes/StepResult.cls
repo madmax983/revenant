@@ -95,7 +95,19 @@ public class StepResult {
         StepResult r = new StepResult();
         r.action = ActionType.SPLIT;
         r.parallelStepNames = stepNames;
-        r.parallelInputJson = (input != null) ? JSON.serialize(input) : null;
+        if (input == null) {
+            r.parallelInputJson = null;
+        } else if (input instanceof String) {
+            String strInput = (String)input;
+            try {
+                JSON.deserializeUntyped(strInput);
+                r.parallelInputJson = strInput;
+            } catch (Exception e) {
+                r.parallelInputJson = JSON.serialize(strInput);
+            }
+        } else {
+            r.parallelInputJson = JSON.serialize(input);
+        }
         return r;
     }
 }

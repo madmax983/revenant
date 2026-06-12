@@ -58,7 +58,7 @@ public with sharing class WorkflowEngine {
                 SELECT Id, Output__c FROM Workflow_Step_Execution__c
                 WHERE Workflow_Instance__c = :instance.Id
                 AND Step_Name__c = :instance.Current_Step__c
-                ORDER BY CreatedDate DESC
+                ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
             if (!activeSteps.isEmpty()) {
@@ -122,7 +122,7 @@ public with sharing class WorkflowEngine {
             FROM Workflow_Step_Execution__c
             WHERE Workflow_Instance__c = :instanceId
             AND Step_Name__c = :activeStepName
-            ORDER BY CreatedDate DESC
+            ORDER BY CreatedDate DESC, Id DESC
             LIMIT 1
         ];
 
@@ -139,7 +139,7 @@ public with sharing class WorkflowEngine {
                 SELECT Output__c FROM Workflow_Step_Execution__c
                 WHERE Workflow_Instance__c = :instanceId
                 AND Status__c = 'Completed'
-                ORDER BY CreatedDate DESC
+                ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
             stepExec.Input__c = !completedSteps.isEmpty() ? completedSteps[0].Output__c : instance.Input__c;
@@ -163,7 +163,7 @@ public with sharing class WorkflowEngine {
                 WHERE Workflow_Instance__c = :instanceId
                 AND Status__c = 'Completed'
                 AND Step_Name__c NOT IN :activeParallelSteps
-                ORDER BY CreatedDate DESC
+                ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
         } else {
@@ -172,7 +172,7 @@ public with sharing class WorkflowEngine {
                 WHERE Workflow_Instance__c = :instanceId
                 AND Status__c = 'Completed'
                 AND Step_Name__c != :activeStepName
-                ORDER BY CreatedDate DESC
+                ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
         }
@@ -193,7 +193,8 @@ public with sharing class WorkflowEngine {
             activeStepName,
             stepExec.Input__c,
             prevOutput,
-            stepExec.Output__c
+            stepExec.Output__c,
+            instance.Input__c
         );
 
         // Determine step timeout if configured
@@ -274,7 +275,7 @@ public with sharing class WorkflowEngine {
                         WHERE Workflow_Instance__c = :instance.Id
                         AND Status__c = 'Completed'
                         AND Step_Name__c NOT IN :activeParallelSteps
-                        ORDER BY CreatedDate DESC
+                        ORDER BY CreatedDate DESC, Id DESC
                         LIMIT 1
                     ];
 
@@ -489,7 +490,7 @@ public with sharing class WorkflowEngine {
                 SELECT Id FROM Workflow_Step_Execution__c
                 WHERE Workflow_Instance__c = :instanceId
                 AND Step_Name__c = :instance.Current_Step__c
-                ORDER BY CreatedDate DESC
+                ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
             if (!stepExecs.isEmpty()) {
@@ -653,7 +654,7 @@ public with sharing class WorkflowEngine {
                 FROM Workflow_Step_Execution__c
                 WHERE Workflow_Instance__c = :instanceId
                 AND Step_Name__c = :instance.Current_Step__c
-                ORDER BY CreatedDate DESC
+                ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
             if (!stepExecs.isEmpty()) {

@@ -15,7 +15,7 @@ public class WorkflowTimeoutJob implements Schedulable {
             WHERE Workflow_Instance__c = :this.instanceId 
             AND Step_Name__c = :this.stepName 
             AND Status__c = 'Running'
-            ORDER BY CreatedDate DESC
+            ORDER BY CreatedDate DESC, Id DESC
             LIMIT 1
         ];
 

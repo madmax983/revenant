@@ -6,3 +6,6 @@
 # System / IDE files
 .DS_Store
 Thumbs.db
+
+# Test results
+test-results/
