@@ -6,6 +6,7 @@ public class StepResult {
     public String outputJson { get; set; }
     public String stepStateJson { get; set; }
     public Integer retryAfterSeconds { get; set; }
+    public RetryPolicy retryPolicy { get; set; }
 
     public static StepResult complete(String nextStepName, Object output) {
         StepResult r = new StepResult();
@@ -28,10 +29,18 @@ public class StepResult {
         return r;
     }
 
+    public static StepResult retry(RetryPolicy policy) {
+        StepResult r = new StepResult();
+        r.action = ActionType.RETRY;
+        r.retryPolicy = policy;
+        return r;
+    }
+
     public static StepResult retry(Integer retryAfterSeconds) {
         StepResult r = new StepResult();
         r.action = ActionType.RETRY;
         r.retryAfterSeconds = retryAfterSeconds;
+        r.retryPolicy = new RetryPolicy(retryAfterSeconds, (Double)1.0, 5); // Backwards compatible fixed interval retry
         return r;
     }
 }

@@ -152,6 +152,23 @@ public class WorkflowEngineTest {
         }
     }
 
+    public class CustomRetryWorkflow implements WorkflowDefinition {
+        public String getInitialStep() {
+            return 'WorkflowEngineTest.CustomRetryStep';
+        }
+        public String getNextStep(String currentStepName, StepResult stepResult) {
+            return null;
+        }
+    }
+
+    public class CustomRetryStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            // Initial = 2s, backoff coefficient = 3.0, max attempts = 3
+            RetryPolicy policy = new RetryPolicy(2, (Double)3.0, 3);
+            return StepResult.retry(policy);
+        }
+    }
+
     // ==========================================
     // TEST METHODS
     // ==========================================
@@ -282,6 +299,35 @@ public class WorkflowEngineTest {
 
         sig = [SELECT Status__c FROM Workflow_Signal__c WHERE Id = :sig.Id];
         System.assertEquals('Consumed', sig.Status__c);
+    }
+
+    @isTest
+    static void testCustomRetryPolicy() {
+        Test.startTest();
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.CustomRetryWorkflow', 'RetryKey', null);
+        Test.stopTest(); // Runs CustomRetryStep once synchronously, which fails and triggers first retry (attempts=1, delay=2s)
+
+        Workflow_Step_Execution__c step = [SELECT Status__c, Retry_Count__c FROM Workflow_Step_Execution__c WHERE Workflow_Instance__c = :instanceId LIMIT 1];
+        System.assertEquals('Retrying', step.Status__c);
+        System.assertEquals(1, step.Retry_Count__c);
+
+        // Run second attempt manually
+        WorkflowEngine.runStep(instanceId); // CustomRetryStep runs, returns retry, triggers second retry (attempts=2, delay=6s)
+        
+        step = [SELECT Status__c, Retry_Count__c FROM Workflow_Step_Execution__c WHERE Workflow_Instance__c = :instanceId LIMIT 1];
+        System.assertEquals('Retrying', step.Status__c);
+        System.assertEquals(2, step.Retry_Count__c);
+
+        // Run third attempt manually (should exceed maximum attempts of 3)
+        WorkflowEngine.runStep(instanceId); // CustomRetryStep runs, returns retry, attempts=3 >= maximumAttempts(3) -> transitions to Failed
+
+        step = [SELECT Status__c, Retry_Count__c FROM Workflow_Step_Execution__c WHERE Workflow_Instance__c = :instanceId LIMIT 1];
+        System.assertEquals('Failed', step.Status__c);
+        System.assertEquals(3, step.Retry_Count__c);
+
+        Workflow_Instance__c inst = [SELECT Status__c, Error_Message__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Failed', inst.Status__c);
+        System.assert(inst.Error_Message__c.contains('failed after max retries'));
     }
 
     @isTest

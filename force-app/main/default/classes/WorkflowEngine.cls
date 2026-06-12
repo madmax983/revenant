@@ -227,9 +227,14 @@ public with sharing class WorkflowEngine {
             // Step requested retry
             stepExec.Retry_Count__c += 1;
             
-            if (stepExec.Retry_Count__c >= 5) { // Hard limit of 5 retries for safety
+            // Get or default retry policy
+            RetryPolicy policy = (result.retryPolicy != null) 
+                ? result.retryPolicy 
+                : new RetryPolicy();
+            
+            if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
                 stepExec.Status__c = 'Failed';
-                stepExec.Error_Details__c = 'Max retries (5) exceeded.';
+                stepExec.Error_Details__c = 'Max retries (' + policy.maximumAttempts + ') exceeded.';
                 update stepExec;
 
                 instance.Status__c = 'Failed';
@@ -239,10 +244,13 @@ public with sharing class WorkflowEngine {
                 stepExec.Status__c = 'Retrying';
                 update stepExec;
                 
-                // Schedule retry execution
-                Integer delay = (result.retryAfterSeconds != null && result.retryAfterSeconds > 0) 
-                    ? result.retryAfterSeconds 
-                    : 5;
+                // Calculate exponential backoff
+                // delay = initialInterval * (coefficient ^ (retryCount - 1))
+                Double backoff = Math.pow((Double)policy.backoffCoefficient, (Double)(stepExec.Retry_Count__c - 1));
+                Integer delay = (Integer)(policy.initialIntervalSeconds * backoff);
+                
+                // Cap the backoff delay to 24 hours (86400 seconds) for sanity
+                delay = Math.min(delay, 86400);
                 
                 scheduleRetry(instance.Id, delay);
             }
