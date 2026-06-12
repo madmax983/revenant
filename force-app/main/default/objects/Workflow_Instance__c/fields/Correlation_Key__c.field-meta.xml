@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Correlation_Key__c</fullName>
+    <caseSensitive>false</caseSensitive>
+    <description>External correlation key for workflow idempotency and routing resume signals.</description>
+    <externalId>true</externalId>
+    <label>Correlation Key</label>
+    <length>255</length>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>true</unique>
+</CustomField>

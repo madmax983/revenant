@@ -1,0 +1,8 @@
+# Salesforce DX local files
+.sf/
+.sfdx/
+.localSourceTracking/
+
+# System / IDE files
+.DS_Store
+Thumbs.db

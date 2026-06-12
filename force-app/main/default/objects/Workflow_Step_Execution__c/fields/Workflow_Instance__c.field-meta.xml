@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Workflow_Instance__c</fullName>
+    <description>The parent workflow instance.</description>
+    <externalId>false</externalId>
+    <label>Workflow Instance</label>
+    <referenceTo>Workflow_Instance__c</referenceTo>
+    <relationshipLabel>Workflow Step Executions</relationshipLabel>
+    <relationshipName>Workflow_Step_Executions</relationshipName>
+    <relationshipOrder>0</relationshipOrder>
+    <reparentableMasterDetail>false</reparentableMasterDetail>
+    <trackTrending>false</trackTrending>
+    <type>MasterDetail</type>
+    <writeRequiresMasterRead>false</writeRequiresMasterRead>
+</CustomField>
