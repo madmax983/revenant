@@ -10,7 +10,7 @@ public with sharing class WorkflowDashboardController {
         ];
     }
     
-    @AuraEnabled(cacheable=true)
+    @AuraEnabled
     public static Map<String, Object> getInstanceDetails(Id instanceId) {
         Workflow_Instance__c instance = [
             SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, Input__c, Output__c, Current_Step__c, Error_Message__c, CreatedDate, Parent_Instance__c, Parent_Instance__r.Name
