@@ -5,7 +5,7 @@
       "default": true
     }
   ],
-  "name": "salesforce-durable-workflows",
+  "name": "revenant",
   "namespace": "",
   "sfdxVersion": "2.0",
   "sourceApiVersion": "61.0"
