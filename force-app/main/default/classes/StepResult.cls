@@ -1,5 +1,5 @@
 public class StepResult {
-    public enum ActionType { COMPLETE, SUSPEND, YIELD, RETRY, SLEEP, START_CHILD }
+    public enum ActionType { COMPLETE, SUSPEND, YIELD, RETRY, SLEEP, START_CHILD, WAIT_FOR_APPROVAL }
     
     public ActionType action { get; set; }
     public String nextStepName { get; set; }
@@ -11,6 +11,8 @@ public class StepResult {
     public String childWorkflowName { get; set; }
     public String childCorrelationKey { get; set; }
     public String childInputJson { get; set; }
+    public String approvalKey { get; set; }
+    public String approvalRole { get; set; }
 
     public static StepResult complete(String nextStepName, Object output) {
         StepResult r = new StepResult();
@@ -69,6 +71,14 @@ public class StepResult {
         r.childWorkflowName = childWorkflowName;
         r.childCorrelationKey = correlationKey;
         r.childInputJson = (input != null) ? JSON.serialize(input) : null;
+        return r;
+    }
+
+    public static StepResult waitForApproval(String key, String role) {
+        StepResult r = new StepResult();
+        r.action = ActionType.WAIT_FOR_APPROVAL;
+        r.approvalKey = key;
+        r.approvalRole = role;
         return r;
     }
 }

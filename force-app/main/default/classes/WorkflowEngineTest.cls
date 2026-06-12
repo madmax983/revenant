@@ -128,6 +128,37 @@ public class WorkflowEngineTest {
         }
     }
 
+    public class ApprovalWorkflow implements WorkflowDefinition {
+        public String getInitialStep() {
+            return 'WorkflowEngineTest.ApprovalStep';
+        }
+        public String getNextStep(String currentStepName, StepResult stepResult) {
+            return null;
+        }
+    }
+
+    public class ApprovalStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            List<Workflow_Signal__c> signals = [
+                SELECT Id, Signal_Name__c, Payload__c FROM Workflow_Signal__c
+                WHERE Workflow_Instance__c = :ctx.workflowInstanceId
+                AND Signal_Name__c = 'Approve:ExpenseApproval'
+                AND Status__c = 'Received'
+                LIMIT 1
+            ];
+
+            if (signals.isEmpty()) {
+                return StepResult.waitForApproval('ExpenseApproval', 'Manager');
+            }
+
+            Workflow_Signal__c sig = signals[0];
+            sig.Status__c = 'Consumed';
+            update sig;
+
+            return StepResult.complete(null, 'Approved');
+        }
+    }
+
     public class TimeoutWorkflow implements WorkflowDefinition {
         public String getInitialStep() {
             return 'WorkflowEngineTest.TimeoutStep';
@@ -623,5 +654,52 @@ public class WorkflowEngineTest {
         ];
         System.assertEquals('Failed', timedOutStep.Status__c);
         System.assertEquals('Step execution timed out.', timedOutStep.Error_Details__c);
+    }
+
+    @isTest
+    static void testWorkflowApproval() {
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.ApprovalWorkflow', 'ApprovalKey', null);
+        
+        // Execute initial step. It will return waitForApproval and suspend.
+        new WorkflowOrchestrator(instanceId).execute(null);
+
+        Workflow_Instance__c inst = [
+            SELECT Status__c, Current_Step__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :instanceId
+        ];
+        System.assertEquals('Suspended', inst.Status__c);
+        System.assertEquals('WorkflowEngineTest.ApprovalStep', inst.Current_Step__c);
+
+        Workflow_Step_Execution__c stepExec = [
+            SELECT Status__c, Output__c 
+            FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :instanceId
+            AND Step_Name__c = 'WorkflowEngineTest.ApprovalStep'
+            LIMIT 1
+        ];
+        System.assertEquals('Pending', stepExec.Status__c);
+        System.assert(stepExec.Output__c.contains('"waitingForApproval":true'));
+        System.assert(stepExec.Output__c.contains('"approvalKey":"ExpenseApproval"'));
+        System.assert(stepExec.Output__c.contains('"approvalRole":"Manager"'));
+
+        // Signal the approval
+        Test.startTest();
+        WorkflowEngine.signal('ApprovalKey', 'Approve:ExpenseApproval', '{"approved":true,"comments":"Approved","approver":"test@example.com"}');
+        Test.stopTest();
+
+        // Platform Event delivery wakes up the parent orchestrator synchronously in test
+        Test.getEventBus().deliver();
+
+        // Run orchestrator to consume signal and complete step
+        new WorkflowOrchestrator(instanceId).execute(null);
+
+        Workflow_Instance__c completedInst = [
+            SELECT Status__c, Output__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :instanceId
+        ];
+        System.assertEquals('Completed', completedInst.Status__c);
+        System.assertEquals('"Approved"', completedInst.Output__c);
     }
 }

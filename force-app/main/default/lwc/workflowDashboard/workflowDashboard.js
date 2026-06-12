@@ -7,6 +7,7 @@ import getInstanceDetails from '@salesforce/apex/WorkflowDashboardController.get
 import getDefinitions from '@salesforce/apex/WorkflowDashboardController.getDefinitions';
 import startWorkflow from '@salesforce/apex/WorkflowDashboardController.startWorkflow';
 import retryWorkflowInstance from '@salesforce/apex/WorkflowDashboardController.retryWorkflowInstance';
+import submitApproval from '@salesforce/apex/WorkflowDashboardController.submitApproval';
 
 export default class WorkflowDashboard extends LightningElement {
     @track instances = [];
@@ -20,6 +21,7 @@ export default class WorkflowDashboard extends LightningElement {
     @track steps = [];
     @track childInstances = [];
     @track loadingDetails = false;
+    @track approvalComments = '';
     @track modalOpen = false;
     @track searchTerm = '';
     
@@ -180,12 +182,30 @@ export default class WorkflowDashboard extends LightningElement {
                 this.steps.forEach(s => showDetailsMap.set(s.Id, s.showDetails));
 
                 this.steps = result.steps.map(step => {
+                    let approvalInfo = null;
+                    if (step.Status__c === 'Pending' && step.Output__c) {
+                        try {
+                            const parsed = JSON.parse(step.Output__c);
+                            if (parsed.waitingForApproval) {
+                                approvalInfo = {
+                                    key: parsed.approvalKey,
+                                    role: parsed.approvalRole
+                                };
+                            }
+                        } catch (e) {
+                            // ignore non-json
+                        }
+                    }
+
                     return {
                         ...step,
                         formattedDate: this.formatDateTime(step.CreatedDate),
-                        statusBadgeClass: this.getStatusBadgeClass(step.Status__c),
-                        markerClass: this.getTimelineMarkerClass(step.Status__c),
-                        showDetails: showDetailsMap.get(step.Id) || false,
+                        statusBadgeClass: approvalInfo ? 'badge badge-orange pulse-glow' : this.getStatusBadgeClass(step.Status__c),
+                        markerClass: approvalInfo ? 'timeline-marker bg-yellow pulse-glow' : this.getTimelineMarkerClass(step.Status__c),
+                        showDetails: showDetailsMap.get(step.Id) || (approvalInfo ? true : false),
+                        isWaitingForApproval: !!approvalInfo,
+                        approvalKey: approvalInfo ? approvalInfo.key : null,
+                        approvalRole: approvalInfo ? approvalInfo.role : null,
                         Input__c: this.formatJson(step.Input__c),
                         Output__c: this.formatJson(step.Output__c)
                     };
@@ -279,6 +299,35 @@ export default class WorkflowDashboard extends LightningElement {
             })
             .catch(error => {
                 this.showToast('Error', 'Failed to retry workflow: ' + error.body.message, 'error');
+            })
+            .finally(() => {
+                this.loadingDetails = false;
+            });
+    }
+
+    handleCommentsChange(event) {
+        this.approvalComments = event.target.value;
+    }
+
+    handleApprovalSubmit(event) {
+        const approvalKey = event.target.dataset.key;
+        const approved = event.target.dataset.approved === 'true';
+        
+        this.loadingDetails = true;
+        submitApproval({
+            instanceId: this.selectedInstanceId,
+            approvalKey: approvalKey,
+            approved: approved,
+            comments: this.approvalComments
+        })
+            .then(() => {
+                this.showToast('Success', `Approval decision (${approved ? 'Approve' : 'Reject'}) submitted successfully.`, 'success');
+                this.approvalComments = '';
+                refreshApex(this.wiredInstancesResult);
+                this.loadDetails(true);
+            })
+            .catch(error => {
+                this.showToast('Error', 'Failed to submit approval: ' + error.body.message, 'error');
             })
             .finally(() => {
                 this.loadingDetails = false;

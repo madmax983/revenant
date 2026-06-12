@@ -137,4 +137,34 @@ public class WorkflowDashboardControllerTest {
         System.assertEquals(0, updatedStep.Retry_Count__c);
         System.assertEquals(null, updatedStep.Error_Details__c);
     }
+
+    @isTest
+    static void testSubmitApproval() {
+        // Create active instance
+        Workflow_Instance__c inst = new Workflow_Instance__c(
+            Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+            Status__c = 'Suspended',
+            Correlation_Key__c = 'ApprovalKey',
+            Input__c = '"InputData"'
+        );
+        insert inst;
+
+        Test.startTest();
+        WorkflowDashboardController.submitApproval(inst.Id, 'ExpenseApproval', true, 'Looks good');
+        Test.stopTest();
+
+        // Deliver Platform Event
+        Test.getEventBus().deliver();
+
+        // Verify a signal is received in database
+        List<Workflow_Signal__c> signals = [
+            SELECT Id, Signal_Name__c, Payload__c, Status__c 
+            FROM Workflow_Signal__c 
+            WHERE Workflow_Instance__c = :inst.Id
+        ];
+        System.assertEquals(1, signals.size());
+        System.assertEquals('Approve:ExpenseApproval', signals[0].Signal_Name__c);
+        System.assert(signals[0].Payload__c.contains('"approved":true'));
+        System.assert(signals[0].Payload__c.contains('"comments":"Looks good"'));
+    }
 }

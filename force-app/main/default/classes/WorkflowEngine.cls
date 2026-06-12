@@ -282,6 +282,19 @@ public with sharing class WorkflowEngine {
 
             startChildWorkflow(instance.Id, result.childWorkflowName, result.childCorrelationKey, result.childInputJson);
 
+        } else if (result.action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
+            stepExec.Status__c = 'Pending';
+            Map<String, Object> state = new Map<String, Object>{
+                'waitingForApproval' => true,
+                'approvalKey' => result.approvalKey,
+                'approvalRole' => result.approvalRole
+            };
+            stepExec.Output__c = JSON.serialize(state);
+            update stepExec;
+
+            instance.Status__c = 'Suspended';
+            update instance;
+
         } else if (result.action == StepResult.ActionType.RETRY) {
             // Step requested retry
             stepExec.Retry_Count__c += 1;
@@ -426,19 +439,39 @@ public with sharing class WorkflowEngine {
     }
 
     /**
-     * Sends an external signal to a workflow instance by correlation key.
+     * Sends an external signal to a workflow instance by correlation key or instance ID.
      */
-    public static void signal(String correlationKey, String signalName, String payload) {
-        List<Workflow_Instance__c> instances = [
-            SELECT Id, Status__c FROM Workflow_Instance__c 
-            WHERE Correlation_Key__c = :correlationKey 
-            AND Status__c IN ('Pending', 'Running', 'Suspended')
-            LIMIT 1
-            FOR UPDATE
-        ];
+    public static void signal(String keyOrId, String signalName, String payload) {
+        Boolean isId = false;
+        Id targetId;
+        try {
+            targetId = (Id)keyOrId;
+            isId = true;
+        } catch (Exception ex) {
+            // Not a valid ID
+        }
+
+        List<Workflow_Instance__c> instances;
+        if (isId) {
+            instances = [
+                SELECT Id, Status__c FROM Workflow_Instance__c 
+                WHERE (Correlation_Key__c = :keyOrId OR Id = :targetId)
+                AND Status__c IN ('Pending', 'Running', 'Suspended')
+                LIMIT 1
+                FOR UPDATE
+            ];
+        } else {
+            instances = [
+                SELECT Id, Status__c FROM Workflow_Instance__c 
+                WHERE Correlation_Key__c = :keyOrId 
+                AND Status__c IN ('Pending', 'Running', 'Suspended')
+                LIMIT 1
+                FOR UPDATE
+            ];
+        }
 
         if (instances.isEmpty()) {
-            throw new WorkflowException('No active workflow found with correlation key: ' + correlationKey);
+            throw new WorkflowException('No active workflow found with key or ID: ' + keyOrId);
         }
 
         Workflow_Instance__c instance = instances[0];

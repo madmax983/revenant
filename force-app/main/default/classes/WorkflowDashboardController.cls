@@ -80,4 +80,25 @@ public with sharing class WorkflowDashboardController {
             throw new AuraHandledException(ex.getMessage());
         }
     }
+
+    @AuraEnabled
+    public static void submitApproval(Id instanceId, String approvalKey, Boolean approved, String comments) {
+        try {
+            Map<String, Object> payload = new Map<String, Object>{
+                'approved' => approved,
+                'comments' => comments,
+                'approver' => UserInfo.getName()
+            };
+            String payloadJson = JSON.serialize(payload);
+            String signalName = 'Approve:' + approvalKey;
+            
+            Workflow_Instance__c inst = [
+                SELECT Correlation_Key__c FROM Workflow_Instance__c WHERE Id = :instanceId
+            ];
+            String targetKey = String.isNotBlank(inst.Correlation_Key__c) ? inst.Correlation_Key__c : inst.Id;
+            WorkflowEngine.signal(targetKey, signalName, payloadJson);
+        } catch (Exception ex) {
+            throw new AuraHandledException(ex.getMessage());
+        }
+    }
 }
