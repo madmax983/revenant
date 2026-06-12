@@ -119,10 +119,12 @@ public class OnboardingWorkflowExample implements WorkflowDefinition {
             Map<String, Object> instanceInput = (Map<String, Object>)JSON.deserializeUntyped(ctx.workflowInputJson);
             String email = (String)instanceInput.get('email');
             
+            String childKey = 'WelcomeEmail_' + ctx.workflowInstanceId;
+            
             List<Workflow_Signal__c> signals = [
                 SELECT Id, Payload__c FROM Workflow_Signal__c
                 WHERE Workflow_Instance__c = :ctx.workflowInstanceId
-                AND Signal_Name__c = 'ChildCompleted:WelcomeEmailSubKey'
+                AND Signal_Name__c = :('ChildCompleted:' + childKey)
                 AND Status__c = 'Received'
                 LIMIT 1
             ];
@@ -135,7 +137,7 @@ public class OnboardingWorkflowExample implements WorkflowDefinition {
 
             return StepResult.startChild(
                 'OnboardingWorkflowExample.WelcomeEmailWorkflow', 
-                'WelcomeEmailSubKey', 
+                childKey, 
                 email
             );
         }
