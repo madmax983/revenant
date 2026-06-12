@@ -106,6 +106,28 @@ public class WorkflowEngineTest {
         }
     }
 
+    public class FailingWorkflow implements WorkflowDefinition {
+        public String getInitialStep() {
+            return 'WorkflowEngineTest.FailingStep';
+        }
+        public String getNextStep(String currentStepName, StepResult stepResult) {
+            return null;
+        }
+    }
+
+    public static Boolean shouldSucceedOnFailingStep = false;
+
+    public class FailingStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            if (shouldSucceedOnFailingStep) {
+                return StepResult.complete(null, 'SuccessAfterRetry');
+            }
+            RetryPolicy policy = new RetryPolicy();
+            policy.maximumAttempts = 1;
+            return StepResult.retry(policy);
+        }
+    }
+
     public class RetryingWorkflow implements WorkflowDefinition {
         public String getInitialStep() {
             return 'WorkflowEngineTest.RetryingStep';
@@ -487,5 +509,47 @@ public class WorkflowEngineTest {
         parentInst = [SELECT Status__c, Output__c FROM Workflow_Instance__c WHERE Id = :parentId];
         System.assertEquals('Completed', parentInst.Status__c);
         System.assertEquals('"ParentResult_ChildInput_ChildDone"', parentInst.Output__c);
+    }
+
+    @isTest
+    static void testRetryWorkflow() {
+        // Start the workflow that will fail
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.FailingWorkflow', 'FailingKey', null);
+        
+        // Execute failing step manually. It will request a retry and hit maxAttempts = 1, resulting in Failure.
+        new WorkflowOrchestrator(instanceId).execute(null);
+
+        Workflow_Instance__c inst = [
+            SELECT Status__c, Error_Message__c, Current_Step__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :instanceId
+        ];
+        System.assertEquals('Failed', inst.Status__c, 'Should be failed');
+        System.assertNotEquals(null, inst.Error_Message__c);
+
+        Workflow_Step_Execution__c stepExec = [
+            SELECT Status__c, Retry_Count__c, Error_Details__c 
+            FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :instanceId 
+            AND Step_Name__c = :inst.Current_Step__c
+            LIMIT 1
+        ];
+        System.assertEquals('Failed', stepExec.Status__c);
+
+        // Now, trigger the retry! Change mock state to succeed
+        WorkflowEngineTest.shouldSucceedOnFailingStep = true;
+
+        Test.startTest();
+        WorkflowEngine.retryWorkflow(instanceId);
+        // This will run the Orchestrator synchronously in Test context
+        Test.stopTest();
+
+        Workflow_Instance__c retriedInst = [
+            SELECT Status__c, Error_Message__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :instanceId
+        ];
+        System.assertEquals('Completed', retriedInst.Status__c, 'Should complete successfully now');
+        System.assertEquals(null, retriedInst.Error_Message__c);
     }
 }

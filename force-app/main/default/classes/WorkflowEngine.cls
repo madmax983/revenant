@@ -428,4 +428,51 @@ public with sharing class WorkflowEngine {
             System.enqueueJob(new WorkflowOrchestrator(instance.Id));
         }
     }
+
+    /**
+     * Resumes a failed workflow instance from the step where it failed, resetting its state and retry counter.
+     */
+    public static void retryWorkflow(Id instanceId) {
+        List<Workflow_Instance__c> instances = [
+            SELECT Id, Status__c, Current_Step__c, Error_Message__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :instanceId 
+            LIMIT 1
+            FOR UPDATE
+        ];
+        if (instances.isEmpty()) {
+            throw new WorkflowException('Workflow instance not found: ' + instanceId);
+        }
+        Workflow_Instance__c instance = instances[0];
+        if (instance.Status__c != 'Failed') {
+            throw new WorkflowException('Workflow instance is not in Failed status. Current status: ' + instance.Status__c);
+        }
+
+        // Reset the failed step's execution status to let it execute again
+        if (String.isNotBlank(instance.Current_Step__c)) {
+            List<Workflow_Step_Execution__c> stepExecs = [
+                SELECT Id, Status__c, Retry_Count__c, Error_Details__c 
+                FROM Workflow_Step_Execution__c
+                WHERE Workflow_Instance__c = :instanceId
+                AND Step_Name__c = :instance.Current_Step__c
+                ORDER BY CreatedDate DESC
+                LIMIT 1
+            ];
+            if (!stepExecs.isEmpty()) {
+                Workflow_Step_Execution__c stepExec = stepExecs[0];
+                stepExec.Status__c = 'Pending';
+                stepExec.Retry_Count__c = 0; // reset retry counter
+                stepExec.Error_Details__c = null;
+                update stepExec;
+            }
+        }
+
+        // Reset the instance status to Running and clear error messages
+        instance.Status__c = 'Running';
+        instance.Error_Message__c = null;
+        update instance;
+
+        // Enqueue the orchestrator to resume execution
+        System.enqueueJob(new WorkflowOrchestrator(instanceId));
+    }
 }

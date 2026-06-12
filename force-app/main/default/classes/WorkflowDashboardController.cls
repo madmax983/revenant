@@ -71,4 +71,13 @@ public with sharing class WorkflowDashboardController {
             throw new AuraHandledException(ex.getMessage());
         }
     }
+    
+    @AuraEnabled
+    public static void retryWorkflowInstance(Id instanceId) {
+        try {
+            WorkflowEngine.retryWorkflow(instanceId);
+        } catch (Exception ex) {
+            throw new AuraHandledException(ex.getMessage());
+        }
+    }
 }

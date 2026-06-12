@@ -6,6 +6,7 @@ import getInstances from '@salesforce/apex/WorkflowDashboardController.getInstan
 import getInstanceDetails from '@salesforce/apex/WorkflowDashboardController.getInstanceDetails';
 import getDefinitions from '@salesforce/apex/WorkflowDashboardController.getDefinitions';
 import startWorkflow from '@salesforce/apex/WorkflowDashboardController.startWorkflow';
+import retryWorkflowInstance from '@salesforce/apex/WorkflowDashboardController.retryWorkflowInstance';
 
 export default class WorkflowDashboard extends LightningElement {
     @track instances = [];
@@ -78,6 +79,10 @@ export default class WorkflowDashboard extends LightningElement {
 
     get hasChildren() {
         return this.childInstances && this.childInstances.length > 0;
+    }
+
+    get isFailed() {
+        return this.selectedInst && this.selectedInst.Status__c === 'Failed';
     }
 
     calculateStats() {
@@ -261,6 +266,22 @@ export default class WorkflowDashboard extends LightningElement {
             })
             .finally(() => {
                 this.executingLaunch = false;
+            });
+    }
+
+    handleRetryWorkflow() {
+        this.loadingDetails = true;
+        retryWorkflowInstance({ instanceId: this.selectedInstanceId })
+            .then(() => {
+                this.showToast('Success', 'Workflow instance queued for retry successfully.', 'success');
+                refreshApex(this.wiredInstancesResult);
+                this.loadDetails(true);
+            })
+            .catch(error => {
+                this.showToast('Error', 'Failed to retry workflow: ' + error.body.message, 'error');
+            })
+            .finally(() => {
+                this.loadingDetails = false;
             });
     }
 

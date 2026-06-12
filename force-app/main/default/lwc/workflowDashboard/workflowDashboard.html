@@ -120,7 +120,16 @@
                                         <h2 class="slds-text-heading_medium font-outfit">{selectedInst.Name} Details</h2>
                                         <p class="slds-text-title slds-text-color_weak">{selectedInst.Workflow_Name__c}</p>
                                     </div>
-                                    <div>
+                                    <div class="slds-grid slds-grid_vertical-align-center">
+                                        <template if:true={isFailed}>
+                                            <lightning-button 
+                                                label="Retry / Replay" 
+                                                icon-name="utility:refresh" 
+                                                variant="neutral" 
+                                                onclick={handleRetryWorkflow}
+                                                class="slds-m-right_small">
+                                            </lightning-button>
+                                        </template>
                                         <span class={selectedInst.statusBadgeClass}>{selectedInst.Status__c}</span>
                                     </div>
                                 </div>

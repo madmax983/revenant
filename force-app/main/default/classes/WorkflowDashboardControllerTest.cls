@@ -94,4 +94,47 @@ public class WorkflowDashboardControllerTest {
         System.assertEquals('StartDashboardKey', inst.Correlation_Key__c);
         System.assertEquals('"InputPayload"', inst.Input__c);
     }
+
+    @isTest
+    static void testRetryWorkflowInstance() {
+        // Create a failed instance
+        Workflow_Instance__c inst = new Workflow_Instance__c(
+            Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+            Status__c = 'Failed',
+            Correlation_Key__c = 'FailedKey',
+            Input__c = '"InputData"',
+            Current_Step__c = 'WorkflowEngineTest.HappyStep1'
+        );
+        insert inst;
+
+        Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+            Workflow_Instance__c = inst.Id,
+            Step_Name__c = 'WorkflowEngineTest.HappyStep1',
+            Status__c = 'Failed',
+            Retry_Count__c = 1,
+            Error_Details__c = 'Some error'
+        );
+        insert step;
+
+        Test.startTest();
+        WorkflowDashboardController.retryWorkflowInstance(inst.Id);
+        Test.stopTest();
+
+        Workflow_Instance__c updatedInst = [
+            SELECT Status__c, Error_Message__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :inst.Id
+        ];
+        System.assertEquals('Running', updatedInst.Status__c);
+        System.assertEquals(null, updatedInst.Error_Message__c);
+
+        Workflow_Step_Execution__c updatedStep = [
+            SELECT Status__c, Retry_Count__c, Error_Details__c 
+            FROM Workflow_Step_Execution__c 
+            WHERE Id = :step.Id
+        ];
+        System.assertEquals('Completed', updatedStep.Status__c);
+        System.assertEquals(0, updatedStep.Retry_Count__c);
+        System.assertEquals(null, updatedStep.Error_Details__c);
+    }
 }
