@@ -167,7 +167,10 @@ public class OnboardingWorkflowExample implements WorkflowDefinition {
 
     public class DelayEmailStep implements WorkflowStep {
         public StepResult execute(StepContext ctx) {
-            return StepResult.sleep(5);
+            if (ctx.stepStateJson != null) {
+                return StepResult.complete(null, ctx.inputJson);
+            }
+            return StepResult.sleep(5, 'slept');
         }
     }
 
