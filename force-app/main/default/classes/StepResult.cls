@@ -1,5 +1,5 @@
 public class StepResult {
-    public enum ActionType { COMPLETE, SUSPEND, YIELD, RETRY }
+    public enum ActionType { COMPLETE, SUSPEND, YIELD, RETRY, SLEEP }
     
     public ActionType action { get; set; }
     public String nextStepName { get; set; }
@@ -7,6 +7,7 @@ public class StepResult {
     public String stepStateJson { get; set; }
     public Integer retryAfterSeconds { get; set; }
     public RetryPolicy retryPolicy { get; set; }
+    public Integer sleepDurationSeconds { get; set; }
 
     public static StepResult complete(String nextStepName, Object output) {
         StepResult r = new StepResult();
@@ -41,6 +42,21 @@ public class StepResult {
         r.action = ActionType.RETRY;
         r.retryAfterSeconds = retryAfterSeconds;
         r.retryPolicy = new RetryPolicy(retryAfterSeconds, (Double)1.0, 5); // Backwards compatible fixed interval retry
+        return r;
+    }
+
+    public static StepResult sleep(Integer seconds) {
+        StepResult r = new StepResult();
+        r.action = ActionType.SLEEP;
+        r.sleepDurationSeconds = seconds;
+        return r;
+    }
+
+    public static StepResult sleep(Integer seconds, String stepStateJson) {
+        StepResult r = new StepResult();
+        r.action = ActionType.SLEEP;
+        r.sleepDurationSeconds = seconds;
+        r.stepStateJson = stepStateJson;
         return r;
     }
 }

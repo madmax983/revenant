@@ -104,6 +104,9 @@ public with sharing class WorkflowEngine {
             instance.Current_Step__c = def.getInitialStep();
             instance.Status__c = 'Running';
             update instance;
+        } else if (instance.Status__c == 'Suspended' || instance.Status__c == 'Pending') {
+            instance.Status__c = 'Running';
+            update instance;
         }
 
         // 3. Retrieve or create Step Execution log
@@ -223,6 +226,17 @@ public with sharing class WorkflowEngine {
             instance.Status__c = 'Suspended';
             update instance;
 
+        } else if (result.action == StepResult.ActionType.SLEEP) {
+            // Step requested sleep
+            stepExec.Status__c = 'Pending';
+            stepExec.Output__c = result.stepStateJson;
+            update stepExec;
+
+            instance.Status__c = 'Suspended';
+            update instance;
+
+            scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
+
         } else if (result.action == StepResult.ActionType.RETRY) {
             // Step requested retry
             stepExec.Retry_Count__c += 1;
@@ -302,6 +316,14 @@ public with sharing class WorkflowEngine {
         Datetime runTime = Datetime.now().addSeconds(delaySeconds);
         String cronStr = runTime.second() + ' ' + runTime.minute() + ' ' + runTime.hour() + ' ' + runTime.day() + ' ' + runTime.month() + ' ? ' + runTime.year();
         System.schedule('WorkflowRetry_' + instanceId + '_' + runTime.getTime(), cronStr, job);
+    }
+
+    private static void scheduleSleepResume(Id instanceId, Integer delaySeconds) {
+        // Enqueue sleep resumption via Scheduled Apex using WorkflowSleepJob
+        WorkflowSleepJob job = new WorkflowSleepJob(instanceId);
+        Datetime runTime = Datetime.now().addSeconds(delaySeconds);
+        String cronStr = runTime.second() + ' ' + runTime.minute() + ' ' + runTime.hour() + ' ' + runTime.day() + ' ' + runTime.month() + ' ? ' + runTime.year();
+        System.schedule('WorkflowSleep_' + instanceId + '_' + runTime.getTime(), cronStr, job);
     }
 
     /**

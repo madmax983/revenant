@@ -169,6 +169,34 @@ public class WorkflowEngineTest {
         }
     }
 
+    public class SleepingWorkflow implements WorkflowDefinition {
+        public String getInitialStep() {
+            return 'WorkflowEngineTest.SleepingStep';
+        }
+        public String getNextStep(String currentStepName, StepResult stepResult) {
+            if (currentStepName == 'WorkflowEngineTest.SleepingStep') {
+                return 'WorkflowEngineTest.AfterSleepStep';
+            }
+            return null;
+        }
+    }
+
+    public class SleepingStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            if (ctx.stepStateJson != null) {
+                return StepResult.complete('WorkflowEngineTest.AfterSleepStep', ctx.stepStateJson);
+            }
+            return StepResult.sleep(10, 'resumed_state');
+        }
+    }
+
+    public class AfterSleepStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            String payload = (String)JSON.deserialize(ctx.previousStepOutput, String.class);
+            return StepResult.complete(null, 'Done_' + payload);
+        }
+    }
+
     // ==========================================
     // TEST METHODS
     // ==========================================
@@ -358,5 +386,30 @@ public class WorkflowEngineTest {
         Workflow_Step_Execution__c step = [SELECT Status__c, Error_Details__c FROM Workflow_Step_Execution__c WHERE Workflow_Instance__c = :instanceId LIMIT 1];
         System.assertEquals('Failed', step.Status__c);
         System.assert(step.Error_Details__c.contains('Simulated Crash'));
+    }
+
+    @isTest
+    static void testSleepingWorkflow() {
+        Test.startTest();
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.SleepingWorkflow', 'SleepKey', null);
+        Test.stopTest(); // Runs SleepingStep once synchronously, which requests sleep
+
+        Workflow_Instance__c inst = [SELECT Status__c, Current_Step__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Suspended', inst.Status__c);
+        System.assertEquals('WorkflowEngineTest.SleepingStep', inst.Current_Step__c);
+
+        Workflow_Step_Execution__c step = [SELECT Status__c, Output__c FROM Workflow_Step_Execution__c WHERE Workflow_Instance__c = :instanceId LIMIT 1];
+        System.assertEquals('Pending', step.Status__c);
+        System.assertEquals('resumed_state', step.Output__c);
+
+        // Manually call runStep to simulate the timer firing and enqueuing execution
+        WorkflowEngine.runStep(instanceId); // SleepingStep runs again, sees stepStateJson != null, completes.
+
+        // Manually execute second step (AfterSleepStep) synchronously
+        new WorkflowOrchestrator(instanceId).execute(null);
+
+        inst = [SELECT Status__c, Output__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Completed', inst.Status__c);
+        System.assertEquals('"Done_resumed_state"', inst.Output__c);
     }
 }
