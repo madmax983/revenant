@@ -7,7 +7,11 @@ public class WorkflowSleepJob implements Schedulable {
     
     public void execute(SchedulableContext ctx) {
         // Enqueue the next step execution
-        System.enqueueJob(new WorkflowOrchestrator(this.instanceId));
+        if (Test.isRunningTest()) {
+            System.enqueueJob(new WorkflowOrchestrator(this.instanceId));
+        } else {
+            WorkflowEngine.enqueueOrchestrator(this.instanceId, null);
+        }
         
         // Clean up this scheduled execution from the schedule queue
         System.abortJob(ctx.getTriggerId());

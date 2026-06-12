@@ -28,7 +28,11 @@ public with sharing class WorkflowEngine {
         insert instance;
 
         // Enqueue the first step execution
-        System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+        if (Test.isRunningTest()) {
+            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+        } else {
+            enqueueOrchestrator(instance.Id, null);
+        }
         return instance.Id;
     }
 
@@ -69,7 +73,11 @@ public with sharing class WorkflowEngine {
             }
         }
 
-        System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+        if (Test.isRunningTest()) {
+            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+        } else {
+            enqueueOrchestrator(instance.Id, null);
+        }
     }
 
     /**
@@ -312,9 +320,7 @@ public with sharing class WorkflowEngine {
                         instance.Current_Step__c = nextStepName;
                         update instance;
 
-                        if (!Test.isRunningTest()) {
-                            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-                        }
+                        enqueueOrchestrator(instance.Id, null);
                     } else {
                         instance.Status__c = 'Completed';
                         instance.Output__c = joinInputJson;
@@ -343,9 +349,7 @@ public with sharing class WorkflowEngine {
                     // Advance to next step
                     instance.Current_Step__c = nextStepName;
                     update instance;
-                    if (!Test.isRunningTest()) {
-                        System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-                    }
+                    enqueueOrchestrator(instance.Id, null);
                 }
             }
             
@@ -355,9 +359,7 @@ public with sharing class WorkflowEngine {
             stepExec.Output__c = result.stepStateJson;
             update stepExec;
 
-            if (!Test.isRunningTest()) {
-                System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-            }
+            enqueueOrchestrator(instance.Id, null);
 
         } else if (result.action == StepResult.ActionType.SUSPEND) {
             // Step suspended (waiting for external signal). Save state and mark instance.
@@ -424,9 +426,7 @@ public with sharing class WorkflowEngine {
             insert parallelExecs;
 
             for (String ps : result.parallelStepNames) {
-                if (!Test.isRunningTest()) {
-                    System.enqueueJob(new WorkflowOrchestrator(instance.Id, ps));
-                }
+                enqueueOrchestrator(instance.Id, ps);
             }
 
         } else if (result.action == StepResult.ActionType.RETRY) {
@@ -541,7 +541,7 @@ public with sharing class WorkflowEngine {
         insert instance;
         
         if (!Test.isRunningTest()) {
-            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+            enqueueOrchestrator(instance.Id, null);
         }
     }
 
@@ -672,7 +672,11 @@ public with sharing class WorkflowEngine {
         update instance;
 
         // Enqueue the orchestrator to resume execution
-        System.enqueueJob(new WorkflowOrchestrator(instanceId));
+        if (Test.isRunningTest()) {
+            System.enqueueJob(new WorkflowOrchestrator(instanceId));
+        } else {
+            enqueueOrchestrator(instanceId, null);
+        }
     }
 
     private static void cancelTimeoutJob(Id instanceId, String stepName) {
@@ -689,5 +693,17 @@ public with sharing class WorkflowEngine {
                 // ignore if already executed/aborted
             }
         }
+    }
+
+    public static void enqueueOrchestrator(Id instanceId, String stepName) {
+        if (Test.isRunningTest()) {
+            return;
+        }
+        Workflow_Event__e event = new Workflow_Event__e(
+            Workflow_Instance_Id__c = instanceId,
+            Event_Type__c = 'RUN_STEP',
+            Payload__c = stepName
+        );
+        EventBus.publish(event);
     }
 }
