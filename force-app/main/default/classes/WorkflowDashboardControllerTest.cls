@@ -3,12 +3,22 @@ public class WorkflowDashboardControllerTest {
 
     @isTest
     static void testGetInstancesAndDetails() {
-        // Create mock workflow instance
+        // Create mock parent workflow instance
+        Workflow_Instance__c parentInst = new Workflow_Instance__c(
+            Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+            Status__c = 'Completed',
+            Correlation_Key__c = 'TestParentKey',
+            Input__c = '"ParentInput"'
+        );
+        insert parentInst;
+
+        // Create mock child workflow instance
         Workflow_Instance__c inst = new Workflow_Instance__c(
             Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
             Status__c = 'Pending',
             Correlation_Key__c = 'TestDashboardKey',
-            Input__c = '"InputData"'
+            Input__c = '"InputData"',
+            Parent_Instance__c = parentInst.Id
         );
         insert inst;
 
@@ -26,17 +36,30 @@ public class WorkflowDashboardControllerTest {
         Test.startTest();
         List<Workflow_Instance__c> instances = WorkflowDashboardController.getInstances();
         Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(inst.Id);
+        Map<String, Object> parentDetails = WorkflowDashboardController.getInstanceDetails(parentInst.Id);
         Test.stopTest();
 
-        System.assertEquals(1, instances.size(), 'Should find one instance');
-        System.assertEquals(inst.Id, instances[0].Id);
+        // Re-query parentInst to get the auto-number Name field
+        parentInst = [SELECT Name FROM Workflow_Instance__c WHERE Id = :parentInst.Id];
+
+        // Should find two instances now
+        System.assertEquals(2, instances.size(), 'Should find two instances');
 
         Workflow_Instance__c returnedInst = (Workflow_Instance__c)details.get('instance');
         List<Workflow_Step_Execution__c> returnedSteps = (List<Workflow_Step_Execution__c>)details.get('steps');
+        List<Workflow_Instance__c> returnedChildren = (List<Workflow_Instance__c>)details.get('children');
 
         System.assertEquals(inst.Id, returnedInst.Id);
+        System.assertEquals(parentInst.Id, returnedInst.Parent_Instance__c);
+        System.assertEquals(parentInst.Name, returnedInst.Parent_Instance__r.Name);
         System.assertEquals(1, returnedSteps.size(), 'Should find one step execution');
         System.assertEquals(step.Id, returnedSteps[0].Id);
+        System.assertEquals(0, returnedChildren.size(), 'Child has no children');
+
+        // Check parent's details for children
+        List<Workflow_Instance__c> parentChildren = (List<Workflow_Instance__c>)parentDetails.get('children');
+        System.assertEquals(1, parentChildren.size(), 'Parent should have one child');
+        System.assertEquals(inst.Id, parentChildren[0].Id);
     }
 
     @isTest

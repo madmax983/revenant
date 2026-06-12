@@ -78,7 +78,7 @@ public with sharing class WorkflowEngine {
     public static void runStep(Id instanceId) {
         // 1. Lock and fetch instance state
         List<Workflow_Instance__c> instances = [
-            SELECT Id, Workflow_Name__c, Status__c, Current_Step__c, Input__c, Correlation_Key__c 
+            SELECT Id, Workflow_Name__c, Status__c, Current_Step__c, Input__c, Correlation_Key__c, Parent_Instance__c 
             FROM Workflow_Instance__c 
             WHERE Id = :instanceId 
             LIMIT 1
@@ -199,6 +199,9 @@ public with sharing class WorkflowEngine {
                 instance.Output__c = result.outputJson;
                 instance.Current_Step__c = null;
                 update instance;
+
+                // Notify parent completion if this is a child workflow
+                notifyParentCompletion(instance);
             } else {
                 // Advance to next step
                 instance.Current_Step__c = nextStepName;
@@ -236,6 +239,16 @@ public with sharing class WorkflowEngine {
             update instance;
 
             scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
+
+        } else if (result.action == StepResult.ActionType.START_CHILD) {
+            // Step requested child workflow
+            stepExec.Status__c = 'Pending';
+            update stepExec;
+
+            instance.Status__c = 'Suspended';
+            update instance;
+
+            startChildWorkflow(instance.Id, result.childWorkflowName, result.childCorrelationKey, result.childInputJson);
 
         } else if (result.action == StepResult.ActionType.RETRY) {
             // Step requested retry
@@ -324,6 +337,60 @@ public with sharing class WorkflowEngine {
         Datetime runTime = Datetime.now().addSeconds(delaySeconds);
         String cronStr = runTime.second() + ' ' + runTime.minute() + ' ' + runTime.hour() + ' ' + runTime.day() + ' ' + runTime.month() + ' ? ' + runTime.year();
         System.schedule('WorkflowSleep_' + instanceId + '_' + runTime.getTime(), cronStr, job);
+    }
+
+    private static void startChildWorkflow(Id parentId, String workflowName, String correlationKey, String inputJson) {
+        if (String.isNotBlank(correlationKey)) {
+            List<Workflow_Instance__c> existing = [
+                SELECT Id FROM Workflow_Instance__c 
+                WHERE Correlation_Key__c = :correlationKey 
+                AND Status__c IN ('Pending', 'Running', 'Suspended')
+                LIMIT 1
+            ];
+            if (!existing.isEmpty()) {
+                throw new WorkflowException('An active workflow already exists with correlation key: ' + correlationKey);
+            }
+        }
+
+        Workflow_Instance__c instance = new Workflow_Instance__c();
+        instance.Workflow_Name__c = workflowName;
+        instance.Status__c = 'Pending';
+        instance.Correlation_Key__c = correlationKey;
+        instance.Input__c = inputJson;
+        instance.Parent_Instance__c = parentId;
+        
+        insert instance;
+        
+        if (!Test.isRunningTest()) {
+            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+        }
+    }
+
+    private static void notifyParentCompletion(Workflow_Instance__c childInstance) {
+        if (childInstance.Parent_Instance__c != null) {
+            Workflow_Instance__c parent = [
+                SELECT Correlation_Key__c FROM Workflow_Instance__c 
+                WHERE Id = :childInstance.Parent_Instance__c
+            ];
+            
+            String targetKey = String.isNotBlank(parent.Correlation_Key__c) 
+                ? parent.Correlation_Key__c 
+                : parent.Id;
+            
+            String signalName = 'ChildCompleted';
+            if (String.isNotBlank(childInstance.Correlation_Key__c)) {
+                signalName += ':' + childInstance.Correlation_Key__c;
+            } else {
+                signalName += ':' + childInstance.Id;
+            }
+            
+            Workflow_Event__e event = new Workflow_Event__e(
+                Workflow_Instance_Id__c = targetKey,
+                Event_Type__c = 'SIGNAL:' + signalName,
+                Payload__c = childInstance.Output__c
+            );
+            EventBus.publish(event);
+        }
     }
 
     /**

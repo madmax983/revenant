@@ -13,7 +13,7 @@ public with sharing class WorkflowDashboardController {
     @AuraEnabled(cacheable=true)
     public static Map<String, Object> getInstanceDetails(Id instanceId) {
         Workflow_Instance__c instance = [
-            SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, Input__c, Output__c, Current_Step__c, Error_Message__c, CreatedDate
+            SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, Input__c, Output__c, Current_Step__c, Error_Message__c, CreatedDate, Parent_Instance__c, Parent_Instance__r.Name
             FROM Workflow_Instance__c 
             WHERE Id = :instanceId
         ];
@@ -25,9 +25,17 @@ public with sharing class WorkflowDashboardController {
             ORDER BY CreatedDate ASC
         ];
         
+        List<Workflow_Instance__c> children = [
+            SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate
+            FROM Workflow_Instance__c
+            WHERE Parent_Instance__c = :instanceId
+            ORDER BY CreatedDate ASC
+        ];
+        
         return new Map<String, Object>{
             'instance' => instance,
-            'steps' => steps
+            'steps' => steps,
+            'children' => children
         };
     }
     

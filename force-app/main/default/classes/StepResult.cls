@@ -1,5 +1,5 @@
 public class StepResult {
-    public enum ActionType { COMPLETE, SUSPEND, YIELD, RETRY, SLEEP }
+    public enum ActionType { COMPLETE, SUSPEND, YIELD, RETRY, SLEEP, START_CHILD }
     
     public ActionType action { get; set; }
     public String nextStepName { get; set; }
@@ -8,6 +8,9 @@ public class StepResult {
     public Integer retryAfterSeconds { get; set; }
     public RetryPolicy retryPolicy { get; set; }
     public Integer sleepDurationSeconds { get; set; }
+    public String childWorkflowName { get; set; }
+    public String childCorrelationKey { get; set; }
+    public String childInputJson { get; set; }
 
     public static StepResult complete(String nextStepName, Object output) {
         StepResult r = new StepResult();
@@ -57,6 +60,15 @@ public class StepResult {
         r.action = ActionType.SLEEP;
         r.sleepDurationSeconds = seconds;
         r.stepStateJson = stepStateJson;
+        return r;
+    }
+
+    public static StepResult startChild(String childWorkflowName, String correlationKey, Object input) {
+        StepResult r = new StepResult();
+        r.action = ActionType.START_CHILD;
+        r.childWorkflowName = childWorkflowName;
+        r.childCorrelationKey = correlationKey;
+        r.childInputJson = (input != null) ? JSON.serialize(input) : null;
         return r;
     }
 }

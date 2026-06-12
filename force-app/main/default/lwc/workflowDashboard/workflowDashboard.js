@@ -17,6 +17,7 @@ export default class WorkflowDashboard extends LightningElement {
     @track selectedInstanceId;
     @track selectedInst = {};
     @track steps = [];
+    @track childInstances = [];
     @track loadingDetails = false;
     @track modalOpen = false;
     @track searchTerm = '';
@@ -75,6 +76,10 @@ export default class WorkflowDashboard extends LightningElement {
         return this.steps.length > 0;
     }
 
+    get hasChildren() {
+        return this.childInstances && this.childInstances.length > 0;
+    }
+
     calculateStats() {
         const stats = { total: this.instances.length, active: 0, completed: 0, failed: 0 };
         this.instances.forEach(inst => {
@@ -128,6 +133,19 @@ export default class WorkflowDashboard extends LightningElement {
         this.loadDetails(true);
     }
 
+    handleSelectRelatedInstance(event) {
+        this.selectedInstanceId = event.currentTarget.dataset.id;
+        
+        // Highlight in list
+        this.instances = this.instances.map(inst => ({
+            ...inst,
+            listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? 'item-selected' : ''}`
+        }));
+        this.filterInstancesList();
+
+        this.loadDetails(true);
+    }
+
     loadDetails(showSpinner) {
         if (showSpinner) {
             this.loadingDetails = true;
@@ -142,6 +160,15 @@ export default class WorkflowDashboard extends LightningElement {
                     Input__c: this.formatJson(inst.Input__c),
                     Output__c: this.formatJson(inst.Output__c)
                 };
+
+                // Map children
+                this.childInstances = (result.children || []).map(child => {
+                    return {
+                        ...child,
+                        formattedDate: this.formatDateTime(child.CreatedDate),
+                        statusBadgeClass: this.getStatusBadgeClass(child.Status__c)
+                    };
+                });
 
                 // Preserve showDetails toggle state if steps were already loaded
                 const showDetailsMap = new Map();

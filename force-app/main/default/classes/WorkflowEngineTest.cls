@@ -197,6 +197,50 @@ public class WorkflowEngineTest {
         }
     }
 
+    public class ParentWorkflow implements WorkflowDefinition {
+        public String getInitialStep() {
+            return 'WorkflowEngineTest.ParentStep';
+        }
+        public String getNextStep(String currentStepName, StepResult stepResult) {
+            return null;
+        }
+    }
+
+    public class ParentStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            List<Workflow_Signal__c> signals = [
+                SELECT Payload__c FROM Workflow_Signal__c
+                WHERE Workflow_Instance__c = :ctx.workflowInstanceId
+                AND Signal_Name__c = 'ChildCompleted:SubKey'
+                AND Status__c = 'Received'
+                LIMIT 1
+            ];
+            if (!signals.isEmpty()) {
+                signals[0].Status__c = 'Consumed';
+                update signals[0];
+                String childResult = (String)JSON.deserialize(signals[0].Payload__c, String.class);
+                return StepResult.complete(null, 'ParentResult_' + childResult);
+            }
+            return StepResult.startChild('WorkflowEngineTest.ChildWorkflow', 'SubKey', 'ChildInput');
+        }
+    }
+
+    public class ChildWorkflow implements WorkflowDefinition {
+        public String getInitialStep() {
+            return 'WorkflowEngineTest.ChildStep';
+        }
+        public String getNextStep(String currentStepName, StepResult stepResult) {
+            return null;
+        }
+    }
+
+    public class ChildStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            String input = (String)JSON.deserialize(ctx.inputJson, String.class);
+            return StepResult.complete(null, input + '_ChildDone');
+        }
+    }
+
     // ==========================================
     // TEST METHODS
     // ==========================================
@@ -411,5 +455,37 @@ public class WorkflowEngineTest {
         inst = [SELECT Status__c, Output__c FROM Workflow_Instance__c WHERE Id = :instanceId];
         System.assertEquals('Completed', inst.Status__c);
         System.assertEquals('"Done_resumed_state"', inst.Output__c);
+    }
+
+    @isTest
+    static void testParentChildWorkflow() {
+        Test.startTest();
+        Id parentId = WorkflowEngine.start('WorkflowEngineTest.ParentWorkflow', 'ParentKey', null);
+        Test.stopTest(); // Executes ParentStep once, starts child, and suspends parent
+
+        Workflow_Instance__c parentInst = [SELECT Status__c, Current_Step__c FROM Workflow_Instance__c WHERE Id = :parentId];
+        System.assertEquals('Suspended', parentInst.Status__c);
+
+        Workflow_Instance__c childInst = [
+            SELECT Id, Status__c, Parent_Instance__c, Correlation_Key__c 
+            FROM Workflow_Instance__c 
+            WHERE Parent_Instance__c = :parentId 
+            LIMIT 1
+        ];
+        System.assertEquals('SubKey', childInst.Correlation_Key__c);
+        System.assertEquals('Pending', childInst.Status__c);
+
+        // Execute child workflow synchronously
+        new WorkflowOrchestrator(childInst.Id).execute(null); // ChildStep completes, triggers child completion event
+
+        // Deliver Platform Event (ChildCompleted) to parent
+        Test.getEventBus().deliver(); // Parent becomes Running, enqueues orchestrator
+
+        // Manually run orchestrator for parent to consume child output signal and complete
+        new WorkflowOrchestrator(parentId).execute(null);
+
+        parentInst = [SELECT Status__c, Output__c FROM Workflow_Instance__c WHERE Id = :parentId];
+        System.assertEquals('Completed', parentInst.Status__c);
+        System.assertEquals('"ParentResult_ChildInput_ChildDone"', parentInst.Output__c);
     }
 }

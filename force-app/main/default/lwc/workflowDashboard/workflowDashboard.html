@@ -135,6 +135,16 @@
                                         <div class="slds-text-title slds-text-color_weak">Started Date</div>
                                         <div class="slds-text-body_regular">{selectedInst.formattedDate}</div>
                                     </div>
+                                    <template if:true={selectedInst.Parent_Instance__c}>
+                                        <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                            <div class="slds-text-title slds-text-color_weak">Parent Workflow</div>
+                                            <div class="slds-text-body_regular">
+                                                <a href="javascript:void(0);" data-id={selectedInst.Parent_Instance__c} onclick={handleSelectRelatedInstance} class="slds-text-link">
+                                                    {selectedInst.Parent_Instance__r.Name}
+                                                </a>
+                                            </div>
+                                        </div>
+                                    </template>
                                     <template if:true={selectedInst.Input__c}>
                                         <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
                                             <div class="slds-text-title slds-text-color_weak">Workflow Input</div>
@@ -154,6 +164,32 @@
                                         </div>
                                     </template>
                                 </div>
+
+                                <!-- Child Workflows Section -->
+                                <template if:true={hasChildren}>
+                                    <div class="slds-m-bottom_large">
+                                        <h3 class="slds-text-heading_small slds-m-bottom_small font-outfit">Sub-Workflows</h3>
+                                        <div class="panel-card">
+                                            <div class="slds-scrollable_y" style="max-height: 200px;">
+                                                <ul class="slds-has-dividers_bottom-space">
+                                                    <template for:each={childInstances} for:item="child">
+                                                        <li key={child.Id} class="slds-p-around_small list-item clickable" data-id={child.Id} onclick={handleSelectRelatedInstance}>
+                                                            <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center">
+                                                                <div>
+                                                                    <div class="slds-text-title_bold text-primary">{child.Name}</div>
+                                                                    <div class="slds-text-body_small slds-text-color_weak">
+                                                                        {child.Workflow_Name__c} | Key: {child.Correlation_Key__c}
+                                                                    </div>
+                                                                </div>
+                                                                <span class={child.statusBadgeClass}>{child.Status__c}</span>
+                                                            </div>
+                                                        </li>
+                                                    </template>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
 
                                 <!-- Step Timeline/DAG Execution History -->
                                 <div>
