@@ -1,0 +1,297 @@
+<template>
+    <div class="slds-card slds-p-around_medium dashboard-container">
+        <!-- Header & Stats -->
+        <div class="slds-grid slds-grid_align-spread slds-m-bottom_medium slds-grid_vertical-align-center">
+            <div>
+                <h1 class="slds-text-heading_large slds-m-bottom_xx-small font-outfit">Workflow Orchestrator</h1>
+                <p class="slds-text-color_weak">Monitor and trigger native database-backed durable workflows</p>
+            </div>
+            <div>
+                <lightning-button 
+                    label="Run Workflow" 
+                    icon-name="utility:play" 
+                    variant="brand" 
+                    onclick={handleOpenModal}
+                    class="brand-button">
+                </lightning-button>
+                <lightning-button-icon 
+                    icon-name="utility:refresh" 
+                    variant="border-filled" 
+                    alternative-text="Refresh" 
+                    onclick={handleRefresh}
+                    class="slds-m-left_small">
+                </lightning-button-icon>
+            </div>
+        </div>
+
+        <!-- Summary Stats Card Row -->
+        <div class="slds-grid slds-wrap slds-gutters slds-m-bottom_large">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-4">
+                <div class="stat-card border-left-blue">
+                    <div class="slds-text-title_caps slds-text-color_weak">Total Runs</div>
+                    <div class="slds-text-heading_large slds-m-top_xx-small">{stats.total}</div>
+                </div>
+            </div>
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-4">
+                <div class="stat-card border-left-orange">
+                    <div class="slds-text-title_caps slds-text-color_weak">Running / Suspended</div>
+                    <div class="slds-text-heading_large slds-m-top_xx-small text-orange">{stats.active}</div>
+                </div>
+            </div>
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-4">
+                <div class="stat-card border-left-green">
+                    <div class="slds-text-title_caps slds-text-color_weak">Completed</div>
+                    <div class="slds-text-heading_large slds-m-top_xx-small text-green">{stats.completed}</div>
+                </div>
+            </div>
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-4">
+                <div class="stat-card border-left-red">
+                    <div class="slds-text-title_caps slds-text-color_weak">Failed</div>
+                    <div class="slds-text-heading_large slds-m-top_xx-small text-red">{stats.failed}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Workspace Split Layout -->
+        <div class="slds-grid slds-wrap slds-gutters">
+            <!-- Left Panel: Instances List -->
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_2-of-5 slds-m-bottom_medium">
+                <div class="panel-card">
+                    <div class="slds-p-around_small border-bottom">
+                        <lightning-input 
+                            name="search" 
+                            type="search" 
+                            placeholder="Filter by workflow name, key, status..." 
+                            value={searchTerm}
+                            onchange={handleSearchChange}>
+                        </lightning-input>
+                    </div>
+
+                    <div class="list-container">
+                        <template if:true={hasFilteredInstances}>
+                            <div class="slds-scrollable_y" style="max-height: 500px;">
+                                <ul class="slds-has-dividers_bottom-space">
+                                    <template for:each={filteredInstances} for:item="inst">
+                                        <li key={inst.Id} 
+                                            class={inst.listItemClass}
+                                            data-id={inst.Id} 
+                                            onclick={handleSelectInstance}>
+                                            <div class="slds-grid slds-grid_vertical-align-center">
+                                                <div class="slds-col slds-grow">
+                                                    <div class="slds-grid slds-grid_align-spread">
+                                                        <span class="slds-text-title_bold text-primary">{inst.Name}</span>
+                                                        <span class={inst.statusBadgeClass}>{inst.Status__c}</span>
+                                                    </div>
+                                                    <div class="slds-text-body_regular slds-m-top_xx-small font-bold">{inst.Workflow_Name__c}</div>
+                                                    <div class="slds-text-body_small slds-text-color_weak slds-m-top_xx-small">
+                                                        Key: {inst.Correlation_Key__c} | Started: {inst.formattedDate}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </li>
+                                    </template>
+                                </ul>
+                            </div>
+                        </template>
+                        <template if:false={hasFilteredInstances}>
+                            <div class="slds-align_absolute-center slds-p-around_large slds-text-color_weak">
+                                No workflow instances found.
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel: Details -->
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_3-of-5">
+                <div class="panel-card details-panel">
+                    <template if:true={selectedInstanceId}>
+                        <template if:true={loadingDetails}>
+                            <div class="slds-align_absolute-center slds-p-around_large spinner-height">
+                                <lightning-spinner alternative-text="Loading Details..." size="medium"></lightning-spinner>
+                            </div>
+                        </template>
+                        
+                        <template if:false={loadingDetails}>
+                            <div class="slds-p-around_medium">
+                                <!-- Instance Title Bar -->
+                                <div class="slds-grid slds-grid_align-spread slds-m-bottom_medium border-bottom slds-p-bottom_small">
+                                    <div>
+                                        <h2 class="slds-text-heading_medium font-outfit">{selectedInst.Name} Details</h2>
+                                        <p class="slds-text-title slds-text-color_weak">{selectedInst.Workflow_Name__c}</p>
+                                    </div>
+                                    <div>
+                                        <span class={selectedInst.statusBadgeClass}>{selectedInst.Status__c}</span>
+                                    </div>
+                                </div>
+
+                                <!-- Instance Meta Fields Grid -->
+                                <div class="slds-grid slds-wrap slds-m-bottom_large detail-fields-grid">
+                                    <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                        <div class="slds-text-title slds-text-color_weak">Correlation Key</div>
+                                        <div class="slds-text-body_regular">{selectedInst.Correlation_Key__c}</div>
+                                    </div>
+                                    <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                        <div class="slds-text-title slds-text-color_weak">Started Date</div>
+                                        <div class="slds-text-body_regular">{selectedInst.formattedDate}</div>
+                                    </div>
+                                    <template if:true={selectedInst.Input__c}>
+                                        <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
+                                            <div class="slds-text-title slds-text-color_weak">Workflow Input</div>
+                                            <pre class="code-block">{selectedInst.Input__c}</pre>
+                                        </div>
+                                    </template>
+                                    <template if:true={selectedInst.Output__c}>
+                                        <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
+                                            <div class="slds-text-title slds-text-color_weak">Workflow Output</div>
+                                            <pre class="code-block">{selectedInst.Output__c}</pre>
+                                        </div>
+                                    </template>
+                                    <template if:true={selectedInst.Error_Message__c}>
+                                        <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
+                                            <div class="slds-text-title text-red">Workflow Failure Message</div>
+                                            <pre class="code-block error-block">{selectedInst.Error_Message__c}</pre>
+                                        </div>
+                                    </template>
+                                </div>
+
+                                <!-- Step Timeline/DAG Execution History -->
+                                <div>
+                                    <h3 class="slds-text-heading_small slds-m-bottom_medium font-outfit">DAG Execution Path</h3>
+                                    
+                                    <template if:true={hasSteps}>
+                                        <div class="slds-m-left_small timeline-container">
+                                            <template for:each={steps} for:item="step">
+                                                <div key={step.Id} class="timeline-item">
+                                                    <div class="slds-grid slds-wrap">
+                                                        <!-- Left: Visual Dot / Connector -->
+                                                        <div class="slds-col slds-grow-none timeline-marker-col">
+                                                            <div class={step.markerClass}></div>
+                                                            <div class="timeline-line"></div>
+                                                        </div>
+                                                        <!-- Right: Step Info Card -->
+                                                        <div class="slds-col slds-grow timeline-content-col slds-p-bottom_medium">
+                                                            <div class="step-card">
+                                                                <div class="slds-grid slds-grid_align-spread slds-m-bottom_x-small">
+                                                                    <span class="slds-text-title_bold text-secondary font-outfit">{step.Step_Name__c}</span>
+                                                                    <span class={step.statusBadgeClass}>{step.Status__c}</span>
+                                                                </div>
+                                                                <div class="slds-text-body_small slds-text-color_weak">
+                                                                    Attempted: {step.formattedDate} | Retries: {step.Retry_Count__c}
+                                                                </div>
+                                                                
+                                                                <!-- Expandable Input/Output -->
+                                                                <div class="slds-m-top_small">
+                                                                    <lightning-button-stateful
+                                                                        label-off="Show Logs / Data"
+                                                                        label-on="Hide Logs / Data"
+                                                                        state={step.showDetails}
+                                                                        data-step-id={step.Id}
+                                                                        onclick={toggleStepDetails}
+                                                                        variant="text"
+                                                                        icon-name-off="utility:chevrondown"
+                                                                        icon-name-on="utility:chevronup"
+                                                                        class="text-button">
+                                                                    </lightning-button-stateful>
+                                                                    
+                                                                    <template if:true={step.showDetails}>
+                                                                        <div class="slds-m-top_small slds-p-top_small border-top">
+                                                                            <template if:true={step.Input__c}>
+                                                                                <div class="slds-text-title slds-text-color_weak slds-m-bottom_xx-small">Step Input</div>
+                                                                                <pre class="code-block slds-m-bottom_small">{step.Input__c}</pre>
+                                                                            </template>
+                                                                            <template if:true={step.Output__c}>
+                                                                                <div class="slds-text-title slds-text-color_weak slds-m-bottom_xx-small">Step State / Output</div>
+                                                                                <pre class="code-block slds-m-bottom_small">{step.Output__c}</pre>
+                                                                            </template>
+                                                                            <template if:true={step.Error_Details__c}>
+                                                                                <div class="slds-text-title text-red slds-m-bottom_xx-small">Step Error Details</div>
+                                                                                <pre class="code-block error-block">{step.Error_Details__c}</pre>
+                                                                            </template>
+                                                                        </div>
+                                                                    </template>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </template>
+                                    <template if:false={hasSteps}>
+                                        <div class="slds-text-color_weak slds-p-around_medium border-dashed slds-align_absolute-center">
+                                            No step execution history recorded yet.
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                    </template>
+                    
+                    <template if:false={selectedInstanceId}>
+                        <div class="slds-align_absolute-center slds-p-around_xx-large spinner-height slds-flex_column slds-text-align_center">
+                            <lightning-icon icon-name="utility:graph" size="large" class="slds-m-bottom_medium text-weak-icon"></lightning-icon>
+                            <h2 class="slds-text-heading_medium font-outfit text-weak">No Workflow Selected</h2>
+                            <p class="slds-text-color_weak slds-m-top_x-small">Select a workflow instance from the list to view its DAG path, state values, and execution steps.</p>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        <!-- Launch Workflow Modal -->
+        <template if:true={modalOpen}>
+            <section role="dialog" tabindex="-1" aria-modal="true" class="slds-modal slds-fade-in-open">
+                <div class="slds-modal__container">
+                    <header class="slds-modal__header">
+                        <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse" title="Close" onclick={handleCloseModal}>
+                            <lightning-icon icon-name="utility:close" size="small" alternative-text="Close" variant="inverse"></lightning-icon>
+                        </button>
+                        <h2 class="slds-modal__title slds-hyphenate font-outfit">Run Workflow / Backfill</h2>
+                    </header>
+                    <div class="slds-modal__content slds-p-around_medium">
+                        <!-- Alert Banner for errors -->
+                        <template if:true={launchError}>
+                            <div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_medium" role="alert">
+                                <h2>{launchError}</h2>
+                            </div>
+                        </template>
+
+                        <lightning-combobox
+                            name="workflowName"
+                            label="Workflow Definition"
+                            placeholder="Select workflow class..."
+                            value={launchName}
+                            options={definitionOptions}
+                            onchange={handleLaunchFieldChange}
+                            required>
+                        </lightning-combobox>
+
+                        <lightning-input
+                            name="correlationKey"
+                            label="Correlation Key (Unique)"
+                            placeholder="e.g. Backfill_June_01"
+                            value={launchKey}
+                            onchange={handleLaunchFieldChange}>
+                        </lightning-input>
+
+                        <lightning-textarea
+                            name="inputJson"
+                            label="Input Payload (JSON)"
+                            placeholder='e.g. { "records": [1, 2, 3] }'
+                            value={launchInputJson}
+                            onchange={handleLaunchFieldChange}
+                            rows="6"
+                            class="slds-m-top_small">
+                        </lightning-textarea>
+                    </div>
+                    <footer class="slds-modal__footer">
+                        <lightning-button label="Cancel" onclick={handleCloseModal} class="slds-m-right_small"></lightning-button>
+                        <lightning-button label="Execute Workflow" variant="brand" onclick={handleExecuteWorkflow} loading={executingLaunch} class="brand-button"></lightning-button>
+                    </footer>
+                </div>
+            </section>
+            <div class="slds-backdrop slds-backdrop_open" role="presentation"></div>
+        </template>
+    </div>
+</template>
