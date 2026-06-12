@@ -175,13 +175,45 @@ public with sharing class WorkflowEngine {
             stepExec.Output__c // If yielded or resumed, output field holds the intermediate state
         );
 
-        StepResult result = stepInstance.execute(context);
+        // Determine step timeout if configured
+        Integer timeoutSeconds = null;
+        if (stepInstance instanceof TimeoutConfigurable) {
+            timeoutSeconds = ((TimeoutConfigurable)stepInstance).getTimeoutSeconds();
+        }
+
+        // Schedule timeout watch job if configured
+        if (timeoutSeconds != null && timeoutSeconds > 0) {
+            WorkflowTimeoutJob job = new WorkflowTimeoutJob(instanceId, instance.Current_Step__c);
+            Datetime runTime = Datetime.now().addSeconds(timeoutSeconds);
+            String cronStr = runTime.second() + ' ' + runTime.minute() + ' ' + runTime.hour() + ' ' + runTime.day() + ' ' + runTime.month() + ' ? ' + runTime.year();
+            String cleanStepName = instance.Current_Step__c.replaceAll('[^a-zA-Z0-9]', '_');
+            String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
+            System.schedule(jobName, cronStr, job);
+        }
+
+        StepResult result;
+        try {
+            result = stepInstance.execute(context);
+        } finally {
+            // Cancel timeout watch job if it hasn't run yet
+            if (timeoutSeconds != null && timeoutSeconds > 0) {
+                cancelTimeoutJob(instanceId, instance.Current_Step__c);
+            }
+        }
 
         // 6. Handle Step Outcome
         handleStepResult(instance, stepExec, result);
     }
 
     private static void handleStepResult(Workflow_Instance__c instance, Workflow_Step_Execution__c stepExec, StepResult result) {
+        // Re-query to avoid overwriting a timeout or finalizer crash status
+        Workflow_Instance__c freshInstance = [
+            SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instance.Id
+        ];
+        if (freshInstance.Status__c == 'Failed') {
+            throw new WorkflowException('Workflow execution was terminated (e.g. timed out or crashed).');
+        }
+
         if (result.action == StepResult.ActionType.COMPLETE) {
             // Step is complete. Store output.
             stepExec.Status__c = 'Completed';
@@ -474,5 +506,21 @@ public with sharing class WorkflowEngine {
 
         // Enqueue the orchestrator to resume execution
         System.enqueueJob(new WorkflowOrchestrator(instanceId));
+    }
+
+    private static void cancelTimeoutJob(Id instanceId, String stepName) {
+        String cleanStepName = stepName.replaceAll('[^a-zA-Z0-9]', '_');
+        String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
+        List<CronTrigger> triggers = [
+            SELECT Id FROM CronTrigger 
+            WHERE CronJobDetail.Name = :jobName
+        ];
+        for (CronTrigger triggerJob : triggers) {
+            try {
+                System.abortJob(triggerJob.Id);
+            } catch (Exception e) {
+                // ignore if already executed/aborted
+            }
+        }
     }
 }

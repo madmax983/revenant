@@ -128,6 +128,24 @@ public class WorkflowEngineTest {
         }
     }
 
+    public class TimeoutWorkflow implements WorkflowDefinition {
+        public String getInitialStep() {
+            return 'WorkflowEngineTest.TimeoutStep';
+        }
+        public String getNextStep(String currentStepName, StepResult stepResult) {
+            return null;
+        }
+    }
+
+    public class TimeoutStep implements WorkflowStep, TimeoutConfigurable {
+        public Integer getTimeoutSeconds() {
+            return 60;
+        }
+        public StepResult execute(StepContext ctx) {
+            return StepResult.complete(null, 'TimeoutComplete');
+        }
+    }
+
     public class RetryingWorkflow implements WorkflowDefinition {
         public String getInitialStep() {
             return 'WorkflowEngineTest.RetryingStep';
@@ -551,5 +569,59 @@ public class WorkflowEngineTest {
         ];
         System.assertEquals('Completed', retriedInst.Status__c, 'Should complete successfully now');
         System.assertEquals(null, retriedInst.Error_Message__c);
+    }
+
+    @isTest
+    static void testWorkflowTimeout() {
+        // Start a workflow instance
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.TimeoutWorkflow', 'TimeoutKey', null);
+        
+        // Assert a step execution record is created when started
+        new WorkflowOrchestrator(instanceId).execute(null);
+
+        Workflow_Instance__c inst = [
+            SELECT Status__c, Current_Step__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :instanceId
+        ];
+        // In the test context, because it ran manually, it completed successfully (since execute is synchronous).
+        // Let's now simulate a timeout by changing status back to Running and manually executing the timeout job!
+        inst.Status__c = 'Running';
+        inst.Current_Step__c = 'WorkflowEngineTest.TimeoutStep';
+        update inst;
+
+        List<Workflow_Step_Execution__c> stepExecs = [
+            SELECT Id, Status__c FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :instanceId
+            AND Step_Name__c = 'WorkflowEngineTest.TimeoutStep'
+            LIMIT 1
+        ];
+        System.assert(!stepExecs.isEmpty());
+        Workflow_Step_Execution__c stepExec = stepExecs[0];
+        stepExec.Status__c = 'Running';
+        update stepExec;
+
+        // Manually run the timeout job
+        Test.startTest();
+        WorkflowTimeoutJob job = new WorkflowTimeoutJob(instanceId, 'WorkflowEngineTest.TimeoutStep');
+        job.execute(null);
+        Test.stopTest();
+
+        // Check if both records are marked Failed
+        Workflow_Instance__c timedOutInst = [
+            SELECT Status__c, Error_Message__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :instanceId
+        ];
+        System.assertEquals('Failed', timedOutInst.Status__c);
+        System.assertEquals('Step WorkflowEngineTest.TimeoutStep timed out.', timedOutInst.Error_Message__c);
+
+        Workflow_Step_Execution__c timedOutStep = [
+            SELECT Status__c, Error_Details__c 
+            FROM Workflow_Step_Execution__c 
+            WHERE Id = :stepExec.Id
+        ];
+        System.assertEquals('Failed', timedOutStep.Status__c);
+        System.assertEquals('Step execution timed out.', timedOutStep.Error_Details__c);
     }
 }
