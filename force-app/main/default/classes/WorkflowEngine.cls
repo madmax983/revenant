@@ -383,6 +383,11 @@ public with sharing class WorkflowEngine {
         } else if (result.action == StepResult.ActionType.START_CHILD) {
             // Step requested child workflow
             stepExec.Status__c = 'Pending';
+            Map<String, Object> childInfo = new Map<String, Object>{
+                'childWorkflowName' => result.childWorkflowName,
+                'childCorrelationKey' => result.childCorrelationKey
+            };
+            stepExec.Output__c = JSON.serialize(childInfo);
             update stepExec;
 
             instance.Status__c = 'Suspended';

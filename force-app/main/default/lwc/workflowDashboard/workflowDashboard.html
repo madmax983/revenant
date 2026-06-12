@@ -217,13 +217,29 @@
                                                         <!-- Right: Step Info Card -->
                                                         <div class="slds-col slds-grow timeline-content-col slds-p-bottom_medium">
                                                             <div class="step-card">
-                                                                <div class="slds-grid slds-grid_align-spread slds-m-bottom_x-small">
-                                                                    <span class="slds-text-title_bold text-secondary font-outfit">{step.Step_Name__c}</span>
-                                                                    <span class={step.statusBadgeClass}>{step.Status__c}</span>
+                                                                <!-- Clickable Step Header -->
+                                                                <div class="clickable-header" onclick={toggleStepDetails} data-step-id={step.Id}>
+                                                                    <div class="slds-grid slds-grid_align-spread slds-m-bottom_x-small">
+                                                                        <span class="slds-text-title_bold text-secondary font-outfit">{step.Step_Name__c}</span>
+                                                                        <span class={step.statusBadgeClass}>{step.Status__c}</span>
+                                                                    </div>
+                                                                    <div class="slds-text-body_small slds-text-color_weak">
+                                                                        Attempted: {step.formattedDate} | Retries: {step.Retry_Count__c}
+                                                                    </div>
                                                                 </div>
-                                                                <div class="slds-text-body_small slds-text-color_weak">
-                                                                    Attempted: {step.formattedDate} | Retries: {step.Retry_Count__c}
-                                                                </div>
+
+                                                                <!-- Direct Sub-Workflow Link -->
+                                                                <template if:true={step.childInstanceId}>
+                                                                    <div class="slds-m-top_x-small slds-grid slds-grid_vertical-align-center">
+                                                                        <lightning-icon icon-name="utility:link" size="xx-small" class="slds-m-right_xx-small"></lightning-icon>
+                                                                        <span class="slds-text-body_small">
+                                                                            Sub-Workflow: 
+                                                                            <a href="javascript:void(0);" data-id={step.childInstanceId} onclick={handleSelectRelatedInstance} class="slds-text-link slds-m-left_xx-small">
+                                                                                {step.childInstanceName}
+                                                                            </a>
+                                                                        </span>
+                                                                    </div>
+                                                                </template>
                                                                 
                                                                 <!-- Expandable Input/Output -->
                                                                 <div class="slds-m-top_small">

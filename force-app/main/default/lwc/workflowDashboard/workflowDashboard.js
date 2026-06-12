@@ -183,7 +183,8 @@ export default class WorkflowDashboard extends LightningElement {
 
                 this.steps = result.steps.map(step => {
                     let approvalInfo = null;
-                    if (step.Status__c === 'Pending' && step.Output__c) {
+                    let childWorkflowLink = null;
+                    if (step.Output__c) {
                         try {
                             const parsed = JSON.parse(step.Output__c);
                             if (parsed.waitingForApproval) {
@@ -191,6 +192,17 @@ export default class WorkflowDashboard extends LightningElement {
                                     key: parsed.approvalKey,
                                     role: parsed.approvalRole
                                 };
+                            }
+                            if (parsed.childWorkflowName && parsed.childCorrelationKey) {
+                                const matchingChild = this.childInstances.find(
+                                    child => child.Correlation_Key__c === parsed.childCorrelationKey && child.Workflow_Name__c === parsed.childWorkflowName
+                                );
+                                if (matchingChild) {
+                                    childWorkflowLink = {
+                                        id: matchingChild.Id,
+                                        name: matchingChild.Name
+                                    };
+                                }
                             }
                         } catch (e) {
                             // ignore non-json
@@ -206,6 +218,8 @@ export default class WorkflowDashboard extends LightningElement {
                         isWaitingForApproval: !!approvalInfo,
                         approvalKey: approvalInfo ? approvalInfo.key : null,
                         approvalRole: approvalInfo ? approvalInfo.role : null,
+                        childInstanceId: childWorkflowLink ? childWorkflowLink.id : null,
+                        childInstanceName: childWorkflowLink ? childWorkflowLink.name : null,
                         Input__c: this.formatJson(step.Input__c),
                         Output__c: this.formatJson(step.Output__c)
                     };

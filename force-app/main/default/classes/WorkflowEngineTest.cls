@@ -537,6 +537,18 @@ public class WorkflowEngineTest {
         Workflow_Instance__c parentInst = [SELECT Status__c, Current_Step__c FROM Workflow_Instance__c WHERE Id = :parentId];
         System.assertEquals('Suspended', parentInst.Status__c);
 
+        Workflow_Step_Execution__c parentStep = [
+            SELECT Output__c 
+            FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :parentId 
+            AND Step_Name__c = 'WorkflowEngineTest.ParentStep'
+            LIMIT 1
+        ];
+        System.assertNotEquals(null, parentStep.Output__c);
+        Map<String, Object> childInfo = (Map<String, Object>)JSON.deserializeUntyped(parentStep.Output__c);
+        System.assertEquals('WorkflowEngineTest.ChildWorkflow', childInfo.get('childWorkflowName'));
+        System.assertEquals('SubKey', childInfo.get('childCorrelationKey'));
+
         Workflow_Instance__c childInst = [
             SELECT Id, Status__c, Parent_Instance__c, Correlation_Key__c 
             FROM Workflow_Instance__c 
