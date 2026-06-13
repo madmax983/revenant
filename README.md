@@ -1,6 +1,6 @@
 # Revenant: Durable Workflow Engine for Salesforce
 
-Revenant is a native, database-backed durable execution engine for Salesforce Apex, inspired by Temporal and DBOSS. By orchestrating native platform features—Queueable Apex, Platform Events, Transaction Finalizers, and Apex Cursors—Revenant allows developers to build complex, reliable, and resumable state machines that survive transaction failures, governor limit exhaustion, and platform limits.
+Revenant is a native, database-backed durable execution engine for Salesforce Apex, inspired by Temporal and DBOS. By orchestrating native platform features—Queueable Apex, Platform Events, Transaction Finalizers, and Apex Cursors—Revenant allows developers to build complex, reliable, and resumable state machines that survive transaction failures, governor limit exhaustion, and platform limits.
 
 ---
 
@@ -12,8 +12,8 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 *   **Continue-As-New (Perpetual Loops)**: Execute perpetual poller tasks or long-lived daemons. A step can request a transition to a new successor run linked via `Previous_Instance__c` to prevent storage footprint explosion and clear heap and debug log limits.
 
 ### Fault Tolerance & Safety
-*   **Distributed Transaction Rollbacks (Sagas)**: Steps implementing [CompensatableStep](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/CompensatableStep.cls) register on a LIFO rollback stack upon successful forward completion. If a forward step fails permanently, the engine automatically executes their `compensate` methods in reverse order.
-*   **Watchdog Step Timeouts**: Steps can declare custom execution timeouts. A Schedulable watchdog ([WorkflowTimeoutJob](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/WorkflowTimeoutJob.cls)) will terminate hung steps (e.g., blocked callouts) and flag the instance as failed.
+*   **Distributed Transaction Rollbacks (Sagas)**: Steps implementing [CompensatableStep](force-app/main/default/classes/CompensatableStep.cls) register on a LIFO rollback stack upon successful forward completion. If a forward step fails permanently, the engine automatically executes their `compensate` methods in reverse order.
+*   **Watchdog Step Timeouts**: Steps can declare custom execution timeouts. A Schedulable watchdog ([WorkflowTimeoutJob](force-app/main/default/classes/WorkflowTimeoutJob.cls)) will terminate hung steps (e.g., blocked callouts) and flag the instance as failed.
 *   **Large Payload Offloading**: When input, output, or state serialization strings exceed 100,000 characters (approaching the 131,072-character long text area limit), the engine transparently offloads the payload to `ContentVersion` files and links them to the parent instance.
 
 ### Integration & Monitoring
@@ -59,7 +59,7 @@ graph TD
 ## Developer Guide
 
 ### 1. Define a Step
-To create a step, implement the [WorkflowStep](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/WorkflowStep.cls) interface (or [CompensatableStep](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/CompensatableStep.cls) if rollback logic is required):
+To create a step, implement the [WorkflowStep](force-app/main/default/classes/WorkflowStep.cls) interface (or [CompensatableStep](force-app/main/default/classes/CompensatableStep.cls) if rollback logic is required):
 
 ```java
 public class ProvisionSandboxStep implements CompensatableStep {
@@ -91,7 +91,7 @@ public class ProvisionSandboxStep implements CompensatableStep {
 ```
 
 ### 2. Define the Workflow DAG
-Create a class implementing [WorkflowDefinition](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/WorkflowDefinition.cls) to model step transitions:
+Create a class implementing [WorkflowDefinition](force-app/main/default/classes/WorkflowDefinition.cls) to model step transitions:
 
 ```java
 public class OnboardingWorkflow implements WorkflowDefinition {
