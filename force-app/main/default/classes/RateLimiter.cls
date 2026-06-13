@@ -28,6 +28,7 @@ public inherited sharing class RateLimiter {
                 SELECT Capacity__c, Refill_Rate_Per_Second__c 
                 FROM Rate_Limit_Config__mdt 
                 WHERE DeveloperName = :integrationKey
+                WITH SYSTEM_MODE
             ];
             if (configs.isEmpty()) {
                 throw new WorkflowEngine.WorkflowException('No rate limit configuration found for: ' + integrationKey);
@@ -40,6 +41,7 @@ public inherited sharing class RateLimiter {
             SELECT Tokens_Remaining__c, Last_Refill_Time_Ms__c 
             FROM Rate_Limit_State__c 
             WHERE Integration_Key__c = :integrationKey
+            WITH SYSTEM_MODE
             FOR UPDATE
         ];
         
@@ -53,7 +55,7 @@ public inherited sharing class RateLimiter {
                 Tokens_Remaining__c = config.Capacity__c,
                 Last_Refill_Time_Ms__c = now
             );
-            insert state;
+            insert as system state;
         } else {
             state = states[0];
         }
@@ -67,7 +69,7 @@ public inherited sharing class RateLimiter {
         if (currentTokens >= 1.0) {
             state.Tokens_Remaining__c = currentTokens - 1.0;
             state.Last_Refill_Time_Ms__c = now;
-            update state;
+            update as system state;
             return new AcquireResult(true, 0);
         } else {
             // Calculate delay until next token is available

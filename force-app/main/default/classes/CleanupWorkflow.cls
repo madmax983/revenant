@@ -37,6 +37,7 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
                 SELECT Id FROM Workflow_Instance__c
                 WHERE Status__c IN ('Completed', 'Failed', 'Compensated', 'Cancelled', 'ContinuedAsNew')
                 AND CreatedDate < :threshold
+                WITH SYSTEM_MODE
                 LIMIT :batchSize
             ];
 
@@ -59,6 +60,7 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
             List<ContentDocumentLink> links = [
                 SELECT ContentDocumentId FROM ContentDocumentLink 
                 WHERE LinkedEntityId IN :oldInstanceIds
+                WITH SYSTEM_MODE
             ];
             if (!links.isEmpty()) {
                 Set<Id> docIds = new Set<Id>();
@@ -66,11 +68,16 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
                     docIds.add(link.ContentDocumentId);
                 }
                 // Delete ContentDocument records, which deletes file versions and links
-                delete [SELECT Id FROM ContentDocument WHERE Id IN :docIds];
+                List<ContentDocument> docsToDelete = [
+                    SELECT Id FROM ContentDocument 
+                    WHERE Id IN :docIds
+                    WITH SYSTEM_MODE
+                ];
+                delete as system docsToDelete;
             }
 
             // Perform delete (Master-Detail cascade deletes all steps and signals automatically)
-            delete oldInstances;
+            delete as system oldInstances;
             state.deletedCount += oldInstances.size();
 
             // Yield to process next batch with fresh limits

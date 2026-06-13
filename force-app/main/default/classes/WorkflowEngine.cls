@@ -16,7 +16,7 @@ public inherited sharing class WorkflowEngine {
                 SELECT Id FROM Workflow_Instance__c 
                 WHERE Correlation_Key__c = :correlationKey 
                 AND Status__c IN ('Pending', 'Running', 'Suspended')
-                LIMIT 1
+                WITH SYSTEM_MODE LIMIT 1
             ];
             if (!existing.isEmpty()) {
                 throw new WorkflowException('An active workflow already exists with correlation key: ' + correlationKey);
@@ -41,10 +41,10 @@ public inherited sharing class WorkflowEngine {
             instance.Definition_Version__c = 1;
         }
 
-        insert instance;
+        insert as system instance;
 
         instance.Input__c = savePayloadIfNeeded(instance.Id, (input != null) ? JSON.serialize(input) : null, 'Input_' + instance.Id);
-        update instance;
+        update as system instance;
 
         // Enqueue the first step execution
         if (Test.isRunningTest()) {
@@ -65,7 +65,7 @@ public inherited sharing class WorkflowEngine {
                 SELECT Id FROM Workflow_Instance__c 
                 WHERE Correlation_Key__c = :correlationKey 
                 AND Status__c IN ('Pending', 'Running', 'Suspended')
-                LIMIT 1
+                WITH SYSTEM_MODE LIMIT 1
             ];
             if (!existing.isEmpty()) {
                 throw new WorkflowException('An active workflow already exists with correlation key: ' + correlationKey);
@@ -91,10 +91,10 @@ public inherited sharing class WorkflowEngine {
             instance.Definition_Version__c = 1;
         }
 
-        insert instance;
+        insert as system instance;
 
         instance.Input__c = savePayloadIfNeeded(instance.Id, (input != null) ? JSON.serialize(input) : null, 'Input_' + instance.Id);
-        update instance;
+        update as system instance;
 
         if (Test.isRunningTest()) {
             System.enqueueJob(new WorkflowOrchestrator(instance.Id));
@@ -112,7 +112,7 @@ public inherited sharing class WorkflowEngine {
             SELECT Id, Workflow_Name__c, Current_Step__c FROM Workflow_Instance__c 
             WHERE Correlation_Key__c = :correlationKey 
             AND Status__c = 'Suspended'
-            LIMIT 1
+            WITH SYSTEM_MODE LIMIT 1
             FOR UPDATE
         ];
 
@@ -122,7 +122,7 @@ public inherited sharing class WorkflowEngine {
 
         Workflow_Instance__c instance = instances[0];
         instance.Status__c = 'Running';
-        update instance;
+        update as system instance;
 
         // If there is an active step, we can store the resume payload in its step execution record
         if (String.isNotBlank(instance.Current_Step__c)) {
@@ -130,14 +130,14 @@ public inherited sharing class WorkflowEngine {
                 SELECT Id, Output__c FROM Workflow_Step_Execution__c
                 WHERE Workflow_Instance__c = :instance.Id
                 AND Step_Name__c = :instance.Current_Step__c
-                ORDER BY CreatedDate DESC, Id DESC
+                WITH SYSTEM_MODE ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
             if (!activeSteps.isEmpty()) {
                 Workflow_Step_Execution__c stepExec = activeSteps[0];
                 stepExec.Status__c = 'Running';
                 stepExec.Output__c = savePayloadIfNeeded(instance.Id, payload, 'Resume_' + stepExec.Id);
-                update stepExec;
+                update as system stepExec;
             }
         }
 
@@ -156,7 +156,7 @@ public inherited sharing class WorkflowEngine {
             SELECT Id, Workflow_Name__c, Current_Step__c FROM Workflow_Instance__c 
             WHERE Id = :instanceId 
             AND Status__c = 'Suspended'
-            LIMIT 1
+            WITH SYSTEM_MODE LIMIT 1
             FOR UPDATE
         ];
 
@@ -166,7 +166,7 @@ public inherited sharing class WorkflowEngine {
 
         Workflow_Instance__c instance = instances[0];
         instance.Status__c = 'Running';
-        update instance;
+        update as system instance;
 
         // If there is an active step, we can store the resume payload in its step execution record
         if (String.isNotBlank(instance.Current_Step__c)) {
@@ -174,14 +174,14 @@ public inherited sharing class WorkflowEngine {
                 SELECT Id, Output__c FROM Workflow_Step_Execution__c
                 WHERE Workflow_Instance__c = :instance.Id
                 AND Step_Name__c = :instance.Current_Step__c
-                ORDER BY CreatedDate DESC, Id DESC
+                WITH SYSTEM_MODE ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
             if (!activeSteps.isEmpty()) {
                 Workflow_Step_Execution__c stepExec = activeSteps[0];
                 stepExec.Status__c = 'Running';
                 stepExec.Output__c = savePayloadIfNeeded(instance.Id, payload, 'Resume_' + stepExec.Id);
-                update stepExec;
+                update as system stepExec;
             }
         }
 
@@ -205,7 +205,7 @@ public inherited sharing class WorkflowEngine {
             SELECT Id, Name, Workflow_Name__c, Status__c, Current_Step__c, Input__c, Correlation_Key__c, Parent_Instance__c, Compensation_Stack__c, Definition_Version__c 
             FROM Workflow_Instance__c 
             WHERE Id = :instanceId 
-            LIMIT 1
+            WITH SYSTEM_MODE LIMIT 1
             FOR UPDATE
         ];
 
@@ -232,10 +232,10 @@ public inherited sharing class WorkflowEngine {
             WorkflowDefinition def = (WorkflowDefinition)wflowType.newInstance();
             instance.Current_Step__c = def.getInitialStep();
             instance.Status__c = 'Running';
-            update instance;
+            update as system instance;
         } else if (instance.Status__c == 'Suspended' || instance.Status__c == 'Pending') {
             instance.Status__c = 'Running';
-            update instance;
+            update as system instance;
         }
 
         // If stepName is blank but Current_Step__c is a parallel list, this is a stale/duplicate orchestrator run. Return early.
@@ -271,7 +271,7 @@ public inherited sharing class WorkflowEngine {
             FROM Workflow_Step_Execution__c
             WHERE Workflow_Instance__c = :instanceId
             AND Step_Name__c = :activeStepName
-            ORDER BY CreatedDate DESC, Id DESC
+            WITH SYSTEM_MODE ORDER BY CreatedDate DESC, Id DESC
             LIMIT 1
         ];
 
@@ -288,18 +288,18 @@ public inherited sharing class WorkflowEngine {
                 SELECT Output__c FROM Workflow_Step_Execution__c
                 WHERE Workflow_Instance__c = :instanceId
                 AND Status__c = 'Completed'
-                ORDER BY CreatedDate DESC, Id DESC
+                WITH SYSTEM_MODE ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
             stepExec.Input__c = !completedSteps.isEmpty() ? completedSteps[0].Output__c : instance.Input__c;
-            insert stepExec;
+            insert as system stepExec;
         } else {
             stepExec = stepExecs[0];
             if (stepExec.Status__c == 'Completed') {
                 throw new WorkflowException('Current step ' + activeStepName + ' is already completed.');
             }
             stepExec.Status__c = 'Running';
-            update stepExec;
+            update as system stepExec;
         }
 
         // 4. Resolve previous step output & step state (for yielded/resumed executions)
@@ -312,7 +312,7 @@ public inherited sharing class WorkflowEngine {
                 WHERE Workflow_Instance__c = :instanceId
                 AND Status__c = 'Completed'
                 AND Step_Name__c NOT IN :activeParallelSteps
-                ORDER BY CreatedDate DESC, Id DESC
+                WITH SYSTEM_MODE ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
         } else {
@@ -321,7 +321,7 @@ public inherited sharing class WorkflowEngine {
                 WHERE Workflow_Instance__c = :instanceId
                 AND Status__c = 'Completed'
                 AND Step_Name__c != :activeStepName
-                ORDER BY CreatedDate DESC, Id DESC
+                WITH SYSTEM_MODE ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
         }
@@ -381,7 +381,7 @@ public inherited sharing class WorkflowEngine {
         // Re-query to avoid overwriting a timeout or finalizer crash status and race conditions
         Workflow_Instance__c freshInstance = [
             SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c, Output__c, Parent_Instance__c, Workflow_Name__c, Correlation_Key__c, Input__c, Definition_Version__c 
-            FROM Workflow_Instance__c WHERE Id = :instance.Id FOR UPDATE
+            FROM Workflow_Instance__c WHERE Id = :instance.Id WITH SYSTEM_MODE FOR UPDATE
         ];
         if (freshInstance.Status__c == 'Failed' || freshInstance.Status__c == 'Compensating' || freshInstance.Status__c == 'Compensated' || freshInstance.Status__c == 'Cancelled' || freshInstance.Status__c == 'Cancelling' || freshInstance.Status__c == 'ContinuedAsNew') {
             throw new WorkflowException('Workflow execution was terminated, cancelled, is compensating, or was continued as new.');
@@ -392,7 +392,7 @@ public inherited sharing class WorkflowEngine {
             // Step is complete. Store output.
             stepExec.Status__c = 'Completed';
             stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.outputJson, 'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
-            update stepExec;
+            update as system stepExec;
 
             // Update compensation stack if step is CompensatableStep
             Type stepType = Type.forName(stepExec.Step_Name__c);
@@ -407,7 +407,7 @@ public inherited sharing class WorkflowEngine {
                     instance.Compensation_Stack__c = JSON.serialize(stack);
                     // If not parallel or if parallel and not all done, update here so stack is saved.
                     // (Parallel allDone paths will update instance later, but doing a single update here is safe).
-                    update instance;
+                    update as system instance;
                 }
             }
 
@@ -418,8 +418,7 @@ public inherited sharing class WorkflowEngine {
                     SELECT Step_Name__c, Status__c, Output__c 
                     FROM Workflow_Step_Execution__c 
                     WHERE Workflow_Instance__c = :instance.Id 
-                    AND Step_Name__c IN :activeParallelSteps
-                ];
+                    AND Step_Name__c IN :activeParallelSteps WITH SYSTEM_MODE];
                 
                 Boolean allDone = true;
                 for (String ps : activeParallelSteps) {
@@ -444,7 +443,7 @@ public inherited sharing class WorkflowEngine {
                         WHERE Workflow_Instance__c = :instance.Id
                         AND Status__c = 'Completed'
                         AND Step_Name__c NOT IN :activeParallelSteps
-                        ORDER BY CreatedDate DESC, Id DESC
+                        WITH SYSTEM_MODE ORDER BY CreatedDate DESC, Id DESC
                         LIMIT 1
                     ];
 
@@ -482,17 +481,17 @@ public inherited sharing class WorkflowEngine {
                         joinStepExec.Status__c = 'Pending';
                         joinStepExec.Input__c = savePayloadIfNeeded(instance.Id, joinInputJson, 'Input_' + nextStepName.replaceAll('[^a-zA-Z0-9]', '_'));
                         joinStepExec.Retry_Count__c = 0;
-                        insert joinStepExec;
+                        insert as system joinStepExec;
 
                         instance.Current_Step__c = nextStepName;
-                        update instance;
+                        update as system instance;
 
                         enqueueOrchestrator(instance.Id, null);
                     } else {
                         instance.Status__c = 'Completed';
                         instance.Output__c = savePayloadIfNeeded(instance.Id, joinInputJson, 'Output_Join');
                         instance.Current_Step__c = null;
-                        update instance;
+                        update as system instance;
 
                         notifyParentCompletion(instance);
                     }
@@ -513,14 +512,14 @@ public inherited sharing class WorkflowEngine {
                     instance.Status__c = 'Completed';
                     instance.Output__c = savePayloadIfNeeded(instance.Id, result.outputJson, 'Output_Final');
                     instance.Current_Step__c = null;
-                    update instance;
+                    update as system instance;
 
                     // Notify parent completion if this is a child workflow
                     notifyParentCompletion(instance);
                 } else {
                     // Advance to next step
                     instance.Current_Step__c = nextStepName;
-                    update instance;
+                    update as system instance;
                     enqueueOrchestrator(instance.Id, null);
                 }
             }
@@ -529,26 +528,26 @@ public inherited sharing class WorkflowEngine {
             // Step yielded (e.g. Apex Cursor chunk). Save state to Output and run again in a new transaction.
             stepExec.Status__c = 'Running';
             stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.stepStateJson, 'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
-            update stepExec;
+            update as system stepExec;
 
             enqueueOrchestrator(instance.Id, null);
 
         } else if (result.action == StepResult.ActionType.SUSPEND) {
             // Step suspended (waiting for external signal). Save state and mark instance.
             stepExec.Status__c = 'Pending';
-            update stepExec;
+            update as system stepExec;
 
             instance.Status__c = 'Suspended';
-            update instance;
+            update as system instance;
 
         } else if (result.action == StepResult.ActionType.SLEEP) {
             // Step requested sleep
             stepExec.Status__c = 'Pending';
             stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.stepStateJson, 'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
-            update stepExec;
+            update as system stepExec;
 
             instance.Status__c = 'Suspended';
-            update instance;
+            update as system instance;
 
             scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
 
@@ -560,10 +559,10 @@ public inherited sharing class WorkflowEngine {
                 'childCorrelationKey' => result.childCorrelationKey
             };
             stepExec.Output__c = savePayloadIfNeeded(instance.Id, JSON.serialize(childInfo), 'State_ChildInfo_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
-            update stepExec;
+            update as system stepExec;
 
             instance.Status__c = 'Suspended';
-            update instance;
+            update as system instance;
 
             startChildWorkflow(instance.Id, result.childWorkflowName, result.childCorrelationKey, result.childInputJson);
 
@@ -575,20 +574,20 @@ public inherited sharing class WorkflowEngine {
                 'approvalRole' => result.approvalRole
             };
             stepExec.Output__c = savePayloadIfNeeded(instance.Id, JSON.serialize(state), 'State_Approval_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
-            update stepExec;
+            update as system stepExec;
 
             instance.Status__c = 'Suspended';
-            update instance;
+            update as system instance;
 
         } else if (result.action == StepResult.ActionType.SPLIT) {
             stepExec.Status__c = 'Completed';
             stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.parallelInputJson != null ? result.parallelInputJson : result.outputJson, 'Output_Split_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
-            update stepExec;
+            update as system stepExec;
 
             String parallelStepsStr = String.join(result.parallelStepNames, ',');
             instance.Current_Step__c = parallelStepsStr;
             instance.Status__c = 'Running';
-            update instance;
+            update as system instance;
 
             List<Workflow_Step_Execution__c> parallelExecs = new List<Workflow_Step_Execution__c>();
             for (String ps : result.parallelStepNames) {
@@ -600,7 +599,7 @@ public inherited sharing class WorkflowEngine {
                 pe.Retry_Count__c = 0;
                 parallelExecs.add(pe);
             }
-            insert parallelExecs;
+            insert as system parallelExecs;
 
             for (String ps : result.parallelStepNames) {
                 enqueueOrchestrator(instance.Id, ps);
@@ -618,13 +617,13 @@ public inherited sharing class WorkflowEngine {
             if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
                 stepExec.Status__c = 'Failed';
                 stepExec.Error_Details__c = 'Max retries (' + policy.maximumAttempts + ') exceeded.';
-                update stepExec;
+                update as system stepExec;
 
                 failWorkflowInstance(instance.Id, instance.Current_Step__c, 'Max retries exceeded.');
             } else {
                 stepExec.Status__c = 'Retrying';
                 stepExec.Output__c = null;
-                update stepExec;
+                update as system stepExec;
                 
                 // Calculate exponential backoff
                 // delay = initialInterval * (coefficient ^ (retryCount - 1))
@@ -639,7 +638,7 @@ public inherited sharing class WorkflowEngine {
         } else if (result.action == StepResult.ActionType.CONTINUE_AS_NEW) {
             stepExec.Status__c = 'ContinuedAsNew';
             stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.nextInputJson, 'ContinueInput_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
-            update stepExec;
+            update as system stepExec;
 
             // Resolve the new correlation key
             String newKey = resolveContinueAsNewKey(instance.Correlation_Key__c, result.newCorrelationKey);
@@ -647,7 +646,7 @@ public inherited sharing class WorkflowEngine {
             // Mark current instance as ContinuedAsNew
             instance.Status__c = 'ContinuedAsNew';
             instance.Current_Step__c = null;
-            update instance;
+            update as system instance;
 
             // Spawn successor instance
             Workflow_Instance__c nextInstance = new Workflow_Instance__c(
@@ -656,11 +655,11 @@ public inherited sharing class WorkflowEngine {
                 Previous_Instance__c = instance.Id,
                 Definition_Version__c = instance.Definition_Version__c
             );
-            insert nextInstance;
+            insert as system nextInstance;
 
             // Set input and save payload
             nextInstance.Input__c = savePayloadIfNeeded(nextInstance.Id, result.nextInputJson, 'Input_' + nextInstance.Id);
-            update nextInstance;
+            update as system nextInstance;
 
             // Enqueue the successor run
             if (Test.isRunningTest()) {
@@ -686,7 +685,7 @@ public inherited sharing class WorkflowEngine {
         List<Workflow_Instance__c> instances = [
             SELECT Id, Current_Step__c FROM Workflow_Instance__c 
             WHERE Id = :instanceId 
-            LIMIT 1
+            WITH SYSTEM_MODE LIMIT 1
             FOR UPDATE
         ];
 
@@ -705,14 +704,14 @@ public inherited sharing class WorkflowEngine {
                 SELECT Id FROM Workflow_Step_Execution__c
                 WHERE Workflow_Instance__c = :instanceId
                 AND Step_Name__c = :targetStepName
-                ORDER BY CreatedDate DESC, Id DESC
+                WITH SYSTEM_MODE ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
             if (!stepExecs.isEmpty()) {
                 Workflow_Step_Execution__c stepExec = stepExecs[0];
                 stepExec.Status__c = 'Failed';
                 stepExec.Error_Details__c = (ex != null ? ex.getMessage() + '\n' + ex.getStackTraceString() : 'Unknown governor limit / crash');
-                update stepExec;
+                update as system stepExec;
             }
         }
 
@@ -729,7 +728,7 @@ public inherited sharing class WorkflowEngine {
             SELECT Id, Name, Status__c, Error_Message__c, Compensation_Stack__c, Workflow_Name__c, Correlation_Key__c 
             FROM Workflow_Instance__c 
             WHERE Id = :instanceId 
-            LIMIT 1
+            WITH SYSTEM_MODE LIMIT 1
             FOR UPDATE
         ];
         if (instances.isEmpty()) {
@@ -747,7 +746,7 @@ public inherited sharing class WorkflowEngine {
         if (hasCompensations) {
             instance.Status__c = 'Compensating';
             instance.Error_Message__c = 'Failed at step ' + stepName + ': ' + errorMessage;
-            update instance;
+            update as system instance;
 
             // Kick off rollback loop
             if (Test.isRunningTest()) {
@@ -760,7 +759,7 @@ public inherited sharing class WorkflowEngine {
         } else {
             instance.Status__c = 'Failed';
             instance.Error_Message__c = 'Failed at step ' + stepName + ': ' + errorMessage;
-            update instance;
+            update as system instance;
             WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
         }
     }
@@ -788,7 +787,7 @@ public inherited sharing class WorkflowEngine {
                 SELECT Id FROM Workflow_Instance__c 
                 WHERE Correlation_Key__c = :correlationKey 
                 AND Status__c IN ('Pending', 'Running', 'Suspended')
-                LIMIT 1
+                WITH SYSTEM_MODE LIMIT 1
             ];
             if (!existing.isEmpty()) {
                 throw new WorkflowException('An active workflow already exists with correlation key: ' + correlationKey);
@@ -814,10 +813,10 @@ public inherited sharing class WorkflowEngine {
             instance.Definition_Version__c = 1;
         }
 
-        insert instance;
+        insert as system instance;
 
         instance.Input__c = savePayloadIfNeeded(instance.Id, inputJson, 'Input_Child_' + instance.Id);
-        update instance;
+        update as system instance;
         
         if (!Test.isRunningTest()) {
             enqueueOrchestrator(instance.Id, null);
@@ -828,8 +827,7 @@ public inherited sharing class WorkflowEngine {
         if (childInstance.Parent_Instance__c != null) {
             Workflow_Instance__c parent = [
                 SELECT Correlation_Key__c FROM Workflow_Instance__c 
-                WHERE Id = :childInstance.Parent_Instance__c
-            ];
+                WHERE Id = :childInstance.Parent_Instance__c WITH SYSTEM_MODE];
             
             String targetKey = String.isNotBlank(parent.Correlation_Key__c) 
                 ? parent.Correlation_Key__c 
@@ -877,7 +875,7 @@ public inherited sharing class WorkflowEngine {
                 SELECT Id, Status__c FROM Workflow_Instance__c 
                 WHERE (Correlation_Key__c = :keyOrId OR Id = :targetId)
                 AND Status__c IN ('Pending', 'Running', 'Suspended')
-                LIMIT 1
+                WITH SYSTEM_MODE LIMIT 1
                 FOR UPDATE
             ];
         } else {
@@ -885,7 +883,7 @@ public inherited sharing class WorkflowEngine {
                 SELECT Id, Status__c FROM Workflow_Instance__c 
                 WHERE Correlation_Key__c = :keyOrId 
                 AND Status__c IN ('Pending', 'Running', 'Suspended')
-                LIMIT 1
+                WITH SYSTEM_MODE LIMIT 1
                 FOR UPDATE
             ];
         }
@@ -918,13 +916,13 @@ public inherited sharing class WorkflowEngine {
         sig.Signal_Name__c = signalName;
         sig.Payload__c = payload;
         sig.Status__c = 'Received';
-        insert sig;
+        insert as system sig;
 
         // If the workflow is suspended or running, resume/orchestrate it
         if (instance.Status__c == 'Suspended' || instance.Status__c == 'Running') {
             if (instance.Status__c == 'Suspended') {
                 instance.Status__c = 'Running';
-                update instance;
+                update as system instance;
             }
 
             if (Test.isRunningTest()) {
@@ -953,7 +951,7 @@ public inherited sharing class WorkflowEngine {
             SELECT Id, Status__c, Current_Step__c, Error_Message__c, Compensation_Stack__c 
             FROM Workflow_Instance__c 
             WHERE Id = :instanceId 
-            LIMIT 1
+            WITH SYSTEM_MODE LIMIT 1
             FOR UPDATE
         ];
         if (instances.isEmpty()) {
@@ -991,7 +989,7 @@ public inherited sharing class WorkflowEngine {
                 FROM Workflow_Step_Execution__c
                 WHERE Workflow_Instance__c = :instanceId
                 AND Step_Name__c = :targetStepName
-                ORDER BY CreatedDate DESC, Id DESC
+                WITH SYSTEM_MODE ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
             if (!stepExecs.isEmpty()) {
@@ -1000,7 +998,7 @@ public inherited sharing class WorkflowEngine {
                     stepExec.Status__c = 'Pending';
                     stepExec.Retry_Count__c = 0; // reset retry counter
                     stepExec.Error_Details__c = null;
-                    update stepExec;
+                    update as system stepExec;
                 }
             }
         }
@@ -1011,7 +1009,7 @@ public inherited sharing class WorkflowEngine {
             instance.Status__c = 'Running';
         }
         instance.Error_Message__c = null;
-        update instance;
+        update as system instance;
 
         // Enqueue the orchestrator to resume execution
         if (hasCompensations || !instance.Current_Step__c.contains(',')) {
@@ -1027,7 +1025,7 @@ public inherited sharing class WorkflowEngine {
                     SELECT Status__c FROM Workflow_Step_Execution__c
                     WHERE Workflow_Instance__c = :instanceId
                     AND Step_Name__c = :targetStepName
-                    ORDER BY CreatedDate DESC, Id DESC
+                    WITH SYSTEM_MODE ORDER BY CreatedDate DESC, Id DESC
                     LIMIT 1
                 ];
                 if (stepExecs.isEmpty() || stepExecs[0].Status__c != 'Completed') {
@@ -1046,7 +1044,7 @@ public inherited sharing class WorkflowEngine {
         if (String.isBlank(instance.Compensation_Stack__c)) {
             instance.Status__c = (instance.Status__c == 'Cancelling') ? 'Cancelled' : 'Compensated';
             instance.Current_Step__c = null;
-            update instance;
+            update as system instance;
             return;
         }
 
@@ -1054,7 +1052,7 @@ public inherited sharing class WorkflowEngine {
         if (stack.isEmpty()) {
             instance.Status__c = (instance.Status__c == 'Cancelling') ? 'Cancelled' : 'Compensated';
             instance.Current_Step__c = null;
-            update instance;
+            update as system instance;
             return;
         }
 
@@ -1068,7 +1066,7 @@ public inherited sharing class WorkflowEngine {
             FROM Workflow_Step_Execution__c
             WHERE Workflow_Instance__c = :instance.Id
             AND Step_Name__c = :compensationStepLogName
-            ORDER BY CreatedDate DESC, Id DESC
+            WITH SYSTEM_MODE ORDER BY CreatedDate DESC, Id DESC
             LIMIT 1
         ];
 
@@ -1086,19 +1084,19 @@ public inherited sharing class WorkflowEngine {
                 FROM Workflow_Step_Execution__c
                 WHERE Workflow_Instance__c = :instance.Id
                 AND Step_Name__c = :activeStepName
-                ORDER BY CreatedDate DESC, Id DESC
+                WITH SYSTEM_MODE ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
             
             stepExec.Input__c = !originalExecs.isEmpty() ? originalExecs[0].Input__c : null;
             stepExec.Output__c = !originalExecs.isEmpty() ? originalExecs[0].Output__c : null;
-            insert stepExec;
+            insert as system stepExec;
         } else {
             stepExec = stepExecs[0];
             if (stepExec.Status__c == 'Completed' || stepExec.Status__c == 'Compensated') {
                 stack.remove(stack.size() - 1);
                 instance.Compensation_Stack__c = JSON.serialize(stack);
-                update instance;
+                update as system instance;
                 
                 if (Test.isRunningTest()) {
                     if (!disableQueueableInTest) {
@@ -1110,7 +1108,7 @@ public inherited sharing class WorkflowEngine {
                 return;
             }
             stepExec.Status__c = 'Running';
-            update stepExec;
+            update as system stepExec;
         }
 
         // 4. Instantiate the step and execute compensate
@@ -1122,11 +1120,11 @@ public inherited sharing class WorkflowEngine {
         Object stepInstanceObj = stepType.newInstance();
         if (!(stepInstanceObj instanceof CompensatableStep)) {
             stepExec.Status__c = 'Compensated';
-            update stepExec;
+            update as system stepExec;
 
             stack.remove(stack.size() - 1);
             instance.Compensation_Stack__c = JSON.serialize(stack);
-            update instance;
+            update as system instance;
             
             if (Test.isRunningTest()) {
                 if (!disableQueueableInTest) {
@@ -1148,7 +1146,7 @@ public inherited sharing class WorkflowEngine {
             AND Status__c = 'Completed'
             AND Step_Name__c != :activeStepName
             AND Step_Name__c != :compensationStepLogName
-            ORDER BY CreatedDate DESC, Id DESC
+            WITH SYSTEM_MODE ORDER BY CreatedDate DESC, Id DESC
             LIMIT 1
         ];
         if (!completedBefore.isEmpty()) {
@@ -1194,8 +1192,7 @@ public inherited sharing class WorkflowEngine {
 
     private static void handleCompensationStepResult(Workflow_Instance__c instance, Workflow_Step_Execution__c stepExec, StepResult result, List<String> stack) {
         Workflow_Instance__c freshInstance = [
-            SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instance.Id
-        ];
+            SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instance.Id WITH SYSTEM_MODE];
         if (freshInstance.Status__c == 'Failed' || freshInstance.Status__c == 'Cancelled') {
             throw new WorkflowException('Workflow execution was terminated or cancelled.');
         }
@@ -1203,7 +1200,7 @@ public inherited sharing class WorkflowEngine {
         if (result.action == StepResult.ActionType.COMPLETE) {
             stepExec.Status__c = 'Compensated';
             stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.outputJson, 'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
-            update stepExec;
+            update as system stepExec;
 
             stack.remove(stack.size() - 1);
             instance.Compensation_Stack__c = JSON.serialize(stack);
@@ -1212,7 +1209,7 @@ public inherited sharing class WorkflowEngine {
                 instance.Status__c = (instance.Status__c == 'Cancelling') ? 'Cancelled' : 'Compensated';
                 instance.Current_Step__c = null;
             }
-            update instance;
+            update as system instance;
 
             if (Test.isRunningTest()) {
                 if (!disableQueueableInTest) {
@@ -1225,21 +1222,21 @@ public inherited sharing class WorkflowEngine {
         } else if (result.action == StepResult.ActionType.YIELD) {
             stepExec.Status__c = 'Running';
             stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.stepStateJson, 'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
-            update stepExec;
+            update as system stepExec;
             enqueueOrchestrator(instance.Id, null);
 
         } else if (result.action == StepResult.ActionType.SUSPEND) {
             stepExec.Status__c = 'Pending';
-            update stepExec;
+            update as system stepExec;
             instance.Status__c = 'Suspended';
-            update instance;
+            update as system instance;
 
         } else if (result.action == StepResult.ActionType.SLEEP) {
             stepExec.Status__c = 'Pending';
             stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.stepStateJson, 'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
-            update stepExec;
+            update as system stepExec;
             instance.Status__c = 'Suspended';
-            update instance;
+            update as system instance;
             scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
 
         } else if (result.action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
@@ -1250,9 +1247,9 @@ public inherited sharing class WorkflowEngine {
                 'approvalRole' => result.approvalRole
             };
             stepExec.Output__c = savePayloadIfNeeded(instance.Id, JSON.serialize(state), 'State_Approval_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
-            update stepExec;
+            update as system stepExec;
             instance.Status__c = 'Suspended';
-            update instance;
+            update as system instance;
 
         } else if (result.action == StepResult.ActionType.RETRY) {
             stepExec.Retry_Count__c += 1;
@@ -1261,16 +1258,16 @@ public inherited sharing class WorkflowEngine {
             if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
                 stepExec.Status__c = 'Failed';
                 stepExec.Error_Details__c = 'Compensation max retries (' + policy.maximumAttempts + ') exceeded.';
-                update stepExec;
+                update as system stepExec;
 
                 instance.Status__c = 'Failed';
                 instance.Error_Message__c = 'Compensation step ' + stepExec.Step_Name__c + ' failed after max retries.';
-                update instance;
+                update as system instance;
                 WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
             } else {
                 stepExec.Status__c = 'Retrying';
                 stepExec.Output__c = null;
-                update stepExec;
+                update as system stepExec;
                 
                 Double backoff = Math.pow((Double)policy.backoffCoefficient, (Double)(stepExec.Retry_Count__c - 1));
                 Integer delay = (Integer)(policy.initialIntervalSeconds * backoff);
@@ -1285,8 +1282,7 @@ public inherited sharing class WorkflowEngine {
         String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
         List<CronTrigger> triggers = [
             SELECT Id FROM CronTrigger 
-            WHERE CronJobDetail.Name = :jobName
-        ];
+            WHERE CronJobDetail.Name = :jobName WITH SYSTEM_MODE];
         for (CronTrigger triggerJob : triggers) {
             try {
                 System.abortJob(triggerJob.Id);
@@ -1304,7 +1300,7 @@ public inherited sharing class WorkflowEngine {
             SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c 
             FROM Workflow_Instance__c 
             WHERE Id = :instanceId 
-            LIMIT 1
+            WITH SYSTEM_MODE LIMIT 1
             FOR UPDATE
         ];
         if (instances.isEmpty()) {
@@ -1333,13 +1329,12 @@ public inherited sharing class WorkflowEngine {
                 FROM Workflow_Step_Execution__c
                 WHERE Workflow_Instance__c = :instanceId
                 AND Step_Name__c IN :activeStepNames
-                AND Status__c IN ('Running', 'Pending', 'Retrying')
-            ];
+                AND Status__c IN ('Running', 'Pending', 'Retrying') WITH SYSTEM_MODE];
             for (Workflow_Step_Execution__c stepExec : stepExecs) {
                 stepExec.Status__c = 'Cancelled';
             }
             if (!stepExecs.isEmpty()) {
-                update stepExecs;
+                update as system stepExecs;
             }
         }
 
@@ -1353,7 +1348,7 @@ public inherited sharing class WorkflowEngine {
         if (hasCompensations) {
             instance.Status__c = 'Cancelling';
             instance.Error_Message__c = 'Cancelled by user. Compensating.';
-            update instance;
+            update as system instance;
 
             // Kick off rollback loop
             if (Test.isRunningTest()) {
@@ -1366,15 +1361,14 @@ public inherited sharing class WorkflowEngine {
         } else {
             instance.Status__c = 'Cancelled';
             instance.Error_Message__c = 'Cancelled by user.';
-            update instance;
+            update as system instance;
         }
 
         // Recursively cancel active child workflows
         List<Workflow_Instance__c> childInstances = [
             SELECT Id FROM Workflow_Instance__c 
             WHERE Parent_Instance__c = :instance.Id 
-            AND Status__c IN ('Pending', 'Running', 'Suspended', 'Cancelling')
-        ];
+            AND Status__c IN ('Pending', 'Running', 'Suspended', 'Cancelling') WITH SYSTEM_MODE];
         for (Workflow_Instance__c child : childInstances) {
             cancel(child.Id, runCompensations);
         }
@@ -1391,8 +1385,7 @@ public inherited sharing class WorkflowEngine {
             SELECT Id FROM CronTrigger 
             WHERE (CronJobDetail.Name LIKE :sleepPrefix 
                    OR CronJobDetail.Name LIKE :retryPrefix 
-                   OR CronJobDetail.Name LIKE :timeoutPrefix)
-        ];
+                   OR CronJobDetail.Name LIKE :timeoutPrefix) WITH SYSTEM_MODE];
         for (CronTrigger triggerJob : triggers) {
             try {
                 System.abortJob(triggerJob.Id);
@@ -1437,8 +1430,7 @@ public inherited sharing class WorkflowEngine {
                 Id attachmentId = (Id)marker.get('$attachmentId');
                 List<ContentVersion> cvs = [
                     SELECT VersionData FROM ContentVersion 
-                    WHERE ContentDocumentId = :attachmentId AND IsLatest = true
-                ];
+                    WHERE ContentDocumentId = :attachmentId AND IsLatest = true WITH SYSTEM_MODE];
                 if (!cvs.isEmpty()) {
                     return cvs[0].VersionData.toString();
                 }
@@ -1455,16 +1447,16 @@ public inherited sharing class WorkflowEngine {
             cv.Title = title;
             cv.PathOnClient = title + '.json';
             cv.VersionData = Blob.valueOf(textValue);
-            insert cv;
+            insert as system cv;
             
-            Id docId = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv.Id].ContentDocumentId;
+            Id docId = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv.Id WITH SYSTEM_MODE].ContentDocumentId;
             
             ContentDocumentLink cdl = new ContentDocumentLink();
             cdl.ContentDocumentId = docId;
             cdl.LinkedEntityId = instanceId;
             cdl.ShareType = 'V';
             cdl.Visibility = 'AllUsers';
-            insert cdl;
+            insert as system cdl;
             
             return JSON.serialize(new Map<String, String>{'$attachmentId' => docId});
         }

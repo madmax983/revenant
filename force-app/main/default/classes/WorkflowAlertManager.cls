@@ -53,6 +53,7 @@ public inherited sharing class WorkflowAlertManager {
                    Time_Window_Minutes__c, Stall_Threshold_Hours__c
             FROM Workflow_Alert_Config__mdt
             WHERE DeveloperName = :devName OR DeveloperName = :truncatedDevName
+            WITH SYSTEM_MODE
         ];
         if (!configs.isEmpty()) {
             return configs[0];
@@ -65,6 +66,7 @@ public inherited sharing class WorkflowAlertManager {
                    Time_Window_Minutes__c, Stall_Threshold_Hours__c
             FROM Workflow_Alert_Config__mdt
             WHERE DeveloperName = 'Default'
+            WITH SYSTEM_MODE
         ];
         if (!configs.isEmpty()) {
             return configs[0];
@@ -89,6 +91,7 @@ public inherited sharing class WorkflowAlertManager {
             List<Workflow_Instance__c> recent = [
                 SELECT Status__c FROM Workflow_Instance__c
                 WHERE Workflow_Name__c = :workflowName
+                WITH SYSTEM_MODE
                 ORDER BY CreatedDate DESC, Id DESC
                 LIMIT :limitVal
             ];
@@ -117,6 +120,7 @@ public inherited sharing class WorkflowAlertManager {
                 WHERE Workflow_Name__c = :workflowName
                 AND (Status__c = 'Failed' OR Status__c = 'Compensated' OR Status__c = 'Cancelled')
                 AND CreatedDate >= :windowStart
+                WITH SYSTEM_MODE
             ];
             
             if (failCount >= limitVal) {

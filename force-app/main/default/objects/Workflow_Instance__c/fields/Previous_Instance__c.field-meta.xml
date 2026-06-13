@@ -2,7 +2,7 @@
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Previous_Instance__c</fullName>
     <deleteConstraint>SetNull</deleteConstraint>
-    <description>Points to the predecessor workflow instance that continued-as-new into this one.</description>
+    <description>Points to the predecessor workflow instance that continued-as-new into this one. (Upgraded)</description>
     <externalId>false</externalId>
     <label>Previous Instance</label>
     <referenceTo>Workflow_Instance__c</referenceTo>

@@ -24,7 +24,7 @@ public inherited sharing class WorkflowDashboardController {
         
         query += ' ORDER BY CreatedDate DESC LIMIT :limitSize OFFSET :offsetSize';
         
-        return Database.query(query);
+        return Database.query(query, AccessLevel.SYSTEM_MODE);
     }
 
     @AuraEnabled
@@ -38,7 +38,7 @@ public inherited sharing class WorkflowDashboardController {
             'failed' => 0
         };
         
-        for (AggregateResult ar : Database.query(query)) {
+        for (AggregateResult ar : Database.query(query, AccessLevel.SYSTEM_MODE)) {
             String stat = (String)ar.get('Status__c');
             Integer count = (Integer)ar.get('cnt');
             results.put('total', results.get('total') + count);
@@ -60,6 +60,7 @@ public inherited sharing class WorkflowDashboardController {
             SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, Input__c, Output__c, Current_Step__c, Error_Message__c, CreatedDate, Parent_Instance__c, Parent_Instance__r.Name, Previous_Instance__c, Previous_Instance__r.Name
             FROM Workflow_Instance__c 
             WHERE Id = :instanceId
+            WITH SYSTEM_MODE
         ];
         instance.Input__c = WorkflowEngine.resolvePayload(instance.Input__c);
         instance.Output__c = WorkflowEngine.resolvePayload(instance.Output__c);
@@ -68,6 +69,7 @@ public inherited sharing class WorkflowDashboardController {
             SELECT Id, Step_Name__c, Status__c, Input__c, Output__c, Retry_Count__c, Error_Details__c, CreatedDate
             FROM Workflow_Step_Execution__c
             WHERE Workflow_Instance__c = :instanceId
+            WITH SYSTEM_MODE
             ORDER BY CreatedDate ASC
         ];
         for (Workflow_Step_Execution__c step : steps) {
@@ -79,12 +81,14 @@ public inherited sharing class WorkflowDashboardController {
             SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate
             FROM Workflow_Instance__c
             WHERE Parent_Instance__c = :instanceId
+            WITH SYSTEM_MODE
             ORDER BY CreatedDate ASC
         ];
         
         List<Workflow_Instance__c> successors = [
             SELECT Id, Name FROM Workflow_Instance__c
             WHERE Previous_Instance__c = :instanceId
+            WITH SYSTEM_MODE
             LIMIT 1
         ];
         Workflow_Instance__c successor = successors.isEmpty() ? null : successors[0];
@@ -104,6 +108,7 @@ public inherited sharing class WorkflowDashboardController {
         List<ApexClass> classes = [
             SELECT Name, Body FROM ApexClass 
             WHERE NamespacePrefix = null 
+            WITH SYSTEM_MODE
             ORDER BY Name ASC
         ];
         
@@ -178,7 +183,7 @@ public inherited sharing class WorkflowDashboardController {
             String signalName = 'Approve:' + approvalKey;
             
             Workflow_Instance__c inst = [
-                SELECT Correlation_Key__c FROM Workflow_Instance__c WHERE Id = :instanceId
+                SELECT Correlation_Key__c FROM Workflow_Instance__c WHERE Id = :instanceId WITH SYSTEM_MODE
             ];
             String targetKey = String.isNotBlank(inst.Correlation_Key__c) ? inst.Correlation_Key__c : inst.Id;
             WorkflowEngine.signal(targetKey, signalName, payloadJson);

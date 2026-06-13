@@ -25,6 +25,7 @@ List<String> fieldsToGrant = new List<String>{
     'Workflow_Instance__c.Input__c',
     'Workflow_Instance__c.Output__c',
     'Workflow_Instance__c.Parent_Instance__c',
+    'Workflow_Instance__c.Previous_Instance__c',
     'Workflow_Instance__c.Status__c',
     'Workflow_Instance__c.Workflow_Name__c',
     
