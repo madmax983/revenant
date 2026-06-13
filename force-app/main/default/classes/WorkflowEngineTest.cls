@@ -30,6 +30,23 @@ public class WorkflowEngineTest {
         }
     }
 
+    public class LargePayloadWorkflow implements WorkflowDefinition {
+        public String getInitialStep() {
+            return 'WorkflowEngineTest.LargePayloadStep';
+        }
+        public String getNextStep(String currentStepName, StepResult stepResult) {
+            return null;
+        }
+    }
+    
+    public class LargePayloadStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            System.assertNotEquals(null, ctx.workflowInputJson);
+            System.assert(ctx.workflowInputJson.length() > 100000);
+            return StepResult.complete(null, 'B'.repeat(110000));
+        }
+    }
+
     public class YieldingWorkflow implements WorkflowDefinition {
         public String getInitialStep() {
             return 'WorkflowEngineTest.YieldingStep';
@@ -1124,5 +1141,57 @@ public class WorkflowEngineTest {
         } catch (WorkflowEngine.WorkflowException ex) {
             System.assert(ex.getMessage().contains('Correlation key length cannot exceed 200 characters'));
         }
+    }
+
+    @isTest
+    static void testLargePayloadFileOffloading() {
+        String largeInput = 'A'.repeat(110000);
+        
+        Test.startTest();
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.LargePayloadWorkflow', 'LargePayloadKey', largeInput);
+        Test.stopTest(); // Executes first step LargePayloadStep
+        
+        // Query the instance in database
+        Workflow_Instance__c inst = [SELECT Input__c, Output__c, Status__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Completed', inst.Status__c);
+        
+        // Assert that the input is stored as attachment marker
+        System.assert(inst.Input__c.startsWith('{"$attachmentId":'), 'Input__c should be stored as attachment marker but got: ' + inst.Input__c);
+        System.assert(inst.Output__c.startsWith('{"$attachmentId":'), 'Output__c should be stored as attachment marker but got: ' + inst.Output__c);
+        
+        // Assert ContentVersion records exist
+        List<ContentDocumentLink> links = [SELECT ContentDocumentId FROM ContentDocumentLink WHERE LinkedEntityId = :instanceId];
+        System.assertEquals(3, links.size(), 'Should have created 3 file links (one for Input, one for Step Output, and one for Final Output)');
+        
+        // Fetch details via dashboard controller and verify transparent resolution
+        Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(instanceId);
+        Workflow_Instance__c detailedInst = (Workflow_Instance__c)details.get('instance');
+        System.assertEquals(110002, detailedInst.Input__c.length(), 'Input should resolve to original serialized length');
+        System.assertEquals(110002, detailedInst.Output__c.length(), 'Output should resolve to original serialized length');
+        
+        // Run Cleanup/Purge step on this instance
+        CleanupWorkflow.PurgeOldInstancesStep purgeStep = new CleanupWorkflow.PurgeOldInstancesStep();
+        
+        StepContext purgeCtx = new StepContext(
+            null,
+            'CleanupWorkflow',
+            'CleanupWorkflow.PurgeOldInstancesStep',
+            null,
+            null,
+            null,
+            '{"retentionDays":-1,"batchSize":100}',
+            1
+        );
+        
+        // Execute purge
+        StepResult purgeResult = purgeStep.execute(purgeCtx);
+        System.assertEquals(StepResult.ActionType.YIELD, purgeResult.action);
+        
+        // Verify ContentDocument links and files are deleted
+        List<ContentDocumentLink> remainingLinks = [SELECT ContentDocumentId FROM ContentDocumentLink WHERE LinkedEntityId = :instanceId];
+        System.assertEquals(0, remainingLinks.size(), 'All links should be deleted');
+        
+        List<Workflow_Instance__c> remainingInstances = [SELECT Id FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals(0, remainingInstances.size(), 'Workflow instance should be deleted');
     }
 }

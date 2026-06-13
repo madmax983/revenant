@@ -51,6 +51,24 @@ public with sharing class CleanupWorkflow implements WorkflowDefinition {
                 return StepResult.complete(null, state);
             }
 
+            // Clean up associated file attachments (ContentDocument records) to prevent storage leaks
+            Set<Id> oldInstanceIds = new Set<Id>();
+            for (Workflow_Instance__c inst : oldInstances) {
+                oldInstanceIds.add(inst.Id);
+            }
+            List<ContentDocumentLink> links = [
+                SELECT ContentDocumentId FROM ContentDocumentLink 
+                WHERE LinkedEntityId IN :oldInstanceIds
+            ];
+            if (!links.isEmpty()) {
+                Set<Id> docIds = new Set<Id>();
+                for (ContentDocumentLink link : links) {
+                    docIds.add(link.ContentDocumentId);
+                }
+                // Delete ContentDocument records, which deletes file versions and links
+                delete [SELECT Id FROM ContentDocument WHERE Id IN :docIds];
+            }
+
             // Perform delete (Master-Detail cascade deletes all steps and signals automatically)
             delete oldInstances;
             state.deletedCount += oldInstances.size();

@@ -17,6 +17,8 @@ public with sharing class WorkflowDashboardController {
             FROM Workflow_Instance__c 
             WHERE Id = :instanceId
         ];
+        instance.Input__c = WorkflowEngine.resolvePayload(instance.Input__c);
+        instance.Output__c = WorkflowEngine.resolvePayload(instance.Output__c);
         
         List<Workflow_Step_Execution__c> steps = [
             SELECT Id, Step_Name__c, Status__c, Input__c, Output__c, Retry_Count__c, Error_Details__c, CreatedDate
@@ -24,6 +26,10 @@ public with sharing class WorkflowDashboardController {
             WHERE Workflow_Instance__c = :instanceId
             ORDER BY CreatedDate ASC
         ];
+        for (Workflow_Step_Execution__c step : steps) {
+            step.Input__c = WorkflowEngine.resolvePayload(step.Input__c);
+            step.Output__c = WorkflowEngine.resolvePayload(step.Output__c);
+        }
         
         List<Workflow_Instance__c> children = [
             SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate

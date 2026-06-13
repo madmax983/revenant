@@ -27,7 +27,6 @@ public with sharing class WorkflowEngine {
         instance.Workflow_Name__c = workflowName;
         instance.Status__c = 'Pending';
         instance.Correlation_Key__c = correlationKey;
-        instance.Input__c = (input != null) ? JSON.serialize(input) : null;
         
         // Resolve version
         Type wflowType = Type.forName(workflowName);
@@ -43,6 +42,9 @@ public with sharing class WorkflowEngine {
         }
 
         insert instance;
+
+        instance.Input__c = savePayloadIfNeeded(instance.Id, (input != null) ? JSON.serialize(input) : null, 'Input_' + instance.Id);
+        update instance;
 
         // Enqueue the first step execution
         if (Test.isRunningTest()) {
@@ -74,7 +76,6 @@ public with sharing class WorkflowEngine {
         instance.Workflow_Name__c = workflowName;
         instance.Status__c = 'Pending';
         instance.Correlation_Key__c = correlationKey;
-        instance.Input__c = (input != null) ? JSON.serialize(input) : null;
         instance.Parent_Instance__c = parentInstanceId;
         
         // Resolve version
@@ -91,6 +92,9 @@ public with sharing class WorkflowEngine {
         }
 
         insert instance;
+
+        instance.Input__c = savePayloadIfNeeded(instance.Id, (input != null) ? JSON.serialize(input) : null, 'Input_' + instance.Id);
+        update instance;
 
         if (Test.isRunningTest()) {
             System.enqueueJob(new WorkflowOrchestrator(instance.Id));
@@ -132,7 +136,7 @@ public with sharing class WorkflowEngine {
             if (!activeSteps.isEmpty()) {
                 Workflow_Step_Execution__c stepExec = activeSteps[0];
                 stepExec.Status__c = 'Running';
-                stepExec.Output__c = payload; // The resume payload is passed as the step's "state/output"
+                stepExec.Output__c = savePayloadIfNeeded(instance.Id, payload, 'Resume_' + stepExec.Id);
                 update stepExec;
             }
         }
@@ -268,10 +272,10 @@ public with sharing class WorkflowEngine {
             instanceId,
             instance.Workflow_Name__c,
             activeStepName,
-            stepExec.Input__c,
-            prevOutput,
-            stepExec.Output__c,
-            instance.Input__c,
+            resolvePayload(stepExec.Input__c),
+            resolvePayload(prevOutput),
+            resolvePayload(stepExec.Output__c),
+            resolvePayload(instance.Input__c),
             instance.Definition_Version__c != null ? (Integer)instance.Definition_Version__c : 1
         );
 
@@ -319,7 +323,7 @@ public with sharing class WorkflowEngine {
         if (result.action == StepResult.ActionType.COMPLETE) {
             // Step is complete. Store output.
             stepExec.Status__c = 'Completed';
-            stepExec.Output__c = result.outputJson;
+            stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.outputJson, 'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
             update stepExec;
 
             // Update compensation stack if step is CompensatableStep
@@ -408,7 +412,7 @@ public with sharing class WorkflowEngine {
                         joinStepExec.Workflow_Instance__c = instance.Id;
                         joinStepExec.Step_Name__c = nextStepName;
                         joinStepExec.Status__c = 'Pending';
-                        joinStepExec.Input__c = joinInputJson;
+                        joinStepExec.Input__c = savePayloadIfNeeded(instance.Id, joinInputJson, 'Input_' + nextStepName.replaceAll('[^a-zA-Z0-9]', '_'));
                         joinStepExec.Retry_Count__c = 0;
                         insert joinStepExec;
 
@@ -418,7 +422,7 @@ public with sharing class WorkflowEngine {
                         enqueueOrchestrator(instance.Id, null);
                     } else {
                         instance.Status__c = 'Completed';
-                        instance.Output__c = joinInputJson;
+                        instance.Output__c = savePayloadIfNeeded(instance.Id, joinInputJson, 'Output_Join');
                         instance.Current_Step__c = null;
                         update instance;
 
@@ -439,7 +443,7 @@ public with sharing class WorkflowEngine {
                 if (String.isBlank(nextStepName)) {
                     // Workflow is finished
                     instance.Status__c = 'Completed';
-                    instance.Output__c = result.outputJson;
+                    instance.Output__c = savePayloadIfNeeded(instance.Id, result.outputJson, 'Output_Final');
                     instance.Current_Step__c = null;
                     update instance;
 
@@ -456,7 +460,7 @@ public with sharing class WorkflowEngine {
         } else if (result.action == StepResult.ActionType.YIELD) {
             // Step yielded (e.g. Apex Cursor chunk). Save state to Output and run again in a new transaction.
             stepExec.Status__c = 'Running';
-            stepExec.Output__c = result.stepStateJson;
+            stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.stepStateJson, 'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
             update stepExec;
 
             enqueueOrchestrator(instance.Id, null);
@@ -472,7 +476,7 @@ public with sharing class WorkflowEngine {
         } else if (result.action == StepResult.ActionType.SLEEP) {
             // Step requested sleep
             stepExec.Status__c = 'Pending';
-            stepExec.Output__c = result.stepStateJson;
+            stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.stepStateJson, 'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
             update stepExec;
 
             instance.Status__c = 'Suspended';
@@ -487,7 +491,7 @@ public with sharing class WorkflowEngine {
                 'childWorkflowName' => result.childWorkflowName,
                 'childCorrelationKey' => result.childCorrelationKey
             };
-            stepExec.Output__c = JSON.serialize(childInfo);
+            stepExec.Output__c = savePayloadIfNeeded(instance.Id, JSON.serialize(childInfo), 'State_ChildInfo_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
             update stepExec;
 
             instance.Status__c = 'Suspended';
@@ -502,7 +506,7 @@ public with sharing class WorkflowEngine {
                 'approvalKey' => result.approvalKey,
                 'approvalRole' => result.approvalRole
             };
-            stepExec.Output__c = JSON.serialize(state);
+            stepExec.Output__c = savePayloadIfNeeded(instance.Id, JSON.serialize(state), 'State_Approval_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
             update stepExec;
 
             instance.Status__c = 'Suspended';
@@ -510,7 +514,7 @@ public with sharing class WorkflowEngine {
 
         } else if (result.action == StepResult.ActionType.SPLIT) {
             stepExec.Status__c = 'Completed';
-            stepExec.Output__c = result.parallelInputJson != null ? result.parallelInputJson : result.outputJson;
+            stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.parallelInputJson != null ? result.parallelInputJson : result.outputJson, 'Output_Split_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
             update stepExec;
 
             String parallelStepsStr = String.join(result.parallelStepNames, ',');
@@ -524,7 +528,7 @@ public with sharing class WorkflowEngine {
                 pe.Workflow_Instance__c = instance.Id;
                 pe.Step_Name__c = ps;
                 pe.Status__c = 'Pending';
-                pe.Input__c = result.parallelInputJson != null ? result.parallelInputJson : stepExec.Output__c;
+                pe.Input__c = savePayloadIfNeeded(instance.Id, result.parallelInputJson != null ? result.parallelInputJson : stepExec.Output__c, 'Input_Parallel_' + ps.replaceAll('[^a-zA-Z0-9]', '_'));
                 pe.Retry_Count__c = 0;
                 parallelExecs.add(pe);
             }
@@ -681,7 +685,6 @@ public with sharing class WorkflowEngine {
         instance.Workflow_Name__c = workflowName;
         instance.Status__c = 'Pending';
         instance.Correlation_Key__c = correlationKey;
-        instance.Input__c = inputJson;
         instance.Parent_Instance__c = parentId;
         
         // Resolve child version
@@ -698,6 +701,9 @@ public with sharing class WorkflowEngine {
         }
 
         insert instance;
+
+        instance.Input__c = savePayloadIfNeeded(instance.Id, inputJson, 'Input_Child_' + instance.Id);
+        update instance;
         
         if (!Test.isRunningTest()) {
             enqueueOrchestrator(instance.Id, null);
@@ -1011,10 +1017,10 @@ public with sharing class WorkflowEngine {
             instance.Id,
             instance.Workflow_Name__c,
             compensationStepLogName,
-            stepExec.Input__c,
-            prevOutput,
-            stepExec.Output__c,
-            instance.Input__c,
+            resolvePayload(stepExec.Input__c),
+            resolvePayload(prevOutput),
+            resolvePayload(stepExec.Output__c),
+            resolvePayload(instance.Input__c),
             instance.Definition_Version__c != null ? (Integer)instance.Definition_Version__c : 1
         );
 
@@ -1054,7 +1060,7 @@ public with sharing class WorkflowEngine {
 
         if (result.action == StepResult.ActionType.COMPLETE) {
             stepExec.Status__c = 'Compensated';
-            stepExec.Output__c = result.outputJson;
+            stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.outputJson, 'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
             update stepExec;
 
             stack.remove(stack.size() - 1);
@@ -1076,7 +1082,7 @@ public with sharing class WorkflowEngine {
 
         } else if (result.action == StepResult.ActionType.YIELD) {
             stepExec.Status__c = 'Running';
-            stepExec.Output__c = result.stepStateJson;
+            stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.stepStateJson, 'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
             update stepExec;
             enqueueOrchestrator(instance.Id, null);
 
@@ -1088,7 +1094,7 @@ public with sharing class WorkflowEngine {
 
         } else if (result.action == StepResult.ActionType.SLEEP) {
             stepExec.Status__c = 'Pending';
-            stepExec.Output__c = result.stepStateJson;
+            stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.stepStateJson, 'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
             update stepExec;
             instance.Status__c = 'Suspended';
             update instance;
@@ -1101,7 +1107,7 @@ public with sharing class WorkflowEngine {
                 'approvalKey' => result.approvalKey,
                 'approvalRole' => result.approvalRole
             };
-            stepExec.Output__c = JSON.serialize(state);
+            stepExec.Output__c = savePayloadIfNeeded(instance.Id, JSON.serialize(state), 'State_Approval_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
             update stepExec;
             instance.Status__c = 'Suspended';
             update instance;
@@ -1275,5 +1281,46 @@ public with sharing class WorkflowEngine {
         if (String.isNotBlank(correlationKey) && correlationKey.length() > 200) {
             throw new WorkflowException('Correlation key length cannot exceed 200 characters.');
         }
+    }
+
+    public static String resolvePayload(String textValue) {
+        if (String.isNotBlank(textValue) && textValue.startsWith('{"$attachmentId":')) {
+            try {
+                Map<String, Object> marker = (Map<String, Object>)JSON.deserializeUntyped(textValue);
+                Id attachmentId = (Id)marker.get('$attachmentId');
+                List<ContentVersion> cvs = [
+                    SELECT VersionData FROM ContentVersion 
+                    WHERE ContentDocumentId = :attachmentId AND IsLatest = true
+                ];
+                if (!cvs.isEmpty()) {
+                    return cvs[0].VersionData.toString();
+                }
+            } catch (Exception ex) {
+                // fallback to original value
+            }
+        }
+        return textValue;
+    }
+
+    public static String savePayloadIfNeeded(Id instanceId, String textValue, String title) {
+        if (String.isNotBlank(textValue) && textValue.length() > 100000) {
+            ContentVersion cv = new ContentVersion();
+            cv.Title = title;
+            cv.PathOnClient = title + '.json';
+            cv.VersionData = Blob.valueOf(textValue);
+            insert cv;
+            
+            Id docId = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv.Id].ContentDocumentId;
+            
+            ContentDocumentLink cdl = new ContentDocumentLink();
+            cdl.ContentDocumentId = docId;
+            cdl.LinkedEntityId = instanceId;
+            cdl.ShareType = 'V';
+            cdl.Visibility = 'AllUsers';
+            insert cdl;
+            
+            return JSON.serialize(new Map<String, String>{'$attachmentId' => docId});
+        }
+        return textValue;
     }
 }
