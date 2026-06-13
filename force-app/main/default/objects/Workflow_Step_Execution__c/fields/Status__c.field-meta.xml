@@ -36,6 +36,16 @@
                 <default>false</default>
                 <label>Retrying</label>
             </value>
+            <value>
+                <fullName>Compensating</fullName>
+                <default>false</default>
+                <label>Compensating</label>
+            </value>
+            <value>
+                <fullName>Compensated</fullName>
+                <default>false</default>
+                <label>Compensated</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>
