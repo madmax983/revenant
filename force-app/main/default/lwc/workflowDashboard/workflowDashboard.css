@@ -150,6 +150,7 @@
 .bg-yellow { background-color: hsl(45, 95%, 50%); }
 .bg-blue { background-color: hsl(210, 100%, 50%); }
 .bg-grey { background-color: hsl(210, 15%, 60%); }
+.bg-orange { background-color: hsl(30, 95%, 45%); }
 
 .step-card {
     background: #fdfefe;

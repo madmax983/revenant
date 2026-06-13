@@ -90,11 +90,11 @@ export default class WorkflowDashboard extends LightningElement {
     calculateStats() {
         const stats = { total: this.instances.length, active: 0, completed: 0, failed: 0 };
         this.instances.forEach(inst => {
-            if (inst.Status__c === 'Pending' || inst.Status__c === 'Running' || inst.Status__c === 'Suspended') {
+            if (inst.Status__c === 'Pending' || inst.Status__c === 'Running' || inst.Status__c === 'Suspended' || inst.Status__c === 'Compensating') {
                 stats.active += 1;
             } else if (inst.Status__c === 'Completed') {
                 stats.completed += 1;
-            } else if (inst.Status__c === 'Failed') {
+            } else if (inst.Status__c === 'Failed' || inst.Status__c === 'Compensated') {
                 stats.failed += 1;
             }
         });
@@ -379,6 +379,10 @@ export default class WorkflowDashboard extends LightningElement {
                 return 'badge badge-grey';
             case 'Retrying':
                 return 'badge badge-yellow pulse-glow';
+            case 'Compensating':
+                return 'badge badge-yellow pulse-glow';
+            case 'Compensated':
+                return 'badge badge-orange';
             default:
                 return 'badge';
         }
@@ -396,6 +400,10 @@ export default class WorkflowDashboard extends LightningElement {
                 return 'timeline-marker bg-blue';
             case 'Pending':
                 return 'timeline-marker bg-grey';
+            case 'Compensating':
+                return 'timeline-marker bg-yellow';
+            case 'Compensated':
+                return 'timeline-marker bg-orange';
             default:
                 return 'timeline-marker';
         }

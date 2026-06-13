@@ -1,5 +1,6 @@
 public with sharing class WorkflowEngine {
     
+    public static Boolean disableQueueableInTest = false;
     public class WorkflowException extends Exception {}
 
     /**
@@ -123,7 +124,7 @@ public with sharing class WorkflowEngine {
     public static void runStep(Id instanceId, String stepName) {
         // 1. Lock and fetch instance state
         List<Workflow_Instance__c> instances = [
-            SELECT Id, Workflow_Name__c, Status__c, Current_Step__c, Input__c, Correlation_Key__c, Parent_Instance__c 
+            SELECT Id, Workflow_Name__c, Status__c, Current_Step__c, Input__c, Correlation_Key__c, Parent_Instance__c, Compensation_Stack__c 
             FROM Workflow_Instance__c 
             WHERE Id = :instanceId 
             LIMIT 1
@@ -135,8 +136,13 @@ public with sharing class WorkflowEngine {
         }
 
         Workflow_Instance__c instance = instances[0];
-        if (instance.Status__c == 'Completed' || instance.Status__c == 'Failed') {
+        if (instance.Status__c == 'Completed' || instance.Status__c == 'Failed' || instance.Status__c == 'Compensated') {
             return; // Already finished
+        }
+
+        if (instance.Status__c == 'Compensating') {
+            runCompensationStep(instance);
+            return;
         }
 
         // 2. Initialize initial step if this is the start
@@ -730,7 +736,7 @@ public with sharing class WorkflowEngine {
      */
     public static void retryWorkflow(Id instanceId) {
         List<Workflow_Instance__c> instances = [
-            SELECT Id, Status__c, Current_Step__c, Error_Message__c 
+            SELECT Id, Status__c, Current_Step__c, Error_Message__c, Compensation_Stack__c 
             FROM Workflow_Instance__c 
             WHERE Id = :instanceId 
             LIMIT 1
@@ -744,13 +750,27 @@ public with sharing class WorkflowEngine {
             throw new WorkflowException('Workflow instance is not in Failed status. Current status: ' + instance.Status__c);
         }
 
+        Boolean hasCompensations = false;
+        List<String> stack = new List<String>();
+        if (String.isNotBlank(instance.Compensation_Stack__c)) {
+            stack = (List<String>)JSON.deserialize(instance.Compensation_Stack__c, List<String>.class);
+            hasCompensations = !stack.isEmpty();
+        }
+
+        String targetStepName = null;
+        if (hasCompensations) {
+            targetStepName = stack[stack.size() - 1] + '_Compensate';
+        } else {
+            targetStepName = instance.Current_Step__c;
+        }
+
         // Reset the failed step's execution status to let it execute again
-        if (String.isNotBlank(instance.Current_Step__c)) {
+        if (String.isNotBlank(targetStepName)) {
             List<Workflow_Step_Execution__c> stepExecs = [
                 SELECT Id, Status__c, Retry_Count__c, Error_Details__c 
                 FROM Workflow_Step_Execution__c
                 WHERE Workflow_Instance__c = :instanceId
-                AND Step_Name__c = :instance.Current_Step__c
+                AND Step_Name__c = :targetStepName
                 ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
@@ -763,8 +783,11 @@ public with sharing class WorkflowEngine {
             }
         }
 
-        // Reset the instance status to Running and clear error messages
-        instance.Status__c = 'Running';
+        if (hasCompensations) {
+            instance.Status__c = 'Compensating';
+        } else {
+            instance.Status__c = 'Running';
+        }
         instance.Error_Message__c = null;
         update instance;
 
@@ -773,6 +796,242 @@ public with sharing class WorkflowEngine {
             System.enqueueJob(new WorkflowOrchestrator(instanceId));
         } else {
             enqueueOrchestrator(instanceId, null);
+        }
+    }
+
+    private static void runCompensationStep(Workflow_Instance__c instance) {
+        // 1. Read the compensation stack
+        if (String.isBlank(instance.Compensation_Stack__c)) {
+            instance.Status__c = 'Compensated';
+            instance.Current_Step__c = null;
+            update instance;
+            return;
+        }
+
+        List<String> stack = (List<String>)JSON.deserialize(instance.Compensation_Stack__c, List<String>.class);
+        if (stack.isEmpty()) {
+            instance.Status__c = 'Compensated';
+            instance.Current_Step__c = null;
+            update instance;
+            return;
+        }
+
+        // 2. Get the top step to compensate (do not pop yet, only pop on success)
+        String activeStepName = stack[stack.size() - 1];
+
+        // 3. Create or retrieve the compensation step execution log
+        String compensationStepLogName = activeStepName + '_Compensate';
+        List<Workflow_Step_Execution__c> stepExecs = [
+            SELECT Id, Status__c, Input__c, Output__c, Retry_Count__c, Step_Name__c
+            FROM Workflow_Step_Execution__c
+            WHERE Workflow_Instance__c = :instance.Id
+            AND Step_Name__c = :compensationStepLogName
+            ORDER BY CreatedDate DESC, Id DESC
+            LIMIT 1
+        ];
+
+        Workflow_Step_Execution__c stepExec;
+        if (stepExecs.isEmpty()) {
+            stepExec = new Workflow_Step_Execution__c();
+            stepExec.Workflow_Instance__c = instance.Id;
+            stepExec.Step_Name__c = compensationStepLogName;
+            stepExec.Status__c = 'Running';
+            stepExec.Retry_Count__c = 0;
+
+            // Retrieve the original step execution to get inputs/outputs
+            List<Workflow_Step_Execution__c> originalExecs = [
+                SELECT Input__c, Output__c 
+                FROM Workflow_Step_Execution__c
+                WHERE Workflow_Instance__c = :instance.Id
+                AND Step_Name__c = :activeStepName
+                ORDER BY CreatedDate DESC, Id DESC
+                LIMIT 1
+            ];
+            
+            stepExec.Input__c = !originalExecs.isEmpty() ? originalExecs[0].Input__c : null;
+            stepExec.Output__c = !originalExecs.isEmpty() ? originalExecs[0].Output__c : null;
+            insert stepExec;
+        } else {
+            stepExec = stepExecs[0];
+            if (stepExec.Status__c == 'Completed' || stepExec.Status__c == 'Compensated') {
+                stack.remove(stack.size() - 1);
+                instance.Compensation_Stack__c = JSON.serialize(stack);
+                update instance;
+                
+                if (Test.isRunningTest()) {
+                    if (!disableQueueableInTest) {
+                        System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+                    }
+                } else {
+                    enqueueOrchestrator(instance.Id, null);
+                }
+                return;
+            }
+            stepExec.Status__c = 'Running';
+            update stepExec;
+        }
+
+        // 4. Instantiate the step and execute compensate
+        Type stepType = Type.forName(activeStepName);
+        if (stepType == null) {
+            throw new WorkflowException('Could not resolve class for step compensation: ' + activeStepName);
+        }
+        
+        Object stepInstanceObj = stepType.newInstance();
+        if (!(stepInstanceObj instanceof CompensatableStep)) {
+            stepExec.Status__c = 'Compensated';
+            update stepExec;
+
+            stack.remove(stack.size() - 1);
+            instance.Compensation_Stack__c = JSON.serialize(stack);
+            update instance;
+            
+            if (Test.isRunningTest()) {
+                if (!disableQueueableInTest) {
+                    System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+                }
+            } else {
+                enqueueOrchestrator(instance.Id, null);
+            }
+            return;
+        }
+
+        CompensatableStep compensatableStepInstance = (CompensatableStep)stepInstanceObj;
+
+        // Build context for compensate
+        String prevOutput = null;
+        List<Workflow_Step_Execution__c> completedBefore = [
+            SELECT Output__c FROM Workflow_Step_Execution__c
+            WHERE Workflow_Instance__c = :instance.Id
+            AND Status__c = 'Completed'
+            AND Step_Name__c != :activeStepName
+            AND Step_Name__c != :compensationStepLogName
+            ORDER BY CreatedDate DESC, Id DESC
+            LIMIT 1
+        ];
+        if (!completedBefore.isEmpty()) {
+            prevOutput = completedBefore[0].Output__c;
+        }
+
+        StepContext context = new StepContext(
+            instance.Id,
+            instance.Workflow_Name__c,
+            compensationStepLogName,
+            stepExec.Input__c,
+            prevOutput,
+            stepExec.Output__c,
+            instance.Input__c
+        );
+
+        Integer timeoutSeconds = null;
+        if (compensatableStepInstance instanceof TimeoutConfigurable) {
+            timeoutSeconds = ((TimeoutConfigurable)compensatableStepInstance).getTimeoutSeconds();
+        }
+
+        if (timeoutSeconds != null && timeoutSeconds > 0) {
+            WorkflowTimeoutJob job = new WorkflowTimeoutJob(instance.Id, compensationStepLogName);
+            Datetime runTime = Datetime.now().addSeconds(timeoutSeconds);
+            String cronStr = runTime.second() + ' ' + runTime.minute() + ' ' + runTime.hour() + ' ' + runTime.day() + ' ' + runTime.month() + ' ? ' + runTime.year();
+            String cleanStepName = compensationStepLogName.replaceAll('[^a-zA-Z0-9]', '_');
+            String jobName = 'Timeout_' + instance.Id + '_' + cleanStepName;
+            System.schedule(jobName, cronStr, job);
+        }
+
+        StepResult result;
+        try {
+            result = compensatableStepInstance.compensate(context);
+        } finally {
+            if (timeoutSeconds != null && timeoutSeconds > 0) {
+                cancelTimeoutJob(instance.Id, compensationStepLogName);
+            }
+        }
+
+        handleCompensationStepResult(instance, stepExec, result, stack);
+    }
+
+    private static void handleCompensationStepResult(Workflow_Instance__c instance, Workflow_Step_Execution__c stepExec, StepResult result, List<String> stack) {
+        Workflow_Instance__c freshInstance = [
+            SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instance.Id
+        ];
+        if (freshInstance.Status__c == 'Failed') {
+            throw new WorkflowException('Workflow execution was terminated.');
+        }
+
+        if (result.action == StepResult.ActionType.COMPLETE) {
+            stepExec.Status__c = 'Compensated';
+            stepExec.Output__c = result.outputJson;
+            update stepExec;
+
+            stack.remove(stack.size() - 1);
+            instance.Compensation_Stack__c = JSON.serialize(stack);
+            
+            if (stack.isEmpty()) {
+                instance.Status__c = 'Compensated';
+                instance.Current_Step__c = null;
+            }
+            update instance;
+
+            if (Test.isRunningTest()) {
+                if (!disableQueueableInTest) {
+                    System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+                }
+            } else {
+                enqueueOrchestrator(instance.Id, null);
+            }
+
+        } else if (result.action == StepResult.ActionType.YIELD) {
+            stepExec.Status__c = 'Running';
+            stepExec.Output__c = result.stepStateJson;
+            update stepExec;
+            enqueueOrchestrator(instance.Id, null);
+
+        } else if (result.action == StepResult.ActionType.SUSPEND) {
+            stepExec.Status__c = 'Pending';
+            update stepExec;
+            instance.Status__c = 'Suspended';
+            update instance;
+
+        } else if (result.action == StepResult.ActionType.SLEEP) {
+            stepExec.Status__c = 'Pending';
+            stepExec.Output__c = result.stepStateJson;
+            update stepExec;
+            instance.Status__c = 'Suspended';
+            update instance;
+            scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
+
+        } else if (result.action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
+            stepExec.Status__c = 'Pending';
+            Map<String, Object> state = new Map<String, Object>{
+                'waitingForApproval' => true,
+                'approvalKey' => result.approvalKey,
+                'approvalRole' => result.approvalRole
+            };
+            stepExec.Output__c = JSON.serialize(state);
+            update stepExec;
+            instance.Status__c = 'Suspended';
+            update instance;
+
+        } else if (result.action == StepResult.ActionType.RETRY) {
+            stepExec.Retry_Count__c += 1;
+            RetryPolicy policy = (result.retryPolicy != null) ? result.retryPolicy : new RetryPolicy();
+            
+            if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
+                stepExec.Status__c = 'Failed';
+                stepExec.Error_Details__c = 'Compensation max retries (' + policy.maximumAttempts + ') exceeded.';
+                update stepExec;
+
+                instance.Status__c = 'Failed';
+                instance.Error_Message__c = 'Compensation step ' + stepExec.Step_Name__c + ' failed after max retries.';
+                update instance;
+            } else {
+                stepExec.Status__c = 'Retrying';
+                update stepExec;
+                
+                Double backoff = Math.pow((Double)policy.backoffCoefficient, (Double)(stepExec.Retry_Count__c - 1));
+                Integer delay = (Integer)(policy.initialIntervalSeconds * backoff);
+                delay = Math.min(delay, 86400);
+                scheduleRetry(instance.Id, delay);
+            }
         }
     }
 

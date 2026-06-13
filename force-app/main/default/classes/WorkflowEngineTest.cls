@@ -792,4 +792,161 @@ public class WorkflowEngineTest {
         System.assertEquals('Completed', inst.Status__c);
         System.assertEquals('"BranchInput_P1Done+BranchInput_P2Done"', inst.Output__c);
     }
+
+    public class CompensatableHappyStep implements CompensatableStep {
+        public StepResult execute(StepContext ctx) {
+            return StepResult.complete(null, 'Success');
+        }
+        public StepResult compensate(StepContext ctx) {
+            return StepResult.complete(null, 'Compensated');
+        }
+    }
+
+    public static Boolean compensationShouldFail = false;
+
+    public class CompensatableFailingStep implements CompensatableStep {
+        public StepResult execute(StepContext ctx) {
+            return StepResult.complete(null, 'Success');
+        }
+        public StepResult compensate(StepContext ctx) {
+            if (compensationShouldFail) {
+                RetryPolicy policy = new RetryPolicy();
+                policy.maximumAttempts = 2;
+                policy.initialIntervalSeconds = 1;
+                policy.backoffCoefficient = 2.0;
+                return StepResult.retry(policy);
+            }
+            return StepResult.complete(null, 'CompensatedFailing');
+        }
+    }
+
+    public class NonCompensatableStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            return StepResult.complete(null, 'Success');
+        }
+    }
+
+    @isTest
+    static void testCompensationFlow() {
+        WorkflowEngine.disableQueueableInTest = true;
+        Workflow_Instance__c inst = new Workflow_Instance__c(
+            Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+            Status__c = 'Compensating',
+            Compensation_Stack__c = JSON.serialize(new List<String>{
+                'WorkflowEngineTest.NonCompensatableStep',
+                'WorkflowEngineTest.CompensatableHappyStep'
+            }),
+            Input__c = '{"test": true}'
+        );
+        insert inst;
+
+        Workflow_Step_Execution__c origExec = new Workflow_Step_Execution__c(
+            Workflow_Instance__c = inst.Id,
+            Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep',
+            Status__c = 'Completed',
+            Input__c = '{"stepInput": 1}',
+            Output__c = '{"stepOutput": 2}'
+        );
+        insert origExec;
+
+        Test.startTest();
+        WorkflowEngine.runStep(inst.Id, null); // Runs CompensatableHappyStep
+        WorkflowEngine.runStep(inst.Id, null); // Runs NonCompensatableStep (skipped)
+        WorkflowEngine.runStep(inst.Id, null); // Stack empty -> transition status to Compensated
+        Test.stopTest();
+
+        Workflow_Instance__c completedInst = [
+            SELECT Status__c, Compensation_Stack__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :inst.Id
+        ];
+        System.assertEquals('Compensated', completedInst.Status__c);
+        
+        List<Workflow_Step_Execution__c> stepExecs = [
+            SELECT Step_Name__c, Status__c, Output__c 
+            FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :inst.Id
+            ORDER BY CreatedDate ASC, Id ASC
+        ];
+        System.assertEquals(3, stepExecs.size());
+        System.assertEquals('WorkflowEngineTest.CompensatableHappyStep_Compensate', stepExecs[1].Step_Name__c);
+        System.assertEquals('Compensated', stepExecs[1].Status__c);
+        System.assertEquals('"Compensated"', stepExecs[1].Output__c);
+
+        System.assertEquals('WorkflowEngineTest.NonCompensatableStep_Compensate', stepExecs[2].Step_Name__c);
+        System.assertEquals('Compensated', stepExecs[2].Status__c);
+    }
+
+    @isTest
+    static void testCompensationFailureAndRetry() {
+        WorkflowEngine.disableQueueableInTest = true;
+        Workflow_Instance__c inst = new Workflow_Instance__c(
+            Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+            Status__c = 'Compensating',
+            Compensation_Stack__c = JSON.serialize(new List<String>{
+                'WorkflowEngineTest.CompensatableFailingStep'
+            }),
+            Input__c = '{"test": true}'
+        );
+        insert inst;
+
+        WorkflowEngineTest.compensationShouldFail = true;
+
+        Test.startTest();
+        // First execution - should result in RETRY and schedule a retry job
+        WorkflowEngine.runStep(inst.Id, null);
+        
+        // Find step execution and manually simulate retry attempts
+        List<Workflow_Step_Execution__c> execs = [
+            SELECT Id, Status__c, Retry_Count__c 
+            FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :inst.Id
+            AND Step_Name__c = 'WorkflowEngineTest.CompensatableFailingStep_Compensate'
+        ];
+        System.assertEquals(1, execs.size());
+        System.assertEquals('Retrying', execs[0].Status__c);
+        System.assertEquals(1, execs[0].Retry_Count__c);
+
+        // Run second time - should exceed maximum attempts (maximumAttempts = 2) and fail
+        WorkflowEngine.runStep(inst.Id, null);
+        Test.stopTest();
+
+        Workflow_Instance__c failedInst = [
+            SELECT Status__c, Error_Message__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :inst.Id
+        ];
+        System.assertEquals('Failed', failedInst.Status__c);
+        System.assert(failedInst.Error_Message__c.contains('failed after max retries'));
+
+        Workflow_Step_Execution__c failedExec = [
+            SELECT Status__c, Retry_Count__c 
+            FROM Workflow_Step_Execution__c 
+            WHERE Id = :execs[0].Id
+        ];
+        System.assertEquals('Failed', failedExec.Status__c);
+        System.assertEquals(2, failedExec.Retry_Count__c);
+
+        // Now test retryWorkflow on failed compensation!
+        WorkflowEngineTest.compensationShouldFail = false;
+
+        WorkflowEngine.retryWorkflow(inst.Id);
+        WorkflowEngine.runStep(inst.Id, null); // Runs the compensation step (completes)
+        WorkflowEngine.runStep(inst.Id, null); // Stack empty -> transition status to Compensated
+
+        Workflow_Instance__c retriedInst = [
+            SELECT Status__c, Error_Message__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :inst.Id
+        ];
+        System.assertEquals('Compensated', retriedInst.Status__c);
+
+        Workflow_Step_Execution__c finalExec = [
+            SELECT Status__c, Output__c 
+            FROM Workflow_Step_Execution__c 
+            WHERE Id = :execs[0].Id
+        ];
+        System.assertEquals('Compensated', finalExec.Status__c);
+        System.assertEquals('"CompensatedFailing"', finalExec.Output__c);
+    }
 }
