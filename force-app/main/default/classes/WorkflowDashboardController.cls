@@ -9,6 +9,32 @@ public with sharing class WorkflowDashboardController {
             LIMIT 100
         ];
     }
+
+    @AuraEnabled(cacheable=true)
+    public static List<Workflow_Instance__c> getFilteredInstances(String workflowName, String status, String searchTerm, Integer limitSize, Integer offsetSize) {
+        String query = 'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, Error_Message__c ' +
+                       'FROM Workflow_Instance__c';
+        
+        List<String> conditions = new List<String>();
+        if (String.isNotBlank(workflowName)) {
+            conditions.add('Workflow_Name__c = :workflowName');
+        }
+        if (String.isNotBlank(status)) {
+            conditions.add('Status__c = :status');
+        }
+        if (String.isNotBlank(searchTerm)) {
+            String likeTerm = '%' + String.escapeSingleQuotes(searchTerm) + '%';
+            conditions.add('(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm)');
+        }
+        
+        if (!conditions.isEmpty()) {
+            query += ' WHERE ' + String.join(conditions, ' AND ');
+        }
+        
+        query += ' ORDER BY CreatedDate DESC LIMIT :limitSize OFFSET :offsetSize';
+        
+        return Database.query(query);
+    }
     
     @AuraEnabled
     public static Map<String, Object> getInstanceDetails(Id instanceId) {
