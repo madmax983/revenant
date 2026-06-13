@@ -248,4 +248,52 @@ public class WorkflowDashboardControllerTest {
         
         Test.stopTest();
     }
+
+    @isTest
+    static void testGetWorkflowStats() {
+        // Create 3 instances with distinct details
+        List<Workflow_Instance__c> testInstances = new List<Workflow_Instance__c>{
+            new Workflow_Instance__c(
+                Workflow_Name__c = 'TestDefA',
+                Status__c = 'Completed',
+                Correlation_Key__c = 'AppleKey',
+                Input__c = '"TestInput"'
+            ),
+            new Workflow_Instance__c(
+                Workflow_Name__c = 'TestDefA',
+                Status__c = 'Failed',
+                Correlation_Key__c = 'BananaKey',
+                Input__c = '"TestInput"',
+                Error_Message__c = 'Slipped on banana'
+            ),
+            new Workflow_Instance__c(
+                Workflow_Name__c = 'TestDefB',
+                Status__c = 'Running',
+                Correlation_Key__c = 'OrangeKey',
+                Input__c = '"TestInput"'
+            )
+        };
+        insert testInstances;
+
+        Test.startTest();
+        // 1. Get stats overall (no filters)
+        Map<String, Integer> statsAll = WorkflowDashboardController.getWorkflowStats('', '', '');
+        System.assertEquals(3, statsAll.get('total'), 'Should count 3 total runs');
+        System.assertEquals(1, statsAll.get('active'), 'Should count 1 active run');
+        System.assertEquals(1, statsAll.get('completed'), 'Should count 1 completed run');
+        System.assertEquals(1, statsAll.get('failed'), 'Should count 1 failed run');
+
+        // 2. Get stats filtered by definition A
+        Map<String, Integer> statsDefA = WorkflowDashboardController.getWorkflowStats('TestDefA', '', '');
+        System.assertEquals(2, statsDefA.get('total'));
+        System.assertEquals(0, statsDefA.get('active'));
+        System.assertEquals(1, statsDefA.get('completed'));
+        System.assertEquals(1, statsDefA.get('failed'));
+
+        // 3. Get stats filtered by search term
+        Map<String, Integer> statsSearch = WorkflowDashboardController.getWorkflowStats('', '', 'Banana');
+        System.assertEquals(1, statsSearch.get('total'));
+        System.assertEquals(1, statsSearch.get('failed'));
+        Test.stopTest();
+    }
 }

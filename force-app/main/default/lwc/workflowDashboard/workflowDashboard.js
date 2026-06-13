@@ -1,6 +1,7 @@
 import { LightningElement, wire, track } from 'lwc';
 import { ShowToastEvent } from 'lightning/platformShowToastEvent';
 import getFilteredInstances from '@salesforce/apex/WorkflowDashboardController.getFilteredInstances';
+import getWorkflowStats from '@salesforce/apex/WorkflowDashboardController.getWorkflowStats';
 import getInstanceDetails from '@salesforce/apex/WorkflowDashboardController.getInstanceDetails';
 import getDefinitions from '@salesforce/apex/WorkflowDashboardController.getDefinitions';
 import startWorkflow from '@salesforce/apex/WorkflowDashboardController.startWorkflow';
@@ -132,14 +133,22 @@ export default class WorkflowDashboard extends LightningElement {
             this.loadingDetails = true;
         }
         
-        return getFilteredInstances({
+        const instancesPromise = getFilteredInstances({
             workflowName: this.selectedWorkflow,
             status: this.selectedStatus,
             searchTerm: this.searchTerm,
             limitSize: currentLimit,
             offsetSize: currentOffset
-        })
-        .then(result => {
+        });
+
+        const statsPromise = getWorkflowStats({
+            workflowName: this.selectedWorkflow,
+            status: this.selectedStatus,
+            searchTerm: this.searchTerm
+        });
+        
+        return Promise.all([instancesPromise, statsPromise])
+        .then(([result, statsResult]) => {
             const formatted = result.map(inst => {
                 return {
                     ...inst,
@@ -162,7 +171,7 @@ export default class WorkflowDashboard extends LightningElement {
                 this.hasMore = true;
             }
             
-            this.calculateStats();
+            this.stats = statsResult;
             this.filterInstancesList();
             
             // Auto-refresh detail view if selected instance is currently loaded
@@ -181,14 +190,23 @@ export default class WorkflowDashboard extends LightningElement {
 
     refreshInstances() {
         const currentSize = this.instances.length > 0 ? this.instances.length : this.limitSize;
-        return getFilteredInstances({
+        
+        const instancesPromise = getFilteredInstances({
             workflowName: this.selectedWorkflow,
             status: this.selectedStatus,
             searchTerm: this.searchTerm,
             limitSize: currentSize,
             offsetSize: 0
-        })
-        .then(result => {
+        });
+
+        const statsPromise = getWorkflowStats({
+            workflowName: this.selectedWorkflow,
+            status: this.selectedStatus,
+            searchTerm: this.searchTerm
+        });
+
+        return Promise.all([instancesPromise, statsPromise])
+        .then(([result, statsResult]) => {
             this.instances = result.map(inst => {
                 return {
                     ...inst,
@@ -197,7 +215,7 @@ export default class WorkflowDashboard extends LightningElement {
                     statusBadgeClass: this.getStatusBadgeClass(inst.Status__c)
                 };
             });
-            this.calculateStats();
+            this.stats = statsResult;
             this.filterInstancesList();
             
             if (this.selectedInstanceId) {
@@ -207,20 +225,6 @@ export default class WorkflowDashboard extends LightningElement {
         .catch(error => {
             console.error('Error refreshing instances:', error);
         });
-    }
-
-    calculateStats() {
-        const stats = { total: this.instances.length, active: 0, completed: 0, failed: 0 };
-        this.instances.forEach(inst => {
-            if (inst.Status__c === 'Pending' || inst.Status__c === 'Running' || inst.Status__c === 'Suspended' || inst.Status__c === 'Compensating' || inst.Status__c === 'Cancelling') {
-                stats.active += 1;
-            } else if (inst.Status__c === 'Completed' || inst.Status__c === 'ContinuedAsNew') {
-                stats.completed += 1;
-            } else if (inst.Status__c === 'Failed' || inst.Status__c === 'Compensated' || inst.Status__c === 'Cancelled') {
-                stats.failed += 1;
-            }
-        });
-        this.stats = stats;
     }
 
     handleSearchChange(event) {

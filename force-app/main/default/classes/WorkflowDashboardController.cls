@@ -1,4 +1,5 @@
 public with sharing class WorkflowDashboardController {
+    private static String likeTerm;
     
     @AuraEnabled(cacheable=true)
     public static List<Workflow_Instance__c> getInstances() {
@@ -10,11 +11,7 @@ public with sharing class WorkflowDashboardController {
         ];
     }
 
-    @AuraEnabled(cacheable=true)
-    public static List<Workflow_Instance__c> getFilteredInstances(String workflowName, String status, String searchTerm, Integer limitSize, Integer offsetSize) {
-        String query = 'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, Error_Message__c ' +
-                       'FROM Workflow_Instance__c';
-        
+    private static String buildWhereClause(String workflowName, String status, String searchTerm) {
         List<String> conditions = new List<String>();
         if (String.isNotBlank(workflowName)) {
             conditions.add('Workflow_Name__c = :workflowName');
@@ -23,17 +20,47 @@ public with sharing class WorkflowDashboardController {
             conditions.add('Status__c = :status');
         }
         if (String.isNotBlank(searchTerm)) {
-            String likeTerm = '%' + String.escapeSingleQuotes(searchTerm) + '%';
+            likeTerm = '%' + String.escapeSingleQuotes(searchTerm) + '%';
             conditions.add('(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm)');
         }
-        
-        if (!conditions.isEmpty()) {
-            query += ' WHERE ' + String.join(conditions, ' AND ');
-        }
+        return conditions.isEmpty() ? '' : ' WHERE ' + String.join(conditions, ' AND ');
+    }
+
+    @AuraEnabled(cacheable=true)
+    public static List<Workflow_Instance__c> getFilteredInstances(String workflowName, String status, String searchTerm, Integer limitSize, Integer offsetSize) {
+        String query = 'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, Error_Message__c ' +
+                       'FROM Workflow_Instance__c' + buildWhereClause(workflowName, status, searchTerm);
         
         query += ' ORDER BY CreatedDate DESC LIMIT :limitSize OFFSET :offsetSize';
         
         return Database.query(query);
+    }
+
+    @AuraEnabled
+    public static Map<String, Integer> getWorkflowStats(String workflowName, String status, String searchTerm) {
+        String query = 'SELECT Status__c, COUNT(Id) cnt FROM Workflow_Instance__c' + buildWhereClause(workflowName, status, searchTerm) + ' GROUP BY Status__c';
+        
+        Map<String, Integer> results = new Map<String, Integer>{
+            'total' => 0,
+            'active' => 0,
+            'completed' => 0,
+            'failed' => 0
+        };
+        
+        for (AggregateResult ar : Database.query(query)) {
+            String stat = (String)ar.get('Status__c');
+            Integer count = (Integer)ar.get('cnt');
+            results.put('total', results.get('total') + count);
+            
+            if (stat == 'Pending' || stat == 'Running' || stat == 'Suspended' || stat == 'Compensating' || stat == 'Cancelling') {
+                results.put('active', results.get('active') + count);
+            } else if (stat == 'Completed' || stat == 'ContinuedAsNew') {
+                results.put('completed', results.get('completed') + count);
+            } else if (stat == 'Failed' || stat == 'Compensated' || stat == 'Cancelled') {
+                results.put('failed', results.get('failed') + count);
+            }
+        }
+        return results;
     }
     
     @AuraEnabled
