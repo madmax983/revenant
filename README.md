@@ -145,15 +145,23 @@ Id instanceId = WorkflowEngine.start(
 
 ## Operations & Alerting Configuration
 
-Revenant supports Custom Metadata-driven alerting. Operators can configure notifications directly in Salesforce Setup without code modifications by creating `Workflow_Alert_Config__mdt` records:
+Revenant supports Custom Metadata-driven failure alerting. Operators can configure notifications directly in Salesforce Setup without code modifications by creating **Workflow Alert Config** (`Workflow_Alert_Config__mdt`) records:
 
-1.  **Recipient Setup**: Define target emails in `Email_Recipients__c` (comma or semicolon separated).
-2.  **Activation**: Toggle alerting via `Enable_Alerts__c`.
-3.  **Threshold Customization**:
-    *   `Consecutive_Failures_Limit__c`: Trigger email alerts only after `N` consecutive workflow executions fail.
+### Mapping Workflow Definitions to Alert Configurations
+
+The engine maps a workflow's class name to a custom metadata record's `DeveloperName` (Workflow Alert Config Name) by replacing all non-alphanumeric characters (such as dots) with underscores:
+
+*   **Standard Class**: `OnboardingWorkflow` maps to `OnboardingWorkflow`
+*   **Inner Class / Nested Class**: `CalloutTimeoutWorkflowExample.CalloutWorkflow` maps to `CalloutTimeoutWorkflowExample_CalloutWorkflow`
+*   **Global Fallback**: If no specific configuration record matches a failing workflow, the engine automatically falls back to a record named **`Default`**.
+
+### Configuration Fields
+
+1.  **Email Recipients** (`Email_Recipients__c`): A comma- or semicolon-separated list of target email addresses (e.g., `ops@example.com, alerts@example.com`).
+2.  **Enable Alerts** (`Enable_Alerts__c`): Checkbox to toggle notifications for this configuration.
+3.  **Threshold Customization** (Optional - if left blank, alerts fire immediately on any failure):
+    *   `Consecutive_Failures_Limit__c`: Trigger email alerts only after `N` consecutive executions fail.
     *   `Failure_Count_Limit__c` and `Time_Window_Minutes__c`: Trigger email alerts if `N` failures occur within a sliding window of `M` minutes.
-
-For global fallback behavior, define a record named `Default`. Specific settings can be targeted to a particular workflow definition by matching its Developer Name (e.g. `OnboardingWorkflow`).
 
 ---
 
