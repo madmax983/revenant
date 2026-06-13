@@ -470,7 +470,7 @@ public class WorkflowEngineTest {
 
         Workflow_Instance__c inst = [SELECT Status__c, Error_Message__c FROM Workflow_Instance__c WHERE Id = :instanceId];
         System.assertEquals('Failed', inst.Status__c);
-        System.assert(inst.Error_Message__c.contains('failed after max retries'));
+        System.assert(inst.Error_Message__c.contains('Max retries exceeded'));
     }
 
     @isTest

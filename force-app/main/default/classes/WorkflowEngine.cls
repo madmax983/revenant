@@ -159,7 +159,7 @@ public with sharing class WorkflowEngine {
 
         // 3. Retrieve or create Step Execution log
         List<Workflow_Step_Execution__c> stepExecs = [
-            SELECT Id, Status__c, Input__c, Output__c, Retry_Count__c
+            SELECT Id, Step_Name__c, Status__c, Input__c, Output__c, Retry_Count__c
             FROM Workflow_Step_Execution__c
             WHERE Workflow_Instance__c = :instanceId
             AND Step_Name__c = :activeStepName
@@ -269,19 +269,38 @@ public with sharing class WorkflowEngine {
     }
 
     private static void handleStepResult(Workflow_Instance__c instance, Workflow_Step_Execution__c stepExec, StepResult result) {
-        // Re-query to avoid overwriting a timeout or finalizer crash status
+        // Re-query to avoid overwriting a timeout or finalizer crash status and race conditions
         Workflow_Instance__c freshInstance = [
-            SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instance.Id
+            SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c, Output__c, Parent_Instance__c, Workflow_Name__c, Correlation_Key__c, Input__c 
+            FROM Workflow_Instance__c WHERE Id = :instance.Id FOR UPDATE
         ];
-        if (freshInstance.Status__c == 'Failed') {
-            throw new WorkflowException('Workflow execution was terminated (e.g. timed out or crashed).');
+        if (freshInstance.Status__c == 'Failed' || freshInstance.Status__c == 'Compensating' || freshInstance.Status__c == 'Compensated') {
+            throw new WorkflowException('Workflow execution was terminated or is compensating.');
         }
+        instance = freshInstance;
 
         if (result.action == StepResult.ActionType.COMPLETE) {
             // Step is complete. Store output.
             stepExec.Status__c = 'Completed';
             stepExec.Output__c = result.outputJson;
             update stepExec;
+
+            // Update compensation stack if step is CompensatableStep
+            Type stepType = Type.forName(stepExec.Step_Name__c);
+            if (stepType != null) {
+                Object stepInstanceObj = stepType.newInstance();
+                if (stepInstanceObj instanceof CompensatableStep) {
+                    List<String> stack = new List<String>();
+                    if (String.isNotBlank(instance.Compensation_Stack__c)) {
+                        stack = (List<String>)JSON.deserialize(instance.Compensation_Stack__c, List<String>.class);
+                    }
+                    stack.add(stepExec.Step_Name__c);
+                    instance.Compensation_Stack__c = JSON.serialize(stack);
+                    // If not parallel or if parallel and not all done, update here so stack is saved.
+                    // (Parallel allDone paths will update instance later, but doing a single update here is safe).
+                    update instance;
+                }
+            }
 
             Boolean isParallel = String.isNotBlank(instance.Current_Step__c) && instance.Current_Step__c.contains(',');
             if (isParallel) {
@@ -481,9 +500,7 @@ public with sharing class WorkflowEngine {
                 stepExec.Error_Details__c = 'Max retries (' + policy.maximumAttempts + ') exceeded.';
                 update stepExec;
 
-                instance.Status__c = 'Failed';
-                instance.Error_Message__c = 'Step ' + instance.Current_Step__c + ' failed after max retries.';
-                update instance;
+                failWorkflowInstance(instance.Id, instance.Current_Step__c, 'Max retries exceeded.');
             } else {
                 stepExec.Status__c = 'Retrying';
                 update stepExec;
@@ -519,10 +536,7 @@ public with sharing class WorkflowEngine {
         }
 
         Workflow_Instance__c instance = instances[0];
-        instance.Status__c = 'Failed';
-        instance.Error_Message__c = 'Transaction crashed: ' + (ex != null ? ex.getMessage() + '\n' + ex.getStackTraceString() : 'Unknown governor limit / crash');
-        update instance;
-
+        // Mark step failed first
         if (String.isNotBlank(instance.Current_Step__c)) {
             List<Workflow_Step_Execution__c> stepExecs = [
                 SELECT Id FROM Workflow_Step_Execution__c
@@ -537,6 +551,51 @@ public with sharing class WorkflowEngine {
                 stepExec.Error_Details__c = (ex != null ? ex.getMessage() + '\n' + ex.getStackTraceString() : 'Unknown governor limit / crash');
                 update stepExec;
             }
+        }
+
+        // Use fail helper
+        String errorMsg = 'Transaction crashed: ' + (ex != null ? ex.getMessage() : 'Unknown governor limit');
+        failWorkflowInstance(instanceId, instance.Current_Step__c, errorMsg);
+    }
+
+    /**
+     * Transitions a workflow instance to Failed or Compensating state.
+     */
+    public static void failWorkflowInstance(Id instanceId, String stepName, String errorMessage) {
+        List<Workflow_Instance__c> instances = [
+            SELECT Id, Status__c, Error_Message__c, Compensation_Stack__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :instanceId 
+            LIMIT 1
+            FOR UPDATE
+        ];
+        if (instances.isEmpty()) {
+            return;
+        }
+        Workflow_Instance__c instance = instances[0];
+        
+        // Check if there are compensations to run
+        Boolean hasCompensations = false;
+        if (String.isNotBlank(instance.Compensation_Stack__c)) {
+            List<String> stack = (List<String>)JSON.deserialize(instance.Compensation_Stack__c, List<String>.class);
+            hasCompensations = !stack.isEmpty();
+        }
+
+        if (hasCompensations) {
+            instance.Status__c = 'Compensating';
+            instance.Error_Message__c = 'Failed at step ' + stepName + ': ' + errorMessage;
+            update instance;
+
+            // Kick off rollback loop
+            if (Test.isRunningTest()) {
+                System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+            } else {
+                enqueueOrchestrator(instance.Id, null);
+            }
+        } else {
+            instance.Status__c = 'Failed';
+            instance.Error_Message__c = 'Failed at step ' + stepName + ': ' + errorMessage;
+            update instance;
         }
     }
 
