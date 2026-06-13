@@ -164,7 +164,7 @@ For global fallback behavior, define a record named `Default`. Specific settings
     *   `objects/` - Core database schemas (`Workflow_Instance__c`, `Workflow_Step_Execution__c`), Platform Events, and Custom Metadata Types.
     *   `lwc/` - Responsive visual monitoring timeline dashboard.
 *   `examples/main/default/` - Reference Architectures
-    *   `classes/` - Onboarding, Saga rollback, version upgrades, and Apex Cursor parallel processing implementations.
+    *   `classes/` - Onboarding, Saga rollback, version upgrades, Apex Cursor parallel processing, and HTTP Callout/Timeout Watchdog implementations.
     *   `triggers/` - Opportunity stage triggers demonstrating automated workflow instantiation.
 
 ---
