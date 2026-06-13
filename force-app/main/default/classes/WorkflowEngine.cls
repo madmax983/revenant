@@ -158,7 +158,7 @@ public with sharing class WorkflowEngine {
     public static void runStep(Id instanceId, String stepName) {
         // 1. Lock and fetch instance state
         List<Workflow_Instance__c> instances = [
-            SELECT Id, Workflow_Name__c, Status__c, Current_Step__c, Input__c, Correlation_Key__c, Parent_Instance__c, Compensation_Stack__c, Definition_Version__c 
+            SELECT Id, Name, Workflow_Name__c, Status__c, Current_Step__c, Input__c, Correlation_Key__c, Parent_Instance__c, Compensation_Stack__c, Definition_Version__c 
             FROM Workflow_Instance__c 
             WHERE Id = :instanceId 
             LIMIT 1
@@ -649,7 +649,7 @@ public with sharing class WorkflowEngine {
      */
     public static void failWorkflowInstance(Id instanceId, String stepName, String errorMessage) {
         List<Workflow_Instance__c> instances = [
-            SELECT Id, Status__c, Error_Message__c, Compensation_Stack__c 
+            SELECT Id, Name, Status__c, Error_Message__c, Compensation_Stack__c, Workflow_Name__c, Correlation_Key__c 
             FROM Workflow_Instance__c 
             WHERE Id = :instanceId 
             LIMIT 1
@@ -684,6 +684,7 @@ public with sharing class WorkflowEngine {
             instance.Status__c = 'Failed';
             instance.Error_Message__c = 'Failed at step ' + stepName + ': ' + errorMessage;
             update instance;
+            WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
         }
     }
 
@@ -1160,6 +1161,7 @@ public with sharing class WorkflowEngine {
                 instance.Status__c = 'Failed';
                 instance.Error_Message__c = 'Compensation step ' + stepExec.Step_Name__c + ' failed after max retries.';
                 update instance;
+                WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
             } else {
                 stepExec.Status__c = 'Retrying';
                 update stepExec;

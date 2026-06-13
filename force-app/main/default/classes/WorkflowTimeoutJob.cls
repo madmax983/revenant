@@ -31,7 +31,7 @@ public class WorkflowTimeoutJob implements Schedulable {
             update stepExec;
 
             List<Workflow_Instance__c> instances = [
-                SELECT Id, Status__c, Error_Message__c 
+                SELECT Id, Name, Status__c, Error_Message__c, Workflow_Name__c, Correlation_Key__c 
                 FROM Workflow_Instance__c 
                 WHERE Id = :this.instanceId
                 LIMIT 1
@@ -42,6 +42,7 @@ public class WorkflowTimeoutJob implements Schedulable {
                 instance.Status__c = 'Failed';
                 instance.Error_Message__c = 'Step ' + this.stepName + ' timed out.';
                 update instance;
+                WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
             }
         }
 
