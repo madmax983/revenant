@@ -1,5 +1,5 @@
 public class StepResult {
-    public enum ActionType { COMPLETE, SUSPEND, YIELD, RETRY, SLEEP, START_CHILD, WAIT_FOR_APPROVAL, SPLIT }
+    public enum ActionType { COMPLETE, SUSPEND, YIELD, RETRY, SLEEP, START_CHILD, WAIT_FOR_APPROVAL, SPLIT, CONTINUE_AS_NEW }
     
     public ActionType action { get; set; }
     public String nextStepName { get; set; }
@@ -15,6 +15,8 @@ public class StepResult {
     public String approvalRole { get; set; }
     public List<String> parallelStepNames { get; set; }
     public String parallelInputJson { get; set; }
+    public String nextInputJson { get; set; }
+    public String newCorrelationKey { get; set; }
 
     public static StepResult complete(String nextStepName, Object output) {
         StepResult r = new StepResult();
@@ -108,6 +110,22 @@ public class StepResult {
         } else {
             r.parallelInputJson = JSON.serialize(input);
         }
+        return r;
+    }
+
+    public static StepResult continueAsNew(Object nextInput) {
+        StepResult r = new StepResult();
+        r.action = ActionType.CONTINUE_AS_NEW;
+        r.nextInputJson = (nextInput != null) ? JSON.serialize(nextInput) : null;
+        r.newCorrelationKey = null;
+        return r;
+    }
+
+    public static StepResult continueAsNew(Object nextInput, String customKey) {
+        StepResult r = new StepResult();
+        r.action = ActionType.CONTINUE_AS_NEW;
+        r.nextInputJson = (nextInput != null) ? JSON.serialize(nextInput) : null;
+        r.newCorrelationKey = customKey;
         return r;
     }
 }
