@@ -368,7 +368,7 @@
                         </template>
 
                         <lightning-combobox
-                            name="workflowName"
+                            name="launchName"
                             label="Workflow Definition"
                             placeholder="Select workflow class..."
                             value={launchName}
@@ -378,7 +378,7 @@
                         </lightning-combobox>
 
                         <lightning-input
-                            name="correlationKey"
+                            name="launchKey"
                             label="Correlation Key (Unique)"
                             placeholder="e.g. Backfill_June_01"
                             value={launchKey}
@@ -386,7 +386,7 @@
                         </lightning-input>
 
                         <lightning-textarea
-                            name="inputJson"
+                            name="launchInputJson"
                             label="Input Payload (JSON)"
                             placeholder='e.g. { "records": [1, 2, 3] }'
                             value={launchInputJson}
