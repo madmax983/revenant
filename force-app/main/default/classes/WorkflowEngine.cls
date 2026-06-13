@@ -162,11 +162,11 @@ public with sharing class WorkflowEngine {
         }
 
         Workflow_Instance__c instance = instances[0];
-        if (instance.Status__c == 'Completed' || instance.Status__c == 'Failed' || instance.Status__c == 'Compensated') {
+        if (instance.Status__c == 'Completed' || instance.Status__c == 'Failed' || instance.Status__c == 'Compensated' || instance.Status__c == 'Cancelled') {
             return; // Already finished
         }
 
-        if (instance.Status__c == 'Compensating') {
+        if (instance.Status__c == 'Compensating' || instance.Status__c == 'Cancelling') {
             runCompensationStep(instance);
             return;
         }
@@ -307,8 +307,8 @@ public with sharing class WorkflowEngine {
             SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c, Output__c, Parent_Instance__c, Workflow_Name__c, Correlation_Key__c, Input__c, Definition_Version__c 
             FROM Workflow_Instance__c WHERE Id = :instance.Id FOR UPDATE
         ];
-        if (freshInstance.Status__c == 'Failed' || freshInstance.Status__c == 'Compensating' || freshInstance.Status__c == 'Compensated') {
-            throw new WorkflowException('Workflow execution was terminated or is compensating.');
+        if (freshInstance.Status__c == 'Failed' || freshInstance.Status__c == 'Compensating' || freshInstance.Status__c == 'Compensated' || freshInstance.Status__c == 'Cancelled' || freshInstance.Status__c == 'Cancelling') {
+            throw new WorkflowException('Workflow execution was terminated, cancelled, or is compensating.');
         }
         instance = freshInstance;
 
@@ -764,6 +764,22 @@ public with sharing class WorkflowEngine {
 
         Workflow_Instance__c instance = instances[0];
 
+        if (signalName.equalsIgnoreCase('Cancel') || signalName.equalsIgnoreCase('CancelWorkflow')) {
+            Boolean runCompensations = true;
+            if (String.isNotBlank(payload)) {
+                try {
+                    Map<String, Object> params = (Map<String, Object>)JSON.deserializeUntyped(payload);
+                    if (params.containsKey('runCompensations')) {
+                        runCompensations = (Boolean)params.get('runCompensations');
+                    }
+                } catch (Exception e) {
+                    // Ignore and use default
+                }
+            }
+            cancel(instance.Id, runCompensations);
+            return;
+        }
+
         // Insert the signal record
         Workflow_Signal__c sig = new Workflow_Signal__c();
         sig.Workflow_Instance__c = instance.Id;
@@ -853,7 +869,7 @@ public with sharing class WorkflowEngine {
     private static void runCompensationStep(Workflow_Instance__c instance) {
         // 1. Read the compensation stack
         if (String.isBlank(instance.Compensation_Stack__c)) {
-            instance.Status__c = 'Compensated';
+            instance.Status__c = (instance.Status__c == 'Cancelling') ? 'Cancelled' : 'Compensated';
             instance.Current_Step__c = null;
             update instance;
             return;
@@ -861,7 +877,7 @@ public with sharing class WorkflowEngine {
 
         List<String> stack = (List<String>)JSON.deserialize(instance.Compensation_Stack__c, List<String>.class);
         if (stack.isEmpty()) {
-            instance.Status__c = 'Compensated';
+            instance.Status__c = (instance.Status__c == 'Cancelling') ? 'Cancelled' : 'Compensated';
             instance.Current_Step__c = null;
             update instance;
             return;
@@ -1005,8 +1021,8 @@ public with sharing class WorkflowEngine {
         Workflow_Instance__c freshInstance = [
             SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instance.Id
         ];
-        if (freshInstance.Status__c == 'Failed') {
-            throw new WorkflowException('Workflow execution was terminated.');
+        if (freshInstance.Status__c == 'Failed' || freshInstance.Status__c == 'Cancelled') {
+            throw new WorkflowException('Workflow execution was terminated or cancelled.');
         }
 
         if (result.action == StepResult.ActionType.COMPLETE) {
@@ -1018,7 +1034,7 @@ public with sharing class WorkflowEngine {
             instance.Compensation_Stack__c = JSON.serialize(stack);
             
             if (stack.isEmpty()) {
-                instance.Status__c = 'Compensated';
+                instance.Status__c = (instance.Status__c == 'Cancelling') ? 'Cancelled' : 'Compensated';
                 instance.Current_Step__c = null;
             }
             update instance;
@@ -1099,6 +1115,112 @@ public with sharing class WorkflowEngine {
                 System.abortJob(triggerJob.Id);
             } catch (Exception e) {
                 // ignore if already executed/aborted
+            }
+        }
+    }
+
+    /**
+     * Cancels a workflow instance, aborts scheduled jobs, and optionally runs saga compensations.
+     */
+    public static void cancel(Id instanceId, Boolean runCompensations) {
+        List<Workflow_Instance__c> instances = [
+            SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :instanceId 
+            LIMIT 1
+            FOR UPDATE
+        ];
+        if (instances.isEmpty()) {
+            throw new WorkflowException('Workflow instance not found: ' + instanceId);
+        }
+
+        Workflow_Instance__c instance = instances[0];
+        if (instance.Status__c == 'Completed' || instance.Status__c == 'Failed' || instance.Status__c == 'Compensated' || instance.Status__c == 'Cancelled') {
+            return; // Already in terminal state
+        }
+
+        // Abort all scheduled jobs for this instance (sleeps, retries, timeouts)
+        abortScheduledJobs(instanceId);
+
+        // Mark the active step execution (if any) as Cancelled
+        if (String.isNotBlank(instance.Current_Step__c)) {
+            List<String> activeStepNames = new List<String>();
+            if (instance.Current_Step__c.contains(',')) {
+                activeStepNames = instance.Current_Step__c.split(',');
+            } else {
+                activeStepNames.add(instance.Current_Step__c);
+            }
+
+            List<Workflow_Step_Execution__c> stepExecs = [
+                SELECT Id, Status__c 
+                FROM Workflow_Step_Execution__c
+                WHERE Workflow_Instance__c = :instanceId
+                AND Step_Name__c IN :activeStepNames
+                AND Status__c IN ('Running', 'Pending', 'Retrying')
+            ];
+            for (Workflow_Step_Execution__c stepExec : stepExecs) {
+                stepExec.Status__c = 'Cancelled';
+            }
+            if (!stepExecs.isEmpty()) {
+                update stepExecs;
+            }
+        }
+
+        // Check for compensations
+        Boolean hasCompensations = false;
+        if (runCompensations && String.isNotBlank(instance.Compensation_Stack__c)) {
+            List<String> stack = (List<String>)JSON.deserialize(instance.Compensation_Stack__c, List<String>.class);
+            hasCompensations = !stack.isEmpty();
+        }
+
+        if (hasCompensations) {
+            instance.Status__c = 'Cancelling';
+            instance.Error_Message__c = 'Cancelled by user. Compensating.';
+            update instance;
+
+            // Kick off rollback loop
+            if (Test.isRunningTest()) {
+                if (!disableQueueableInTest) {
+                    System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+                }
+            } else {
+                enqueueOrchestrator(instance.Id, null);
+            }
+        } else {
+            instance.Status__c = 'Cancelled';
+            instance.Error_Message__c = 'Cancelled by user.';
+            update instance;
+        }
+
+        // Recursively cancel active child workflows
+        List<Workflow_Instance__c> childInstances = [
+            SELECT Id FROM Workflow_Instance__c 
+            WHERE Parent_Instance__c = :instance.Id 
+            AND Status__c IN ('Pending', 'Running', 'Suspended', 'Cancelling')
+        ];
+        for (Workflow_Instance__c child : childInstances) {
+            cancel(child.Id, runCompensations);
+        }
+    }
+
+    /**
+     * Aborts all Scheduled Apex cron jobs associated with the workflow instance.
+     */
+    public static void abortScheduledJobs(Id instanceId) {
+        String sleepPrefix = 'WorkflowSleep_' + instanceId + '_%';
+        String retryPrefix = 'WorkflowRetry_' + instanceId + '_%';
+        String timeoutPrefix = 'Timeout_' + instanceId + '_%';
+        List<CronTrigger> triggers = [
+            SELECT Id FROM CronTrigger 
+            WHERE (CronJobDetail.Name LIKE :sleepPrefix 
+                   OR CronJobDetail.Name LIKE :retryPrefix 
+                   OR CronJobDetail.Name LIKE :timeoutPrefix)
+        ];
+        for (CronTrigger triggerJob : triggers) {
+            try {
+                System.abortJob(triggerJob.Id);
+            } catch (Exception e) {
+                // ignore
             }
         }
     }

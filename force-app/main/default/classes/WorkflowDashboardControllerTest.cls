@@ -167,4 +167,28 @@ public class WorkflowDashboardControllerTest {
         System.assert(signals[0].Payload__c.contains('"approved":true'));
         System.assert(signals[0].Payload__c.contains('"comments":"Looks good"'));
     }
+
+    @isTest
+    static void testCancelWorkflowInstance() {
+        // Create running instance
+        Workflow_Instance__c inst = new Workflow_Instance__c(
+            Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+            Status__c = 'Running',
+            Correlation_Key__c = 'CancelDashKey',
+            Input__c = '"InputData"'
+        );
+        insert inst;
+
+        Test.startTest();
+        WorkflowDashboardController.cancelWorkflow(inst.Id, false);
+        Test.stopTest();
+
+        Workflow_Instance__c updatedInst = [
+            SELECT Status__c, Error_Message__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :inst.Id
+        ];
+        System.assertEquals('Cancelled', updatedInst.Status__c);
+        System.assertEquals('Cancelled by user.', updatedInst.Error_Message__c);
+    }
 }

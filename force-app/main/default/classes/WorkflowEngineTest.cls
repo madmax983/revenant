@@ -949,4 +949,120 @@ public class WorkflowEngineTest {
         System.assertEquals('Compensated', finalExec.Status__c);
         System.assertEquals('"CompensatedFailing"', finalExec.Output__c);
     }
+
+    @isTest
+    static void testCancelWorkflowActiveNoCompensations() {
+        Test.startTest();
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.SuspendingWorkflow', 'CancelKey1', null);
+        Test.stopTest(); // Executes initial step and suspends
+        
+        Workflow_Instance__c inst = [SELECT Status__c, Current_Step__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Suspended', inst.Status__c);
+        System.assertEquals('WorkflowEngineTest.SuspendingStep', inst.Current_Step__c);
+        
+        WorkflowEngine.cancel(instanceId, false);
+
+        inst = [SELECT Status__c, Current_Step__c, Error_Message__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Cancelled', inst.Status__c);
+        System.assertEquals('Cancelled by user.', inst.Error_Message__c);
+        
+        List<Workflow_Step_Execution__c> steps = [
+            SELECT Status__c FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :instanceId
+        ];
+        System.assert(!steps.isEmpty());
+        for (Workflow_Step_Execution__c s : steps) {
+            System.assertEquals('Cancelled', s.Status__c);
+        }
+    }
+
+    @isTest
+    static void testCancelWorkflowActiveWithCompensations() {
+        WorkflowEngine.disableQueueableInTest = true;
+        
+        // Use SagaWorkflowExample for saga stack building
+        Id instanceId = WorkflowEngine.start('SagaWorkflowExample.SagaWorkflow', 'CancelKey2', null);
+        
+        // Run first step (ChargeCreditCardStep) to push to stack
+        WorkflowEngine.runStep(instanceId, null);
+        
+        Workflow_Instance__c inst = [SELECT Status__c, Current_Step__c, Compensation_Stack__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('SagaWorkflowExample.ProvisionServiceStep', inst.Current_Step__c);
+        System.assert(inst.Compensation_Stack__c.contains('SagaWorkflowExample.ChargeCreditCardStep'));
+
+        Test.startTest();
+        // Cancel with compensations
+        WorkflowEngine.cancel(instanceId, true);
+        
+        // Assert status is now Cancelling
+        inst = [SELECT Status__c, Current_Step__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Cancelling', inst.Status__c);
+        
+        // Execute the compensation step (pops ChargeCreditCardStep)
+        WorkflowEngine.runStep(instanceId, null);
+        
+        // Finish compensation loop
+        WorkflowEngine.runStep(instanceId, null);
+        Test.stopTest();
+
+        inst = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Cancelled', inst.Status__c);
+    }
+
+    @isTest
+    static void testCancelWorkflowSleeping() {
+        Test.startTest();
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.SleepingWorkflow', 'CancelKey3', null);
+        Test.stopTest(); // Runs the queueable and puts the workflow to Sleep (Suspended)
+        
+        Workflow_Instance__c inst = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Suspended', inst.Status__c);
+
+        // Cancel sleeping workflow
+        WorkflowEngine.cancel(instanceId, false);
+
+        inst = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Cancelled', inst.Status__c);
+    }
+
+    @isTest
+    static void testCancelWorkflowParentChild() {
+        WorkflowEngine.disableQueueableInTest = true;
+        Id parentId = WorkflowEngine.start('WorkflowEngineTest.ParentWorkflow', 'CancelParent', null);
+        
+        // Execute parent, which starts child and suspends
+        WorkflowEngine.runStep(parentId, null);
+        
+        Workflow_Instance__c childInst = [
+            SELECT Id, Status__c FROM Workflow_Instance__c 
+            WHERE Parent_Instance__c = :parentId 
+            LIMIT 1
+        ];
+        System.assertEquals('Pending', childInst.Status__c);
+
+        Test.startTest();
+        // Cancel parent, should recursively cancel child
+        WorkflowEngine.cancel(parentId, false);
+        Test.stopTest();
+
+        Workflow_Instance__c parent = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :parentId];
+        childInst = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :childInst.Id];
+        
+        System.assertEquals('Cancelled', parent.Status__c);
+        System.assertEquals('Cancelled', childInst.Status__c);
+    }
+
+    @isTest
+    static void testCancelWorkflowViaSignal() {
+        WorkflowEngine.disableQueueableInTest = true;
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.HappyWorkflow', 'CancelSignalKey', null);
+        
+        Test.startTest();
+        // Signal cancellation
+        WorkflowEngine.signal('CancelSignalKey', 'Cancel', '{"runCompensations": false}');
+        Test.stopTest();
+
+        Workflow_Instance__c inst = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Cancelled', inst.Status__c);
+    }
 }

@@ -7,6 +7,7 @@ import getInstanceDetails from '@salesforce/apex/WorkflowDashboardController.get
 import getDefinitions from '@salesforce/apex/WorkflowDashboardController.getDefinitions';
 import startWorkflow from '@salesforce/apex/WorkflowDashboardController.startWorkflow';
 import retryWorkflowInstance from '@salesforce/apex/WorkflowDashboardController.retryWorkflowInstance';
+import cancelWorkflow from '@salesforce/apex/WorkflowDashboardController.cancelWorkflow';
 import submitApproval from '@salesforce/apex/WorkflowDashboardController.submitApproval';
 
 export default class WorkflowDashboard extends LightningElement {
@@ -87,14 +88,20 @@ export default class WorkflowDashboard extends LightningElement {
         return this.selectedInst && this.selectedInst.Status__c === 'Failed';
     }
 
+    get isCancelable() {
+        if (!this.selectedInst) return false;
+        const status = this.selectedInst.Status__c;
+        return status === 'Pending' || status === 'Running' || status === 'Suspended';
+    }
+
     calculateStats() {
         const stats = { total: this.instances.length, active: 0, completed: 0, failed: 0 };
         this.instances.forEach(inst => {
-            if (inst.Status__c === 'Pending' || inst.Status__c === 'Running' || inst.Status__c === 'Suspended' || inst.Status__c === 'Compensating') {
+            if (inst.Status__c === 'Pending' || inst.Status__c === 'Running' || inst.Status__c === 'Suspended' || inst.Status__c === 'Compensating' || inst.Status__c === 'Cancelling') {
                 stats.active += 1;
             } else if (inst.Status__c === 'Completed') {
                 stats.completed += 1;
-            } else if (inst.Status__c === 'Failed' || inst.Status__c === 'Compensated') {
+            } else if (inst.Status__c === 'Failed' || inst.Status__c === 'Compensated' || inst.Status__c === 'Cancelled') {
                 stats.failed += 1;
             }
         });
@@ -319,6 +326,27 @@ export default class WorkflowDashboard extends LightningElement {
             });
     }
 
+    handleCancelWorkflow() {
+        const runCompensate = confirm('Cancel this workflow? Click OK to run Saga compensations and roll back completed steps, or Cancel to abort immediately without compensations.');
+        
+        this.loadingDetails = true;
+        cancelWorkflow({ 
+            instanceId: this.selectedInstanceId, 
+            runCompensations: runCompensate 
+        })
+            .then(() => {
+                this.showToast('Success', 'Workflow cancellation requested successfully.', 'success');
+                refreshApex(this.wiredInstancesResult);
+                this.loadDetails(true);
+            })
+            .catch(error => {
+                this.showToast('Error', 'Failed to cancel workflow: ' + (error.body ? error.body.message : error.message), 'error');
+            })
+            .finally(() => {
+                this.loadingDetails = false;
+            });
+    }
+
     handleCommentsChange(event) {
         this.approvalComments = event.target.value;
     }
@@ -383,6 +411,10 @@ export default class WorkflowDashboard extends LightningElement {
                 return 'badge badge-yellow pulse-glow';
             case 'Compensated':
                 return 'badge badge-orange';
+            case 'Cancelling':
+                return 'badge badge-yellow pulse-glow';
+            case 'Cancelled':
+                return 'badge badge-grey';
             default:
                 return 'badge';
         }
@@ -404,6 +436,10 @@ export default class WorkflowDashboard extends LightningElement {
                 return 'timeline-marker bg-yellow';
             case 'Compensated':
                 return 'timeline-marker bg-orange';
+            case 'Cancelling':
+                return 'timeline-marker bg-yellow';
+            case 'Cancelled':
+                return 'timeline-marker bg-grey';
             default:
                 return 'timeline-marker';
         }

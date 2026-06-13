@@ -46,6 +46,16 @@
                 <default>false</default>
                 <label>Compensated</label>
             </value>
+            <value>
+                <fullName>Cancelling</fullName>
+                <default>false</default>
+                <label>Cancelling</label>
+            </value>
+            <value>
+                <fullName>Cancelled</fullName>
+                <default>false</default>
+                <label>Cancelled</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

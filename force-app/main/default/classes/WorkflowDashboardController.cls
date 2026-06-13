@@ -82,6 +82,15 @@ public with sharing class WorkflowDashboardController {
     }
 
     @AuraEnabled
+    public static void cancelWorkflow(Id instanceId, Boolean runCompensations) {
+        try {
+            WorkflowEngine.cancel(instanceId, runCompensations);
+        } catch (Exception ex) {
+            throw new AuraHandledException(ex.getMessage());
+        }
+    }
+
+    @AuraEnabled
     public static void submitApproval(Id instanceId, String approvalKey, Boolean approved, String comments) {
         try {
             Map<String, Object> payload = new Map<String, Object>{

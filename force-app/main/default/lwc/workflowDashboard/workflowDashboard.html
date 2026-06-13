@@ -130,6 +130,15 @@
                                                 class="slds-m-right_small">
                                             </lightning-button>
                                         </template>
+                                        <template if:true={isCancelable}>
+                                            <lightning-button 
+                                                label="Cancel Workflow" 
+                                                icon-name="utility:close" 
+                                                variant="destructive" 
+                                                onclick={handleCancelWorkflow}
+                                                class="slds-m-right_small">
+                                            </lightning-button>
+                                        </template>
                                         <span class={selectedInst.statusBadgeClass}>{selectedInst.Status__c}</span>
                                     </div>
                                 </div>
