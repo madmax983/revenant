@@ -26,6 +26,19 @@ public with sharing class WorkflowEngine {
         instance.Correlation_Key__c = correlationKey;
         instance.Input__c = (input != null) ? JSON.serialize(input) : null;
         
+        // Resolve version
+        Type wflowType = Type.forName(workflowName);
+        if (wflowType != null) {
+            Object defObj = wflowType.newInstance();
+            if (defObj instanceof VersionedWorkflow) {
+                instance.Definition_Version__c = ((VersionedWorkflow)defObj).getLatestVersion();
+            } else {
+                instance.Definition_Version__c = 1;
+            }
+        } else {
+            instance.Definition_Version__c = 1;
+        }
+
         insert instance;
 
         // Enqueue the first step execution
@@ -60,6 +73,19 @@ public with sharing class WorkflowEngine {
         instance.Input__c = (input != null) ? JSON.serialize(input) : null;
         instance.Parent_Instance__c = parentInstanceId;
         
+        // Resolve version
+        Type wflowType = Type.forName(workflowName);
+        if (wflowType != null) {
+            Object defObj = wflowType.newInstance();
+            if (defObj instanceof VersionedWorkflow) {
+                instance.Definition_Version__c = ((VersionedWorkflow)defObj).getLatestVersion();
+            } else {
+                instance.Definition_Version__c = 1;
+            }
+        } else {
+            instance.Definition_Version__c = 1;
+        }
+
         insert instance;
 
         if (Test.isRunningTest()) {
@@ -124,7 +150,7 @@ public with sharing class WorkflowEngine {
     public static void runStep(Id instanceId, String stepName) {
         // 1. Lock and fetch instance state
         List<Workflow_Instance__c> instances = [
-            SELECT Id, Workflow_Name__c, Status__c, Current_Step__c, Input__c, Correlation_Key__c, Parent_Instance__c, Compensation_Stack__c 
+            SELECT Id, Workflow_Name__c, Status__c, Current_Step__c, Input__c, Correlation_Key__c, Parent_Instance__c, Compensation_Stack__c, Definition_Version__c 
             FROM Workflow_Instance__c 
             WHERE Id = :instanceId 
             LIMIT 1
@@ -241,7 +267,8 @@ public with sharing class WorkflowEngine {
             stepExec.Input__c,
             prevOutput,
             stepExec.Output__c,
-            instance.Input__c
+            instance.Input__c,
+            instance.Definition_Version__c != null ? (Integer)instance.Definition_Version__c : 1
         );
 
         // Determine step timeout if configured
@@ -277,7 +304,7 @@ public with sharing class WorkflowEngine {
     private static void handleStepResult(Workflow_Instance__c instance, Workflow_Step_Execution__c stepExec, StepResult result) {
         // Re-query to avoid overwriting a timeout or finalizer crash status and race conditions
         Workflow_Instance__c freshInstance = [
-            SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c, Output__c, Parent_Instance__c, Workflow_Name__c, Correlation_Key__c, Input__c 
+            SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c, Output__c, Parent_Instance__c, Workflow_Name__c, Correlation_Key__c, Input__c, Definition_Version__c 
             FROM Workflow_Instance__c WHERE Id = :instance.Id FOR UPDATE
         ];
         if (freshInstance.Status__c == 'Failed' || freshInstance.Status__c == 'Compensating' || freshInstance.Status__c == 'Compensated') {
@@ -350,7 +377,13 @@ public with sharing class WorkflowEngine {
                     
                     String spawningStepName = !spawningSteps.isEmpty() ? spawningSteps[0].Step_Name__c : '';
                     StepResult mockResult = StepResult.complete(null, !spawningSteps.isEmpty() ? spawningSteps[0].Output__c : null);
-                    String nextStepName = def.getNextStep(spawningStepName, mockResult);
+                    
+                    String nextStepName;
+                    if (def instanceof VersionedWorkflow) {
+                        nextStepName = ((VersionedWorkflow)def).getNextStep(spawningStepName, mockResult, instance.Definition_Version__c != null ? (Integer)instance.Definition_Version__c : 1);
+                    } else {
+                        nextStepName = def.getNextStep(spawningStepName, mockResult);
+                    }
 
                     Map<String, Object> joinInput = new Map<String, Object>();
                     for (Workflow_Step_Execution__c pe : parallelExecs) {
@@ -392,7 +425,12 @@ public with sharing class WorkflowEngine {
                 // Determine next step
                 Type wflowType = Type.forName(instance.Workflow_Name__c);
                 WorkflowDefinition def = (WorkflowDefinition)wflowType.newInstance();
-                String nextStepName = def.getNextStep(instance.Current_Step__c, result);
+                String nextStepName;
+                if (def instanceof VersionedWorkflow) {
+                    nextStepName = ((VersionedWorkflow)def).getNextStep(instance.Current_Step__c, result, instance.Definition_Version__c != null ? (Integer)instance.Definition_Version__c : 1);
+                } else {
+                    nextStepName = def.getNextStep(instance.Current_Step__c, result);
+                }
 
                 if (String.isBlank(nextStepName)) {
                     // Workflow is finished
@@ -641,6 +679,19 @@ public with sharing class WorkflowEngine {
         instance.Input__c = inputJson;
         instance.Parent_Instance__c = parentId;
         
+        // Resolve child version
+        Type wflowType = Type.forName(workflowName);
+        if (wflowType != null) {
+            Object defObj = wflowType.newInstance();
+            if (defObj instanceof VersionedWorkflow) {
+                instance.Definition_Version__c = ((VersionedWorkflow)defObj).getLatestVersion();
+            } else {
+                instance.Definition_Version__c = 1;
+            }
+        } else {
+            instance.Definition_Version__c = 1;
+        }
+
         insert instance;
         
         if (!Test.isRunningTest()) {
@@ -920,7 +971,8 @@ public with sharing class WorkflowEngine {
             stepExec.Input__c,
             prevOutput,
             stepExec.Output__c,
-            instance.Input__c
+            instance.Input__c,
+            instance.Definition_Version__c != null ? (Integer)instance.Definition_Version__c : 1
         );
 
         Integer timeoutSeconds = null;
