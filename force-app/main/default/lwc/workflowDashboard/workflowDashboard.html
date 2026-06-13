@@ -57,19 +57,47 @@
             <!-- Left Panel: Instances List -->
             <div class="slds-col slds-size_1-of-1 slds-medium-size_2-of-5 slds-m-bottom_medium">
                 <div class="panel-card">
-                    <div class="slds-p-around_small border-bottom">
-                        <lightning-input 
-                            name="search" 
-                            type="search" 
-                            placeholder="Filter by workflow name, key, status..." 
-                            value={searchTerm}
-                            onchange={handleSearchChange}>
-                        </lightning-input>
+                    <div class="slds-p-around_small border-bottom filter-bar">
+                        <div class="slds-grid slds-wrap slds-gutters_xx-small">
+                            <!-- Search Field -->
+                            <div class="slds-col slds-size_1-of-1 slds-m-bottom_x-small">
+                                <lightning-input 
+                                    name="search" 
+                                    type="search" 
+                                    variant="label-hidden"
+                                    placeholder="Search by name, key, error..." 
+                                    value={searchTerm}
+                                    onchange={handleSearchChange}>
+                                </lightning-input>
+                            </div>
+                            <!-- Workflow Definition Filter -->
+                            <div class="slds-col slds-size_1-of-2">
+                                <lightning-combobox
+                                    name="workflowFilter"
+                                    variant="label-hidden"
+                                    placeholder="Filter by Definition"
+                                    value={selectedWorkflow}
+                                    options={workflowOptions}
+                                    onchange={handleWorkflowFilterChange}>
+                                </lightning-combobox>
+                            </div>
+                            <!-- Status Filter -->
+                            <div class="slds-col slds-size_1-of-2">
+                                <lightning-combobox
+                                    name="statusFilter"
+                                    variant="label-hidden"
+                                    placeholder="Filter by Status"
+                                    value={selectedStatus}
+                                    options={statusOptions}
+                                    onchange={handleStatusFilterChange}>
+                                </lightning-combobox>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="list-container">
                         <template if:true={hasFilteredInstances}>
-                            <div class="slds-scrollable_y" style="max-height: 500px;">
+                            <div class="slds-scrollable_y" style="max-height: 500px;" onscroll={handleScroll}>
                                 <ul class="slds-has-dividers_bottom-space">
                                     <template for:each={filteredInstances} for:item="inst">
                                         <li key={inst.Id} 
@@ -91,6 +119,20 @@
                                         </li>
                                     </template>
                                 </ul>
+
+                                <!-- Infinite Scroll Loading / Fallback Link -->
+                                <template if:true={loadingMore}>
+                                    <div class="slds-p-around_small slds-align_absolute-center" style="position: relative; min-height: 50px;">
+                                        <lightning-spinner alternative-text="Loading more instances..." size="small" variant="brand"></lightning-spinner>
+                                    </div>
+                                </template>
+                                <template if:false={loadingMore}>
+                                    <template if:true={hasMore}>
+                                        <div class="slds-p-around_small slds-text-align_center">
+                                            <a href="javascript:void(0);" onclick={loadMoreInstances} class="slds-text-link">Load More</a>
+                                        </div>
+                                    </template>
+                                </template>
                             </div>
                         </template>
                         <template if:false={hasFilteredInstances}>

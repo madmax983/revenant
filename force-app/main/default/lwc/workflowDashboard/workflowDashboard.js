@@ -1,8 +1,6 @@
 import { LightningElement, wire, track } from 'lwc';
 import { ShowToastEvent } from 'lightning/platformShowToastEvent';
-import { refreshApex } from '@salesforce/apex';
-
-import getInstances from '@salesforce/apex/WorkflowDashboardController.getInstances';
+import getFilteredInstances from '@salesforce/apex/WorkflowDashboardController.getFilteredInstances';
 import getInstanceDetails from '@salesforce/apex/WorkflowDashboardController.getInstanceDetails';
 import getDefinitions from '@salesforce/apex/WorkflowDashboardController.getDefinitions';
 import startWorkflow from '@salesforce/apex/WorkflowDashboardController.startWorkflow';
@@ -34,42 +32,27 @@ export default class WorkflowDashboard extends LightningElement {
     @track executingLaunch = false;
     @track launchError = '';
 
-    wiredInstancesResult;
+    // Pagination & Filters State
+    @track selectedWorkflow = '';
+    @track selectedStatus = '';
+    @track limitSize = 50;
+    @track offsetSize = 0;
+    @track hasMore = true;
+    @track loadingMore = false;
+
     wiredDefinitionsResult;
     pollingInterval;
     autoRefreshInterval;
+    searchTimeout;
 
     connectedCallback() {
+        this.fetchInstances(false);
         this.startAutoRefresh();
     }
 
     disconnectedCallback() {
         this.stopPolling();
         this.stopAutoRefresh();
-    }
-
-    @wire(getInstances)
-    wiredInstances(result) {
-        this.wiredInstancesResult = result;
-        if (result.data) {
-            this.instances = result.data.map(inst => {
-                return {
-                    ...inst,
-                    formattedDate: this.formatDateTime(inst.CreatedDate),
-                    listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? 'item-selected' : ''}`,
-                    statusBadgeClass: this.getStatusBadgeClass(inst.Status__c)
-                };
-            });
-            this.calculateStats();
-            this.filterInstancesList();
-            
-            // Auto-refresh detail view if selected instance is currently loaded
-            if (this.selectedInstanceId) {
-                this.loadDetails(false);
-            }
-        } else if (result.error) {
-            this.showToast('Error', 'Failed to retrieve workflow instances: ' + result.error.body.message, 'error');
-        }
     }
 
     @wire(getDefinitions)
@@ -82,6 +65,33 @@ export default class WorkflowDashboard extends LightningElement {
 
     get definitionOptions() {
         return this.definitions.map(def => ({ label: def, value: def }));
+    }
+
+    get workflowOptions() {
+        const options = [{ label: '-- All Definitions --', value: '' }];
+        if (this.definitions) {
+            this.definitions.forEach(def => {
+                options.push({ label: def, value: def });
+            });
+        }
+        return options;
+    }
+
+    get statusOptions() {
+        return [
+            { label: '-- All Statuses --', value: '' },
+            { label: 'Running', value: 'Running' },
+            { label: 'Pending', value: 'Pending' },
+            { label: 'Suspended', value: 'Suspended' },
+            { label: 'Retrying', value: 'Retrying' },
+            { label: 'Compensating', value: 'Compensating' },
+            { label: 'Compensated', value: 'Compensated' },
+            { label: 'Completed', value: 'Completed' },
+            { label: 'Failed', value: 'Failed' },
+            { label: 'Cancelling', value: 'Cancelling' },
+            { label: 'Cancelled', value: 'Cancelled' },
+            { label: 'ContinuedAsNew', value: 'ContinuedAsNew' }
+        ];
     }
 
     get hasFilteredInstances() {
@@ -106,6 +116,99 @@ export default class WorkflowDashboard extends LightningElement {
         return status === 'Pending' || status === 'Running' || status === 'Suspended';
     }
 
+    fetchInstances(isAppend) {
+        if (!isAppend) {
+            this.offsetSize = 0;
+            this.hasMore = true;
+            this.loadingMore = false;
+        }
+        
+        const currentOffset = this.offsetSize;
+        const currentLimit = this.limitSize;
+        
+        if (isAppend) {
+            this.loadingMore = true;
+        } else {
+            this.loadingDetails = true;
+        }
+        
+        return getFilteredInstances({
+            workflowName: this.selectedWorkflow,
+            status: this.selectedStatus,
+            searchTerm: this.searchTerm,
+            limitSize: currentLimit,
+            offsetSize: currentOffset
+        })
+        .then(result => {
+            const formatted = result.map(inst => {
+                return {
+                    ...inst,
+                    formattedDate: this.formatDateTime(inst.CreatedDate),
+                    listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? 'item-selected' : ''}`,
+                    statusBadgeClass: this.getStatusBadgeClass(inst.Status__c)
+                };
+            });
+            
+            if (isAppend) {
+                this.instances = [...this.instances, ...formatted];
+            } else {
+                this.instances = formatted;
+            }
+            
+            // Guard against SOQL 2000 offset limit
+            if (result.length < currentLimit || (this.offsetSize + result.length) >= 2000) {
+                this.hasMore = false;
+            } else {
+                this.hasMore = true;
+            }
+            
+            this.calculateStats();
+            this.filterInstancesList();
+            
+            // Auto-refresh detail view if selected instance is currently loaded
+            if (this.selectedInstanceId && !isAppend) {
+                this.loadDetails(false);
+            }
+        })
+        .catch(error => {
+            this.showToast('Error', 'Failed to retrieve workflow instances: ' + (error.body ? error.body.message : error.message), 'error');
+        })
+        .finally(() => {
+            this.loadingMore = false;
+            this.loadingDetails = false;
+        });
+    }
+
+    refreshInstances() {
+        const currentSize = this.instances.length > 0 ? this.instances.length : this.limitSize;
+        return getFilteredInstances({
+            workflowName: this.selectedWorkflow,
+            status: this.selectedStatus,
+            searchTerm: this.searchTerm,
+            limitSize: currentSize,
+            offsetSize: 0
+        })
+        .then(result => {
+            this.instances = result.map(inst => {
+                return {
+                    ...inst,
+                    formattedDate: this.formatDateTime(inst.CreatedDate),
+                    listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? 'item-selected' : ''}`,
+                    statusBadgeClass: this.getStatusBadgeClass(inst.Status__c)
+                };
+            });
+            this.calculateStats();
+            this.filterInstancesList();
+            
+            if (this.selectedInstanceId) {
+                this.loadDetails(false);
+            }
+        })
+        .catch(error => {
+            console.error('Error refreshing instances:', error);
+        });
+    }
+
     calculateStats() {
         const stats = { total: this.instances.length, active: 0, completed: 0, failed: 0 };
         this.instances.forEach(inst => {
@@ -122,55 +225,60 @@ export default class WorkflowDashboard extends LightningElement {
 
     handleSearchChange(event) {
         this.searchTerm = event.target.value;
-        this.filterInstancesList();
+        if (this.searchTimeout) {
+            clearTimeout(this.searchTimeout);
+        }
+        this.searchTimeout = setTimeout(() => {
+            this.fetchInstances(false);
+        }, 300);
+    }
+
+    handleWorkflowFilterChange(event) {
+        this.selectedWorkflow = event.target.value;
+        this.fetchInstances(false);
+    }
+
+    handleStatusFilterChange(event) {
+        this.selectedStatus = event.target.value;
+        this.fetchInstances(false);
     }
 
     filterInstancesList() {
-        if (!this.searchTerm) {
-            this.filteredInstances = [...this.instances];
-        } else {
-            const term = this.searchTerm.toLowerCase();
-            this.filteredInstances = this.instances.filter(inst => {
-                return (
-                    (inst.Name && inst.Name.toLowerCase().includes(term)) ||
-                    (inst.Workflow_Name__c && inst.Workflow_Name__c.toLowerCase().includes(term)) ||
-                    (inst.Correlation_Key__c && inst.Correlation_Key__c.toLowerCase().includes(term)) ||
-                    (inst.Status__c && inst.Status__c.toLowerCase().includes(term))
-                );
-            });
-        }
-        // Update selected items classes
-        this.filteredInstances = this.filteredInstances.map(inst => ({
+        this.filteredInstances = this.instances.map(inst => ({
             ...inst,
             listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? 'item-selected' : ''}`
         }));
+    }
+
+    handleScroll(event) {
+        const container = event.target;
+        const threshold = 20;
+        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
+        
+        if (isNearBottom && !this.loadingMore && this.hasMore) {
+            this.loadMoreInstances();
+        }
+    }
+
+    loadMoreInstances() {
+        if (this.loadingMore || !this.hasMore) {
+            return;
+        }
+        this.offsetSize += this.limitSize;
+        this.fetchInstances(true);
     }
 
     handleSelectInstance(event) {
         this.stopPolling();
         this.selectedInstanceId = event.currentTarget.dataset.id;
-        
-        // Highlight in list
-        this.instances = this.instances.map(inst => ({
-            ...inst,
-            listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? 'item-selected' : ''}`
-        }));
         this.filterInstancesList();
-
         this.loadDetails(true);
     }
 
     handleSelectRelatedInstance(event) {
         this.stopPolling();
         this.selectedInstanceId = event.currentTarget.dataset.id;
-        
-        // Highlight in list
-        this.instances = this.instances.map(inst => ({
-            ...inst,
-            listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? 'item-selected' : ''}`
-        }));
         this.filterInstancesList();
-
         this.loadDetails(true);
     }
 
@@ -274,7 +382,7 @@ export default class WorkflowDashboard extends LightningElement {
     }
 
     handleRefresh() {
-        refreshApex(this.wiredInstancesResult)
+        this.refreshInstances()
             .then(() => {
                 this.showToast('Success', 'Workflow dashboard refreshed', 'success');
             });
@@ -323,7 +431,7 @@ export default class WorkflowDashboard extends LightningElement {
             .then(result => {
                 this.showToast('Success', 'Workflow instance started successfully. ID: ' + result, 'success');
                 this.modalOpen = false;
-                refreshApex(this.wiredInstancesResult);
+                this.refreshInstances();
             })
             .catch(error => {
                 this.launchError = 'Failed to execute workflow: ' + error.body.message;
@@ -338,7 +446,7 @@ export default class WorkflowDashboard extends LightningElement {
         retryWorkflowInstance({ instanceId: this.selectedInstanceId })
             .then(() => {
                 this.showToast('Success', 'Workflow instance queued for retry successfully.', 'success');
-                refreshApex(this.wiredInstancesResult);
+                this.refreshInstances();
                 this.loadDetails(true);
                 this.startPolling();
             })
@@ -360,7 +468,7 @@ export default class WorkflowDashboard extends LightningElement {
         })
             .then(() => {
                 this.showToast('Success', 'Workflow cancellation requested successfully.', 'success');
-                refreshApex(this.wiredInstancesResult);
+                this.refreshInstances();
                 this.loadDetails(true);
                 this.startPolling();
             })
@@ -390,7 +498,7 @@ export default class WorkflowDashboard extends LightningElement {
             .then(() => {
                 this.showToast('Success', `Approval decision (${approved ? 'Approve' : 'Reject'}) submitted successfully.`, 'success');
                 this.approvalComments = '';
-                refreshApex(this.wiredInstancesResult);
+                this.refreshInstances();
                 this.loadDetails(true);
                 this.startPolling();
             })
@@ -490,7 +598,7 @@ export default class WorkflowDashboard extends LightningElement {
         let attempts = 0;
         this.pollingInterval = setInterval(() => {
             attempts += 1;
-            refreshApex(this.wiredInstancesResult);
+            this.refreshInstances();
             if (attempts >= 10) {
                 this.stopPolling();
             }
@@ -507,7 +615,7 @@ export default class WorkflowDashboard extends LightningElement {
     startAutoRefresh() {
         this.stopAutoRefresh();
         this.autoRefreshInterval = setInterval(() => {
-            refreshApex(this.wiredInstancesResult);
+            this.refreshInstances();
         }, 5000);
     }
 
