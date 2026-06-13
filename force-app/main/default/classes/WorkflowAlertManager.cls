@@ -1,4 +1,4 @@
-public with sharing class WorkflowAlertManager {
+public inherited sharing class WorkflowAlertManager {
 
     @TestVisible
     private static Map<String, Workflow_Alert_Config__mdt> mockConfigs = new Map<String, Workflow_Alert_Config__mdt>();

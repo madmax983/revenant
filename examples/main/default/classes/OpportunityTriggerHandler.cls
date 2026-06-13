@@ -1,4 +1,4 @@
-public class OpportunityTriggerHandler {
+public inherited sharing class OpportunityTriggerHandler {
     
     public static void handleAfterUpdate(List<Opportunity> newOpps, Map<Id, Opportunity> oldOppsMap) {
         List<Id> oppIdsToOnboard = new List<Id>();

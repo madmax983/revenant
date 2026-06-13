@@ -1,4 +1,4 @@
-public with sharing class CalloutTimeoutWorkflowExample {
+public inherited sharing class CalloutTimeoutWorkflowExample {
     @TestVisible
     private static Boolean forceAsyncInTest = false;
 

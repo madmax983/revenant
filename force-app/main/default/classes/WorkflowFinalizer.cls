@@ -1,4 +1,4 @@
-public class WorkflowFinalizer implements System.Finalizer {
+public inherited sharing class WorkflowFinalizer implements System.Finalizer {
     private Id instanceId;
     private String stepName;
 

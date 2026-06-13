@@ -1,4 +1,4 @@
-public class WorkflowOrchestrator implements Queueable, Database.AllowsCallouts {
+public inherited sharing class WorkflowOrchestrator implements Queueable, Database.AllowsCallouts {
     private Id instanceId;
     private String stepName;
 

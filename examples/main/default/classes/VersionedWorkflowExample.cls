@@ -1,4 +1,4 @@
-public with sharing class VersionedWorkflowExample {
+public inherited sharing class VersionedWorkflowExample {
     
     public class VersionedWorkflowImpl implements VersionedWorkflow {
         public List<String> getSteps() {

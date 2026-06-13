@@ -1,4 +1,4 @@
-public class WorkflowTimeoutJob implements Schedulable {
+public inherited sharing class WorkflowTimeoutJob implements Schedulable {
     private Id instanceId;
     private String stepName;
 

@@ -1,4 +1,4 @@
-public with sharing class ContinueAsNewWorkflowExample {
+public inherited sharing class ContinueAsNewWorkflowExample {
     
     public class PollerWorkflow implements WorkflowDefinition {
         public List<String> getSteps() {

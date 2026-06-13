@@ -1,4 +1,4 @@
-public with sharing class WorkflowSignalInvocableAction {
+public inherited sharing class WorkflowSignalInvocableAction {
 
     public class SignalRequest {
         @InvocableVariable(label='Correlation Key / Instance ID' required=true)

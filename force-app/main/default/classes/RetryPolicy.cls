@@ -1,4 +1,4 @@
-public class RetryPolicy {
+public inherited sharing class RetryPolicy {
     public Integer initialIntervalSeconds { get; set; }
     public Double backoffCoefficient { get; set; }
     public Integer maximumAttempts { get; set; }

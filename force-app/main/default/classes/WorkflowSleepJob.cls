@@ -1,4 +1,4 @@
-public class WorkflowSleepJob implements Schedulable {
+public inherited sharing class WorkflowSleepJob implements Schedulable {
     private Id instanceId;
     
     public WorkflowSleepJob(Id instanceId) {

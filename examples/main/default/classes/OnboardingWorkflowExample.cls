@@ -1,4 +1,4 @@
-public class OnboardingWorkflowExample implements WorkflowDefinition {
+public inherited sharing class OnboardingWorkflowExample implements WorkflowDefinition {
     
     public String getInitialStep() {
         return 'OnboardingWorkflowExample.VerifyOrderStep';

@@ -1,4 +1,4 @@
-public with sharing class BatchFanoutWorkflowExample {
+public inherited sharing class BatchFanoutWorkflowExample {
 
     // ==========================================
     // Parent Workflow Definition

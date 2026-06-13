@@ -1,4 +1,4 @@
-public with sharing class WorkflowStartInvocableAction {
+public inherited sharing class WorkflowStartInvocableAction {
     
     public class StartRequest {
         @InvocableVariable(label='Workflow Name' required=true)

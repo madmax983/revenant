@@ -1,4 +1,4 @@
-public with sharing class CursorFanoutWorkflowExample {
+public inherited sharing class CursorFanoutWorkflowExample {
 
     // ==========================================
     // Parent Workflow Definition

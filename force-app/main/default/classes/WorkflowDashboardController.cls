@@ -1,4 +1,4 @@
-public with sharing class WorkflowDashboardController {
+public inherited sharing class WorkflowDashboardController {
     private static String likeTerm;
     
 

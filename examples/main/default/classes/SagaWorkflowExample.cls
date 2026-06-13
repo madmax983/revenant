@@ -1,4 +1,4 @@
-public with sharing class SagaWorkflowExample {
+public inherited sharing class SagaWorkflowExample {
     
     public class SagaWorkflow implements WorkflowDefinition {
         public List<String> getSteps() {

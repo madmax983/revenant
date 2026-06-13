@@ -1,4 +1,4 @@
-public with sharing class WorkflowFlowStep implements WorkflowStep {
+public inherited sharing class WorkflowFlowStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
         if (ctx == null || String.isBlank(ctx.inputJson)) {
             return StepResult.complete(null, new Map<String, Object>{'error' => 'Input is null'});

@@ -1,4 +1,4 @@
-public class StepResult {
+public inherited sharing class StepResult {
     public enum ActionType { COMPLETE, SUSPEND, YIELD, RETRY, SLEEP, START_CHILD, WAIT_FOR_APPROVAL, SPLIT, CONTINUE_AS_NEW }
     
     public ActionType action { get; set; }

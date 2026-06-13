@@ -1,4 +1,4 @@
-public with sharing class CleanupWorkflow implements WorkflowDefinition {
+public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
     public String getInitialStep() {
         return 'CleanupWorkflow.PurgeOldInstancesStep';
     }

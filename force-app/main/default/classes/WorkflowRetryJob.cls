@@ -1,4 +1,4 @@
-public class WorkflowRetryJob implements Schedulable {
+public inherited sharing class WorkflowRetryJob implements Schedulable {
     private Id instanceId;
     
     public WorkflowRetryJob(Id instanceId) {

@@ -1,4 +1,4 @@
-public class StepContext {
+public inherited sharing class StepContext {
     public Id workflowInstanceId { get; set; }
     public String workflowName { get; set; }
     public String stepName { get; set; }

@@ -1,4 +1,4 @@
-public with sharing class RateLimiter {
+public inherited sharing class RateLimiter {
     
     // Allows unit tests to inject custom configs without database DML dependencies
     @TestVisible

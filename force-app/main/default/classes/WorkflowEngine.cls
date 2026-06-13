@@ -1,4 +1,4 @@
-public with sharing class WorkflowEngine {
+public inherited sharing class WorkflowEngine {
     
     public static Boolean disableQueueableInTest = false;
     @TestVisible

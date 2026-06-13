@@ -1,4 +1,4 @@
-public with sharing class WorkflowScheduler implements Schedulable {
+public inherited sharing class WorkflowScheduler implements Schedulable {
     private String workflowName;
     private String correlationKeyPrefix;
     private String inputJson;
