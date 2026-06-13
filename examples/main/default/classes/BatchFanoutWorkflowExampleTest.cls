@@ -3,6 +3,14 @@ public class BatchFanoutWorkflowExampleTest {
 
     @isTest
     static void testBatchFanoutWorkflowSuccess() {
+        // Seed 3 real Account records
+        List<Account> testAccs = new List<Account>{
+            new Account(Name = 'Acme Corp'),
+            new Account(Name = 'Stark Industries'),
+            new Account(Name = 'Wayne Enterprises')
+        };
+        insert testAccs;
+
         // 1. Start the parent BatchFanoutWorkflow
         Test.startTest();
         Id parentId = WorkflowEngine.start('BatchFanoutWorkflowExample.BatchFanoutWorkflow', 'ParentKey', null);
@@ -30,7 +38,7 @@ public class BatchFanoutWorkflowExampleTest {
         System.assertEquals(3, children.size(), 'Should have spawned 3 child workflows');
         for (Workflow_Instance__c child : children) {
             System.assertEquals('Pending', child.Status__c);
-            System.assert(child.Correlation_Key__c.contains('Process_001_mock_'));
+            System.assert(child.Correlation_Key__c.contains('Process_001'));
         }
 
         // 4. Manually run each child workflow to completion
@@ -67,9 +75,14 @@ public class BatchFanoutWorkflowExampleTest {
         Map<String, Object> details = (Map<String, Object>)outputMap.get('details');
         System.assertEquals(3, details.size());
         
-        // Assert child audit results are aggregated
-        Map<String, Object> child1 = (Map<String, Object>)details.get('Process_001_mock_1_' + parentId);
-        System.assertEquals('Audited', child1.get('status'));
+        // Assert child audit results are aggregated and database was updated
+        String child1Key = 'Process_' + testAccs[0].Id + '_' + parentId;
+        Map<String, Object> child1 = (Map<String, Object>)details.get(child1Key);
+        System.assertEquals('Audited & Updated', child1.get('status'));
         System.assertEquals('Acme Corp', child1.get('accountName'));
+
+        Account updatedAcc = [SELECT Description FROM Account WHERE Id = :testAccs[0].Id];
+        System.assertNotEquals(null, updatedAcc.Description);
+        System.assert(updatedAcc.Description.contains('Audited by Revenant Workflow'));
     }
 }

@@ -57,12 +57,18 @@ public with sharing class BatchFanoutWorkflowExample {
      */
     public class FetchRecordsStep implements WorkflowStep {
         public StepResult execute(StepContext ctx) {
-            List<Map<String, Object>> mockAccounts = new List<Map<String, Object>>{
-                new Map<String, Object>{'id' => '001_mock_1', 'name' => 'Acme Corp'},
-                new Map<String, Object>{'id' => '001_mock_2', 'name' => 'Stark Industries'},
-                new Map<String, Object>{'id' => '001_mock_3', 'name' => 'Wayne Enterprises'}
-            };
-            return StepResult.complete(null, mockAccounts);
+            List<Account> accounts = [SELECT Id, Name FROM Account ORDER BY CreatedDate DESC LIMIT 100];
+            List<Map<String, Object>> records = new List<Map<String, Object>>();
+            for (Account acc : accounts) {
+                records.add(new Map<String, Object>{'id' => (String)acc.Id, 'name' => acc.Name});
+            }
+            // Fallback to mock data if none exist (for backward compatibility / safety)
+            if (records.isEmpty()) {
+                records.add(new Map<String, Object>{'id' => '001_mock_1', 'name' => 'Acme Corp'});
+                records.add(new Map<String, Object>{'id' => '001_mock_2', 'name' => 'Stark Industries'});
+                records.add(new Map<String, Object>{'id' => '001_mock_3', 'name' => 'Wayne Enterprises'});
+            }
+            return StepResult.complete(null, records);
         }
     }
 
@@ -144,13 +150,24 @@ public with sharing class BatchFanoutWorkflowExample {
                 return StepResult.complete(null, new Map<String, Object>{'status' => 'Skipped', 'reason' => 'No input'});
             }
             Map<String, Object> acc = (Map<String, Object>)JSON.deserializeUntyped(ctx.workflowInputJson);
+            String accId = (String)acc.get('id');
             String accName = (String)acc.get('name');
             
-            // Perform mock auditing business logic
+            String status = 'Audited';
+            String note = 'Audited by Revenant Workflow at ' + DateTime.now();
+            
+            if (accId.startsWith('001') && accId.length() >= 15) {
+                // Real Account - Perform DML transaction
+                Account a = new Account(Id = (Id)accId, Description = note);
+                update a;
+                status = 'Audited & Updated';
+            }
+            
             Map<String, Object> auditResult = new Map<String, Object>{
-                'status' => 'Audited',
+                'status' => status,
                 'timestamp' => DateTime.now().getTime(),
                 'score' => 95,
+                'accountId' => accId,
                 'accountName' => accName
             };
             return StepResult.complete(null, auditResult);

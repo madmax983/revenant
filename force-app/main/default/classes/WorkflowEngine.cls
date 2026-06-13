@@ -1,6 +1,8 @@
 public with sharing class WorkflowEngine {
     
     public static Boolean disableQueueableInTest = false;
+    @TestVisible
+    private static Set<Id> enqueuedInstanceIds = new Set<Id>();
     public class WorkflowException extends Exception {}
 
     /**
@@ -722,7 +724,14 @@ public with sharing class WorkflowEngine {
                 Event_Type__c = 'SIGNAL:' + signalName,
                 Payload__c = childInstance.Output__c
             );
-            EventBus.publish(event);
+            Database.SaveResult sr = EventBus.publish(event);
+            if (!sr.isSuccess()) {
+                List<String> errMsgs = new List<String>();
+                for (Database.Error err : sr.getErrors()) {
+                    errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
+                }
+                throw new WorkflowException('Failed to publish child completion event: ' + String.join(errMsgs, ', '));
+            }
         }
     }
 
@@ -788,13 +797,28 @@ public with sharing class WorkflowEngine {
         sig.Status__c = 'Received';
         insert sig;
 
-        // If the workflow is suspended, resume it
-        if (instance.Status__c == 'Suspended') {
-            instance.Status__c = 'Running';
-            update instance;
+        // If the workflow is suspended or running, resume/orchestrate it
+        if (instance.Status__c == 'Suspended' || instance.Status__c == 'Running') {
+            if (instance.Status__c == 'Suspended') {
+                instance.Status__c = 'Running';
+                update instance;
+            }
 
-            // Enqueue orchestrator to run the step again
-            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+            if (Test.isRunningTest()) {
+                if (!enqueuedInstanceIds.contains(instance.Id)) {
+                    enqueuedInstanceIds.add(instance.Id);
+                    System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+                }
+            } else {
+                if (!enqueuedInstanceIds.contains(instance.Id)) {
+                    enqueuedInstanceIds.add(instance.Id);
+                    if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+                        System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+                    } else {
+                        enqueueOrchestrator(instance.Id, null);
+                    }
+                }
+            }
         }
     }
 
@@ -1234,6 +1258,13 @@ public with sharing class WorkflowEngine {
             Event_Type__c = 'RUN_STEP',
             Payload__c = stepName
         );
-        EventBus.publish(event);
+        Database.SaveResult sr = EventBus.publish(event);
+        if (!sr.isSuccess()) {
+            List<String> errMsgs = new List<String>();
+            for (Database.Error err : sr.getErrors()) {
+                errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
+            }
+            throw new WorkflowException('Failed to publish orchestrator event: ' + String.join(errMsgs, ', '));
+        }
     }
 }
