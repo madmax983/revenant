@@ -1194,4 +1194,67 @@ public class WorkflowEngineTest {
         List<Workflow_Instance__c> remainingInstances = [SELECT Id FROM Workflow_Instance__c WHERE Id = :instanceId];
         System.assertEquals(0, remainingInstances.size(), 'Workflow instance should be deleted');
     }
+
+    public class DaemonWorkflow implements WorkflowDefinition {
+        public String getInitialStep() {
+            return 'WorkflowEngineTest.IncrementCounterStep';
+        }
+        public String getNextStep(String currentStepName, StepResult stepResult) {
+            return null;
+        }
+    }
+    
+    public class IncrementCounterStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            Integer counter = 0;
+            if (String.isNotBlank(ctx.workflowInputJson)) {
+                counter = Integer.valueOf(ctx.workflowInputJson);
+            }
+            if (counter < 2) {
+                return StepResult.continueAsNew(counter + 1);
+            }
+            return StepResult.complete(null, counter + 1);
+        }
+    }
+
+    @isTest
+    static void testContinueAsNew() {
+        WorkflowEngine.disableQueueableInTest = true;
+
+        Test.startTest();
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.DaemonWorkflow', 'DaemonKey', 0);
+        Test.stopTest(); // Runs the first execution run (counter 0 -> continueAsNew 1)
+        
+        // Manual triggers for execution runs 2 and 3
+        
+        // Query Run 1
+        Workflow_Instance__c run1 = [SELECT Status__c, Correlation_Key__c, Input__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('ContinuedAsNew', run1.Status__c);
+        System.assertEquals('DaemonKey', run1.Correlation_Key__c);
+
+        // Find and run Run 2
+        Workflow_Instance__c run2 = [SELECT Id, Status__c, Correlation_Key__c, Input__c, Previous_Instance__c FROM Workflow_Instance__c WHERE Previous_Instance__c = :run1.Id];
+        System.assertEquals('Pending', run2.Status__c);
+        System.assertEquals('DaemonKey_run2', run2.Correlation_Key__c);
+        System.assertEquals('1', run2.Input__c);
+
+        // Execute Run 2 (counter 1 -> continueAsNew 2)
+        new WorkflowOrchestrator(run2.Id).execute(null);
+
+        run2 = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :run2.Id];
+        System.assertEquals('ContinuedAsNew', run2.Status__c);
+
+        // Find and run Run 3
+        Workflow_Instance__c run3 = [SELECT Id, Status__c, Correlation_Key__c, Input__c, Previous_Instance__c FROM Workflow_Instance__c WHERE Previous_Instance__c = :run2.Id];
+        System.assertEquals('Pending', run3.Status__c);
+        System.assertEquals('DaemonKey_run3', run3.Correlation_Key__c);
+        System.assertEquals('2', run3.Input__c);
+
+        // Execute Run 3 (counter 2 -> complete 3)
+        new WorkflowOrchestrator(run3.Id).execute(null);
+
+        run3 = [SELECT Status__c, Output__c FROM Workflow_Instance__c WHERE Id = :run3.Id];
+        System.assertEquals('Completed', run3.Status__c);
+        System.assertEquals('3', run3.Output__c);
+    }
 }
