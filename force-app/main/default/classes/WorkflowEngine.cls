@@ -1314,7 +1314,10 @@ public with sharing class WorkflowEngine {
     }
 
     private static void validateCorrelationKey(String correlationKey) {
-        if (String.isNotBlank(correlationKey) && correlationKey.length() > 200) {
+        if (String.isBlank(correlationKey)) {
+            throw new WorkflowException('Correlation key is required.');
+        }
+        if (correlationKey.length() > 200) {
             throw new WorkflowException('Correlation key length cannot exceed 200 characters.');
         }
     }

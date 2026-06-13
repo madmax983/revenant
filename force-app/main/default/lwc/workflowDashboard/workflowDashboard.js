@@ -415,6 +415,10 @@ export default class WorkflowDashboard extends LightningElement {
             this.launchError = 'Please select a Workflow Definition.';
             return;
         }
+        if (!this.launchKey || !this.launchKey.trim()) {
+            this.launchError = 'Please provide a Correlation Key.';
+            return;
+        }
 
         // Validate JSON if provided
         if (this.launchInputJson) {
