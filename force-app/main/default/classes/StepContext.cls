@@ -6,8 +6,13 @@ public class StepContext {
     public String previousStepOutput { get; set; }
     public String stepStateJson { get; set; }
     public String workflowInputJson { get; set; }
+    public Integer workflowVersion { get; set; }
 
     public StepContext(Id workflowInstanceId, String workflowName, String stepName, String inputJson, String previousStepOutput, String stepStateJson, String workflowInputJson) {
+        this(workflowInstanceId, workflowName, stepName, inputJson, previousStepOutput, stepStateJson, workflowInputJson, 1);
+    }
+
+    public StepContext(Id workflowInstanceId, String workflowName, String stepName, String inputJson, String previousStepOutput, String stepStateJson, String workflowInputJson, Integer workflowVersion) {
         this.workflowInstanceId = workflowInstanceId;
         this.workflowName = workflowName;
         this.stepName = stepName;
@@ -15,5 +20,6 @@ public class StepContext {
         this.previousStepOutput = previousStepOutput;
         this.stepStateJson = stepStateJson;
         this.workflowInputJson = workflowInputJson;
+        this.workflowVersion = workflowVersion;
     }
 }
