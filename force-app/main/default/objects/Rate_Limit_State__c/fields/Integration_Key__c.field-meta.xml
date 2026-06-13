@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Integration_Key__c</fullName>
+    <caseSensitive>false</caseSensitive>
+    <description>Unique key representing the external integration endpoint (e.g. SFMC).</description>
+    <externalId>true</externalId>
+    <label>Integration Key</label>
+    <length>100</length>
+    <required>true</required>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>true</unique>
+</CustomField>

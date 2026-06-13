@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Static configurations for external integration rate limits.</description>
+    <label>Rate Limit Config</label>
+    <pluralLabel>Rate Limit Configs</pluralLabel>
+    <visibility>Public</visibility>
+</CustomObject>
