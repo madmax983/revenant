@@ -9,3 +9,6 @@ Thumbs.db
 
 # Test results
 test-results/
+
+# Node dependencies
+node_modules/
