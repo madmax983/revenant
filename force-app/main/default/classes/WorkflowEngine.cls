@@ -595,7 +595,9 @@ public with sharing class WorkflowEngine {
 
             // Enqueue the successor run
             if (Test.isRunningTest()) {
-                System.enqueueJob(new WorkflowOrchestrator(nextInstance.Id));
+                if (!disableQueueableInTest) {
+                    System.enqueueJob(new WorkflowOrchestrator(nextInstance.Id));
+                }
             } else {
                 enqueueOrchestrator(nextInstance.Id, null);
             }
@@ -672,7 +674,9 @@ public with sharing class WorkflowEngine {
 
             // Kick off rollback loop
             if (Test.isRunningTest()) {
-                System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+                if (!disableQueueableInTest) {
+                    System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+                }
             } else {
                 enqueueOrchestrator(instance.Id, null);
             }
