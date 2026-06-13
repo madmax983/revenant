@@ -57,7 +57,7 @@ public inherited sharing class BatchFanoutWorkflowExample {
      */
     public class FetchRecordsStep implements WorkflowStep {
         public StepResult execute(StepContext ctx) {
-            List<Account> accounts = [SELECT Id, Name FROM Account ORDER BY CreatedDate DESC LIMIT 100];
+            List<Account> accounts = [SELECT Id, Name FROM Account WITH SYSTEM_MODE ORDER BY CreatedDate DESC LIMIT 100];
             List<Map<String, Object>> records = new List<Map<String, Object>>();
             for (Account acc : accounts) {
                 records.add(new Map<String, Object>{'id' => (String)acc.Id, 'name' => acc.Name});
@@ -80,29 +80,51 @@ public inherited sharing class BatchFanoutWorkflowExample {
      */
     public class FanoutStep implements WorkflowStep {
         public StepResult execute(StepContext ctx) {
-            // 1. Query how many child workflows belong to this parent instance
+            // 1. Parse accounts from previous step output
+            if (String.isBlank(ctx.previousStepOutput)) {
+                return StepResult.complete(null, new Map<String, Object>{'error' => 'No record list returned from FetchRecordsStep'});
+            }
+            List<Object> accountsList = (List<Object>)JSON.deserializeUntyped(ctx.previousStepOutput);
+
+            // 2. Resolve offset from stepStateJson
+            Integer offset = 0;
+            if (String.isNotBlank(ctx.stepStateJson)) {
+                try {
+                    Map<String, Object> stateMap = (Map<String, Object>)JSON.deserializeUntyped(ctx.stepStateJson);
+                    if (stateMap.containsKey('offset')) {
+                        offset = ((Decimal)stateMap.get('offset')).intValue();
+                    }
+                } catch (Exception ex) {
+                    // fallback
+                }
+            }
+
+            // 3. Spawn child workflows in chunks if they have not been spawned yet
             List<Workflow_Instance__c> childInstances = [
                 SELECT Id, Status__c, Correlation_Key__c, Output__c
                 FROM Workflow_Instance__c
                 WHERE Parent_Instance__c = :ctx.workflowInstanceId
+                WITH SYSTEM_MODE
             ];
 
-            // 2. If no children have been spawned yet, it's our first run
-            if (childInstances.isEmpty()) {
-                // Parse accounts from previous step output
-                if (String.isBlank(ctx.previousStepOutput)) {
-                    return StepResult.complete(null, new Map<String, Object>{'error' => 'No record list returned from FetchRecordsStep'});
-                }
-                List<Object> accountsList = (List<Object>)JSON.deserializeUntyped(ctx.previousStepOutput);
-                
-                for (Object accObj : accountsList) {
+            Boolean needsSpawning = (offset < accountsList.size()) && (offset > 0 || childInstances.isEmpty());
+            if (needsSpawning) {
+                Boolean yielded = false;
+                for (Integer i = offset; i < accountsList.size(); i++) {
+                    if (ctx.shouldYield()) {
+                        offset = i;
+                        yielded = true;
+                        break;
+                    }
+                    
+                    Object accObj = accountsList[i];
                     Map<String, Object> acc = (Map<String, Object>)accObj;
                     String accId = (String)acc.get('id');
                     
                     // Generate unique child correlation key
                     String childKey = 'Process_' + accId + '_' + ctx.workflowInstanceId;
                     
-                    // Start child workflow dynamically via core public overload
+                    // Start child workflow dynamically
                     WorkflowEngine.start(
                         'BatchFanoutWorkflowExample.ProcessRecordWorkflow', 
                         childKey, 
@@ -110,12 +132,22 @@ public inherited sharing class BatchFanoutWorkflowExample {
                         ctx.workflowInstanceId
                     );
                 }
-                
-                // Suspend parent execution, waiting for completions
-                return StepResult.suspend();
+
+                if (yielded) {
+                    // Return YIELD to resume spawning in the next transaction
+                    Map<String, Object> nextState = new Map<String, Object>{ 'offset' => offset };
+                    return StepResult.yield(JSON.serialize(nextState));
+                }
+
+                // Query child instances again after spawning to get the latest list for checking completion
+                childInstances = [
+                    SELECT Id, Status__c, Correlation_Key__c, Output__c
+                    FROM Workflow_Instance__c
+                    WHERE Parent_Instance__c = :ctx.workflowInstanceId
+                    WITH SYSTEM_MODE
+                ];
             }
 
-            // 3. If children exist, check if all of them are Completed
             Boolean allCompleted = true;
             for (Workflow_Instance__c child : childInstances) {
                 if (child.Status__c != 'Completed' && child.Status__c != 'Failed') {
@@ -125,11 +157,11 @@ public inherited sharing class BatchFanoutWorkflowExample {
             }
 
             if (!allCompleted) {
-                // Not all child workflows have completed yet, go back to sleep/suspension
+                // Not all child workflows have completed yet, suspend parent
                 return StepResult.suspend();
             }
 
-            // 4. Once all are completed, aggregate their outputs
+            // 5. Once all are completed, aggregate their outputs
             Map<String, Object> aggregatedResults = new Map<String, Object>();
             for (Workflow_Instance__c child : childInstances) {
                 Object childOut = child.Output__c != null ? JSON.deserializeUntyped(child.Output__c) : null;
@@ -159,7 +191,7 @@ public inherited sharing class BatchFanoutWorkflowExample {
             if (accId.startsWith('001') && accId.length() >= 15) {
                 // Real Account - Perform DML transaction
                 Account a = new Account(Id = (Id)accId, Description = note);
-                update a;
+                update as system a;
                 status = 'Audited & Updated';
             }
             
