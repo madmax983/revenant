@@ -1,15 +1,6 @@
 public with sharing class WorkflowDashboardController {
     private static String likeTerm;
     
-    @AuraEnabled(cacheable=true)
-    public static List<Workflow_Instance__c> getInstances() {
-        return [
-            SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, Error_Message__c 
-            FROM Workflow_Instance__c 
-            ORDER BY CreatedDate DESC 
-            LIMIT 100
-        ];
-    }
 
     private static String buildWhereClause(String workflowName, String status, String searchTerm) {
         List<String> conditions = new List<String>();

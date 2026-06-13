@@ -34,7 +34,7 @@ public class WorkflowDashboardControllerTest {
         insert step;
 
         Test.startTest();
-        List<Workflow_Instance__c> instances = WorkflowDashboardController.getInstances();
+        List<Workflow_Instance__c> instances = WorkflowDashboardController.getFilteredInstances('', '', '', 10, 0);
         Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(inst.Id);
         Map<String, Object> parentDetails = WorkflowDashboardController.getInstanceDetails(parentInst.Id);
         Test.stopTest();
