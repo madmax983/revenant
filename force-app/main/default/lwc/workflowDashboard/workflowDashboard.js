@@ -36,9 +36,15 @@ export default class WorkflowDashboard extends LightningElement {
     wiredInstancesResult;
     wiredDefinitionsResult;
     pollingInterval;
+    autoRefreshInterval;
+
+    connectedCallback() {
+        this.startAutoRefresh();
+    }
 
     disconnectedCallback() {
         this.stopPolling();
+        this.stopAutoRefresh();
     }
 
     @wire(getInstances)
@@ -488,6 +494,20 @@ export default class WorkflowDashboard extends LightningElement {
         if (this.pollingInterval) {
             clearInterval(this.pollingInterval);
             this.pollingInterval = null;
+        }
+    }
+
+    startAutoRefresh() {
+        this.stopAutoRefresh();
+        this.autoRefreshInterval = setInterval(() => {
+            refreshApex(this.wiredInstancesResult);
+        }, 5000);
+    }
+
+    stopAutoRefresh() {
+        if (this.autoRefreshInterval) {
+            clearInterval(this.autoRefreshInterval);
+            this.autoRefreshInterval = null;
         }
     }
 }
