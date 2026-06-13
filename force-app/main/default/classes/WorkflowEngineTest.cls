@@ -1065,4 +1065,53 @@ public class WorkflowEngineTest {
         Workflow_Instance__c inst = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId];
         System.assertEquals('Cancelled', inst.Status__c);
     }
+
+    public class MockQueueable implements Queueable {
+        public void execute(QueueableContext ctx) {}
+    }
+
+    @isTest
+    static void testStepContextShouldYield() {
+        StepContext ctx = new StepContext(
+            null,
+            'TestWorkflow',
+            'TestStep',
+            null,
+            null,
+            null,
+            null
+        );
+        // Under normal test conditions, limit usage is low, so shouldYield should return false
+        System.assertEquals(false, ctx.shouldYield());
+    }
+
+    @isTest
+    static void testTriggerQueueableThrottling() {
+        // Create 55 distinct workflow instances
+        List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
+        for (Integer i = 0; i < 55; i++) {
+            instances.add(new Workflow_Instance__c(
+                Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+                Status__c = 'Running',
+                Current_Step__c = 'WorkflowEngineTest.HappyStep1'
+            ));
+        }
+        insert instances;
+
+        List<Workflow_Event__e> events = new List<Workflow_Event__e>();
+        for (Integer i = 0; i < 55; i++) {
+            events.add(new Workflow_Event__e(
+                Workflow_Instance_Id__c = instances[i].Id,
+                Event_Type__c = 'RUN_STEP',
+                Payload__c = 'WorkflowEngineTest.HappyStep1'
+            ));
+        }
+        
+        Test.startTest();
+        List<Database.SaveResult> srs = EventBus.publish(events);
+        for (Database.SaveResult sr : srs) {
+            System.assert(sr.isSuccess());
+        }
+        Test.stopTest();
+    }
 }

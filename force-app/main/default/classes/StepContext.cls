@@ -22,4 +22,32 @@ public class StepContext {
         this.workflowInputJson = workflowInputJson;
         this.workflowVersion = workflowVersion;
     }
+
+    /**
+     * Checks if the current transaction is approaching governor limits.
+     * Returns true if any monitored limit (CPU, SOQL, DML statements, DML rows, or Heap size) is > 80% consumed.
+     */
+    public Boolean shouldYield() {
+        // CPU Time
+        if (Limits.getLimitCpuTime() > 0 && ((Double)Limits.getCpuTime() / Limits.getLimitCpuTime()) > 0.80) {
+            return true;
+        }
+        // SOQL Queries
+        if (Limits.getLimitQueries() > 0 && ((Double)Limits.getQueries() / Limits.getLimitQueries()) > 0.80) {
+            return true;
+        }
+        // DML Statements
+        if (Limits.getLimitDmlStatements() > 0 && ((Double)Limits.getDmlStatements() / Limits.getLimitDmlStatements()) > 0.80) {
+            return true;
+        }
+        // DML Rows
+        if (Limits.getLimitDmlRows() > 0 && ((Double)Limits.getDmlRows() / Limits.getLimitDmlRows()) > 0.80) {
+            return true;
+        }
+        // Heap Size
+        if (Limits.getLimitHeapSize() > 0 && ((Double)Limits.getHeapSize() / Limits.getLimitHeapSize()) > 0.80) {
+            return true;
+        }
+        return false;
+    }
 }
