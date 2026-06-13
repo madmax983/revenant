@@ -76,6 +76,32 @@ public class WorkflowAlertManagerTest {
     }
 
     @isTest
+    static void testSendAlertWithTruncatedDevNameConfig() {
+        String longWorkflowName = 'WorkflowEngineTest.HappyWorkflowWithVeryLongName';
+        String expectedTruncatedDevName = longWorkflowName.replaceAll('[^a-zA-Z0-9_]', '_').substring(0, 40);
+        
+        WorkflowAlertManager.mockConfigs.clear();
+        WorkflowAlertManager.mockConfigs.put(
+            expectedTruncatedDevName, 
+            createMockConfig(expectedTruncatedDevName, 'longname@example.com', true, null, null, null, null)
+        );
+        WorkflowAlertManager.sentEmailsCount = 0;
+
+        Workflow_Instance__c inst = new Workflow_Instance__c(
+            Workflow_Name__c = longWorkflowName,
+            Status__c = 'Failed'
+        );
+        insert inst;
+        inst = [SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c FROM Workflow_Instance__c WHERE Id = :inst.Id];
+
+        Test.startTest();
+        WorkflowAlertManager.sendAlert(inst, 'Long workflow name error');
+        Test.stopTest();
+
+        System.assertEquals(1, WorkflowAlertManager.sentEmailsCount, 'Should resolve via truncated DeveloperName and send alert');
+    }
+
+    @isTest
     static void testSendAlertDisabled() {
         WorkflowAlertManager.mockConfigs.clear();
         WorkflowAlertManager.mockConfigs.put(

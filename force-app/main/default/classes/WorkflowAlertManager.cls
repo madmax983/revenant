@@ -33,10 +33,14 @@ public with sharing class WorkflowAlertManager {
 
     private static Workflow_Alert_Config__mdt getAlertConfig(String workflowName) {
         String devName = workflowName.replaceAll('[^a-zA-Z0-9_]', '_');
+        String truncatedDevName = devName.length() > 40 ? devName.substring(0, 40) : devName;
         
         // Check mock configs first
         if (mockConfigs.containsKey(devName)) {
             return mockConfigs.get(devName);
+        }
+        if (mockConfigs.containsKey(truncatedDevName)) {
+            return mockConfigs.get(truncatedDevName);
         }
         if (mockConfigs.containsKey('Default')) {
             return mockConfigs.get('Default');
@@ -48,7 +52,7 @@ public with sharing class WorkflowAlertManager {
                    Consecutive_Failures_Limit__c, Failure_Count_Limit__c, 
                    Time_Window_Minutes__c, Stall_Threshold_Hours__c
             FROM Workflow_Alert_Config__mdt
-            WHERE DeveloperName = :devName
+            WHERE DeveloperName = :devName OR DeveloperName = :truncatedDevName
         ];
         if (!configs.isEmpty()) {
             return configs[0];
