@@ -25,26 +25,27 @@ public with sharing class WorkflowFlowStep implements WorkflowStep {
         }
         
         try {
-            Flow.Interview flowInterview = Flow.Interview.createInterview(flowName, variables);
-            flowInterview.start();
+            // Dynamic invocation via modern Invocable.Action API
+            Invocable.Action action = Invocable.Action.createCustomAction('flow', flowName);
+            action.setInvocations(new List<Map<String, Object>>{ variables });
+            List<Invocable.Action.Result> results = action.invoke();
             
-            Map<String, Object> outputsMap = new Map<String, Object>();
-            List<Object> outputKeys = null;
-            if (inputMap.containsKey('outputs') && inputMap.get('outputs') instanceof List<Object>) {
-                outputKeys = (List<Object>)inputMap.get('outputs');
+            if (results == null || results.isEmpty()) {
+                return StepResult.complete(null, new Map<String, Object>{'error' => 'No result returned from action invocation'});
             }
             
-            if (outputKeys != null) {
-                for (Object keyObj : outputKeys) {
-                    String key = (String)keyObj;
-                    try {
-                        Object val = flowInterview.getVariableValue(key);
-                        outputsMap.put(key, val);
-                    } catch (Exception varEx) {
-                        // Variable might not exist in the flow
-                        outputsMap.put(key, null);
-                    }
+            Invocable.Action.Result result = results[0];
+            if (!result.isSuccess()) {
+                String errorMsg = 'Flow invocation failed';
+                if (result.getErrors() != null && !result.getErrors().isEmpty()) {
+                    errorMsg += ': ' + result.getErrors()[0].getMessage();
                 }
+                return StepResult.complete(null, new Map<String, Object>{'error' => errorMsg});
+            }
+            
+            Map<String, Object> outputsMap = result.getOutputParameters();
+            if (outputsMap == null) {
+                outputsMap = new Map<String, Object>();
             }
             return StepResult.complete(null, outputsMap);
         } catch (Exception ex) {
