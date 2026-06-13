@@ -1,3 +1,3 @@
 public interface CompensatableStep extends WorkflowStep {
-    StepResult compensate(StepContext ctx);
+  StepResult compensate(StepContext ctx);
 }

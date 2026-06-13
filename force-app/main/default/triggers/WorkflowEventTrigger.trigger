@@ -43,11 +43,16 @@ trigger WorkflowEventTrigger on Workflow_Event__e (after insert) {
             WorkflowEngine.signal(correlationKey, signalName, event.Payload__c);
             
         } else if (event.Event_Type__c == 'RUN_STEP' || event.Event_Type__c == 'NEXT_STEP') {
-            if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
-                System.enqueueJob(new WorkflowOrchestrator(event.Workflow_Instance_Id__c, event.Payload__c));
-            } else {
-                // Throttle: If Queueable limit is reached in this transaction batch, 
-                // republish the event to be processed in a new trigger context.
+            try {
+                if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+                    System.enqueueJob(new WorkflowOrchestrator(event.Workflow_Instance_Id__c, event.Payload__c));
+                } else {
+                    // Throttle: If Queueable limit is reached in this transaction batch, 
+                    // republish the event to be processed in a new trigger context.
+                    WorkflowEngine.enqueueOrchestrator(event.Workflow_Instance_Id__c, event.Payload__c);
+                }
+            } catch (Exception ex) {
+                // If enqueue fails (e.g. transient LimitException), fallback to publishing an event to try again in a new trigger context
                 WorkflowEngine.enqueueOrchestrator(event.Workflow_Instance_Id__c, event.Payload__c);
             }
         }

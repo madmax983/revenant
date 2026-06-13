@@ -1,3 +1,3 @@
 public interface TimeoutConfigurable {
-    Integer getTimeoutSeconds();
+  Integer getTimeoutSeconds();
 }

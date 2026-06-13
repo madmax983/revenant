@@ -1,3 +1,3 @@
 public interface WorkflowStep {
-    StepResult execute(StepContext context);
+  StepResult execute(StepContext context);
 }
