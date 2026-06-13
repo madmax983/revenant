@@ -1,24 +1,29 @@
-# Revenant — Durable Workflow Engine for Salesforce
+# Revenant: Durable Workflow Engine for Salesforce
 
-A native, database-backed durable execution engine for Apex, inspired by Temporal and DBOSS. Revenant leverages Salesforce platform features (Queueables, Platform Events, Transaction Finalizers, and Apex Cursors) to run reliable, resumable state machines that survive transaction failures and governor limits.
-
----
-
-## Key Capabilities
-
-*   **Resumable Execution (Yielding)**: Long-running loops or paginated tasks can call `shouldYield()` to detect governor limits and automatically checkpoint state to custom objects, resuming in a fresh transaction.
-*   **Distributed Rollbacks (Sagas)**: Steps implementing the [CompensatableStep](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/CompensatableStep.cls) interface register on a LIFO rollback stack. If forward execution fails permanently, the engine automatically rolls back steps in reverse order.
-*   **Scatter-Gather (Parallel Processing)**: Split execution across multiple parallel branches and rejoin their outputs before proceeding to subsequent steps.
-*   **Watchdog Step Timeouts**: Custom step timeouts scheduled via Scheduled Apex. If a step hangs or exceeds its limits, the watchdog terminates the run and flags the failure.
-*   **Continue-As-New (Perpetual Runs)**: Perpetual pollers and daemons can transition to a successor run link (`Previous_Instance__c`) to clear heap/log/database limits and avoid storage leaks.
-*   **Platform Event Signals**: External updates and human-in-the-loop approvals wake up suspended workflows via `Workflow_Event__e` platform events.
-*   **Large Payload Offloading**: Transparently offloads inputs, outputs, and states exceeding the 131,072-character text area limit into `ContentVersion` attachments.
-*   **Metadata failure alerting**: Operators can configure thresholds (consecutive failures, sliding rate counts) via `Workflow_Alert_Config__mdt` records in Setup to trigger notifications on terminal failures.
-*   **Salesforce Flow Interoperability**: Invocable actions to launch or signal workflows from standard Flows, plus a generic `WorkflowFlowStep` to execute standard flows as durable workflow steps.
+Revenant is a native, database-backed durable execution engine for Salesforce Apex, inspired by Temporal and DBOSS. By orchestrating native platform features—Queueable Apex, Platform Events, Transaction Finalizers, and Apex Cursors—Revenant allows developers to build complex, reliable, and resumable state machines that survive transaction failures, governor limit exhaustion, and platform limits.
 
 ---
 
-## Core Engine Architecture
+## Key Features
+
+### Core Orchestration
+*   **Resumable Execution (Yielding)**: Long-running processing loops or query pagination steps can call `shouldYield()` to monitor governor limits. If limits are exceeded, the step checkpoints its state to custom objects and resumes execution transparently in a fresh asynchronous transaction.
+*   **Scatter-Gather (Parallel Processing)**: Split execution flow across multiple parallel branches and rejoin their output payloads before moving to subsequent steps.
+*   **Continue-As-New (Perpetual Loops)**: Execute perpetual poller tasks or long-lived daemons. A step can request a transition to a new successor run linked via `Previous_Instance__c` to prevent storage footprint explosion and clear heap and debug log limits.
+
+### Fault Tolerance & Safety
+*   **Distributed Transaction Rollbacks (Sagas)**: Steps implementing [CompensatableStep](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/CompensatableStep.cls) register on a LIFO rollback stack upon successful forward completion. If a forward step fails permanently, the engine automatically executes their `compensate` methods in reverse order.
+*   **Watchdog Step Timeouts**: Steps can declare custom execution timeouts. A Schedulable watchdog ([WorkflowTimeoutJob](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/WorkflowTimeoutJob.cls)) will terminate hung steps (e.g., blocked callouts) and flag the instance as failed.
+*   **Large Payload Offloading**: When input, output, or state serialization strings exceed 100,000 characters (approaching the 131,072-character long text area limit), the engine transparently offloads the payload to `ContentVersion` files and links them to the parent instance.
+
+### Integration & Monitoring
+*   **Platform Event Signaling**: External integrations, webhook listeners, or human-in-the-loop approvals wake up suspended workflows by publishing `Workflow_Event__e` platform events.
+*   **Salesforce Flow Interoperability**: Launches or signals workflows using Invocable Actions from Salesforce Flow, or executes standard Autolaunched Flows as steps within a workflow using the generic `WorkflowFlowStep` wrapper.
+*   **Custom Metadata Alerts**: Supports operator-configurable failure notification thresholds (consecutive failures, sliding rate counts) using `Workflow_Alert_Config__mdt` custom metadata records.
+
+---
+
+## System Architecture
 
 ```mermaid
 graph TD
@@ -51,34 +56,49 @@ graph TD
 
 ---
 
-## Getting Started
+## Developer Guide
 
-### 1. Write a Step
-Steps implement the [WorkflowStep](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/WorkflowStep.cls) interface (or [CompensatableStep](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/CompensatableStep.cls) if rollback logic is required):
+### 1. Define a Step
+To create a step, implement the [WorkflowStep](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/WorkflowStep.cls) interface (or [CompensatableStep](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/CompensatableStep.cls) if rollback logic is required):
 
 ```java
 public class ProvisionSandboxStep implements CompensatableStep {
+    
+    /**
+     * Executes forward step logic.
+     */
     public StepResult execute(StepContext ctx) {
-        // Run sandbox creation logic...
+        // Business logic execution
         String sandboxId = 'sb_98765';
+        
+        // Return COMPLETE action and output payload
         return StepResult.complete(null, new Map<String, Object>{'sandboxId' => sandboxId});
     }
 
+    /**
+     * Executes rollback logic if a subsequent step in the DAG fails.
+     */
     public StepResult compensate(StepContext ctx) {
-        // Rollback sandbox creation if later steps fail
+        // Hydrate forward step state from the context
         Map<String, Object> state = (Map<String, Object>)JSON.deserializeUntyped(ctx.stepStateJson);
         String sandboxId = (String)state.get('sandboxId');
-        // Delete sandbox...
+        
+        // De-provision resources
+        System.debug('Deprovisioning sandbox: ' + sandboxId);
         return StepResult.complete(null, 'Deprovisioned');
     }
 }
 ```
 
 ### 2. Define the Workflow DAG
-Implement [WorkflowDefinition](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/WorkflowDefinition.cls) to model transitions:
+Create a class implementing [WorkflowDefinition](file:///C:/Users/markm/Documents/antigravity/focused-hopper/force-app/main/default/classes/WorkflowDefinition.cls) to model step transitions:
 
 ```java
 public class OnboardingWorkflow implements WorkflowDefinition {
+    
+    /**
+     * Declares the complete list of steps involved in the workflow.
+     */
     public List<String> getSteps() {
         return new List<String>{
             'VerifyOrderStep',
@@ -87,10 +107,16 @@ public class OnboardingWorkflow implements WorkflowDefinition {
         };
     }
 
+    /**
+     * Designates the starting step.
+     */
     public String getInitialStep() {
         return 'VerifyOrderStep';
     }
 
+    /**
+     * Determines the next transition step based on the outcome of the active step.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
         if (currentStepName == 'VerifyOrderStep') {
             return 'ProvisionSandboxStep';
@@ -98,48 +124,61 @@ public class OnboardingWorkflow implements WorkflowDefinition {
         if (currentStepName == 'ProvisionSandboxStep') {
             return 'SendWelcomeEmailStep';
         }
-        return null; // Terminal step
+        return null; // Null indicates terminal completion
     }
 }
 ```
 
-### 3. Start Execution
-Invoke the engine from Apex triggers, queueables, or invocables:
+### 3. Initiate Execution
+Execute the workflow asynchronously from any Apex context (Triggers, Controllers, or Queueables):
 
 ```java
+// Parameters: WorkflowDefinition ClassName, Unique Correlation Key, JSON Input
 Id instanceId = WorkflowEngine.start(
     'OnboardingWorkflow', 
     'Opp_Onboarding_006As00000abcde', 
-    '{"accountId": "001As0000012345", "vip": true}'
+    '{"accountId": "001As0000012345", "vipOnboarding": true}'
 );
 ```
 
 ---
 
-## Directory Layout
+## Operations & Alerting Configuration
 
-*   `/force-app/main/default/` - Core Framework
-    *   `classes/` - Main orchestrator classes, finalizers, and utility helpers.
-    *   `objects/` - Custom objects, platform events, and alert config custom metadata models.
-    *   `lwc/` - Timeline dashboard visualization LWC.
-*   `/examples/main/default/` - Concrete Use Cases
-    *   `classes/` - Onboarding, Saga rollbacks, Cursor parallel fan-out, and Versioning examples.
-    *   `triggers/` - Opportunity stage triggers initiating workflows.
+Revenant supports Custom Metadata-driven alerting. Operators can configure notifications directly in Salesforce Setup without code modifications by creating `Workflow_Alert_Config__mdt` records:
+
+1.  **Recipient Setup**: Define target emails in `Email_Recipients__c` (comma or semicolon separated).
+2.  **Activation**: Toggle alerting via `Enable_Alerts__c`.
+3.  **Threshold Customization**:
+    *   `Consecutive_Failures_Limit__c`: Trigger email alerts only after `N` consecutive workflow executions fail.
+    *   `Failure_Count_Limit__c` and `Time_Window_Minutes__c`: Trigger email alerts if `N` failures occur within a sliding window of `M` minutes.
+
+For global fallback behavior, define a record named `Default`. Specific settings can be targeted to a particular workflow definition by matching its Developer Name (e.g. `OnboardingWorkflow`).
 
 ---
 
-## Testing & Verification
+## Directory Structure
 
-Run the test suite using Salesforce CLI:
+*   `force-app/main/default/` - Core Engine & UI Components
+    *   `classes/` - Framework classes, queueables, finalizers, and scheduling utilities.
+    *   `objects/` - Core database schemas (`Workflow_Instance__c`, `Workflow_Step_Execution__c`), Platform Events, and Custom Metadata Types.
+    *   `lwc/` - Responsive visual monitoring timeline dashboard.
+*   `examples/main/default/` - Reference Architectures
+    *   `classes/` - Onboarding, Saga rollback, version upgrades, and Apex Cursor parallel processing implementations.
+    *   `triggers/` - Opportunity stage triggers demonstrating automated workflow instantiation.
+
+---
+
+## Development & Testing
+
+Deploy the codebase to a scratch org:
+
+```bash
+sf project deploy start
+```
+
+Run the suite of unit tests to verify orchestration safety, yielding limits, parallel forks, Saga compensations, and watchdog timeouts:
 
 ```bash
 sf apex run test -w 10
 ```
-
-All 59 test cases verify:
-*   DAG progression, step-to-step state handoffs, and finalization.
-*   Cursor pagination query limits yielding.
-*   Saga distributed transaction rollbacks.
-*   Scatter-gather concurrent executions and output joins.
-*   ContentVersion large payload offloading.
-*   Custom metadata failure threshold evaluations.
