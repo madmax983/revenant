@@ -22,6 +22,7 @@ export default class WorkflowDashboard extends LightningElement {
     @track steps = [];
     @track childInstances = [];
     @track loadingDetails = false;
+    @track successor = null;
     @track approvalComments = '';
     @track modalOpen = false;
     @track searchTerm = '';
@@ -110,7 +111,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.instances.forEach(inst => {
             if (inst.Status__c === 'Pending' || inst.Status__c === 'Running' || inst.Status__c === 'Suspended' || inst.Status__c === 'Compensating' || inst.Status__c === 'Cancelling') {
                 stats.active += 1;
-            } else if (inst.Status__c === 'Completed') {
+            } else if (inst.Status__c === 'Completed' || inst.Status__c === 'ContinuedAsNew') {
                 stats.completed += 1;
             } else if (inst.Status__c === 'Failed' || inst.Status__c === 'Compensated' || inst.Status__c === 'Cancelled') {
                 stats.failed += 1;
@@ -177,9 +178,11 @@ export default class WorkflowDashboard extends LightningElement {
         if (showSpinner) {
             this.loadingDetails = true;
         }
+        this.successor = null;
         getInstanceDetails({ instanceId: this.selectedInstanceId })
             .then(result => {
                 const inst = result.instance;
+                this.successor = result.successor;
                 this.selectedInst = {
                     ...inst,
                     formattedDate: this.formatDateTime(inst.CreatedDate),
@@ -420,6 +423,8 @@ export default class WorkflowDashboard extends LightningElement {
         switch (status) {
             case 'Completed':
                 return 'badge badge-green';
+            case 'ContinuedAsNew':
+                return 'badge badge-blue';
             case 'Failed':
                 return 'badge badge-red';
             case 'Suspended':
@@ -447,6 +452,8 @@ export default class WorkflowDashboard extends LightningElement {
         switch (status) {
             case 'Completed':
                 return 'timeline-marker bg-green';
+            case 'ContinuedAsNew':
+                return 'timeline-marker bg-blue';
             case 'Failed':
                 return 'timeline-marker bg-red';
             case 'Retrying':

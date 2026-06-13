@@ -163,6 +163,26 @@
                                             </div>
                                         </div>
                                     </template>
+                                    <template if:true={selectedInst.Previous_Instance__c}>
+                                        <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                            <div class="slds-text-title slds-text-color_weak">Previous Run</div>
+                                            <div class="slds-text-body_regular">
+                                                <a href="javascript:void(0);" data-id={selectedInst.Previous_Instance__c} onclick={handleSelectRelatedInstance} class="slds-text-link">
+                                                    {selectedInst.Previous_Instance__r.Name}
+                                                </a>
+                                            </div>
+                                        </div>
+                                    </template>
+                                    <template if:true={successor}>
+                                        <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                            <div class="slds-text-title slds-text-color_weak">Next Run</div>
+                                            <div class="slds-text-body_regular">
+                                                <a href="javascript:void(0);" data-id={successor.Id} onclick={handleSelectRelatedInstance} class="slds-text-link">
+                                                    {successor.Name}
+                                                </a>
+                                            </div>
+                                        </div>
+                                    </template>
                                     <template if:true={selectedInst.Input__c}>
                                         <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
                                             <div class="slds-text-title slds-text-color_weak">Workflow Input</div>

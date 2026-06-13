@@ -35,7 +35,7 @@ public with sharing class CleanupWorkflow implements WorkflowDefinition {
             // Query old terminal instances
             List<Workflow_Instance__c> oldInstances = [
                 SELECT Id FROM Workflow_Instance__c
-                WHERE Status__c IN ('Completed', 'Failed', 'Compensated', 'Cancelled')
+                WHERE Status__c IN ('Completed', 'Failed', 'Compensated', 'Cancelled', 'ContinuedAsNew')
                 AND CreatedDate < :threshold
                 LIMIT :batchSize
             ];
