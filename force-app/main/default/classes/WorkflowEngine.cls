@@ -37,6 +37,39 @@ public with sharing class WorkflowEngine {
     }
 
     /**
+     * Starts a new durable workflow instance with a parent workflow reference.
+     */
+    public static Id start(String workflowName, String correlationKey, Object input, Id parentInstanceId) {
+        if (String.isNotBlank(correlationKey)) {
+            List<Workflow_Instance__c> existing = [
+                SELECT Id FROM Workflow_Instance__c 
+                WHERE Correlation_Key__c = :correlationKey 
+                AND Status__c IN ('Pending', 'Running', 'Suspended')
+                LIMIT 1
+            ];
+            if (!existing.isEmpty()) {
+                throw new WorkflowException('An active workflow already exists with correlation key: ' + correlationKey);
+            }
+        }
+
+        Workflow_Instance__c instance = new Workflow_Instance__c();
+        instance.Workflow_Name__c = workflowName;
+        instance.Status__c = 'Pending';
+        instance.Correlation_Key__c = correlationKey;
+        instance.Input__c = (input != null) ? JSON.serialize(input) : null;
+        instance.Parent_Instance__c = parentInstanceId;
+        
+        insert instance;
+
+        if (Test.isRunningTest()) {
+            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+        } else {
+            enqueueOrchestrator(instance.Id, null);
+        }
+        return instance.Id;
+    }
+
+    /**
      * Resumes a suspended workflow matching the correlation key.
      */
     public static void resume(String correlationKey, String payload) {
