@@ -214,4 +214,46 @@ public class CalloutTimeoutWorkflowExampleTest {
         System.assertEquals(1, stepExecs.size());
         System.assertEquals('Pending', stepExecs[0].Status__c, 'Step should suspend and wait for the new callout');
     }
+
+    @isTest
+    static void testTimeoutTriggersSagaCompensation() {
+        WorkflowEngine.disableQueueableInTest = true;
+        // Start workflow instance and let the initial queueable run
+        Id instanceId = WorkflowEngine.start('CalloutTimeoutWorkflowExample.CalloutWorkflow', 'TimeoutSagaKey', null);
+        
+        Test.startTest();
+        Test.stopTest(); // executes the starting queueable
+        
+        Workflow_Instance__c inst = [
+            SELECT Status__c, Current_Step__c, Compensation_Stack__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :instanceId
+        ];
+
+        // Populate Compensation Stack and simulate running step
+        inst.Status__c = 'Running';
+        inst.Current_Step__c = 'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep';
+        inst.Compensation_Stack__c = JSON.serialize(new List<String>{'SagaWorkflowExample.ChargeCreditCardStep'});
+        update inst;
+
+        List<Workflow_Step_Execution__c> stepExecs = [
+            SELECT Id, Status__c FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :instanceId
+            AND Step_Name__c = 'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep'
+            LIMIT 1
+        ];
+        System.assert(!stepExecs.isEmpty());
+        Workflow_Step_Execution__c stepExec = stepExecs[0];
+        stepExec.Status__c = 'Running';
+        update stepExec;
+
+        // Execute watchdog job
+        WorkflowTimeoutJob job = new WorkflowTimeoutJob(instanceId, 'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep');
+        job.execute(null);
+
+        // Verify status transitioned to Compensating instead of Failed due to populated compensation stack
+        Workflow_Instance__c updatedInst = [SELECT Status__c, Error_Message__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Compensating', updatedInst.Status__c, 'Instance should transition to Compensating on timeout');
+        System.assert(updatedInst.Error_Message__c.contains('timed out'), 'Error message should contain timeout details');
+    }
 }

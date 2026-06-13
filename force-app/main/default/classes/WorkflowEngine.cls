@@ -214,7 +214,7 @@ public with sharing class WorkflowEngine {
         }
 
         Workflow_Instance__c instance = instances[0];
-        if (instance.Status__c == 'Completed' || instance.Status__c == 'Failed' || instance.Status__c == 'Compensated' || instance.Status__c == 'Cancelled') {
+        if (instance.Status__c == 'Completed' || instance.Status__c == 'Failed' || instance.Status__c == 'Compensated' || instance.Status__c == 'Cancelled' || instance.Status__c == 'ContinuedAsNew') {
             return; // Already finished
         }
 
@@ -236,6 +236,30 @@ public with sharing class WorkflowEngine {
         } else if (instance.Status__c == 'Suspended' || instance.Status__c == 'Pending') {
             instance.Status__c = 'Running';
             update instance;
+        }
+
+        // If stepName is blank but Current_Step__c is a parallel list, this is a stale/duplicate orchestrator run. Return early.
+        if (String.isBlank(stepName) && String.isNotBlank(instance.Current_Step__c) && instance.Current_Step__c.contains(',')) {
+            return;
+        }
+
+        // Validate explicit stepName only when Current_Step__c is a parallel list and the requested step is in that list
+        if (String.isNotBlank(stepName)) {
+            Boolean isValid = false;
+            if (instance.Current_Step__c == stepName) {
+                isValid = true;
+            } else if (String.isNotBlank(instance.Current_Step__c) && instance.Current_Step__c.contains(',')) {
+                List<String> parallelSteps = instance.Current_Step__c.split(',');
+                for (String pStep : parallelSteps) {
+                    if (pStep.trim() == stepName) {
+                        isValid = true;
+                        break;
+                    }
+                }
+            }
+            if (!isValid) {
+                throw new WorkflowException('Step ' + stepName + ' is not the active/expected step for this instance: ' + instance.Current_Step__c);
+            }
         }
 
         // Determine step name to execute
@@ -359,8 +383,8 @@ public with sharing class WorkflowEngine {
             SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c, Output__c, Parent_Instance__c, Workflow_Name__c, Correlation_Key__c, Input__c, Definition_Version__c 
             FROM Workflow_Instance__c WHERE Id = :instance.Id FOR UPDATE
         ];
-        if (freshInstance.Status__c == 'Failed' || freshInstance.Status__c == 'Compensating' || freshInstance.Status__c == 'Compensated' || freshInstance.Status__c == 'Cancelled' || freshInstance.Status__c == 'Cancelling') {
-            throw new WorkflowException('Workflow execution was terminated, cancelled, or is compensating.');
+        if (freshInstance.Status__c == 'Failed' || freshInstance.Status__c == 'Compensating' || freshInstance.Status__c == 'Compensated' || freshInstance.Status__c == 'Cancelled' || freshInstance.Status__c == 'Cancelling' || freshInstance.Status__c == 'ContinuedAsNew') {
+            throw new WorkflowException('Workflow execution was terminated, cancelled, is compensating, or was continued as new.');
         }
         instance = freshInstance;
 
@@ -654,6 +678,10 @@ public with sharing class WorkflowEngine {
      * Invoked from a System.Finalizer.
      */
     public static void handleCrash(Id instanceId, Exception ex) {
+        handleCrash(instanceId, null, ex);
+    }
+
+    public static void handleCrash(Id instanceId, String stepName, Exception ex) {
         // Run as separate DML transaction to ensure it's written even if parent rolled back
         List<Workflow_Instance__c> instances = [
             SELECT Id, Current_Step__c FROM Workflow_Instance__c 
@@ -667,12 +695,16 @@ public with sharing class WorkflowEngine {
         }
 
         Workflow_Instance__c instance = instances[0];
+        
+        // Resolve target step name: if stepName is passed, use it; otherwise fallback to Current_Step__c
+        String targetStepName = String.isNotBlank(stepName) ? stepName : instance.Current_Step__c;
+
         // Mark step failed first
-        if (String.isNotBlank(instance.Current_Step__c)) {
+        if (String.isNotBlank(targetStepName)) {
             List<Workflow_Step_Execution__c> stepExecs = [
                 SELECT Id FROM Workflow_Step_Execution__c
                 WHERE Workflow_Instance__c = :instanceId
-                AND Step_Name__c = :instance.Current_Step__c
+                AND Step_Name__c = :targetStepName
                 ORDER BY CreatedDate DESC, Id DESC
                 LIMIT 1
             ];
@@ -686,7 +718,7 @@ public with sharing class WorkflowEngine {
 
         // Use fail helper
         String errorMsg = 'Transaction crashed: ' + (ex != null ? ex.getMessage() : 'Unknown governor limit');
-        failWorkflowInstance(instanceId, instance.Current_Step__c, errorMsg);
+        failWorkflowInstance(instanceId, targetStepName, errorMsg);
     }
 
     /**
@@ -939,15 +971,21 @@ public with sharing class WorkflowEngine {
             hasCompensations = !stack.isEmpty();
         }
 
-        String targetStepName = null;
+        List<String> targetStepNames = new List<String>();
         if (hasCompensations) {
-            targetStepName = stack[stack.size() - 1] + '_Compensate';
-        } else {
-            targetStepName = instance.Current_Step__c;
+            targetStepNames.add(stack[stack.size() - 1] + '_Compensate');
+        } else if (String.isNotBlank(instance.Current_Step__c)) {
+            if (instance.Current_Step__c.contains(',')) {
+                for (String pStep : instance.Current_Step__c.split(',')) {
+                    targetStepNames.add(pStep.trim());
+                }
+            } else {
+                targetStepNames.add(instance.Current_Step__c);
+            }
         }
 
         // Reset the failed step's execution status to let it execute again
-        if (String.isNotBlank(targetStepName)) {
+        for (String targetStepName : targetStepNames) {
             List<Workflow_Step_Execution__c> stepExecs = [
                 SELECT Id, Status__c, Retry_Count__c, Error_Details__c 
                 FROM Workflow_Step_Execution__c
@@ -958,10 +996,12 @@ public with sharing class WorkflowEngine {
             ];
             if (!stepExecs.isEmpty()) {
                 Workflow_Step_Execution__c stepExec = stepExecs[0];
-                stepExec.Status__c = 'Pending';
-                stepExec.Retry_Count__c = 0; // reset retry counter
-                stepExec.Error_Details__c = null;
-                update stepExec;
+                if (stepExec.Status__c != 'Completed') {
+                    stepExec.Status__c = 'Pending';
+                    stepExec.Retry_Count__c = 0; // reset retry counter
+                    stepExec.Error_Details__c = null;
+                    update stepExec;
+                }
             }
         }
 
@@ -974,10 +1014,30 @@ public with sharing class WorkflowEngine {
         update instance;
 
         // Enqueue the orchestrator to resume execution
-        if (Test.isRunningTest()) {
-            System.enqueueJob(new WorkflowOrchestrator(instanceId));
+        if (hasCompensations || !instance.Current_Step__c.contains(',')) {
+            if (Test.isRunningTest()) {
+                System.enqueueJob(new WorkflowOrchestrator(instanceId));
+            } else {
+                enqueueOrchestrator(instanceId, null);
+            }
         } else {
-            enqueueOrchestrator(instanceId, null);
+            // Parallel forward execution retry: enqueue only incomplete branches
+            for (String targetStepName : targetStepNames) {
+                List<Workflow_Step_Execution__c> stepExecs = [
+                    SELECT Status__c FROM Workflow_Step_Execution__c
+                    WHERE Workflow_Instance__c = :instanceId
+                    AND Step_Name__c = :targetStepName
+                    ORDER BY CreatedDate DESC, Id DESC
+                    LIMIT 1
+                ];
+                if (stepExecs.isEmpty() || stepExecs[0].Status__c != 'Completed') {
+                    if (Test.isRunningTest()) {
+                        System.enqueueJob(new WorkflowOrchestrator(instanceId, targetStepName));
+                    } else {
+                        enqueueOrchestrator(instanceId, targetStepName);
+                    }
+                }
+            }
         }
     }
 
@@ -1252,7 +1312,7 @@ public with sharing class WorkflowEngine {
         }
 
         Workflow_Instance__c instance = instances[0];
-        if (instance.Status__c == 'Completed' || instance.Status__c == 'Failed' || instance.Status__c == 'Compensated' || instance.Status__c == 'Cancelled') {
+        if (instance.Status__c == 'Completed' || instance.Status__c == 'Failed' || instance.Status__c == 'Compensated' || instance.Status__c == 'Cancelled' || instance.Status__c == 'ContinuedAsNew') {
             return; // Already in terminal state
         }
 

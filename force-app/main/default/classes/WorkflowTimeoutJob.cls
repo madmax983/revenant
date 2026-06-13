@@ -30,20 +30,7 @@ public class WorkflowTimeoutJob implements Schedulable {
             stepExec.Error_Details__c = 'Step execution timed out.';
             update stepExec;
 
-            List<Workflow_Instance__c> instances = [
-                SELECT Id, Name, Status__c, Error_Message__c, Workflow_Name__c, Correlation_Key__c 
-                FROM Workflow_Instance__c 
-                WHERE Id = :this.instanceId
-                LIMIT 1
-                FOR UPDATE
-            ];
-            if (!instances.isEmpty()) {
-                Workflow_Instance__c instance = instances[0];
-                instance.Status__c = 'Failed';
-                instance.Error_Message__c = 'Step ' + this.stepName + ' timed out.';
-                update instance;
-                WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
-            }
+            WorkflowEngine.failWorkflowInstance(this.instanceId, this.stepName, 'Step execution timed out.');
         }
 
         // Clean up this scheduled execution

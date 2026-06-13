@@ -674,7 +674,7 @@ public class WorkflowEngineTest {
             WHERE Id = :instanceId
         ];
         System.assertEquals('Failed', timedOutInst.Status__c);
-        System.assertEquals('Step WorkflowEngineTest.TimeoutStep timed out.', timedOutInst.Error_Message__c);
+        System.assertEquals('Failed at step WorkflowEngineTest.TimeoutStep: Step execution timed out.', timedOutInst.Error_Message__c);
 
         Workflow_Step_Execution__c timedOutStep = [
             SELECT Status__c, Error_Details__c 
@@ -1270,5 +1270,102 @@ public class WorkflowEngineTest {
         run3 = [SELECT Status__c, Output__c FROM Workflow_Instance__c WHERE Id = :run3.Id];
         System.assertEquals('Completed', run3.Status__c);
         System.assertEquals('3', run3.Output__c);
+    }
+
+    @isTest
+    static void testStepNameValidation() {
+        WorkflowEngine.disableQueueableInTest = true;
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.HappyWorkflow', 'ValidationKey', null);
+        
+        // Let's run a step but supply an invalid step name
+        try {
+            WorkflowEngine.runStep(instanceId, 'InvalidStepName');
+            System.assert(false, 'Should have failed step validation');
+        } catch (WorkflowEngine.WorkflowException ex) {
+            System.assert(ex.getMessage().contains('is not the active/expected step'), 'Error should be about invalid step: ' + ex.getMessage());
+        }
+    }
+
+    @isTest
+    static void testParallelRecovery() {
+        WorkflowEngine.disableQueueableInTest = true;
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.ParallelWorkflow', 'ParallelRecoveryKey', null);
+        
+        // Execute initial split step to spawn parallel branches
+        WorkflowEngine.runStep(instanceId, null);
+        
+        Workflow_Instance__c inst = [SELECT Status__c, Current_Step__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('WorkflowEngineTest.ParallelStep1,WorkflowEngineTest.ParallelStep2', inst.Current_Step__c);
+        
+        // Make ParallelStep2 succeed
+        WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.ParallelStep2');
+        
+        // Verify ParallelStep2 is Completed
+        Workflow_Step_Execution__c step2Exec = [
+            SELECT Status__c FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :instanceId 
+            AND Step_Name__c = 'WorkflowEngineTest.ParallelStep2'
+            LIMIT 1
+        ];
+        System.assertEquals('Completed', step2Exec.Status__c);
+
+        // Now simulate a crash on ParallelStep1
+        WorkflowEngine.handleCrash(instanceId, 'WorkflowEngineTest.ParallelStep1', new WorkflowEngine.WorkflowException('Parallel step 1 crashed'));
+        
+        // Verify instance and ParallelStep1 are Failed
+        inst = [SELECT Status__c, Error_Message__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Failed', inst.Status__c);
+        System.assert(inst.Error_Message__c.contains('ParallelStep1'));
+
+        Workflow_Step_Execution__c step1Exec = [
+            SELECT Status__c, Error_Details__c FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :instanceId 
+            AND Step_Name__c = 'WorkflowEngineTest.ParallelStep1'
+            LIMIT 1
+        ];
+        System.assertEquals('Failed', step1Exec.Status__c);
+        System.assert(step1Exec.Error_Details__c.contains('Parallel step 1 crashed'));
+
+        // Retry the workflow - should only reset ParallelStep1 and spawn orchestrator for it
+        WorkflowEngine.retryWorkflow(instanceId);
+
+        step1Exec = [
+            SELECT Status__c, Error_Details__c FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :instanceId 
+            AND Step_Name__c = 'WorkflowEngineTest.ParallelStep1'
+            LIMIT 1
+        ];
+        System.assertEquals('Pending', step1Exec.Status__c);
+        System.assertEquals(null, step1Exec.Error_Details__c);
+
+        // ParallelStep2 should remain Completed
+        step2Exec = [
+            SELECT Status__c FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :instanceId 
+            AND Step_Name__c = 'WorkflowEngineTest.ParallelStep2'
+            LIMIT 1
+        ];
+        System.assertEquals('Completed', step2Exec.Status__c);
+    }
+
+    @isTest
+    static void testCorrelationKeyReuse() {
+        WorkflowEngine.disableQueueableInTest = true;
+        
+        // Run first instance to completion
+        Id instanceId1 = WorkflowEngine.start('WorkflowEngineTest.HappyWorkflow', 'SharedKey', null);
+        WorkflowEngine.runStep(instanceId1, null);
+        WorkflowEngine.runStep(instanceId1, null);
+        
+        Workflow_Instance__c inst1 = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId1];
+        System.assertEquals('Completed', inst1.Status__c);
+
+        // Start a second instance with the same correlation key - should succeed because first one is Completed (terminal)
+        Test.startTest();
+        Id instanceId2 = WorkflowEngine.start('WorkflowEngineTest.HappyWorkflow', 'SharedKey', null);
+        Test.stopTest();
+
+        Workflow_Instance__c inst2 = [SELECT Status__c, Correlation_Key__c FROM Workflow_Instance__c WHERE Id = :instanceId2];
+        System.assertEquals('SharedKey', inst2.Correlation_Key__c);
     }
 }

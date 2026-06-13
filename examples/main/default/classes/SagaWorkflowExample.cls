@@ -31,8 +31,17 @@ public with sharing class SagaWorkflowExample {
         
         public StepResult compensate(StepContext ctx) {
             // Retrieve chargeId from original output in ctx
-            Map<String, Object> origOutput = (Map<String, Object>)JSON.deserializeUntyped(ctx.stepStateJson);
-            String chargeId = (String)origOutput.get('chargeId');
+            String chargeId = 'ch_mock';
+            if (String.isNotBlank(ctx.stepStateJson)) {
+                try {
+                    Map<String, Object> origOutput = (Map<String, Object>)JSON.deserializeUntyped(ctx.stepStateJson);
+                    if (origOutput != null && origOutput.containsKey('chargeId')) {
+                        chargeId = (String)origOutput.get('chargeId');
+                    }
+                } catch (Exception e) {
+                    // Fallback to mock chargeId
+                }
+            }
             
             // Mock refund logic
             return StepResult.complete(null, new Map<String, Object>{'refundId' => 'rf_12345', 'refundedChargeId' => chargeId});

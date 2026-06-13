@@ -14,7 +14,7 @@ public class WorkflowOrchestrator implements Queueable, Database.AllowsCallouts 
     public void execute(QueueableContext ctx) {
         // Attach transaction finalizer to rescue workflow on crash/limits
         if (ctx != null) {
-            System.attachFinalizer(new WorkflowFinalizer(this.instanceId));
+            System.attachFinalizer(new WorkflowFinalizer(this.instanceId, this.stepName));
         }
         
         // Execute step
