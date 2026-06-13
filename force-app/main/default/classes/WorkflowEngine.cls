@@ -567,6 +567,38 @@ public with sharing class WorkflowEngine {
                 
                 scheduleRetry(instance.Id, delay);
             }
+        } else if (result.action == StepResult.ActionType.CONTINUE_AS_NEW) {
+            stepExec.Status__c = 'ContinuedAsNew';
+            stepExec.Output__c = savePayloadIfNeeded(instance.Id, result.nextInputJson, 'ContinueInput_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_'));
+            update stepExec;
+
+            // Resolve the new correlation key
+            String newKey = resolveContinueAsNewKey(instance.Correlation_Key__c, result.newCorrelationKey);
+
+            // Mark current instance as ContinuedAsNew
+            instance.Status__c = 'ContinuedAsNew';
+            instance.Current_Step__c = null;
+            update instance;
+
+            // Spawn successor instance
+            Workflow_Instance__c nextInstance = new Workflow_Instance__c(
+                Workflow_Name__c = instance.Workflow_Name__c,
+                Correlation_Key__c = newKey,
+                Previous_Instance__c = instance.Id,
+                Definition_Version__c = instance.Definition_Version__c
+            );
+            insert nextInstance;
+
+            // Set input and save payload
+            nextInstance.Input__c = savePayloadIfNeeded(nextInstance.Id, result.nextInputJson, 'Input_' + nextInstance.Id);
+            update nextInstance;
+
+            // Enqueue the successor run
+            if (Test.isRunningTest()) {
+                System.enqueueJob(new WorkflowOrchestrator(nextInstance.Id));
+            } else {
+                enqueueOrchestrator(nextInstance.Id, null);
+            }
         }
     }
 
@@ -1322,5 +1354,23 @@ public with sharing class WorkflowEngine {
             return JSON.serialize(new Map<String, String>{'$attachmentId' => docId});
         }
         return textValue;
+    }
+
+    private static String resolveContinueAsNewKey(String currentKey, String customKey) {
+        if (String.isNotBlank(customKey)) {
+            return customKey;
+        }
+        if (String.isBlank(currentKey)) {
+            return 'Run_' + System.currentTimeMillis();
+        }
+        
+        Pattern p = Pattern.compile('^(.*)_run(\\d+)$');
+        Matcher m = p.matcher(currentKey);
+        if (m.matches()) {
+            String base = m.group(1);
+            Integer nextNum = Integer.valueOf(m.group(2)) + 1;
+            return base + '_run' + nextNum;
+        }
+        return currentKey + '_run2';
     }
 }
