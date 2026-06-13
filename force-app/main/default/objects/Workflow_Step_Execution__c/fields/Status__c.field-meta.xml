@@ -56,6 +56,11 @@
                 <default>false</default>
                 <label>Cancelled</label>
             </value>
+            <value>
+                <fullName>ContinuedAsNew</fullName>
+                <default>false</default>
+                <label>ContinuedAsNew</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>
