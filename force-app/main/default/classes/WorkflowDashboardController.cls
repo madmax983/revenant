@@ -18,7 +18,7 @@ public with sharing class WorkflowDashboardController {
     }
 
     @AuraEnabled(cacheable=true)
-    public static List<Workflow_Instance__c> getFilteredInstances(String workflowName, String status, String searchTerm, Integer limitSize, Integer offsetSize) {
+    public static List<Workflow_Instance__c> getFilteredInstances(String workflowName, String status, String searchTerm, Integer limitSize, Integer offsetSize, String cacheBuster) {
         String query = 'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, Error_Message__c ' +
                        'FROM Workflow_Instance__c' + buildWhereClause(workflowName, status, searchTerm);
         

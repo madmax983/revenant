@@ -40,6 +40,7 @@ export default class WorkflowDashboard extends LightningElement {
     @track offsetSize = 0;
     @track hasMore = true;
     @track loadingMore = false;
+    @track cacheBuster = '';
 
     wiredDefinitionsResult;
     pollingInterval;
@@ -122,6 +123,7 @@ export default class WorkflowDashboard extends LightningElement {
             this.offsetSize = 0;
             this.hasMore = true;
             this.loadingMore = false;
+            this.cacheBuster = Date.now().toString();
         }
         
         const currentOffset = this.offsetSize;
@@ -138,7 +140,8 @@ export default class WorkflowDashboard extends LightningElement {
             status: this.selectedStatus,
             searchTerm: this.searchTerm,
             limitSize: currentLimit,
-            offsetSize: currentOffset
+            offsetSize: currentOffset,
+            cacheBuster: this.cacheBuster
         });
 
         const statsPromise = getWorkflowStats({
@@ -190,13 +193,15 @@ export default class WorkflowDashboard extends LightningElement {
 
     refreshInstances() {
         const currentSize = this.instances.length > 0 ? this.instances.length : this.limitSize;
+        this.cacheBuster = Date.now().toString();
         
         const instancesPromise = getFilteredInstances({
             workflowName: this.selectedWorkflow,
             status: this.selectedStatus,
             searchTerm: this.searchTerm,
             limitSize: currentSize,
-            offsetSize: 0
+            offsetSize: 0,
+            cacheBuster: this.cacheBuster
         });
 
         const statsPromise = getWorkflowStats({
