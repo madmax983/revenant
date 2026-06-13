@@ -9,6 +9,7 @@ public with sharing class WorkflowEngine {
      * Starts a new durable workflow instance.
      */
     public static Id start(String workflowName, String correlationKey, Object input) {
+        validateCorrelationKey(correlationKey);
         // Enforce uniqueness of active correlation keys if provided
         if (String.isNotBlank(correlationKey)) {
             List<Workflow_Instance__c> existing = [
@@ -56,6 +57,7 @@ public with sharing class WorkflowEngine {
      * Starts a new durable workflow instance with a parent workflow reference.
      */
     public static Id start(String workflowName, String correlationKey, Object input, Id parentInstanceId) {
+        validateCorrelationKey(correlationKey);
         if (String.isNotBlank(correlationKey)) {
             List<Workflow_Instance__c> existing = [
                 SELECT Id FROM Workflow_Instance__c 
@@ -662,6 +664,7 @@ public with sharing class WorkflowEngine {
     }
 
     private static void startChildWorkflow(Id parentId, String workflowName, String correlationKey, String inputJson) {
+        validateCorrelationKey(correlationKey);
         if (String.isNotBlank(correlationKey)) {
             List<Workflow_Instance__c> existing = [
                 SELECT Id FROM Workflow_Instance__c 
@@ -1265,6 +1268,12 @@ public with sharing class WorkflowEngine {
                 errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
             }
             throw new WorkflowException('Failed to publish orchestrator event: ' + String.join(errMsgs, ', '));
+        }
+    }
+
+    private static void validateCorrelationKey(String correlationKey) {
+        if (String.isNotBlank(correlationKey) && correlationKey.length() > 200) {
+            throw new WorkflowException('Correlation key length cannot exceed 200 characters.');
         }
     }
 }

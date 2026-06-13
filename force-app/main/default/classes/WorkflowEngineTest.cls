@@ -1114,4 +1114,15 @@ public class WorkflowEngineTest {
         }
         Test.stopTest();
     }
+
+    @isTest
+    static void testCorrelationKeyLengthValidation() {
+        String longKey = 'A'.repeat(201);
+        try {
+            WorkflowEngine.start('WorkflowEngineTest.HappyWorkflow', longKey, null);
+            System.assert(false, 'Should have thrown exception for long correlation key');
+        } catch (WorkflowEngine.WorkflowException ex) {
+            System.assert(ex.getMessage().contains('Correlation key length cannot exceed 200 characters'));
+        }
+    }
 }
