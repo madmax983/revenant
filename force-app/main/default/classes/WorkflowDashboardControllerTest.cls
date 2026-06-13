@@ -193,4 +193,59 @@ public class WorkflowDashboardControllerTest {
         System.assertEquals('Cancelled', updatedInst.Status__c);
         System.assertEquals('Cancelled by user.', updatedInst.Error_Message__c);
     }
+
+    @isTest
+    static void testGetFilteredInstances() {
+        // Create 3 instances with distinct details
+        List<Workflow_Instance__c> testInstances = new List<Workflow_Instance__c>{
+            new Workflow_Instance__c(
+                Workflow_Name__c = 'TestDefA',
+                Status__c = 'Completed',
+                Correlation_Key__c = 'AppleKey',
+                Input__c = '"TestInput"'
+            ),
+            new Workflow_Instance__c(
+                Workflow_Name__c = 'TestDefA',
+                Status__c = 'Failed',
+                Correlation_Key__c = 'BananaKey',
+                Input__c = '"TestInput"',
+                Error_Message__c = 'Slipped on banana'
+            ),
+            new Workflow_Instance__c(
+                Workflow_Name__c = 'TestDefB',
+                Status__c = 'Running',
+                Correlation_Key__c = 'OrangeKey',
+                Input__c = '"TestInput"'
+            )
+        };
+        insert testInstances;
+
+        Test.startTest();
+        // 1. Test filtering by Workflow Name
+        List<Workflow_Instance__c> resWorkflow = WorkflowDashboardController.getFilteredInstances('TestDefA', '', '', 10, 0);
+        System.assertEquals(2, resWorkflow.size(), 'Should find 2 instances with definition TestDefA');
+
+        // 2. Test filtering by Status
+        List<Workflow_Instance__c> resStatus = WorkflowDashboardController.getFilteredInstances('', 'Running', '', 10, 0);
+        System.assertEquals(1, resStatus.size(), 'Should find 1 instance with Status Running');
+        System.assertEquals('OrangeKey', resStatus[0].Correlation_Key__c);
+
+        // 3. Test filtering by Search Term on Correlation Key
+        List<Workflow_Instance__c> resSearchKey = WorkflowDashboardController.getFilteredInstances('', '', 'Banana', 10, 0);
+        System.assertEquals(1, resSearchKey.size(), 'Should find 1 instance matching search Banana');
+        System.assertEquals('BananaKey', resSearchKey[0].Correlation_Key__c);
+
+        // 4. Test filtering by Search Term on Error Message
+        List<Workflow_Instance__c> resSearchError = WorkflowDashboardController.getFilteredInstances('', '', 'banana', 10, 0);
+        System.assertEquals(1, resSearchError.size(), 'Search term search should be case-insensitive');
+
+        // 5. Test pagination: limit and offset
+        List<Workflow_Instance__c> page1 = WorkflowDashboardController.getFilteredInstances('', '', '', 2, 0);
+        System.assertEquals(2, page1.size(), 'Page 1 limit 2 should return 2 records');
+
+        List<Workflow_Instance__c> page2 = WorkflowDashboardController.getFilteredInstances('', '', '', 2, 2);
+        System.assertEquals(1, page2.size(), 'Page 2 offset 2 limit 2 should return the remaining 1 record');
+        
+        Test.stopTest();
+    }
 }
