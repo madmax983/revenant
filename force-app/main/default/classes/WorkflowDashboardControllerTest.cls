@@ -235,7 +235,7 @@ public class WorkflowDashboardControllerTest {
         System.assertEquals(1, resSearchKey.size(), 'Should find 1 instance matching search Banana');
         System.assertEquals('BananaKey', resSearchKey[0].Correlation_Key__c);
 
-        // 4. Test filtering by Search Term on Error Message
+        // 4. Test filtering by Search Term case-insensitivity on Correlation Key
         List<Workflow_Instance__c> resSearchError = WorkflowDashboardController.getFilteredInstances('', '', 'banana', 10, 0);
         System.assertEquals(1, resSearchError.size(), 'Search term search should be case-insensitive');
 

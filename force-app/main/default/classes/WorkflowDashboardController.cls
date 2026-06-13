@@ -24,7 +24,7 @@ public with sharing class WorkflowDashboardController {
         }
         if (String.isNotBlank(searchTerm)) {
             String likeTerm = '%' + String.escapeSingleQuotes(searchTerm) + '%';
-            conditions.add('(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm)');
+            conditions.add('(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm)');
         }
         
         if (!conditions.isEmpty()) {
