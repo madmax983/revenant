@@ -149,6 +149,50 @@ public with sharing class WorkflowEngine {
     }
 
     /**
+     * Resumes a suspended workflow instance directly by its database ID.
+     */
+    public static void resumeInstance(Id instanceId, String payload) {
+        List<Workflow_Instance__c> instances = [
+            SELECT Id, Workflow_Name__c, Current_Step__c FROM Workflow_Instance__c 
+            WHERE Id = :instanceId 
+            AND Status__c = 'Suspended'
+            LIMIT 1
+            FOR UPDATE
+        ];
+
+        if (instances.isEmpty()) {
+            throw new WorkflowException('No suspended workflow found with ID: ' + instanceId);
+        }
+
+        Workflow_Instance__c instance = instances[0];
+        instance.Status__c = 'Running';
+        update instance;
+
+        // If there is an active step, we can store the resume payload in its step execution record
+        if (String.isNotBlank(instance.Current_Step__c)) {
+            List<Workflow_Step_Execution__c> activeSteps = [
+                SELECT Id, Output__c FROM Workflow_Step_Execution__c
+                WHERE Workflow_Instance__c = :instance.Id
+                AND Step_Name__c = :instance.Current_Step__c
+                ORDER BY CreatedDate DESC, Id DESC
+                LIMIT 1
+            ];
+            if (!activeSteps.isEmpty()) {
+                Workflow_Step_Execution__c stepExec = activeSteps[0];
+                stepExec.Status__c = 'Running';
+                stepExec.Output__c = savePayloadIfNeeded(instance.Id, payload, 'Resume_' + stepExec.Id);
+                update stepExec;
+            }
+        }
+
+        if (Test.isRunningTest()) {
+            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+        } else {
+            enqueueOrchestrator(instance.Id, null);
+        }
+    }
+
+    /**
      * Executes the active step for a workflow instance. Designed to run in a Queueable context.
      */
     public static void runStep(Id instanceId) {
@@ -555,6 +599,7 @@ public with sharing class WorkflowEngine {
                 failWorkflowInstance(instance.Id, instance.Current_Step__c, 'Max retries exceeded.');
             } else {
                 stepExec.Status__c = 'Retrying';
+                stepExec.Output__c = null;
                 update stepExec;
                 
                 // Calculate exponential backoff
@@ -1164,6 +1209,7 @@ public with sharing class WorkflowEngine {
                 WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
             } else {
                 stepExec.Status__c = 'Retrying';
+                stepExec.Output__c = null;
                 update stepExec;
                 
                 Double backoff = Math.pow((Double)policy.backoffCoefficient, (Double)(stepExec.Retry_Count__c - 1));

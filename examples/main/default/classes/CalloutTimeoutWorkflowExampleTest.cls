@@ -127,4 +127,91 @@ public class CalloutTimeoutWorkflowExampleTest {
         System.assert(updatedInst.Error_Message__c.contains('timed out'), 'Error message should contain timeout details');
         System.assertEquals(1, WorkflowAlertManager.sentEmailsCount, 'Email alert should be dispatched on watchdog timeout');
     }
+
+    @isTest
+    static void testCalloutAsyncRetryFlow() {
+        WorkflowAlertManager.mockConfigs.put(
+            'CalloutTimeoutWorkflowExample_CalloutWorkflow', 
+            (Workflow_Alert_Config__mdt)JSON.deserialize(
+                '{"DeveloperName":"CalloutTimeoutWorkflowExample_CalloutWorkflow", "Email_Recipients__c":"test@example.com", "Enable_Alerts__c":true}', 
+                Workflow_Alert_Config__mdt.class
+            )
+        );
+        WorkflowAlertManager.sentEmailsCount = 0;
+
+        // Force async callout path in tests
+        CalloutTimeoutWorkflowExample.forceAsyncInTest = true;
+
+        // Mock a 500 error response from the HTTP callout
+        Test.setMock(HttpCalloutMock.class, new SingleRequestMock(500, 'Internal Server Error'));
+
+        Test.startTest();
+        // 1. Start workflow - executes MakeHttpCalloutStep for the first time
+        // This triggers the future method execution and returns StepResult.suspend()
+        Id instanceId = WorkflowEngine.start(
+            'CalloutTimeoutWorkflowExample.CalloutWorkflow', 
+            'CalloutAsyncRetryKey', 
+            new Map<String, Object>{'endpoint' => 'https://httpbin.org/status/500'}
+        );
+        Test.stopTest(); // Executes the queueable to run the first step and suspend
+
+        // In unit tests, nested asynchronous operations (future method enqueued inside queueable)
+        // are not executed automatically. We call the synchronous helper directly to simulate completion.
+        CalloutTimeoutWorkflowExample.doCalloutAndResume(instanceId, 'https://httpbin.org/status/500');
+
+        // Verify that the instance status became Running (since resumeInstance sets it to Running)
+        Workflow_Instance__c inst = [
+            SELECT Status__c, Current_Step__c 
+            FROM Workflow_Instance__c 
+            WHERE Id = :instanceId
+        ];
+        System.assertEquals('Running', inst.Status__c);
+        System.assertEquals('CalloutTimeoutWorkflowExample.MakeHttpCalloutStep', inst.Current_Step__c);
+
+        // Verify the step execution has status 'Running' and Output__c contains the 500 response payload
+        List<Workflow_Step_Execution__c> stepExecs = [
+            SELECT Status__c, Output__c, Retry_Count__c 
+            FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :instanceId
+            AND Step_Name__c = 'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep'
+            ORDER BY CreatedDate DESC, Id DESC
+        ];
+        System.assertEquals(1, stepExecs.size());
+        System.assertEquals('Running', stepExecs[0].Status__c);
+        System.assert(String.isNotBlank(stepExecs[0].Output__c));
+        System.assert(stepExecs[0].Output__c.contains('status'));
+        System.assert(stepExecs[0].Output__c.contains('500'));
+
+        // 2. Manually run the orchestrator to process the resumed step
+        // The step will see the 500 response, return StepResult.retry(), and clear its Output__c
+        new WorkflowOrchestrator(instanceId).execute(null);
+
+        // Verify the step is now in 'Retrying' status, Retry_Count__c is 1, and Output__c is cleared (null)
+        stepExecs = [
+            SELECT Status__c, Output__c, Retry_Count__c 
+            FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :instanceId
+            AND Step_Name__c = 'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep'
+            ORDER BY CreatedDate DESC, Id DESC
+        ];
+        System.assertEquals(1, stepExecs.size());
+        System.assertEquals('Retrying', stepExecs[0].Status__c);
+        System.assertEquals(1, stepExecs[0].Retry_Count__c);
+        System.assertEquals(null, stepExecs[0].Output__c, 'Cached output should be cleared on retry transition');
+
+        // 3. Manually run the orchestrator again to execute the retry attempt
+        // Since Output__c is cleared, execute() sees a blank stepStateJson and will trigger executeAsyncCallout() again
+        new WorkflowOrchestrator(instanceId).execute(null);
+
+        // Verify step execution returned back to 'Pending' (because of StepResult.suspend() waiting for the second callout)
+        stepExecs = [
+            SELECT Status__c, Output__c, Retry_Count__c 
+            FROM Workflow_Step_Execution__c 
+            WHERE Workflow_Instance__c = :instanceId
+            AND Step_Name__c = 'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep'
+            ORDER BY CreatedDate DESC, Id DESC
+        ];
+        System.assertEquals(1, stepExecs.size());
+        System.assertEquals('Pending', stepExecs[0].Status__c, 'Step should suspend and wait for the new callout');
+    }
 }

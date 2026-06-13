@@ -1,4 +1,6 @@
 public with sharing class CalloutTimeoutWorkflowExample {
+    @TestVisible
+    private static Boolean forceAsyncInTest = false;
 
     public class CalloutWorkflow implements WorkflowDefinition {
         public List<String> getSteps() {
@@ -19,13 +21,31 @@ public with sharing class CalloutTimeoutWorkflowExample {
     public class MakeHttpCalloutStep implements WorkflowStep, TimeoutConfigurable {
         
         public Integer getTimeoutSeconds() {
-            return 5; // Timeout watchdog times out after 5 seconds
+            return 60; // Larger timeout for future method call
         }
 
         public StepResult execute(StepContext ctx) {
+            // Check if we already have the callout response in our state (resuming after future method)
+            if (String.isNotBlank(ctx.stepStateJson)) {
+                try {
+                    Map<String, Object> state = (Map<String, Object>)JSON.deserializeUntyped(ctx.stepStateJson);
+                    if (state.containsKey('status')) {
+                        Integer status = (Integer)state.get('status');
+                        String body = (String)state.get('body');
+                        if (status == 200) {
+                            return StepResult.complete(null, new Map<String, Object>{'status' => status, 'body' => body});
+                        } else {
+                            // If it failed, we retry using retry policy
+                            return StepResult.retry(new RetryPolicy(2, (Double)2.0, 3));
+                        }
+                    }
+                } catch (Exception ex) {
+                    // Fall back to initiate callout
+                }
+            }
+
+            // Otherwise, get the endpoint
             String endpoint = 'https://httpbin.org/status/500';
-            
-            // Allow endpoint override via input JSON
             if (String.isNotBlank(ctx.workflowInputJson)) {
                 try {
                     Map<String, Object> input = (Map<String, Object>)JSON.deserializeUntyped(ctx.workflowInputJson);
@@ -33,11 +53,12 @@ public with sharing class CalloutTimeoutWorkflowExample {
                         endpoint = (String)input.get('endpoint');
                     }
                 } catch (Exception ex) {
-                    // Fall back to default
+                    // Fall back
                 }
             }
 
-            if (Test.isRunningTest()) {
+            if (Test.isRunningTest() && !forceAsyncInTest) {
+                // In tests, avoid future delays by simulating success/failure directly
                 if (endpoint.contains('status/200')) {
                     return StepResult.complete(null, new Map<String, Object>{
                         'status' => 200,
@@ -48,27 +69,47 @@ public with sharing class CalloutTimeoutWorkflowExample {
                 }
             }
 
-            Http h = new Http();
-            HttpRequest req = new HttpRequest();
-            req.setEndpoint(endpoint);
-            req.setMethod('GET');
-            
-            try {
-                HttpResponse res = h.send(req);
-                if (res.getStatusCode() == 200) {
-                    return StepResult.complete(null, new Map<String, Object>{
-                        'status' => 200,
-                        'body' => res.getBody()
-                    });
-                } else {
-                    // Retry on error status codes
-                    return StepResult.retry(new RetryPolicy(2, (Double)2.0, 3));
-                }
-            } catch (Exception ex) {
-                System.debug('Exception in MakeHttpCalloutStep: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
-                // Retry on exceptions (e.g. timeout, connection failure)
-                return StepResult.retry(new RetryPolicy(2, (Double)2.0, 3));
-            }
+            // Launch the callout asynchronously to bypass DML callout restrictions
+            executeAsyncCallout(ctx.workflowInstanceId, endpoint);
+
+            // Suspend the execution state. It will resume once the future method finishes.
+            return StepResult.suspend();
+        }
+    }
+
+    @future(callout=true)
+    public static void executeAsyncCallout(Id instanceId, String endpoint) {
+        doCalloutAndResume(instanceId, endpoint);
+    }
+
+    public static void doCalloutAndResume(Id instanceId, String endpoint) {
+        Http h = new Http();
+        HttpRequest req = new HttpRequest();
+        req.setEndpoint(endpoint);
+        req.setMethod('GET');
+
+        Integer statusCode = 500;
+        String responseBody = '';
+
+        try {
+            HttpResponse res = h.send(req);
+            statusCode = res.getStatusCode();
+            responseBody = res.getBody();
+        } catch (Exception ex) {
+            responseBody = 'Exception: ' + ex.getMessage() + '\n' + ex.getStackTraceString();
+        }
+
+        // Store status and body in the resume payload
+        Map<String, Object> state = new Map<String, Object>{
+            'status' => statusCode,
+            'body' => responseBody
+        };
+
+        // Resume the suspended instance with the callout result
+        try {
+            WorkflowEngine.resumeInstance(instanceId, JSON.serialize(state));
+        } catch (Exception ex) {
+            System.debug('Failed to resume workflow instance ' + instanceId + ': ' + ex.getMessage());
         }
     }
 }
