@@ -242,10 +242,20 @@ public class CalloutTimeoutWorkflowExampleTest {
             AND Step_Name__c = 'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep'
             LIMIT 1
         ];
-        System.assert(!stepExecs.isEmpty());
-        Workflow_Step_Execution__c stepExec = stepExecs[0];
-        stepExec.Status__c = 'Running';
-        update stepExec;
+        if (stepExecs.isEmpty()) {
+            Workflow_Step_Execution__c newStepExec = new Workflow_Step_Execution__c(
+                Workflow_Instance__c = instanceId,
+                Step_Name__c = 'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep',
+                Status__c = 'Running',
+                Retry_Count__c = 0
+            );
+            insert newStepExec;
+            stepExecs.add(newStepExec);
+        } else {
+            Workflow_Step_Execution__c stepExec = stepExecs[0];
+            stepExec.Status__c = 'Running';
+            update stepExec;
+        }
 
         // Execute watchdog job
         WorkflowTimeoutJob job = new WorkflowTimeoutJob(instanceId, 'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep');

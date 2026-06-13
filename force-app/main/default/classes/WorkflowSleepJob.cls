@@ -13,6 +13,9 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
             WorkflowEngine.enqueueOrchestrator(this.instanceId, null);
         }
         
+        // Schedule watchdog for the step we just resumed
+        WorkflowEngine.scheduleTimeoutJobForInstance(this.instanceId);
+        
         // Clean up this scheduled execution from the schedule queue
         System.abortJob(ctx.getTriggerId());
     }

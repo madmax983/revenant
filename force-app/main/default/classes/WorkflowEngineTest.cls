@@ -30,6 +30,82 @@ public class WorkflowEngineTest {
         }
     }
 
+    public class MockCalloutResponse implements HttpCalloutMock {
+        public HTTPResponse respond(HTTPRequest req) {
+            HttpResponse res = new HttpResponse();
+            res.setHeader('Content-Type', 'application/json');
+            res.setBody('{"status":"success"}');
+            res.setStatusCode(200);
+            return res;
+        }
+    }
+
+    public class CalloutWorkflow implements WorkflowDefinition {
+        public List<String> getSteps() {
+            return new List<String>{'WorkflowEngineTest.CalloutStep'};
+        }
+        public String getInitialStep() {
+            return 'WorkflowEngineTest.CalloutStep';
+        }
+        public String getNextStep(String currentStepName, StepResult result) {
+            return null;
+        }
+    }
+
+    public class CalloutStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            HttpRequest req = new HttpRequest();
+            req.setEndpoint('https://api.example.com/test');
+            req.setMethod('GET');
+            Http h = new Http();
+            HttpResponse res = h.send(req);
+            return StepResult.complete(null, res.getBody());
+        }
+    }
+
+    public class LargeParallelWorkflow implements WorkflowDefinition {
+        public List<String> getSteps() {
+            return new List<String>{
+                'WorkflowEngineTest.LargeParallelSplitStep',
+                'WorkflowEngineTest.LargeOutputStep',
+                'WorkflowEngineTest.ParallelStep2',
+                'WorkflowEngineTest.LargeParallelJoinStep'
+            };
+        }
+        public String getInitialStep() {
+            return 'WorkflowEngineTest.LargeParallelSplitStep';
+        }
+        public String getNextStep(String currentStepName, StepResult result) {
+            if (currentStepName == 'WorkflowEngineTest.LargeParallelSplitStep') {
+                return 'WorkflowEngineTest.LargeParallelJoinStep';
+            }
+            return null;
+        }
+    }
+
+    public class LargeParallelSplitStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            return StepResult.split(new List<String>{'WorkflowEngineTest.LargeOutputStep', 'WorkflowEngineTest.ParallelStep2'}, 'BranchInput');
+        }
+    }
+
+    public class LargeOutputStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            String largeStr = 'a'.repeat(110000);
+            return StepResult.complete(null, largeStr);
+        }
+    }
+
+    public class LargeParallelJoinStep implements WorkflowStep {
+        public StepResult execute(StepContext ctx) {
+            Map<String, Object> input = (Map<String, Object>)JSON.deserializeUntyped(ctx.inputJson);
+            String val1 = (String)input.get('WorkflowEngineTest.LargeOutputStep');
+            System.assertNotEquals(null, val1);
+            System.assertEquals(110000, val1.length());
+            return StepResult.complete(null, 'OK');
+        }
+    }
+
     public class LargePayloadWorkflow implements WorkflowDefinition {
         public String getInitialStep() {
             return 'WorkflowEngineTest.LargePayloadStep';
@@ -1235,9 +1311,8 @@ public class WorkflowEngineTest {
     static void testContinueAsNew() {
         WorkflowEngine.disableQueueableInTest = true;
 
-        Test.startTest();
         Id instanceId = WorkflowEngine.start('WorkflowEngineTest.DaemonWorkflow', 'DaemonKey', 0);
-        Test.stopTest(); // Runs the first execution run (counter 0 -> continueAsNew 1)
+        new WorkflowOrchestrator(instanceId).execute(null); // Runs the first execution run (counter 0 -> continueAsNew 1)
         
         // Manual triggers for execution runs 2 and 3
         
@@ -1367,5 +1442,104 @@ public class WorkflowEngineTest {
 
         Workflow_Instance__c inst2 = [SELECT Status__c, Correlation_Key__c FROM Workflow_Instance__c WHERE Id = :instanceId2];
         System.assertEquals('SharedKey', inst2.Correlation_Key__c);
+    }
+
+    @isTest
+    static void testDirectCalloutStep() {
+        Test.setMock(HttpCalloutMock.class, new MockCalloutResponse());
+        
+        Test.startTest();
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.CalloutWorkflow', 'CalloutKey', null);
+        Test.stopTest();
+        
+        Workflow_Instance__c inst = [SELECT Status__c, Output__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Completed', inst.Status__c);
+        System.assertEquals('{"status":"success"}', (String)JSON.deserialize(WorkflowEngine.resolvePayload(inst.Output__c), String.class));
+    }
+
+    @isTest
+    static void testWatchdogLifecycle() {
+        WorkflowEngine.disableQueueableInTest = true;
+        
+        // TimeoutStep has timeout of 30 seconds
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.TimeoutWorkflow', 'TimeoutWatchdogKey', null);
+        
+        // Verify watchdog was scheduled
+        String cleanStepName = 'WorkflowEngineTest_TimeoutStep';
+        String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
+        List<CronTrigger> triggers = [SELECT Id, State FROM CronTrigger WHERE CronJobDetail.Name = :jobName];
+        System.assertEquals(1, triggers.size());
+        
+        // Execute the step. It should cancel the watchdog.
+        Test.startTest();
+        WorkflowEngine.runStep(instanceId, null);
+        Test.stopTest();
+        
+        triggers = [SELECT Id FROM CronTrigger WHERE CronJobDetail.Name = :jobName];
+        System.assertEquals(0, triggers.size(), 'Watchdog should be aborted upon successful step completion');
+    }
+
+    @isTest
+    static void testLargeParallelOutputJoin() {
+        WorkflowEngine.disableQueueableInTest = true;
+        
+        Id instanceId = WorkflowEngine.start('WorkflowEngineTest.LargeParallelWorkflow', 'LargeParallelKey', null);
+        
+        // Run SplitStep
+        WorkflowEngine.runStep(instanceId, null);
+        
+        // Run LargeOutputStep and ParallelStep2
+        WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.LargeOutputStep');
+        WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.ParallelStep2');
+        
+        Workflow_Instance__c instBefore = [SELECT Status__c, Current_Step__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.debug('--- TEST BEFORE JOIN: Status=' + instBefore.Status__c + ', CurrentStep=' + instBefore.Current_Step__c);
+        
+        List<Workflow_Step_Execution__c> stepsBefore = [SELECT Step_Name__c, Status__c, Input__c FROM Workflow_Step_Execution__c WHERE Workflow_Instance__c = :instanceId];
+        for (Workflow_Step_Execution__c s : stepsBefore) {
+            System.debug('--- STEP BEFORE JOIN: Name=' + s.Step_Name__c + ', Status=' + s.Status__c + ', InputLength=' + (s.Input__c != null ? s.Input__c.length() : 0));
+        }
+
+        // Run JoinStep manually
+        try {
+            new WorkflowOrchestrator(instanceId).execute(null);
+        } catch (Exception ex) {
+            System.debug('--- JOIN EXECUTION CRASHED: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+            throw ex;
+        }
+        
+        Workflow_Instance__c instAfter = [SELECT Status__c, Current_Step__c, Error_Message__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.debug('--- TEST AFTER JOIN: Status=' + instAfter.Status__c + ', CurrentStep=' + instAfter.Current_Step__c + ', Error=' + instAfter.Error_Message__c);
+        
+        List<Workflow_Step_Execution__c> stepsAfter = [SELECT Step_Name__c, Status__c, Error_Details__c FROM Workflow_Step_Execution__c WHERE Workflow_Instance__c = :instanceId];
+        for (Workflow_Step_Execution__c s : stepsAfter) {
+            System.debug('--- STEP AFTER JOIN: Name=' + s.Step_Name__c + ', Status=' + s.Status__c + ', Error=' + s.Error_Details__c);
+        }
+
+        System.assertEquals('Completed', instAfter.Status__c);
+    }
+
+    @isTest
+    static void testRetryWorkflowNullCurrentStep() {
+        WorkflowEngine.disableQueueableInTest = true;
+        
+        // Construct and insert the instance manually to avoid enqueuing
+        Workflow_Instance__c inst = new Workflow_Instance__c(
+            Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+            Status__c = 'Failed',
+            Current_Step__c = null,
+            Correlation_Key__c = 'NullStepKey'
+        );
+        insert inst;
+        Id instanceId = inst.Id;
+        
+        // Run retry. It should not throw NullPointerException
+        Test.startTest();
+        WorkflowEngine.retryWorkflow(instanceId);
+        Test.stopTest();
+        
+        inst = [SELECT Status__c, Current_Step__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+        System.assertEquals('Running', inst.Status__c);
+        System.assertEquals('WorkflowEngineTest.HappyStep1', inst.Current_Step__c);
     }
 }
