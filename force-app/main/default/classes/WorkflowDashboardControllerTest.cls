@@ -67,10 +67,12 @@ public class WorkflowDashboardControllerTest {
         Test.startTest();
         List<String> definitions = WorkflowDashboardController.getDefinitions();
         Test.stopTest();
-
-        // Should return a list of classes containing "implements WorkflowDefinition"
-        // In the local workspace scratch org, HappyWorkflow and other definitions will be found.
+ 
+        // Should return a list of classes containing "implements WorkflowDefinition" or "implements VersionedWorkflow"
         System.assert(definitions != null, 'Definitions list should not be null');
+        System.assert(definitions.contains('CleanupWorkflow'), 'Should find CleanupWorkflow');
+        System.assert(definitions.contains('BatchFanoutWorkflowExample.BatchFanoutWorkflow'), 'Should find BatchFanoutWorkflowExample.BatchFanoutWorkflow inner class');
+        System.assert(definitions.contains('SagaWorkflowExample.SagaWorkflow'), 'Should find SagaWorkflowExample.SagaWorkflow inner class');
     }
 
     @isTest

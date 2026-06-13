@@ -48,16 +48,34 @@ public with sharing class WorkflowDashboardController {
             WHERE NamespacePrefix = null 
             ORDER BY Name ASC
         ];
+        
+        Pattern classPattern = Pattern.compile('(?i)\\bclass\\s+([a-zA-Z0-9_]+)\\s+[^\\{]*?\\bimplements\\s+[^\\{]*?\\b(WorkflowDefinition|VersionedWorkflow)\\b');
+        
         for (ApexClass ac : classes) {
-            if (ac.Body != null && (ac.Body.contains('implements WorkflowDefinition') || ac.Body.contains('implements  WorkflowDefinition'))) {
-                // Exclude test class definitions
-                if (!ac.Name.contains('WorkflowEngineTest') && !ac.Name.contains('WorkflowDashboardControllerTest')) {
-                    definitions.add(ac.Name);
+            if (ac.Body != null) {
+                Matcher pm = classPattern.matcher(ac.Body);
+                while (pm.find()) {
+                    String className = pm.group(1);
+                    // Check if it's the outer class or an inner class
+                    if (className.equalsIgnoreCase(ac.Name)) {
+                        // Exclude test classes
+                        if (!ac.Name.contains('WorkflowEngineTest') && !ac.Name.contains('WorkflowDashboardControllerTest')) {
+                            definitions.add(ac.Name);
+                        }
+                    } else {
+                        // Inner class: prefix with outer class name
+                        // Exclude test classes
+                        if (!ac.Name.contains('WorkflowEngineTest') && !ac.Name.contains('WorkflowDashboardControllerTest')) {
+                            definitions.add(ac.Name + '.' + className);
+                        }
+                    }
                 }
             }
         }
+        definitions.sort();
         return definitions;
     }
+
     
     @AuraEnabled
     public static Id startWorkflow(String workflowName, String correlationKey, String inputJson) {
