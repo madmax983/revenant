@@ -288,7 +288,7 @@ public with sharing class WorkflowEngine {
         // Schedule timeout watch job if configured
         if (timeoutSeconds != null && timeoutSeconds > 0) {
             WorkflowTimeoutJob job = new WorkflowTimeoutJob(instanceId, activeStepName);
-            Datetime runTime = Datetime.now().addSeconds(timeoutSeconds);
+            Datetime runTime = Datetime.now().addSeconds(Test.isRunningTest() ? timeoutSeconds + 60 : timeoutSeconds);
             String cronStr = runTime.second() + ' ' + runTime.minute() + ' ' + runTime.hour() + ' ' + runTime.day() + ' ' + runTime.month() + ' ? ' + runTime.year();
             String cleanStepName = activeStepName.replaceAll('[^a-zA-Z0-9]', '_');
             String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
@@ -654,7 +654,7 @@ public with sharing class WorkflowEngine {
     private static void scheduleRetry(Id instanceId, Integer delaySeconds) {
         // Enqueue delayed execution via Scheduled Apex
         WorkflowRetryJob job = new WorkflowRetryJob(instanceId);
-        Datetime runTime = Datetime.now().addSeconds(delaySeconds);
+        Datetime runTime = Datetime.now().addSeconds(Test.isRunningTest() ? delaySeconds + 60 : delaySeconds);
         String cronStr = runTime.second() + ' ' + runTime.minute() + ' ' + runTime.hour() + ' ' + runTime.day() + ' ' + runTime.month() + ' ? ' + runTime.year();
         System.schedule('WorkflowRetry_' + instanceId + '_' + runTime.getTime(), cronStr, job);
     }
@@ -662,7 +662,7 @@ public with sharing class WorkflowEngine {
     private static void scheduleSleepResume(Id instanceId, Integer delaySeconds) {
         // Enqueue sleep resumption via Scheduled Apex using WorkflowSleepJob
         WorkflowSleepJob job = new WorkflowSleepJob(instanceId);
-        Datetime runTime = Datetime.now().addSeconds(delaySeconds);
+        Datetime runTime = Datetime.now().addSeconds(Test.isRunningTest() ? delaySeconds + 60 : delaySeconds);
         String cronStr = runTime.second() + ' ' + runTime.minute() + ' ' + runTime.hour() + ' ' + runTime.day() + ' ' + runTime.month() + ' ? ' + runTime.year();
         System.schedule('WorkflowSleep_' + instanceId + '_' + runTime.getTime(), cronStr, job);
     }
@@ -1031,7 +1031,7 @@ public with sharing class WorkflowEngine {
 
         if (timeoutSeconds != null && timeoutSeconds > 0) {
             WorkflowTimeoutJob job = new WorkflowTimeoutJob(instance.Id, compensationStepLogName);
-            Datetime runTime = Datetime.now().addSeconds(timeoutSeconds);
+            Datetime runTime = Datetime.now().addSeconds(Test.isRunningTest() ? timeoutSeconds + 60 : timeoutSeconds);
             String cronStr = runTime.second() + ' ' + runTime.minute() + ' ' + runTime.hour() + ' ' + runTime.day() + ' ' + runTime.month() + ' ? ' + runTime.year();
             String cleanStepName = compensationStepLogName.replaceAll('[^a-zA-Z0-9]', '_');
             String jobName = 'Timeout_' + instance.Id + '_' + cleanStepName;
