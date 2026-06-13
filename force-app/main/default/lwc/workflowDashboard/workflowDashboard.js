@@ -35,6 +35,11 @@ export default class WorkflowDashboard extends LightningElement {
 
     wiredInstancesResult;
     wiredDefinitionsResult;
+    pollingInterval;
+
+    disconnectedCallback() {
+        this.stopPolling();
+    }
 
     @wire(getInstances)
     wiredInstances(result) {
@@ -135,6 +140,7 @@ export default class WorkflowDashboard extends LightningElement {
     }
 
     handleSelectInstance(event) {
+        this.stopPolling();
         this.selectedInstanceId = event.currentTarget.dataset.id;
         
         // Highlight in list
@@ -148,6 +154,7 @@ export default class WorkflowDashboard extends LightningElement {
     }
 
     handleSelectRelatedInstance(event) {
+        this.stopPolling();
         this.selectedInstanceId = event.currentTarget.dataset.id;
         
         // Highlight in list
@@ -231,6 +238,13 @@ export default class WorkflowDashboard extends LightningElement {
                         Output__c: this.formatJson(step.Output__c)
                     };
                 });
+
+                // Check if we can stop polling early
+                const isStillWaitingForApproval = this.steps.some(step => step.isWaitingForApproval);
+                const isTransitioning = inst.Status__c === 'Running' || inst.Status__c === 'Compensating' || inst.Status__c === 'Cancelling';
+                if (!isStillWaitingForApproval && !isTransitioning) {
+                    this.stopPolling();
+                }
             })
             .catch(error => {
                 this.showToast('Error', 'Failed to retrieve details: ' + error.body.message, 'error');
@@ -317,6 +331,7 @@ export default class WorkflowDashboard extends LightningElement {
                 this.showToast('Success', 'Workflow instance queued for retry successfully.', 'success');
                 refreshApex(this.wiredInstancesResult);
                 this.loadDetails(true);
+                this.startPolling();
             })
             .catch(error => {
                 this.showToast('Error', 'Failed to retry workflow: ' + error.body.message, 'error');
@@ -338,6 +353,7 @@ export default class WorkflowDashboard extends LightningElement {
                 this.showToast('Success', 'Workflow cancellation requested successfully.', 'success');
                 refreshApex(this.wiredInstancesResult);
                 this.loadDetails(true);
+                this.startPolling();
             })
             .catch(error => {
                 this.showToast('Error', 'Failed to cancel workflow: ' + (error.body ? error.body.message : error.message), 'error');
@@ -367,6 +383,7 @@ export default class WorkflowDashboard extends LightningElement {
                 this.approvalComments = '';
                 refreshApex(this.wiredInstancesResult);
                 this.loadDetails(true);
+                this.startPolling();
             })
             .catch(error => {
                 this.showToast('Error', 'Failed to submit approval: ' + error.body.message, 'error');
@@ -453,5 +470,24 @@ export default class WorkflowDashboard extends LightningElement {
                 variant: variant
             })
         );
+    }
+
+    startPolling() {
+        this.stopPolling();
+        let attempts = 0;
+        this.pollingInterval = setInterval(() => {
+            attempts += 1;
+            refreshApex(this.wiredInstancesResult);
+            if (attempts >= 10) {
+                this.stopPolling();
+            }
+        }, 2000);
+    }
+
+    stopPolling() {
+        if (this.pollingInterval) {
+            clearInterval(this.pollingInterval);
+            this.pollingInterval = null;
+        }
     }
 }
