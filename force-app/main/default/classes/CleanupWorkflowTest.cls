@@ -155,4 +155,248 @@ public class CleanupWorkflowTest {
       'Should record 2 deleted instances'
     );
   }
+
+  @isTest
+  static void testDataLossPrevention() {
+    // Purged instance: Completed, 40 days old
+    Workflow_Instance__c instPurge = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'KeyPurge',
+      Input__c = '"InputPurge"'
+    );
+    insert instPurge;
+    Test.setCreatedDate(instPurge.Id, DateTime.now().addDays(-40));
+
+    // Keep instance: Completed, 5 days old (not purged)
+    Workflow_Instance__c instKeep = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'KeyKeep',
+      Input__c = '"InputKeep"'
+    );
+    insert instKeep;
+    Test.setCreatedDate(instKeep.Id, DateTime.now().addDays(-5));
+
+    // Create File 1: Engine owned, shared with both instPurge and instKeep (should NOT be deleted)
+    ContentVersion cv1 = new ContentVersion(
+      Title = 'Input_Shared',
+      PathOnClient = 'Input_Shared.json',
+      VersionData = Blob.valueOf('{}')
+    );
+    insert cv1;
+    Id docId1 = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv1.Id].ContentDocumentId;
+
+    ContentDocumentLink cdl1a = new ContentDocumentLink(
+      ContentDocumentId = docId1,
+      LinkedEntityId = instPurge.Id,
+      ShareType = 'V',
+      Visibility = 'AllUsers'
+    );
+    insert cdl1a;
+
+    ContentDocumentLink cdl1b = new ContentDocumentLink(
+      ContentDocumentId = docId1,
+      LinkedEntityId = instKeep.Id,
+      ShareType = 'V',
+      Visibility = 'AllUsers'
+    );
+    insert cdl1b;
+
+    // Create File 2: Engine owned, linked ONLY to instPurge (should BE deleted)
+    ContentVersion cv2 = new ContentVersion(
+      Title = 'Input_Private',
+      PathOnClient = 'Input_Private.json',
+      VersionData = Blob.valueOf('{}')
+    );
+    insert cv2;
+    Id docId2 = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv2.Id].ContentDocumentId;
+
+    ContentDocumentLink cdl2 = new ContentDocumentLink(
+      ContentDocumentId = docId2,
+      LinkedEntityId = instPurge.Id,
+      ShareType = 'V',
+      Visibility = 'AllUsers'
+    );
+    insert cdl2;
+
+    // Create File 3: User owned (no prefix), linked ONLY to instPurge (should NOT be deleted)
+    ContentVersion cv3 = new ContentVersion(
+      Title = 'MyImportantDocument',
+      PathOnClient = 'MyImportantDocument.pdf',
+      VersionData = Blob.valueOf('PDF DATA')
+    );
+    insert cv3;
+    Id docId3 = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv3.Id].ContentDocumentId;
+
+    ContentDocumentLink cdl3 = new ContentDocumentLink(
+      ContentDocumentId = docId3,
+      LinkedEntityId = instPurge.Id,
+      ShareType = 'V',
+      Visibility = 'AllUsers'
+    );
+    insert cdl3;
+
+    // Run cleanup
+    Test.startTest();
+    WorkflowEngine.start(
+      'CleanupWorkflow',
+      'Cleanup_Run_DataLoss',
+      new Map<String, Object>{ 'retentionDays' => 30, 'batchSize' => 10 }
+    );
+    Test.stopTest();
+
+    // Verify instance was deleted
+    List<Workflow_Instance__c> deletedInstances = [SELECT Id FROM Workflow_Instance__c WHERE Id = :instPurge.Id];
+    System.assert(deletedInstances.isEmpty(), 'instPurge should be deleted');
+
+    // Verify files
+    List<ContentDocument> docs = [SELECT Id, Title FROM ContentDocument WHERE Id IN (:docId1, :docId2, :docId3)];
+    Set<Id> remainingDocIds = new Set<Id>();
+    for (ContentDocument d : docs) {
+      remainingDocIds.add(d.Id);
+    }
+
+    System.assert(remainingDocIds.contains(docId1), 'Shared file Input_Shared should NOT be deleted');
+    System.assert(!remainingDocIds.contains(docId2), 'Private file Input_Private should BE deleted');
+    System.assert(remainingDocIds.contains(docId3), 'User file MyImportantDocument should NOT be deleted');
+  }
+
+  @isTest
+  static void testInputValidation() {
+    // Test Malformed JSON
+    try {
+      Workflow_Instance__c instMalformed = new Workflow_Instance__c(
+        Workflow_Name__c = 'CleanupWorkflow',
+        Status__c = 'Running',
+        Input__c = '{malformed json}'
+      );
+      insert instMalformed;
+      StepContext ctx = new StepContext(
+        instMalformed.Id,
+        'CleanupWorkflow',
+        'CleanupWorkflow.PurgeOldInstancesStep',
+        null,
+        null,
+        null,
+        instMalformed.Input__c
+      );
+      new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
+      System.assert(false, 'Should throw exception on malformed JSON');
+    } catch (Exception ex) {
+      System.assert(ex.getMessage().contains('Malformed JSON'), 'Expected Malformed JSON error, got: ' + ex.getMessage());
+    }
+
+    // Test invalid retentionDays type
+    try {
+      Workflow_Instance__c instBadType = new Workflow_Instance__c(
+        Workflow_Name__c = 'CleanupWorkflow',
+        Status__c = 'Running',
+        Input__c = '{"retentionDays":"not-an-integer"}'
+      );
+      insert instBadType;
+      StepContext ctx = new StepContext(
+        instBadType.Id,
+        'CleanupWorkflow',
+        'CleanupWorkflow.PurgeOldInstancesStep',
+        null,
+        null,
+        null,
+        instBadType.Input__c
+      );
+      new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
+      System.assert(false, 'Should throw exception on invalid retentionDays type');
+    } catch (Exception ex) {
+      System.assert(ex.getMessage().contains('Invalid retentionDays parameter type'), 'Expected invalid type error, got: ' + ex.getMessage());
+    }
+
+    // Test zero batchSize
+    try {
+      Workflow_Instance__c instZero = new Workflow_Instance__c(
+        Workflow_Name__c = 'CleanupWorkflow',
+        Status__c = 'Running',
+        Input__c = '{"batchSize":0}'
+      );
+      insert instZero;
+      StepContext ctx = new StepContext(
+        instZero.Id,
+        'CleanupWorkflow',
+        'CleanupWorkflow.PurgeOldInstancesStep',
+        null,
+        null,
+        null,
+        instZero.Input__c
+      );
+      new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
+      System.assert(false, 'Should throw exception on zero batchSize');
+    } catch (Exception ex) {
+      System.assert(ex.getMessage().contains('batchSize parameter must be greater than zero'), 'Expected zero batchSize error, got: ' + ex.getMessage());
+    }
+
+    // Test invalid batchSize type
+    try {
+      Workflow_Instance__c instBadBatchType = new Workflow_Instance__c(
+        Workflow_Name__c = 'CleanupWorkflow',
+        Status__c = 'Running',
+        Input__c = '{"batchSize":"not-an-integer"}'
+      );
+      insert instBadBatchType;
+      StepContext ctx = new StepContext(
+        instBadBatchType.Id,
+        'CleanupWorkflow',
+        'CleanupWorkflow.PurgeOldInstancesStep',
+        null,
+        null,
+        null,
+        instBadBatchType.Input__c
+      );
+      new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
+      System.assert(false, 'Should throw exception on invalid batchSize type');
+    } catch (Exception ex) {
+      System.assert(ex.getMessage().contains('Invalid batchSize parameter type'), 'Expected invalid type error, got: ' + ex.getMessage());
+    }
+  }
+
+  @isTest
+  static void testLimitSafetyClamping() {
+    // 60 old workflow instances
+    List<Workflow_Instance__c> oldInstances = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < 60; i++) {
+      oldInstances.add(new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+        Status__c = 'Completed',
+        Correlation_Key__c = 'KeyClamp_' + i,
+        Input__c = '"InputClamp"'
+      ));
+    }
+    insert oldInstances;
+    for (Workflow_Instance__c inst : oldInstances) {
+      Test.setCreatedDate(inst.Id, DateTime.now().addDays(-40));
+    }
+
+    // Start cleanup with batchSize = 100, which should clamp to 50
+    Test.startTest();
+    Id cleanupInstanceId = WorkflowEngine.start(
+      'CleanupWorkflow',
+      'Cleanup_Run_Clamp',
+      new Map<String, Object>{ 'retentionDays' => 30, 'batchSize' => 100 }
+    );
+    Test.stopTest();
+
+    // Query the latest step execution record's output since it yielded
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :cleanupInstanceId
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    System.assert(!stepExecs.isEmpty());
+
+    CleanupWorkflow.PurgeState midState = (CleanupWorkflow.PurgeState) JSON.deserialize(
+      WorkflowEngine.resolvePayload(stepExecs[0].Output__c),
+      CleanupWorkflow.PurgeState.class
+    );
+    System.assertEquals(50, midState.deletedCount, 'Should have processed exactly 50 instances (clamped)');
+  }
 }
