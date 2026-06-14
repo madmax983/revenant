@@ -14,6 +14,13 @@
                     onclick={handleOpenModal}
                     class="brand-button">
                 </lightning-button>
+                <lightning-button 
+                    label="System Doctor" 
+                    icon-name="utility:heart" 
+                    variant="neutral" 
+                    onclick={handleOpenDoctor}
+                    class="slds-m-left_small">
+                </lightning-button>
                 <lightning-button-icon 
                     icon-name="utility:refresh" 
                     variant="border-filled" 
@@ -106,9 +113,14 @@
                                             onclick={handleSelectInstance}>
                                             <div class="slds-grid slds-grid_vertical-align-center">
                                                 <div class="slds-col slds-grow">
-                                                    <div class="slds-grid slds-grid_align-spread">
+                                                                                    <div class="slds-grid slds-grid_align-spread">
                                                         <span class="slds-text-title_bold text-primary">{inst.Name}</span>
-                                                        <span class={inst.statusBadgeClass}>{inst.Status__c}</span>
+                                                        <div class="slds-grid slds-grid_vertical-align-center">
+                                                            <template if:true={inst.waitingOn}>
+                                                                <span class={inst.waitingOnBadgeClass} style="margin-right: 8px;">{inst.waitingOn}</span>
+                                                            </template>
+                                                            <span class={inst.statusBadgeClass}>{inst.Status__c}</span>
+                                                        </div>
                                                     </div>
                                                     <div class="slds-text-body_regular slds-m-top_xx-small font-bold">{inst.Workflow_Name__c}</div>
                                                     <div class="slds-text-body_small slds-text-color_weak slds-m-top_xx-small">
@@ -147,7 +159,176 @@
             <!-- Right Panel: Details -->
             <div class="slds-col slds-size_1-of-1 slds-medium-size_3-of-5">
                 <div class="panel-card details-panel">
-                    <template if:true={selectedInstanceId}>
+                    <!-- System Doctor View -->
+                    <template if:true={viewingDoctor}>
+                        <template if:true={loadingDoctor}>
+                            <div class="slds-align_absolute-center slds-p-around_large spinner-height">
+                                <lightning-spinner alternative-text="Loading Doctor..." size="medium"></lightning-spinner>
+                            </div>
+                        </template>
+                        <template if:false={loadingDoctor}>
+                            <div class="slds-p-around_medium">
+                                <!-- Header -->
+                                <div class="slds-grid slds-grid_align-spread slds-m-bottom_medium border-bottom slds-p-bottom_small">
+                                    <div>
+                                        <h2 class="slds-text-heading_medium font-outfit slds-grid slds-grid_vertical-align-center">
+                                            <lightning-icon icon-name="utility:setup_assistant_guide" size="small" class="slds-m-right_small text-primary"></lightning-icon>
+                                            System Doctor
+                                        </h2>
+                                        <p class="slds-text-title slds-text-color_weak">Monitor limits, watchdog health, and engine configuration</p>
+                                    </div>
+                                    <div class="slds-grid slds-grid_vertical-align-center">
+                                        <lightning-button 
+                                            label="Refresh Status" 
+                                            icon-name="utility:refresh" 
+                                            variant="neutral" 
+                                            onclick={loadDoctorStatus}
+                                            class="slds-m-right_small">
+                                        </lightning-button>
+                                        <lightning-button 
+                                            label="Close" 
+                                            variant="neutral" 
+                                            onclick={handleCloseDoctor}>
+                                        </lightning-button>
+                                    </div>
+                                </div>
+
+                                <!-- Watchdog Health Panel -->
+                                <div class="slds-card slds-p-around_small slds-m-bottom_large status-card">
+                                    <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center">
+                                        <div>
+                                            <div class="slds-text-title_caps slds-text-color_weak">Watchdog Daemon Health</div>
+                                            <div class="slds-grid slds-grid_vertical-align-center slds-m-top_xx-small">
+                                                <template if:true={doctorData.isRunning}>
+                                                    <span class="badge badge-green slds-m-right_small">Running</span>
+                                                    <span class="slds-text-body_small slds-text-color_success">Self-chaining queueable loop is active</span>
+                                                </template>
+                                                <template if:false={doctorData.isRunning}>
+                                                    <span class="badge badge-red slds-m-right_small">Stopped</span>
+                                                    <span class="slds-text-body_small slds-text-color_error">Watchdog poller is currently idle or stalled</span>
+                                                </template>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <lightning-button 
+                                                label="Enqueue Watchdog" 
+                                                icon-name="utility:power" 
+                                                variant="brand" 
+                                                onclick={handleEnqueueWatchdog}
+                                                disabled={doctorData.isRunning}
+                                                class="brand-button">
+                                            </lightning-button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Limits Auditing Grid -->
+                                <h3 class="slds-text-heading_small slds-m-bottom_small font-outfit">Platform Limits & Database Auditing</h3>
+                                <div class="slds-grid slds-wrap slds-gutters slds-m-bottom_large">
+                                    <div class="slds-col slds-size_1-of-2 slds-m-bottom_small">
+                                        <div class="stat-card">
+                                            <div class="slds-text-title slds-text-color_weak">Scheduled Jobs (Cron)</div>
+                                            <div class="slds-text-heading_small slds-m-top_xx-small">{doctorData.scheduledJobsCount} / 100</div>
+                                            <div class="slds-text-body_small slds-text-color_weak">Salesforce limit of 100 concurrent scheduled jobs</div>
+                                        </div>
+                                    </div>
+                                    <div class="slds-col slds-size_1-of-2 slds-m-bottom_small">
+                                        <div class="stat-card">
+                                            <div class="slds-text-title slds-text-color_weak">Sleeping Instances</div>
+                                            <div class="slds-text-heading_small slds-m-top_xx-small">{doctorData.sleepingInstances}</div>
+                                            <div class="slds-text-body_small slds-text-color_weak">Suspended workflows waiting for sleep time to elapse</div>
+                                        </div>
+                                    </div>
+                                    <div class="slds-col slds-size_1-of-2 slds-m-bottom_small">
+                                        <div class="stat-card">
+                                            <div class="slds-text-title slds-text-color_weak">Steps Awaiting Timeout</div>
+                                            <div class="slds-text-heading_small slds-m-top_xx-small">{doctorData.pendingTimeouts}</div>
+                                            <div class="slds-text-body_small slds-text-color_weak">Active steps with configured timeout deadlines</div>
+                                        </div>
+                                    </div>
+                                    <div class="slds-col slds-size_1-of-2 slds-m-bottom_small">
+                                        <div class="stat-card">
+                                            <div class="slds-text-title slds-text-color_weak">Daily Async Apex Executions</div>
+                                            <div class="slds-text-heading_small slds-m-top_xx-small">{doctorData.dailyAsyncValue} / {doctorData.dailyAsyncLimit}</div>
+                                            <div class="slds-text-body_small slds-text-color_weak">Daily limit for asynchronous Apex executions</div>
+                                        </div>
+                                    </div>
+                                    <template if:true={doctorData.hasElasticLimit}>
+                                        <div class="slds-col slds-size_1-of-1 slds-m-bottom_small">
+                                            <div class="stat-card">
+                                                <div class="slds-text-title slds-text-color_weak">Elastic Async Apex Limit</div>
+                                                <div class="slds-text-heading_small slds-m-top_xx-small">{doctorData.elasticAsyncValue} / {doctorData.elasticAsyncLimit}</div>
+                                                <div class="slds-text-body_small slds-text-color_weak">Scale-out limit dynamically allowed by Salesforce</div>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+
+                                <!-- Configuration Settings -->
+                                <div class="slds-m-bottom_large">
+                                    <h3 class="slds-text-heading_small slds-m-bottom_small font-outfit">Active Engine Configuration</h3>
+                                    <div class="panel-card slds-p-around_medium">
+                                        <div class="slds-grid slds-wrap">
+                                            <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                                <div class="slds-text-title slds-text-color_weak">Dynamic Precise Scheduling</div>
+                                                <div class="slds-m-top_xx-small">
+                                                    <template if:true={doctorData.config.Use_Dynamic_Scheduling__c}>
+                                                        <span class="badge badge-indigo">Enabled</span>
+                                                    </template>
+                                                    <template if:false={doctorData.config.Use_Dynamic_Scheduling__c}>
+                                                        <span class="badge badge-orange">Disabled (Watchdog Only)</span>
+                                                    </template>
+                                                </div>
+                                            </div>
+                                            <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                                <div class="slds-text-title slds-text-color_weak">Watchdog Sweep Delay</div>
+                                                <div class="slds-text-body_regular slds-m-top_xx-small font-bold">
+                                                    {doctorData.config.Watchdog_Delay_Minutes__c} minutes
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Latest Watchdog Instance Details -->
+                                <template if:true={doctorData.latestJob}>
+                                    <div>
+                                        <h3 class="slds-text-heading_small slds-m-bottom_small font-outfit">Latest Watchdog Execution</h3>
+                                        <div class="panel-card slds-p-around_medium">
+                                            <div class="slds-grid slds-wrap detail-fields-grid">
+                                                <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                                    <div class="slds-text-title slds-text-color_weak">Instance Name</div>
+                                                    <div class="slds-text-body_regular font-bold">{doctorData.latestJob.Name}</div>
+                                                </div>
+                                                <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                                    <div class="slds-text-title slds-text-color_weak">Status</div>
+                                                    <div class="slds-m-top_xx-small">
+                                                        <span class={doctorData.latestJob.statusBadgeClass}>{doctorData.latestJob.Status__c}</span>
+                                                    </div>
+                                                </div>
+                                                <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                                    <div class="slds-text-title slds-text-color_weak">Started At</div>
+                                                    <div class="slds-text-body_regular">{doctorData.latestJobCreatedDate}</div>
+                                                </div>
+                                                <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                                    <div class="slds-text-title slds-text-color_weak">Current Step</div>
+                                                    <div class="slds-text-body_regular">{doctorData.latestJob.Current_Step__c}</div>
+                                                </div>
+                                                <template if:true={doctorData.latestJob.Error_Message__c}>
+                                                    <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
+                                                        <div class="slds-text-title text-red">Watchdog Error Details</div>
+                                                        <pre class="code-block error-block">{doctorData.latestJob.Error_Message__c}</pre>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                    </template>
+                    <template if:false={viewingDoctor}>
+                        <template if:true={selectedInstanceId}>
                         <template if:true={loadingDetails}>
                             <div class="slds-align_absolute-center slds-p-around_large spinner-height">
                                 <lightning-spinner alternative-text="Loading Details..." size="medium"></lightning-spinner>
@@ -163,25 +344,37 @@
                                         <p class="slds-text-title slds-text-color_weak">{selectedInst.Workflow_Name__c}</p>
                                     </div>
                                     <div class="slds-grid slds-grid_vertical-align-center">
-                                        <template if:true={isFailed}>
-                                            <lightning-button 
-                                                label="Retry / Replay" 
-                                                icon-name="utility:refresh" 
-                                                variant="neutral" 
-                                                onclick={handleRetryWorkflow}
-                                                class="slds-m-right_small">
-                                            </lightning-button>
-                                        </template>
-                                        <template if:true={isCancelable}>
-                                            <lightning-button 
-                                                label="Cancel Workflow" 
-                                                icon-name="utility:close" 
-                                                variant="destructive" 
-                                                onclick={handleCancelWorkflow}
-                                                class="slds-m-right_small">
-                                            </lightning-button>
-                                        </template>
-                                        <span class={selectedInst.statusBadgeClass}>{selectedInst.Status__c}</span>
+                                         <template if:true={selectedInst.isWatchdogWaiting}>
+                                             <lightning-button 
+                                                 label="Resume Now" 
+                                                 icon-name="utility:play" 
+                                                 variant="brand" 
+                                                 onclick={handleResumeWorkflow}
+                                                 class="slds-m-right_small brand-button">
+                                             </lightning-button>
+                                         </template>
+                                         <template if:true={isFailed}>
+                                             <lightning-button 
+                                                 label="Retry / Replay" 
+                                                 icon-name="utility:refresh" 
+                                                 variant="neutral" 
+                                                 onclick={handleRetryWorkflow}
+                                                 class="slds-m-right_small">
+                                             </lightning-button>
+                                         </template>
+                                         <template if:true={isCancelable}>
+                                             <lightning-button 
+                                                 label="Cancel Workflow" 
+                                                 icon-name="utility:close" 
+                                                 variant="destructive" 
+                                                 onclick={handleCancelWorkflow}
+                                                 class="slds-m-right_small">
+                                             </lightning-button>
+                                         </template>
+                                         <template if:true={selectedInst.waitingOn}>
+                                             <span class={selectedInst.waitingOnBadgeClass} style="margin-right: 8px;">Waiting On: {selectedInst.waitingOn}</span>
+                                         </template>
+                                         <span class={selectedInst.statusBadgeClass}>{selectedInst.Status__c}</span>
                                     </div>
                                 </div>
 
@@ -406,6 +599,7 @@
                             <h2 class="slds-text-heading_medium font-outfit text-weak">No Workflow Selected</h2>
                             <p class="slds-text-color_weak slds-m-top_x-small">Select a workflow instance from the list to view its DAG path, state values, and execution steps.</p>
                         </div>
+                    </template>
                     </template>
                 </div>
             </div>

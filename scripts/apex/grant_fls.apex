@@ -28,6 +28,10 @@ List<String> fieldsToGrant = new List<String>{
     'Workflow_Instance__c.Previous_Instance__c',
     'Workflow_Instance__c.Status__c',
     'Workflow_Instance__c.Workflow_Name__c',
+    'Workflow_Instance__c.Sleep_Until__c',
+    'Workflow_Instance__c.Async_Job_Id__c',
+    'Workflow_Instance__c.Terminal_At__c',
+    'Workflow_Instance__c.Active_Correlation_Key__c',
     
     'Workflow_Step_Execution__c.Error_Details__c',
     'Workflow_Step_Execution__c.Input__c',
@@ -36,6 +40,7 @@ List<String> fieldsToGrant = new List<String>{
     'Workflow_Step_Execution__c.Status__c',
     'Workflow_Step_Execution__c.Step_Name__c',
     'Workflow_Step_Execution__c.Workflow_Instance__c',
+    'Workflow_Step_Execution__c.Timeout_At__c',
     
     'Workflow_Signal__c.Payload__c',
     'Workflow_Signal__c.Signal_Name__c',

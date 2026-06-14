@@ -205,35 +205,41 @@ sf apex run test -w 10
 
 Revenant implements a **Hybrid Watchdog Model** for high-precision, fail-safe step timeouts, sleeps, and retries:
 1. **Dynamic High-Precision Scheduling**: When a step sleeps, retries, or registers a timeout, the engine dynamically schedules a seconds-level Apex job (`WorkflowSleepJob`, `WorkflowRetryJob`, or `WorkflowTimeoutJob`) to run immediately.
-2. **Graceful Fail-Safe (Database Tracking)**: If the system has reached Salesforce's limit of 100 concurrent scheduled jobs, `System.schedule` fails with an `AsyncException`. The engine catches this error and falls back to tracking the timeout/sleep deadlines solely in the database (`Sleep_Until__c` and `Timeout_At__c`).
-3. **Safety Poller**: You schedule a single, low-frequency watchdog poller (`WorkflowWatchdog`) to run periodically (e.g. every 10 or 15 minutes). This poller sweeps the database to find and resume/fail any instances that were not dynamically scheduled due to platform limits.
+2. **Delayed Queueable Optimization**: For delays that fall between 1 and 10 minutes (multiples of 60 seconds), the engine automatically routes scheduling through **Delayed Queueables** (`System.enqueueJob(job, delayMinutes)`) instead of standard scheduled Apex. This consumes **0 scheduled job slots** while still executing precisely.
+3. **Graceful Degradation (Overflow Protection)**: If the system has reached Salesforce's limit of 100 concurrent scheduled jobs, any failed `System.schedule` call falls back gracefully to tracking the timeout/sleep deadlines in the database (`Sleep_Until__c` and `Timeout_At__c`).
+4. **Durable Safety Poller (Watchdog Workflow)**: A native, durable workflow (`WatchdogWorkflow`) runs perpetually (using continue-as-new) to sweep the database and resume/fail any instances that were not dynamically scheduled. Because it uses the Delayed Queueable optimization, the watchdog itself consumes **0 scheduled job slots** in production.
 
-### Fallback Watchdog Scheduling
+---
 
-Because the safety watchdog is only a fallback, you do not need a high-frequency (every minute) loop. Scheduling it to run every 10 or 15 minutes is recommended to act as an overflow safety net.
+## Operator Configuration (Revenant Config)
 
-> [!IMPORTANT]
-> **Salesforce Scheduler Constraints**: Salesforce's `System.schedule` cron expressions require the **Seconds** and **Minutes** fields to be literal integers. You cannot use `*` or `?` in these two fields. Therefore, sub-hour scheduled polling requires scheduling multiple separate hourly offset jobs.
+Revenant settings can be configured without code modifications by editing the **Default** record of the **Revenant Config** (`Revenant_Config__mdt`) Custom Metadata Type:
 
-#### Every 10 Minutes (Consumes 6 Scheduled Job slots)
-Schedules 6 separate hourly jobs, offset by 10 minutes:
-```apex
-for (Integer i = 0; i < 60; i += 10) {
-    String jobName = 'Revenant_Watchdog_10Min_' + String.valueOf(i).leftPad(2, '0');
-    String cronExpression = '0 ' + i + ' * * * ?';
-    System.schedule(jobName, cronExpression, new WorkflowWatchdog());
-}
-```
+1. **Use Dynamic Scheduling** (`Use_Dynamic_Scheduling__c` - Checkbox, default `true`):
+   - **`true`**: The engine attempts precise, second-level scheduling via `System.schedule` first, falling back to the database watchdog only if limits are reached.
+   - **`false`**: The engine completely bypasses `System.schedule` and writes all sleep/retry/timeout states directly to the database. All operations are then processed sequentially by the watchdog poller.
+2. **Watchdog Delay Minutes** (`Watchdog_Delay_Minutes__c` - Number, default `10`):
+   - The delay interval (between 1 and 10 minutes) before the watchdog enqueues its next self-chaining execution.
 
-#### Every 15 Minutes (Consumes 4 Scheduled Job slots)
-Schedules 4 separate hourly jobs, offset by 15 minutes:
-```apex
-for (Integer i = 0; i < 60; i += 15) {
-    String jobName = 'Revenant_Watchdog_15Min_' + String.valueOf(i).leftPad(2, '0');
-    String cronExpression = '0 ' + i + ' * * * ?';
-    System.schedule(jobName, cronExpression, new WorkflowWatchdog());
-}
-```
+### Architectural Trade-offs
+
+| Metric / Aspect | Dynamic Precise Scheduling (Default) | Watchdog-Only (`Use_Dynamic_Scheduling__c = false`) |
+| :--- | :--- | :--- |
+| **Precision** | High-precision (down to the second). | Delayed by up to the watchdog delay (e.g., 10 minutes). |
+| **Latency** | Low-latency (runs immediately at target time). | Coarse-grained polling latency. |
+| **Scheduled Job Slots** | Consumes 1 slot per active sleep/retry/timeout job (max 100 concurrent). | Consumes **0** scheduled job slots. |
+| **Limit Vulnerability** | Vulnerable to hitting the 100 scheduled jobs limit in high-volume orgs. | Completely immune to the 100 scheduled jobs limit. |
+| **Use Case** | Low-volume, time-sensitive or interactive workflows. | High-volume, non-interactive batch or transactional processing workflows. |
+
+---
+
+## System Doctor (Dashboard Monitoring)
+
+The Workflow Dashboard includes a **System Doctor** tab to monitor limits, check configuration settings, and audit watchdog health:
+
+* **Watchdog Health**: Indicates whether the self-chaining watchdog Queueable chain is active (`Running`) or has stalled (`Stopped`).
+* **Bootstrap Action**: Includes an **Enqueue Watchdog** button to manually trigger and restart the Queueable chain if it ever halts (e.g., during major platform maintenance windows).
+* **Limits Auditing**: Displays active `CronTrigger` utilization (against the 100-job limit) and pending database sweeps (sleeping instances and step timeouts).
 
 ---
 

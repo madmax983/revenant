@@ -33,7 +33,7 @@ public class WorkflowDashboardControllerTest {
     insert step;
 
     Test.startTest();
-    List<Workflow_Instance__c> instances = WorkflowDashboardController.getFilteredInstances(
+    List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
       '',
       '',
       '',
@@ -273,7 +273,7 @@ public class WorkflowDashboardControllerTest {
 
     Test.startTest();
     // 1. Test filtering by Workflow Name
-    List<Workflow_Instance__c> resWorkflow = WorkflowDashboardController.getFilteredInstances(
+    List<Map<String, Object>> resWorkflow = WorkflowDashboardController.getFilteredInstances(
       'TestDefA',
       '',
       '',
@@ -288,7 +288,7 @@ public class WorkflowDashboardControllerTest {
     );
 
     // 2. Test filtering by Status
-    List<Workflow_Instance__c> resStatus = WorkflowDashboardController.getFilteredInstances(
+    List<Map<String, Object>> resStatus = WorkflowDashboardController.getFilteredInstances(
       '',
       'Running',
       '',
@@ -301,10 +301,10 @@ public class WorkflowDashboardControllerTest {
       resStatus.size(),
       'Should find 1 instance with Status Running'
     );
-    System.assertEquals('OrangeKey', resStatus[0].Correlation_Key__c);
+    System.assertEquals('OrangeKey', (String) resStatus[0].get('Correlation_Key__c'));
 
     // 3. Test filtering by Search Term on Correlation Key
-    List<Workflow_Instance__c> resSearchKey = WorkflowDashboardController.getFilteredInstances(
+    List<Map<String, Object>> resSearchKey = WorkflowDashboardController.getFilteredInstances(
       '',
       '',
       'Banana',
@@ -317,10 +317,10 @@ public class WorkflowDashboardControllerTest {
       resSearchKey.size(),
       'Should find 1 instance matching search Banana'
     );
-    System.assertEquals('BananaKey', resSearchKey[0].Correlation_Key__c);
+    System.assertEquals('BananaKey', (String) resSearchKey[0].get('Correlation_Key__c'));
 
     // 4. Test filtering by Search Term case-insensitivity on Correlation Key
-    List<Workflow_Instance__c> resSearchError = WorkflowDashboardController.getFilteredInstances(
+    List<Map<String, Object>> resSearchError = WorkflowDashboardController.getFilteredInstances(
       '',
       '',
       'banana',
@@ -335,7 +335,7 @@ public class WorkflowDashboardControllerTest {
     );
 
     // 5. Test pagination: limit and offset
-    List<Workflow_Instance__c> page1 = WorkflowDashboardController.getFilteredInstances(
+    List<Map<String, Object>> page1 = WorkflowDashboardController.getFilteredInstances(
       '',
       '',
       '',
@@ -349,7 +349,7 @@ public class WorkflowDashboardControllerTest {
       'Page 1 limit 2 should return 2 records'
     );
 
-    List<Workflow_Instance__c> page2 = WorkflowDashboardController.getFilteredInstances(
+    List<Map<String, Object>> page2 = WorkflowDashboardController.getFilteredInstances(
       '',
       '',
       '',
@@ -643,7 +643,7 @@ public class WorkflowDashboardControllerTest {
     insert inst;
 
     Test.startTest();
-    List<Workflow_Instance__c> res = WorkflowDashboardController.getFilteredInstances(
+    List<Map<String, Object>> res = WorkflowDashboardController.getFilteredInstances(
       '',
       '',
       'xyz',
@@ -658,7 +658,7 @@ public class WorkflowDashboardControllerTest {
       res.size(),
       'Should find 1 instance with Error Message matching xyz'
     );
-    System.assertEquals(inst.Id, res[0].Id);
+    System.assertEquals(inst.Id, (Id) res[0].get('Id'));
   }
 
   @isTest
@@ -781,5 +781,80 @@ public class WorkflowDashboardControllerTest {
       returnedStepSafety.Input__c
     );
     System.assertEquals('ShortOutput', returnedStepSafety.Output__c);
+  }
+
+  @isTest
+  static void testWatchdogStatusAndEnqueue() {
+    // Mock the WatchdogWorkflow instance
+    Workflow_Instance__c watchdogInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WatchdogWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'SystemWatchdog'
+    );
+    insert watchdogInst;
+
+    Test.startTest();
+    Map<String, Object> status = WorkflowDashboardController.getWatchdogStatus();
+    WorkflowDashboardController.enqueueWatchdog();
+    Test.stopTest();
+
+    System.assertNotEquals(null, status);
+    System.assertEquals(true, status.get('isRunning'));
+    System.assertNotEquals(null, status.get('latestJob'));
+    System.assert(status.containsKey('scheduledJobsCount'));
+    System.assert(status.containsKey('sleepingInstances'));
+    System.assert(status.containsKey('pendingTimeouts'));
+    System.assert(status.containsKey('config'));
+    System.assert(status.containsKey('dailyAsyncValue'));
+    System.assert(status.containsKey('dailyAsyncLimit'));
+    System.assert(status.containsKey('hasElasticLimit'));
+    System.assert(status.containsKey('elasticAsyncValue'));
+    System.assert(status.containsKey('elasticAsyncLimit'));
+  }
+
+  @isTest
+  static void testResumeWorkflowAndWaitingOn() {
+    // Create a mock suspended instance
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'TestResumeKey',
+      Sleep_Until__c = DateTime.now().addMinutes(5),
+      Async_Job_Id__c = '08e000000000000AAA'
+    );
+    insert as system inst;
+
+    // Test getFilteredInstances returns the computed waitingOn
+    Test.startTest();
+    List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
+      '',
+      'Suspended',
+      '',
+      10,
+      0,
+      ''
+    );
+    System.assertEquals(1, instances.size());
+    // Since it's a fake ID and not active, it should fall back to 'Watchdog'
+    System.assertEquals('Watchdog', (String) instances[0].get('waitingOn'));
+
+    // Test getInstanceDetails returns details + waitingOn
+    Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(inst.Id);
+    System.assertNotEquals(null, details);
+    System.assertEquals('Watchdog', (String) details.get('waitingOn'));
+
+    // Test resumeWorkflowInstance
+    WorkflowDashboardController.resumeWorkflowInstance(inst.Id);
+    Test.stopTest();
+
+    // Verify it updated the status and cleared sleep and async job fields
+    Workflow_Instance__c updatedInst = [
+      SELECT Status__c, Sleep_Until__c, Async_Job_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assert(updatedInst.Status__c == 'Running' || updatedInst.Status__c == 'Completed', 'Expected Status to be Running or Completed but was: ' + updatedInst.Status__c);
+    System.assertEquals(null, updatedInst.Sleep_Until__c);
+    System.assertEquals(null, updatedInst.Async_Job_Id__c);
   }
 }

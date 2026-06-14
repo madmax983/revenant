@@ -103,4 +103,45 @@ public class StepContextTest {
       'shouldYield should return false when query rows are below 80%'
     );
   }
+
+  @isTest
+  static void testShouldYieldAsyncApexExecutionsLimit() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null
+    );
+
+    // Set mock fraction above 80%
+    StepContext.mockAsyncExecutionsFraction = 0.81;
+    System.assertEquals(
+      true,
+      ctx.shouldYield(),
+      'shouldYield should return true when async executions exceed 80%'
+    );
+
+    // Set mock fraction at 80%
+    StepContext.mockAsyncExecutionsFraction = 0.80;
+    System.assertEquals(
+      false,
+      ctx.shouldYield(),
+      'shouldYield should return false when async executions are exactly 80%'
+    );
+
+    // Set mock fraction below 80%
+    StepContext.mockAsyncExecutionsFraction = 0.79;
+    System.assertEquals(
+      false,
+      ctx.shouldYield(),
+      'shouldYield should return false when async executions are below 80%'
+    );
+
+    // Reset
+    StepContext.mockAsyncExecutionsFraction = null;
+  }
 }

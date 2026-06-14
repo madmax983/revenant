@@ -1,213 +1,291 @@
 /* Core Design Tokens & Visual Styles */
 
 .font-outfit {
-    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family:
+    "Outfit",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
 }
 
 .dashboard-container {
-    background-color: #fcfdfe;
-    border-radius: 16px;
-    border: 1px solid rgba(226, 232, 240, 0.8);
-    box-shadow: 0 4px 20px -2px rgba(148, 163, 184, 0.12);
+  background-color: #fcfdfe;
+  border-radius: 16px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 4px 20px -2px rgba(148, 163, 184, 0.12);
 }
 
 /* Stat Cards */
 .stat-card {
-    background: #ffffff;
-    padding: 18px 24px;
-    border-radius: 12px;
-    border: 1px solid rgba(226, 232, 240, 0.8);
-    box-shadow: 0 2px 8px -1px rgba(148, 163, 184, 0.08);
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  background: #ffffff;
+  padding: 18px 24px;
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 8px -1px rgba(148, 163, 184, 0.08);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .stat-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px -1px rgba(148, 163, 184, 0.15);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px -1px rgba(148, 163, 184, 0.15);
 }
 
-.border-left-blue { border-left: 4px solid hsl(210, 100%, 50%); }
-.border-left-orange { border-left: 4px solid hsl(30, 100%, 50%); }
-.border-left-green { border-left: 4px solid hsl(140, 75%, 45%); }
-.border-left-red { border-left: 4px solid hsl(0, 85%, 60%); }
+.border-left-blue {
+  border-left: 4px solid hsl(210, 100%, 50%);
+}
+.border-left-orange {
+  border-left: 4px solid hsl(30, 100%, 50%);
+}
+.border-left-green {
+  border-left: 4px solid hsl(140, 75%, 45%);
+}
+.border-left-red {
+  border-left: 4px solid hsl(0, 85%, 60%);
+}
+.border-left-purple {
+  border-left: 4px solid hsl(270, 75%, 60%);
+}
+.border-left-indigo {
+  border-left: 4px solid hsl(240, 75%, 60%);
+}
 
-.text-orange { color: hsl(30, 95%, 45%); }
-.text-green { color: hsl(140, 80%, 35%); }
-.text-red { color: hsl(0, 80%, 55%); }
+.text-orange {
+  color: hsl(30, 95%, 45%);
+}
+.text-green {
+  color: hsl(140, 80%, 35%);
+}
+.text-red {
+  color: hsl(0, 80%, 55%);
+}
 
 /* Layout Cards */
 .panel-card {
-    background: #ffffff;
-    border: 1px solid rgba(226, 232, 240, 0.8);
-    border-radius: 12px;
-    box-shadow: 0 2px 10px -2px rgba(148, 163, 184, 0.06);
-    overflow: visible;
+  background: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  border-radius: 12px;
+  box-shadow: 0 2px 10px -2px rgba(148, 163, 184, 0.06);
+  overflow: visible;
 }
 
 .details-panel {
-    min-height: 575px;
-    border: 1px solid rgba(226, 232, 240, 0.8);
+  min-height: 575px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
 }
 
 .border-bottom {
-    border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
 }
 
 .border-top {
-    border-top: 1px solid rgba(226, 232, 240, 0.8);
+  border-top: 1px solid rgba(226, 232, 240, 0.8);
 }
 
 /* Interactive List */
 .list-item {
-    cursor: pointer;
-    transition: background 0.15s ease, border-left 0.15s ease;
-    border-left: 4px solid transparent;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-left 0.15s ease;
+  border-left: 4px solid transparent;
 }
 
 .list-item:hover {
-    background: rgba(241, 245, 249, 0.6);
+  background: rgba(241, 245, 249, 0.6);
 }
 
 .item-selected {
-    background: rgba(239, 246, 255, 0.85);
-    border-left: 4px solid hsl(210, 100%, 45%);
+  background: rgba(239, 246, 255, 0.85);
+  border-left: 4px solid hsl(210, 100%, 45%);
 }
 
 .text-primary {
-    color: hsl(215, 50%, 23%);
+  color: hsl(215, 50%, 23%);
 }
 
 .text-secondary {
-    color: hsl(215, 40%, 35%);
+  color: hsl(215, 40%, 35%);
 }
 
 /* Badges */
 .badge {
-    display: inline-block;
-    padding: 2px 10px;
-    font-size: 0.75rem;
-    font-weight: 700;
-    border-radius: 20px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+  display: inline-block;
+  padding: 2px 10px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border-radius: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
-.badge-green { background-color: hsl(140, 85%, 95%); color: hsl(140, 80%, 25%); }
-.badge-red { background-color: hsl(0, 100%, 96%); color: hsl(0, 85%, 40%); }
-.badge-orange { background-color: hsl(30, 100%, 95%); color: hsl(30, 95%, 38%); }
-.badge-blue { background-color: hsl(210, 100%, 94%); color: hsl(210, 100%, 35%); }
-.badge-grey { background-color: hsl(210, 15%, 93%); color: hsl(210, 10%, 40%); }
-.badge-yellow { background-color: hsl(45, 100%, 92%); color: hsl(40, 95%, 32%); }
+.badge-green {
+  background-color: hsl(140, 85%, 95%);
+  color: hsl(140, 80%, 25%);
+}
+.badge-red {
+  background-color: hsl(0, 100%, 96%);
+  color: hsl(0, 85%, 40%);
+}
+.badge-orange {
+  background-color: hsl(30, 100%, 95%);
+  color: hsl(30, 95%, 38%);
+}
+.badge-blue {
+  background-color: hsl(210, 100%, 94%);
+  color: hsl(210, 100%, 35%);
+}
+.badge-grey {
+  background-color: hsl(210, 15%, 93%);
+  color: hsl(210, 10%, 40%);
+}
+.badge-yellow {
+  background-color: hsl(45, 100%, 92%);
+  color: hsl(40, 95%, 32%);
+}
+
+.badge-purple {
+  background-color: hsl(270, 100%, 95%);
+  color: hsl(270, 95%, 38%);
+}
+.badge-indigo {
+  background-color: hsl(240, 100%, 95%);
+  color: hsl(240, 95%, 38%);
+}
+
 
 /* Code Blocks */
 .code-block {
-    background-color: hsl(220, 20%, 97%);
-    color: hsl(220, 30%, 25%);
-    font-family: 'Space Mono', monospace;
-    font-size: 0.825rem;
-    padding: 12px;
-    border-radius: 6px;
-    border: 1px solid rgba(226, 232, 240, 0.8);
-    overflow-x: auto;
-    white-space: pre-wrap;
-    max-height: 250px;
+  background-color: hsl(220, 20%, 97%);
+  color: hsl(220, 30%, 25%);
+  font-family: "Space Mono", monospace;
+  font-size: 0.825rem;
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  max-height: 250px;
 }
 
 .error-block {
-    background-color: hsl(0, 100%, 98%);
-    color: hsl(0, 80%, 45%);
-    border-color: hsl(0, 80%, 93%);
+  background-color: hsl(0, 100%, 98%);
+  color: hsl(0, 80%, 45%);
+  border-color: hsl(0, 80%, 93%);
 }
 
 /* Visual Timeline / DAG Executions */
 .timeline-container {
-    position: relative;
-    border-left: 2px solid rgba(226, 232, 240, 0.8);
-    padding-left: 24px;
+  position: relative;
+  border-left: 2px solid rgba(226, 232, 240, 0.8);
+  padding-left: 24px;
 }
 
 .timeline-item {
-    position: relative;
+  position: relative;
 }
 
 .timeline-marker-col {
-    position: absolute;
-    left: -33px;
-    top: 4px;
-    z-index: 2;
+  position: absolute;
+  left: -33px;
+  top: 4px;
+  z-index: 2;
 }
 
 .timeline-marker {
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    border: 3px solid #ffffff;
-    box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3);
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 3px solid #ffffff;
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3);
 }
 
-.bg-green { background-color: hsl(140, 75%, 45%); }
-.bg-red { background-color: hsl(0, 85%, 60%); }
-.bg-yellow { background-color: hsl(45, 95%, 50%); }
-.bg-blue { background-color: hsl(210, 100%, 50%); }
-.bg-grey { background-color: hsl(210, 15%, 60%); }
-.bg-orange { background-color: hsl(30, 95%, 45%); }
+.bg-green {
+  background-color: hsl(140, 75%, 45%);
+}
+.bg-red {
+  background-color: hsl(0, 85%, 60%);
+}
+.bg-yellow {
+  background-color: hsl(45, 95%, 50%);
+}
+.bg-blue {
+  background-color: hsl(210, 100%, 50%);
+}
+.bg-grey {
+  background-color: hsl(210, 15%, 60%);
+}
+.bg-orange {
+  background-color: hsl(30, 95%, 45%);
+}
 
 .step-card {
-    background: #fdfefe;
-    border: 1px solid rgba(226, 232, 240, 0.8);
-    padding: 14px 18px;
-    border-radius: 10px;
-    box-shadow: 0 1px 3px rgba(148, 163, 184, 0.05);
+  background: #fdfefe;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 14px 18px;
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(148, 163, 184, 0.05);
 }
 
 /* Animations */
 @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.4); }
-    70% { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+  0% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(37, 99, 235, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+  }
 }
 
 .pulse-glow {
-    animation: pulse 2s infinite;
+  animation: pulse 2s infinite;
 }
 
 /* Brand styling overrides */
 .brand-button {
-    --slds-c-button-brand-color-background: hsl(210, 100%, 45%);
-    --slds-c-button-brand-color-background-hover: hsl(210, 100%, 38%);
-    --slds-c-button-brand-color-border: hsl(210, 100%, 45%);
+  --slds-c-button-brand-color-background: hsl(210, 100%, 45%);
+  --slds-c-button-brand-color-background-hover: hsl(210, 100%, 38%);
+  --slds-c-button-brand-color-border: hsl(210, 100%, 45%);
 }
 
 .text-button {
-    font-size: 0.8rem;
-    font-weight: 600;
+  font-size: 0.8rem;
+  font-weight: 600;
 }
 
 .text-weak-icon {
-    --sds-c-icon-color-foreground: hsl(215, 15%, 75%);
+  --sds-c-icon-color-foreground: hsl(215, 15%, 75%);
 }
 
 .text-weak {
-    color: hsl(215, 20%, 30%);
+  color: hsl(215, 20%, 30%);
 }
 
 .spinner-height {
-    height: 400px;
+  height: 400px;
 }
 
 /* Approval Panel */
 .approval-panel {
-    background-color: hsl(45, 100%, 98%);
-    border: 1px dashed hsl(40, 60%, 80%);
-    border-radius: 8px;
-    box-shadow: inset 0 1px 2px rgba(148, 163, 184, 0.03);
+  background-color: hsl(45, 100%, 98%);
+  border: 1px dashed hsl(40, 60%, 80%);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 2px rgba(148, 163, 184, 0.03);
 }
 
 .clickable-header {
-    cursor: pointer;
-    transition: color 0.15s ease;
+  cursor: pointer;
+  transition: color 0.15s ease;
 }
 
 .clickable-header:hover .text-secondary {
-    color: hsl(210, 100%, 45%);
+  color: hsl(210, 100%, 45%);
 }
