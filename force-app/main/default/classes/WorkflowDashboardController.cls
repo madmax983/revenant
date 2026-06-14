@@ -4,6 +4,100 @@ public inherited sharing class WorkflowDashboardController {
   // when Database.query() is executed, even if the WHERE clause is built in a helper method.
   private static String likeTerm;
 
+  private static void checkAuthorization() {
+    if (FeatureManagement.checkPermission('Workflow_Admin')) {
+      return;
+    }
+    List<Profile> profiles = [
+      SELECT Name
+      FROM Profile
+      WHERE Id = :UserInfo.getProfileId()
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    if (!profiles.isEmpty() && profiles[0].Name == 'System Administrator') {
+      return;
+    }
+    
+    AuraHandledException ex = new AuraHandledException('Unauthorized: Access to the Workflow Dashboard is restricted.');
+    ex.setMessage('Unauthorized: Access to the Workflow Dashboard is restricted.');
+    throw ex;
+  }
+
+  private static Id getAttachmentId(String textValue) {
+    if (String.isNotBlank(textValue) && textValue.startsWith('{"$attachmentId":')) {
+      try {
+        Map<String, Object> marker = (Map<String, Object>) JSON.deserializeUntyped(textValue);
+        return (Id) marker.get('$attachmentId');
+      } catch (Exception ex) {
+        // fallback
+      }
+    }
+    return null;
+  }
+
+  private static String truncatePayload(String val) {
+    if (val != null && val.length() > 50000) {
+      return val.substring(0, 50000) + '... (truncated)';
+    }
+    return val;
+  }
+
+  private static String resolveSinglePayload(String textValue, Map<Id, String> attachmentIdToData) {
+    if (String.isBlank(textValue)) {
+      return textValue;
+    }
+    Id attachmentId = getAttachmentId(textValue);
+    if (attachmentId != null) {
+      if (attachmentIdToData.containsKey(attachmentId)) {
+        return truncatePayload(attachmentIdToData.get(attachmentId));
+      }
+    }
+    return truncatePayload(textValue);
+  }
+
+  private static void resolvePayloadsInBulk(
+    Workflow_Instance__c instance,
+    List<Workflow_Step_Execution__c> steps
+  ) {
+    Set<Id> attachmentIds = new Set<Id>();
+    
+    Id instInputId = getAttachmentId(instance.Input__c);
+    if (instInputId != null) attachmentIds.add(instInputId);
+    
+    Id instOutputId = getAttachmentId(instance.Output__c);
+    if (instOutputId != null) attachmentIds.add(instOutputId);
+    
+    for (Workflow_Step_Execution__c step : steps) {
+      Id stepInputId = getAttachmentId(step.Input__c);
+      if (stepInputId != null) attachmentIds.add(stepInputId);
+      
+      Id stepOutputId = getAttachmentId(step.Output__c);
+      if (stepOutputId != null) attachmentIds.add(stepOutputId);
+    }
+    
+    Map<Id, String> attachmentIdToData = new Map<Id, String>();
+    if (!attachmentIds.isEmpty()) {
+      for (ContentVersion cv : [
+        SELECT ContentDocumentId, VersionData
+        FROM ContentVersion
+        WHERE ContentDocumentId IN :attachmentIds AND IsLatest = TRUE
+        WITH SYSTEM_MODE
+      ]) {
+        if (cv.VersionData != null) {
+          attachmentIdToData.put(cv.ContentDocumentId, cv.VersionData.toString());
+        }
+      }
+    }
+    
+    instance.Input__c = resolveSinglePayload(instance.Input__c, attachmentIdToData);
+    instance.Output__c = resolveSinglePayload(instance.Output__c, attachmentIdToData);
+    for (Workflow_Step_Execution__c step : steps) {
+      step.Input__c = resolveSinglePayload(step.Input__c, attachmentIdToData);
+      step.Output__c = resolveSinglePayload(step.Output__c, attachmentIdToData);
+    }
+  }
+
   private static String buildWhereClause(
     String workflowName,
     String status,
@@ -19,7 +113,7 @@ public inherited sharing class WorkflowDashboardController {
     if (String.isNotBlank(searchTerm)) {
       likeTerm = '%' + String.escapeSingleQuotes(searchTerm) + '%';
       conditions.add(
-        '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm)'
+        '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
     }
     return conditions.isEmpty()
@@ -36,6 +130,7 @@ public inherited sharing class WorkflowDashboardController {
     Integer offsetSize,
     String cacheBuster
   ) {
+    checkAuthorization();
     String query =
       'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, Error_Message__c ' +
       'FROM Workflow_Instance__c' +
@@ -52,6 +147,7 @@ public inherited sharing class WorkflowDashboardController {
     String status,
     String searchTerm
   ) {
+    checkAuthorization();
     String query =
       'SELECT Status__c, COUNT(Id) cnt FROM Workflow_Instance__c' +
       buildWhereClause(workflowName, status, searchTerm) +
@@ -92,6 +188,7 @@ public inherited sharing class WorkflowDashboardController {
 
   @AuraEnabled
   public static Map<String, Object> getInstanceDetails(Id instanceId) {
+    checkAuthorization();
     Workflow_Instance__c instance = [
       SELECT
         Id,
@@ -112,8 +209,6 @@ public inherited sharing class WorkflowDashboardController {
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
     ];
-    instance.Input__c = WorkflowEngine.resolvePayload(instance.Input__c);
-    instance.Output__c = WorkflowEngine.resolvePayload(instance.Output__c);
 
     List<Workflow_Step_Execution__c> steps = [
       SELECT
@@ -130,10 +225,7 @@ public inherited sharing class WorkflowDashboardController {
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC
     ];
-    for (Workflow_Step_Execution__c step : steps) {
-      step.Input__c = WorkflowEngine.resolvePayload(step.Input__c);
-      step.Output__c = WorkflowEngine.resolvePayload(step.Output__c);
-    }
+    resolvePayloadsInBulk(instance, steps);
 
     List<Workflow_Instance__c> children = [
       SELECT
@@ -170,6 +262,7 @@ public inherited sharing class WorkflowDashboardController {
 
   @AuraEnabled(cacheable=true)
   public static List<String> getDefinitions() {
+    checkAuthorization();
     List<String> definitions = new List<String>();
     // Query Apex classes and check body in memory to bypass SOQL Body restriction
     List<ApexClass> classes = [
@@ -221,6 +314,7 @@ public inherited sharing class WorkflowDashboardController {
     String correlationKey,
     String inputJson
   ) {
+    checkAuthorization();
     try {
       Object input = null;
       if (String.isNotBlank(inputJson)) {
@@ -234,6 +328,7 @@ public inherited sharing class WorkflowDashboardController {
 
   @AuraEnabled
   public static void retryWorkflowInstance(Id instanceId) {
+    checkAuthorization();
     try {
       WorkflowEngine.retryWorkflow(instanceId);
     } catch (Exception ex) {
@@ -243,6 +338,7 @@ public inherited sharing class WorkflowDashboardController {
 
   @AuraEnabled
   public static void cancelWorkflow(Id instanceId, Boolean runCompensations) {
+    checkAuthorization();
     try {
       WorkflowEngine.cancel(instanceId, runCompensations);
     } catch (Exception ex) {
@@ -257,6 +353,7 @@ public inherited sharing class WorkflowDashboardController {
     Boolean approved,
     String comments
   ) {
+    checkAuthorization();
     try {
       Map<String, Object> payload = new Map<String, Object>{
         'approved' => approved,
@@ -266,16 +363,7 @@ public inherited sharing class WorkflowDashboardController {
       String payloadJson = JSON.serialize(payload);
       String signalName = 'Approve:' + approvalKey;
 
-      Workflow_Instance__c inst = [
-        SELECT Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE Id = :instanceId
-        WITH SYSTEM_MODE
-      ];
-      String targetKey = String.isNotBlank(inst.Correlation_Key__c)
-        ? inst.Correlation_Key__c
-        : inst.Id;
-      WorkflowEngine.signal(targetKey, signalName, payloadJson);
+      WorkflowEngine.signal(String.valueOf(instanceId), signalName, payloadJson);
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
     }

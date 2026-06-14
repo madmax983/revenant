@@ -429,4 +429,258 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(1, statsSearch.get('failed'));
     Test.stopTest();
   }
+
+  @isTest
+  static void testAuthorizationFailures() {
+    // Create standard user who does not have the custom permission or System Administrator profile
+    Profile stdProfile = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
+    User stdUser = new User(
+      Alias = 'stdusr',
+      Email = 'stduser@testorg.com',
+      EmailEncodingKey = 'UTF-8',
+      LastName = 'Testing',
+      LanguageLocaleKey = 'en_US',
+      LocaleSidKey = 'en_US',
+      ProfileId = stdProfile.Id,
+      TimeZoneSidKey = 'America/Los_Angeles',
+      UserName = 'stduser_dashboard_test_' + DateTime.now().getTime() + '@testorg.com'
+    );
+    insert stdUser;
+
+    System.runAs(stdUser) {
+      // 1. getFilteredInstances
+      try {
+        WorkflowDashboardController.getFilteredInstances('', '', '', 10, 0, '');
+        System.assert(false, 'Expected AuraHandledException for getFilteredInstances');
+      } catch (AuraHandledException e) {
+        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+      }
+
+      // 2. getWorkflowStats
+      try {
+        WorkflowDashboardController.getWorkflowStats('', '', '');
+        System.assert(false, 'Expected AuraHandledException for getWorkflowStats');
+      } catch (AuraHandledException e) {
+        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+      }
+
+      // 3. getInstanceDetails
+      try {
+        WorkflowDashboardController.getInstanceDetails(null);
+        System.assert(false, 'Expected AuraHandledException for getInstanceDetails');
+      } catch (AuraHandledException e) {
+        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+      }
+
+      // 4. getDefinitions
+      try {
+        WorkflowDashboardController.getDefinitions();
+        System.assert(false, 'Expected AuraHandledException for getDefinitions');
+      } catch (AuraHandledException e) {
+        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+      }
+
+      // 5. startWorkflow
+      try {
+        WorkflowDashboardController.startWorkflow('', '', '');
+        System.assert(false, 'Expected AuraHandledException for startWorkflow');
+      } catch (AuraHandledException e) {
+        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+      }
+
+      // 6. retryWorkflowInstance
+      try {
+        WorkflowDashboardController.retryWorkflowInstance(null);
+        System.assert(false, 'Expected AuraHandledException for retryWorkflowInstance');
+      } catch (AuraHandledException e) {
+        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+      }
+
+      // 7. cancelWorkflow
+      try {
+        WorkflowDashboardController.cancelWorkflow(null, false);
+        System.assert(false, 'Expected AuraHandledException for cancelWorkflow');
+      } catch (AuraHandledException e) {
+        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+      }
+
+      // 8. submitApproval
+      try {
+        WorkflowDashboardController.submitApproval(null, '', false, '');
+        System.assert(false, 'Expected AuraHandledException for submitApproval');
+      } catch (AuraHandledException e) {
+        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+      }
+    }
+  }
+
+  @isTest
+  static void testAuthorizationSuccessWithCustomPermission() {
+    // Create standard user
+    Profile stdProfile = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
+    User stdUser = new User(
+      Alias = 'stdusr',
+      Email = 'stduser@testorg.com',
+      EmailEncodingKey = 'UTF-8',
+      LastName = 'Testing',
+      LanguageLocaleKey = 'en_US',
+      LocaleSidKey = 'en_US',
+      ProfileId = stdProfile.Id,
+      TimeZoneSidKey = 'America/Los_Angeles',
+      UserName = 'stduser_dashboard_ok_' + DateTime.now().getTime() + '@testorg.com'
+    );
+    insert stdUser;
+
+    // Create a PermissionSet and SetupEntityAccess for custom permission
+    CustomPermission cp = [SELECT Id FROM CustomPermission WHERE DeveloperName = 'Workflow_Admin' LIMIT 1];
+    PermissionSet ps = new PermissionSet(
+      Label = 'Workflow Admin Test PS',
+      Name = 'Workflow_Admin_Test_PS'
+    );
+    insert ps;
+    
+    SetupEntityAccess sea = new SetupEntityAccess(
+      ParentId = ps.Id,
+      SetupEntityId = cp.Id
+    );
+    insert sea;
+    
+    PermissionSetAssignment psa = new PermissionSetAssignment(
+      AssigneeId = stdUser.Id,
+      PermissionSetId = ps.Id
+    );
+    insert psa;
+
+    System.runAs(stdUser) {
+      // Call getDefinitions, should not throw unauthorized exception
+      List<String> definitions = WorkflowDashboardController.getDefinitions();
+      System.assertNotEquals(null, definitions);
+    }
+  }
+
+  @isTest
+  static void testSearchByErrorMessage() {
+    // Create instance with error message
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestDefC',
+      Status__c = 'Failed',
+      Correlation_Key__c = 'UnrelatedKey',
+      Input__c = '"TestInput"',
+      Error_Message__c = 'Unique error message xyz'
+    );
+    insert inst;
+
+    Test.startTest();
+    List<Workflow_Instance__c> res = WorkflowDashboardController.getFilteredInstances(
+      '',
+      '',
+      'xyz',
+      10,
+      0,
+      'cbError'
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, res.size(), 'Should find 1 instance with Error Message matching xyz');
+    System.assertEquals(inst.Id, res[0].Id);
+  }
+
+  @isTest
+  static void testBulkPayloadResolutionAndTruncation() {
+    // Create ContentVersion records
+    ContentVersion cv1 = new ContentVersion(
+      Title = 'TestCV1',
+      PathOnClient = 'test1.json',
+      VersionData = Blob.valueOf('{"small":"json"}')
+    );
+    ContentVersion cv2 = new ContentVersion(
+      Title = 'TestCV2',
+      PathOnClient = 'test2.json',
+      VersionData = Blob.valueOf('A'.repeat(50005))
+    );
+    ContentVersion cv3 = new ContentVersion(
+      Title = 'TestCV3',
+      PathOnClient = 'test3.json',
+      VersionData = Blob.valueOf('B'.repeat(60000))
+    );
+    ContentVersion cv4 = new ContentVersion(
+      Title = 'TestCV4',
+      PathOnClient = 'test4.json',
+      VersionData = Blob.valueOf('{"result":"ok"}')
+    );
+    insert new List<ContentVersion>{cv1, cv2, cv3, cv4};
+
+    // Query ContentDocumentId for each
+    List<ContentVersion> cvs = [SELECT ContentDocumentId FROM ContentVersion WHERE Id IN (:cv1.Id, :cv2.Id, :cv3.Id, :cv4.Id)];
+    Map<Id, Id> cvIdToDocId = new Map<Id, Id>();
+    for (ContentVersion cv : [SELECT Id, ContentDocumentId FROM ContentVersion WHERE Id IN (:cv1.Id, :cv2.Id, :cv3.Id, :cv4.Id)]) {
+      cvIdToDocId.put(cv.Id, cv.ContentDocumentId);
+    }
+
+    String marker1 = '{"$attachmentId":"' + cvIdToDocId.get(cv1.Id) + '"}';
+    String marker2 = '{"$attachmentId":"' + cvIdToDocId.get(cv2.Id) + '"}';
+    String marker3 = '{"$attachmentId":"' + cvIdToDocId.get(cv3.Id) + '"}';
+    String marker4 = '{"$attachmentId":"' + cvIdToDocId.get(cv4.Id) + '"}';
+
+    // Create instance
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestDefBulk',
+      Status__c = 'Running',
+      Correlation_Key__c = 'BulkKey',
+      Input__c = marker1,
+      Output__c = marker2
+    );
+    insert inst;
+
+    // Create step
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'BulkStep',
+      Status__c = 'Completed',
+      Input__c = marker3,
+      Output__c = marker4,
+      Retry_Count__c = 0
+    );
+    insert step;
+
+    // Create another step with raw long input (exceeding 50k characters) to test safety truncation
+    Workflow_Step_Execution__c stepSafety = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'SafetyStep',
+      Status__c = 'Completed',
+      Input__c = 'C'.repeat(51000),
+      Output__c = 'ShortOutput',
+      Retry_Count__c = 0
+    );
+    insert stepSafety;
+
+    Test.startTest();
+    Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(inst.Id);
+    Test.stopTest();
+
+    Workflow_Instance__c returnedInst = (Workflow_Instance__c) details.get('instance');
+    List<Workflow_Step_Execution__c> returnedSteps = (List<Workflow_Step_Execution__c>) details.get('steps');
+
+    System.assertEquals('{"small":"json"}', returnedInst.Input__c);
+    System.assertEquals('A'.repeat(50000) + '... (truncated)', returnedInst.Output__c);
+    
+    // Check steps
+    Workflow_Step_Execution__c returnedStep1;
+    Workflow_Step_Execution__c returnedStepSafety;
+    for (Workflow_Step_Execution__c s : returnedSteps) {
+      if (s.Step_Name__c == 'BulkStep') {
+        returnedStep1 = s;
+      } else if (s.Step_Name__c == 'SafetyStep') {
+        returnedStepSafety = s;
+      }
+    }
+    
+    System.assertNotEquals(null, returnedStep1);
+    System.assertEquals('B'.repeat(50000) + '... (truncated)', returnedStep1.Input__c);
+    System.assertEquals('{"result":"ok"}', returnedStep1.Output__c);
+
+    System.assertNotEquals(null, returnedStepSafety);
+    System.assertEquals('C'.repeat(50000) + '... (truncated)', returnedStepSafety.Input__c);
+    System.assertEquals('ShortOutput', returnedStepSafety.Output__c);
+  }
 }

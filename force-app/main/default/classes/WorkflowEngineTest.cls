@@ -1630,14 +1630,22 @@ public class WorkflowEngineTest {
       'instance'
     );
     System.assertEquals(
-      110002,
+      50015,
       detailedInst.Input__c.length(),
-      'Input should resolve to original serialized length'
+      'Input should resolve to truncated length due to dashboard cap'
+    );
+    System.assert(
+      detailedInst.Input__c.endsWith('... (truncated)'),
+      'Input should be truncated'
     );
     System.assertEquals(
-      110002,
+      50015,
       detailedInst.Output__c.length(),
-      'Output should resolve to original serialized length'
+      'Output should resolve to truncated length due to dashboard cap'
+    );
+    System.assert(
+      detailedInst.Output__c.endsWith('... (truncated)'),
+      'Output should be truncated'
     );
 
     // Run Cleanup/Purge step on this instance
