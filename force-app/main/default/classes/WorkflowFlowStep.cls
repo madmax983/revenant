@@ -1,30 +1,31 @@
 public inherited sharing class WorkflowFlowStep implements WorkflowStep {
   public StepResult execute(StepContext ctx) {
     if (ctx == null || String.isBlank(ctx.inputJson)) {
-      return StepResult.complete(
-        null,
-        new Map<String, Object>{ 'error' => 'Input is null' }
-      );
+      throw new WorkflowEngine.WorkflowException('Input is null');
     }
 
     Map<String, Object> inputMap;
     try {
       inputMap = (Map<String, Object>) JSON.deserializeUntyped(ctx.inputJson);
     } catch (Exception ex) {
-      return StepResult.complete(
-        null,
-        new Map<String, Object>{
-          'error' => 'Input must be a valid JSON object'
-        }
+      throw new WorkflowEngine.WorkflowException(
+        'Input must be a valid JSON object: ' + ex.getMessage()
       );
     }
 
-    String flowName = (String) inputMap.get('flowName');
+    if (!inputMap.containsKey('flowName')) {
+      throw new WorkflowEngine.WorkflowException('flowName is required in input');
+    }
+    Object flowNameObj = inputMap.get('flowName');
+    if (flowNameObj == null) {
+      throw new WorkflowEngine.WorkflowException('flowName is required in input');
+    }
+    if (!(flowNameObj instanceof String)) {
+      throw new WorkflowEngine.WorkflowException('flowName must be a String');
+    }
+    String flowName = (String) flowNameObj;
     if (String.isBlank(flowName)) {
-      return StepResult.complete(
-        null,
-        new Map<String, Object>{ 'error' => 'flowName is required in input' }
-      );
+      throw new WorkflowEngine.WorkflowException('flowName is required in input');
     }
 
     Map<String, Object> variables = null;
@@ -48,11 +49,8 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
       List<Invocable.Action.Result> results = action.invoke();
 
       if (results == null || results.isEmpty()) {
-        return StepResult.complete(
-          null,
-          new Map<String, Object>{
-            'error' => 'No result returned from action invocation'
-          }
+        throw new WorkflowEngine.WorkflowException(
+          'No result returned from action invocation'
         );
       }
 
@@ -62,10 +60,7 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
         if (result.getErrors() != null && !result.getErrors().isEmpty()) {
           errorMsg += ': ' + result.getErrors()[0].getMessage();
         }
-        return StepResult.complete(
-          null,
-          new Map<String, Object>{ 'error' => errorMsg }
-        );
+        throw new WorkflowEngine.WorkflowException(errorMsg);
       }
 
       Map<String, Object> outputsMap = result.getOutputParameters();
@@ -73,11 +68,10 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
         outputsMap = new Map<String, Object>();
       }
       return StepResult.complete(null, outputsMap);
+    } catch (WorkflowEngine.WorkflowException ex) {
+      throw ex;
     } catch (Exception ex) {
-      return StepResult.complete(
-        null,
-        new Map<String, Object>{ 'error' => ex.getMessage() }
-      );
+      throw new WorkflowEngine.WorkflowException(ex.getMessage());
     }
   }
 }

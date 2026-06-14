@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>67.0</apiVersion>
+    <assignments>
+        <name>Assign_Values</name>
+        <label>Assign Values</label>
+        <locationX>176</locationX>
+        <locationY>134</locationY>
+        <assignmentItems>
+            <assignToReference>outputVal</assignToReference>
+            <operator>Assign</operator>
+            <value>
+                <elementReference>inputVal</elementReference>
+            </value>
+        </assignmentItems>
+    </assignments>
+    <environments>Default</environments>
+    <interviewLabel>Test Autolaunched Flow {!$Flow.CurrentDateTime}</interviewLabel>
+    <label>Test Autolaunched Flow</label>
+    <processType>AutoLaunchedFlow</processType>
+    <variables>
+        <name>inputVal</name>
+        <dataType>String</dataType>
+        <isCollection>false</isCollection>
+        <isInput>true</isInput>
+        <isOutput>false</isOutput>
+    </variables>
+    <variables>
+        <name>outputVal</name>
+        <dataType>String</dataType>
+        <isCollection>false</isCollection>
+        <isInput>false</isInput>
+        <isOutput>true</isOutput>
+    </variables>
+    <start>
+        <locationX>50</locationX>
+        <locationY>0</locationY>
+        <connector>
+            <targetReference>Assign_Values</targetReference>
+        </connector>
+    </start>
+    <status>Active</status>
+</Flow>
