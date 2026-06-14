@@ -201,39 +201,39 @@ sf apex run test -w 10
 
 ---
 
-## Watchdog Poller Scheduling
+## Watchdog Poller Scheduling (Hybrid Model)
 
-To clean up timed-out steps and resume suspended/sleeping instances in production, you must schedule the global watchdog class (`WorkflowWatchdog`) to run periodically.
+Revenant implements a **Hybrid Watchdog Model** for high-precision, fail-safe step timeouts, sleeps, and retries:
+1. **Dynamic High-Precision Scheduling**: When a step sleeps, retries, or registers a timeout, the engine dynamically schedules a seconds-level Apex job (`WorkflowSleepJob`, `WorkflowRetryJob`, or `WorkflowTimeoutJob`) to run immediately.
+2. **Graceful Fail-Safe (Database Tracking)**: If the system has reached Salesforce's limit of 100 concurrent scheduled jobs, `System.schedule` fails with an `AsyncException`. The engine catches this error and falls back to tracking the timeout/sleep deadlines solely in the database (`Sleep_Until__c` and `Timeout_At__c`).
+3. **Safety Poller**: You schedule a single, low-frequency watchdog poller (`WorkflowWatchdog`) to run periodically (e.g. every 10 or 15 minutes). This poller sweeps the database to find and resume/fail any instances that were not dynamically scheduled due to platform limits.
+
+### Fallback Watchdog Scheduling
+
+Because the safety watchdog is only a fallback, you do not need a high-frequency (every minute) loop. Scheduling it to run every 10 or 15 minutes is recommended to act as an overflow safety net.
 
 > [!IMPORTANT]
-> **Resolution & Precision Constraints**: The precision of step timeouts, sleep steps, and retry backoffs is strictly bounded by the frequency of the watchdog poller's execution. For example, if the watchdog runs every 5 minutes, a 10-second sleep or a 30-second timeout will only be resolved when the next heartbeat fires (resulting in up to a 5-minute latency). Configure your scheduling frequency accordingly to match your workflow latency requirements.
+> **Salesforce Scheduler Constraints**: Salesforce's `System.schedule` cron expressions require the **Seconds** and **Minutes** fields to be literal integers. You cannot use `*` or `?` in these two fields. Therefore, sub-hour scheduled polling requires scheduling multiple separate hourly offset jobs.
 
-Because the Salesforce Declarative Scheduler UI only supports hourly increments, you can schedule it at sub-hour intervals (such as every minute or every 5 minutes) via Anonymous Apex using the Cron Trigger API.
-
-> [!IMPORTANT]
-> **Salesforce Scheduler Constraints**: Salesforce's `System.schedule` cron expressions require the **Seconds** and **Minutes** fields to be literal integers. You cannot use `*` or `?` in these two fields. Therefore, running a job every minute requires scheduling 60 separate jobs (one for each minute of the hour).
-
-### Every Minute (Consumes 60 Scheduled Job slots)
-Schedules 60 separate hourly jobs, offset by 1 minute:
+#### Every 10 Minutes (Consumes 6 Scheduled Job slots)
+Schedules 6 separate hourly jobs, offset by 10 minutes:
 ```apex
-for (Integer i = 0; i < 60; i++) {
-    String jobName = 'Revenant_Watchdog_Min_' + String.valueOf(i).leftPad(2, '0');
+for (Integer i = 0; i < 60; i += 10) {
+    String jobName = 'Revenant_Watchdog_10Min_' + String.valueOf(i).leftPad(2, '0');
     String cronExpression = '0 ' + i + ' * * * ?';
     System.schedule(jobName, cronExpression, new WorkflowWatchdog());
 }
 ```
 
-### Every 5 Minutes (Consumes 12 Scheduled Job slots)
-Schedules 12 separate hourly jobs, offset by 5 minutes:
+#### Every 15 Minutes (Consumes 4 Scheduled Job slots)
+Schedules 4 separate hourly jobs, offset by 15 minutes:
 ```apex
-for (Integer i = 0; i < 60; i += 5) {
-    String jobName = 'Revenant_Watchdog_5Min_' + String.valueOf(i).leftPad(2, '0');
+for (Integer i = 0; i < 60; i += 15) {
+    String jobName = 'Revenant_Watchdog_15Min_' + String.valueOf(i).leftPad(2, '0');
     String cronExpression = '0 ' + i + ' * * * ?';
     System.schedule(jobName, cronExpression, new WorkflowWatchdog());
 }
 ```
-
-*(Note: Running every 15 seconds would require 240 separate jobs, which exceeds Salesforce's platform limit of 100 concurrent scheduled jobs. Therefore, a 1-minute resolution is the highest practical frequency using the standard scheduler).*
 
 ---
 
