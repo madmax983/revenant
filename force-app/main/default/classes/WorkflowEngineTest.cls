@@ -2092,4 +2092,159 @@ public class WorkflowEngineTest {
     System.assertEquals('Running', inst.Status__c);
     System.assertEquals('WorkflowEngineTest.HappyStep1', inst.Current_Step__c);
   }
+
+  @isTest
+  static void testActiveCorrelationKeyUniqueness() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start a first instance - should succeed
+    Id instanceId1 = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'UniqueActiveKey',
+      null
+    );
+
+    // Try starting a second instance with the same correlation key - should fail because the first one is active (Pending)
+    Boolean threw = false;
+    try {
+      WorkflowEngine.start(
+        'WorkflowEngineTest.HappyWorkflow',
+        'UniqueActiveKey',
+        null
+      );
+    } catch (WorkflowEngine.WorkflowException ex) {
+      threw = true;
+      System.assert(ex.getMessage().contains('already exists'), 'Expected active duplicate error: ' + ex.getMessage());
+    }
+    System.assert(threw, 'Should have blocked starting second active instance with same correlation key');
+
+    // Run first instance to completion (terminal)
+    WorkflowEngine.runStep(instanceId1, null);
+    WorkflowEngine.runStep(instanceId1, null);
+
+    // Now start a new instance with same correlation key - should succeed because the first one completed (terminal)
+    Id instanceId2 = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'UniqueActiveKey',
+      null
+    );
+    System.assertNotEquals(null, instanceId2);
+  }
+
+  @isTest
+  static void testSignalByIdShapedKey() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start an instance with correlation key 'UniqueSignalKey'
+    Id instanceId1 = WorkflowEngine.start(
+      'WorkflowEngineTest.SignaledWorkflow',
+      'UniqueSignalKey',
+      null
+    );
+
+    // Start a second instance whose correlation key is the string representation of instanceId1's ID!
+    String idKey = String.valueOf(instanceId1);
+    Id instanceId2 = WorkflowEngine.start(
+      'WorkflowEngineTest.SignaledWorkflow',
+      idKey,
+      null
+    );
+
+    // Send a signal using keyOrId = instanceId1. Since keyOrId casts to ID, it should hit instanceId1, NOT instanceId2 (even though instanceId2's correlation key equals instanceId1's ID string!)
+    WorkflowEngine.signal(idKey, 'PaymentReceived', '100');
+
+    // Verify instanceId1 received the signal and changed to Running (resumed)
+    Workflow_Instance__c inst1 = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId1];
+    System.assertEquals('Running', inst1.Status__c, 'Instance 1 should have been resumed');
+
+    // Verify instanceId2 did NOT receive the signal (still Suspended)
+    Workflow_Instance__c inst2 = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId2];
+    System.assertEquals('Suspended', inst2.Status__c, 'Instance 2 should not have been resumed');
+  }
+
+  public class ContinueSuccessorWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.TimeoutStep'; // TimeoutStep implements TimeoutConfigurable
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  public class ContinueAsNewStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.continueAsNew(null, 'SuccessorKey');
+    }
+  }
+
+  public class SuccessorStarterWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.ContinueAsNewStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  @isTest
+  static void testContinueAsNewSuccessorWatchdog() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start workflow that continues as new to ContinueSuccessorWorkflow
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SuccessorStarterWorkflow',
+      'StarterKey',
+      null
+    );
+
+    // Run the step, which continues as new
+    WorkflowEngine.runStep(instanceId, null);
+
+    // Find the successor run
+    Workflow_Instance__c successor = [
+      SELECT Id, Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :instanceId
+      LIMIT 1
+    ];
+    System.assertEquals('WorkflowEngineTest.TimeoutStep', successor.Current_Step__c);
+
+    // Verify watchdog job was scheduled for the successor instance's initial step (TimeoutStep)
+    String cleanStepName = 'WorkflowEngineTest_TimeoutStep';
+    String jobName = 'Timeout_' + successor.Id + '_' + cleanStepName;
+    List<CronTrigger> triggers = [
+      SELECT Id, State
+      FROM CronTrigger
+      WHERE CronJobDetail.Name = :jobName
+    ];
+    System.assertEquals(1, triggers.size(), 'Watchdog should have been scheduled for successor initial step');
+  }
+
+  @isTest
+  static void testContentVersionVisibility() {
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'PayloadVisibilityKey',
+      null
+    );
+
+    // Save a large payload which offloads to ContentVersion
+    String largeStr = 'x'.repeat(110000);
+    String marker = WorkflowEngine.savePayloadIfNeeded(instanceId, largeStr, 'TestPayload');
+    System.assert(marker.contains('$attachmentId'));
+
+    // Extract the docId
+    Map<String, Object> markerMap = (Map<String, Object>) JSON.deserializeUntyped(marker);
+    Id docId = (Id) markerMap.get('$attachmentId');
+
+    // Query ContentDocumentLink to verify Visibility is set to 'InternalUsers'
+    ContentDocumentLink link = [
+      SELECT Visibility
+      FROM ContentDocumentLink
+      WHERE ContentDocumentId = :docId AND LinkedEntityId = :instanceId
+      LIMIT 1
+    ];
+    // Verify visibility is either InternalUsers (if Communities enabled) or AllUsers (if disabled)
+    System.assert(link.Visibility == 'InternalUsers' || link.Visibility == 'AllUsers', 'Invalid visibility: ' + link.Visibility);
+  }
 }
