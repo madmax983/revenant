@@ -3,6 +3,15 @@ public inherited sharing class WorkflowEngine {
   public static Integer watchdogDelayMinutes = 10;
   public static Boolean useDynamicScheduling = true;
 
+  // Max number of timed-out steps a single watchdog heartbeat will fail. Each failure
+  // triggers failWorkflowInstance() (its own SOQL/DML + optional alert queries), so this
+  // bounds the heartbeat's governor usage. Remaining timeouts drain on the next heartbeat.
+  @TestVisible
+  private static Integer WATCHDOG_TIMEOUT_BATCH_SIZE = 50;
+  // Max number of sleeping instances a single heartbeat resumes, for the same reason.
+  @TestVisible
+  private static Integer WATCHDOG_RESUME_BATCH_SIZE = 200;
+
   static {
     try {
       List<Revenant_Config__mdt> configs = [
@@ -1733,6 +1742,11 @@ public inherited sharing class WorkflowEngine {
       insert as system stepExec;
     }
 
+    // Schedule the watchdog for the child's initial step before executing it, matching
+    // the start() overloads. Without this a TimeoutConfigurable first step of a child
+    // workflow would never get a scheduled timeout job.
+    scheduleTimeoutJobForInstance(instance.Id);
+
     if (!Test.isRunningTest()) {
       enqueueOrchestrator(instance.Id, null);
     }
@@ -2082,27 +2096,38 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    // Reset the failed step's execution status to let it execute again
-    for (String targetStepName : targetStepNames) {
-      List<Workflow_Step_Execution__c> stepExecs = [
-        SELECT Id, Status__c, Retry_Count__c, Error_Details__c
+    // Reset the failed step's execution status to let it execute again. Bulk-load the
+    // latest execution per target step in ONE query (was one SOQL per step in a loop),
+    // build a name->latest map, then update the resettable ones together.
+    Map<String, Workflow_Step_Execution__c> latestStepByName = new Map<String, Workflow_Step_Execution__c>();
+    if (!targetStepNames.isEmpty()) {
+      for (Workflow_Step_Execution__c se : [
+        SELECT Id, Step_Name__c, Status__c, Retry_Count__c, Error_Details__c
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Step_Name__c = :targetStepName
+          AND Step_Name__c IN :targetStepNames
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
-        LIMIT 1
-      ];
-      if (!stepExecs.isEmpty()) {
-        Workflow_Step_Execution__c stepExec = stepExecs[0];
-        if (stepExec.Status__c != 'Completed') {
-          stepExec.Status__c = 'Pending';
-          stepExec.Retry_Count__c = 0; // reset retry counter
-          stepExec.Error_Details__c = null;
-          update as system stepExec;
+      ]) {
+        if (!latestStepByName.containsKey(se.Step_Name__c)) {
+          latestStepByName.put(se.Step_Name__c, se);
         }
       }
+    }
+
+    List<Workflow_Step_Execution__c> stepsToReset = new List<Workflow_Step_Execution__c>();
+    for (String targetStepName : targetStepNames) {
+      Workflow_Step_Execution__c stepExec = latestStepByName.get(targetStepName);
+      if (stepExec != null && stepExec.Status__c != 'Completed') {
+        stepExec.Status__c = 'Pending';
+        stepExec.Retry_Count__c = 0; // reset retry counter
+        stepExec.Error_Details__c = null;
+        stepsToReset.add(stepExec);
+      }
+    }
+    if (!stepsToReset.isEmpty()) {
+      update as system stepsToReset;
     }
 
     if (hasCompensations) {
@@ -2129,19 +2154,12 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    // Parallel forward execution retry: enqueue only incomplete branches
+    // Parallel forward execution retry: enqueue only incomplete branches. Reuse the
+    // already-loaded step map (reset steps are now 'Pending' in memory) instead of
+    // re-querying once per branch.
     for (String targetStepName : targetStepNames) {
-      List<Workflow_Step_Execution__c> stepExecs = [
-        SELECT Status__c
-        FROM Workflow_Step_Execution__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Step_Name__c = :targetStepName
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC, Id DESC
-        LIMIT 1
-      ];
-      if (stepExecs.isEmpty() || stepExecs[0].Status__c != 'Completed') {
+      Workflow_Step_Execution__c stepExec = latestStepByName.get(targetStepName);
+      if (stepExec == null || stepExec.Status__c != 'Completed') {
         if (Test.isRunningTest()) {
           if (!disableQueueableInTest) {
             System.enqueueJob(
@@ -2612,6 +2630,61 @@ public inherited sharing class WorkflowEngine {
    * Cancels a workflow instance, aborts scheduled jobs, and optionally runs saga compensations.
    */
   public static void cancel(Id instanceId, Boolean runCompensations) {
+    // Cancel the target instance and its entire active descendant tree. Descendants are
+    // gathered iteratively (one set-based query per tree level) rather than via recursive
+    // cancel() calls, so deep/wide trees cannot blow the SOQL or stack-depth governor
+    // limits through uncontrolled recursion. Parent-before-child ordering is preserved.
+    //
+    // Note: each node still costs a handful of SOQL/DML in cancelSingleInstance(); a tree
+    // with thousands of nodes would need async chunking. That is intentionally out of
+    // scope here — the goal is to remove the recursion-driven multiplication.
+    // The traversal always yields the target first, so it is cancelled with the original
+    // not-found semantics (throwIfMissing = true); descendants are best-effort.
+    for (Id targetId : collectInstanceAndActiveDescendants(instanceId)) {
+      cancelSingleInstance(targetId, runCompensations, targetId == instanceId);
+    }
+  }
+
+  /**
+   * Breadth-first collection of an instance plus all of its active descendants using one
+   * set-based query per tree level. Returns IDs in parent-before-child order. A `seen`
+   * guard makes the traversal safe against accidental parent-reference cycles.
+   */
+  private static List<Id> collectInstanceAndActiveDescendants(Id rootId) {
+    List<Id> ordered = new List<Id>{ rootId };
+    Set<Id> seen = new Set<Id>{ rootId };
+    List<Id> frontier = new List<Id>{ rootId };
+    while (!frontier.isEmpty()) {
+      List<Workflow_Instance__c> children = [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE
+          Parent_Instance__c IN :frontier
+          AND Status__c IN ('Pending', 'Running', 'Suspended', 'Cancelling')
+        WITH SYSTEM_MODE
+      ];
+      List<Id> nextFrontier = new List<Id>();
+      for (Workflow_Instance__c child : children) {
+        if (!seen.contains(child.Id)) {
+          seen.add(child.Id);
+          ordered.add(child.Id);
+          nextFrontier.add(child.Id);
+        }
+      }
+      frontier = nextFrontier;
+    }
+    return ordered;
+  }
+
+  /**
+   * Cancels a single workflow instance (no descendant traversal). When throwIfMissing is
+   * true the original not-found exception is preserved for the top-level target.
+   */
+  private static void cancelSingleInstance(
+    Id instanceId,
+    Boolean runCompensations,
+    Boolean throwIfMissing
+  ) {
     List<Workflow_Instance__c> instances = [
       SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c
       FROM Workflow_Instance__c
@@ -2620,7 +2693,12 @@ public inherited sharing class WorkflowEngine {
       LIMIT 1
     ];
     if (instances.isEmpty()) {
-      throw new WorkflowException('Workflow instance not found: ' + instanceId);
+      if (throwIfMissing) {
+        throw new WorkflowException(
+          'Workflow instance not found: ' + instanceId
+        );
+      }
+      return;
     }
 
     Workflow_Instance__c instance = instances[0];
@@ -2671,7 +2749,12 @@ public inherited sharing class WorkflowEngine {
       FOR UPDATE
     ];
     if (instances.isEmpty()) {
-      throw new WorkflowException('Workflow instance not found: ' + instanceId);
+      if (throwIfMissing) {
+        throw new WorkflowException(
+          'Workflow instance not found: ' + instanceId
+        );
+      }
+      return;
     }
     instance = instances[0];
 
@@ -2726,19 +2809,8 @@ public inherited sharing class WorkflowEngine {
       instance.Error_Message__c = 'Cancelled by user.';
       update as system instance;
     }
-
-    // Recursively cancel active child workflows
-    List<Workflow_Instance__c> childInstances = [
-      SELECT Id
-      FROM Workflow_Instance__c
-      WHERE
-        Parent_Instance__c = :instance.Id
-        AND Status__c IN ('Pending', 'Running', 'Suspended', 'Cancelling')
-      WITH SYSTEM_MODE
-    ];
-    for (Workflow_Instance__c child : childInstances) {
-      cancel(child.Id, runCompensations);
-    }
+    // Active child workflows are handled by the caller (cancel()) via iterative
+    // descendant traversal, so no recursive child cancellation happens here.
   }
 
   /**
@@ -2919,7 +2991,7 @@ public inherited sharing class WorkflowEngine {
       WHERE Status__c IN ('Running', 'Pending') AND Timeout_At__c <= :now
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
-      LIMIT 50
+      LIMIT :WATCHDOG_TIMEOUT_BATCH_SIZE
     ];
 
     if (!timedOutSteps.isEmpty()) {
@@ -3103,12 +3175,14 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    // 2. Process Sleep Resumptions
+    // 2. Process Sleep Resumptions (bounded per heartbeat; backlog drains on subsequent
+    // heartbeats so an unbounded suspended-instance backlog cannot blow row/heap limits).
     List<Workflow_Instance__c> readyToResume = [
       SELECT Id, Status__c, Sleep_Until__c, Async_Job_Id__c, Error_Message__c
       FROM Workflow_Instance__c
       WHERE Status__c = 'Suspended' AND Sleep_Until__c <= :now
       WITH SYSTEM_MODE
+      LIMIT :WATCHDOG_RESUME_BATCH_SIZE
       FOR UPDATE
     ];
 
@@ -3293,6 +3367,11 @@ public inherited sharing class WorkflowEngine {
           runTime.year();
         String cleanStepName = stepName.replaceAll('[^a-zA-Z0-9]', '_');
         String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
+        // The job name is deterministic, so a re-schedule (e.g. retry, or a yielded step
+        // that re-enters before its prior timeout job fires) collides with the existing
+        // scheduled job and System.schedule() throws. Clear any stale job with this name
+        // first so the new timeout is actually registered instead of silently dropped.
+        cancelTimeoutJob(instanceId, stepName);
         System.schedule(jobName, cronStr, job);
       }
     } catch (AsyncException ex) {

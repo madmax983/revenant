@@ -8,14 +8,12 @@ public inherited sharing class WorkflowDashboardController {
     if (FeatureManagement.checkPermission('Workflow_Admin')) {
       return;
     }
-    List<Profile> profiles = [
-      SELECT Name
-      FROM Profile
-      WHERE Id = :UserInfo.getProfileId()
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    if (!profiles.isEmpty() && profiles[0].Name == 'System Administrator') {
+    // Fall back to users who hold the "Modify All Data" system permission (see
+    // currentUserHasModifyAllData). This replaces the previous hard-coded 'System
+    // Administrator' profile-NAME comparison, which silently locked out real admins when
+    // the profile was renamed (common post-migration) and could be spoofed by cloning a
+    // profile and naming it 'System Administrator'.
+    if (currentUserHasModifyAllData()) {
       return;
     }
 
@@ -26,6 +24,24 @@ public inherited sharing class WorkflowDashboardController {
       'Unauthorized: Access to the Workflow Dashboard is restricted.'
     );
     throw ex;
+  }
+
+  /**
+   * True when the running user has "Modify All Data", granted via EITHER their profile or
+   * an assigned permission set. Rename-proof and covers permission-set-granted admins,
+   * unlike matching a mutable profile name.
+   */
+  private static Boolean currentUserHasModifyAllData() {
+    return ![
+      SELECT Id
+      FROM PermissionSetAssignment
+      WHERE
+        AssigneeId = :UserInfo.getUserId()
+        AND PermissionSet.PermissionsModifyAllData = TRUE
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ]
+    .isEmpty();
   }
 
   private static Id getAttachmentId(String textValue) {
@@ -415,52 +431,141 @@ public inherited sharing class WorkflowDashboardController {
     };
   }
 
+  /**
+   * Raised internally when the precise source-scan strategy approaches a governor
+   * limit. It is thrown *before* the (uncatchable) platform LimitException would fire,
+   * so the caller can degrade gracefully to the lightweight ApexTypeImplementor index.
+   */
+  @TestVisible
+  private class DefinitionScanLimitException extends Exception {
+  }
+
+  // When the running transaction reaches this fraction of its heap or CPU budget while
+  // scanning Apex source, abandon the source scan and fall back to ApexTypeImplementor.
+  @TestVisible
+  private static Decimal definitionScanGuardFraction = 0.7;
+  // Forces the fallback path in tests (an empty org has no classes to scan otherwise).
+  @TestVisible
+  private static Boolean forceDefinitionFallback = false;
+
   @AuraEnabled(cacheable=true)
   public static List<String> getDefinitions() {
     checkAuthorization();
+    // Primary strategy: scan Apex source so we can detect *inner-class* definitions
+    // (reported as "Outer.Inner"), which the platform index cannot express. This is
+    // governor-bounded by the proactive guards inside getDefinitionsFromSource().
+    //
+    // Fallback strategy: on very large orgs the source scan can exhaust heap or CPU.
+    // Governor LimitExceptions are uncatchable in Apex, so we cannot react to them;
+    // instead we monitor Limits.* and bail to the cheap ApexTypeImplementor index.
+    //
+    // KNOWN TRADE-OFF: the fallback queries the platform's compiled-type index rather
+    // than raw source. Verified behavior (API 67): it DOES surface inner-class
+    // definitions with qualified "Outer.Inner" names and resolves transitive interface
+    // inheritance, so for *startable* definitions it is at least as complete as the
+    // regex. The differences are (a) it lists only concrete (IsConcrete = true) types,
+    // so non-instantiable abstract/virtual definition classes are omitted — acceptable,
+    // since those cannot be started anyway; and (b) it reflects the compiled index, a
+    // separate source of truth that is normally current but updates on class compile.
+    try {
+      if (forceDefinitionFallback) {
+        throw new DefinitionScanLimitException('Forced fallback (test).');
+      }
+      return getDefinitionsFromSource();
+    } catch (DefinitionScanLimitException ex) {
+      System.debug(
+        LoggingLevel.WARN,
+        'getDefinitions: source scan hit governor guard, falling back to ' +
+        'ApexTypeImplementor (inner-class definitions will be omitted): ' +
+        ex.getMessage()
+      );
+      return getDefinitionsFromTypeIndex();
+    }
+  }
+
+  /**
+   * Precise discovery via Apex source regex. Uses a SOQL for-loop so only ~200 class
+   * bodies are resident in heap at a time, and proactively aborts (throwing
+   * DefinitionScanLimitException) before crossing the heap/CPU governor limits.
+   */
+  private static List<String> getDefinitionsFromSource() {
     List<String> definitions = new List<String>();
-    // Query Apex classes and check body in memory to bypass SOQL Body restriction
-    List<ApexClass> classes = [
+    Pattern classPattern = Pattern.compile(
+      '(?i)\\bclass\\s+([a-zA-Z0-9_]+)\\s+[^\\{]*?\\bimplements\\s+[^\\{]*?\\b(WorkflowDefinition|VersionedWorkflow)\\b'
+    );
+
+    Long heapGuard = (Long) (Limits.getLimitHeapSize() *
+      definitionScanGuardFraction);
+    Integer cpuGuard = (Integer) (Limits.getLimitCpuTime() *
+      definitionScanGuardFraction);
+
+    // SOQL for-loop retrieves records in chunks of 200, bounding resident heap so a
+    // large org's class bodies are not all materialized at once.
+    for (ApexClass ac : [
       SELECT Name, Body
       FROM ApexClass
       WHERE NamespacePrefix = NULL
       WITH SYSTEM_MODE
       ORDER BY Name ASC
-    ];
-
-    Pattern classPattern = Pattern.compile(
-      '(?i)\\bclass\\s+([a-zA-Z0-9_]+)\\s+[^\\{]*?\\bimplements\\s+[^\\{]*?\\b(WorkflowDefinition|VersionedWorkflow)\\b'
-    );
-
-    for (ApexClass ac : classes) {
-      if (ac.Body != null) {
-        Matcher pm = classPattern.matcher(ac.Body);
-        while (pm.find()) {
-          String className = pm.group(1);
-          // Check if it's the outer class or an inner class
-          if (className.equalsIgnoreCase(ac.Name)) {
-            // Exclude test classes
-            if (
-              !ac.Name.contains('WorkflowEngineTest') &&
-              !ac.Name.contains('WorkflowDashboardControllerTest')
-            ) {
-              definitions.add(ac.Name);
-            }
-          } else {
-            // Inner class: prefix with outer class name
-            // Exclude test classes
-            if (
-              !ac.Name.contains('WorkflowEngineTest') &&
-              !ac.Name.contains('WorkflowDashboardControllerTest')
-            ) {
-              definitions.add(ac.Name + '.' + className);
-            }
-          }
+    ]) {
+      if (Limits.getHeapSize() > heapGuard || Limits.getCpuTime() > cpuGuard) {
+        throw new DefinitionScanLimitException(
+          'Heap/CPU guard tripped during Apex source scan.'
+        );
+      }
+      if (ac.Body == null) {
+        continue;
+      }
+      Matcher pm = classPattern.matcher(ac.Body);
+      while (pm.find()) {
+        String className = pm.group(1);
+        if (
+          ac.Name.contains('WorkflowEngineTest') ||
+          ac.Name.contains('WorkflowDashboardControllerTest')
+        ) {
+          continue; // Exclude test classes
         }
+        // Outer class match returns the bare name; inner class is qualified.
+        definitions.add(
+          className.equalsIgnoreCase(ac.Name)
+            ? ac.Name
+            : ac.Name + '.' + className
+        );
       }
     }
     definitions.sort();
     return definitions;
+  }
+
+  /**
+   * Degraded-mode discovery via the platform's compiled-type index. Heap/CPU cheap.
+   * Includes inner classes (qualified "Outer.Inner") and transitive interface
+   * inheritance, but lists only concrete (IsConcrete = true) implementing classes.
+   */
+  private static List<String> getDefinitionsFromTypeIndex() {
+    Set<String> definitions = new Set<String>();
+    for (ApexTypeImplementor impl : [
+      SELECT ClassName
+      FROM ApexTypeImplementor
+      WHERE
+        InterfaceName IN ('WorkflowDefinition', 'VersionedWorkflow')
+        AND ClassNamespacePrefix = NULL
+        AND IsConcrete = TRUE
+      WITH SYSTEM_MODE
+    ]) {
+      String className = impl.ClassName;
+      if (
+        String.isBlank(className) ||
+        className.contains('WorkflowEngineTest') ||
+        className.contains('WorkflowDashboardControllerTest')
+      ) {
+        continue;
+      }
+      definitions.add(className);
+    }
+    List<String> sorted = new List<String>(definitions);
+    sorted.sort();
+    return sorted;
   }
 
   @AuraEnabled
@@ -538,10 +643,18 @@ public inherited sharing class WorkflowDashboardController {
     String comments
   ) {
     checkAuthorization();
+    // Enforce the approval gate's designated role BEFORE recording the decision, so a
+    // dashboard admin cannot approve a gate they were not assigned to. Thrown before the
+    // try/catch below so the specific message is not flattened into a generic one.
+    enforceApprovalRole(instanceId, approvalKey);
     try {
       Map<String, Object> payload = new Map<String, Object>{
         'approved' => approved,
         'comments' => comments,
+        // Record the immutable User Id (and username) as the authoritative approver
+        // identity for the audit trail; the display name alone is mutable and not unique.
+        'approverId' => UserInfo.getUserId(),
+        'approverUsername' => UserInfo.getUserName(),
         'approver' => UserInfo.getName()
       };
       String payloadJson = JSON.serialize(payload);
@@ -555,6 +668,70 @@ public inherited sharing class WorkflowDashboardController {
     } catch (Exception ex) {
       System.debug(LoggingLevel.ERROR, 'Aura submitApproval failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  /**
+   * If the instance has a pending approval gate for the given key that designates an
+   * approvalRole, require the running user to hold a custom permission of that API name
+   * (or "Modify All Data" as a break-glass override). Gates with no role, or no matching
+   * pending gate, impose no additional restriction beyond checkAuthorization().
+   */
+  private static void enforceApprovalRole(Id instanceId, String approvalKey) {
+    if (instanceId == null) {
+      return;
+    }
+    String requiredRole = null;
+    Boolean gateFound = false;
+    for (Workflow_Step_Execution__c se : [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Pending'
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 50
+    ]) {
+      String resolved = WorkflowEngine.resolvePayload(se.Output__c);
+      if (
+        String.isBlank(resolved) ||
+        !resolved.contains('waitingForApproval')
+      ) {
+        continue;
+      }
+      try {
+        Map<String, Object> state = (Map<String, Object>) JSON.deserializeUntyped(
+          resolved
+        );
+        if (
+          state.get('waitingForApproval') == true &&
+          approvalKey == (String) state.get('approvalKey')
+        ) {
+          gateFound = true;
+          requiredRole = (String) state.get('approvalRole');
+          break;
+        }
+      } catch (Exception ex) {
+        // Malformed/oversized state payload — ignore and keep scanning.
+      }
+    }
+
+    if (
+      gateFound &&
+      String.isNotBlank(requiredRole) &&
+      !FeatureManagement.checkPermission(requiredRole) &&
+      !currentUserHasModifyAllData()
+    ) {
+      AuraHandledException ex = new AuraHandledException(
+        'Unauthorized: this approval requires the "' +
+          requiredRole +
+          '" permission.'
+      );
+      ex.setMessage(
+        'Unauthorized: this approval requires the "' +
+          requiredRole +
+          '" permission.'
+      );
+      throw ex;
     }
   }
 
