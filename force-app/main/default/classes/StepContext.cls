@@ -8,6 +8,9 @@ public inherited sharing class StepContext {
   public String workflowInputJson { get; set; }
   public Integer workflowVersion { get; set; }
 
+  @TestVisible
+  private static Double mockQueryRowsFraction = null;
+
   public StepContext(
     Id workflowInstanceId,
     String workflowName,
@@ -66,6 +69,13 @@ public inherited sharing class StepContext {
       Limits.getLimitQueries() > 0 &&
       ((Double) Limits.getQueries() / Limits.getLimitQueries()) > 0.80
     ) {
+      return true;
+    }
+    // SOQL Query Rows
+    Double queryRowsFraction = mockQueryRowsFraction != null
+      ? mockQueryRowsFraction
+      : (Limits.getLimitQueryRows() > 0 ? ((Double) Limits.getQueryRows() / Limits.getLimitQueryRows()) : 0.0);
+    if (queryRowsFraction > 0.80) {
       return true;
     }
     // DML Statements
