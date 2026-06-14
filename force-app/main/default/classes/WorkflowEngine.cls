@@ -1782,14 +1782,12 @@ public inherited sharing class WorkflowEngine {
    * Sends an external signal to a workflow instance by correlation key or instance ID.
    */
   public static void signal(String keyOrId, String signalName, String payload) {
-    Boolean isId = false;
-    Id targetId;
-    try {
-      targetId = (Id) keyOrId;
-      isId = true;
-    } catch (Exception ex) {
-      // Not a valid ID
-    }
+    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix();
+    Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
+    Boolean isId = String.isNotBlank(keyOrId) &&
+                   idPattern.matcher(keyOrId).matches() &&
+                   keyOrId.startsWith(wflowPrefix);
+    Id targetId = isId ? (Id) keyOrId : null;
 
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
     if (isId) {
@@ -1894,18 +1892,15 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
+    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
     Set<Id> ids = new Set<Id>();
     Set<String> keys = new Set<String>();
 
     for (SignalRequest req : requests) {
       if (String.isNotBlank(req.keyOrId)) {
-        if (idPattern.matcher(req.keyOrId).matches()) {
-          try {
-            ids.add((Id) req.keyOrId);
-          } catch (Exception ex) {
-            keys.add(req.keyOrId);
-          }
+        if (idPattern.matcher(req.keyOrId).matches() && req.keyOrId.startsWith(wflowPrefix)) {
+          ids.add((Id) req.keyOrId);
         } else {
           keys.add(req.keyOrId);
         }
@@ -1928,10 +1923,14 @@ public inherited sharing class WorkflowEngine {
       FOR UPDATE
     ];
 
-    Map<Id, Workflow_Instance__c> instById = new Map<Id, Workflow_Instance__c>();
+    Map<String, Workflow_Instance__c> instById = new Map<String, Workflow_Instance__c>();
     Map<String, Workflow_Instance__c> instByKey = new Map<String, Workflow_Instance__c>();
     for (Workflow_Instance__c inst : instances) {
       instById.put(inst.Id, inst);
+      String idStr = String.valueOf(inst.Id);
+      if (idStr.length() == 18) {
+        instById.put(idStr.substring(0, 15), inst);
+      }
       if (String.isNotBlank(inst.Correlation_Key__c)) {
         instByKey.put(inst.Correlation_Key__c, inst);
       }
@@ -1939,20 +1938,8 @@ public inherited sharing class WorkflowEngine {
 
     // Verify that we found an active instance for every request, or throw
     for (SignalRequest req : requests) {
-      Workflow_Instance__c inst = null;
-      Boolean isId = false;
-      Id targetId;
-      if (idPattern.matcher(req.keyOrId).matches()) {
-        try {
-          targetId = (Id) req.keyOrId;
-          isId = true;
-        } catch (Exception ex) {
-          // Not a valid ID
-        }
-      }
-      if (isId) {
-        inst = instById.get(targetId);
-      } else {
+      Workflow_Instance__c inst = instById.get(req.keyOrId);
+      if (inst == null) {
         inst = instByKey.get(req.keyOrId);
       }
       if (inst == null) {
@@ -1967,20 +1954,8 @@ public inherited sharing class WorkflowEngine {
     List<Workflow_Instance__c> activeInstances = new List<Workflow_Instance__c>();
 
     for (SignalRequest req : requests) {
-      Workflow_Instance__c inst = null;
-      Boolean isId = false;
-      Id targetId;
-      if (idPattern.matcher(req.keyOrId).matches()) {
-        try {
-          targetId = (Id) req.keyOrId;
-          isId = true;
-        } catch (Exception ex) {
-          // Not a valid ID
-        }
-      }
-      if (isId) {
-        inst = instById.get(targetId);
-      } else {
+      Workflow_Instance__c inst = instById.get(req.keyOrId);
+      if (inst == null) {
         inst = instByKey.get(req.keyOrId);
       }
 
@@ -1999,7 +1974,7 @@ public inherited sharing class WorkflowEngine {
                 runCompensations = (Boolean) params.get('runCompensations');
               }
             } catch (Exception e) {
-              // Ignore and use default
+              System.debug(LoggingLevel.WARN, 'Failed to deserialize signal cancel payload: ' + e.getMessage());
             }
           }
           cancel(inst.Id, runCompensations);
