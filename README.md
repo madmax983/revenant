@@ -49,7 +49,7 @@ graph TD
     TransitionComp --> Rollback[Run Compensation Steps LIFO]
     Rollback --> CompSuccess{All Rollbacks Done?}
     CompSuccess -- Yes --> TerminalComp[Status: Compensated]
-    CompSuccess -- No -- RollbackFail{Compensation Step Fails?}
+    CompSuccess -- No --> RollbackFail{Compensation Step Fails?}
     RollbackFail -- Yes --> TerminalFail[Status: Failed]
     RollbackFail -- No --> Rollback
     
