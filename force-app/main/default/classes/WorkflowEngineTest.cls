@@ -937,15 +937,11 @@ public class WorkflowEngineTest {
     System.assert(!stepExecs.isEmpty());
     Workflow_Step_Execution__c stepExec = stepExecs[0];
     stepExec.Status__c = 'Running';
-    update stepExec;
+    stepExec.Timeout_At__c = DateTime.now().addSeconds(-10);
+    update as system stepExec;
 
-    // Manually run the timeout job
     Test.startTest();
-    WorkflowTimeoutJob job = new WorkflowTimeoutJob(
-      instanceId,
-      'WorkflowEngineTest.TimeoutStep'
-    );
-    job.execute(null);
+    WorkflowEngine.processWatchdogHeartbeat();
     Test.stopTest();
 
     // Check if both records are marked Failed
@@ -1959,27 +1955,34 @@ public class WorkflowEngineTest {
       null
     );
 
-    // Verify watchdog was scheduled
-    String cleanStepName = 'WorkflowEngineTest_TimeoutStep';
-    String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
-    List<CronTrigger> triggers = [
-      SELECT Id, State
-      FROM CronTrigger
-      WHERE CronJobDetail.Name = :jobName
+    // Verify watchdog was scheduled in DB
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.TimeoutStep'
+      WITH SYSTEM_MODE
+      LIMIT 1
     ];
-    System.assertEquals(1, triggers.size());
+    System.assertEquals(1, stepExecs.size());
+    System.assertNotEquals(null, stepExecs[0].Timeout_At__c, 'Watchdog timeout should be set on step execution');
 
-    // Execute the step. It should cancel the watchdog.
+    // Execute the step. It should clear the timeout in DB.
     Test.startTest();
     WorkflowEngine.runStep(instanceId, null);
     Test.stopTest();
 
-    triggers = [SELECT Id FROM CronTrigger WHERE CronJobDetail.Name = :jobName];
-    System.assertEquals(
-      0,
-      triggers.size(),
-      'Watchdog should be aborted upon successful step completion'
-    );
+    stepExecs = [
+      SELECT Timeout_At__c, Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.TimeoutStep'
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    System.assertEquals(1, stepExecs.size());
+    System.assertEquals('Completed', stepExecs[0].Status__c);
+    System.assertEquals(null, stepExecs[0].Timeout_At__c, 'Watchdog timeout should be cleared upon successful step completion');
   }
 
   @isTest
@@ -2247,18 +2250,16 @@ public class WorkflowEngineTest {
     );
 
     // Verify watchdog job was scheduled for the successor instance's initial step
-    String cleanStepName = 'WorkflowEngineTest_TimeoutContinueStep';
-    String jobName = 'Timeout_' + successor.Id + '_' + cleanStepName;
-    List<CronTrigger> triggers = [
-      SELECT Id, State
-      FROM CronTrigger
-      WHERE CronJobDetail.Name = :jobName
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :successor.Id
+        AND Step_Name__c = :successor.Current_Step__c
+      WITH SYSTEM_MODE
+      LIMIT 1
     ];
-    System.assertEquals(
-      1,
-      triggers.size(),
-      'Watchdog should have been scheduled for successor initial step'
-    );
+    System.assertEquals(1, stepExecs.size());
+    System.assertNotEquals(null, stepExecs[0].Timeout_At__c, 'Watchdog timeout should be set on successor initial step');
   }
 
   @isTest
@@ -2337,12 +2338,11 @@ public class WorkflowEngineTest {
     update inst;
 
     // If watchdog runs on a completed instance, it should exit without error or changes
+    stepExec.Timeout_At__c = DateTime.now().addSeconds(-10);
+    update as system stepExec;
+
     Test.startTest();
-    WorkflowTimeoutJob job1 = new WorkflowTimeoutJob(
-      instanceId,
-      'WorkflowEngineTest.HappyStep1'
-    );
-    job1.execute(null);
+    WorkflowEngine.processWatchdogHeartbeat();
     Test.stopTest();
 
     // Check that step remains Completed
@@ -2381,13 +2381,12 @@ public class WorkflowEngineTest {
     inst.Current_Step__c = 'WorkflowEngineTest.HappyStep1';
     update inst;
 
-    // Run the timeout job
+    stepExec.Timeout_At__c = DateTime.now().addSeconds(-10);
+    update as system stepExec;
+
+    // Run the watchdog
     Test.startTest();
-    WorkflowTimeoutJob job = new WorkflowTimeoutJob(
-      instanceId,
-      'WorkflowEngineTest.HappyStep1'
-    );
-    job.execute(null);
+    WorkflowEngine.processWatchdogHeartbeat();
     Test.stopTest();
 
     // Verify step execution is marked Failed with 'Step execution timed out before starting.'
@@ -2436,13 +2435,12 @@ public class WorkflowEngineTest {
     );
     insert compExec;
 
-    // Run the timeout job for the compensation step
+    compExec.Timeout_At__c = DateTime.now().addSeconds(-10);
+    update as system compExec;
+
+    // Run the watchdog for the compensation step
     Test.startTest();
-    WorkflowTimeoutJob job = new WorkflowTimeoutJob(
-      inst.Id,
-      'WorkflowEngineTest.CompensatableHappyStep_Compensate'
-    );
-    job.execute(null);
+    WorkflowEngine.processWatchdogHeartbeat();
     Test.stopTest();
 
     // Verify step execution status is Failed

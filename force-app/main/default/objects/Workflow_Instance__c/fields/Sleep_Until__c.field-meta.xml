@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Sleep_Until__c</fullName>
+    <description>The time when a suspended/sleeping workflow should be resumed by the watchdog.</description>
+    <externalId>false</externalId>
+    <label>Sleep Until</label>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>DateTime</type>
+</CustomField>

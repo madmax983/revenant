@@ -144,14 +144,11 @@ public class CalloutTimeoutWorkflowExampleTest {
     System.assert(!stepExecs.isEmpty());
     Workflow_Step_Execution__c stepExec = stepExecs[0];
     stepExec.Status__c = 'Running';
-    update stepExec;
+    stepExec.Timeout_At__c = DateTime.now().addSeconds(-10);
+    update as system stepExec;
 
-    // Execute watchdog job
-    WorkflowTimeoutJob job = new WorkflowTimeoutJob(
-      instanceId,
-      'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep'
-    );
-    job.execute(null);
+    // Execute watchdog heartbeat
+    WorkflowEngine.processWatchdogHeartbeat();
 
     // Verify status transitioned to Failed and email alert sent
     Workflow_Instance__c updatedInst = [
@@ -322,22 +319,19 @@ public class CalloutTimeoutWorkflowExampleTest {
         Workflow_Instance__c = instanceId,
         Step_Name__c = 'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep',
         Status__c = 'Running',
-        Retry_Count__c = 0
+        Retry_Count__c = 0,
+        Timeout_At__c = DateTime.now().addSeconds(-10)
       );
-      insert newStepExec;
-      stepExecs.add(newStepExec);
+      insert as system newStepExec;
     } else {
       Workflow_Step_Execution__c stepExec = stepExecs[0];
       stepExec.Status__c = 'Running';
-      update stepExec;
+      stepExec.Timeout_At__c = DateTime.now().addSeconds(-10);
+      update as system stepExec;
     }
 
-    // Execute watchdog job
-    WorkflowTimeoutJob job = new WorkflowTimeoutJob(
-      instanceId,
-      'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep'
-    );
-    job.execute(null);
+    // Execute watchdog heartbeat
+    WorkflowEngine.processWatchdogHeartbeat();
 
     // Verify status transitioned to Compensating instead of Failed due to populated compensation stack
     Workflow_Instance__c updatedInst = [
