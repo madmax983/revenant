@@ -189,6 +189,144 @@ public inherited sharing class WorkflowEngine {
     return instance.Id;
   }
 
+  public class StartRequest {
+    public String workflowName;
+    public String correlationKey;
+    public Object input;
+    public Id parentInstanceId;
+
+    public StartRequest(String workflowName, String correlationKey, Object input) {
+      this.workflowName = workflowName;
+      this.correlationKey = correlationKey;
+      this.input = input;
+    }
+
+    public StartRequest(String workflowName, String correlationKey, Object input, Id parentInstanceId) {
+      this.workflowName = workflowName;
+      this.correlationKey = correlationKey;
+      this.input = input;
+      this.parentInstanceId = parentInstanceId;
+    }
+  }
+
+  /**
+   * Starts multiple durable workflow instances in a bulk-friendly transaction.
+   */
+  public static List<Id> start(List<StartRequest> requests) {
+    if (requests == null || requests.isEmpty()) {
+      return new List<Id>();
+    }
+
+    // 1. Gather correlation keys and validate
+    Set<String> correlationKeys = new Set<String>();
+    for (StartRequest req : requests) {
+      validateCorrelationKey(req.correlationKey);
+      if (String.isNotBlank(req.correlationKey)) {
+        correlationKeys.add(req.correlationKey);
+      }
+    }
+
+    // 2. Enforce uniqueness of active correlation keys in bulk
+    if (!correlationKeys.isEmpty()) {
+      List<Workflow_Instance__c> existing = [
+        SELECT Id, Correlation_Key__c
+        FROM Workflow_Instance__c
+        WHERE
+          Correlation_Key__c IN :correlationKeys
+          AND Status__c IN ('Pending', 'Running', 'Suspended')
+        WITH SYSTEM_MODE
+      ];
+      if (!existing.isEmpty()) {
+        throw new WorkflowException(
+          'An active workflow already exists with correlation key: ' +
+          existing[0].Correlation_Key__c
+        );
+      }
+    }
+
+    // 3. Construct Workflow_Instance__c records
+    List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
+    for (StartRequest req : requests) {
+      Workflow_Instance__c instance = new Workflow_Instance__c();
+      instance.Workflow_Name__c = req.workflowName;
+      instance.Status__c = 'Pending';
+      instance.Correlation_Key__c = req.correlationKey;
+      instance.Parent_Instance__c = req.parentInstanceId;
+
+      // Resolve version and initial step
+      Type wflowType = Type.forName(req.workflowName);
+      if (wflowType != null) {
+        Object defObj = wflowType.newInstance();
+        if (defObj instanceof VersionedWorkflow) {
+          instance.Definition_Version__c = ((VersionedWorkflow) defObj)
+            .getLatestVersion();
+        } else {
+          instance.Definition_Version__c = 1;
+        }
+        if (defObj instanceof WorkflowDefinition) {
+          instance.Current_Step__c = ((WorkflowDefinition) defObj)
+            .getInitialStep();
+        }
+      } else {
+        instance.Definition_Version__c = 1;
+      }
+      instances.add(instance);
+    }
+
+    try {
+      insert as system instances;
+    } catch (DmlException ex) {
+      if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
+        throw new WorkflowException(
+          'An active workflow already exists with duplicate correlation key constraint.'
+        );
+      }
+      throw ex;
+    }
+
+    // 4. Resolve input payloads and update instances
+    for (Integer i = 0; i < requests.size(); i++) {
+      StartRequest req = requests[i];
+      Workflow_Instance__c instance = instances[i];
+      String inputJson = (req.input != null) ? JSON.serialize(req.input) : null;
+      instance.Input__c = savePayloadIfNeeded(
+        instance.Id,
+        inputJson,
+        'Input_' + instance.Id
+      );
+    }
+    update as system instances;
+
+    // 5. Construct initial Step Execution logs
+    List<Workflow_Step_Execution__c> stepExecs = new List<Workflow_Step_Execution__c>();
+    for (Workflow_Instance__c instance : instances) {
+      if (String.isNotBlank(instance.Current_Step__c)) {
+        Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
+        stepExec.Workflow_Instance__c = instance.Id;
+        stepExec.Step_Name__c = instance.Current_Step__c;
+        stepExec.Status__c = 'Pending';
+        stepExec.Input__c = instance.Input__c;
+        stepExec.Retry_Count__c = 0;
+        stepExecs.add(stepExec);
+      }
+    }
+    if (!stepExecs.isEmpty()) {
+      insert as system stepExecs;
+    }
+
+    // 6. Schedule timeout jobs for the instances (bulk-friendly)
+    scheduleTimeoutJobsForInstances(instances);
+
+    // 7. Enqueue orchestrator execution in bulk
+    List<Id> instanceIds = new List<Id>();
+    for (Workflow_Instance__c instance : instances) {
+      instanceIds.add(instance.Id);
+    }
+    enqueueOrchestrators(instanceIds);
+
+    return instanceIds;
+  }
+
   /**
    * Resumes a suspended workflow matching the correlation key.
    */
@@ -2241,6 +2379,43 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  public static void enqueueOrchestrators(List<Id> instanceIds) {
+    if (Test.isRunningTest()) {
+      for (Id instId : instanceIds) {
+        try {
+          if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+            System.enqueueJob(new WorkflowOrchestrator(instId));
+          }
+        } catch (Exception e) {
+          // Ignore / limit reached
+        }
+      }
+      return;
+    }
+    List<Workflow_Event__e> events = new List<Workflow_Event__e>();
+    for (Id instId : instanceIds) {
+      events.add(new Workflow_Event__e(
+        Workflow_Instance_Id__c = instId,
+        Event_Type__c = 'RUN_STEP',
+        Payload__c = null
+      ));
+    }
+    if (!events.isEmpty()) {
+      List<Database.SaveResult> srs = EventBus.publish(events);
+      for (Database.SaveResult sr : srs) {
+        if (!sr.isSuccess()) {
+          List<String> errMsgs = new List<String>();
+          for (Database.Error err : sr.getErrors()) {
+            errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
+          }
+          throw new WorkflowException(
+            'Failed to publish orchestrator event: ' + String.join(errMsgs, ', ')
+          );
+        }
+      }
+    }
+  }
+
   public static void enqueueOrchestrator(Id instanceId, String stepName) {
     if (Test.isRunningTest()) {
       return;
@@ -2335,6 +2510,33 @@ public inherited sharing class WorkflowEngine {
       );
     }
     return textValue;
+  }
+
+  public static void scheduleTimeoutJobsForInstances(List<Workflow_Instance__c> instances) {
+    for (Workflow_Instance__c instance : instances) {
+      if (instance.Status__c == 'Compensating' || instance.Status__c == 'Cancelling') {
+        if (String.isNotBlank(instance.Compensation_Stack__c)) {
+          List<String> stack = (List<String>) JSON.deserialize(
+            instance.Compensation_Stack__c,
+            List<String>.class
+          );
+          if (!stack.isEmpty()) {
+            scheduleTimeoutJobIfNeeded(
+              instance.Id,
+              stack[stack.size() - 1] + '_Compensate'
+            );
+          }
+        }
+      } else if (String.isNotBlank(instance.Current_Step__c)) {
+        if (instance.Current_Step__c.contains(',')) {
+          for (String pStep : instance.Current_Step__c.split(',')) {
+            scheduleTimeoutJobIfNeeded(instance.Id, pStep.trim());
+          }
+        } else {
+          scheduleTimeoutJobIfNeeded(instance.Id, instance.Current_Step__c);
+        }
+      }
+    }
   }
 
   public static void scheduleTimeoutJobForInstance(Id instanceId) {

@@ -2427,4 +2427,33 @@ public class WorkflowEngineTest {
     System.assertEquals(1, stack.size());
     System.assertEquals('WorkflowEngineTest.CompensatableCrashStep', stack[0]);
   }
+
+  @isTest
+  static void testBulkStart() {
+    List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
+    for (Integer i = 0; i < 5; i++) {
+      requests.add(new WorkflowEngine.StartRequest(
+        'WorkflowEngineTest.HappyWorkflow',
+        'BulkKey_' + i,
+        'StartVal_' + i
+      ));
+    }
+
+    Test.startTest();
+    List<Id> instanceIds = WorkflowEngine.start(requests);
+    Test.stopTest(); // Runs HappyStep1 for all of them synchronously
+
+    System.assertEquals(5, instanceIds.size());
+    List<Workflow_Instance__c> instances = [
+      SELECT Id, Status__c, Correlation_Key__c, Input__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :instanceIds
+    ];
+    System.assertEquals(5, instances.size());
+    for (Workflow_Instance__c inst : instances) {
+      System.assertEquals('Running', inst.Status__c);
+      System.assert(inst.Correlation_Key__c.startsWith('BulkKey_'));
+      System.assertEquals('WorkflowEngineTest.HappyStep2', inst.Current_Step__c);
+    }
+  }
 }

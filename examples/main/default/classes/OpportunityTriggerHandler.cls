@@ -23,6 +23,7 @@ public inherited sharing class OpportunityTriggerHandler {
             WHERE Id IN :oppIdsToOnboard
         ];
 
+        List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
         for (Opportunity opp : oppsWithDetails) {
             // Build the input for the OnboardingWorkflowExample
             Map<String, Object> input = new Map<String, Object>{
@@ -31,12 +32,15 @@ public inherited sharing class OpportunityTriggerHandler {
                 'email' => 'customer@' + (opp.Account != null ? opp.Account.Name.replaceAll('[^a-zA-Z0-9]', '').toLowerCase() : 'example') + '.com'
             };
 
-            // Start the customer onboarding workflow
-            WorkflowEngine.start(
+            // Queue the start request
+            requests.add(new WorkflowEngine.StartRequest(
                 'OnboardingWorkflowExample', 
                 'Opp_Onboarding_' + opp.Id, 
                 input
-            );
+            ));
         }
+
+        // Start the customer onboarding workflows in bulk
+        WorkflowEngine.start(requests);
     }
 }
