@@ -1967,6 +1967,16 @@ public class WorkflowEngineTest {
     System.assertEquals(1, stepExecs.size());
     System.assertNotEquals(null, stepExecs[0].Timeout_At__c, 'Watchdog timeout should be set on step execution');
 
+    // Verify watchdog was scheduled in CronTriggers
+    String cleanStepName = 'WorkflowEngineTest_TimeoutStep';
+    String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
+    List<CronTrigger> triggers = [
+      SELECT Id, State
+      FROM CronTrigger
+      WHERE CronJobDetail.Name = :jobName
+    ];
+    System.assertEquals(1, triggers.size(), 'A dynamic CronTrigger should be scheduled');
+
     // Execute the step. It should clear the timeout in DB.
     Test.startTest();
     WorkflowEngine.runStep(instanceId, null);
@@ -1983,6 +1993,14 @@ public class WorkflowEngineTest {
     System.assertEquals(1, stepExecs.size());
     System.assertEquals('Completed', stepExecs[0].Status__c);
     System.assertEquals(null, stepExecs[0].Timeout_At__c, 'Watchdog timeout should be cleared upon successful step completion');
+
+    // Verify watchdog CronTrigger was canceled/aborted
+    triggers = [
+      SELECT Id
+      FROM CronTrigger
+      WHERE CronJobDetail.Name = :jobName
+    ];
+    System.assertEquals(0, triggers.size(), 'Watchdog CronTrigger should be aborted upon successful step completion');
   }
 
   @isTest
