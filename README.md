@@ -17,7 +17,7 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 ### Fault Tolerance & Safety
 
 - **Distributed Transaction Rollbacks (Sagas)**: Steps implementing [CompensatableStep](force-app/main/default/classes/CompensatableStep.cls) register on a LIFO rollback stack upon successful forward completion. If a forward step fails permanently, the engine automatically executes their `compensate` methods in reverse order.
-- **Watchdog Step Timeouts**: Steps can declare custom execution timeouts. A Schedulable watchdog ([WorkflowTimeoutJob](force-app/main/default/classes/WorkflowTimeoutJob.cls)) will terminate hung steps (e.g., blocked callouts) and flag the instance as failed.
+- **Watchdog Step Timeouts**: Steps can declare custom execution timeouts. A single global watchdog poller ([WorkflowWatchdog](force-app/main/default/classes/WorkflowWatchdog.cls)) sweeps the database for any timed-out steps or suspended instances, failing or resuming them cleanly without hitting Salesforce's 100 concurrent scheduled jobs limit.
 - **Large Payload Offloading**: When input, output, or state serialization strings exceed 100,000 characters (approaching the 131,072-character long text area limit), the engine transparently offloads the payload to `ContentVersion` files and links them to the parent instance.
 
 ### Integration & Monitoring
@@ -197,6 +197,34 @@ Run the suite of unit tests to verify orchestration safety, yielding limits, par
 
 ```bash
 sf apex run test -w 10
+```
+
+---
+
+## Watchdog Poller Scheduling
+
+To clean up timed-out steps and resume suspended/sleeping instances in production, you must schedule the global watchdog class (`WorkflowWatchdog`) to run periodically.
+
+Because the Salesforce Declarative Scheduler UI only supports hourly increments, you can schedule it at sub-hour intervals (such as every minute or every 5 minutes) via Anonymous Apex using the Cron Trigger API:
+
+```apex
+// Schedule the watchdog to run every minute
+for (Integer i = 0; i < 60; i++) {
+    String jobName = 'Revenant_Watchdog_Min_' + String.valueOf(i).leftPad(2, '0');
+    String cronExpression = '0 ' + i + ' * * * ?';
+    System.schedule(jobName, cronExpression, new WorkflowWatchdog());
+}
+```
+
+If 5-minute precision is sufficient, you can schedule fewer jobs to conserve cron slots:
+
+```apex
+// Schedule the watchdog to run every 5 minutes
+for (Integer i = 0; i < 60; i += 5) {
+    String jobName = 'Revenant_Watchdog_5Min_' + String.valueOf(i).leftPad(2, '0');
+    String cronExpression = '0 ' + i + ' * * * ?';
+    System.schedule(jobName, cronExpression, new WorkflowWatchdog());
+}
 ```
 
 ---
