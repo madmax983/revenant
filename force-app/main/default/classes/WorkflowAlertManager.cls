@@ -3,6 +3,9 @@ public inherited sharing class WorkflowAlertManager {
   private static Map<String, Workflow_Alert_Config__mdt> mockConfigs = new Map<String, Workflow_Alert_Config__mdt>();
 
   @TestVisible
+  private static Map<String, Workflow_Alert_Config__mdt> configCache = new Map<String, Workflow_Alert_Config__mdt>();
+
+  @TestVisible
   public static Integer sentEmailsCount = 0;
 
   @TestVisible
@@ -53,6 +56,10 @@ public inherited sharing class WorkflowAlertManager {
   private static Workflow_Alert_Config__mdt getAlertConfig(
     String workflowName
   ) {
+    if (configCache.containsKey(workflowName)) {
+      return configCache.get(workflowName);
+    }
+
     String devName = workflowName.replaceAll('[^a-zA-Z0-9_]', '_');
     String truncatedDevName = devName.length() > 40
       ? devName.substring(0, 40)
@@ -82,6 +89,7 @@ public inherited sharing class WorkflowAlertManager {
       WITH SYSTEM_MODE
     ];
     if (!configs.isEmpty()) {
+      configCache.put(workflowName, configs[0]);
       return configs[0];
     }
 
@@ -98,9 +106,11 @@ public inherited sharing class WorkflowAlertManager {
       WITH SYSTEM_MODE
     ];
     if (!configs.isEmpty()) {
+      configCache.put(workflowName, configs[0]);
       return configs[0];
     }
 
+    configCache.put(workflowName, null);
     return null;
   }
 

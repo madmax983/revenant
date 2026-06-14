@@ -3,6 +3,15 @@ public inherited sharing class WorkflowEngine {
   public static Integer watchdogDelayMinutes = 10;
   public static Boolean useDynamicScheduling = true;
 
+  // Max number of timed-out steps a single watchdog heartbeat will fail. Each failure
+  // triggers failWorkflowInstance() (its own SOQL/DML + optional alert queries), so this
+  // bounds the heartbeat's governor usage. Remaining timeouts drain on the next heartbeat.
+  @TestVisible
+  private static Integer WATCHDOG_TIMEOUT_BATCH_SIZE = 50;
+  // Max number of sleeping instances a single heartbeat resumes, for the same reason.
+  @TestVisible
+  private static Integer WATCHDOG_RESUME_BATCH_SIZE = 200;
+
   static {
     try {
       List<Revenant_Config__mdt> configs = [
@@ -22,7 +31,7 @@ public inherited sharing class WorkflowEngine {
         }
       }
     } catch (Exception ex) {
-      // Gracefully fall back to defaults if Custom Metadata not deployed/available
+      System.debug(LoggingLevel.WARN, 'Revenant configuration metadata query failed: ' + ex.getMessage());
     }
   }
 
@@ -1206,6 +1215,7 @@ public inherited sharing class WorkflowEngine {
           try {
             outputVal = JSON.deserializeUntyped(resolvedOutput);
           } catch (Exception ex) {
+            System.debug(LoggingLevel.FINE, 'Parallel step output was not JSON, falling back to raw string: ' + ex.getMessage());
             outputVal = resolvedOutput;
           }
         }
@@ -1732,6 +1742,11 @@ public inherited sharing class WorkflowEngine {
       insert as system stepExec;
     }
 
+    // Schedule the watchdog for the child's initial step before executing it, matching
+    // the start() overloads. Without this a TimeoutConfigurable first step of a child
+    // workflow would never get a scheduled timeout job.
+    scheduleTimeoutJobForInstance(instance.Id);
+
     if (!Test.isRunningTest()) {
       enqueueOrchestrator(instance.Id, null);
     }
@@ -1782,14 +1797,12 @@ public inherited sharing class WorkflowEngine {
    * Sends an external signal to a workflow instance by correlation key or instance ID.
    */
   public static void signal(String keyOrId, String signalName, String payload) {
-    Boolean isId = false;
-    Id targetId;
-    try {
-      targetId = (Id) keyOrId;
-      isId = true;
-    } catch (Exception ex) {
-      // Not a valid ID
-    }
+    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix();
+    Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
+    Boolean isId = String.isNotBlank(keyOrId) &&
+                   idPattern.matcher(keyOrId).matches() &&
+                   keyOrId.startsWith(wflowPrefix);
+    Id targetId = isId ? (Id) keyOrId : null;
 
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
     if (isId) {
@@ -1841,7 +1854,7 @@ public inherited sharing class WorkflowEngine {
             runCompensations = (Boolean) params.get('runCompensations');
           }
         } catch (Exception e) {
-          // Ignore and use default
+          System.debug(LoggingLevel.WARN, 'Failed to parse cancel payload, using default runCompensations: ' + e.getMessage());
         }
       }
       cancel(instance.Id, runCompensations);
@@ -1878,7 +1891,7 @@ public inherited sharing class WorkflowEngine {
               enqueueOrchestrator(instance.Id, null);
             }
           } catch (Exception ex) {
-            // Fallback to asynchronous Platform Event if enqueue fails due to transient platform limit errors
+            System.debug(LoggingLevel.WARN, 'Queueable enqueue failed, falling back to Platform Event: ' + ex.getMessage());
             enqueueOrchestrator(instance.Id, null);
           }
         }
@@ -1894,18 +1907,15 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
+    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
     Set<Id> ids = new Set<Id>();
     Set<String> keys = new Set<String>();
 
     for (SignalRequest req : requests) {
       if (String.isNotBlank(req.keyOrId)) {
-        if (idPattern.matcher(req.keyOrId).matches()) {
-          try {
-            ids.add((Id) req.keyOrId);
-          } catch (Exception ex) {
-            keys.add(req.keyOrId);
-          }
+        if (idPattern.matcher(req.keyOrId).matches() && req.keyOrId.startsWith(wflowPrefix)) {
+          ids.add((Id) req.keyOrId);
         } else {
           keys.add(req.keyOrId);
         }
@@ -1928,10 +1938,14 @@ public inherited sharing class WorkflowEngine {
       FOR UPDATE
     ];
 
-    Map<Id, Workflow_Instance__c> instById = new Map<Id, Workflow_Instance__c>();
+    Map<String, Workflow_Instance__c> instById = new Map<String, Workflow_Instance__c>();
     Map<String, Workflow_Instance__c> instByKey = new Map<String, Workflow_Instance__c>();
     for (Workflow_Instance__c inst : instances) {
       instById.put(inst.Id, inst);
+      String idStr = String.valueOf(inst.Id);
+      if (idStr.length() == 18) {
+        instById.put(idStr.substring(0, 15), inst);
+      }
       if (String.isNotBlank(inst.Correlation_Key__c)) {
         instByKey.put(inst.Correlation_Key__c, inst);
       }
@@ -1939,10 +1953,8 @@ public inherited sharing class WorkflowEngine {
 
     // Verify that we found an active instance for every request, or throw
     for (SignalRequest req : requests) {
-      Workflow_Instance__c inst = null;
-      if (idPattern.matcher(req.keyOrId).matches()) {
-        inst = instById.get((Id) req.keyOrId);
-      } else {
+      Workflow_Instance__c inst = instById.get(req.keyOrId);
+      if (inst == null) {
         inst = instByKey.get(req.keyOrId);
       }
       if (inst == null) {
@@ -1957,10 +1969,8 @@ public inherited sharing class WorkflowEngine {
     List<Workflow_Instance__c> activeInstances = new List<Workflow_Instance__c>();
 
     for (SignalRequest req : requests) {
-      Workflow_Instance__c inst = null;
-      if (idPattern.matcher(req.keyOrId).matches()) {
-        inst = instById.get((Id) req.keyOrId);
-      } else {
+      Workflow_Instance__c inst = instById.get(req.keyOrId);
+      if (inst == null) {
         inst = instByKey.get(req.keyOrId);
       }
 
@@ -1979,7 +1989,7 @@ public inherited sharing class WorkflowEngine {
                 runCompensations = (Boolean) params.get('runCompensations');
               }
             } catch (Exception e) {
-              // Ignore and use default
+              System.debug(LoggingLevel.WARN, 'Failed to deserialize signal cancel payload: ' + e.getMessage());
             }
           }
           cancel(inst.Id, runCompensations);
@@ -2086,27 +2096,38 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    // Reset the failed step's execution status to let it execute again
-    for (String targetStepName : targetStepNames) {
-      List<Workflow_Step_Execution__c> stepExecs = [
-        SELECT Id, Status__c, Retry_Count__c, Error_Details__c
+    // Reset the failed step's execution status to let it execute again. Bulk-load the
+    // latest execution per target step in ONE query (was one SOQL per step in a loop),
+    // build a name->latest map, then update the resettable ones together.
+    Map<String, Workflow_Step_Execution__c> latestStepByName = new Map<String, Workflow_Step_Execution__c>();
+    if (!targetStepNames.isEmpty()) {
+      for (Workflow_Step_Execution__c se : [
+        SELECT Id, Step_Name__c, Status__c, Retry_Count__c, Error_Details__c
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Step_Name__c = :targetStepName
+          AND Step_Name__c IN :targetStepNames
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
-        LIMIT 1
-      ];
-      if (!stepExecs.isEmpty()) {
-        Workflow_Step_Execution__c stepExec = stepExecs[0];
-        if (stepExec.Status__c != 'Completed') {
-          stepExec.Status__c = 'Pending';
-          stepExec.Retry_Count__c = 0; // reset retry counter
-          stepExec.Error_Details__c = null;
-          update as system stepExec;
+      ]) {
+        if (!latestStepByName.containsKey(se.Step_Name__c)) {
+          latestStepByName.put(se.Step_Name__c, se);
         }
       }
+    }
+
+    List<Workflow_Step_Execution__c> stepsToReset = new List<Workflow_Step_Execution__c>();
+    for (String targetStepName : targetStepNames) {
+      Workflow_Step_Execution__c stepExec = latestStepByName.get(targetStepName);
+      if (stepExec != null && stepExec.Status__c != 'Completed') {
+        stepExec.Status__c = 'Pending';
+        stepExec.Retry_Count__c = 0; // reset retry counter
+        stepExec.Error_Details__c = null;
+        stepsToReset.add(stepExec);
+      }
+    }
+    if (!stepsToReset.isEmpty()) {
+      update as system stepsToReset;
     }
 
     if (hasCompensations) {
@@ -2133,19 +2154,12 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    // Parallel forward execution retry: enqueue only incomplete branches
+    // Parallel forward execution retry: enqueue only incomplete branches. Reuse the
+    // already-loaded step map (reset steps are now 'Pending' in memory) instead of
+    // re-querying once per branch.
     for (String targetStepName : targetStepNames) {
-      List<Workflow_Step_Execution__c> stepExecs = [
-        SELECT Status__c
-        FROM Workflow_Step_Execution__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Step_Name__c = :targetStepName
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC, Id DESC
-        LIMIT 1
-      ];
-      if (stepExecs.isEmpty() || stepExecs[0].Status__c != 'Completed') {
+      Workflow_Step_Execution__c stepExec = latestStepByName.get(targetStepName);
+      if (stepExec == null || stepExec.Status__c != 'Completed') {
         if (Test.isRunningTest()) {
           if (!disableQueueableInTest) {
             System.enqueueJob(
@@ -2616,6 +2630,61 @@ public inherited sharing class WorkflowEngine {
    * Cancels a workflow instance, aborts scheduled jobs, and optionally runs saga compensations.
    */
   public static void cancel(Id instanceId, Boolean runCompensations) {
+    // Cancel the target instance and its entire active descendant tree. Descendants are
+    // gathered iteratively (one set-based query per tree level) rather than via recursive
+    // cancel() calls, so deep/wide trees cannot blow the SOQL or stack-depth governor
+    // limits through uncontrolled recursion. Parent-before-child ordering is preserved.
+    //
+    // Note: each node still costs a handful of SOQL/DML in cancelSingleInstance(); a tree
+    // with thousands of nodes would need async chunking. That is intentionally out of
+    // scope here — the goal is to remove the recursion-driven multiplication.
+    // The traversal always yields the target first, so it is cancelled with the original
+    // not-found semantics (throwIfMissing = true); descendants are best-effort.
+    for (Id targetId : collectInstanceAndActiveDescendants(instanceId)) {
+      cancelSingleInstance(targetId, runCompensations, targetId == instanceId);
+    }
+  }
+
+  /**
+   * Breadth-first collection of an instance plus all of its active descendants using one
+   * set-based query per tree level. Returns IDs in parent-before-child order. A `seen`
+   * guard makes the traversal safe against accidental parent-reference cycles.
+   */
+  private static List<Id> collectInstanceAndActiveDescendants(Id rootId) {
+    List<Id> ordered = new List<Id>{ rootId };
+    Set<Id> seen = new Set<Id>{ rootId };
+    List<Id> frontier = new List<Id>{ rootId };
+    while (!frontier.isEmpty()) {
+      List<Workflow_Instance__c> children = [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE
+          Parent_Instance__c IN :frontier
+          AND Status__c IN ('Pending', 'Running', 'Suspended', 'Cancelling')
+        WITH SYSTEM_MODE
+      ];
+      List<Id> nextFrontier = new List<Id>();
+      for (Workflow_Instance__c child : children) {
+        if (!seen.contains(child.Id)) {
+          seen.add(child.Id);
+          ordered.add(child.Id);
+          nextFrontier.add(child.Id);
+        }
+      }
+      frontier = nextFrontier;
+    }
+    return ordered;
+  }
+
+  /**
+   * Cancels a single workflow instance (no descendant traversal). When throwIfMissing is
+   * true the original not-found exception is preserved for the top-level target.
+   */
+  private static void cancelSingleInstance(
+    Id instanceId,
+    Boolean runCompensations,
+    Boolean throwIfMissing
+  ) {
     List<Workflow_Instance__c> instances = [
       SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c
       FROM Workflow_Instance__c
@@ -2624,7 +2693,12 @@ public inherited sharing class WorkflowEngine {
       LIMIT 1
     ];
     if (instances.isEmpty()) {
-      throw new WorkflowException('Workflow instance not found: ' + instanceId);
+      if (throwIfMissing) {
+        throw new WorkflowException(
+          'Workflow instance not found: ' + instanceId
+        );
+      }
+      return;
     }
 
     Workflow_Instance__c instance = instances[0];
@@ -2675,7 +2749,12 @@ public inherited sharing class WorkflowEngine {
       FOR UPDATE
     ];
     if (instances.isEmpty()) {
-      throw new WorkflowException('Workflow instance not found: ' + instanceId);
+      if (throwIfMissing) {
+        throw new WorkflowException(
+          'Workflow instance not found: ' + instanceId
+        );
+      }
+      return;
     }
     instance = instances[0];
 
@@ -2730,19 +2809,8 @@ public inherited sharing class WorkflowEngine {
       instance.Error_Message__c = 'Cancelled by user.';
       update as system instance;
     }
-
-    // Recursively cancel active child workflows
-    List<Workflow_Instance__c> childInstances = [
-      SELECT Id
-      FROM Workflow_Instance__c
-      WHERE
-        Parent_Instance__c = :instance.Id
-        AND Status__c IN ('Pending', 'Running', 'Suspended', 'Cancelling')
-      WITH SYSTEM_MODE
-    ];
-    for (Workflow_Instance__c child : childInstances) {
-      cancel(child.Id, runCompensations);
-    }
+    // Active child workflows are handled by the caller (cancel()) via iterative
+    // descendant traversal, so no recursive child cancellation happens here.
   }
 
   /**
@@ -2765,7 +2833,7 @@ public inherited sharing class WorkflowEngine {
       try {
         System.abortJob(triggerJob.Id);
       } catch (Exception e) {
-        // ignore
+        System.debug(LoggingLevel.WARN, 'Failed to abort job ' + triggerJob.Id + ': ' + e.getMessage());
       }
     }
   }
@@ -2779,7 +2847,7 @@ public inherited sharing class WorkflowEngine {
             System.enqueueJob(new WorkflowOrchestrator(instId));
           }
         } catch (Exception e) {
-          // Ignore / limit reached
+          System.debug(LoggingLevel.WARN, 'Failed to enqueue WorkflowOrchestrator for ' + instId + ': ' + e.getMessage());
         }
       }
       return;
@@ -2863,7 +2931,7 @@ public inherited sharing class WorkflowEngine {
           return cvs[0].VersionData.toString();
         }
       } catch (Exception ex) {
-        // fallback to original value
+        System.debug(LoggingLevel.WARN, 'Failed to resolve offloaded payload, falling back to raw value: ' + ex.getMessage());
       }
     }
     return textValue;
@@ -2897,6 +2965,7 @@ public inherited sharing class WorkflowEngine {
       try {
         insert as system cdl;
       } catch (DmlException ex) {
+        System.debug(LoggingLevel.FINE, 'ContentDocumentLink insert failed with default visibility, retrying with AllUsers: ' + ex.getMessage());
         cdl.Visibility = 'AllUsers';
         insert as system cdl;
       }
@@ -2922,72 +2991,198 @@ public inherited sharing class WorkflowEngine {
       WHERE Status__c IN ('Running', 'Pending') AND Timeout_At__c <= :now
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
-      LIMIT 100
+      LIMIT :WATCHDOG_TIMEOUT_BATCH_SIZE
     ];
 
     if (!timedOutSteps.isEmpty()) {
+      Set<Id> stepIds = new Set<Id>();
+      Set<Id> instanceIds = new Set<Id>();
       for (Workflow_Step_Execution__c step : timedOutSteps) {
-        try {
-          List<Workflow_Instance__c> parentInsts = [
-            SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c
-            FROM Workflow_Instance__c
-            WHERE Id = :step.Workflow_Instance__c
-            WITH SYSTEM_MODE
-            FOR UPDATE
-          ];
-          if (parentInsts.isEmpty()) {
-            continue;
-          }
-          Workflow_Instance__c parent = parentInsts[0];
-          if (
-            parent.Status__c != 'Pending' &&
-            parent.Status__c != 'Running' &&
-            parent.Status__c != 'Compensating' &&
-            parent.Status__c != 'Cancelling'
-          ) {
-            continue;
+        stepIds.add(step.Id);
+        instanceIds.add(step.Workflow_Instance__c);
+      }
+
+      // Lock parent instances
+      Map<Id, Workflow_Instance__c> parents = new Map<Id, Workflow_Instance__c>([
+        SELECT Id, Name, Status__c, Current_Step__c, Compensation_Stack__c, Error_Message__c, Workflow_Name__c, Correlation_Key__c
+        FROM Workflow_Instance__c
+        WHERE Id IN :instanceIds
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ]);
+
+      // Lock step executions
+      Map<Id, Workflow_Step_Execution__c> lockedSteps = new Map<Id, Workflow_Step_Execution__c>([
+        SELECT Id, Status__c, Error_Details__c, Timeout_At__c, Step_Name__c, Workflow_Instance__c
+        FROM Workflow_Step_Execution__c
+        WHERE Id IN :stepIds
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ]);
+
+      List<Workflow_Step_Execution__c> stepsToUpdate = new List<Workflow_Step_Execution__c>();
+      Map<Id, Workflow_Instance__c> instancesToUpdate = new Map<Id, Workflow_Instance__c>();
+      List<Workflow_Step_Execution__c> compensationStepsToInsert = new List<Workflow_Step_Execution__c>();
+      List<Id> orchestratorInstanceIds = new List<Id>();
+
+      Set<Id> instancesNeedingCompensationInfo = new Set<Id>();
+      Set<String> activeStepNamesForComp = new Set<String>();
+
+      for (Workflow_Step_Execution__c step : timedOutSteps) {
+        Workflow_Instance__c parent = parents.get(step.Workflow_Instance__c);
+        if (parent == null) {
+          continue;
+        }
+        if (
+          parent.Status__c != 'Pending' &&
+          parent.Status__c != 'Running' &&
+          parent.Status__c != 'Compensating' &&
+          parent.Status__c != 'Cancelling'
+        ) {
+          continue;
+        }
+
+        Workflow_Step_Execution__c lockedStep = lockedSteps.get(step.Id);
+        if (lockedStep == null) {
+          continue;
+        }
+        if (
+          lockedStep.Status__c != 'Running' &&
+          lockedStep.Status__c != 'Pending'
+        ) {
+          continue;
+        }
+
+        String errorMsg = (lockedStep.Status__c == 'Running')
+          ? 'Step execution timed out.'
+          : 'Step execution timed out before starting.';
+
+        lockedStep.Status__c = 'Failed';
+        lockedStep.Error_Details__c = errorMsg;
+        lockedStep.Timeout_At__c = null;
+        stepsToUpdate.add(lockedStep);
+
+        if (!instancesToUpdate.containsKey(parent.Id)) {
+          // Check if there are compensations to run
+          Boolean hasCompensations = false;
+          List<String> stack = new List<String>();
+          if (String.isNotBlank(parent.Compensation_Stack__c)) {
+            stack = (List<String>) JSON.deserialize(
+              parent.Compensation_Stack__c,
+              List<String>.class
+            );
+            hasCompensations = !stack.isEmpty();
           }
 
-          List<Workflow_Step_Execution__c> stepLockList = [
-            SELECT Id, Status__c, Error_Details__c
-            FROM Workflow_Step_Execution__c
-            WHERE Id = :step.Id
-            WITH SYSTEM_MODE
-            FOR UPDATE
-          ];
-          if (stepLockList.isEmpty()) {
-            continue;
+          Boolean isCompensationFailure = (parent.Status__c == 'Compensating' ||
+            parent.Status__c == 'Cancelling' ||
+            (String.isNotBlank(step.Step_Name__c) && step.Step_Name__c.endsWith('_Compensate')));
+
+          if (!hasCompensations || isCompensationFailure) {
+            parent.Status__c = 'Failed';
+            parent.Error_Message__c = 'Failed at step ' + step.Step_Name__c + ': ' + errorMsg;
+            instancesToUpdate.put(parent.Id, parent);
+          } else {
+            parent.Status__c = 'Compensating';
+            parent.Error_Message__c = 'Failed at step ' + step.Step_Name__c + ': ' + errorMsg;
+            instancesToUpdate.put(parent.Id, parent);
+
+            instancesNeedingCompensationInfo.add(parent.Id);
+            if (!stack.isEmpty()) {
+              activeStepNamesForComp.add(stack[stack.size() - 1]);
+            }
           }
-          Workflow_Step_Execution__c lockedStep = stepLockList[0];
-          if (
-            lockedStep.Status__c != 'Running' &&
-            lockedStep.Status__c != 'Pending'
-          ) {
-            continue;
+        }
+      }
+
+      Map<String, Workflow_Step_Execution__c> existingCompSteps = new Map<String, Workflow_Step_Execution__c>();
+      Map<String, Workflow_Step_Execution__c> originalStepsMap = new Map<String, Workflow_Step_Execution__c>();
+
+      if (!instancesNeedingCompensationInfo.isEmpty()) {
+        List<Workflow_Step_Execution__c> existing = [
+          SELECT Id, Workflow_Instance__c, Step_Name__c
+          FROM Workflow_Step_Execution__c
+          WHERE Workflow_Instance__c IN :instancesNeedingCompensationInfo
+            AND Step_Name__c LIKE '%\_Compensate'
+          WITH SYSTEM_MODE
+        ];
+        for (Workflow_Step_Execution__c e : existing) {
+          existingCompSteps.put(e.Workflow_Instance__c + ':' + e.Step_Name__c, e);
+        }
+
+        List<Workflow_Step_Execution__c> originalExecs = [
+          SELECT Workflow_Instance__c, Step_Name__c, Input__c, Output__c
+          FROM Workflow_Step_Execution__c
+          WHERE Workflow_Instance__c IN :instancesNeedingCompensationInfo
+            AND Step_Name__c IN :activeStepNamesForComp
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate DESC, Id DESC
+        ];
+        for (Workflow_Step_Execution__c o : originalExecs) {
+          String key = o.Workflow_Instance__c + ':' + o.Step_Name__c;
+          if (!originalStepsMap.containsKey(key)) {
+            originalStepsMap.put(key, o);
           }
+        }
+      }
 
-          String errorMsg = (lockedStep.Status__c == 'Running')
-            ? 'Step execution timed out.'
-            : 'Step execution timed out before starting.';
+      for (Id instId : instancesNeedingCompensationInfo) {
+        Workflow_Instance__c parent = parents.get(instId);
+        List<String> stack = (List<String>) JSON.deserialize(
+          parent.Compensation_Stack__c,
+          List<String>.class
+        );
+        String activeStepName = stack[stack.size() - 1];
+        String compensationStepLogName = activeStepName + '_Compensate';
 
-          lockedStep.Status__c = 'Failed';
-          lockedStep.Error_Details__c = errorMsg;
-          lockedStep.Timeout_At__c = null;
-          update as system lockedStep;
+        if (existingCompSteps.containsKey(parent.Id + ':' + compensationStepLogName)) {
+          continue;
+        }
 
-          failWorkflowInstance(parent.Id, step.Step_Name__c, errorMsg);
-        } catch (Exception ex) {
-          // Log/ignore individual step failures
+        Workflow_Step_Execution__c orig = originalStepsMap.get(parent.Id + ':' + activeStepName);
+
+        Workflow_Step_Execution__c compStepExec = new Workflow_Step_Execution__c();
+        compStepExec.Workflow_Instance__c = parent.Id;
+        compStepExec.Step_Name__c = compensationStepLogName;
+        compStepExec.Status__c = 'Pending';
+        compStepExec.Input__c = (orig != null) ? orig.Input__c : null;
+        compStepExec.Output__c = (orig != null) ? orig.Output__c : null;
+        compStepExec.Retry_Count__c = 0;
+        compensationStepsToInsert.add(compStepExec);
+        orchestratorInstanceIds.add(parent.Id);
+      }
+
+      if (!stepsToUpdate.isEmpty()) {
+        update as system stepsToUpdate;
+      }
+      if (!compensationStepsToInsert.isEmpty()) {
+        insert as system compensationStepsToInsert;
+      }
+      if (!instancesToUpdate.isEmpty()) {
+        update as system instancesToUpdate.values();
+      }
+
+      for (Workflow_Instance__c parent : instancesToUpdate.values()) {
+        WorkflowAlertManager.sendAlert(parent, parent.Error_Message__c);
+      }
+
+      if (!orchestratorInstanceIds.isEmpty()) {
+        if (Test.isRunningTest() && disableQueueableInTest) {
+          // Do nothing
+        } else {
+          enqueueOrchestrators(orchestratorInstanceIds);
         }
       }
     }
 
-    // 2. Process Sleep Resumptions
+    // 2. Process Sleep Resumptions (bounded per heartbeat; backlog drains on subsequent
+    // heartbeats so an unbounded suspended-instance backlog cannot blow row/heap limits).
     List<Workflow_Instance__c> readyToResume = [
       SELECT Id, Status__c, Sleep_Until__c, Async_Job_Id__c, Error_Message__c
       FROM Workflow_Instance__c
       WHERE Status__c = 'Suspended' AND Sleep_Until__c <= :now
       WITH SYSTEM_MODE
+      LIMIT :WATCHDOG_RESUME_BATCH_SIZE
       FOR UPDATE
     ];
 
@@ -3056,6 +3251,7 @@ public inherited sharing class WorkflowEngine {
         }
       }
     } catch (Exception e) {
+      System.debug(LoggingLevel.FINE, 'Failed to instantiate type to read timeout duration for step: ' + className + ', error: ' + e.getMessage());
     }
     return null;
   }
@@ -3171,12 +3367,17 @@ public inherited sharing class WorkflowEngine {
           runTime.year();
         String cleanStepName = stepName.replaceAll('[^a-zA-Z0-9]', '_');
         String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
+        // The job name is deterministic, so a re-schedule (e.g. retry, or a yielded step
+        // that re-enters before its prior timeout job fires) collides with the existing
+        // scheduled job and System.schedule() throws. Clear any stale job with this name
+        // first so the new timeout is actually registered instead of silently dropped.
+        cancelTimeoutJob(instanceId, stepName);
         System.schedule(jobName, cronStr, job);
       }
     } catch (AsyncException ex) {
-      // Limit reached, fall back to database-backed Timeout_At__c watchdog
+      System.debug(LoggingLevel.INFO, 'Async timeout scheduling limit reached, relying on watchdog: ' + ex.getMessage());
     } catch (Exception ex) {
-      // Ignore other exceptions
+      System.debug(LoggingLevel.WARN, 'Failed to schedule timeout job: ' + ex.getMessage());
     }
   }
 
@@ -3223,10 +3424,10 @@ public inherited sharing class WorkflowEngine {
         job
       ));
     } catch (AsyncException ex) {
-      // Limit reached, fall back to Sleep_Until__c poller
+      System.debug(LoggingLevel.INFO, 'Async retry scheduling limit reached, relying on watchdog: ' + ex.getMessage());
       return null;
     } catch (Exception ex) {
-      // Ignore
+      System.debug(LoggingLevel.WARN, 'Failed to schedule retry job: ' + ex.getMessage());
       return null;
     }
   }
@@ -3270,10 +3471,10 @@ public inherited sharing class WorkflowEngine {
         job
       ));
     } catch (AsyncException ex) {
-      // Limit reached, fall back to Sleep_Until__c poller
+      System.debug(LoggingLevel.INFO, 'Async sleep scheduling limit reached, relying on watchdog: ' + ex.getMessage());
       return null;
     } catch (Exception ex) {
-      // Ignore
+      System.debug(LoggingLevel.WARN, 'Failed to schedule sleep job: ' + ex.getMessage());
       return null;
     }
   }
@@ -3291,7 +3492,7 @@ public inherited sharing class WorkflowEngine {
       try {
         System.abortJob(triggerJob.Id);
       } catch (Exception e) {
-        // ignore if already executed/aborted
+        System.debug(LoggingLevel.WARN, 'Failed to cancel timeout job ' + triggerJob.Id + ': ' + e.getMessage());
       }
     }
   }

@@ -857,4 +857,165 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(null, updatedInst.Sleep_Until__c);
     System.assertEquals(null, updatedInst.Async_Job_Id__c);
   }
+
+  @isTest
+  static void testFilteredInstancesClamping() {
+    Test.startTest();
+    List<Map<String, Object>> res1 = WorkflowDashboardController.getFilteredInstances(
+      '',
+      '',
+      '',
+      -10,
+      -5,
+      ''
+    );
+    List<Map<String, Object>> res2 = WorkflowDashboardController.getFilteredInstances(
+      '',
+      '',
+      '',
+      500,
+      5000,
+      ''
+    );
+    Test.stopTest();
+    System.assertNotEquals(null, res1);
+    System.assertNotEquals(null, res2);
+  }
+
+  @isTest
+  static void testGetDefinitionsFallback() {
+    // Force the ApexTypeImplementor fallback path (used when the source scan would
+    // approach a governor limit) and verify it still discovers top-level and inner-class
+    // workflow definitions.
+    WorkflowDashboardController.forceDefinitionFallback = true;
+    Test.startTest();
+    List<String> definitions = WorkflowDashboardController.getDefinitions();
+    Test.stopTest();
+    WorkflowDashboardController.forceDefinitionFallback = false;
+
+    System.assertNotEquals(null, definitions, 'Fallback should return a list');
+    System.assert(
+      definitions.contains('CleanupWorkflow'),
+      'Fallback should find top-level CleanupWorkflow: ' + definitions
+    );
+    System.assert(
+      definitions.contains('SagaWorkflowExample.SagaWorkflow'),
+      'Fallback should find inner-class SagaWorkflowExample.SagaWorkflow: ' +
+      definitions
+    );
+    // Test workflow definitions must remain excluded in the fallback path too.
+    for (String def : definitions) {
+      System.assert(
+        !def.contains('WorkflowEngineTest'),
+        'Test workflow definitions must be excluded: ' + def
+      );
+    }
+  }
+
+  @isTest
+  static void testSubmitApprovalRoleEnforced() {
+    // A non-admin user holding Workflow_Admin (so they pass the dashboard gate) but NOT
+    // the approval's designated role must be blocked from approving that specific gate.
+    Profile stdProfile = [
+      SELECT Id
+      FROM Profile
+      WHERE Name = 'Standard User'
+      LIMIT 1
+    ];
+    User stdUser = new User(
+      Alias = 'apprusr',
+      Email = 'appruser@testorg.com',
+      EmailEncodingKey = 'UTF-8',
+      LastName = 'Approver',
+      LanguageLocaleKey = 'en_US',
+      LocaleSidKey = 'en_US',
+      ProfileId = stdProfile.Id,
+      TimeZoneSidKey = 'America/Los_Angeles',
+      UserName = 'stduser_approval_test_' +
+        DateTime.now().getTime() +
+        '@testorg.com'
+    );
+    // Isolate setup-object DML (User/PermissionSet/...) in its own context so it does not
+    // collide with the non-setup Workflow_Instance__c DML below (MIXED_DML_OPERATION).
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insert stdUser;
+      CustomPermission cp = [
+        SELECT Id
+        FROM CustomPermission
+        WHERE DeveloperName = 'Workflow_Admin'
+        LIMIT 1
+      ];
+      PermissionSet ps = new PermissionSet(
+        Label = 'Workflow Admin Appr PS',
+        Name = 'Workflow_Admin_Appr_PS'
+      );
+      insert ps;
+      insert new SetupEntityAccess(ParentId = ps.Id, SetupEntityId = cp.Id);
+      insert new PermissionSetAssignment(
+        AssigneeId = stdUser.Id,
+        PermissionSetId = ps.Id
+      );
+    }
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'RoleApprovalKey',
+      Input__c = '"InputData"'
+    );
+    insert inst;
+
+    // Pending approval gate that requires a custom permission the std user does not hold.
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.HappyStep1',
+      Status__c = 'Pending',
+      Retry_Count__c = 0,
+      Output__c = JSON.serialize(
+        new Map<String, Object>{
+          'waitingForApproval' => true,
+          'approvalKey' => 'ExpenseApproval',
+          'approvalRole' => 'Nonexistent_Finance_Approver_Perm'
+        }
+      )
+    );
+    insert step;
+
+    Test.startTest();
+    System.runAs(stdUser) {
+      Boolean threw = false;
+      try {
+        WorkflowDashboardController.submitApproval(
+          inst.Id,
+          'ExpenseApproval',
+          true,
+          'Approving without the role'
+        );
+      } catch (AuraHandledException e) {
+        threw = true;
+        System.assert(
+          e.getMessage().contains('requires') ||
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception'),
+          e.getMessage()
+        );
+      }
+      System.assert(
+        threw,
+        'Approver without the designated role must be blocked'
+      );
+    }
+    Test.stopTest();
+
+    // No approval signal should have been recorded.
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE Workflow_Instance__c = :inst.Id
+      ],
+      'No signal should be created when the role check fails'
+    );
+  }
 }

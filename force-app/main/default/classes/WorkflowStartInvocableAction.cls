@@ -21,17 +21,29 @@ public inherited sharing class WorkflowStartInvocableAction {
     description='Initiates a Revenant durable workflow instance'
   )
   public static List<StartResult> startWorkflow(List<StartRequest> requests) {
-    List<StartResult> results = new List<StartResult>();
+    if (requests == null || requests.isEmpty()) {
+      return new List<StartResult>();
+    }
+
+    List<WorkflowEngine.StartRequest> engineRequests = new List<WorkflowEngine.StartRequest>();
     for (StartRequest req : requests) {
       Object input = null;
       if (String.isNotBlank(req.inputJson)) {
         input = JSON.deserializeUntyped(req.inputJson);
       }
-      Id instanceId = WorkflowEngine.start(
-        req.workflowName,
-        req.correlationKey,
-        input
+      engineRequests.add(
+        new WorkflowEngine.StartRequest(
+          req.workflowName,
+          req.correlationKey,
+          input
+        )
       );
+    }
+
+    List<Id> instanceIds = WorkflowEngine.start(engineRequests);
+
+    List<StartResult> results = new List<StartResult>();
+    for (Id instanceId : instanceIds) {
       StartResult res = new StartResult();
       res.workflowInstanceId = instanceId;
       results.add(res);

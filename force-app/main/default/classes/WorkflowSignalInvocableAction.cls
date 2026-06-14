@@ -16,8 +16,20 @@ public inherited sharing class WorkflowSignalInvocableAction {
     description='Sends a signal event to a running workflow instance'
   )
   public static void signalWorkflow(List<SignalRequest> requests) {
-    for (SignalRequest req : requests) {
-      WorkflowEngine.signal(req.targetKey, req.signalName, req.payloadJson);
+    if (requests == null || requests.isEmpty()) {
+      return;
     }
+
+    List<WorkflowEngine.SignalRequest> engineRequests = new List<WorkflowEngine.SignalRequest>();
+    for (SignalRequest req : requests) {
+      engineRequests.add(
+        new WorkflowEngine.SignalRequest(
+          req.targetKey,
+          req.signalName,
+          req.payloadJson
+        )
+      );
+    }
+    WorkflowEngine.signal(engineRequests);
   }
 }

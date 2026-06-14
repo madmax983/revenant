@@ -8,14 +8,12 @@ public inherited sharing class WorkflowDashboardController {
     if (FeatureManagement.checkPermission('Workflow_Admin')) {
       return;
     }
-    List<Profile> profiles = [
-      SELECT Name
-      FROM Profile
-      WHERE Id = :UserInfo.getProfileId()
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    if (!profiles.isEmpty() && profiles[0].Name == 'System Administrator') {
+    // Fall back to users who hold the "Modify All Data" system permission (see
+    // currentUserHasModifyAllData). This replaces the previous hard-coded 'System
+    // Administrator' profile-NAME comparison, which silently locked out real admins when
+    // the profile was renamed (common post-migration) and could be spoofed by cloning a
+    // profile and naming it 'System Administrator'.
+    if (currentUserHasModifyAllData()) {
       return;
     }
 
@@ -28,6 +26,24 @@ public inherited sharing class WorkflowDashboardController {
     throw ex;
   }
 
+  /**
+   * True when the running user has "Modify All Data", granted via EITHER their profile or
+   * an assigned permission set. Rename-proof and covers permission-set-granted admins,
+   * unlike matching a mutable profile name.
+   */
+  private static Boolean currentUserHasModifyAllData() {
+    return ![
+      SELECT Id
+      FROM PermissionSetAssignment
+      WHERE
+        AssigneeId = :UserInfo.getUserId()
+        AND PermissionSet.PermissionsModifyAllData = TRUE
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ]
+    .isEmpty();
+  }
+
   private static Id getAttachmentId(String textValue) {
     if (
       String.isNotBlank(textValue) && textValue.startsWith('{"$attachmentId":')
@@ -38,7 +54,7 @@ public inherited sharing class WorkflowDashboardController {
         );
         return (Id) marker.get('$attachmentId');
       } catch (Exception ex) {
-        // fallback
+        System.debug(LoggingLevel.FINE, 'getAttachmentId parsing fallback: ' + ex.getMessage());
       }
     }
     return null;
@@ -155,6 +171,19 @@ public inherited sharing class WorkflowDashboardController {
     String cacheBuster
   ) {
     checkAuthorization();
+
+    if (limitSize == null || limitSize <= 0) {
+      limitSize = 50;
+    } else if (limitSize > 100) {
+      limitSize = 100;
+    }
+
+    if (offsetSize == null || offsetSize < 0) {
+      offsetSize = 0;
+    } else if (offsetSize > 2000) {
+      offsetSize = 2000;
+    }
+
     String query =
       'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c ' +
       'FROM Workflow_Instance__c' +
@@ -168,14 +197,22 @@ public inherited sharing class WorkflowDashboardController {
     Set<Id> asyncIds = new Set<Id>();
     for (Workflow_Instance__c inst : instances) {
       if (String.isNotBlank(inst.Async_Job_Id__c)) {
-        try {
-          Id jobId = (Id) inst.Async_Job_Id__c;
-          if (jobId.getSobjectType() == CronTrigger.SObjectType) {
-            cronIds.add(jobId);
-          } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
-            asyncIds.add(jobId);
+        String jobIdStr = inst.Async_Job_Id__c;
+        if ((jobIdStr.length() == 15 || jobIdStr.length() == 18) && 
+            (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))) {
+          try {
+            Id jobId = (Id) jobIdStr;
+            if (jobId.getSobjectType() == CronTrigger.SObjectType) {
+              cronIds.add(jobId);
+            } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
+              asyncIds.add(jobId);
+            }
+          } catch (Exception ex) {
+            System.debug(LoggingLevel.WARN, 'Failed to cast Async Job ID: ' + jobIdStr + ', error: ' + ex.getMessage());
           }
-        } catch (Exception ex) {}
+        } else {
+          System.debug(LoggingLevel.WARN, 'Invalid Async Job ID format: ' + jobIdStr);
+        }
       }
     }
 
@@ -210,16 +247,24 @@ public inherited sharing class WorkflowDashboardController {
       String waitingOn = null;
       if (inst.Status__c == 'Suspended') {
         if (String.isNotBlank(inst.Async_Job_Id__c)) {
-          try {
-            Id jobId = (Id) inst.Async_Job_Id__c;
-            if (jobId.getSobjectType() == CronTrigger.SObjectType && activeCronIds.contains(jobId)) {
-              waitingOn = 'Scheduled Job';
-            } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType && activeAsyncIds.contains(jobId)) {
-              waitingOn = 'Delayed Queueable';
-            } else {
+          String jobIdStr = inst.Async_Job_Id__c;
+          if ((jobIdStr.length() == 15 || jobIdStr.length() == 18) && 
+              (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))) {
+            try {
+              Id jobId = (Id) jobIdStr;
+              if (jobId.getSobjectType() == CronTrigger.SObjectType && activeCronIds.contains(jobId)) {
+                waitingOn = 'Scheduled Job';
+              } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType && activeAsyncIds.contains(jobId)) {
+                waitingOn = 'Delayed Queueable';
+              } else {
+                waitingOn = 'Watchdog';
+              }
+            } catch (Exception ex) {
+              System.debug(LoggingLevel.WARN, 'Failed to cast Async Job ID: ' + jobIdStr + ', error: ' + ex.getMessage());
               waitingOn = 'Watchdog';
             }
-          } catch (Exception ex) {
+          } else {
+            System.debug(LoggingLevel.WARN, 'Invalid Async Job ID format: ' + jobIdStr);
             waitingOn = 'Watchdog';
           }
         } else if (inst.Sleep_Until__c != null) {
@@ -344,24 +389,32 @@ public inherited sharing class WorkflowDashboardController {
     String waitingOn = null;
     if (instance.Status__c == 'Suspended') {
       if (String.isNotBlank(instance.Async_Job_Id__c)) {
-        try {
-          Id jobId = (Id) instance.Async_Job_Id__c;
-          if (jobId.getSobjectType() == CronTrigger.SObjectType) {
-            List<CronTrigger> cronJobs = [SELECT Id FROM CronTrigger WHERE Id = :jobId AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING') WITH SYSTEM_MODE LIMIT 1];
-            if (!cronJobs.isEmpty()) {
-              waitingOn = 'Scheduled Job';
-            } else {
-              waitingOn = 'Watchdog';
+        String jobIdStr = instance.Async_Job_Id__c;
+        if ((jobIdStr.length() == 15 || jobIdStr.length() == 18) && 
+            (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))) {
+          try {
+            Id jobId = (Id) jobIdStr;
+            if (jobId.getSobjectType() == CronTrigger.SObjectType) {
+              List<CronTrigger> cronJobs = [SELECT Id FROM CronTrigger WHERE Id = :jobId AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING') WITH SYSTEM_MODE LIMIT 1];
+              if (!cronJobs.isEmpty()) {
+                waitingOn = 'Scheduled Job';
+              } else {
+                waitingOn = 'Watchdog';
+              }
+            } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
+              List<AsyncApexJob> asyncJobs = [SELECT Id FROM AsyncApexJob WHERE Id = :jobId AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing') WITH SYSTEM_MODE LIMIT 1];
+              if (!asyncJobs.isEmpty()) {
+                waitingOn = 'Delayed Queueable';
+              } else {
+                waitingOn = 'Watchdog';
+              }
             }
-          } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
-            List<AsyncApexJob> asyncJobs = [SELECT Id FROM AsyncApexJob WHERE Id = :jobId AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing') WITH SYSTEM_MODE LIMIT 1];
-            if (!asyncJobs.isEmpty()) {
-              waitingOn = 'Delayed Queueable';
-            } else {
-              waitingOn = 'Watchdog';
-            }
+          } catch (Exception ex) {
+            System.debug(LoggingLevel.WARN, 'Failed to cast Async Job ID: ' + jobIdStr + ', error: ' + ex.getMessage());
+            waitingOn = 'Watchdog';
           }
-        } catch (Exception ex) {
+        } else {
+          System.debug(LoggingLevel.WARN, 'Invalid Async Job ID format: ' + jobIdStr);
           waitingOn = 'Watchdog';
         }
       } else if (instance.Sleep_Until__c != null) {
@@ -378,52 +431,141 @@ public inherited sharing class WorkflowDashboardController {
     };
   }
 
+  /**
+   * Raised internally when the precise source-scan strategy approaches a governor
+   * limit. It is thrown *before* the (uncatchable) platform LimitException would fire,
+   * so the caller can degrade gracefully to the lightweight ApexTypeImplementor index.
+   */
+  @TestVisible
+  private class DefinitionScanLimitException extends Exception {
+  }
+
+  // When the running transaction reaches this fraction of its heap or CPU budget while
+  // scanning Apex source, abandon the source scan and fall back to ApexTypeImplementor.
+  @TestVisible
+  private static Decimal definitionScanGuardFraction = 0.7;
+  // Forces the fallback path in tests (an empty org has no classes to scan otherwise).
+  @TestVisible
+  private static Boolean forceDefinitionFallback = false;
+
   @AuraEnabled(cacheable=true)
   public static List<String> getDefinitions() {
     checkAuthorization();
+    // Primary strategy: scan Apex source so we can detect *inner-class* definitions
+    // (reported as "Outer.Inner"), which the platform index cannot express. This is
+    // governor-bounded by the proactive guards inside getDefinitionsFromSource().
+    //
+    // Fallback strategy: on very large orgs the source scan can exhaust heap or CPU.
+    // Governor LimitExceptions are uncatchable in Apex, so we cannot react to them;
+    // instead we monitor Limits.* and bail to the cheap ApexTypeImplementor index.
+    //
+    // KNOWN TRADE-OFF: the fallback queries the platform's compiled-type index rather
+    // than raw source. Verified behavior (API 67): it DOES surface inner-class
+    // definitions with qualified "Outer.Inner" names and resolves transitive interface
+    // inheritance, so for *startable* definitions it is at least as complete as the
+    // regex. The differences are (a) it lists only concrete (IsConcrete = true) types,
+    // so non-instantiable abstract/virtual definition classes are omitted — acceptable,
+    // since those cannot be started anyway; and (b) it reflects the compiled index, a
+    // separate source of truth that is normally current but updates on class compile.
+    try {
+      if (forceDefinitionFallback) {
+        throw new DefinitionScanLimitException('Forced fallback (test).');
+      }
+      return getDefinitionsFromSource();
+    } catch (DefinitionScanLimitException ex) {
+      System.debug(
+        LoggingLevel.WARN,
+        'getDefinitions: source scan hit governor guard, falling back to ' +
+        'ApexTypeImplementor (inner-class definitions will be omitted): ' +
+        ex.getMessage()
+      );
+      return getDefinitionsFromTypeIndex();
+    }
+  }
+
+  /**
+   * Precise discovery via Apex source regex. Uses a SOQL for-loop so only ~200 class
+   * bodies are resident in heap at a time, and proactively aborts (throwing
+   * DefinitionScanLimitException) before crossing the heap/CPU governor limits.
+   */
+  private static List<String> getDefinitionsFromSource() {
     List<String> definitions = new List<String>();
-    // Query Apex classes and check body in memory to bypass SOQL Body restriction
-    List<ApexClass> classes = [
+    Pattern classPattern = Pattern.compile(
+      '(?i)\\bclass\\s+([a-zA-Z0-9_]+)\\s+[^\\{]*?\\bimplements\\s+[^\\{]*?\\b(WorkflowDefinition|VersionedWorkflow)\\b'
+    );
+
+    Long heapGuard = (Long) (Limits.getLimitHeapSize() *
+      definitionScanGuardFraction);
+    Integer cpuGuard = (Integer) (Limits.getLimitCpuTime() *
+      definitionScanGuardFraction);
+
+    // SOQL for-loop retrieves records in chunks of 200, bounding resident heap so a
+    // large org's class bodies are not all materialized at once.
+    for (ApexClass ac : [
       SELECT Name, Body
       FROM ApexClass
       WHERE NamespacePrefix = NULL
       WITH SYSTEM_MODE
       ORDER BY Name ASC
-    ];
-
-    Pattern classPattern = Pattern.compile(
-      '(?i)\\bclass\\s+([a-zA-Z0-9_]+)\\s+[^\\{]*?\\bimplements\\s+[^\\{]*?\\b(WorkflowDefinition|VersionedWorkflow)\\b'
-    );
-
-    for (ApexClass ac : classes) {
-      if (ac.Body != null) {
-        Matcher pm = classPattern.matcher(ac.Body);
-        while (pm.find()) {
-          String className = pm.group(1);
-          // Check if it's the outer class or an inner class
-          if (className.equalsIgnoreCase(ac.Name)) {
-            // Exclude test classes
-            if (
-              !ac.Name.contains('WorkflowEngineTest') &&
-              !ac.Name.contains('WorkflowDashboardControllerTest')
-            ) {
-              definitions.add(ac.Name);
-            }
-          } else {
-            // Inner class: prefix with outer class name
-            // Exclude test classes
-            if (
-              !ac.Name.contains('WorkflowEngineTest') &&
-              !ac.Name.contains('WorkflowDashboardControllerTest')
-            ) {
-              definitions.add(ac.Name + '.' + className);
-            }
-          }
+    ]) {
+      if (Limits.getHeapSize() > heapGuard || Limits.getCpuTime() > cpuGuard) {
+        throw new DefinitionScanLimitException(
+          'Heap/CPU guard tripped during Apex source scan.'
+        );
+      }
+      if (ac.Body == null) {
+        continue;
+      }
+      Matcher pm = classPattern.matcher(ac.Body);
+      while (pm.find()) {
+        String className = pm.group(1);
+        if (
+          ac.Name.contains('WorkflowEngineTest') ||
+          ac.Name.contains('WorkflowDashboardControllerTest')
+        ) {
+          continue; // Exclude test classes
         }
+        // Outer class match returns the bare name; inner class is qualified.
+        definitions.add(
+          className.equalsIgnoreCase(ac.Name)
+            ? ac.Name
+            : ac.Name + '.' + className
+        );
       }
     }
     definitions.sort();
     return definitions;
+  }
+
+  /**
+   * Degraded-mode discovery via the platform's compiled-type index. Heap/CPU cheap.
+   * Includes inner classes (qualified "Outer.Inner") and transitive interface
+   * inheritance, but lists only concrete (IsConcrete = true) implementing classes.
+   */
+  private static List<String> getDefinitionsFromTypeIndex() {
+    Set<String> definitions = new Set<String>();
+    for (ApexTypeImplementor impl : [
+      SELECT ClassName
+      FROM ApexTypeImplementor
+      WHERE
+        InterfaceName IN ('WorkflowDefinition', 'VersionedWorkflow')
+        AND ClassNamespacePrefix = NULL
+        AND IsConcrete = TRUE
+      WITH SYSTEM_MODE
+    ]) {
+      String className = impl.ClassName;
+      if (
+        String.isBlank(className) ||
+        className.contains('WorkflowEngineTest') ||
+        className.contains('WorkflowDashboardControllerTest')
+      ) {
+        continue;
+      }
+      definitions.add(className);
+    }
+    List<String> sorted = new List<String>(definitions);
+    sorted.sort();
+    return sorted;
   }
 
   @AuraEnabled
@@ -440,6 +582,7 @@ public inherited sharing class WorkflowDashboardController {
       }
       return WorkflowEngine.start(workflowName, correlationKey, input);
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura startWorkflow failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -450,6 +593,7 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowEngine.retryWorkflow(instanceId);
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura retryWorkflowInstance failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -475,6 +619,7 @@ public inherited sharing class WorkflowDashboardController {
         WorkflowEngine.enqueueOrchestrators(new List<Id>{ inst.Id });
       }
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura resumeWorkflowInstance failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -485,6 +630,7 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowEngine.cancel(instanceId, runCompensations);
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura cancelWorkflow failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -497,10 +643,18 @@ public inherited sharing class WorkflowDashboardController {
     String comments
   ) {
     checkAuthorization();
+    // Enforce the approval gate's designated role BEFORE recording the decision, so a
+    // dashboard admin cannot approve a gate they were not assigned to. Thrown before the
+    // try/catch below so the specific message is not flattened into a generic one.
+    enforceApprovalRole(instanceId, approvalKey);
     try {
       Map<String, Object> payload = new Map<String, Object>{
         'approved' => approved,
         'comments' => comments,
+        // Record the immutable User Id (and username) as the authoritative approver
+        // identity for the audit trail; the display name alone is mutable and not unique.
+        'approverId' => UserInfo.getUserId(),
+        'approverUsername' => UserInfo.getUserName(),
         'approver' => UserInfo.getName()
       };
       String payloadJson = JSON.serialize(payload);
@@ -512,7 +666,72 @@ public inherited sharing class WorkflowDashboardController {
         payloadJson
       );
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura submitApproval failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  /**
+   * If the instance has a pending approval gate for the given key that designates an
+   * approvalRole, require the running user to hold a custom permission of that API name
+   * (or "Modify All Data" as a break-glass override). Gates with no role, or no matching
+   * pending gate, impose no additional restriction beyond checkAuthorization().
+   */
+  private static void enforceApprovalRole(Id instanceId, String approvalKey) {
+    if (instanceId == null) {
+      return;
+    }
+    String requiredRole = null;
+    Boolean gateFound = false;
+    for (Workflow_Step_Execution__c se : [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Pending'
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 50
+    ]) {
+      String resolved = WorkflowEngine.resolvePayload(se.Output__c);
+      if (
+        String.isBlank(resolved) ||
+        !resolved.contains('waitingForApproval')
+      ) {
+        continue;
+      }
+      try {
+        Map<String, Object> state = (Map<String, Object>) JSON.deserializeUntyped(
+          resolved
+        );
+        if (
+          state.get('waitingForApproval') == true &&
+          approvalKey == (String) state.get('approvalKey')
+        ) {
+          gateFound = true;
+          requiredRole = (String) state.get('approvalRole');
+          break;
+        }
+      } catch (Exception ex) {
+        // Malformed/oversized state payload — ignore and keep scanning.
+      }
+    }
+
+    if (
+      gateFound &&
+      String.isNotBlank(requiredRole) &&
+      !FeatureManagement.checkPermission(requiredRole) &&
+      !currentUserHasModifyAllData()
+    ) {
+      AuraHandledException ex = new AuraHandledException(
+        'Unauthorized: this approval requires the "' +
+          requiredRole +
+          '" permission.'
+      );
+      ex.setMessage(
+        'Unauthorized: this approval requires the "' +
+          requiredRole +
+          '" permission.'
+      );
+      throw ex;
     }
   }
 
@@ -611,6 +830,7 @@ public inherited sharing class WorkflowDashboardController {
         'elasticAsyncLimit' => elasticAsyncLimit
       };
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura getWatchdogStatus failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -621,6 +841,7 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowWatchdog.bootstrap();
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura enqueueWatchdog failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }
