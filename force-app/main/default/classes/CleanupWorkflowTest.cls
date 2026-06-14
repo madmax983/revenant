@@ -422,4 +422,82 @@ public class CleanupWorkflowTest {
     );
     System.assertEquals(50, midState.deletedCount, 'Should have processed exactly 50 instances (clamped)');
   }
+
+  @isTest
+  static void testSingleHugeInstancePurge() {
+    // 1. Create a workflow instance that is old and completed
+    Workflow_Instance__c instA = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'KeyHuge',
+      Input__c = '"InputHuge"'
+    );
+    insert instA;
+    Test.setCreatedDate(instA.Id, DateTime.now().addDays(-40));
+
+    // 2. Create 105 ContentVersions bulk style
+    List<ContentVersion> versions = new List<ContentVersion>();
+    for (Integer i = 0; i < 105; i++) {
+      versions.add(new ContentVersion(
+        Title = 'Input_Huge_' + i,
+        PathOnClient = 'Input_Huge_' + i + '.json',
+        VersionData = Blob.valueOf('{}')
+      ));
+    }
+    insert versions;
+
+    // Query ContentDocumentIds
+    List<Id> versionIds = new List<Id>();
+    for (ContentVersion cv : versions) {
+      versionIds.add(cv.Id);
+    }
+    List<ContentVersion> queriedVersions = [SELECT ContentDocumentId FROM ContentVersion WHERE Id IN :versionIds];
+    
+    // Create ContentDocumentLink for each document
+    List<ContentDocumentLink> links = new List<ContentDocumentLink>();
+    for (ContentVersion cv : queriedVersions) {
+      links.add(new ContentDocumentLink(
+        ContentDocumentId = cv.ContentDocumentId,
+        LinkedEntityId = instA.Id,
+        ShareType = 'V',
+        Visibility = 'AllUsers'
+      ));
+    }
+    insert links;
+
+    // Execute the purge step on this instance
+    CleanupWorkflow.PurgeOldInstancesStep purgeStep = new CleanupWorkflow.PurgeOldInstancesStep();
+    StepContext purgeCtx = new StepContext(
+      instA.Id,
+      'CleanupWorkflow',
+      'CleanupWorkflow.PurgeOldInstancesStep',
+      null,
+      null,
+      null,
+      '{"retentionDays":30,"batchSize":10}',
+      1
+    );
+
+    Test.startTest();
+    StepResult purgeResult = purgeStep.execute(purgeCtx);
+    Test.stopTest();
+
+    // Verify it completed because it processed the single candidate successfully
+    System.assertEquals(StepResult.ActionType.COMPLETE, purgeResult.action);
+
+    // Verify all 105 files and links were deleted
+    List<ContentDocumentLink> remainingLinks = [
+      SELECT ContentDocumentId
+      FROM ContentDocumentLink
+      WHERE LinkedEntityId = :instA.Id
+    ];
+    System.assertEquals(0, remainingLinks.size(), 'All 105 links should be deleted');
+
+    List<Workflow_Instance__c> remainingInstances = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Id = :instA.Id
+    ];
+    System.assertEquals(0, remainingInstances.size(), 'Workflow instance should be deleted');
+  }
 }

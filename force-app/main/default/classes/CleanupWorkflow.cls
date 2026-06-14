@@ -153,8 +153,8 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
         List<Id> docIds = instanceToDocIdsMap.get(inst.Id);
         Integer docCount = (docIds != null) ? docIds.size() : 0;
 
-        // Bounded processing: if processing this instance would exceed our transaction cap of 100 deleted documents,
-        // we defer it to the next yield chunk. We allow the first instance to exceed the cap to ensure forward progress.
+        // Bounded processing: if processing this instance would exceed our soft transaction cap of 100 deleted documents,
+        // we defer it to the next yield chunk. We allow the first instance to exceed this soft cap to guarantee forward progress.
         if (!instancesToPurge.isEmpty() && (finalDocIdsToDelete.size() + docCount) > 100) {
           break;
         }
