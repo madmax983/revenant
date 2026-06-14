@@ -205,6 +205,9 @@ sf apex run test -w 10
 
 To clean up timed-out steps and resume suspended/sleeping instances in production, you must schedule the global watchdog class (`WorkflowWatchdog`) to run periodically.
 
+> [!IMPORTANT]
+> **Resolution & Precision Constraints**: The precision of step timeouts, sleep steps, and retry backoffs is strictly bounded by the frequency of the watchdog poller's execution. For example, if the watchdog runs every 5 minutes, a 10-second sleep or a 30-second timeout will only be resolved when the next heartbeat fires (resulting in up to a 5-minute latency). Configure your scheduling frequency accordingly to match your workflow latency requirements.
+
 Because the Salesforce Declarative Scheduler UI only supports hourly increments, you can schedule it at sub-hour intervals (such as every minute or every 5 minutes) via Anonymous Apex using the Cron Trigger API:
 
 ```apex
