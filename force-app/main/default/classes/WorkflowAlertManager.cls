@@ -40,7 +40,13 @@ public inherited sharing class WorkflowAlertManager {
       // 3. Dispatch Alert
       dispatchEmail(instance, config.Email_Recipients__c, errorMsg);
     } catch (Exception ex) {
-      System.debug(LoggingLevel.ERROR, 'Alert dispatch failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      System.debug(
+        LoggingLevel.ERROR,
+        'Alert dispatch failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
     }
   }
 
@@ -193,18 +199,29 @@ public inherited sharing class WorkflowAlertManager {
       '[Revenant Alert] Workflow Failure: ' + instance.Workflow_Name__c;
     mail.setSubject(subject);
 
-    String escWorkflowName = String.isBlank(instance.Workflow_Name__c) ? '' : instance.Workflow_Name__c.escapeHtml4();
-    String escInstanceName = String.isBlank(instance.Name) ? '' : instance.Name.escapeHtml4();
-    String escInstanceId = instance.Id == null ? '' : String.valueOf(instance.Id).escapeHtml4();
+    String escWorkflowName = String.isBlank(instance.Workflow_Name__c)
+      ? ''
+      : instance.Workflow_Name__c.escapeHtml4();
+    String escInstanceName = String.isBlank(instance.Name)
+      ? ''
+      : instance.Name.escapeHtml4();
+    String escInstanceId = instance.Id == null
+      ? ''
+      : String.valueOf(instance.Id).escapeHtml4();
     String escCorrelationKey = String.isNotBlank(instance.Correlation_Key__c)
       ? instance.Correlation_Key__c.escapeHtml4()
       : 'N/A';
 
     String truncatedErrorMsg = errorMsg;
-    if (String.isNotBlank(truncatedErrorMsg) && truncatedErrorMsg.length() > 5000) {
-      truncatedErrorMsg = truncatedErrorMsg.substring(0, 5000) + '... (truncated)';
+    if (
+      String.isNotBlank(truncatedErrorMsg) && truncatedErrorMsg.length() > 5000
+    ) {
+      truncatedErrorMsg =
+        truncatedErrorMsg.substring(0, 5000) + '... (truncated)';
     }
-    String escapedErrorMsg = String.isBlank(truncatedErrorMsg) ? '' : truncatedErrorMsg.escapeHtml4();
+    String escapedErrorMsg = String.isBlank(truncatedErrorMsg)
+      ? ''
+      : truncatedErrorMsg.escapeHtml4();
 
     String htmlBody =
       '<div style="font-family: sans-serif; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; max-width: 600px;">' +
@@ -244,7 +261,10 @@ public inherited sharing class WorkflowAlertManager {
         throw new IllegalArgumentException('Simulated email exception');
       }
     } catch (Exception e) {
-      System.debug(LoggingLevel.ERROR, 'Email dispatch failed: ' + e.getMessage());
+      System.debug(
+        LoggingLevel.ERROR,
+        'Email dispatch failed: ' + e.getMessage()
+      );
     }
     sentEmailsCount += 1;
   }

@@ -14,22 +14,30 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
     }
 
     if (inputMap == null) {
-      throw new WorkflowEngine.WorkflowException('Input must be a valid JSON object');
+      throw new WorkflowEngine.WorkflowException(
+        'Input must be a valid JSON object'
+      );
     }
 
     if (!inputMap.containsKey('flowName')) {
-      throw new WorkflowEngine.WorkflowException('flowName is required in input');
+      throw new WorkflowEngine.WorkflowException(
+        'flowName is required in input'
+      );
     }
     Object flowNameObj = inputMap.get('flowName');
     if (flowNameObj == null) {
-      throw new WorkflowEngine.WorkflowException('flowName is required in input');
+      throw new WorkflowEngine.WorkflowException(
+        'flowName is required in input'
+      );
     }
     if (!(flowNameObj instanceof String)) {
       throw new WorkflowEngine.WorkflowException('flowName must be a String');
     }
     String flowName = (String) flowNameObj;
     if (String.isBlank(flowName)) {
-      throw new WorkflowEngine.WorkflowException('flowName is required in input');
+      throw new WorkflowEngine.WorkflowException(
+        'flowName is required in input'
+      );
     }
 
     Map<String, Object> variables = null;

@@ -433,7 +433,12 @@ public class WorkflowDashboardControllerTest {
   @isTest
   static void testAuthorizationFailures() {
     // Create standard user who does not have the custom permission or System Administrator profile
-    Profile stdProfile = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
+    Profile stdProfile = [
+      SELECT Id
+      FROM Profile
+      WHERE Name = 'Standard User'
+      LIMIT 1
+    ];
     User stdUser = new User(
       Alias = 'stdusr',
       Email = 'stduser@testorg.com',
@@ -443,7 +448,9 @@ public class WorkflowDashboardControllerTest {
       LocaleSidKey = 'en_US',
       ProfileId = stdProfile.Id,
       TimeZoneSidKey = 'America/Los_Angeles',
-      UserName = 'stduser_dashboard_test_' + DateTime.now().getTime() + '@testorg.com'
+      UserName = 'stduser_dashboard_test_' +
+        DateTime.now().getTime() +
+        '@testorg.com'
     );
     insert stdUser;
 
@@ -451,33 +458,61 @@ public class WorkflowDashboardControllerTest {
       // 1. getFilteredInstances
       try {
         WorkflowDashboardController.getFilteredInstances('', '', '', 10, 0, '');
-        System.assert(false, 'Expected AuraHandledException for getFilteredInstances');
+        System.assert(
+          false,
+          'Expected AuraHandledException for getFilteredInstances'
+        );
       } catch (AuraHandledException e) {
-        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception'),
+          e.getMessage()
+        );
       }
 
       // 2. getWorkflowStats
       try {
         WorkflowDashboardController.getWorkflowStats('', '', '');
-        System.assert(false, 'Expected AuraHandledException for getWorkflowStats');
+        System.assert(
+          false,
+          'Expected AuraHandledException for getWorkflowStats'
+        );
       } catch (AuraHandledException e) {
-        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception'),
+          e.getMessage()
+        );
       }
 
       // 3. getInstanceDetails
       try {
         WorkflowDashboardController.getInstanceDetails(null);
-        System.assert(false, 'Expected AuraHandledException for getInstanceDetails');
+        System.assert(
+          false,
+          'Expected AuraHandledException for getInstanceDetails'
+        );
       } catch (AuraHandledException e) {
-        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception'),
+          e.getMessage()
+        );
       }
 
       // 4. getDefinitions
       try {
         WorkflowDashboardController.getDefinitions();
-        System.assert(false, 'Expected AuraHandledException for getDefinitions');
+        System.assert(
+          false,
+          'Expected AuraHandledException for getDefinitions'
+        );
       } catch (AuraHandledException e) {
-        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception'),
+          e.getMessage()
+        );
       }
 
       // 5. startWorkflow
@@ -485,31 +520,56 @@ public class WorkflowDashboardControllerTest {
         WorkflowDashboardController.startWorkflow('', '', '');
         System.assert(false, 'Expected AuraHandledException for startWorkflow');
       } catch (AuraHandledException e) {
-        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception'),
+          e.getMessage()
+        );
       }
 
       // 6. retryWorkflowInstance
       try {
         WorkflowDashboardController.retryWorkflowInstance(null);
-        System.assert(false, 'Expected AuraHandledException for retryWorkflowInstance');
+        System.assert(
+          false,
+          'Expected AuraHandledException for retryWorkflowInstance'
+        );
       } catch (AuraHandledException e) {
-        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception'),
+          e.getMessage()
+        );
       }
 
       // 7. cancelWorkflow
       try {
         WorkflowDashboardController.cancelWorkflow(null, false);
-        System.assert(false, 'Expected AuraHandledException for cancelWorkflow');
+        System.assert(
+          false,
+          'Expected AuraHandledException for cancelWorkflow'
+        );
       } catch (AuraHandledException e) {
-        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception'),
+          e.getMessage()
+        );
       }
 
       // 8. submitApproval
       try {
         WorkflowDashboardController.submitApproval(null, '', false, '');
-        System.assert(false, 'Expected AuraHandledException for submitApproval');
+        System.assert(
+          false,
+          'Expected AuraHandledException for submitApproval'
+        );
       } catch (AuraHandledException e) {
-        System.assert(e.getMessage().contains('Unauthorized') || e.getMessage().contains('Script-thrown exception'), e.getMessage());
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception'),
+          e.getMessage()
+        );
       }
     }
   }
@@ -517,7 +577,12 @@ public class WorkflowDashboardControllerTest {
   @isTest
   static void testAuthorizationSuccessWithCustomPermission() {
     // Create standard user
-    Profile stdProfile = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
+    Profile stdProfile = [
+      SELECT Id
+      FROM Profile
+      WHERE Name = 'Standard User'
+      LIMIT 1
+    ];
     User stdUser = new User(
       Alias = 'stdusr',
       Email = 'stduser@testorg.com',
@@ -527,24 +592,31 @@ public class WorkflowDashboardControllerTest {
       LocaleSidKey = 'en_US',
       ProfileId = stdProfile.Id,
       TimeZoneSidKey = 'America/Los_Angeles',
-      UserName = 'stduser_dashboard_ok_' + DateTime.now().getTime() + '@testorg.com'
+      UserName = 'stduser_dashboard_ok_' +
+        DateTime.now().getTime() +
+        '@testorg.com'
     );
     insert stdUser;
 
     // Create a PermissionSet and SetupEntityAccess for custom permission
-    CustomPermission cp = [SELECT Id FROM CustomPermission WHERE DeveloperName = 'Workflow_Admin' LIMIT 1];
+    CustomPermission cp = [
+      SELECT Id
+      FROM CustomPermission
+      WHERE DeveloperName = 'Workflow_Admin'
+      LIMIT 1
+    ];
     PermissionSet ps = new PermissionSet(
       Label = 'Workflow Admin Test PS',
       Name = 'Workflow_Admin_Test_PS'
     );
     insert ps;
-    
+
     SetupEntityAccess sea = new SetupEntityAccess(
       ParentId = ps.Id,
       SetupEntityId = cp.Id
     );
     insert sea;
-    
+
     PermissionSetAssignment psa = new PermissionSetAssignment(
       AssigneeId = stdUser.Id,
       PermissionSetId = ps.Id
@@ -581,7 +653,11 @@ public class WorkflowDashboardControllerTest {
     );
     Test.stopTest();
 
-    System.assertEquals(1, res.size(), 'Should find 1 instance with Error Message matching xyz');
+    System.assertEquals(
+      1,
+      res.size(),
+      'Should find 1 instance with Error Message matching xyz'
+    );
     System.assertEquals(inst.Id, res[0].Id);
   }
 
@@ -608,12 +684,20 @@ public class WorkflowDashboardControllerTest {
       PathOnClient = 'test4.json',
       VersionData = Blob.valueOf('{"result":"ok"}')
     );
-    insert new List<ContentVersion>{cv1, cv2, cv3, cv4};
+    insert new List<ContentVersion>{ cv1, cv2, cv3, cv4 };
 
     // Query ContentDocumentId for each
-    List<ContentVersion> cvs = [SELECT ContentDocumentId FROM ContentVersion WHERE Id IN (:cv1.Id, :cv2.Id, :cv3.Id, :cv4.Id)];
+    List<ContentVersion> cvs = [
+      SELECT ContentDocumentId
+      FROM ContentVersion
+      WHERE Id IN (:cv1.Id, :cv2.Id, :cv3.Id, :cv4.Id)
+    ];
     Map<Id, Id> cvIdToDocId = new Map<Id, Id>();
-    for (ContentVersion cv : [SELECT Id, ContentDocumentId FROM ContentVersion WHERE Id IN (:cv1.Id, :cv2.Id, :cv3.Id, :cv4.Id)]) {
+    for (ContentVersion cv : [
+      SELECT Id, ContentDocumentId
+      FROM ContentVersion
+      WHERE Id IN (:cv1.Id, :cv2.Id, :cv3.Id, :cv4.Id)
+    ]) {
       cvIdToDocId.put(cv.Id, cv.ContentDocumentId);
     }
 
@@ -655,15 +739,24 @@ public class WorkflowDashboardControllerTest {
     insert stepSafety;
 
     Test.startTest();
-    Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(inst.Id);
+    Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(
+      inst.Id
+    );
     Test.stopTest();
 
-    Workflow_Instance__c returnedInst = (Workflow_Instance__c) details.get('instance');
-    List<Workflow_Step_Execution__c> returnedSteps = (List<Workflow_Step_Execution__c>) details.get('steps');
+    Workflow_Instance__c returnedInst = (Workflow_Instance__c) details.get(
+      'instance'
+    );
+    List<Workflow_Step_Execution__c> returnedSteps = (List<Workflow_Step_Execution__c>) details.get(
+      'steps'
+    );
 
     System.assertEquals('{"small":"json"}', returnedInst.Input__c);
-    System.assertEquals('A'.repeat(50000) + '... (truncated)', returnedInst.Output__c);
-    
+    System.assertEquals(
+      'A'.repeat(50000) + '... (truncated)',
+      returnedInst.Output__c
+    );
+
     // Check steps
     Workflow_Step_Execution__c returnedStep1;
     Workflow_Step_Execution__c returnedStepSafety;
@@ -674,13 +767,19 @@ public class WorkflowDashboardControllerTest {
         returnedStepSafety = s;
       }
     }
-    
+
     System.assertNotEquals(null, returnedStep1);
-    System.assertEquals('B'.repeat(50000) + '... (truncated)', returnedStep1.Input__c);
+    System.assertEquals(
+      'B'.repeat(50000) + '... (truncated)',
+      returnedStep1.Input__c
+    );
     System.assertEquals('{"result":"ok"}', returnedStep1.Output__c);
 
     System.assertNotEquals(null, returnedStepSafety);
-    System.assertEquals('C'.repeat(50000) + '... (truncated)', returnedStepSafety.Input__c);
+    System.assertEquals(
+      'C'.repeat(50000) + '... (truncated)',
+      returnedStepSafety.Input__c
+    );
     System.assertEquals('ShortOutput', returnedStepSafety.Output__c);
   }
 }

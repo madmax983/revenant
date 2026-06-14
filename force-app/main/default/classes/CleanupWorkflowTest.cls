@@ -185,7 +185,12 @@ public class CleanupWorkflowTest {
       VersionData = Blob.valueOf('{}')
     );
     insert cv1;
-    Id docId1 = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv1.Id].ContentDocumentId;
+    Id docId1 = [
+      SELECT ContentDocumentId
+      FROM ContentVersion
+      WHERE Id = :cv1.Id
+    ]
+    .ContentDocumentId;
 
     ContentDocumentLink cdl1a = new ContentDocumentLink(
       ContentDocumentId = docId1,
@@ -210,7 +215,12 @@ public class CleanupWorkflowTest {
       VersionData = Blob.valueOf('{}')
     );
     insert cv2;
-    Id docId2 = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv2.Id].ContentDocumentId;
+    Id docId2 = [
+      SELECT ContentDocumentId
+      FROM ContentVersion
+      WHERE Id = :cv2.Id
+    ]
+    .ContentDocumentId;
 
     ContentDocumentLink cdl2 = new ContentDocumentLink(
       ContentDocumentId = docId2,
@@ -227,7 +237,12 @@ public class CleanupWorkflowTest {
       VersionData = Blob.valueOf('PDF DATA')
     );
     insert cv3;
-    Id docId3 = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv3.Id].ContentDocumentId;
+    Id docId3 = [
+      SELECT ContentDocumentId
+      FROM ContentVersion
+      WHERE Id = :cv3.Id
+    ]
+    .ContentDocumentId;
 
     ContentDocumentLink cdl3 = new ContentDocumentLink(
       ContentDocumentId = docId3,
@@ -247,19 +262,36 @@ public class CleanupWorkflowTest {
     Test.stopTest();
 
     // Verify instance was deleted
-    List<Workflow_Instance__c> deletedInstances = [SELECT Id FROM Workflow_Instance__c WHERE Id = :instPurge.Id];
+    List<Workflow_Instance__c> deletedInstances = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Id = :instPurge.Id
+    ];
     System.assert(deletedInstances.isEmpty(), 'instPurge should be deleted');
 
     // Verify files
-    List<ContentDocument> docs = [SELECT Id, Title FROM ContentDocument WHERE Id IN (:docId1, :docId2, :docId3)];
+    List<ContentDocument> docs = [
+      SELECT Id, Title
+      FROM ContentDocument
+      WHERE Id IN (:docId1, :docId2, :docId3)
+    ];
     Set<Id> remainingDocIds = new Set<Id>();
     for (ContentDocument d : docs) {
       remainingDocIds.add(d.Id);
     }
 
-    System.assert(remainingDocIds.contains(docId1), 'Shared file Input_Shared should NOT be deleted');
-    System.assert(!remainingDocIds.contains(docId2), 'Private file Input_Private should BE deleted');
-    System.assert(remainingDocIds.contains(docId3), 'User file MyImportantDocument should NOT be deleted');
+    System.assert(
+      remainingDocIds.contains(docId1),
+      'Shared file Input_Shared should NOT be deleted'
+    );
+    System.assert(
+      !remainingDocIds.contains(docId2),
+      'Private file Input_Private should BE deleted'
+    );
+    System.assert(
+      remainingDocIds.contains(docId3),
+      'User file MyImportantDocument should NOT be deleted'
+    );
   }
 
   @isTest
@@ -284,7 +316,10 @@ public class CleanupWorkflowTest {
       new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
       System.assert(false, 'Should throw exception on malformed JSON');
     } catch (Exception ex) {
-      System.assert(ex.getMessage().contains('Malformed JSON'), 'Expected Malformed JSON error, got: ' + ex.getMessage());
+      System.assert(
+        ex.getMessage().contains('Malformed JSON'),
+        'Expected Malformed JSON error, got: ' + ex.getMessage()
+      );
     }
 
     // Test invalid retentionDays type
@@ -305,9 +340,15 @@ public class CleanupWorkflowTest {
         instBadType.Input__c
       );
       new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
-      System.assert(false, 'Should throw exception on invalid retentionDays type');
+      System.assert(
+        false,
+        'Should throw exception on invalid retentionDays type'
+      );
     } catch (Exception ex) {
-      System.assert(ex.getMessage().contains('Invalid retentionDays parameter type'), 'Expected invalid type error, got: ' + ex.getMessage());
+      System.assert(
+        ex.getMessage().contains('Invalid retentionDays parameter type'),
+        'Expected invalid type error, got: ' + ex.getMessage()
+      );
     }
 
     // Test negative retentionDays
@@ -330,7 +371,10 @@ public class CleanupWorkflowTest {
       new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
       System.assert(false, 'Should throw exception on negative retentionDays');
     } catch (Exception ex) {
-      System.assert(ex.getMessage().contains('retentionDays parameter cannot be negative'), 'Expected negative error, got: ' + ex.getMessage());
+      System.assert(
+        ex.getMessage().contains('retentionDays parameter cannot be negative'),
+        'Expected negative error, got: ' + ex.getMessage()
+      );
     }
 
     // Test zero batchSize
@@ -353,7 +397,11 @@ public class CleanupWorkflowTest {
       new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
       System.assert(false, 'Should throw exception on zero batchSize');
     } catch (Exception ex) {
-      System.assert(ex.getMessage().contains('batchSize parameter must be greater than zero'), 'Expected zero batchSize error, got: ' + ex.getMessage());
+      System.assert(
+        ex.getMessage()
+          .contains('batchSize parameter must be greater than zero'),
+        'Expected zero batchSize error, got: ' + ex.getMessage()
+      );
     }
 
     // Test invalid batchSize type
@@ -376,7 +424,10 @@ public class CleanupWorkflowTest {
       new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
       System.assert(false, 'Should throw exception on invalid batchSize type');
     } catch (Exception ex) {
-      System.assert(ex.getMessage().contains('Invalid batchSize parameter type'), 'Expected invalid type error, got: ' + ex.getMessage());
+      System.assert(
+        ex.getMessage().contains('Invalid batchSize parameter type'),
+        'Expected invalid type error, got: ' + ex.getMessage()
+      );
     }
   }
 
@@ -385,12 +436,14 @@ public class CleanupWorkflowTest {
     // 60 old workflow instances
     List<Workflow_Instance__c> oldInstances = new List<Workflow_Instance__c>();
     for (Integer i = 0; i < 60; i++) {
-      oldInstances.add(new Workflow_Instance__c(
-        Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
-        Status__c = 'Completed',
-        Correlation_Key__c = 'KeyClamp_' + i,
-        Input__c = '"InputClamp"'
-      ));
+      oldInstances.add(
+        new Workflow_Instance__c(
+          Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+          Status__c = 'Completed',
+          Correlation_Key__c = 'KeyClamp_' + i,
+          Input__c = '"InputClamp"'
+        )
+      );
     }
     insert oldInstances;
     for (Workflow_Instance__c inst : oldInstances) {
@@ -420,7 +473,11 @@ public class CleanupWorkflowTest {
       WorkflowEngine.resolvePayload(stepExecs[0].Output__c),
       CleanupWorkflow.PurgeState.class
     );
-    System.assertEquals(50, midState.deletedCount, 'Should have processed exactly 50 instances (clamped)');
+    System.assertEquals(
+      50,
+      midState.deletedCount,
+      'Should have processed exactly 50 instances (clamped)'
+    );
   }
 
   @isTest
@@ -438,11 +495,13 @@ public class CleanupWorkflowTest {
     // 2. Create 105 ContentVersions bulk style
     List<ContentVersion> versions = new List<ContentVersion>();
     for (Integer i = 0; i < 105; i++) {
-      versions.add(new ContentVersion(
-        Title = 'Input_Huge_' + i,
-        PathOnClient = 'Input_Huge_' + i + '.json',
-        VersionData = Blob.valueOf('{}')
-      ));
+      versions.add(
+        new ContentVersion(
+          Title = 'Input_Huge_' + i,
+          PathOnClient = 'Input_Huge_' + i + '.json',
+          VersionData = Blob.valueOf('{}')
+        )
+      );
     }
     insert versions;
 
@@ -451,17 +510,23 @@ public class CleanupWorkflowTest {
     for (ContentVersion cv : versions) {
       versionIds.add(cv.Id);
     }
-    List<ContentVersion> queriedVersions = [SELECT ContentDocumentId FROM ContentVersion WHERE Id IN :versionIds];
-    
+    List<ContentVersion> queriedVersions = [
+      SELECT ContentDocumentId
+      FROM ContentVersion
+      WHERE Id IN :versionIds
+    ];
+
     // Create ContentDocumentLink for each document
     List<ContentDocumentLink> links = new List<ContentDocumentLink>();
     for (ContentVersion cv : queriedVersions) {
-      links.add(new ContentDocumentLink(
-        ContentDocumentId = cv.ContentDocumentId,
-        LinkedEntityId = instA.Id,
-        ShareType = 'V',
-        Visibility = 'AllUsers'
-      ));
+      links.add(
+        new ContentDocumentLink(
+          ContentDocumentId = cv.ContentDocumentId,
+          LinkedEntityId = instA.Id,
+          ShareType = 'V',
+          Visibility = 'AllUsers'
+        )
+      );
     }
     insert links;
 
@@ -491,13 +556,21 @@ public class CleanupWorkflowTest {
       FROM ContentDocumentLink
       WHERE LinkedEntityId = :instA.Id
     ];
-    System.assertEquals(0, remainingLinks.size(), 'All 105 links should be deleted');
+    System.assertEquals(
+      0,
+      remainingLinks.size(),
+      'All 105 links should be deleted'
+    );
 
     List<Workflow_Instance__c> remainingInstances = [
       SELECT Id
       FROM Workflow_Instance__c
       WHERE Id = :instA.Id
     ];
-    System.assertEquals(0, remainingInstances.size(), 'Workflow instance should be deleted');
+    System.assertEquals(
+      0,
+      remainingInstances.size(),
+      'Workflow instance should be deleted'
+    );
   }
 }

@@ -195,13 +195,22 @@ public inherited sharing class WorkflowEngine {
     public Object input;
     public Id parentInstanceId;
 
-    public StartRequest(String workflowName, String correlationKey, Object input) {
+    public StartRequest(
+      String workflowName,
+      String correlationKey,
+      Object input
+    ) {
       this.workflowName = workflowName;
       this.correlationKey = correlationKey;
       this.input = input;
     }
 
-    public StartRequest(String workflowName, String correlationKey, Object input, Id parentInstanceId) {
+    public StartRequest(
+      String workflowName,
+      String correlationKey,
+      Object input,
+      Id parentInstanceId
+    ) {
       this.workflowName = workflowName;
       this.correlationKey = correlationKey;
       this.input = input;
@@ -519,7 +528,10 @@ public inherited sharing class WorkflowEngine {
 
     // Validate explicit stepName only when Current_Step__c is a parallel list and the requested step is in that list
     if (String.isNotBlank(stepName) && instance.Current_Step__c != stepName) {
-      if (String.isBlank(instance.Current_Step__c) || !instance.Current_Step__c.contains(',')) {
+      if (
+        String.isBlank(instance.Current_Step__c) ||
+        !instance.Current_Step__c.contains(',')
+      ) {
         throw new WorkflowException(
           'Step ' +
             stepName +
@@ -1166,8 +1178,7 @@ public inherited sharing class WorkflowEngine {
       } catch (DmlException ex) {
         if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
           throw new WorkflowException(
-            'An active workflow already exists with correlation key: ' +
-            newKey
+            'An active workflow already exists with correlation key: ' + newKey
           );
         }
         throw ex;
@@ -1337,8 +1348,8 @@ public inherited sharing class WorkflowEngine {
     }
 
     Boolean isCompensationFailure = (instance.Status__c == 'Compensating' ||
-                                     instance.Status__c == 'Cancelling' ||
-                                     (String.isNotBlank(stepName) && stepName.endsWith('_Compensate')));
+    instance.Status__c == 'Cancelling' ||
+    (String.isNotBlank(stepName) && stepName.endsWith('_Compensate')));
 
     if (isCompensationFailure) {
       instance.Status__c = 'Failed';
@@ -1570,7 +1581,9 @@ public inherited sharing class WorkflowEngine {
       instances = [
         SELECT Id, Status__c
         FROM Workflow_Instance__c
-        WHERE Id = :targetId AND Status__c IN ('Pending', 'Running', 'Suspended')
+        WHERE
+          Id = :targetId
+          AND Status__c IN ('Pending', 'Running', 'Suspended')
         WITH SYSTEM_MODE
         LIMIT 1
         FOR UPDATE
@@ -1850,19 +1863,30 @@ public inherited sharing class WorkflowEngine {
 
     // Re-query the instance after acquiring the lock on the step execution to get the most up-to-date committed state
     List<Workflow_Instance__c> freshInstances = [
-      SELECT Id, Status__c, Compensation_Stack__c, Definition_Version__c, Workflow_Name__c, Input__c
+      SELECT
+        Id,
+        Status__c,
+        Compensation_Stack__c,
+        Definition_Version__c,
+        Workflow_Name__c,
+        Input__c
       FROM Workflow_Instance__c
       WHERE Id = :instance.Id
       WITH SYSTEM_MODE
       LIMIT 1
     ];
     if (freshInstances.isEmpty()) {
-      throw new WorkflowException('Workflow instance not found: ' + instance.Id);
+      throw new WorkflowException(
+        'Workflow instance not found: ' + instance.Id
+      );
     }
     instance = freshInstances[0];
 
     // Check early exit conditions for instance status
-    if (instance.Status__c != 'Compensating' && instance.Status__c != 'Cancelling') {
+    if (
+      instance.Status__c != 'Compensating' &&
+      instance.Status__c != 'Cancelling'
+    ) {
       return; // Already completed compensation or aborted
     }
 
@@ -1996,9 +2020,16 @@ public inherited sharing class WorkflowEngine {
       result = compensatableStepInstance.compensate(context);
     } catch (Exception ex) {
       stepExec.Status__c = 'Failed';
-      stepExec.Error_Details__c = ex.getMessage() + '\n' + ex.getStackTraceString();
+      stepExec.Error_Details__c =
+        ex.getMessage() +
+        '\n' +
+        ex.getStackTraceString();
       saveStepExec(stepExec);
-      failWorkflowInstance(instance.Id, compensationStepLogName, ex.getMessage());
+      failWorkflowInstance(
+        instance.Id,
+        compensationStepLogName,
+        ex.getMessage()
+      );
       return;
     } finally {
       if (timeoutSeconds != null && timeoutSeconds > 0) {
@@ -2141,7 +2172,9 @@ public inherited sharing class WorkflowEngine {
       }
     } else {
       stepExec.Status__c = 'Failed';
-      stepExec.Error_Details__c = 'Unsupported compensation action: ' + (result != null ? result.action : null);
+      stepExec.Error_Details__c =
+        'Unsupported compensation action: ' +
+        (result != null ? result.action : null);
       saveStepExec(stepExec);
 
       instance.Status__c = 'Failed';
@@ -2172,7 +2205,9 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
-  private static void preCreateFirstCompensationStep(Workflow_Instance__c instance) {
+  private static void preCreateFirstCompensationStep(
+    Workflow_Instance__c instance
+  ) {
     if (String.isBlank(instance.Compensation_Stack__c)) {
       return;
     }
@@ -2190,7 +2225,8 @@ public inherited sharing class WorkflowEngine {
     List<Workflow_Step_Execution__c> existing = [
       SELECT Id
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instance.Id
+      WHERE
+        Workflow_Instance__c = :instance.Id
         AND Step_Name__c = :compensationStepLogName
       WITH SYSTEM_MODE
       LIMIT 1
@@ -2274,7 +2310,12 @@ public inherited sharing class WorkflowEngine {
 
     // 2. Lock the instance FOR UPDATE second
     instances = [
-      SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c, Error_Message__c
+      SELECT
+        Id,
+        Status__c,
+        Current_Step__c,
+        Compensation_Stack__c,
+        Error_Message__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -2394,11 +2435,13 @@ public inherited sharing class WorkflowEngine {
     }
     List<Workflow_Event__e> events = new List<Workflow_Event__e>();
     for (Id instId : instanceIds) {
-      events.add(new Workflow_Event__e(
-        Workflow_Instance_Id__c = instId,
-        Event_Type__c = 'RUN_STEP',
-        Payload__c = null
-      ));
+      events.add(
+        new Workflow_Event__e(
+          Workflow_Instance_Id__c = instId,
+          Event_Type__c = 'RUN_STEP',
+          Payload__c = null
+        )
+      );
     }
     if (!events.isEmpty()) {
       List<Database.SaveResult> srs = EventBus.publish(events);
@@ -2409,7 +2452,8 @@ public inherited sharing class WorkflowEngine {
             errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
           }
           throw new WorkflowException(
-            'Failed to publish orchestrator event: ' + String.join(errMsgs, ', ')
+            'Failed to publish orchestrator event: ' +
+            String.join(errMsgs, ', ')
           );
         }
       }
@@ -2512,9 +2556,14 @@ public inherited sharing class WorkflowEngine {
     return textValue;
   }
 
-  public static void scheduleTimeoutJobsForInstances(List<Workflow_Instance__c> instances) {
+  public static void scheduleTimeoutJobsForInstances(
+    List<Workflow_Instance__c> instances
+  ) {
     for (Workflow_Instance__c instance : instances) {
-      if (instance.Status__c == 'Compensating' || instance.Status__c == 'Cancelling') {
+      if (
+        instance.Status__c == 'Compensating' ||
+        instance.Status__c == 'Cancelling'
+      ) {
         if (String.isNotBlank(instance.Compensation_Stack__c)) {
           List<String> stack = (List<String>) JSON.deserialize(
             instance.Compensation_Stack__c,

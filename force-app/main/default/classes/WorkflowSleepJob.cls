@@ -6,7 +6,6 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
   }
 
   public void execute(SchedulableContext ctx) {
-
     // Enqueue the next step execution
     if (Test.isRunningTest()) {
       System.enqueueJob(new WorkflowOrchestrator(this.instanceId));

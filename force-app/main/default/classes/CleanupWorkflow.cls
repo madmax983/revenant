@@ -19,19 +19,27 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
       if (String.isNotBlank(ctx.workflowInputJson)) {
         Map<String, Object> input;
         try {
-          input = (Map<String, Object>) JSON.deserializeUntyped(ctx.workflowInputJson);
+          input = (Map<String, Object>) JSON.deserializeUntyped(
+            ctx.workflowInputJson
+          );
         } catch (Exception ex) {
-          throw new WorkflowEngine.WorkflowException('Malformed JSON in workflow input: ' + ex.getMessage());
+          throw new WorkflowEngine.WorkflowException(
+            'Malformed JSON in workflow input: ' + ex.getMessage()
+          );
         }
 
         if (input.containsKey('retentionDays')) {
           try {
             retentionDays = Integer.valueOf(input.get('retentionDays'));
           } catch (Exception ex) {
-            throw new WorkflowEngine.WorkflowException('Invalid retentionDays parameter type: ' + ex.getMessage());
+            throw new WorkflowEngine.WorkflowException(
+              'Invalid retentionDays parameter type: ' + ex.getMessage()
+            );
           }
           if (retentionDays < 0) {
-            throw new WorkflowEngine.WorkflowException('retentionDays parameter cannot be negative');
+            throw new WorkflowEngine.WorkflowException(
+              'retentionDays parameter cannot be negative'
+            );
           }
         }
 
@@ -39,10 +47,14 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
           try {
             batchSize = Integer.valueOf(input.get('batchSize'));
           } catch (Exception ex) {
-            throw new WorkflowEngine.WorkflowException('Invalid batchSize parameter type: ' + ex.getMessage());
+            throw new WorkflowEngine.WorkflowException(
+              'Invalid batchSize parameter type: ' + ex.getMessage()
+            );
           }
           if (batchSize <= 0) {
-            throw new WorkflowEngine.WorkflowException('batchSize parameter must be greater than zero');
+            throw new WorkflowEngine.WorkflowException(
+              'batchSize parameter must be greater than zero'
+            );
           }
         }
       }
@@ -100,7 +112,8 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
         if (!instanceToDocIdsMap.containsKey(link.LinkedEntityId)) {
           instanceToDocIdsMap.put(link.LinkedEntityId, new List<Id>());
         }
-        instanceToDocIdsMap.get(link.LinkedEntityId).add(link.ContentDocumentId);
+        instanceToDocIdsMap.get(link.LinkedEntityId)
+          .add(link.ContentDocumentId);
         allDocIds.add(link.ContentDocumentId);
       }
 
@@ -138,7 +151,10 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
         ];
         for (ContentDocumentLink cdl : docLinks) {
           if (!docToLinksMap.containsKey(cdl.ContentDocumentId)) {
-            docToLinksMap.put(cdl.ContentDocumentId, new List<ContentDocumentLink>());
+            docToLinksMap.put(
+              cdl.ContentDocumentId,
+              new List<ContentDocumentLink>()
+            );
           }
           docToLinksMap.get(cdl.ContentDocumentId).add(cdl);
         }
@@ -155,7 +171,10 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
 
         // Bounded processing: if processing this instance would exceed our soft transaction cap of 100 deleted documents,
         // we defer it to the next yield chunk. We allow the first instance to exceed this soft cap to guarantee forward progress.
-        if (!instancesToPurge.isEmpty() && (finalDocIdsToDelete.size() + docCount) > 100) {
+        if (
+          !instancesToPurge.isEmpty() &&
+          (finalDocIdsToDelete.size() + docCount) > 100
+        ) {
           break;
         }
 
@@ -188,13 +207,18 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
             if (cdls != null) {
               for (ContentDocumentLink cdl : cdls) {
                 Id linkedId = cdl.LinkedEntityId;
-                String sObjType = linkedId.getSObjectType().getDescribe().getName();
+                String sObjType = linkedId.getSObjectType()
+                  .getDescribe()
+                  .getName();
                 // Ignore the default User link created on file upload
                 if (sObjType == 'User') {
                   continue;
                 }
                 // If it is linked to any record other than a Workflow_Instance__c that is also being deleted in this batch:
-                if (sObjType != 'Workflow_Instance__c' || !instanceIdsToPurge.contains(linkedId)) {
+                if (
+                  sObjType != 'Workflow_Instance__c' ||
+                  !instanceIdsToPurge.contains(linkedId)
+                ) {
                   isSharedElsewhere = true;
                   break;
                 }
@@ -227,7 +251,9 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
 
       // Check if we still have remaining candidate instances that weren't processed in this batch due to the limit,
       // or if we fetched a full batch which implies there could be more in the database.
-      Boolean hasMore = (candidateInstances.size() > instancesToPurge.size()) || (candidateInstances.size() == clampedBatchSize);
+      Boolean hasMore =
+        (candidateInstances.size() > instancesToPurge.size()) ||
+        (candidateInstances.size() == clampedBatchSize);
       if (hasMore) {
         return StepResult.yield(JSON.serialize(state));
       }

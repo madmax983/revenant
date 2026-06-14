@@ -55,7 +55,10 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
         ];
 
         // Re-validate status after lock
-        if (stepExec.Status__c != 'Running' && stepExec.Status__c != 'Pending') {
+        if (
+          stepExec.Status__c != 'Running' &&
+          stepExec.Status__c != 'Pending'
+        ) {
           return;
         }
 
@@ -80,13 +83,19 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
 
       // Check if the workflow instance is still active and waiting on this step (pre-start check)
       Boolean isExpectedStep = false;
-      if (instance.Status__c == 'Compensating' || instance.Status__c == 'Cancelling') {
+      if (
+        instance.Status__c == 'Compensating' ||
+        instance.Status__c == 'Cancelling'
+      ) {
         if (String.isNotBlank(instance.Compensation_Stack__c)) {
           List<String> stack = (List<String>) JSON.deserialize(
             instance.Compensation_Stack__c,
             List<String>.class
           );
-          if (!stack.isEmpty() && (stack[stack.size() - 1] + '_Compensate') == this.stepName) {
+          if (
+            !stack.isEmpty() &&
+            (stack[stack.size() - 1] + '_Compensate') == this.stepName
+          ) {
             isExpectedStep = true;
           }
         }

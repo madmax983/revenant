@@ -74,7 +74,9 @@ public inherited sharing class StepContext {
     // SOQL Query Rows
     Double queryRowsFraction = mockQueryRowsFraction != null
       ? mockQueryRowsFraction
-      : (Limits.getLimitQueryRows() > 0 ? ((Double) Limits.getQueryRows() / Limits.getLimitQueryRows()) : 0.0);
+      : (Limits.getLimitQueryRows() > 0
+          ? ((Double) Limits.getQueryRows() / Limits.getLimitQueryRows())
+          : 0.0);
     if (queryRowsFraction > 0.80) {
       return true;
     }

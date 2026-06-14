@@ -86,9 +86,15 @@ public class RateLimiterTest {
     Test.startTest();
     try {
       RateLimiter.acquire('InvalidCapacityService');
-      System.assert(false, 'Should have thrown WorkflowException due to invalid capacity');
+      System.assert(
+        false,
+        'Should have thrown WorkflowException due to invalid capacity'
+      );
     } catch (WorkflowEngine.WorkflowException e) {
-      System.assert(e.getMessage().contains('Capacity__c must be at least 1.0'), 'Message: ' + e.getMessage());
+      System.assert(
+        e.getMessage().contains('Capacity__c must be at least 1.0'),
+        'Message: ' + e.getMessage()
+      );
     }
     Test.stopTest();
   }
@@ -105,9 +111,16 @@ public class RateLimiterTest {
     Test.startTest();
     try {
       RateLimiter.acquire('InvalidRefillService');
-      System.assert(false, 'Should have thrown WorkflowException due to invalid refill rate');
+      System.assert(
+        false,
+        'Should have thrown WorkflowException due to invalid refill rate'
+      );
     } catch (WorkflowEngine.WorkflowException e) {
-      System.assert(e.getMessage().contains('Refill_Rate_Per_Second__c must be greater than 0.0'), 'Message: ' + e.getMessage());
+      System.assert(
+        e.getMessage()
+          .contains('Refill_Rate_Per_Second__c must be greater than 0.0'),
+        'Message: ' + e.getMessage()
+      );
     }
     Test.stopTest();
   }
@@ -144,8 +157,11 @@ public class RateLimiterTest {
     RateLimiter.AcquireResult res = RateLimiter.acquire('ConcurrencyService');
     Test.stopTest();
 
-    System.assert(res.isAllowed, 'Should be allowed after recovering from concurrency');
-    
+    System.assert(
+      res.isAllowed,
+      'Should be allowed after recovering from concurrency'
+    );
+
     // Verify the pre-inserted record was updated (tokens reduced by 1.0 plus any refill)
     Rate_Limit_State__c updatedState = [
       SELECT Tokens_Remaining__c

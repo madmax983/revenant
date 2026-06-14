@@ -18,16 +18,24 @@ public inherited sharing class WorkflowDashboardController {
     if (!profiles.isEmpty() && profiles[0].Name == 'System Administrator') {
       return;
     }
-    
-    AuraHandledException ex = new AuraHandledException('Unauthorized: Access to the Workflow Dashboard is restricted.');
-    ex.setMessage('Unauthorized: Access to the Workflow Dashboard is restricted.');
+
+    AuraHandledException ex = new AuraHandledException(
+      'Unauthorized: Access to the Workflow Dashboard is restricted.'
+    );
+    ex.setMessage(
+      'Unauthorized: Access to the Workflow Dashboard is restricted.'
+    );
     throw ex;
   }
 
   private static Id getAttachmentId(String textValue) {
-    if (String.isNotBlank(textValue) && textValue.startsWith('{"$attachmentId":')) {
+    if (
+      String.isNotBlank(textValue) && textValue.startsWith('{"$attachmentId":')
+    ) {
       try {
-        Map<String, Object> marker = (Map<String, Object>) JSON.deserializeUntyped(textValue);
+        Map<String, Object> marker = (Map<String, Object>) JSON.deserializeUntyped(
+          textValue
+        );
         return (Id) marker.get('$attachmentId');
       } catch (Exception ex) {
         // fallback
@@ -43,7 +51,10 @@ public inherited sharing class WorkflowDashboardController {
     return val;
   }
 
-  private static String resolveSinglePayload(String textValue, Map<Id, String> attachmentIdToData) {
+  private static String resolveSinglePayload(
+    String textValue,
+    Map<Id, String> attachmentIdToData
+  ) {
     if (String.isBlank(textValue)) {
       return textValue;
     }
@@ -61,21 +72,25 @@ public inherited sharing class WorkflowDashboardController {
     List<Workflow_Step_Execution__c> steps
   ) {
     Set<Id> attachmentIds = new Set<Id>();
-    
+
     Id instInputId = getAttachmentId(instance.Input__c);
-    if (instInputId != null) attachmentIds.add(instInputId);
-    
+    if (instInputId != null)
+      attachmentIds.add(instInputId);
+
     Id instOutputId = getAttachmentId(instance.Output__c);
-    if (instOutputId != null) attachmentIds.add(instOutputId);
-    
+    if (instOutputId != null)
+      attachmentIds.add(instOutputId);
+
     for (Workflow_Step_Execution__c step : steps) {
       Id stepInputId = getAttachmentId(step.Input__c);
-      if (stepInputId != null) attachmentIds.add(stepInputId);
-      
+      if (stepInputId != null)
+        attachmentIds.add(stepInputId);
+
       Id stepOutputId = getAttachmentId(step.Output__c);
-      if (stepOutputId != null) attachmentIds.add(stepOutputId);
+      if (stepOutputId != null)
+        attachmentIds.add(stepOutputId);
     }
-    
+
     Map<Id, String> attachmentIdToData = new Map<Id, String>();
     if (!attachmentIds.isEmpty()) {
       for (ContentVersion cv : [
@@ -85,13 +100,22 @@ public inherited sharing class WorkflowDashboardController {
         WITH SYSTEM_MODE
       ]) {
         if (cv.VersionData != null) {
-          attachmentIdToData.put(cv.ContentDocumentId, cv.VersionData.toString());
+          attachmentIdToData.put(
+            cv.ContentDocumentId,
+            cv.VersionData.toString()
+          );
         }
       }
     }
-    
-    instance.Input__c = resolveSinglePayload(instance.Input__c, attachmentIdToData);
-    instance.Output__c = resolveSinglePayload(instance.Output__c, attachmentIdToData);
+
+    instance.Input__c = resolveSinglePayload(
+      instance.Input__c,
+      attachmentIdToData
+    );
+    instance.Output__c = resolveSinglePayload(
+      instance.Output__c,
+      attachmentIdToData
+    );
     for (Workflow_Step_Execution__c step : steps) {
       step.Input__c = resolveSinglePayload(step.Input__c, attachmentIdToData);
       step.Output__c = resolveSinglePayload(step.Output__c, attachmentIdToData);
@@ -363,7 +387,11 @@ public inherited sharing class WorkflowDashboardController {
       String payloadJson = JSON.serialize(payload);
       String signalName = 'Approve:' + approvalKey;
 
-      WorkflowEngine.signal(String.valueOf(instanceId), signalName, payloadJson);
+      WorkflowEngine.signal(
+        String.valueOf(instanceId),
+        signalName,
+        payloadJson
+      );
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
     }

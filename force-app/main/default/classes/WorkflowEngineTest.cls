@@ -2122,9 +2122,15 @@ public class WorkflowEngineTest {
       );
     } catch (WorkflowEngine.WorkflowException ex) {
       threw = true;
-      System.assert(ex.getMessage().contains('already exists'), 'Expected active duplicate error: ' + ex.getMessage());
+      System.assert(
+        ex.getMessage().contains('already exists'),
+        'Expected active duplicate error: ' + ex.getMessage()
+      );
     }
-    System.assert(threw, 'Should have blocked starting second active instance with same correlation key');
+    System.assert(
+      threw,
+      'Should have blocked starting second active instance with same correlation key'
+    );
 
     // Run first instance to completion (terminal)
     WorkflowEngine.runStep(instanceId1, null);
@@ -2166,12 +2172,28 @@ public class WorkflowEngineTest {
     WorkflowEngine.signal(idKey, 'PaymentReceived', '100');
 
     // Verify instanceId1 received the signal and changed to Running (resumed)
-    Workflow_Instance__c inst1 = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId1];
-    System.assertEquals('Running', inst1.Status__c, 'Instance 1 should have been resumed');
+    Workflow_Instance__c inst1 = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId1
+    ];
+    System.assertEquals(
+      'Running',
+      inst1.Status__c,
+      'Instance 1 should have been resumed'
+    );
 
     // Verify instanceId2 did NOT receive the signal (still Suspended)
-    Workflow_Instance__c inst2 = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId2];
-    System.assertEquals('Suspended', inst2.Status__c, 'Instance 2 should not have been resumed');
+    Workflow_Instance__c inst2 = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId2
+    ];
+    System.assertEquals(
+      'Suspended',
+      inst2.Status__c,
+      'Instance 2 should not have been resumed'
+    );
   }
 
   public class TimeoutContinueStep implements WorkflowStep, TimeoutConfigurable {
@@ -2179,7 +2201,10 @@ public class WorkflowEngineTest {
       return 60;
     }
     public StepResult execute(StepContext ctx) {
-      if (ctx.workflowInputJson != null && ctx.workflowInputJson.contains('successor')) {
+      if (
+        ctx.workflowInputJson != null &&
+        ctx.workflowInputJson.contains('successor')
+      ) {
         return StepResult.complete(null, 'SuccessorFinished');
       }
       return StepResult.continueAsNew('successor', 'SuccessorKey');
@@ -2216,7 +2241,10 @@ public class WorkflowEngineTest {
       WHERE Previous_Instance__c = :instanceId
       LIMIT 1
     ];
-    System.assertEquals('WorkflowEngineTest.TimeoutContinueStep', successor.Current_Step__c);
+    System.assertEquals(
+      'WorkflowEngineTest.TimeoutContinueStep',
+      successor.Current_Step__c
+    );
 
     // Verify watchdog job was scheduled for the successor instance's initial step
     String cleanStepName = 'WorkflowEngineTest_TimeoutContinueStep';
@@ -2226,7 +2254,11 @@ public class WorkflowEngineTest {
       FROM CronTrigger
       WHERE CronJobDetail.Name = :jobName
     ];
-    System.assertEquals(1, triggers.size(), 'Watchdog should have been scheduled for successor initial step');
+    System.assertEquals(
+      1,
+      triggers.size(),
+      'Watchdog should have been scheduled for successor initial step'
+    );
   }
 
   @isTest
@@ -2239,11 +2271,17 @@ public class WorkflowEngineTest {
 
     // Save a large payload which offloads to ContentVersion
     String largeStr = 'x'.repeat(110000);
-    String marker = WorkflowEngine.savePayloadIfNeeded(instanceId, largeStr, 'TestPayload');
+    String marker = WorkflowEngine.savePayloadIfNeeded(
+      instanceId,
+      largeStr,
+      'TestPayload'
+    );
     System.assert(marker.contains('$attachmentId'));
 
     // Extract the docId
-    Map<String, Object> markerMap = (Map<String, Object>) JSON.deserializeUntyped(marker);
+    Map<String, Object> markerMap = (Map<String, Object>) JSON.deserializeUntyped(
+      marker
+    );
     Id docId = (Id) markerMap.get('$attachmentId');
 
     // Query ContentDocumentLink to verify Visibility is set to 'InternalUsers'
@@ -2254,7 +2292,10 @@ public class WorkflowEngineTest {
       LIMIT 1
     ];
     // Verify visibility is either InternalUsers (if Communities enabled) or AllUsers (if disabled)
-    System.assert(link.Visibility == 'InternalUsers' || link.Visibility == 'AllUsers', 'Invalid visibility: ' + link.Visibility);
+    System.assert(
+      link.Visibility == 'InternalUsers' || link.Visibility == 'AllUsers',
+      'Invalid visibility: ' + link.Visibility
+    );
   }
 
   // Mock class for compensation crash
@@ -2263,7 +2304,9 @@ public class WorkflowEngineTest {
       return StepResult.complete(null, 'Success');
     }
     public StepResult compensate(StepContext ctx) {
-      throw new WorkflowEngine.WorkflowException('Compensation crash simulation');
+      throw new WorkflowEngine.WorkflowException(
+        'Compensation crash simulation'
+      );
     }
   }
 
@@ -2285,18 +2328,29 @@ public class WorkflowEngineTest {
     insert stepExec;
 
     // Transition instance status to Completed
-    Workflow_Instance__c inst = [SELECT Id FROM Workflow_Instance__c WHERE Id = :instanceId];
+    Workflow_Instance__c inst = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
     inst.Status__c = 'Completed';
     update inst;
 
     // If watchdog runs on a completed instance, it should exit without error or changes
     Test.startTest();
-    WorkflowTimeoutJob job1 = new WorkflowTimeoutJob(instanceId, 'WorkflowEngineTest.HappyStep1');
+    WorkflowTimeoutJob job1 = new WorkflowTimeoutJob(
+      instanceId,
+      'WorkflowEngineTest.HappyStep1'
+    );
     job1.execute(null);
     Test.stopTest();
 
     // Check that step remains Completed
-    Workflow_Step_Execution__c checkStep = [SELECT Status__c FROM Workflow_Step_Execution__c WHERE Id = :stepExec.Id];
+    Workflow_Step_Execution__c checkStep = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :stepExec.Id
+    ];
     System.assertEquals('Completed', checkStep.Status__c);
   }
 
@@ -2318,14 +2372,21 @@ public class WorkflowEngineTest {
     insert stepExec;
 
     // We make instance Running
-    Workflow_Instance__c inst = [SELECT Id FROM Workflow_Instance__c WHERE Id = :instanceId];
+    Workflow_Instance__c inst = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
     inst.Status__c = 'Running';
     inst.Current_Step__c = 'WorkflowEngineTest.HappyStep1';
     update inst;
 
     // Run the timeout job
     Test.startTest();
-    WorkflowTimeoutJob job = new WorkflowTimeoutJob(instanceId, 'WorkflowEngineTest.HappyStep1');
+    WorkflowTimeoutJob job = new WorkflowTimeoutJob(
+      instanceId,
+      'WorkflowEngineTest.HappyStep1'
+    );
     job.execute(null);
     Test.stopTest();
 
@@ -2336,7 +2397,10 @@ public class WorkflowEngineTest {
       WHERE Id = :stepExec.Id
     ];
     System.assertEquals('Failed', timedOutStep.Status__c);
-    System.assertEquals('Step execution timed out before starting.', timedOutStep.Error_Details__c);
+    System.assertEquals(
+      'Step execution timed out before starting.',
+      timedOutStep.Error_Details__c
+    );
 
     // Verify workflow instance transitions to Failed
     Workflow_Instance__c timedOutInst = [
@@ -2345,7 +2409,11 @@ public class WorkflowEngineTest {
       WHERE Id = :instanceId
     ];
     System.assertEquals('Failed', timedOutInst.Status__c);
-    System.assert(timedOutInst.Error_Message__c.contains('Step execution timed out before starting.'));
+    System.assert(
+      timedOutInst.Error_Message__c.contains(
+        'Step execution timed out before starting.'
+      )
+    );
   }
 
   @isTest
@@ -2370,7 +2438,10 @@ public class WorkflowEngineTest {
 
     // Run the timeout job for the compensation step
     Test.startTest();
-    WorkflowTimeoutJob job = new WorkflowTimeoutJob(inst.Id, 'WorkflowEngineTest.CompensatableHappyStep_Compensate');
+    WorkflowTimeoutJob job = new WorkflowTimeoutJob(
+      inst.Id,
+      'WorkflowEngineTest.CompensatableHappyStep_Compensate'
+    );
     job.execute(null);
     Test.stopTest();
 
@@ -2391,7 +2462,10 @@ public class WorkflowEngineTest {
     System.assertEquals('Failed', timedOutInst.Status__c);
     System.assert(timedOutInst.Error_Message__c.contains('timed out'));
     // Compensation stack should NOT be popped
-    List<String> stack = (List<String>) JSON.deserialize(timedOutInst.Compensation_Stack__c, List<String>.class);
+    List<String> stack = (List<String>) JSON.deserialize(
+      timedOutInst.Compensation_Stack__c,
+      List<String>.class
+    );
     System.assertEquals(1, stack.size());
     System.assertEquals('WorkflowEngineTest.CompensatableHappyStep', stack[0]);
   }
@@ -2421,9 +2495,14 @@ public class WorkflowEngineTest {
       WHERE Id = :inst.Id
     ];
     System.assertEquals('Failed', failedInst.Status__c);
-    System.assert(failedInst.Error_Message__c.contains('Compensation crash simulation'));
+    System.assert(
+      failedInst.Error_Message__c.contains('Compensation crash simulation')
+    );
 
-    List<String> stack = (List<String>) JSON.deserialize(failedInst.Compensation_Stack__c, List<String>.class);
+    List<String> stack = (List<String>) JSON.deserialize(
+      failedInst.Compensation_Stack__c,
+      List<String>.class
+    );
     System.assertEquals(1, stack.size());
     System.assertEquals('WorkflowEngineTest.CompensatableCrashStep', stack[0]);
   }
@@ -2432,11 +2511,13 @@ public class WorkflowEngineTest {
   static void testBulkStart() {
     List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
     for (Integer i = 0; i < 5; i++) {
-      requests.add(new WorkflowEngine.StartRequest(
-        'WorkflowEngineTest.HappyWorkflow',
-        'BulkKey_' + i,
-        'StartVal_' + i
-      ));
+      requests.add(
+        new WorkflowEngine.StartRequest(
+          'WorkflowEngineTest.HappyWorkflow',
+          'BulkKey_' + i,
+          'StartVal_' + i
+        )
+      );
     }
 
     Test.startTest();
@@ -2453,7 +2534,10 @@ public class WorkflowEngineTest {
     for (Workflow_Instance__c inst : instances) {
       System.assertEquals('Running', inst.Status__c);
       System.assert(inst.Correlation_Key__c.startsWith('BulkKey_'));
-      System.assertEquals('WorkflowEngineTest.HappyStep2', inst.Current_Step__c);
+      System.assertEquals(
+        'WorkflowEngineTest.HappyStep2',
+        inst.Current_Step__c
+      );
     }
   }
 }

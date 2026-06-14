@@ -69,14 +69,7 @@ public class WorkflowAlertManagerTest {
     WorkflowAlertManager.mockConfigs.clear();
     WorkflowAlertManager.mockConfigs.put(
       'Default',
-      createMockConfig(
-        'Default',
-        'default@example.com',
-        true,
-        null,
-        null,
-        null
-      )
+      createMockConfig('Default', 'default@example.com', true, null, null, null)
     );
     WorkflowAlertManager.sentEmailsCount = 0;
 
@@ -523,7 +516,11 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.sendAlert(inst, 'Some error');
       System.assert(true, 'Should not throw exception');
     } catch (Exception e) {
-      System.assert(false, 'Should have caught and isolated email exception, but got: ' + e.getMessage());
+      System.assert(
+        false,
+        'Should have caught and isolated email exception, but got: ' +
+        e.getMessage()
+      );
     }
     Test.stopTest();
 
@@ -576,18 +573,42 @@ public class WorkflowAlertManagerTest {
     String html = WorkflowAlertManager.lastHtmlBody;
     System.assertNotEquals(null, html);
 
-    System.assert(!html.contains(xssWfName), 'Workflow Name must be HTML-escaped');
-    System.assert(html.contains('WorkflowEngineTest.HappyWorkflow&lt;script&gt;'), 'Escaped Workflow Name should be present');
+    System.assert(
+      !html.contains(xssWfName),
+      'Workflow Name must be HTML-escaped'
+    );
+    System.assert(
+      html.contains('WorkflowEngineTest.HappyWorkflow&lt;script&gt;'),
+      'Escaped Workflow Name should be present'
+    );
 
-    System.assert(!html.contains(xssCorrelation), 'Correlation Key must be HTML-escaped');
-    System.assert(html.contains('Key &amp; Value &gt; XSS'), 'Escaped Correlation Key should be present');
+    System.assert(
+      !html.contains(xssCorrelation),
+      'Correlation Key must be HTML-escaped'
+    );
+    System.assert(
+      html.contains('Key &amp; Value &gt; XSS'),
+      'Escaped Correlation Key should be present'
+    );
 
-    System.assert(html.contains(inst.Name.escapeHtml4()), 'Name should be escaped');
-    System.assert(html.contains(String.valueOf(inst.Id).escapeHtml4()), 'Id should be escaped');
+    System.assert(
+      html.contains(inst.Name.escapeHtml4()),
+      'Name should be escaped'
+    );
+    System.assert(
+      html.contains(String.valueOf(inst.Id).escapeHtml4()),
+      'Id should be escaped'
+    );
 
-    System.assert(html.contains('... (truncated)'), 'Should contain the truncation suffix');
+    System.assert(
+      html.contains('... (truncated)'),
+      'Should contain the truncation suffix'
+    );
     String expectedErrorDetails = 'A'.repeat(5000) + '... (truncated)';
-    System.assert(html.contains(expectedErrorDetails), 'Should contain exactly 5000 characters of error details plus the truncation indicator');
+    System.assert(
+      html.contains(expectedErrorDetails),
+      'Should contain exactly 5000 characters of error details plus the truncation indicator'
+    );
   }
 
   @isTest
@@ -667,14 +688,23 @@ public class WorkflowAlertManagerTest {
 
     // Verify it is not counted in the window now
     Workflow_Instance__c queriedInst = [
-      SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, Terminal_At__c
+      SELECT
+        Id,
+        Name,
+        Workflow_Name__c,
+        Status__c,
+        Correlation_Key__c,
+        Terminal_At__c
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
       WITH SYSTEM_MODE
     ];
 
     Test.startTest();
-    WorkflowAlertManager.sendAlert(queriedInst, 'Alert triggered by a later update');
+    WorkflowAlertManager.sendAlert(
+      queriedInst,
+      'Alert triggered by a later update'
+    );
     Test.stopTest();
 
     System.assertEquals(
@@ -689,9 +719,16 @@ public class WorkflowAlertManagerTest {
     Test.startTest();
     try {
       WorkflowAlertManager.sendAlert(null, 'Some error');
-      System.assert(true, 'Null pointer exception should be caught inside sendAlert');
+      System.assert(
+        true,
+        'Null pointer exception should be caught inside sendAlert'
+      );
     } catch (Exception ex) {
-      System.assert(false, 'Should have caught all exceptions in sendAlert, but got: ' + ex.getMessage());
+      System.assert(
+        false,
+        'Should have caught all exceptions in sendAlert, but got: ' +
+        ex.getMessage()
+      );
     }
     Test.stopTest();
   }

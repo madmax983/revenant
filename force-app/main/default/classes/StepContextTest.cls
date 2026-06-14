@@ -61,7 +61,11 @@ public class StepContextTest {
     );
 
     // Under normal test execution conditions, limits should not be exceeded
-    System.assertEquals(false, ctx.shouldYield(), 'shouldYield should be false under normal conditions');
+    System.assertEquals(
+      false,
+      ctx.shouldYield(),
+      'shouldYield should be false under normal conditions'
+    );
   }
 
   @isTest
@@ -79,12 +83,24 @@ public class StepContextTest {
 
     // Set mock to trigger SOQL query row limits checking logic
     StepContext.mockQueryRowsFraction = 0.81;
-    System.assertEquals(true, ctx.shouldYield(), 'shouldYield should return true when query rows exceed 80%');
+    System.assertEquals(
+      true,
+      ctx.shouldYield(),
+      'shouldYield should return true when query rows exceed 80%'
+    );
 
     StepContext.mockQueryRowsFraction = 0.80;
-    System.assertEquals(false, ctx.shouldYield(), 'shouldYield should return false when query rows are exactly 80%');
+    System.assertEquals(
+      false,
+      ctx.shouldYield(),
+      'shouldYield should return false when query rows are exactly 80%'
+    );
 
     StepContext.mockQueryRowsFraction = 0.79;
-    System.assertEquals(false, ctx.shouldYield(), 'shouldYield should return false when query rows are below 80%');
+    System.assertEquals(
+      false,
+      ctx.shouldYield(),
+      'shouldYield should return false when query rows are below 80%'
+    );
   }
 }
