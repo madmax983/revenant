@@ -146,7 +146,7 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   @AuraEnabled(cacheable=true)
-  public static List<Workflow_Instance__c> getFilteredInstances(
+  public static List<Map<String, Object>> getFilteredInstances(
     String workflowName,
     String status,
     String searchTerm,
@@ -156,13 +156,80 @@ public inherited sharing class WorkflowDashboardController {
   ) {
     checkAuthorization();
     String query =
-      'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, Error_Message__c ' +
+      'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c ' +
       'FROM Workflow_Instance__c' +
       buildWhereClause(workflowName, status, searchTerm);
 
     query += ' ORDER BY CreatedDate DESC LIMIT :limitSize OFFSET :offsetSize';
 
-    return Database.query(query, AccessLevel.SYSTEM_MODE);
+    List<Workflow_Instance__c> instances = Database.query(query, AccessLevel.SYSTEM_MODE);
+
+    Set<Id> cronIds = new Set<Id>();
+    Set<Id> asyncIds = new Set<Id>();
+    for (Workflow_Instance__c inst : instances) {
+      if (String.isNotBlank(inst.Async_Job_Id__c)) {
+        try {
+          Id jobId = (Id) inst.Async_Job_Id__c;
+          if (jobId.getSobjectType() == CronTrigger.SObjectType) {
+            cronIds.add(jobId);
+          } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
+            asyncIds.add(jobId);
+          }
+        } catch (Exception ex) {}
+      }
+    }
+
+    Set<Id> activeCronIds = new Set<Id>();
+    if (!cronIds.isEmpty()) {
+      for (CronTrigger ct : [SELECT Id FROM CronTrigger WHERE Id IN :cronIds AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING') WITH SYSTEM_MODE]) {
+        activeCronIds.add(ct.Id);
+      }
+    }
+
+    Set<Id> activeAsyncIds = new Set<Id>();
+    if (!asyncIds.isEmpty()) {
+      for (AsyncApexJob aaj : [SELECT Id FROM AsyncApexJob WHERE Id IN :asyncIds AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing') WITH SYSTEM_MODE]) {
+        activeAsyncIds.add(aaj.Id);
+      }
+    }
+
+    List<Map<String, Object>> results = new List<Map<String, Object>>();
+    for (Workflow_Instance__c inst : instances) {
+      Map<String, Object> m = new Map<String, Object>{
+        'Id' => inst.Id,
+        'Name' => inst.Name,
+        'Workflow_Name__c' => inst.Workflow_Name__c,
+        'Status__c' => inst.Status__c,
+        'Correlation_Key__c' => inst.Correlation_Key__c,
+        'CreatedDate' => inst.CreatedDate,
+        'Error_Message__c' => inst.Error_Message__c,
+        'Async_Job_Id__c' => inst.Async_Job_Id__c,
+        'Sleep_Until__c' => inst.Sleep_Until__c
+      };
+
+      String waitingOn = null;
+      if (inst.Status__c == 'Suspended') {
+        if (String.isNotBlank(inst.Async_Job_Id__c)) {
+          try {
+            Id jobId = (Id) inst.Async_Job_Id__c;
+            if (jobId.getSobjectType() == CronTrigger.SObjectType && activeCronIds.contains(jobId)) {
+              waitingOn = 'Scheduled Job';
+            } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType && activeAsyncIds.contains(jobId)) {
+              waitingOn = 'Delayed Queueable';
+            } else {
+              waitingOn = 'Watchdog';
+            }
+          } catch (Exception ex) {
+            waitingOn = 'Watchdog';
+          }
+        } else if (inst.Sleep_Until__c != null) {
+          waitingOn = 'Watchdog';
+        }
+      }
+      m.put('waitingOn', waitingOn);
+      results.add(m);
+    }
+    return results;
   }
 
   @AuraEnabled
@@ -228,7 +295,9 @@ public inherited sharing class WorkflowDashboardController {
         Parent_Instance__c,
         Parent_Instance__r.Name,
         Previous_Instance__c,
-        Previous_Instance__r.Name
+        Previous_Instance__r.Name,
+        Async_Job_Id__c,
+        Sleep_Until__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -272,15 +341,40 @@ public inherited sharing class WorkflowDashboardController {
       WITH SYSTEM_MODE
       LIMIT 1
     ];
-    Workflow_Instance__c successor = successors.isEmpty()
-      ? null
-      : successors[0];
+    String waitingOn = null;
+    if (instance.Status__c == 'Suspended') {
+      if (String.isNotBlank(instance.Async_Job_Id__c)) {
+        try {
+          Id jobId = (Id) instance.Async_Job_Id__c;
+          if (jobId.getSobjectType() == CronTrigger.SObjectType) {
+            List<CronTrigger> cronJobs = [SELECT Id FROM CronTrigger WHERE Id = :jobId AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING') WITH SYSTEM_MODE LIMIT 1];
+            if (!cronJobs.isEmpty()) {
+              waitingOn = 'Scheduled Job';
+            } else {
+              waitingOn = 'Watchdog';
+            }
+          } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
+            List<AsyncApexJob> asyncJobs = [SELECT Id FROM AsyncApexJob WHERE Id = :jobId AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing') WITH SYSTEM_MODE LIMIT 1];
+            if (!asyncJobs.isEmpty()) {
+              waitingOn = 'Delayed Queueable';
+            } else {
+              waitingOn = 'Watchdog';
+            }
+          }
+        } catch (Exception ex) {
+          waitingOn = 'Watchdog';
+        }
+      } else if (instance.Sleep_Until__c != null) {
+        waitingOn = 'Watchdog';
+      }
+    }
 
     return new Map<String, Object>{
       'instance' => instance,
       'steps' => steps,
       'children' => children,
-      'successor' => successor
+      'successor' => successors.isEmpty() ? null : successors[0],
+      'waitingOn' => waitingOn
     };
   }
 
@@ -361,6 +455,31 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   @AuraEnabled
+  public static void resumeWorkflowInstance(Id instanceId) {
+    checkAuthorization();
+    try {
+      List<Workflow_Instance__c> instances = [
+        SELECT Id, Status__c, Sleep_Until__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instanceId AND Status__c = 'Suspended'
+        WITH SYSTEM_MODE
+        LIMIT 1
+        FOR UPDATE
+      ];
+      if (!instances.isEmpty()) {
+        Workflow_Instance__c inst = instances[0];
+        inst.Status__c = 'Running';
+        inst.Sleep_Until__c = null;
+        inst.Async_Job_Id__c = null;
+        update as system inst;
+        WorkflowEngine.enqueueOrchestrators(new List<Id>{ inst.Id });
+      }
+    } catch (Exception ex) {
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  @AuraEnabled
   public static void cancelWorkflow(Id instanceId, Boolean runCompensations) {
     checkAuthorization();
     try {
@@ -392,6 +511,115 @@ public inherited sharing class WorkflowDashboardController {
         signalName,
         payloadJson
       );
+    } catch (Exception ex) {
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  @AuraEnabled
+  public static Map<String, Object> getWatchdogStatus() {
+    checkAuthorization();
+    try {
+      List<Workflow_Instance__c> watchdogInstances = [
+        SELECT
+          Id,
+          Name,
+          Status__c,
+          Current_Step__c,
+          Error_Message__c,
+          CreatedDate,
+          LastModifiedDate
+        FROM Workflow_Instance__c
+        WHERE Correlation_Key__c = 'SystemWatchdog'
+           OR Correlation_Key__c LIKE 'SystemWatchdog_run%'
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC
+        LIMIT 5
+      ];
+      Boolean isRunning = false;
+      Workflow_Instance__c latestWatchdog = null;
+      if (!watchdogInstances.isEmpty()) {
+        latestWatchdog = watchdogInstances[0];
+        String status = latestWatchdog.Status__c;
+        if (
+          status == 'Pending' ||
+          status == 'Running' ||
+          status == 'Suspended'
+        ) {
+          isRunning = true;
+        }
+      }
+
+      Integer scheduledJobsCount = [
+        SELECT COUNT()
+        FROM CronTrigger
+        WITH SYSTEM_MODE
+      ];
+
+      Integer sleepingInstances = [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE Sleep_Until__c != NULL AND Status__c = 'Suspended'
+        WITH SYSTEM_MODE
+      ];
+
+      Integer pendingTimeouts = [
+        SELECT COUNT()
+        FROM Workflow_Step_Execution__c
+        WHERE Timeout_At__c != NULL AND Status__c = 'Pending'
+        WITH SYSTEM_MODE
+      ];
+
+      Map<String, System.OrgLimit> limitsMap = System.OrgLimits.getMap();
+      Integer dailyAsyncValue = 0;
+      Integer dailyAsyncLimit = 0;
+      Boolean hasElasticLimit = false;
+      Integer elasticAsyncValue = 0;
+      Integer elasticAsyncLimit = 0;
+
+      if (limitsMap.containsKey('DailyAsyncApexExecutions')) {
+        System.OrgLimit limitObj = limitsMap.get('DailyAsyncApexExecutions');
+        dailyAsyncValue = limitObj.getValue();
+        dailyAsyncLimit = limitObj.getLimit();
+      }
+      if (limitsMap.containsKey('DailyAsyncApexElasticExecutions')) {
+        System.OrgLimit limitObj = limitsMap.get(
+          'DailyAsyncApexElasticExecutions'
+        );
+        hasElasticLimit = true;
+        elasticAsyncValue = limitObj.getValue();
+        elasticAsyncLimit = limitObj.getLimit();
+      }
+
+      Map<String, Object> config = new Map<String, Object>{
+        'Use_Dynamic_Scheduling__c' => WorkflowEngine.useDynamicScheduling,
+        'Watchdog_Delay_Minutes__c' => WorkflowEngine.watchdogDelayMinutes
+      };
+
+      return new Map<String, Object>{
+        'isRunning' => isRunning,
+        'latestJob' => latestWatchdog,
+        'recentJobs' => watchdogInstances,
+        'scheduledJobsCount' => scheduledJobsCount,
+        'sleepingInstances' => sleepingInstances,
+        'pendingTimeouts' => pendingTimeouts,
+        'config' => config,
+        'dailyAsyncValue' => dailyAsyncValue,
+        'dailyAsyncLimit' => dailyAsyncLimit,
+        'hasElasticLimit' => hasElasticLimit,
+        'elasticAsyncValue' => elasticAsyncValue,
+        'elasticAsyncLimit' => elasticAsyncLimit
+      };
+    } catch (Exception ex) {
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  @AuraEnabled
+  public static void enqueueWatchdog() {
+    checkAuthorization();
+    try {
+      WorkflowWatchdog.bootstrap();
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
     }

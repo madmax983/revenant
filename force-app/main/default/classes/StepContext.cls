@@ -10,6 +10,8 @@ public inherited sharing class StepContext {
 
   @TestVisible
   private static Double mockQueryRowsFraction = null;
+  @TestVisible
+  private static Double mockAsyncExecutionsFraction = null;
 
   public StepContext(
     Id workflowInstanceId,
@@ -100,6 +102,32 @@ public inherited sharing class StepContext {
       Limits.getLimitHeapSize() > 0 &&
       ((Double) Limits.getHeapSize() / Limits.getLimitHeapSize()) > 0.80
     ) {
+      return true;
+    }
+    // Daily Async Apex Executions Limit (accounts for Beta Elastic Limits if enabled)
+    Double asyncFraction = mockAsyncExecutionsFraction;
+    if (asyncFraction == null) {
+      Map<String, System.OrgLimit> limitsMap = System.OrgLimits.getMap();
+      if (limitsMap.containsKey('DailyAsyncApexExecutions')) {
+        System.OrgLimit dailyLimitObj = limitsMap.get(
+          'DailyAsyncApexExecutions'
+        );
+        Integer limitValue = dailyLimitObj.getValue();
+        Integer maxLimit = dailyLimitObj.getLimit();
+
+        if (limitsMap.containsKey('DailyAsyncApexElasticExecutions')) {
+          System.OrgLimit elasticLimitObj = limitsMap.get(
+            'DailyAsyncApexElasticExecutions'
+          );
+          maxLimit = elasticLimitObj.getLimit();
+        }
+
+        if (maxLimit > 0) {
+          asyncFraction = (Double) limitValue / maxLimit;
+        }
+      }
+    }
+    if (asyncFraction != null && asyncFraction > 0.80) {
       return true;
     }
     return false;

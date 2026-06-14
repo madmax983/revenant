@@ -1,5 +1,31 @@
 public inherited sharing class WorkflowEngine {
   public static Boolean disableQueueableInTest = false;
+  public static Integer watchdogDelayMinutes = 10;
+  public static Boolean useDynamicScheduling = true;
+
+  static {
+    try {
+      List<Revenant_Config__mdt> configs = [
+        SELECT Watchdog_Delay_Minutes__c, Use_Dynamic_Scheduling__c
+        FROM Revenant_Config__mdt
+        WHERE DeveloperName = 'Default'
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      if (!configs.isEmpty()) {
+        if (configs[0].Watchdog_Delay_Minutes__c != null) {
+          watchdogDelayMinutes = configs[0]
+            .Watchdog_Delay_Minutes__c.intValue();
+        }
+        if (configs[0].Use_Dynamic_Scheduling__c != null) {
+          useDynamicScheduling = configs[0].Use_Dynamic_Scheduling__c;
+        }
+      }
+    } catch (Exception ex) {
+      // Gracefully fall back to defaults if Custom Metadata not deployed/available
+    }
+  }
+
   @TestVisible
   private static Set<Id> enqueuedInstanceIds = new Set<Id>();
   public class WorkflowException extends Exception {
@@ -682,7 +708,8 @@ public inherited sharing class WorkflowEngine {
       return; // Already finished
     }
 
-    Boolean isCompensating = (instance.Status__c == 'Compensating' || instance.Status__c == 'Cancelling');
+    Boolean isCompensating = (instance.Status__c == 'Compensating' ||
+    instance.Status__c == 'Cancelling');
     if (instance.Status__c == 'Suspended') {
       List<Workflow_Step_Execution__c> latestSteps = [
         SELECT Step_Name__c
@@ -692,18 +719,26 @@ public inherited sharing class WorkflowEngine {
         ORDER BY CreatedDate DESC, Id DESC
         LIMIT 1
       ];
-      if (!latestSteps.isEmpty() && latestSteps[0].Step_Name__c != null && latestSteps[0].Step_Name__c.endsWith('_Compensate')) {
+      if (
+        !latestSteps.isEmpty() &&
+        latestSteps[0].Step_Name__c != null &&
+        latestSteps[0].Step_Name__c.endsWith('_Compensate')
+      ) {
         isCompensating = true;
       }
     }
 
     if (isCompensating) {
       if (instance.Status__c == 'Suspended') {
-        if (instance.Error_Message__c != null && instance.Error_Message__c.contains('Cancelled')) {
+        if (
+          instance.Error_Message__c != null &&
+          instance.Error_Message__c.contains('Cancelled')
+        ) {
           instance.Status__c = 'Cancelling';
         } else {
           instance.Status__c = 'Compensating';
         }
+        instance.Async_Job_Id__c = null;
         update as system instance;
       }
       runCompensationStep(instance);
@@ -727,6 +762,7 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c == 'Pending'
     ) {
       instance.Status__c = 'Running';
+      instance.Async_Job_Id__c = null;
     }
 
     // If stepName is blank but Current_Step__c is a parallel list, this is a stale/duplicate orchestrator run. Return early.
@@ -1240,10 +1276,10 @@ public inherited sharing class WorkflowEngine {
       saveStepExec(stepExec);
 
       instance.Status__c = 'Suspended';
-      instance.Sleep_Until__c = DateTime.now().addSeconds(result.sleepDurationSeconds);
+      instance.Sleep_Until__c = DateTime.now()
+        .addSeconds(result.sleepDurationSeconds);
+      instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
       update as system instance;
-
-      scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
     } else if (result.action == StepResult.ActionType.START_CHILD) {
       // Step requested child workflow
       stepExec.Status__c = 'Pending';
@@ -1364,9 +1400,8 @@ public inherited sharing class WorkflowEngine {
 
         instance.Status__c = 'Suspended';
         instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
+        instance.Async_Job_Id__c = scheduleRetry(instance.Id, stepExec.Step_Name__c, delay);
         update as system instance;
-
-        scheduleRetry(instance.Id, stepExec.Step_Name__c, delay);
       }
     } else if (result.action == StepResult.ActionType.CONTINUE_AS_NEW) {
       stepExec.Status__c = 'ContinuedAsNew';
@@ -2245,7 +2280,7 @@ public inherited sharing class WorkflowEngine {
           preCreateFirstCompensationStep(instance);
           scheduleTimeoutJobForInstance(instance.Id);
         }
- 
+
         if (Test.isRunningTest()) {
           if (!disableQueueableInTest) {
             System.enqueueJob(new WorkflowOrchestrator(instance.Id));
@@ -2257,7 +2292,7 @@ public inherited sharing class WorkflowEngine {
       }
       stepExec.Status__c = 'Running';
     }
- 
+
     // 4. Instantiate the step and execute compensate
     Type stepType = Type.forName(activeStepName);
     if (stepType == null) {
@@ -2265,16 +2300,16 @@ public inherited sharing class WorkflowEngine {
         'Could not resolve class for step compensation: ' + activeStepName
       );
     }
- 
+
     Object stepInstanceObj = stepType.newInstance();
     if (!(stepInstanceObj instanceof CompensatableStep)) {
       stepExec.Status__c = 'Compensated';
       saveStepExec(stepExec);
- 
+
       stack.remove(stack.size() - 1);
       instance.Compensation_Stack__c = JSON.serialize(stack);
       update as system instance;
- 
+
       if (!stack.isEmpty()) {
         scheduleTimeoutJobForInstance(instance.Id);
       }
@@ -2407,7 +2442,7 @@ public inherited sharing class WorkflowEngine {
         instance.Current_Step__c = null;
       }
       update as system instance;
- 
+
       if (!stack.isEmpty()) {
         scheduleTimeoutJobForInstance(instance.Id);
       }
@@ -2429,7 +2464,7 @@ public inherited sharing class WorkflowEngine {
       saveStepExec(stepExec);
 
       update as system instance;
- 
+
       scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.SUSPEND) {
@@ -2447,12 +2482,11 @@ public inherited sharing class WorkflowEngine {
       saveStepExec(stepExec);
       instance.Status__c = 'Suspended';
       if (result.sleepDurationSeconds != null) {
-        instance.Sleep_Until__c = DateTime.now().addSeconds(result.sleepDurationSeconds);
+        instance.Sleep_Until__c = DateTime.now()
+          .addSeconds(result.sleepDurationSeconds);
+        instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
       }
       update as system instance;
-      if (result.sleepDurationSeconds != null) {
-        scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
-      }
     } else if (result.action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
       stepExec.Status__c = 'Pending';
       Map<String, Object> state = new Map<String, Object>{
@@ -2503,8 +2537,8 @@ public inherited sharing class WorkflowEngine {
         delay = Math.min(delay, 86400);
         instance.Status__c = 'Suspended';
         instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
+        instance.Async_Job_Id__c = scheduleRetry(instance.Id, stepExec.Step_Name__c, delay);
         update as system instance;
-        scheduleRetry(instance.Id, stepExec.Step_Name__c, delay);
       }
     } else {
       stepExec.Status__c = 'Failed';
@@ -2522,8 +2556,6 @@ public inherited sharing class WorkflowEngine {
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
     }
   }
-
-
 
   private static void preCreateFirstCompensationStep(
     Workflow_Instance__c instance
@@ -2739,6 +2771,7 @@ public inherited sharing class WorkflowEngine {
   }
 
   public static void enqueueOrchestrators(List<Id> instanceIds) {
+    WorkflowWatchdog.bootstrap();
     if (Test.isRunningTest()) {
       for (Id instId : instanceIds) {
         try {
@@ -2779,6 +2812,7 @@ public inherited sharing class WorkflowEngine {
   }
 
   public static void enqueueOrchestrator(Id instanceId, String stepName) {
+    WorkflowWatchdog.bootstrap();
     if (Test.isRunningTest()) {
       return;
     }
@@ -2885,8 +2919,7 @@ public inherited sharing class WorkflowEngine {
     List<Workflow_Step_Execution__c> timedOutSteps = [
       SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Error_Details__c
       FROM Workflow_Step_Execution__c
-      WHERE Status__c IN ('Running', 'Pending')
-        AND Timeout_At__c <= :now
+      WHERE Status__c IN ('Running', 'Pending') AND Timeout_At__c <= :now
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
       LIMIT 100
@@ -2926,7 +2959,10 @@ public inherited sharing class WorkflowEngine {
             continue;
           }
           Workflow_Step_Execution__c lockedStep = stepLockList[0];
-          if (lockedStep.Status__c != 'Running' && lockedStep.Status__c != 'Pending') {
+          if (
+            lockedStep.Status__c != 'Running' &&
+            lockedStep.Status__c != 'Pending'
+          ) {
             continue;
           }
 
@@ -2948,10 +2984,9 @@ public inherited sharing class WorkflowEngine {
 
     // 2. Process Sleep Resumptions
     List<Workflow_Instance__c> readyToResume = [
-      SELECT Id, Status__c, Sleep_Until__c, Error_Message__c
+      SELECT Id, Status__c, Sleep_Until__c, Async_Job_Id__c, Error_Message__c
       FROM Workflow_Instance__c
-      WHERE Status__c = 'Suspended'
-        AND Sleep_Until__c <= :now
+      WHERE Status__c = 'Suspended' AND Sleep_Until__c <= :now
       WITH SYSTEM_MODE
       FOR UPDATE
     ];
@@ -2980,8 +3015,15 @@ public inherited sharing class WorkflowEngine {
       List<Id> instanceIds = new List<Id>();
       for (Workflow_Instance__c inst : readyToResume) {
         Workflow_Step_Execution__c latestStep = latestStepByInstId.get(inst.Id);
-        if (latestStep != null && latestStep.Step_Name__c != null && latestStep.Step_Name__c.endsWith('_Compensate')) {
-          if (inst.Error_Message__c != null && inst.Error_Message__c.contains('Cancelled')) {
+        if (
+          latestStep != null &&
+          latestStep.Step_Name__c != null &&
+          latestStep.Step_Name__c.endsWith('_Compensate')
+        ) {
+          if (
+            inst.Error_Message__c != null &&
+            inst.Error_Message__c.contains('Cancelled')
+          ) {
             inst.Status__c = 'Cancelling';
           } else {
             inst.Status__c = 'Compensating';
@@ -2990,6 +3032,7 @@ public inherited sharing class WorkflowEngine {
           inst.Status__c = 'Running';
         }
         inst.Sleep_Until__c = null;
+        inst.Async_Job_Id__c = null;
         instanceIds.add(inst.Id);
       }
       update as system readyToResume;
@@ -3012,7 +3055,8 @@ public inherited sharing class WorkflowEngine {
           return ((TimeoutConfigurable) stepObj).getTimeoutSeconds();
         }
       }
-    } catch (Exception e) {}
+    } catch (Exception e) {
+    }
     return null;
   }
 
@@ -3081,23 +3125,34 @@ public inherited sharing class WorkflowEngine {
       return;
     }
     Workflow_Instance__c instance = instances[0];
-    scheduleTimeoutJobsForInstances(new List<Workflow_Instance__c>{instance});
+    scheduleTimeoutJobsForInstances(new List<Workflow_Instance__c>{ instance });
   }
 
   public static void scheduleTimeoutJobIfNeeded(
     Id instanceId,
     String stepName
   ) {
-    if (String.isBlank(stepName)) {
+    if (String.isBlank(stepName) || !useDynamicScheduling) {
       return;
     }
     try {
       Integer timeoutSeconds = getStepTimeoutSeconds(stepName);
       if (timeoutSeconds != null && timeoutSeconds > 0) {
-        WorkflowTimeoutJob job = new WorkflowTimeoutJob(
-          instanceId,
-          stepName
-        );
+        if (
+          !Test.isRunningTest() &&
+          timeoutSeconds >= 60 &&
+          timeoutSeconds <= 600 &&
+          Math.mod(timeoutSeconds, 60) == 0
+        ) {
+          if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+            System.enqueueJob(
+              new WorkflowTimeoutJob.QueueableTimeoutJob(instanceId, stepName),
+              timeoutSeconds / 60
+            );
+            return;
+          }
+        }
+        WorkflowTimeoutJob job = new WorkflowTimeoutJob(instanceId, stepName);
         Datetime runTime = Datetime.now()
           .addSeconds(
             Test.isRunningTest() ? timeoutSeconds + 60 : timeoutSeconds
@@ -3125,12 +3180,28 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
-  private static void scheduleRetry(
+  private static String scheduleRetry(
     Id instanceId,
     String stepName,
     Integer delaySeconds
   ) {
+    if (!useDynamicScheduling) {
+      return null;
+    }
     try {
+      if (
+        !Test.isRunningTest() &&
+        delaySeconds >= 60 &&
+        delaySeconds <= 600 &&
+        Math.mod(delaySeconds, 60) == 0
+      ) {
+        if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+          return String.valueOf(System.enqueueJob(
+            new WorkflowRetryJob.QueueableRetryJob(instanceId, stepName),
+            delaySeconds / 60
+          ));
+        }
+      }
       WorkflowRetryJob job = new WorkflowRetryJob(instanceId, stepName);
       Datetime runTime = Datetime.now()
         .addSeconds(Test.isRunningTest() ? delaySeconds + 60 : delaySeconds);
@@ -3146,20 +3217,38 @@ public inherited sharing class WorkflowEngine {
         runTime.month() +
         ' ? ' +
         runTime.year();
-      System.schedule(
+      return String.valueOf(System.schedule(
         'WorkflowRetry_' + instanceId + '_' + runTime.getTime(),
         cronStr,
         job
-      );
+      ));
     } catch (AsyncException ex) {
       // Limit reached, fall back to Sleep_Until__c poller
+      return null;
     } catch (Exception ex) {
       // Ignore
+      return null;
     }
   }
 
-  private static void scheduleSleepResume(Id instanceId, Integer delaySeconds) {
+  private static String scheduleSleepResume(Id instanceId, Integer delaySeconds) {
+    if (!useDynamicScheduling) {
+      return null;
+    }
     try {
+      if (
+        !Test.isRunningTest() &&
+        delaySeconds >= 60 &&
+        delaySeconds <= 600 &&
+        Math.mod(delaySeconds, 60) == 0
+      ) {
+        if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+          return String.valueOf(System.enqueueJob(
+            new WorkflowSleepJob.QueueableSleepJob(instanceId),
+            delaySeconds / 60
+          ));
+        }
+      }
       WorkflowSleepJob job = new WorkflowSleepJob(instanceId);
       Datetime runTime = Datetime.now()
         .addSeconds(Test.isRunningTest() ? delaySeconds + 60 : delaySeconds);
@@ -3175,15 +3264,17 @@ public inherited sharing class WorkflowEngine {
         runTime.month() +
         ' ? ' +
         runTime.year();
-      System.schedule(
+      return String.valueOf(System.schedule(
         'WorkflowSleep_' + instanceId + '_' + runTime.getTime(),
         cronStr,
         job
-      );
+      ));
     } catch (AsyncException ex) {
       // Limit reached, fall back to Sleep_Until__c poller
+      return null;
     } catch (Exception ex) {
       // Ignore
+      return null;
     }
   }
 

@@ -1959,13 +1959,18 @@ public class WorkflowEngineTest {
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Timeout_At__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId
+      WHERE
+        Workflow_Instance__c = :instanceId
         AND Step_Name__c = 'WorkflowEngineTest.TimeoutStep'
       WITH SYSTEM_MODE
       LIMIT 1
     ];
     System.assertEquals(1, stepExecs.size());
-    System.assertNotEquals(null, stepExecs[0].Timeout_At__c, 'Watchdog timeout should be set on step execution');
+    System.assertNotEquals(
+      null,
+      stepExecs[0].Timeout_At__c,
+      'Watchdog timeout should be set on step execution'
+    );
 
     // Verify watchdog was scheduled in CronTriggers
     String cleanStepName = 'WorkflowEngineTest_TimeoutStep';
@@ -1975,7 +1980,11 @@ public class WorkflowEngineTest {
       FROM CronTrigger
       WHERE CronJobDetail.Name = :jobName
     ];
-    System.assertEquals(1, triggers.size(), 'A dynamic CronTrigger should be scheduled');
+    System.assertEquals(
+      1,
+      triggers.size(),
+      'A dynamic CronTrigger should be scheduled'
+    );
 
     // Execute the step. It should clear the timeout in DB.
     Test.startTest();
@@ -1985,14 +1994,19 @@ public class WorkflowEngineTest {
     stepExecs = [
       SELECT Timeout_At__c, Status__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId
+      WHERE
+        Workflow_Instance__c = :instanceId
         AND Step_Name__c = 'WorkflowEngineTest.TimeoutStep'
       WITH SYSTEM_MODE
       LIMIT 1
     ];
     System.assertEquals(1, stepExecs.size());
     System.assertEquals('Completed', stepExecs[0].Status__c);
-    System.assertEquals(null, stepExecs[0].Timeout_At__c, 'Watchdog timeout should be cleared upon successful step completion');
+    System.assertEquals(
+      null,
+      stepExecs[0].Timeout_At__c,
+      'Watchdog timeout should be cleared upon successful step completion'
+    );
 
     // Verify watchdog CronTrigger was canceled/aborted
     triggers = [
@@ -2000,7 +2014,11 @@ public class WorkflowEngineTest {
       FROM CronTrigger
       WHERE CronJobDetail.Name = :jobName
     ];
-    System.assertEquals(0, triggers.size(), 'Watchdog CronTrigger should be aborted upon successful step completion');
+    System.assertEquals(
+      0,
+      triggers.size(),
+      'Watchdog CronTrigger should be aborted upon successful step completion'
+    );
   }
 
   @isTest
@@ -2271,13 +2289,18 @@ public class WorkflowEngineTest {
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Timeout_At__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :successor.Id
+      WHERE
+        Workflow_Instance__c = :successor.Id
         AND Step_Name__c = :successor.Current_Step__c
       WITH SYSTEM_MODE
       LIMIT 1
     ];
     System.assertEquals(1, stepExecs.size());
-    System.assertNotEquals(null, stepExecs[0].Timeout_At__c, 'Watchdog timeout should be set on successor initial step');
+    System.assertNotEquals(
+      null,
+      stepExecs[0].Timeout_At__c,
+      'Watchdog timeout should be set on successor initial step'
+    );
   }
 
   @isTest
@@ -2611,7 +2634,10 @@ public class WorkflowEngineTest {
     ];
     for (Workflow_Instance__c inst : updatedInstances) {
       System.assertEquals('Running', inst.Status__c);
-      System.assertEquals('WorkflowEngineTest.AfterSuspendStep', inst.Current_Step__c);
+      System.assertEquals(
+        'WorkflowEngineTest.AfterSuspendStep',
+        inst.Current_Step__c
+      );
     }
   }
 

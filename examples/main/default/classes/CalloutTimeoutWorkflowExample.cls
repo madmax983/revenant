@@ -39,8 +39,18 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
                 new Map<String, Object>{ 'status' => status, 'body' => body }
               );
             } else {
+              // Read initial interval from input if available
+              Integer retryDelay = 2;
+              if (String.isNotBlank(ctx.workflowInputJson)) {
+                try {
+                  Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(ctx.workflowInputJson);
+                  if (input.containsKey('retryDelay')) {
+                    retryDelay = (Integer) input.get('retryDelay');
+                  }
+                } catch (Exception ex) {}
+              }
               // If it failed, we retry using retry policy
-              return StepResult.retry(new RetryPolicy(2, (Double) 2.0, 3));
+              return StepResult.retry(new RetryPolicy(retryDelay, (Double) 1.0, 3));
             }
           }
         } catch (Exception ex) {
