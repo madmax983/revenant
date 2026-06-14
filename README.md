@@ -203,14 +203,14 @@ sf apex run test -w 10
 
 ## Production Scaling & Platform Event Subscriber Configuration
 
-By default, Salesforce Platform Event triggers (like `WorkflowEventTrigger`) execute under the context of the **Automated Process** system user with a default batch size of **2,000** event messages. For production systems running durable workflows, this defaults to two main limitations:
-1. **Permissions & HTTP Callouts**: The "Automated Process" system user has restricted access to database records (bypassing sharing rules but lacking standard permission sets) and cannot execute outbound HTTP callouts. This will crash any steps making callouts or accessing restricted objects.
+By default, Salesforce Platform Event triggers (like `WorkflowEventTrigger`) execute under the context of the **Automated Process** system user with a default batch size of **2,000** event messages. For production systems running durable workflows, this presents two main limitations:
+1. **Permissions & Asynchronous Callout Context**: Triggers cannot make HTTP callouts directly (regardless of the user context). To bypass this, the trigger enqueues a `WorkflowOrchestrator` Queueable job. However, if the trigger runs as the default "Automated Process" user, the Queueable inherits this context. Because "Automated Process" is not a real user, it cannot be assigned standard permission sets or Named Credential access, causing asynchronous callouts and emails to fail when authentication or specific permissions are required.
 2. **Large Batch Volumes**: Ingesting up to 2,000 events in a single transaction can exceed CPU time and governor limits. While the trigger contains built-in throttling (republishing events above a limit), setting a smaller, more optimal batch size at the platform layer is much more efficient.
 
 To configure these, associate a **[PlatformEventSubscriberConfig](https://developer.salesforce.com/docs/atlas.en-us.platform_events.meta/platform_events/platform_events_ps_config.htm)** record with `WorkflowEventTrigger` using the Tooling API or Metadata API.
 
 ### Configuration Parameters:
-- **`userId`**: The ID of a dedicated integration user or system administrator. The trigger will execute under this user's context, inheriting their permissions, sharing access, and allowing callouts.
+- **`userId`**: The ID of a dedicated integration user or system administrator. The trigger (and any enqueued Queueable jobs) will execute under this user's context, inheriting their permissions, sharing access, and Named Credential authorization.
 - **`batchSize`**: Set a lower value (e.g., `50` or `100`) to process events in manageable chunks, keeping transaction limits safe.
 
 For detailed deployment payloads and instructions, consult the [Salesforce Platform Events Developer Guide](https://developer.salesforce.com/docs/atlas.en-us.platform_events.meta/platform_events/platform_events_ps_config.htm).
