@@ -380,20 +380,20 @@ public inherited sharing class WorkflowEngine {
     }
 
     // Validate explicit stepName only when Current_Step__c is a parallel list and the requested step is in that list
-    if (String.isNotBlank(stepName)) {
+    if (String.isNotBlank(stepName) && instance.Current_Step__c != stepName) {
+      if (String.isBlank(instance.Current_Step__c) || !instance.Current_Step__c.contains(',')) {
+        throw new WorkflowException(
+          'Step ' +
+            stepName +
+            ' is not the active/expected step for this instance: ' +
+            instance.Current_Step__c
+        );
+      }
       Boolean isValid = false;
-      if (instance.Current_Step__c == stepName) {
-        isValid = true;
-      } else if (
-        String.isNotBlank(instance.Current_Step__c) &&
-        instance.Current_Step__c.contains(',')
-      ) {
-        List<String> parallelSteps = instance.Current_Step__c.split(',');
-        for (String pStep : parallelSteps) {
-          if (pStep.trim() == stepName) {
-            isValid = true;
-            break;
-          }
+      for (String pStep : instance.Current_Step__c.split(',')) {
+        if (pStep.trim() == stepName) {
+          isValid = true;
+          break;
         }
       }
       if (!isValid) {
@@ -669,118 +669,7 @@ public inherited sharing class WorkflowEngine {
       Boolean isParallel =
         String.isNotBlank(instance.Current_Step__c) &&
         instance.Current_Step__c.contains(',');
-      if (isParallel) {
-        List<String> activeParallelSteps = instance.Current_Step__c.split(',');
-        List<Workflow_Step_Execution__c> parallelExecs = [
-          SELECT Step_Name__c, Status__c, Output__c
-          FROM Workflow_Step_Execution__c
-          WHERE
-            Workflow_Instance__c = :instance.Id
-            AND Step_Name__c IN :activeParallelSteps
-          WITH SYSTEM_MODE
-        ];
-
-        Boolean allDone = true;
-        for (String ps : activeParallelSteps) {
-          Boolean found = false;
-          for (Workflow_Step_Execution__c pe : parallelExecs) {
-            if (pe.Step_Name__c == ps && pe.Status__c == 'Completed') {
-              found = true;
-              break;
-            }
-          }
-          if (!found) {
-            allDone = false;
-            break;
-          }
-        }
-
-        if (allDone) {
-          // All parallel steps completed. Proceed to Join step.
-          List<Workflow_Step_Execution__c> spawningSteps = [
-            SELECT Step_Name__c, Output__c
-            FROM Workflow_Step_Execution__c
-            WHERE
-              Workflow_Instance__c = :instance.Id
-              AND Status__c = 'Completed'
-              AND Step_Name__c NOT IN :activeParallelSteps
-            WITH SYSTEM_MODE
-            ORDER BY CreatedDate DESC, Id DESC
-            LIMIT 1
-          ];
-
-          Type wflowType = Type.forName(instance.Workflow_Name__c);
-          WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
-
-          String spawningStepName = !spawningSteps.isEmpty()
-            ? spawningSteps[0].Step_Name__c
-            : '';
-          StepResult mockResult = StepResult.complete(
-            null,
-            !spawningSteps.isEmpty() ? spawningSteps[0].Output__c : null
-          );
-
-          String nextStepName;
-          if (def instanceof VersionedWorkflow) {
-            nextStepName = ((VersionedWorkflow) def)
-              .getNextStep(
-                spawningStepName,
-                mockResult,
-                instance.Definition_Version__c != null
-                  ? (Integer) instance.Definition_Version__c
-                  : 1
-              );
-          } else {
-            nextStepName = def.getNextStep(spawningStepName, mockResult);
-          }
-
-          Map<String, Object> joinInput = new Map<String, Object>();
-          for (Workflow_Step_Execution__c pe : parallelExecs) {
-            Object outputVal = null;
-            String resolvedOutput = resolvePayload(pe.Output__c);
-            if (String.isNotBlank(resolvedOutput)) {
-              try {
-                outputVal = JSON.deserializeUntyped(resolvedOutput);
-              } catch (Exception ex) {
-                outputVal = resolvedOutput;
-              }
-            }
-            joinInput.put(pe.Step_Name__c, outputVal);
-          }
-          String joinInputJson = JSON.serialize(joinInput);
-
-          if (String.isNotBlank(nextStepName)) {
-            Workflow_Step_Execution__c joinStepExec = new Workflow_Step_Execution__c();
-            joinStepExec.Workflow_Instance__c = instance.Id;
-            joinStepExec.Step_Name__c = nextStepName;
-            joinStepExec.Status__c = 'Pending';
-            joinStepExec.Input__c = savePayloadIfNeeded(
-              instance.Id,
-              joinInputJson,
-              'Input_' + nextStepName.replaceAll('[^a-zA-Z0-9]', '_')
-            );
-            joinStepExec.Retry_Count__c = 0;
-            insert as system joinStepExec;
-
-            instance.Current_Step__c = nextStepName;
-            update as system instance;
-
-            scheduleTimeoutJobForInstance(instance.Id);
-            enqueueOrchestrator(instance.Id, null);
-          } else {
-            instance.Status__c = 'Completed';
-            instance.Output__c = savePayloadIfNeeded(
-              instance.Id,
-              joinInputJson,
-              'Output_Join'
-            );
-            instance.Current_Step__c = null;
-            update as system instance;
-
-            notifyParentCompletion(instance);
-          }
-        }
-      } else {
+      if (!isParallel) {
         // Determine next step
         Type wflowType = Type.forName(instance.Workflow_Name__c);
         WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
@@ -811,23 +700,140 @@ public inherited sharing class WorkflowEngine {
 
           // Notify parent completion if this is a child workflow
           notifyParentCompletion(instance);
-        } else {
-          // Advance to next step
-          instance.Current_Step__c = nextStepName;
-          update as system instance;
+          return;
+        }
 
-          Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
-          nextStepExec.Workflow_Instance__c = instance.Id;
-          nextStepExec.Step_Name__c = nextStepName;
-          nextStepExec.Status__c = 'Pending';
-          nextStepExec.Input__c = stepExec.Output__c;
-          nextStepExec.Retry_Count__c = 0;
-          insert as system nextStepExec;
+        // Advance to next step
+        instance.Current_Step__c = nextStepName;
+        update as system instance;
 
-          scheduleTimeoutJobForInstance(instance.Id);
-          enqueueOrchestrator(instance.Id, null);
+        Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
+        nextStepExec.Workflow_Instance__c = instance.Id;
+        nextStepExec.Step_Name__c = nextStepName;
+        nextStepExec.Status__c = 'Pending';
+        nextStepExec.Input__c = stepExec.Output__c;
+        nextStepExec.Retry_Count__c = 0;
+        insert as system nextStepExec;
+
+        scheduleTimeoutJobForInstance(instance.Id);
+        enqueueOrchestrator(instance.Id, null);
+        return;
+      }
+
+      // Parallel logic (which was under if (isParallel))
+      List<String> activeParallelSteps = instance.Current_Step__c.split(',');
+      List<Workflow_Step_Execution__c> parallelExecs = [
+        SELECT Step_Name__c, Status__c, Output__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instance.Id
+          AND Step_Name__c IN :activeParallelSteps
+        WITH SYSTEM_MODE
+      ];
+
+      Boolean allDone = true;
+      for (String ps : activeParallelSteps) {
+        Boolean found = false;
+        for (Workflow_Step_Execution__c pe : parallelExecs) {
+          if (pe.Step_Name__c == ps && pe.Status__c == 'Completed') {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          allDone = false;
+          break;
         }
       }
+
+      if (!allDone) {
+        return;
+      }
+
+      // All parallel steps completed. Proceed to Join step.
+      List<Workflow_Step_Execution__c> spawningSteps = [
+        SELECT Step_Name__c, Output__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instance.Id
+          AND Status__c = 'Completed'
+          AND Step_Name__c NOT IN :activeParallelSteps
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC, Id DESC
+        LIMIT 1
+      ];
+
+      Type wflowType = Type.forName(instance.Workflow_Name__c);
+      WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
+
+      String spawningStepName = !spawningSteps.isEmpty()
+        ? spawningSteps[0].Step_Name__c
+        : '';
+      StepResult mockResult = StepResult.complete(
+        null,
+        !spawningSteps.isEmpty() ? spawningSteps[0].Output__c : null
+      );
+
+      String nextStepName;
+      if (def instanceof VersionedWorkflow) {
+        nextStepName = ((VersionedWorkflow) def)
+          .getNextStep(
+            spawningStepName,
+            mockResult,
+            instance.Definition_Version__c != null
+              ? (Integer) instance.Definition_Version__c
+              : 1
+          );
+      } else {
+        nextStepName = def.getNextStep(spawningStepName, mockResult);
+      }
+
+      Map<String, Object> joinInput = new Map<String, Object>();
+      for (Workflow_Step_Execution__c pe : parallelExecs) {
+        Object outputVal = null;
+        String resolvedOutput = resolvePayload(pe.Output__c);
+        if (String.isNotBlank(resolvedOutput)) {
+          try {
+            outputVal = JSON.deserializeUntyped(resolvedOutput);
+          } catch (Exception ex) {
+            outputVal = resolvedOutput;
+          }
+        }
+        joinInput.put(pe.Step_Name__c, outputVal);
+      }
+      String joinInputJson = JSON.serialize(joinInput);
+
+      if (String.isBlank(nextStepName)) {
+        instance.Status__c = 'Completed';
+        instance.Output__c = savePayloadIfNeeded(
+          instance.Id,
+          joinInputJson,
+          'Output_Join'
+        );
+        instance.Current_Step__c = null;
+        update as system instance;
+
+        notifyParentCompletion(instance);
+        return;
+      }
+
+      Workflow_Step_Execution__c joinStepExec = new Workflow_Step_Execution__c();
+      joinStepExec.Workflow_Instance__c = instance.Id;
+      joinStepExec.Step_Name__c = nextStepName;
+      joinStepExec.Status__c = 'Pending';
+      joinStepExec.Input__c = savePayloadIfNeeded(
+        instance.Id,
+        joinInputJson,
+        'Input_' + nextStepName.replaceAll('[^a-zA-Z0-9]', '_')
+      );
+      joinStepExec.Retry_Count__c = 0;
+      insert as system joinStepExec;
+
+      instance.Current_Step__c = nextStepName;
+      update as system instance;
+
+      scheduleTimeoutJobForInstance(instance.Id);
+      enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.YIELD) {
       // Step yielded (e.g. Apex Cursor chunk). Save state to Output and run again in a new transaction.
       stepExec.Status__c = 'Running';
@@ -1180,27 +1186,7 @@ public inherited sharing class WorkflowEngine {
       hasCompensations = !stack.isEmpty();
     }
 
-    if (hasCompensations) {
-      instance.Status__c = 'Compensating';
-      instance.Error_Message__c =
-        'Failed at step ' +
-        stepName +
-        ': ' +
-        errorMessage;
-      preCreateFirstCompensationStep(instance);
-      update as system instance;
-
-      scheduleTimeoutJobForInstance(instance.Id);
-
-      // Kick off rollback loop
-      if (Test.isRunningTest()) {
-        if (!disableQueueableInTest) {
-          System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-        }
-      } else {
-        enqueueOrchestrator(instance.Id, null);
-      }
-    } else {
+    if (!hasCompensations) {
       instance.Status__c = 'Failed';
       instance.Error_Message__c =
         'Failed at step ' +
@@ -1209,6 +1195,27 @@ public inherited sharing class WorkflowEngine {
         errorMessage;
       update as system instance;
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
+      return;
+    }
+
+    instance.Status__c = 'Compensating';
+    instance.Error_Message__c =
+      'Failed at step ' +
+      stepName +
+      ': ' +
+      errorMessage;
+    preCreateFirstCompensationStep(instance);
+    update as system instance;
+
+    scheduleTimeoutJobForInstance(instance.Id);
+
+    // Kick off rollback loop
+    if (Test.isRunningTest()) {
+      if (!disableQueueableInTest) {
+        System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+      }
+    } else {
+      enqueueOrchestrator(instance.Id, null);
     }
   }
 
@@ -1608,29 +1615,30 @@ public inherited sharing class WorkflowEngine {
       } else {
         enqueueOrchestrator(instanceId, null);
       }
-    } else {
-      // Parallel forward execution retry: enqueue only incomplete branches
-      for (String targetStepName : targetStepNames) {
-        List<Workflow_Step_Execution__c> stepExecs = [
-          SELECT Status__c
-          FROM Workflow_Step_Execution__c
-          WHERE
-            Workflow_Instance__c = :instanceId
-            AND Step_Name__c = :targetStepName
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate DESC, Id DESC
-          LIMIT 1
-        ];
-        if (stepExecs.isEmpty() || stepExecs[0].Status__c != 'Completed') {
-          if (Test.isRunningTest()) {
-            if (!disableQueueableInTest) {
-              System.enqueueJob(
-                new WorkflowOrchestrator(instanceId, targetStepName)
-              );
-            }
-          } else {
-            enqueueOrchestrator(instanceId, targetStepName);
+      return;
+    }
+
+    // Parallel forward execution retry: enqueue only incomplete branches
+    for (String targetStepName : targetStepNames) {
+      List<Workflow_Step_Execution__c> stepExecs = [
+        SELECT Status__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = :targetStepName
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC, Id DESC
+        LIMIT 1
+      ];
+      if (stepExecs.isEmpty() || stepExecs[0].Status__c != 'Completed') {
+        if (Test.isRunningTest()) {
+          if (!disableQueueableInTest) {
+            System.enqueueJob(
+              new WorkflowOrchestrator(instanceId, targetStepName)
+            );
           }
+        } else {
+          enqueueOrchestrator(instanceId, targetStepName);
         }
       }
     }

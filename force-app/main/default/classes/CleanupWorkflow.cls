@@ -52,13 +52,12 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
       ];
 
       PurgeState state = new PurgeState();
+      state.deletedCount = 0;
       if (String.isNotBlank(ctx.stepStateJson)) {
         state = (PurgeState) JSON.deserialize(
           ctx.stepStateJson,
           PurgeState.class
         );
-      } else {
-        state.deletedCount = 0;
       }
 
       if (oldInstances.isEmpty()) {

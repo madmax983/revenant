@@ -113,7 +113,9 @@ public inherited sharing class StepResult {
     r.parallelStepNames = stepNames;
     if (input == null) {
       r.parallelInputJson = null;
-    } else if (input instanceof String) {
+      return r;
+    }
+    if (input instanceof String) {
       String strInput = (String) input;
       try {
         JSON.deserializeUntyped(strInput);
@@ -121,9 +123,9 @@ public inherited sharing class StepResult {
       } catch (Exception e) {
         r.parallelInputJson = JSON.serialize(strInput);
       }
-    } else {
-      r.parallelInputJson = JSON.serialize(input);
+      return r;
     }
+    r.parallelInputJson = JSON.serialize(input);
     return r;
   }
 

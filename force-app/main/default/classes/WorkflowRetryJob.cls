@@ -12,21 +12,12 @@ public inherited sharing class WorkflowRetryJob implements Schedulable {
   }
 
   public void execute(SchedulableContext ctx) {
-    // Enqueue the next step execution
-    if (String.isNotBlank(this.stepName)) {
-      if (Test.isRunningTest()) {
-        System.enqueueJob(
-          new WorkflowOrchestrator(this.instanceId, this.stepName)
-        );
-      } else {
-        WorkflowEngine.enqueueOrchestrator(this.instanceId, this.stepName);
-      }
+    if (Test.isRunningTest()) {
+      System.enqueueJob(String.isNotBlank(this.stepName)
+        ? new WorkflowOrchestrator(this.instanceId, this.stepName)
+        : new WorkflowOrchestrator(this.instanceId));
     } else {
-      if (Test.isRunningTest()) {
-        System.enqueueJob(new WorkflowOrchestrator(this.instanceId));
-      } else {
-        WorkflowEngine.enqueueOrchestrator(this.instanceId, null);
-      }
+      WorkflowEngine.enqueueOrchestrator(this.instanceId, this.stepName);
     }
 
     // Schedule watchdog for the step we just enqueued
