@@ -436,7 +436,7 @@ public class WorkflowAlertManagerTest {
   }
 
   @isTest
-  static void testWorkflowTimeoutJobAlert() {
+  static void testWorkflowWatchdogAlert() {
     WorkflowAlertManager.mockConfigs.clear();
     WorkflowAlertManager.mockConfigs.put(
       'WorkflowEngineTest_HappyWorkflow',
@@ -456,18 +456,18 @@ public class WorkflowAlertManagerTest {
       Status__c = 'Running',
       Current_Step__c = 'SomeStep'
     );
-    insert inst;
+    insert as system inst;
 
     Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c(
       Workflow_Instance__c = inst.Id,
       Step_Name__c = 'SomeStep',
-      Status__c = 'Running'
+      Status__c = 'Running',
+      Timeout_At__c = DateTime.now().addSeconds(-10)
     );
-    insert stepExec;
+    insert as system stepExec;
 
     Test.startTest();
-    WorkflowTimeoutJob job = new WorkflowTimeoutJob(inst.Id, 'SomeStep');
-    job.execute(null);
+    WorkflowEngine.processWatchdogHeartbeat();
     Test.stopTest();
 
     Workflow_Instance__c updatedInst = [

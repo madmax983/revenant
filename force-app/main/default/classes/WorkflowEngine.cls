@@ -82,11 +82,12 @@ public inherited sharing class WorkflowEngine {
       stepExec.Status__c = 'Pending';
       stepExec.Input__c = instance.Input__c;
       stepExec.Retry_Count__c = 0;
+      Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
+      if (timeout != null && timeout > 0) {
+        stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+      }
       insert as system stepExec;
     }
-
-    // Schedule watchdog for the initial step before executing it
-    scheduleTimeoutJobForInstance(instance.Id);
 
     // Enqueue the first step execution
     if (Test.isRunningTest()) {
@@ -175,11 +176,12 @@ public inherited sharing class WorkflowEngine {
       stepExec.Status__c = 'Pending';
       stepExec.Input__c = instance.Input__c;
       stepExec.Retry_Count__c = 0;
+      Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
+      if (timeout != null && timeout > 0) {
+        stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+      }
       insert as system stepExec;
     }
-
-    // Schedule watchdog for the initial step before executing it
-    scheduleTimeoutJobForInstance(instance.Id);
 
     if (Test.isRunningTest()) {
       System.enqueueJob(new WorkflowOrchestrator(instance.Id));
@@ -344,15 +346,16 @@ public inherited sharing class WorkflowEngine {
         stepExec.Status__c = 'Pending';
         stepExec.Input__c = instance.Input__c;
         stepExec.Retry_Count__c = 0;
+        Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
+        if (timeout != null && timeout > 0) {
+          stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+        }
         stepExecs.add(stepExec);
       }
     }
     if (!stepExecs.isEmpty()) {
       insert as system stepExecs;
     }
-
-    // 6. Schedule timeout jobs for the instances (bulk-friendly)
-    scheduleTimeoutJobsForInstances(instances);
 
     // 7. Enqueue orchestrator execution in bulk
     List<Id> instanceIds = new List<Id>();
@@ -407,11 +410,15 @@ public inherited sharing class WorkflowEngine {
           payload,
           'Resume_' + stepExec.Id
         );
+        Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
+        if (timeout != null && timeout > 0) {
+          stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+        } else {
+          stepExec.Timeout_At__c = null;
+        }
         update as system stepExec;
       }
     }
-
-    scheduleTimeoutJobForInstance(instance.Id);
 
     if (Test.isRunningTest()) {
       System.enqueueJob(new WorkflowOrchestrator(instance.Id));
@@ -463,11 +470,15 @@ public inherited sharing class WorkflowEngine {
           payload,
           'Resume_' + stepExec.Id
         );
+        Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
+        if (timeout != null && timeout > 0) {
+          stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+        } else {
+          stepExec.Timeout_At__c = null;
+        }
         update as system stepExec;
       }
     }
-
-    scheduleTimeoutJobForInstance(instance.Id);
 
     if (Test.isRunningTest()) {
       System.enqueueJob(new WorkflowOrchestrator(instance.Id));
@@ -590,6 +601,12 @@ public inherited sharing class WorkflowEngine {
             req.payload,
             'Resume_' + stepExec.Id
           );
+          Integer timeout = getStepTimeoutSeconds(inst.Current_Step__c);
+          if (timeout != null && timeout > 0) {
+            stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+          } else {
+            stepExec.Timeout_At__c = null;
+          }
           stepsToUpdate.add(stepExec);
         }
       }
@@ -599,8 +616,6 @@ public inherited sharing class WorkflowEngine {
     if (!stepsToUpdate.isEmpty()) {
       update as system stepsToUpdate;
     }
-
-    scheduleTimeoutJobsForInstances(instancesToUpdate);
 
     List<Id> instanceIds = new List<Id>();
     for (Workflow_Instance__c inst : instancesToUpdate) {
@@ -629,7 +644,8 @@ public inherited sharing class WorkflowEngine {
         Correlation_Key__c,
         Parent_Instance__c,
         Compensation_Stack__c,
-        Definition_Version__c
+        Definition_Version__c,
+        Error_Message__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -651,10 +667,30 @@ public inherited sharing class WorkflowEngine {
       return; // Already finished
     }
 
-    if (
-      instance.Status__c == 'Compensating' ||
-      instance.Status__c == 'Cancelling'
-    ) {
+    Boolean isCompensating = (instance.Status__c == 'Compensating' || instance.Status__c == 'Cancelling');
+    if (instance.Status__c == 'Suspended') {
+      List<Workflow_Step_Execution__c> latestSteps = [
+        SELECT Step_Name__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c = :instance.Id
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC, Id DESC
+        LIMIT 1
+      ];
+      if (!latestSteps.isEmpty() && latestSteps[0].Step_Name__c != null && latestSteps[0].Step_Name__c.endsWith('_Compensate')) {
+        isCompensating = true;
+      }
+    }
+
+    if (isCompensating) {
+      if (instance.Status__c == 'Suspended') {
+        if (instance.Error_Message__c != null && instance.Error_Message__c.contains('Cancelled')) {
+          instance.Status__c = 'Cancelling';
+        } else {
+          instance.Status__c = 'Compensating';
+        }
+        update as system instance;
+      }
       runCompensationStep(instance);
       return;
     }
@@ -756,7 +792,8 @@ public inherited sharing class WorkflowEngine {
         Correlation_Key__c,
         Parent_Instance__c,
         Compensation_Stack__c,
-        Definition_Version__c
+        Definition_Version__c,
+        Error_Message__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -870,19 +907,29 @@ public inherited sharing class WorkflowEngine {
         : 1
     );
 
-    // Determine step timeout if configured
+    // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts
+    stepExec.Status__c = 'Running';
     Integer timeoutSeconds = null;
     if (stepInstance instanceof TimeoutConfigurable) {
       timeoutSeconds = ((TimeoutConfigurable) stepInstance).getTimeoutSeconds();
+    }
+    if (timeoutSeconds != null && timeoutSeconds > 0) {
+      stepExec.Timeout_At__c = DateTime.now().addSeconds(timeoutSeconds);
+      saveStepExec(stepExec);
+    } else {
+      stepExec.Timeout_At__c = null;
+      if (stepExec.Id == null) {
+        saveStepExec(stepExec);
+      }
     }
 
     StepResult result;
     try {
       result = stepInstance.execute(context);
     } finally {
-      // Cancel timeout watch job if it hasn't run yet
       if (timeoutSeconds != null && timeoutSeconds > 0) {
-        cancelTimeoutJob(instanceId, activeStepName);
+        stepExec.Timeout_At__c = null;
+        saveStepExec(stepExec);
       }
     }
 
@@ -1026,7 +1073,6 @@ public inherited sharing class WorkflowEngine {
         nextStepExec.Retry_Count__c = 0;
         insert as system nextStepExec;
 
-        scheduleTimeoutJobForInstance(instance.Id);
         enqueueOrchestrator(instance.Id, null);
         return;
       }
@@ -1143,7 +1189,6 @@ public inherited sharing class WorkflowEngine {
       instance.Current_Step__c = nextStepName;
       update as system instance;
 
-      scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.YIELD) {
       // Step yielded (e.g. Apex Cursor chunk). Save state to Output and run again in a new transaction.
@@ -1157,7 +1202,6 @@ public inherited sharing class WorkflowEngine {
 
       update as system instance;
 
-      scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.SUSPEND) {
       // Step suspended (waiting for external signal). Save state and mark instance.
@@ -1177,9 +1221,8 @@ public inherited sharing class WorkflowEngine {
       saveStepExec(stepExec);
 
       instance.Status__c = 'Suspended';
+      instance.Sleep_Until__c = DateTime.now().addSeconds(result.sleepDurationSeconds);
       update as system instance;
-
-      scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
     } else if (result.action == StepResult.ActionType.START_CHILD) {
       // Step requested child workflow
       stepExec.Status__c = 'Pending';
@@ -1251,11 +1294,14 @@ public inherited sharing class WorkflowEngine {
           'Input_Parallel_' + ps.replaceAll('[^a-zA-Z0-9]', '_')
         );
         pe.Retry_Count__c = 0;
+        Integer timeout = getStepTimeoutSeconds(ps);
+        if (timeout != null && timeout > 0) {
+          pe.Timeout_At__c = DateTime.now().addSeconds(timeout);
+        }
         parallelExecs.add(pe);
       }
       insert as system parallelExecs;
 
-      scheduleTimeoutJobForInstance(instance.Id);
       for (String ps : result.parallelStepNames) {
         enqueueOrchestrator(instance.Id, ps);
       }
@@ -1294,7 +1340,9 @@ public inherited sharing class WorkflowEngine {
         Integer delay = (Integer) (policy.initialIntervalSeconds * backoff);
         delay = Math.min(delay, 86400);
 
-        scheduleRetry(instance.Id, stepExec.Step_Name__c, delay);
+        instance.Status__c = 'Suspended';
+        instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
+        update as system instance;
       }
     } else if (result.action == StepResult.ActionType.CONTINUE_AS_NEW) {
       stepExec.Status__c = 'ContinuedAsNew';
@@ -1361,11 +1409,14 @@ public inherited sharing class WorkflowEngine {
         nextStepExec.Status__c = 'Pending';
         nextStepExec.Input__c = nextInstance.Input__c;
         nextStepExec.Retry_Count__c = 0;
+        Integer timeout = getStepTimeoutSeconds(initialStep);
+        if (timeout != null && timeout > 0) {
+          nextStepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+        }
         insert as system nextStepExec;
       }
 
       // Enqueue the successor run
-      scheduleTimeoutJobForInstance(nextInstance.Id);
       if (Test.isRunningTest()) {
         if (!disableQueueableInTest) {
           System.enqueueJob(new WorkflowOrchestrator(nextInstance.Id));
@@ -1533,8 +1584,6 @@ public inherited sharing class WorkflowEngine {
     preCreateFirstCompensationStep(instance);
     update as system instance;
 
-    scheduleTimeoutJobForInstance(instance.Id);
-
     // Kick off rollback loop
     if (Test.isRunningTest()) {
       if (!disableQueueableInTest) {
@@ -1543,58 +1592,6 @@ public inherited sharing class WorkflowEngine {
     } else {
       enqueueOrchestrator(instance.Id, null);
     }
-  }
-
-  private static void scheduleRetry(
-    Id instanceId,
-    String stepName,
-    Integer delaySeconds
-  ) {
-    // Enqueue delayed execution via Scheduled Apex
-    WorkflowRetryJob job = new WorkflowRetryJob(instanceId, stepName);
-    Datetime runTime = Datetime.now()
-      .addSeconds(Test.isRunningTest() ? delaySeconds + 60 : delaySeconds);
-    String cronStr =
-      runTime.second() +
-      ' ' +
-      runTime.minute() +
-      ' ' +
-      runTime.hour() +
-      ' ' +
-      runTime.day() +
-      ' ' +
-      runTime.month() +
-      ' ? ' +
-      runTime.year();
-    System.schedule(
-      'WorkflowRetry_' + instanceId + '_' + runTime.getTime(),
-      cronStr,
-      job
-    );
-  }
-
-  private static void scheduleSleepResume(Id instanceId, Integer delaySeconds) {
-    // Enqueue sleep resumption via Scheduled Apex using WorkflowSleepJob
-    WorkflowSleepJob job = new WorkflowSleepJob(instanceId);
-    Datetime runTime = Datetime.now()
-      .addSeconds(Test.isRunningTest() ? delaySeconds + 60 : delaySeconds);
-    String cronStr =
-      runTime.second() +
-      ' ' +
-      runTime.minute() +
-      ' ' +
-      runTime.hour() +
-      ' ' +
-      runTime.day() +
-      ' ' +
-      runTime.month() +
-      ' ? ' +
-      runTime.year();
-    System.schedule(
-      'WorkflowSleep_' + instanceId + '_' + runTime.getTime(),
-      cronStr,
-      job
-    );
   }
 
   private static void startChildWorkflow(
@@ -1674,8 +1671,6 @@ public inherited sharing class WorkflowEngine {
       stepExec.Retry_Count__c = 0;
       insert as system stepExec;
     }
-
-    scheduleTimeoutJobForInstance(instance.Id);
 
     if (!Test.isRunningTest()) {
       enqueueOrchestrator(instance.Id, null);
@@ -1807,8 +1802,6 @@ public inherited sharing class WorkflowEngine {
         instance.Status__c = 'Running';
         update as system instance;
       }
-
-      scheduleTimeoutJobForInstance(instance.Id);
 
       if (Test.isRunningTest()) {
         if (!enqueuedInstanceIds.contains(instance.Id)) {
@@ -1959,8 +1952,6 @@ public inherited sharing class WorkflowEngine {
       update as system instancesToUpdate;
     }
 
-    scheduleTimeoutJobsForInstances(activeInstances);
-
     List<Id> instanceIdsToEnqueue = new List<Id>();
     for (Workflow_Instance__c inst : activeInstances) {
       if (!enqueuedInstanceIds.contains(inst.Id)) {
@@ -2065,8 +2056,6 @@ public inherited sharing class WorkflowEngine {
     }
     instance.Error_Message__c = null;
     update as system instance;
-
-    scheduleTimeoutJobForInstance(instanceId);
 
     // Enqueue the orchestrator to resume execution
     if (
@@ -2229,9 +2218,8 @@ public inherited sharing class WorkflowEngine {
 
         if (!stack.isEmpty()) {
           preCreateFirstCompensationStep(instance);
-          scheduleTimeoutJobForInstance(instance.Id);
         }
-
+ 
         if (Test.isRunningTest()) {
           if (!disableQueueableInTest) {
             System.enqueueJob(new WorkflowOrchestrator(instance.Id));
@@ -2243,7 +2231,7 @@ public inherited sharing class WorkflowEngine {
       }
       stepExec.Status__c = 'Running';
     }
-
+ 
     // 4. Instantiate the step and execute compensate
     Type stepType = Type.forName(activeStepName);
     if (stepType == null) {
@@ -2251,20 +2239,16 @@ public inherited sharing class WorkflowEngine {
         'Could not resolve class for step compensation: ' + activeStepName
       );
     }
-
+ 
     Object stepInstanceObj = stepType.newInstance();
     if (!(stepInstanceObj instanceof CompensatableStep)) {
       stepExec.Status__c = 'Compensated';
       saveStepExec(stepExec);
-
+ 
       stack.remove(stack.size() - 1);
       instance.Compensation_Stack__c = JSON.serialize(stack);
       update as system instance;
-
-      if (!stack.isEmpty()) {
-        scheduleTimeoutJobForInstance(instance.Id);
-      }
-
+ 
       if (Test.isRunningTest()) {
         if (!disableQueueableInTest) {
           System.enqueueJob(new WorkflowOrchestrator(instance.Id));
@@ -2308,10 +2292,21 @@ public inherited sharing class WorkflowEngine {
         : 1
     );
 
+    // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts
+    stepExec.Status__c = 'Running';
     Integer timeoutSeconds = null;
     if (compensatableStepInstance instanceof TimeoutConfigurable) {
       timeoutSeconds = ((TimeoutConfigurable) compensatableStepInstance)
         .getTimeoutSeconds();
+    }
+    if (timeoutSeconds != null && timeoutSeconds > 0) {
+      stepExec.Timeout_At__c = DateTime.now().addSeconds(timeoutSeconds);
+      saveStepExec(stepExec);
+    } else {
+      stepExec.Timeout_At__c = null;
+      if (stepExec.Id == null) {
+        saveStepExec(stepExec);
+      }
     }
 
     StepResult result;
@@ -2332,7 +2327,8 @@ public inherited sharing class WorkflowEngine {
       return;
     } finally {
       if (timeoutSeconds != null && timeoutSeconds > 0) {
-        cancelTimeoutJob(instance.Id, compensationStepLogName);
+        stepExec.Timeout_At__c = null;
+        saveStepExec(stepExec);
       }
     }
 
@@ -2378,8 +2374,6 @@ public inherited sharing class WorkflowEngine {
           ? 'Cancelled'
           : 'Compensated';
         instance.Current_Step__c = null;
-      } else {
-        scheduleTimeoutJobForInstance(instance.Id);
       }
       update as system instance;
 
@@ -2401,7 +2395,6 @@ public inherited sharing class WorkflowEngine {
 
       update as system instance;
 
-      scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.SUSPEND) {
       stepExec.Status__c = 'Pending';
@@ -2417,8 +2410,10 @@ public inherited sharing class WorkflowEngine {
       );
       saveStepExec(stepExec);
       instance.Status__c = 'Suspended';
+      if (result.sleepDurationSeconds != null) {
+        instance.Sleep_Until__c = DateTime.now().addSeconds(result.sleepDurationSeconds);
+      }
       update as system instance;
-      scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
     } else if (result.action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
       stepExec.Status__c = 'Pending';
       Map<String, Object> state = new Map<String, Object>{
@@ -2467,7 +2462,9 @@ public inherited sharing class WorkflowEngine {
         );
         Integer delay = (Integer) (policy.initialIntervalSeconds * backoff);
         delay = Math.min(delay, 86400);
-        scheduleRetry(instance.Id, stepExec.Step_Name__c, delay);
+        instance.Status__c = 'Suspended';
+        instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
+        update as system instance;
       }
     } else {
       stepExec.Status__c = 'Failed';
@@ -2486,23 +2483,7 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
-  private static void cancelTimeoutJob(Id instanceId, String stepName) {
-    String cleanStepName = stepName.replaceAll('[^a-zA-Z0-9]', '_');
-    String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
-    List<CronTrigger> triggers = [
-      SELECT Id
-      FROM CronTrigger
-      WHERE CronJobDetail.Name = :jobName
-      WITH SYSTEM_MODE
-    ];
-    for (CronTrigger triggerJob : triggers) {
-      try {
-        System.abortJob(triggerJob.Id);
-      } catch (Exception e) {
-        // ignore if already executed/aborted
-      }
-    }
-  }
+
 
   private static void preCreateFirstCompensationStep(
     Workflow_Instance__c instance
@@ -2663,8 +2644,6 @@ public inherited sharing class WorkflowEngine {
       instance.Error_Message__c = 'Cancelled by user. Compensating.';
       preCreateFirstCompensationStep(instance);
       update as system instance;
-
-      scheduleTimeoutJobForInstance(instance.Id);
 
       // Kick off rollback loop
       if (Test.isRunningTest()) {
@@ -2855,83 +2834,132 @@ public inherited sharing class WorkflowEngine {
     return textValue;
   }
 
-  public static void scheduleTimeoutJobsForInstances(
-    List<Workflow_Instance__c> instances
-  ) {
-    for (Workflow_Instance__c instance : instances) {
-      if (
-        instance.Status__c == 'Compensating' ||
-        instance.Status__c == 'Cancelling'
-      ) {
-        if (String.isNotBlank(instance.Compensation_Stack__c)) {
-          List<String> stack = (List<String>) JSON.deserialize(
-            instance.Compensation_Stack__c,
-            List<String>.class
-          );
-          if (!stack.isEmpty()) {
-            scheduleTimeoutJobIfNeeded(
-              instance.Id,
-              stack[stack.size() - 1] + '_Compensate'
-            );
+  /**
+   * Evaluates and resumes suspended workflows that have exceeded their sleep time,
+   * and terminates active steps that have exceeded their timeout limits.
+   */
+  public static void processWatchdogHeartbeat() {
+    Datetime now = System.now();
+
+    // 1. Process Timed-out Steps
+    List<Workflow_Step_Execution__c> timedOutSteps = [
+      SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Error_Details__c
+      FROM Workflow_Step_Execution__c
+      WHERE Status__c IN ('Running', 'Pending')
+        AND Timeout_At__c <= :now
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate ASC, Id ASC
+      LIMIT 100
+    ];
+
+    if (!timedOutSteps.isEmpty()) {
+      for (Workflow_Step_Execution__c step : timedOutSteps) {
+        try {
+          List<Workflow_Instance__c> parentInsts = [
+            SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c
+            FROM Workflow_Instance__c
+            WHERE Id = :step.Workflow_Instance__c
+            WITH SYSTEM_MODE
+            FOR UPDATE
+          ];
+          if (parentInsts.isEmpty()) {
+            continue;
           }
+          Workflow_Instance__c parent = parentInsts[0];
+          if (
+            parent.Status__c != 'Pending' &&
+            parent.Status__c != 'Running' &&
+            parent.Status__c != 'Compensating' &&
+            parent.Status__c != 'Cancelling'
+          ) {
+            continue;
+          }
+
+          List<Workflow_Step_Execution__c> stepLockList = [
+            SELECT Id, Status__c, Error_Details__c
+            FROM Workflow_Step_Execution__c
+            WHERE Id = :step.Id
+            WITH SYSTEM_MODE
+            FOR UPDATE
+          ];
+          if (stepLockList.isEmpty()) {
+            continue;
+          }
+          Workflow_Step_Execution__c lockedStep = stepLockList[0];
+          if (lockedStep.Status__c != 'Running' && lockedStep.Status__c != 'Pending') {
+            continue;
+          }
+
+          String errorMsg = (lockedStep.Status__c == 'Running')
+            ? 'Step execution timed out.'
+            : 'Step execution timed out before starting.';
+
+          lockedStep.Status__c = 'Failed';
+          lockedStep.Error_Details__c = errorMsg;
+          lockedStep.Timeout_At__c = null;
+          update as system lockedStep;
+
+          failWorkflowInstance(parent.Id, step.Step_Name__c, errorMsg);
+        } catch (Exception ex) {
+          // Log/ignore individual step failures
         }
-      } else if (String.isNotBlank(instance.Current_Step__c)) {
-        if (instance.Current_Step__c.contains(',')) {
-          for (String pStep : instance.Current_Step__c.split(',')) {
-            scheduleTimeoutJobIfNeeded(instance.Id, pStep.trim());
+      }
+    }
+
+    // 2. Process Sleep Resumptions
+    List<Workflow_Instance__c> readyToResume = [
+      SELECT Id, Status__c, Sleep_Until__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Status__c = 'Suspended'
+        AND Sleep_Until__c <= :now
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+
+    if (!readyToResume.isEmpty()) {
+      Set<Id> resumeIds = new Set<Id>();
+      for (Workflow_Instance__c inst : readyToResume) {
+        resumeIds.add(inst.Id);
+      }
+
+      List<Workflow_Step_Execution__c> latestSteps = [
+        SELECT Workflow_Instance__c, Step_Name__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c IN :resumeIds
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC, Id DESC
+      ];
+
+      Map<Id, Workflow_Step_Execution__c> latestStepByInstId = new Map<Id, Workflow_Step_Execution__c>();
+      for (Workflow_Step_Execution__c step : latestSteps) {
+        if (!latestStepByInstId.containsKey(step.Workflow_Instance__c)) {
+          latestStepByInstId.put(step.Workflow_Instance__c, step);
+        }
+      }
+
+      List<Id> instanceIds = new List<Id>();
+      for (Workflow_Instance__c inst : readyToResume) {
+        Workflow_Step_Execution__c latestStep = latestStepByInstId.get(inst.Id);
+        if (latestStep != null && latestStep.Step_Name__c != null && latestStep.Step_Name__c.endsWith('_Compensate')) {
+          if (inst.Error_Message__c != null && inst.Error_Message__c.contains('Cancelled')) {
+            inst.Status__c = 'Cancelling';
+          } else {
+            inst.Status__c = 'Compensating';
           }
         } else {
-          scheduleTimeoutJobIfNeeded(instance.Id, instance.Current_Step__c);
+          inst.Status__c = 'Running';
         }
+        inst.Sleep_Until__c = null;
+        instanceIds.add(inst.Id);
       }
+      update as system readyToResume;
+      enqueueOrchestrators(instanceIds);
     }
   }
 
-  public static void scheduleTimeoutJobForInstance(Id instanceId) {
-    List<Workflow_Instance__c> instances = [
-      SELECT Status__c, Current_Step__c, Compensation_Stack__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    if (instances.isEmpty()) {
-      return;
-    }
-    Workflow_Instance__c instance = instances[0];
-    if (
-      instance.Status__c == 'Compensating' ||
-      instance.Status__c == 'Cancelling'
-    ) {
-      if (String.isNotBlank(instance.Compensation_Stack__c)) {
-        List<String> stack = (List<String>) JSON.deserialize(
-          instance.Compensation_Stack__c,
-          List<String>.class
-        );
-        if (!stack.isEmpty()) {
-          scheduleTimeoutJobIfNeeded(
-            instanceId,
-            stack[stack.size() - 1] + '_Compensate'
-          );
-        }
-      }
-    } else if (String.isNotBlank(instance.Current_Step__c)) {
-      if (instance.Current_Step__c.contains(',')) {
-        for (String pStep : instance.Current_Step__c.split(',')) {
-          scheduleTimeoutJobIfNeeded(instanceId, pStep.trim());
-        }
-      } else {
-        scheduleTimeoutJobIfNeeded(instanceId, instance.Current_Step__c);
-      }
-    }
-  }
-
-  public static void scheduleTimeoutJobIfNeeded(
-    Id instanceId,
-    String stepName
-  ) {
+  private static Integer getStepTimeoutSeconds(String stepName) {
     if (String.isBlank(stepName)) {
-      return;
+      return null;
     }
     String className = stepName.endsWith('_Compensate')
       ? stepName.substring(0, stepName.lastIndexOf('_Compensate'))
@@ -2941,38 +2969,11 @@ public inherited sharing class WorkflowEngine {
       if (stepType != null) {
         Object stepObj = stepType.newInstance();
         if (stepObj instanceof TimeoutConfigurable) {
-          Integer timeoutSeconds = ((TimeoutConfigurable) stepObj)
-            .getTimeoutSeconds();
-          if (timeoutSeconds != null && timeoutSeconds > 0) {
-            WorkflowTimeoutJob job = new WorkflowTimeoutJob(
-              instanceId,
-              stepName
-            );
-            Datetime runTime = Datetime.now()
-              .addSeconds(
-                Test.isRunningTest() ? timeoutSeconds + 60 : timeoutSeconds
-              );
-            String cronStr =
-              runTime.second() +
-              ' ' +
-              runTime.minute() +
-              ' ' +
-              runTime.hour() +
-              ' ' +
-              runTime.day() +
-              ' ' +
-              runTime.month() +
-              ' ? ' +
-              runTime.year();
-            String cleanStepName = stepName.replaceAll('[^a-zA-Z0-9]', '_');
-            String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
-            System.schedule(jobName, cronStr, job);
-          }
+          return ((TimeoutConfigurable) stepObj).getTimeoutSeconds();
         }
       }
-    } catch (Exception ex) {
-      // Ignore/log
-    }
+    } catch (Exception e) {}
+    return null;
   }
 
   private static String resolveContinueAsNewKey(
