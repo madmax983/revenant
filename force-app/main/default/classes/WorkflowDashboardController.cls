@@ -155,6 +155,19 @@ public inherited sharing class WorkflowDashboardController {
     String cacheBuster
   ) {
     checkAuthorization();
+
+    if (limitSize == null || limitSize <= 0) {
+      limitSize = 50;
+    } else if (limitSize > 100) {
+      limitSize = 100;
+    }
+
+    if (offsetSize == null || offsetSize < 0) {
+      offsetSize = 0;
+    } else if (offsetSize > 2000) {
+      offsetSize = 2000;
+    }
+
     String query =
       'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c ' +
       'FROM Workflow_Instance__c' +

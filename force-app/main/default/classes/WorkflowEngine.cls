@@ -1940,8 +1940,18 @@ public inherited sharing class WorkflowEngine {
     // Verify that we found an active instance for every request, or throw
     for (SignalRequest req : requests) {
       Workflow_Instance__c inst = null;
+      Boolean isId = false;
+      Id targetId;
       if (idPattern.matcher(req.keyOrId).matches()) {
-        inst = instById.get((Id) req.keyOrId);
+        try {
+          targetId = (Id) req.keyOrId;
+          isId = true;
+        } catch (Exception ex) {
+          // Not a valid ID
+        }
+      }
+      if (isId) {
+        inst = instById.get(targetId);
       } else {
         inst = instByKey.get(req.keyOrId);
       }
@@ -1958,8 +1968,18 @@ public inherited sharing class WorkflowEngine {
 
     for (SignalRequest req : requests) {
       Workflow_Instance__c inst = null;
+      Boolean isId = false;
+      Id targetId;
       if (idPattern.matcher(req.keyOrId).matches()) {
-        inst = instById.get((Id) req.keyOrId);
+        try {
+          targetId = (Id) req.keyOrId;
+          isId = true;
+        } catch (Exception ex) {
+          // Not a valid ID
+        }
+      }
+      if (isId) {
+        inst = instById.get(targetId);
       } else {
         inst = instByKey.get(req.keyOrId);
       }
@@ -2922,62 +2942,186 @@ public inherited sharing class WorkflowEngine {
       WHERE Status__c IN ('Running', 'Pending') AND Timeout_At__c <= :now
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
-      LIMIT 100
+      LIMIT 50
     ];
 
     if (!timedOutSteps.isEmpty()) {
+      Set<Id> stepIds = new Set<Id>();
+      Set<Id> instanceIds = new Set<Id>();
       for (Workflow_Step_Execution__c step : timedOutSteps) {
-        try {
-          List<Workflow_Instance__c> parentInsts = [
-            SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c
-            FROM Workflow_Instance__c
-            WHERE Id = :step.Workflow_Instance__c
-            WITH SYSTEM_MODE
-            FOR UPDATE
-          ];
-          if (parentInsts.isEmpty()) {
-            continue;
-          }
-          Workflow_Instance__c parent = parentInsts[0];
-          if (
-            parent.Status__c != 'Pending' &&
-            parent.Status__c != 'Running' &&
-            parent.Status__c != 'Compensating' &&
-            parent.Status__c != 'Cancelling'
-          ) {
-            continue;
+        stepIds.add(step.Id);
+        instanceIds.add(step.Workflow_Instance__c);
+      }
+
+      // Lock parent instances
+      Map<Id, Workflow_Instance__c> parents = new Map<Id, Workflow_Instance__c>([
+        SELECT Id, Name, Status__c, Current_Step__c, Compensation_Stack__c, Error_Message__c, Workflow_Name__c, Correlation_Key__c
+        FROM Workflow_Instance__c
+        WHERE Id IN :instanceIds
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ]);
+
+      // Lock step executions
+      Map<Id, Workflow_Step_Execution__c> lockedSteps = new Map<Id, Workflow_Step_Execution__c>([
+        SELECT Id, Status__c, Error_Details__c, Timeout_At__c, Step_Name__c, Workflow_Instance__c
+        FROM Workflow_Step_Execution__c
+        WHERE Id IN :stepIds
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ]);
+
+      List<Workflow_Step_Execution__c> stepsToUpdate = new List<Workflow_Step_Execution__c>();
+      Map<Id, Workflow_Instance__c> instancesToUpdate = new Map<Id, Workflow_Instance__c>();
+      List<Workflow_Step_Execution__c> compensationStepsToInsert = new List<Workflow_Step_Execution__c>();
+      List<Id> orchestratorInstanceIds = new List<Id>();
+
+      Set<Id> instancesNeedingCompensationInfo = new Set<Id>();
+      Set<String> activeStepNamesForComp = new Set<String>();
+
+      for (Workflow_Step_Execution__c step : timedOutSteps) {
+        Workflow_Instance__c parent = parents.get(step.Workflow_Instance__c);
+        if (parent == null) {
+          continue;
+        }
+        if (
+          parent.Status__c != 'Pending' &&
+          parent.Status__c != 'Running' &&
+          parent.Status__c != 'Compensating' &&
+          parent.Status__c != 'Cancelling'
+        ) {
+          continue;
+        }
+
+        Workflow_Step_Execution__c lockedStep = lockedSteps.get(step.Id);
+        if (lockedStep == null) {
+          continue;
+        }
+        if (
+          lockedStep.Status__c != 'Running' &&
+          lockedStep.Status__c != 'Pending'
+        ) {
+          continue;
+        }
+
+        String errorMsg = (lockedStep.Status__c == 'Running')
+          ? 'Step execution timed out.'
+          : 'Step execution timed out before starting.';
+
+        lockedStep.Status__c = 'Failed';
+        lockedStep.Error_Details__c = errorMsg;
+        lockedStep.Timeout_At__c = null;
+        stepsToUpdate.add(lockedStep);
+
+        if (!instancesToUpdate.containsKey(parent.Id)) {
+          // Check if there are compensations to run
+          Boolean hasCompensations = false;
+          List<String> stack = new List<String>();
+          if (String.isNotBlank(parent.Compensation_Stack__c)) {
+            stack = (List<String>) JSON.deserialize(
+              parent.Compensation_Stack__c,
+              List<String>.class
+            );
+            hasCompensations = !stack.isEmpty();
           }
 
-          List<Workflow_Step_Execution__c> stepLockList = [
-            SELECT Id, Status__c, Error_Details__c
-            FROM Workflow_Step_Execution__c
-            WHERE Id = :step.Id
-            WITH SYSTEM_MODE
-            FOR UPDATE
-          ];
-          if (stepLockList.isEmpty()) {
-            continue;
+          Boolean isCompensationFailure = (parent.Status__c == 'Compensating' ||
+            parent.Status__c == 'Cancelling' ||
+            (String.isNotBlank(step.Step_Name__c) && step.Step_Name__c.endsWith('_Compensate')));
+
+          if (!hasCompensations || isCompensationFailure) {
+            parent.Status__c = 'Failed';
+            parent.Error_Message__c = 'Failed at step ' + step.Step_Name__c + ': ' + errorMsg;
+            instancesToUpdate.put(parent.Id, parent);
+          } else {
+            parent.Status__c = 'Compensating';
+            parent.Error_Message__c = 'Failed at step ' + step.Step_Name__c + ': ' + errorMsg;
+            instancesToUpdate.put(parent.Id, parent);
+
+            instancesNeedingCompensationInfo.add(parent.Id);
+            if (!stack.isEmpty()) {
+              activeStepNamesForComp.add(stack[stack.size() - 1]);
+            }
           }
-          Workflow_Step_Execution__c lockedStep = stepLockList[0];
-          if (
-            lockedStep.Status__c != 'Running' &&
-            lockedStep.Status__c != 'Pending'
-          ) {
-            continue;
+        }
+      }
+
+      Map<String, Workflow_Step_Execution__c> existingCompSteps = new Map<String, Workflow_Step_Execution__c>();
+      Map<String, Workflow_Step_Execution__c> originalStepsMap = new Map<String, Workflow_Step_Execution__c>();
+
+      if (!instancesNeedingCompensationInfo.isEmpty()) {
+        List<Workflow_Step_Execution__c> existing = [
+          SELECT Id, Workflow_Instance__c, Step_Name__c
+          FROM Workflow_Step_Execution__c
+          WHERE Workflow_Instance__c IN :instancesNeedingCompensationInfo
+            AND Step_Name__c LIKE '%\_Compensate'
+          WITH SYSTEM_MODE
+        ];
+        for (Workflow_Step_Execution__c e : existing) {
+          existingCompSteps.put(e.Workflow_Instance__c + ':' + e.Step_Name__c, e);
+        }
+
+        List<Workflow_Step_Execution__c> originalExecs = [
+          SELECT Workflow_Instance__c, Step_Name__c, Input__c, Output__c
+          FROM Workflow_Step_Execution__c
+          WHERE Workflow_Instance__c IN :instancesNeedingCompensationInfo
+            AND Step_Name__c IN :activeStepNamesForComp
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate DESC, Id DESC
+        ];
+        for (Workflow_Step_Execution__c o : originalExecs) {
+          String key = o.Workflow_Instance__c + ':' + o.Step_Name__c;
+          if (!originalStepsMap.containsKey(key)) {
+            originalStepsMap.put(key, o);
           }
+        }
+      }
 
-          String errorMsg = (lockedStep.Status__c == 'Running')
-            ? 'Step execution timed out.'
-            : 'Step execution timed out before starting.';
+      for (Id instId : instancesNeedingCompensationInfo) {
+        Workflow_Instance__c parent = parents.get(instId);
+        List<String> stack = (List<String>) JSON.deserialize(
+          parent.Compensation_Stack__c,
+          List<String>.class
+        );
+        String activeStepName = stack[stack.size() - 1];
+        String compensationStepLogName = activeStepName + '_Compensate';
 
-          lockedStep.Status__c = 'Failed';
-          lockedStep.Error_Details__c = errorMsg;
-          lockedStep.Timeout_At__c = null;
-          update as system lockedStep;
+        if (existingCompSteps.containsKey(parent.Id + ':' + compensationStepLogName)) {
+          continue;
+        }
 
-          failWorkflowInstance(parent.Id, step.Step_Name__c, errorMsg);
-        } catch (Exception ex) {
-          // Log/ignore individual step failures
+        Workflow_Step_Execution__c orig = originalStepsMap.get(parent.Id + ':' + activeStepName);
+
+        Workflow_Step_Execution__c compStepExec = new Workflow_Step_Execution__c();
+        compStepExec.Workflow_Instance__c = parent.Id;
+        compStepExec.Step_Name__c = compensationStepLogName;
+        compStepExec.Status__c = 'Pending';
+        compStepExec.Input__c = (orig != null) ? orig.Input__c : null;
+        compStepExec.Output__c = (orig != null) ? orig.Output__c : null;
+        compStepExec.Retry_Count__c = 0;
+        compensationStepsToInsert.add(compStepExec);
+        orchestratorInstanceIds.add(parent.Id);
+      }
+
+      if (!stepsToUpdate.isEmpty()) {
+        update as system stepsToUpdate;
+      }
+      if (!compensationStepsToInsert.isEmpty()) {
+        insert as system compensationStepsToInsert;
+      }
+      if (!instancesToUpdate.isEmpty()) {
+        update as system instancesToUpdate.values();
+      }
+
+      for (Workflow_Instance__c parent : instancesToUpdate.values()) {
+        WorkflowAlertManager.sendAlert(parent, parent.Error_Message__c);
+      }
+
+      if (!orchestratorInstanceIds.isEmpty()) {
+        if (Test.isRunningTest() && disableQueueableInTest) {
+          // Do nothing
+        } else {
+          enqueueOrchestrators(orchestratorInstanceIds);
         }
       }
     }

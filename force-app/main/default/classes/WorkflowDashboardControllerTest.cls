@@ -857,4 +857,28 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(null, updatedInst.Sleep_Until__c);
     System.assertEquals(null, updatedInst.Async_Job_Id__c);
   }
+
+  @isTest
+  static void testFilteredInstancesClamping() {
+    Test.startTest();
+    List<Map<String, Object>> res1 = WorkflowDashboardController.getFilteredInstances(
+      '',
+      '',
+      '',
+      -10,
+      -5,
+      ''
+    );
+    List<Map<String, Object>> res2 = WorkflowDashboardController.getFilteredInstances(
+      '',
+      '',
+      '',
+      500,
+      5000,
+      ''
+    );
+    Test.stopTest();
+    System.assertNotEquals(null, res1);
+    System.assertNotEquals(null, res2);
+  }
 }
