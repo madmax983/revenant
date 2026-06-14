@@ -121,6 +121,7 @@ public inherited sharing class StepResult {
         JSON.deserializeUntyped(strInput);
         r.parallelInputJson = strInput;
       } catch (Exception e) {
+        System.debug(LoggingLevel.FINE, 'Parallel input is not a JSON string, serializing: ' + e.getMessage());
         r.parallelInputJson = JSON.serialize(strInput);
       }
       return r;

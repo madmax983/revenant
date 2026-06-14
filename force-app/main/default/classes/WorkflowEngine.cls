@@ -22,7 +22,7 @@ public inherited sharing class WorkflowEngine {
         }
       }
     } catch (Exception ex) {
-      // Gracefully fall back to defaults if Custom Metadata not deployed/available
+      System.debug(LoggingLevel.WARN, 'Revenant configuration metadata query failed: ' + ex.getMessage());
     }
   }
 
@@ -1206,6 +1206,7 @@ public inherited sharing class WorkflowEngine {
           try {
             outputVal = JSON.deserializeUntyped(resolvedOutput);
           } catch (Exception ex) {
+            System.debug(LoggingLevel.FINE, 'Parallel step output was not JSON, falling back to raw string: ' + ex.getMessage());
             outputVal = resolvedOutput;
           }
         }
@@ -1839,7 +1840,7 @@ public inherited sharing class WorkflowEngine {
             runCompensations = (Boolean) params.get('runCompensations');
           }
         } catch (Exception e) {
-          // Ignore and use default
+          System.debug(LoggingLevel.WARN, 'Failed to parse cancel payload, using default runCompensations: ' + e.getMessage());
         }
       }
       cancel(instance.Id, runCompensations);
@@ -1876,7 +1877,7 @@ public inherited sharing class WorkflowEngine {
               enqueueOrchestrator(instance.Id, null);
             }
           } catch (Exception ex) {
-            // Fallback to asynchronous Platform Event if enqueue fails due to transient platform limit errors
+            System.debug(LoggingLevel.WARN, 'Queueable enqueue failed, falling back to Platform Event: ' + ex.getMessage());
             enqueueOrchestrator(instance.Id, null);
           }
         }
@@ -2760,7 +2761,7 @@ public inherited sharing class WorkflowEngine {
       try {
         System.abortJob(triggerJob.Id);
       } catch (Exception e) {
-        // ignore
+        System.debug(LoggingLevel.WARN, 'Failed to abort job ' + triggerJob.Id + ': ' + e.getMessage());
       }
     }
   }
@@ -2774,7 +2775,7 @@ public inherited sharing class WorkflowEngine {
             System.enqueueJob(new WorkflowOrchestrator(instId));
           }
         } catch (Exception e) {
-          // Ignore / limit reached
+          System.debug(LoggingLevel.WARN, 'Failed to enqueue WorkflowOrchestrator for ' + instId + ': ' + e.getMessage());
         }
       }
       return;
@@ -2858,7 +2859,7 @@ public inherited sharing class WorkflowEngine {
           return cvs[0].VersionData.toString();
         }
       } catch (Exception ex) {
-        // fallback to original value
+        System.debug(LoggingLevel.WARN, 'Failed to resolve offloaded payload, falling back to raw value: ' + ex.getMessage());
       }
     }
     return textValue;
@@ -2892,6 +2893,7 @@ public inherited sharing class WorkflowEngine {
       try {
         insert as system cdl;
       } catch (DmlException ex) {
+        System.debug(LoggingLevel.FINE, 'ContentDocumentLink insert failed with default visibility, retrying with AllUsers: ' + ex.getMessage());
         cdl.Visibility = 'AllUsers';
         insert as system cdl;
       }
@@ -3175,6 +3177,7 @@ public inherited sharing class WorkflowEngine {
         }
       }
     } catch (Exception e) {
+      System.debug(LoggingLevel.FINE, 'Failed to instantiate type to read timeout duration for step: ' + className + ', error: ' + e.getMessage());
     }
     return null;
   }
@@ -3293,9 +3296,9 @@ public inherited sharing class WorkflowEngine {
         System.schedule(jobName, cronStr, job);
       }
     } catch (AsyncException ex) {
-      // Limit reached, fall back to database-backed Timeout_At__c watchdog
+      System.debug(LoggingLevel.INFO, 'Async timeout scheduling limit reached, relying on watchdog: ' + ex.getMessage());
     } catch (Exception ex) {
-      // Ignore other exceptions
+      System.debug(LoggingLevel.WARN, 'Failed to schedule timeout job: ' + ex.getMessage());
     }
   }
 
@@ -3342,10 +3345,10 @@ public inherited sharing class WorkflowEngine {
         job
       ));
     } catch (AsyncException ex) {
-      // Limit reached, fall back to Sleep_Until__c poller
+      System.debug(LoggingLevel.INFO, 'Async retry scheduling limit reached, relying on watchdog: ' + ex.getMessage());
       return null;
     } catch (Exception ex) {
-      // Ignore
+      System.debug(LoggingLevel.WARN, 'Failed to schedule retry job: ' + ex.getMessage());
       return null;
     }
   }
@@ -3389,10 +3392,10 @@ public inherited sharing class WorkflowEngine {
         job
       ));
     } catch (AsyncException ex) {
-      // Limit reached, fall back to Sleep_Until__c poller
+      System.debug(LoggingLevel.INFO, 'Async sleep scheduling limit reached, relying on watchdog: ' + ex.getMessage());
       return null;
     } catch (Exception ex) {
-      // Ignore
+      System.debug(LoggingLevel.WARN, 'Failed to schedule sleep job: ' + ex.getMessage());
       return null;
     }
   }
@@ -3410,7 +3413,7 @@ public inherited sharing class WorkflowEngine {
       try {
         System.abortJob(triggerJob.Id);
       } catch (Exception e) {
-        // ignore if already executed/aborted
+        System.debug(LoggingLevel.WARN, 'Failed to cancel timeout job ' + triggerJob.Id + ': ' + e.getMessage());
       }
     }
   }

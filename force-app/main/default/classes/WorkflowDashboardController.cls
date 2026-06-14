@@ -38,7 +38,7 @@ public inherited sharing class WorkflowDashboardController {
         );
         return (Id) marker.get('$attachmentId');
       } catch (Exception ex) {
-        // fallback
+        System.debug(LoggingLevel.FINE, 'getAttachmentId parsing fallback: ' + ex.getMessage());
       }
     }
     return null;
@@ -181,14 +181,22 @@ public inherited sharing class WorkflowDashboardController {
     Set<Id> asyncIds = new Set<Id>();
     for (Workflow_Instance__c inst : instances) {
       if (String.isNotBlank(inst.Async_Job_Id__c)) {
-        try {
-          Id jobId = (Id) inst.Async_Job_Id__c;
-          if (jobId.getSobjectType() == CronTrigger.SObjectType) {
-            cronIds.add(jobId);
-          } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
-            asyncIds.add(jobId);
+        String jobIdStr = inst.Async_Job_Id__c;
+        if ((jobIdStr.length() == 15 || jobIdStr.length() == 18) && 
+            (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))) {
+          try {
+            Id jobId = (Id) jobIdStr;
+            if (jobId.getSobjectType() == CronTrigger.SObjectType) {
+              cronIds.add(jobId);
+            } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
+              asyncIds.add(jobId);
+            }
+          } catch (Exception ex) {
+            System.debug(LoggingLevel.WARN, 'Failed to cast Async Job ID: ' + jobIdStr + ', error: ' + ex.getMessage());
           }
-        } catch (Exception ex) {}
+        } else {
+          System.debug(LoggingLevel.WARN, 'Invalid Async Job ID format: ' + jobIdStr);
+        }
       }
     }
 
@@ -223,16 +231,24 @@ public inherited sharing class WorkflowDashboardController {
       String waitingOn = null;
       if (inst.Status__c == 'Suspended') {
         if (String.isNotBlank(inst.Async_Job_Id__c)) {
-          try {
-            Id jobId = (Id) inst.Async_Job_Id__c;
-            if (jobId.getSobjectType() == CronTrigger.SObjectType && activeCronIds.contains(jobId)) {
-              waitingOn = 'Scheduled Job';
-            } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType && activeAsyncIds.contains(jobId)) {
-              waitingOn = 'Delayed Queueable';
-            } else {
+          String jobIdStr = inst.Async_Job_Id__c;
+          if ((jobIdStr.length() == 15 || jobIdStr.length() == 18) && 
+              (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))) {
+            try {
+              Id jobId = (Id) jobIdStr;
+              if (jobId.getSobjectType() == CronTrigger.SObjectType && activeCronIds.contains(jobId)) {
+                waitingOn = 'Scheduled Job';
+              } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType && activeAsyncIds.contains(jobId)) {
+                waitingOn = 'Delayed Queueable';
+              } else {
+                waitingOn = 'Watchdog';
+              }
+            } catch (Exception ex) {
+              System.debug(LoggingLevel.WARN, 'Failed to cast Async Job ID: ' + jobIdStr + ', error: ' + ex.getMessage());
               waitingOn = 'Watchdog';
             }
-          } catch (Exception ex) {
+          } else {
+            System.debug(LoggingLevel.WARN, 'Invalid Async Job ID format: ' + jobIdStr);
             waitingOn = 'Watchdog';
           }
         } else if (inst.Sleep_Until__c != null) {
@@ -357,24 +373,32 @@ public inherited sharing class WorkflowDashboardController {
     String waitingOn = null;
     if (instance.Status__c == 'Suspended') {
       if (String.isNotBlank(instance.Async_Job_Id__c)) {
-        try {
-          Id jobId = (Id) instance.Async_Job_Id__c;
-          if (jobId.getSobjectType() == CronTrigger.SObjectType) {
-            List<CronTrigger> cronJobs = [SELECT Id FROM CronTrigger WHERE Id = :jobId AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING') WITH SYSTEM_MODE LIMIT 1];
-            if (!cronJobs.isEmpty()) {
-              waitingOn = 'Scheduled Job';
-            } else {
-              waitingOn = 'Watchdog';
+        String jobIdStr = instance.Async_Job_Id__c;
+        if ((jobIdStr.length() == 15 || jobIdStr.length() == 18) && 
+            (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))) {
+          try {
+            Id jobId = (Id) jobIdStr;
+            if (jobId.getSobjectType() == CronTrigger.SObjectType) {
+              List<CronTrigger> cronJobs = [SELECT Id FROM CronTrigger WHERE Id = :jobId AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING') WITH SYSTEM_MODE LIMIT 1];
+              if (!cronJobs.isEmpty()) {
+                waitingOn = 'Scheduled Job';
+              } else {
+                waitingOn = 'Watchdog';
+              }
+            } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
+              List<AsyncApexJob> asyncJobs = [SELECT Id FROM AsyncApexJob WHERE Id = :jobId AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing') WITH SYSTEM_MODE LIMIT 1];
+              if (!asyncJobs.isEmpty()) {
+                waitingOn = 'Delayed Queueable';
+              } else {
+                waitingOn = 'Watchdog';
+              }
             }
-          } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
-            List<AsyncApexJob> asyncJobs = [SELECT Id FROM AsyncApexJob WHERE Id = :jobId AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing') WITH SYSTEM_MODE LIMIT 1];
-            if (!asyncJobs.isEmpty()) {
-              waitingOn = 'Delayed Queueable';
-            } else {
-              waitingOn = 'Watchdog';
-            }
+          } catch (Exception ex) {
+            System.debug(LoggingLevel.WARN, 'Failed to cast Async Job ID: ' + jobIdStr + ', error: ' + ex.getMessage());
+            waitingOn = 'Watchdog';
           }
-        } catch (Exception ex) {
+        } else {
+          System.debug(LoggingLevel.WARN, 'Invalid Async Job ID format: ' + jobIdStr);
           waitingOn = 'Watchdog';
         }
       } else if (instance.Sleep_Until__c != null) {
@@ -453,6 +477,7 @@ public inherited sharing class WorkflowDashboardController {
       }
       return WorkflowEngine.start(workflowName, correlationKey, input);
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura startWorkflow failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -463,6 +488,7 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowEngine.retryWorkflow(instanceId);
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura retryWorkflowInstance failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -488,6 +514,7 @@ public inherited sharing class WorkflowDashboardController {
         WorkflowEngine.enqueueOrchestrators(new List<Id>{ inst.Id });
       }
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura resumeWorkflowInstance failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -498,6 +525,7 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowEngine.cancel(instanceId, runCompensations);
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura cancelWorkflow failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -525,6 +553,7 @@ public inherited sharing class WorkflowDashboardController {
         payloadJson
       );
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura submitApproval failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -624,6 +653,7 @@ public inherited sharing class WorkflowDashboardController {
         'elasticAsyncLimit' => elasticAsyncLimit
       };
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura getWatchdogStatus failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -634,6 +664,7 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowWatchdog.bootstrap();
     } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura enqueueWatchdog failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }
