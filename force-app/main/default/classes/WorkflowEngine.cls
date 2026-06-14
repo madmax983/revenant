@@ -1198,6 +1198,22 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
+    Boolean isCompensationFailure = (instance.Status__c == 'Compensating' ||
+                                     instance.Status__c == 'Cancelling' ||
+                                     (String.isNotBlank(stepName) && stepName.endsWith('_Compensate')));
+
+    if (isCompensationFailure) {
+      instance.Status__c = 'Failed';
+      instance.Error_Message__c =
+        'Failed at step ' +
+        stepName +
+        ': ' +
+        errorMessage;
+      update as system instance;
+      WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
+      return;
+    }
+
     instance.Status__c = 'Compensating';
     instance.Error_Message__c =
       'Failed at step ' +
@@ -1840,6 +1856,12 @@ public inherited sharing class WorkflowEngine {
     StepResult result;
     try {
       result = compensatableStepInstance.compensate(context);
+    } catch (Exception ex) {
+      stepExec.Status__c = 'Failed';
+      stepExec.Error_Details__c = ex.getMessage() + '\n' + ex.getStackTraceString();
+      saveStepExec(stepExec);
+      failWorkflowInstance(instance.Id, compensationStepLogName, ex.getMessage());
+      return;
     } finally {
       if (timeoutSeconds != null && timeoutSeconds > 0) {
         cancelTimeoutJob(instance.Id, compensationStepLogName);
@@ -1979,6 +2001,18 @@ public inherited sharing class WorkflowEngine {
         delay = Math.min(delay, 86400);
         scheduleRetry(instance.Id, stepExec.Step_Name__c, delay);
       }
+    } else {
+      stepExec.Status__c = 'Failed';
+      stepExec.Error_Details__c = 'Unsupported compensation action: ' + (result != null ? result.action : null);
+      saveStepExec(stepExec);
+
+      instance.Status__c = 'Failed';
+      instance.Error_Message__c =
+        'Compensation step ' +
+        stepExec.Step_Name__c +
+        ' failed: Unsupported action.';
+      update as system instance;
+      WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
     }
   }
 

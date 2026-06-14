@@ -2256,4 +2256,175 @@ public class WorkflowEngineTest {
     // Verify visibility is either InternalUsers (if Communities enabled) or AllUsers (if disabled)
     System.assert(link.Visibility == 'InternalUsers' || link.Visibility == 'AllUsers', 'Invalid visibility: ' + link.Visibility);
   }
+
+  // Mock class for compensation crash
+  public class CompensatableCrashStep implements CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'Success');
+    }
+    public StepResult compensate(StepContext ctx) {
+      throw new WorkflowEngine.WorkflowException('Compensation crash simulation');
+    }
+  }
+
+  @isTest
+  static void testWatchdogRaceAndStatuses() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'RaceKey',
+      null
+    );
+
+    // Let's create a completed step execution
+    Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = instanceId,
+      Step_Name__c = 'WorkflowEngineTest.HappyStep1',
+      Status__c = 'Completed'
+    );
+    insert stepExec;
+
+    // Transition instance status to Completed
+    Workflow_Instance__c inst = [SELECT Id FROM Workflow_Instance__c WHERE Id = :instanceId];
+    inst.Status__c = 'Completed';
+    update inst;
+
+    // If watchdog runs on a completed instance, it should exit without error or changes
+    Test.startTest();
+    WorkflowTimeoutJob job1 = new WorkflowTimeoutJob(instanceId, 'WorkflowEngineTest.HappyStep1');
+    job1.execute(null);
+    Test.stopTest();
+
+    // Check that step remains Completed
+    Workflow_Step_Execution__c checkStep = [SELECT Status__c FROM Workflow_Step_Execution__c WHERE Id = :stepExec.Id];
+    System.assertEquals('Completed', checkStep.Status__c);
+  }
+
+  @isTest
+  static void testPreStartTimeout() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'PreStartTimeoutKey',
+      null
+    );
+
+    // Let's manually create a Pending step execution
+    Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = instanceId,
+      Step_Name__c = 'WorkflowEngineTest.HappyStep1',
+      Status__c = 'Pending'
+    );
+    insert stepExec;
+
+    // We make instance Running
+    Workflow_Instance__c inst = [SELECT Id FROM Workflow_Instance__c WHERE Id = :instanceId];
+    inst.Status__c = 'Running';
+    inst.Current_Step__c = 'WorkflowEngineTest.HappyStep1';
+    update inst;
+
+    // Run the timeout job
+    Test.startTest();
+    WorkflowTimeoutJob job = new WorkflowTimeoutJob(instanceId, 'WorkflowEngineTest.HappyStep1');
+    job.execute(null);
+    Test.stopTest();
+
+    // Verify step execution is marked Failed with 'Step execution timed out before starting.'
+    Workflow_Step_Execution__c timedOutStep = [
+      SELECT Status__c, Error_Details__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :stepExec.Id
+    ];
+    System.assertEquals('Failed', timedOutStep.Status__c);
+    System.assertEquals('Step execution timed out before starting.', timedOutStep.Error_Details__c);
+
+    // Verify workflow instance transitions to Failed
+    Workflow_Instance__c timedOutInst = [
+      SELECT Status__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', timedOutInst.Status__c);
+    System.assert(timedOutInst.Error_Message__c.contains('Step execution timed out before starting.'));
+  }
+
+  @isTest
+  static void testCompensationTimeout() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Compensating',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+      ),
+      Input__c = '{"test": true}'
+    );
+    insert inst;
+
+    Workflow_Step_Execution__c compExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep_Compensate',
+      Status__c = 'Running'
+    );
+    insert compExec;
+
+    // Run the timeout job for the compensation step
+    Test.startTest();
+    WorkflowTimeoutJob job = new WorkflowTimeoutJob(inst.Id, 'WorkflowEngineTest.CompensatableHappyStep_Compensate');
+    job.execute(null);
+    Test.stopTest();
+
+    // Verify step execution status is Failed
+    Workflow_Step_Execution__c timedOutStep = [
+      SELECT Status__c, Error_Details__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :compExec.Id
+    ];
+    System.assertEquals('Failed', timedOutStep.Status__c);
+
+    // Verify instance status transitions to Failed and does not get stuck in Compensating
+    Workflow_Instance__c timedOutInst = [
+      SELECT Status__c, Error_Message__c, Compensation_Stack__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Failed', timedOutInst.Status__c);
+    System.assert(timedOutInst.Error_Message__c.contains('timed out'));
+    // Compensation stack should NOT be popped
+    List<String> stack = (List<String>) JSON.deserialize(timedOutInst.Compensation_Stack__c, List<String>.class);
+    System.assertEquals(1, stack.size());
+    System.assertEquals('WorkflowEngineTest.CompensatableHappyStep', stack[0]);
+  }
+
+  @isTest
+  static void testCompensationFailureRollback() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Compensating',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableCrashStep' }
+      ),
+      Input__c = '{"test": true}'
+    );
+    insert inst;
+
+    // Run the step compensation (will crash because of the mock class)
+    Test.startTest();
+    WorkflowEngine.runStep(inst.Id, null);
+    Test.stopTest();
+
+    // Verify instance transitions to Failed and does not pop the stack
+    Workflow_Instance__c failedInst = [
+      SELECT Status__c, Error_Message__c, Compensation_Stack__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Failed', failedInst.Status__c);
+    System.assert(failedInst.Error_Message__c.contains('Compensation crash simulation'));
+
+    List<String> stack = (List<String>) JSON.deserialize(failedInst.Compensation_Stack__c, List<String>.class);
+    System.assertEquals(1, stack.size());
+    System.assertEquals('WorkflowEngineTest.CompensatableCrashStep', stack[0]);
+  }
 }
