@@ -59,7 +59,7 @@ public inherited sharing class WorkflowEngine {
     try {
       insert as system instance;
     } catch (DmlException ex) {
-      if (ex.getDmlType(0) == StatusCode.DUPLICATE_VALUE) {
+      if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
         throw new WorkflowException(
           'An active workflow already exists with correlation key: ' +
           correlationKey
@@ -152,7 +152,7 @@ public inherited sharing class WorkflowEngine {
     try {
       insert as system instance;
     } catch (DmlException ex) {
-      if (ex.getDmlType(0) == StatusCode.DUPLICATE_VALUE) {
+      if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
         throw new WorkflowException(
           'An active workflow already exists with correlation key: ' +
           correlationKey
@@ -462,10 +462,9 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c == 'Failed' ||
       instance.Status__c == 'Compensated' ||
       instance.Status__c == 'Cancelled' ||
-      instance.Status__c == 'ContinuedAsNew' ||
-      instance.Status__c == 'Suspended'
+      instance.Status__c == 'ContinuedAsNew'
     ) {
-      return; // Already finished or suspended
+      return; // Already finished
     }
 
     Workflow_Step_Execution__c stepExec;
@@ -473,7 +472,7 @@ public inherited sharing class WorkflowEngine {
       stepExec = new Workflow_Step_Execution__c();
       stepExec.Workflow_Instance__c = instanceId;
       stepExec.Step_Name__c = activeStepName;
-      stepExec.Status__c = 'Pending';
+      stepExec.Status__c = 'Running';
       stepExec.Retry_Count__c = 0;
 
       // Get previous step's output to feed as input
@@ -488,18 +487,6 @@ public inherited sharing class WorkflowEngine {
       stepExec.Input__c = !completedSteps.isEmpty()
         ? completedSteps[0].Output__c
         : instance.Input__c;
-
-      insert as system stepExec;
-
-      // Re-query to establish FOR UPDATE lock
-      stepExec = [
-        SELECT Id, Step_Name__c, Status__c, Input__c, Output__c, Retry_Count__c
-        FROM Workflow_Step_Execution__c
-        WHERE Id = :stepExec.Id
-        WITH SYSTEM_MODE
-        FOR UPDATE
-      ];
-      stepExec.Status__c = 'Running';
     } else {
       stepExec = stepExecs[0];
       if (
@@ -1033,7 +1020,7 @@ public inherited sharing class WorkflowEngine {
       try {
         insert as system nextInstance;
       } catch (DmlException ex) {
-        if (ex.getDmlType(0) == StatusCode.DUPLICATE_VALUE) {
+        if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
           throw new WorkflowException(
             'An active workflow already exists with correlation key: ' +
             newKey
@@ -1329,7 +1316,7 @@ public inherited sharing class WorkflowEngine {
     try {
       insert as system instance;
     } catch (DmlException ex) {
-      if (ex.getDmlType(0) == StatusCode.DUPLICATE_VALUE) {
+      if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
         throw new WorkflowException(
           'An active workflow already exists with correlation key: ' +
           correlationKey
@@ -1722,7 +1709,7 @@ public inherited sharing class WorkflowEngine {
       stepExec = new Workflow_Step_Execution__c();
       stepExec.Workflow_Instance__c = instance.Id;
       stepExec.Step_Name__c = compensationStepLogName;
-      stepExec.Status__c = 'Pending';
+      stepExec.Status__c = 'Running';
       stepExec.Retry_Count__c = 0;
 
       // Retrieve the original step execution to get inputs/outputs
@@ -1743,18 +1730,6 @@ public inherited sharing class WorkflowEngine {
       stepExec.Output__c = !originalExecs.isEmpty()
         ? originalExecs[0].Output__c
         : null;
-
-      insert as system stepExec;
-
-      // Re-query to establish FOR UPDATE lock
-      stepExec = [
-        SELECT Id, Step_Name__c, Status__c, Input__c, Output__c, Retry_Count__c
-        FROM Workflow_Step_Execution__c
-        WHERE Id = :stepExec.Id
-        WITH SYSTEM_MODE
-        FOR UPDATE
-      ];
-      stepExec.Status__c = 'Running';
     } else {
       stepExec = stepExecs[0];
       if (
@@ -2079,7 +2054,6 @@ public inherited sharing class WorkflowEngine {
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
       LIMIT 1
-      FOR UPDATE
     ];
     if (instances.isEmpty()) {
       throw new WorkflowException('Workflow instance not found: ' + instanceId);
@@ -2096,10 +2070,8 @@ public inherited sharing class WorkflowEngine {
       return; // Already in terminal state
     }
 
-    // Abort all scheduled jobs for this instance (sleeps, retries, timeouts)
-    abortScheduledJobs(instanceId);
-
-    // Mark the active step execution (if any) as Cancelled
+    // 1. Lock active step executions FOR UPDATE first
+    List<Workflow_Step_Execution__c> stepExecs = new List<Workflow_Step_Execution__c>();
     if (String.isNotBlank(instance.Current_Step__c)) {
       List<String> activeStepNames = new List<String>();
       if (instance.Current_Step__c.contains(',')) {
@@ -2108,7 +2080,7 @@ public inherited sharing class WorkflowEngine {
         activeStepNames.add(instance.Current_Step__c);
       }
 
-      List<Workflow_Step_Execution__c> stepExecs = [
+      stepExecs = [
         SELECT Id, Status__c
         FROM Workflow_Step_Execution__c
         WHERE
@@ -2116,13 +2088,44 @@ public inherited sharing class WorkflowEngine {
           AND Step_Name__c IN :activeStepNames
           AND Status__c IN ('Running', 'Pending', 'Retrying')
         WITH SYSTEM_MODE
+        FOR UPDATE
       ];
-      for (Workflow_Step_Execution__c stepExec : stepExecs) {
-        stepExec.Status__c = 'Cancelled';
-      }
-      if (!stepExecs.isEmpty()) {
-        update as system stepExecs;
-      }
+    }
+
+    // 2. Lock the instance FOR UPDATE second
+    instances = [
+      SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+      LIMIT 1
+      FOR UPDATE
+    ];
+    if (instances.isEmpty()) {
+      throw new WorkflowException('Workflow instance not found: ' + instanceId);
+    }
+    instance = instances[0];
+
+    // Recheck status under lock
+    if (
+      instance.Status__c == 'Completed' ||
+      instance.Status__c == 'Failed' ||
+      instance.Status__c == 'Compensated' ||
+      instance.Status__c == 'Cancelled' ||
+      instance.Status__c == 'ContinuedAsNew'
+    ) {
+      return;
+    }
+
+    // Abort all scheduled jobs for this instance (sleeps, retries, timeouts)
+    abortScheduledJobs(instanceId);
+
+    // Update step executions to Cancelled
+    for (Workflow_Step_Execution__c stepExec : stepExecs) {
+      stepExec.Status__c = 'Cancelled';
+    }
+    if (!stepExecs.isEmpty()) {
+      update as system stepExecs;
     }
 
     // Check for compensations

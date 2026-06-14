@@ -2150,6 +2150,10 @@ public class WorkflowEngineTest {
       null
     );
 
+    // Run the initial step to transition both instances to Suspended
+    WorkflowEngine.runStep(instanceId1, null);
+    WorkflowEngine.runStep(instanceId2, null);
+
     // Send a signal using keyOrId = instanceId1. Since keyOrId casts to ID, it should hit instanceId1, NOT instanceId2 (even though instanceId2's correlation key equals instanceId1's ID string!)
     WorkflowEngine.signal(idKey, 'PaymentReceived', '100');
 
@@ -2162,24 +2166,21 @@ public class WorkflowEngineTest {
     System.assertEquals('Suspended', inst2.Status__c, 'Instance 2 should not have been resumed');
   }
 
-  public class ContinueSuccessorWorkflow implements WorkflowDefinition {
-    public String getInitialStep() {
-      return 'WorkflowEngineTest.TimeoutStep'; // TimeoutStep implements TimeoutConfigurable
+  public class TimeoutContinueStep implements WorkflowStep, TimeoutConfigurable {
+    public Integer getTimeoutSeconds() {
+      return 60;
     }
-    public String getNextStep(String currentStepName, StepResult stepResult) {
-      return null;
-    }
-  }
-
-  public class ContinueAsNewStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      return StepResult.continueAsNew(null, 'SuccessorKey');
+      if (ctx.workflowInputJson != null && ctx.workflowInputJson.contains('successor')) {
+        return StepResult.complete(null, 'SuccessorFinished');
+      }
+      return StepResult.continueAsNew('successor', 'SuccessorKey');
     }
   }
 
-  public class SuccessorStarterWorkflow implements WorkflowDefinition {
+  public class TimeoutContinueWorkflow implements WorkflowDefinition {
     public String getInitialStep() {
-      return 'WorkflowEngineTest.ContinueAsNewStep';
+      return 'WorkflowEngineTest.TimeoutContinueStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
@@ -2190,9 +2191,9 @@ public class WorkflowEngineTest {
   static void testContinueAsNewSuccessorWatchdog() {
     WorkflowEngine.disableQueueableInTest = true;
 
-    // Start workflow that continues as new to ContinueSuccessorWorkflow
+    // Start workflow that continues as new to same workflow definition
     Id instanceId = WorkflowEngine.start(
-      'WorkflowEngineTest.SuccessorStarterWorkflow',
+      'WorkflowEngineTest.TimeoutContinueWorkflow',
       'StarterKey',
       null
     );
@@ -2207,10 +2208,10 @@ public class WorkflowEngineTest {
       WHERE Previous_Instance__c = :instanceId
       LIMIT 1
     ];
-    System.assertEquals('WorkflowEngineTest.TimeoutStep', successor.Current_Step__c);
+    System.assertEquals('WorkflowEngineTest.TimeoutContinueStep', successor.Current_Step__c);
 
-    // Verify watchdog job was scheduled for the successor instance's initial step (TimeoutStep)
-    String cleanStepName = 'WorkflowEngineTest_TimeoutStep';
+    // Verify watchdog job was scheduled for the successor instance's initial step
+    String cleanStepName = 'WorkflowEngineTest_TimeoutContinueStep';
     String jobName = 'Timeout_' + successor.Id + '_' + cleanStepName;
     List<CronTrigger> triggers = [
       SELECT Id, State
