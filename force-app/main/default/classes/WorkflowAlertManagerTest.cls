@@ -6,8 +6,7 @@ public class WorkflowAlertManagerTest {
     Boolean enabled,
     Integer consecutiveLimit,
     Integer failLimit,
-    Integer windowMin,
-    Integer stallHours
+    Integer windowMin
   ) {
     Map<String, Object> fields = new Map<String, Object>{
       'DeveloperName' => devName,
@@ -15,8 +14,7 @@ public class WorkflowAlertManagerTest {
       'Enable_Alerts__c' => enabled,
       'Consecutive_Failures_Limit__c' => consecutiveLimit,
       'Failure_Count_Limit__c' => failLimit,
-      'Time_Window_Minutes__c' => windowMin,
-      'Stall_Threshold_Hours__c' => stallHours
+      'Time_Window_Minutes__c' => windowMin
     };
     return (Workflow_Alert_Config__mdt) JSON.deserialize(
       JSON.serialize(fields),
@@ -33,7 +31,6 @@ public class WorkflowAlertManagerTest {
         'WorkflowEngineTest_HappyWorkflow',
         'test@example.com',
         true,
-        null,
         null,
         null,
         null
@@ -76,7 +73,6 @@ public class WorkflowAlertManagerTest {
         'Default',
         'default@example.com',
         true,
-        null,
         null,
         null,
         null
@@ -124,7 +120,6 @@ public class WorkflowAlertManagerTest {
         true,
         null,
         null,
-        null,
         null
       )
     );
@@ -161,7 +156,6 @@ public class WorkflowAlertManagerTest {
         'WorkflowEngineTest_HappyWorkflow',
         'test@example.com',
         false,
-        null,
         null,
         null,
         null
@@ -202,7 +196,6 @@ public class WorkflowAlertManagerTest {
         true,
         null,
         null,
-        null,
         null
       )
     );
@@ -240,7 +233,6 @@ public class WorkflowAlertManagerTest {
         'test@example.com',
         true,
         3,
-        null,
         null,
         null
       )
@@ -344,8 +336,7 @@ public class WorkflowAlertManagerTest {
         true,
         null,
         2,
-        10,
-        null
+        10
       )
     );
     WorkflowAlertManager.sentEmailsCount = 0;
@@ -401,7 +392,6 @@ public class WorkflowAlertManagerTest {
         'WorkflowEngineTest_HappyWorkflow',
         'test@example.com',
         true,
-        null,
         null,
         null,
         null
@@ -463,7 +453,6 @@ public class WorkflowAlertManagerTest {
         true,
         null,
         null,
-        null,
         null
       )
     );
@@ -498,6 +487,152 @@ public class WorkflowAlertManagerTest {
       1,
       WorkflowAlertManager.sentEmailsCount,
       'Alert should be sent on timeout'
+    );
+  }
+
+  @isTest
+  static void testSendEmailExceptionIsolation() {
+    WorkflowAlertManager.mockConfigs.clear();
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockConfig(
+        'WorkflowEngineTest_HappyWorkflow',
+        'test@example.com',
+        true,
+        null,
+        null,
+        null
+      )
+    );
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowAlertManager.throwTestException = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Failed'
+    );
+    insert inst;
+    inst = [
+      SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+
+    Test.startTest();
+    try {
+      WorkflowAlertManager.sendAlert(inst, 'Some error');
+      System.assert(true, 'Should not throw exception');
+    } catch (Exception e) {
+      System.assert(false, 'Should have caught and isolated email exception, but got: ' + e.getMessage());
+    }
+    Test.stopTest();
+
+    System.assertEquals(1, WorkflowAlertManager.sentEmailsCount);
+    WorkflowAlertManager.throwTestException = false;
+  }
+
+  @isTest
+  static void testHtmlEscapingAndErrorTruncation() {
+    String xssWfName = 'WorkflowEngineTest.HappyWorkflow<script>';
+    String devName = xssWfName.replaceAll('[^a-zA-Z0-9_]', '_');
+    String truncatedDevName = devName.length() > 40
+      ? devName.substring(0, 40)
+      : devName;
+
+    WorkflowAlertManager.mockConfigs.clear();
+    WorkflowAlertManager.mockConfigs.put(
+      truncatedDevName,
+      createMockConfig(
+        truncatedDevName,
+        'test@example.com',
+        true,
+        null,
+        null,
+        null
+      )
+    );
+    WorkflowAlertManager.sentEmailsCount = 0;
+
+    String xssCorrelation = 'Key & Value > XSS';
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = xssWfName,
+      Status__c = 'Failed',
+      Correlation_Key__c = xssCorrelation
+    );
+    insert inst;
+    inst = [
+      SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+
+    String longPart = 'A'.repeat(5010);
+
+    Test.startTest();
+    WorkflowAlertManager.sendAlert(inst, longPart + '<script>');
+    Test.stopTest();
+
+    String html = WorkflowAlertManager.lastHtmlBody;
+    System.assertNotEquals(null, html);
+
+    System.assert(!html.contains(xssWfName), 'Workflow Name must be HTML-escaped');
+    System.assert(html.contains('WorkflowEngineTest.HappyWorkflow&lt;script&gt;'), 'Escaped Workflow Name should be present');
+
+    System.assert(!html.contains(xssCorrelation), 'Correlation Key must be HTML-escaped');
+    System.assert(html.contains('Key &amp; Value &gt; XSS'), 'Escaped Correlation Key should be present');
+
+    System.assert(html.contains(inst.Name.escapeHtml4()), 'Name should be escaped');
+    System.assert(html.contains(String.valueOf(inst.Id).escapeHtml4()), 'Id should be escaped');
+
+    System.assert(html.contains('... (truncated)'), 'Should contain the truncation suffix');
+    String expectedErrorDetails = 'A'.repeat(5000) + '... (truncated)';
+    System.assert(html.contains(expectedErrorDetails), 'Should contain exactly 5000 characters of error details plus the truncation indicator');
+  }
+
+  @isTest
+  static void testSlidingWindowUsesLastModifiedDate() {
+    WorkflowAlertManager.mockConfigs.clear();
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockConfig(
+        'WorkflowEngineTest_HappyWorkflow',
+        'test@example.com',
+        true,
+        null,
+        1,
+        10
+      )
+    );
+    WorkflowAlertManager.sentEmailsCount = 0;
+
+    String wfName = 'WorkflowEngineTest.HappyWorkflow';
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Running'
+    );
+    insert inst;
+
+    Test.setCreatedDate(inst.Id, Datetime.now().addMinutes(-20));
+
+    inst.Status__c = 'Failed';
+
+    Test.startTest();
+    update inst;
+
+    Workflow_Instance__c queriedInst = [
+      SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    WorkflowAlertManager.sendAlert(queriedInst, 'Failed step');
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      WorkflowAlertManager.sentEmailsCount,
+      'Alert should be sent because LastModifiedDate is within the window'
     );
   }
 }

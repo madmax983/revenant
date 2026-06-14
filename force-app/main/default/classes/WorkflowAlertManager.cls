@@ -5,6 +5,12 @@ public inherited sharing class WorkflowAlertManager {
   @TestVisible
   public static Integer sentEmailsCount = 0;
 
+  @TestVisible
+  private static Boolean throwTestException = false;
+
+  @TestVisible
+  private static String lastHtmlBody = null;
+
   /**
    * Inspects configuration and thresholds, and sends an email alert if needed.
    */
@@ -60,8 +66,7 @@ public inherited sharing class WorkflowAlertManager {
         Enable_Alerts__c,
         Consecutive_Failures_Limit__c,
         Failure_Count_Limit__c,
-        Time_Window_Minutes__c,
-        Stall_Threshold_Hours__c
+        Time_Window_Minutes__c
       FROM Workflow_Alert_Config__mdt
       WHERE DeveloperName = :devName OR DeveloperName = :truncatedDevName
       WITH SYSTEM_MODE
@@ -77,8 +82,7 @@ public inherited sharing class WorkflowAlertManager {
         Enable_Alerts__c,
         Consecutive_Failures_Limit__c,
         Failure_Count_Limit__c,
-        Time_Window_Minutes__c,
-        Stall_Threshold_Hours__c
+        Time_Window_Minutes__c
       FROM Workflow_Alert_Config__mdt
       WHERE DeveloperName = 'Default'
       WITH SYSTEM_MODE
@@ -151,7 +155,7 @@ public inherited sharing class WorkflowAlertManager {
           AND (Status__c = 'Failed'
           OR Status__c = 'Compensated'
           OR Status__c = 'Cancelled')
-          AND CreatedDate >= :windowStart
+          AND LastModifiedDate >= :windowStart
         WITH SYSTEM_MODE
       ];
 
@@ -185,23 +189,34 @@ public inherited sharing class WorkflowAlertManager {
       '[Revenant Alert] Workflow Failure: ' + instance.Workflow_Name__c;
     mail.setSubject(subject);
 
+    String escWorkflowName = String.isBlank(instance.Workflow_Name__c) ? '' : instance.Workflow_Name__c.escapeHtml4();
+    String escInstanceName = String.isBlank(instance.Name) ? '' : instance.Name.escapeHtml4();
+    String escInstanceId = instance.Id == null ? '' : String.valueOf(instance.Id).escapeHtml4();
+    String escCorrelationKey = String.isNotBlank(instance.Correlation_Key__c)
+      ? instance.Correlation_Key__c.escapeHtml4()
+      : 'N/A';
+
+    String truncatedErrorMsg = errorMsg;
+    if (String.isNotBlank(truncatedErrorMsg) && truncatedErrorMsg.length() > 5000) {
+      truncatedErrorMsg = truncatedErrorMsg.substring(0, 5000) + '... (truncated)';
+    }
+    String escapedErrorMsg = String.isBlank(truncatedErrorMsg) ? '' : truncatedErrorMsg.escapeHtml4();
+
     String htmlBody =
       '<div style="font-family: sans-serif; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; max-width: 600px;">' +
       '<h2 style="color: #e53e3e; margin-top: 0;">Workflow Execution Failed</h2>' +
       '<hr style="border: 0; border-top: 1px solid #e2e8f0; margin-bottom: 20px;"/>' +
       '<table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">' +
       '<tr><td style="padding: 6px 0; font-weight: bold; width: 150px;">Workflow Name:</td><td>' +
-      instance.Workflow_Name__c +
+      escWorkflowName +
       '</td></tr>' +
       '<tr><td style="padding: 6px 0; font-weight: bold;">Instance ID:</td><td>' +
-      instance.Name +
+      escInstanceName +
       ' (' +
-      instance.Id +
+      escInstanceId +
       ')</td></tr>' +
       '<tr><td style="padding: 6px 0; font-weight: bold;">Correlation Key:</td><td>' +
-      (String.isNotBlank(instance.Correlation_Key__c)
-        ? instance.Correlation_Key__c
-        : 'N/A') +
+      escCorrelationKey +
       '</td></tr>' +
       '<tr><td style="padding: 6px 0; font-weight: bold;">Failed Time:</td><td>' +
       Datetime.now().format() +
@@ -209,16 +224,23 @@ public inherited sharing class WorkflowAlertManager {
       '</table>' +
       '<div style="background-color: #fff5f5; border: 1px solid #fed7d7; border-radius: 4px; padding: 15px; margin-bottom: 20px; color: #c53030;">' +
       '<strong>Error Details:</strong><br/><pre style="white-space: pre-wrap; font-family: monospace; margin: 5px 0 0 0;">' +
-      errorMsg +
+      escapedErrorMsg +
       '</pre>' +
       '</div>' +
       '<p style="font-size: 14px; color: #718096; margin-bottom: 0;">To view and retry this workflow, open the Workflow Dashboard in Salesforce.</p>' +
       '</div>';
 
     mail.setHtmlBody(htmlBody);
+    lastHtmlBody = htmlBody;
 
-    if (!Test.isRunningTest()) {
-      Messaging.sendEmail(new List<Messaging.SingleEmailMessage>{ mail });
+    try {
+      if (!Test.isRunningTest()) {
+        Messaging.sendEmail(new List<Messaging.SingleEmailMessage>{ mail });
+      } else if (throwTestException) {
+        throw new IllegalArgumentException('Simulated email exception');
+      }
+    } catch (Exception e) {
+      System.debug(LoggingLevel.ERROR, 'Email dispatch failed: ' + e.getMessage());
     }
     sentEmailsCount += 1;
   }
