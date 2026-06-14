@@ -1650,13 +1650,13 @@ public class WorkflowEngineTest {
       null,
       null,
       null,
-      '{"retentionDays":-1,"batchSize":100}',
+      '{"retentionDays":0,"batchSize":100}',
       1
     );
 
     // Execute purge
     StepResult purgeResult = purgeStep.execute(purgeCtx);
-    System.assertEquals(StepResult.ActionType.YIELD, purgeResult.action);
+    System.assertEquals(StepResult.ActionType.COMPLETE, purgeResult.action);
 
     // Verify ContentDocument links and files are deleted
     List<ContentDocumentLink> remainingLinks = [

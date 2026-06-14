@@ -30,6 +30,9 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
           } catch (Exception ex) {
             throw new WorkflowEngine.WorkflowException('Invalid retentionDays parameter type: ' + ex.getMessage());
           }
+          if (retentionDays < 0) {
+            throw new WorkflowEngine.WorkflowException('retentionDays parameter cannot be negative');
+          }
         }
 
         if (input.containsKey('batchSize')) {
@@ -151,8 +154,8 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
         Integer docCount = (docIds != null) ? docIds.size() : 0;
 
         // Bounded processing: if processing this instance would exceed our transaction cap of 100 deleted documents,
-        // we defer it to the next yield chunk.
-        if (!finalDocIdsToDelete.isEmpty() && (finalDocIdsToDelete.size() + docCount) > 100) {
+        // we defer it to the next yield chunk. We allow the first instance to exceed the cap to ensure forward progress.
+        if (!instancesToPurge.isEmpty() && (finalDocIdsToDelete.size() + docCount) > 100) {
           break;
         }
 
@@ -222,13 +225,14 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
         state.deletedCount += instancesToPurge.size();
       }
 
-      // Check if we still have remaining candidate instances that weren't processed in this batch due to the limit
-      Boolean hasMore = candidateInstances.size() > instancesToPurge.size();
+      // Check if we still have remaining candidate instances that weren't processed in this batch due to the limit,
+      // or if we fetched a full batch which implies there could be more in the database.
+      Boolean hasMore = (candidateInstances.size() > instancesToPurge.size()) || (candidateInstances.size() == clampedBatchSize);
       if (hasMore) {
         return StepResult.yield(JSON.serialize(state));
       }
 
-      return StepResult.yield(JSON.serialize(state));
+      return StepResult.complete(null, state);
     }
   }
 }

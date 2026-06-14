@@ -310,6 +310,29 @@ public class CleanupWorkflowTest {
       System.assert(ex.getMessage().contains('Invalid retentionDays parameter type'), 'Expected invalid type error, got: ' + ex.getMessage());
     }
 
+    // Test negative retentionDays
+    try {
+      Workflow_Instance__c instNeg = new Workflow_Instance__c(
+        Workflow_Name__c = 'CleanupWorkflow',
+        Status__c = 'Running',
+        Input__c = '{"retentionDays":-5}'
+      );
+      insert instNeg;
+      StepContext ctx = new StepContext(
+        instNeg.Id,
+        'CleanupWorkflow',
+        'CleanupWorkflow.PurgeOldInstancesStep',
+        null,
+        null,
+        null,
+        instNeg.Input__c
+      );
+      new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
+      System.assert(false, 'Should throw exception on negative retentionDays');
+    } catch (Exception ex) {
+      System.assert(ex.getMessage().contains('retentionDays parameter cannot be negative'), 'Expected negative error, got: ' + ex.getMessage());
+    }
+
     // Test zero batchSize
     try {
       Workflow_Instance__c instZero = new Workflow_Instance__c(
