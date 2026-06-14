@@ -1,79 +1,67 @@
 trigger WorkflowEventTrigger on Workflow_Event__e(after insert) {
   Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
 
-  // 1. Gather all potential Salesforce IDs from incoming events to query in bulk
-  Set<Id> instanceIds = new Set<Id>();
-  for (Workflow_Event__e event : Trigger.new) {
-    if (
-      String.isNotBlank(event.Workflow_Instance_Id__c) &&
-      idPattern.matcher(event.Workflow_Instance_Id__c).matches()
-    ) {
-      instanceIds.add((Id) event.Workflow_Instance_Id__c);
-    }
-  }
-
-  Map<Id, Workflow_Instance__c> instancesById = new Map<Id, Workflow_Instance__c>();
-  if (!instanceIds.isEmpty()) {
-    instancesById = new Map<Id, Workflow_Instance__c>(
-      [
-        SELECT Id, Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE Id IN :instanceIds
-        WITH SYSTEM_MODE
-      ]
-    );
-  }
-
+  List<WorkflowEngine.ResumeRequest> resumeRequests = new List<WorkflowEngine.ResumeRequest>();
+  List<WorkflowEngine.SignalRequest> signalRequests = new List<WorkflowEngine.SignalRequest>();
   List<Workflow_Event__e> throttledEvents = new List<Workflow_Event__e>();
 
-  // 2. Process events in the batch
+  Integer processedResumeSignals = 0;
+  Integer maxResumeSignals = 20;
+
+  // 1. Process events in the batch
   for (Workflow_Event__e event : Trigger.new) {
     if (event.Event_Type__c == 'RESUME') {
-      String resumeKey = null;
-      Boolean isId = false;
-
-      if (
-        String.isNotBlank(event.Workflow_Instance_Id__c) &&
-        idPattern.matcher(event.Workflow_Instance_Id__c).matches()
-      ) {
-        isId = true;
-        Id instanceId = (Id) event.Workflow_Instance_Id__c;
-        if (instancesById.containsKey(instanceId)) {
-          Workflow_Instance__c inst = instancesById.get(instanceId);
-          if (String.isNotBlank(inst.Correlation_Key__c)) {
-            resumeKey = inst.Correlation_Key__c;
-          }
+      if (processedResumeSignals < maxResumeSignals) {
+        processedResumeSignals++;
+        if (
+          String.isNotBlank(event.Workflow_Instance_Id__c) &&
+          idPattern.matcher(event.Workflow_Instance_Id__c).matches()
+        ) {
+          resumeRequests.add(
+            new WorkflowEngine.ResumeRequest(
+              (Id) event.Workflow_Instance_Id__c,
+              event.Payload__c
+            )
+          );
+        } else {
+          resumeRequests.add(
+            new WorkflowEngine.ResumeRequest(
+              event.Workflow_Instance_Id__c,
+              event.Payload__c
+            )
+          );
         }
       } else {
-        resumeKey = event.Workflow_Instance_Id__c;
-      }
-
-      if (isId) {
-        if (String.isNotBlank(resumeKey)) {
-          WorkflowEngine.resume(resumeKey, event.Payload__c);
-        }
-      } else {
-        WorkflowEngine.resume(resumeKey, event.Payload__c);
+        throttledEvents.add(
+          new Workflow_Event__e(
+            Workflow_Instance_Id__c = event.Workflow_Instance_Id__c,
+            Event_Type__c = event.Event_Type__c,
+            Payload__c = event.Payload__c
+          )
+        );
       }
     } else if (
       event.Event_Type__c != null && event.Event_Type__c.startsWith('SIGNAL:')
     ) {
-      String signalName = event.Event_Type__c.substringAfter('SIGNAL:');
-      String correlationKey = event.Workflow_Instance_Id__c;
-
-      if (
-        String.isNotBlank(event.Workflow_Instance_Id__c) &&
-        idPattern.matcher(event.Workflow_Instance_Id__c).matches()
-      ) {
-        Id instanceId = (Id) event.Workflow_Instance_Id__c;
-        if (instancesById.containsKey(instanceId)) {
-          Workflow_Instance__c inst = instancesById.get(instanceId);
-          if (String.isNotBlank(inst.Correlation_Key__c)) {
-            correlationKey = inst.Correlation_Key__c;
-          }
-        }
+      if (processedResumeSignals < maxResumeSignals) {
+        processedResumeSignals++;
+        String signalName = event.Event_Type__c.substringAfter('SIGNAL:');
+        signalRequests.add(
+          new WorkflowEngine.SignalRequest(
+            event.Workflow_Instance_Id__c,
+            signalName,
+            event.Payload__c
+          )
+        );
+      } else {
+        throttledEvents.add(
+          new Workflow_Event__e(
+            Workflow_Instance_Id__c = event.Workflow_Instance_Id__c,
+            Event_Type__c = event.Event_Type__c,
+            Payload__c = event.Payload__c
+          )
+        );
       }
-      WorkflowEngine.signal(correlationKey, signalName, event.Payload__c);
     } else if (
       event.Event_Type__c == 'RUN_STEP' ||
       event.Event_Type__c == 'NEXT_STEP'
@@ -106,6 +94,14 @@ trigger WorkflowEventTrigger on Workflow_Event__e(after insert) {
         );
       }
     }
+  }
+
+  // 2. Execute bulk resume and signal requests
+  if (!resumeRequests.isEmpty()) {
+    WorkflowEngine.resume(resumeRequests);
+  }
+  if (!signalRequests.isEmpty()) {
+    WorkflowEngine.signal(signalRequests);
   }
 
   // 3. Publish throttled events in a single bulk DML statement

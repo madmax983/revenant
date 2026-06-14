@@ -218,6 +218,34 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  public class ResumeRequest {
+    public String correlationKey;
+    public Id instanceId;
+    public String payload;
+
+    public ResumeRequest(String correlationKey, String payload) {
+      this.correlationKey = correlationKey;
+      this.payload = payload;
+    }
+
+    public ResumeRequest(Id instanceId, String payload) {
+      this.instanceId = instanceId;
+      this.payload = payload;
+    }
+  }
+
+  public class SignalRequest {
+    public String keyOrId;
+    public String signalName;
+    public String payload;
+
+    public SignalRequest(String keyOrId, String signalName, String payload) {
+      this.keyOrId = keyOrId;
+      this.signalName = signalName;
+      this.payload = payload;
+    }
+  }
+
   /**
    * Starts multiple durable workflow instances in a bulk-friendly transaction.
    */
@@ -446,6 +474,139 @@ public inherited sharing class WorkflowEngine {
     } else {
       enqueueOrchestrator(instance.Id, null);
     }
+  }
+
+  /**
+   * Resumes multiple suspended workflows in a bulk-friendly transaction.
+   */
+  public static void resume(List<ResumeRequest> requests) {
+    if (requests == null || requests.isEmpty()) {
+      return;
+    }
+
+    Set<String> keys = new Set<String>();
+    Set<Id> ids = new Set<Id>();
+    for (ResumeRequest req : requests) {
+      if (req.instanceId != null) {
+        ids.add(req.instanceId);
+      } else if (String.isNotBlank(req.correlationKey)) {
+        keys.add(req.correlationKey);
+      }
+    }
+
+    List<Workflow_Instance__c> instances = [
+      SELECT Id, Workflow_Name__c, Current_Step__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE
+        (Id IN :ids
+        OR Correlation_Key__c IN :keys)
+        AND Status__c = 'Suspended'
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+
+    Map<Id, Workflow_Instance__c> instById = new Map<Id, Workflow_Instance__c>();
+    Map<String, Workflow_Instance__c> instByKey = new Map<String, Workflow_Instance__c>();
+    for (Workflow_Instance__c inst : instances) {
+      instById.put(inst.Id, inst);
+      if (String.isNotBlank(inst.Correlation_Key__c)) {
+        instByKey.put(inst.Correlation_Key__c, inst);
+      }
+    }
+
+    // Verify that we found a suspended instance for every request
+    for (ResumeRequest req : requests) {
+      Workflow_Instance__c inst = null;
+      if (req.instanceId != null) {
+        inst = instById.get(req.instanceId);
+      } else if (String.isNotBlank(req.correlationKey)) {
+        inst = instByKey.get(req.correlationKey);
+      }
+      if (inst == null) {
+        throw new WorkflowException(
+          'No suspended workflow found with key or ID: ' +
+          (req.instanceId != null
+            ? (String) req.instanceId
+            : req.correlationKey)
+        );
+      }
+    }
+
+    // Gathers active step execution logs for the instances in bulk
+    Set<Id> activeInstIds = instById.keySet();
+    List<Workflow_Step_Execution__c> allActiveSteps = [
+      SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :activeInstIds
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+
+    Map<Id, Workflow_Step_Execution__c> latestStepByInstanceId = new Map<Id, Workflow_Step_Execution__c>();
+    for (Workflow_Step_Execution__c step : allActiveSteps) {
+      if (!latestStepByInstanceId.containsKey(step.Workflow_Instance__c)) {
+        Workflow_Instance__c inst = instById.get(step.Workflow_Instance__c);
+        if (inst != null && String.isNotBlank(inst.Current_Step__c)) {
+          Boolean stepMatches = false;
+          if (inst.Current_Step__c.contains(',')) {
+            for (String pStep : inst.Current_Step__c.split(',')) {
+              if (pStep.trim() == step.Step_Name__c) {
+                stepMatches = true;
+                break;
+              }
+            }
+          } else if (inst.Current_Step__c == step.Step_Name__c) {
+            stepMatches = true;
+          }
+          if (stepMatches) {
+            latestStepByInstanceId.put(step.Workflow_Instance__c, step);
+          }
+        }
+      }
+    }
+
+    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+    List<Workflow_Step_Execution__c> stepsToUpdate = new List<Workflow_Step_Execution__c>();
+
+    for (ResumeRequest req : requests) {
+      Workflow_Instance__c inst = null;
+      if (req.instanceId != null) {
+        inst = instById.get(req.instanceId);
+      } else if (String.isNotBlank(req.correlationKey)) {
+        inst = instByKey.get(req.correlationKey);
+      }
+
+      if (inst != null) {
+        inst.Status__c = 'Running';
+        instancesToUpdate.add(inst);
+
+        Workflow_Step_Execution__c stepExec = latestStepByInstanceId.get(
+          inst.Id
+        );
+        if (stepExec != null) {
+          stepExec.Status__c = 'Running';
+          stepExec.Output__c = savePayloadIfNeeded(
+            inst.Id,
+            req.payload,
+            'Resume_' + stepExec.Id
+          );
+          stepsToUpdate.add(stepExec);
+        }
+      }
+    }
+
+    update as system instancesToUpdate;
+    if (!stepsToUpdate.isEmpty()) {
+      update as system stepsToUpdate;
+    }
+
+    scheduleTimeoutJobsForInstances(instancesToUpdate);
+
+    List<Id> instanceIds = new List<Id>();
+    for (Workflow_Instance__c inst : instancesToUpdate) {
+      instanceIds.add(inst.Id);
+    }
+    enqueueOrchestrators(instanceIds);
   }
 
   /**
@@ -1670,6 +1831,144 @@ public inherited sharing class WorkflowEngine {
         }
       }
     }
+  }
+
+  /**
+   * Sends external signals to multiple workflow instances in bulk.
+   */
+  public static void signal(List<SignalRequest> requests) {
+    if (requests == null || requests.isEmpty()) {
+      return;
+    }
+
+    Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
+    Set<Id> ids = new Set<Id>();
+    Set<String> keys = new Set<String>();
+
+    for (SignalRequest req : requests) {
+      if (String.isNotBlank(req.keyOrId)) {
+        if (idPattern.matcher(req.keyOrId).matches()) {
+          try {
+            ids.add((Id) req.keyOrId);
+          } catch (Exception ex) {
+            keys.add(req.keyOrId);
+          }
+        } else {
+          keys.add(req.keyOrId);
+        }
+      }
+    }
+
+    List<Workflow_Instance__c> instances = [
+      SELECT
+        Id,
+        Status__c,
+        Correlation_Key__c,
+        Current_Step__c,
+        Compensation_Stack__c
+      FROM Workflow_Instance__c
+      WHERE
+        (Id IN :ids
+        OR Correlation_Key__c IN :keys)
+        AND Status__c IN ('Pending', 'Running', 'Suspended')
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+
+    Map<Id, Workflow_Instance__c> instById = new Map<Id, Workflow_Instance__c>();
+    Map<String, Workflow_Instance__c> instByKey = new Map<String, Workflow_Instance__c>();
+    for (Workflow_Instance__c inst : instances) {
+      instById.put(inst.Id, inst);
+      if (String.isNotBlank(inst.Correlation_Key__c)) {
+        instByKey.put(inst.Correlation_Key__c, inst);
+      }
+    }
+
+    // Verify that we found an active instance for every request, or throw
+    for (SignalRequest req : requests) {
+      Workflow_Instance__c inst = null;
+      if (idPattern.matcher(req.keyOrId).matches()) {
+        inst = instById.get((Id) req.keyOrId);
+      } else {
+        inst = instByKey.get(req.keyOrId);
+      }
+      if (inst == null) {
+        throw new WorkflowException(
+          'No active workflow found with key or ID: ' + req.keyOrId
+        );
+      }
+    }
+
+    List<Workflow_Signal__c> signalsToInsert = new List<Workflow_Signal__c>();
+    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+    List<Workflow_Instance__c> activeInstances = new List<Workflow_Instance__c>();
+
+    for (SignalRequest req : requests) {
+      Workflow_Instance__c inst = null;
+      if (idPattern.matcher(req.keyOrId).matches()) {
+        inst = instById.get((Id) req.keyOrId);
+      } else {
+        inst = instByKey.get(req.keyOrId);
+      }
+
+      if (inst != null) {
+        if (
+          req.signalName.equalsIgnoreCase('Cancel') ||
+          req.signalName.equalsIgnoreCase('CancelWorkflow')
+        ) {
+          Boolean runCompensations = true;
+          if (String.isNotBlank(req.payload)) {
+            try {
+              Map<String, Object> params = (Map<String, Object>) JSON.deserializeUntyped(
+                req.payload
+              );
+              if (params.containsKey('runCompensations')) {
+                runCompensations = (Boolean) params.get('runCompensations');
+              }
+            } catch (Exception e) {
+              // Ignore and use default
+            }
+          }
+          cancel(inst.Id, runCompensations);
+          continue;
+        }
+
+        // Insert the signal record
+        Workflow_Signal__c sig = new Workflow_Signal__c();
+        sig.Workflow_Instance__c = inst.Id;
+        sig.Signal_Name__c = req.signalName;
+        sig.Payload__c = req.payload;
+        sig.Status__c = 'Received';
+        signalsToInsert.add(sig);
+
+        // If the workflow is suspended or running, resume/orchestrate it
+        if (inst.Status__c == 'Suspended' || inst.Status__c == 'Running') {
+          if (inst.Status__c == 'Suspended') {
+            inst.Status__c = 'Running';
+            instancesToUpdate.add(inst);
+          }
+          activeInstances.add(inst);
+        }
+      }
+    }
+
+    if (!signalsToInsert.isEmpty()) {
+      insert as system signalsToInsert;
+    }
+    if (!instancesToUpdate.isEmpty()) {
+      update as system instancesToUpdate;
+    }
+
+    scheduleTimeoutJobsForInstances(activeInstances);
+
+    List<Id> instanceIdsToEnqueue = new List<Id>();
+    for (Workflow_Instance__c inst : activeInstances) {
+      if (!enqueuedInstanceIds.contains(inst.Id)) {
+        enqueuedInstanceIds.add(inst.Id);
+        instanceIdsToEnqueue.add(inst.Id);
+      }
+    }
+    enqueueOrchestrators(instanceIdsToEnqueue);
   }
 
   /**

@@ -2540,4 +2540,107 @@ public class WorkflowEngineTest {
       );
     }
   }
+
+  @isTest
+  static void testBulkResume() {
+    // 1. Create suspended workflow instances
+    List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < 5; i++) {
+      instances.add(
+        new Workflow_Instance__c(
+          Workflow_Name__c = 'WorkflowEngineTest.SuspendingWorkflow',
+          Status__c = 'Suspended',
+          Correlation_Key__c = 'BulkResumeKey_' + i,
+          Current_Step__c = 'WorkflowEngineTest.SuspendingStep'
+        )
+      );
+    }
+    insert instances;
+
+    // Insert active step executions for them
+    List<Workflow_Step_Execution__c> stepExecs = new List<Workflow_Step_Execution__c>();
+    for (Workflow_Instance__c inst : instances) {
+      stepExecs.add(
+        new Workflow_Step_Execution__c(
+          Workflow_Instance__c = inst.Id,
+          Step_Name__c = 'WorkflowEngineTest.SuspendingStep',
+          Status__c = 'Pending',
+          Retry_Count__c = 0
+        )
+      );
+    }
+    insert stepExecs;
+
+    // 2. Publish RESUME events
+    List<Workflow_Event__e> events = new List<Workflow_Event__e>();
+    for (Integer i = 0; i < 5; i++) {
+      events.add(
+        new Workflow_Event__e(
+          Workflow_Instance_Id__c = 'BulkResumeKey_' + i,
+          Event_Type__c = 'RESUME',
+          Payload__c = 'ResumeData_' + i
+        )
+      );
+    }
+
+    Test.startTest();
+    EventBus.publish(events);
+    Test.getEventBus().deliver(); // Executes WorkflowEventTrigger which resumes all in bulk
+    Test.stopTest();
+
+    List<Workflow_Instance__c> updatedInstances = [
+      SELECT Id, Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :instances
+    ];
+    for (Workflow_Instance__c inst : updatedInstances) {
+      System.assertEquals('Running', inst.Status__c);
+      System.assertEquals('WorkflowEngineTest.AfterSuspendStep', inst.Current_Step__c);
+    }
+  }
+
+  @isTest
+  static void testBulkSignal() {
+    // 1. Start workflows that block on signals
+    List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < 5; i++) {
+      instances.add(
+        new Workflow_Instance__c(
+          Workflow_Name__c = 'WorkflowEngineTest.SignaledWorkflow',
+          Status__c = 'Suspended',
+          Correlation_Key__c = 'BulkSignalKey_' + i,
+          Current_Step__c = 'WorkflowEngineTest.SignaledStep'
+        )
+      );
+    }
+    insert instances;
+
+    // 2. Send SIGNAL platform events
+    List<Workflow_Event__e> events = new List<Workflow_Event__e>();
+    for (Integer i = 0; i < 5; i++) {
+      events.add(
+        new Workflow_Event__e(
+          Workflow_Instance_Id__c = 'BulkSignalKey_' + i,
+          Event_Type__c = 'SIGNAL:PaymentReceived',
+          Payload__c = '{"amount": ' + (100 + i) + '}'
+        )
+      );
+    }
+
+    Test.startTest();
+    EventBus.publish(events);
+    Test.getEventBus().deliver(); // Trigger runs, inserts Workflow_Signal__c in bulk, sets to Running
+    Test.stopTest();
+
+    List<Workflow_Signal__c> signals = [
+      SELECT Id, Signal_Name__c, Payload__c, Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Workflow_Instance__c IN :instances
+    ];
+    System.assertEquals(5, signals.size());
+    for (Workflow_Signal__c sig : signals) {
+      System.assertEquals('PaymentReceived', sig.Signal_Name__c);
+      System.assertEquals('Consumed', sig.Status__c);
+    }
+  }
 }
