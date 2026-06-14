@@ -96,6 +96,7 @@ public inherited sharing class RateLimiter {
           ];
           if (!existingStates.isEmpty()) {
             state = existingStates[0];
+            now = System.currentTimeMillis();
           } else {
             throw e;
           }
@@ -109,6 +110,7 @@ public inherited sharing class RateLimiter {
 
     // 3. Compute Refill based on elapsed time
     Decimal elapsed = (Decimal) (now - state.Last_Refill_Time_Ms__c) / 1000.0;
+    elapsed = (elapsed < 0.0) ? 0.0 : elapsed;
     Decimal calculatedTokens =
       state.Tokens_Remaining__c + (elapsed * config.Refill_Rate_Per_Second__c);
     Decimal currentTokens = Math.min(config.Capacity__c, calculatedTokens);

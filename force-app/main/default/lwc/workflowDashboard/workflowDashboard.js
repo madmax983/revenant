@@ -295,9 +295,13 @@ export default class WorkflowDashboard extends LightningElement {
         if (showSpinner) {
             this.loadingDetails = true;
         }
+        const currentInstanceId = this.selectedInstanceId;
         this.successor = null;
-        getInstanceDetails({ instanceId: this.selectedInstanceId })
+        getInstanceDetails({ instanceId: currentInstanceId })
             .then(result => {
+                if (currentInstanceId !== this.selectedInstanceId) {
+                    return;
+                }
                 const inst = result.instance;
                 this.successor = result.successor;
                 this.selectedInst = {
@@ -373,10 +377,14 @@ export default class WorkflowDashboard extends LightningElement {
                 }
             })
             .catch(error => {
-                this.showToast('Error', 'Failed to retrieve details: ' + error.body.message, 'error');
+                if (currentInstanceId === this.selectedInstanceId) {
+                    this.showToast('Error', 'Failed to retrieve details: ' + error.body.message, 'error');
+                }
             })
             .finally(() => {
-                this.loadingDetails = false;
+                if (currentInstanceId === this.selectedInstanceId) {
+                    this.loadingDetails = false;
+                }
             });
     }
 
@@ -415,6 +423,9 @@ export default class WorkflowDashboard extends LightningElement {
     }
 
     handleExecuteWorkflow() {
+        if (this.executingLaunch) {
+            return;
+        }
         this.launchError = '';
         if (!this.launchName) {
             this.launchError = 'Please select a Workflow Definition.';

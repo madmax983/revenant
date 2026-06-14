@@ -15,29 +15,33 @@ public inherited sharing class WorkflowAlertManager {
    * Inspects configuration and thresholds, and sends an email alert if needed.
    */
   public static void sendAlert(Workflow_Instance__c instance, String errorMsg) {
-    String workflowName = instance.Workflow_Name__c;
-    if (String.isBlank(workflowName)) {
-      return;
-    }
+    try {
+      String workflowName = instance.Workflow_Name__c;
+      if (String.isBlank(workflowName)) {
+        return;
+      }
 
-    // 1. Resolve Config
-    Workflow_Alert_Config__mdt config = getAlertConfig(workflowName);
-    if (
-      config == null ||
-      !config.Enable_Alerts__c ||
-      String.isBlank(config.Email_Recipients__c)
-    ) {
-      return;
-    }
+      // 1. Resolve Config
+      Workflow_Alert_Config__mdt config = getAlertConfig(workflowName);
+      if (
+        config == null ||
+        !config.Enable_Alerts__c ||
+        String.isBlank(config.Email_Recipients__c)
+      ) {
+        return;
+      }
 
-    // 2. Evaluate Thresholds
-    Boolean isThresholdMet = evaluateThresholds(workflowName, config);
-    if (!isThresholdMet) {
-      return;
-    }
+      // 2. Evaluate Thresholds
+      Boolean isThresholdMet = evaluateThresholds(workflowName, config);
+      if (!isThresholdMet) {
+        return;
+      }
 
-    // 3. Dispatch Alert
-    dispatchEmail(instance, config.Email_Recipients__c, errorMsg);
+      // 3. Dispatch Alert
+      dispatchEmail(instance, config.Email_Recipients__c, errorMsg);
+    } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Alert dispatch failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+    }
   }
 
   private static Workflow_Alert_Config__mdt getAlertConfig(
@@ -155,7 +159,7 @@ public inherited sharing class WorkflowAlertManager {
           AND (Status__c = 'Failed'
           OR Status__c = 'Compensated'
           OR Status__c = 'Cancelled')
-          AND LastModifiedDate >= :windowStart
+          AND Terminal_At__c >= :windowStart
         WITH SYSTEM_MODE
       ];
 

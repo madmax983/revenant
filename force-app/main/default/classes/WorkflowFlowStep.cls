@@ -13,6 +13,10 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
       );
     }
 
+    if (inputMap == null) {
+      throw new WorkflowEngine.WorkflowException('Input must be a valid JSON object');
+    }
+
     if (!inputMap.containsKey('flowName')) {
       throw new WorkflowEngine.WorkflowException('flowName is required in input');
     }

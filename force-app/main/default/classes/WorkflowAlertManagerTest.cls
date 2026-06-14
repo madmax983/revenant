@@ -591,7 +591,7 @@ public class WorkflowAlertManagerTest {
   }
 
   @isTest
-  static void testSlidingWindowUsesLastModifiedDate() {
+  static void testSlidingWindowUsesTerminalAtDate() {
     WorkflowAlertManager.mockConfigs.clear();
     WorkflowAlertManager.mockConfigs.put(
       'WorkflowEngineTest_HappyWorkflow',
@@ -632,7 +632,67 @@ public class WorkflowAlertManagerTest {
     System.assertEquals(
       1,
       WorkflowAlertManager.sentEmailsCount,
-      'Alert should be sent because LastModifiedDate is within the window'
+      'Alert should be sent because Terminal_At__c is within the window'
     );
+  }
+
+  @isTest
+  static void testSlidingWindowExcludesStaleModifiedDates() {
+    WorkflowAlertManager.mockConfigs.clear();
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockConfig(
+        'WorkflowEngineTest_HappyWorkflow',
+        'test@example.com',
+        true,
+        null,
+        1,
+        10
+      )
+    );
+    WorkflowAlertManager.sentEmailsCount = 0;
+
+    String wfName = 'WorkflowEngineTest.HappyWorkflow';
+
+    // Insert an already Failed instance
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed'
+    );
+    insert as system inst; // sets Terminal_At__c = System.now()
+
+    // Manually push Terminal_At__c back by 20 minutes (outside the 10 minute window)
+    inst.Terminal_At__c = Datetime.now().addMinutes(-20);
+    update as system inst;
+
+    // Verify it is not counted in the window now
+    Workflow_Instance__c queriedInst = [
+      SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+      WITH SYSTEM_MODE
+    ];
+
+    Test.startTest();
+    WorkflowAlertManager.sendAlert(queriedInst, 'Alert triggered by a later update');
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      WorkflowAlertManager.sentEmailsCount,
+      'No alert should be sent because the terminal failure timestamp is outside the window, despite the recent update'
+    );
+  }
+
+  @isTest
+  static void testSendAlertBestEffortIsolation() {
+    Test.startTest();
+    try {
+      WorkflowAlertManager.sendAlert(null, 'Some error');
+      System.assert(true, 'Null pointer exception should be caught inside sendAlert');
+    } catch (Exception ex) {
+      System.assert(false, 'Should have caught all exceptions in sendAlert, but got: ' + ex.getMessage());
+    }
+    Test.stopTest();
   }
 }

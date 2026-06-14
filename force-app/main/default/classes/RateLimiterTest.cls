@@ -122,11 +122,13 @@ public class RateLimiterTest {
     );
     RateLimiter.mockConfigs.put('ConcurrencyService', mockConfig);
 
-    // 2. Pre-insert a state record representing the concurrent transaction that already won the race
+    // 2. Pre-insert a state record representing the concurrent transaction that already won the race.
+    // Set Last_Refill_Time_Ms__c to 1 second in the future to verify that duplicate-insert recovery
+    // handles clocks/race-times without producing negative elapsed calculations.
     Rate_Limit_State__c existingState = new Rate_Limit_State__c(
       Integration_Key__c = 'ConcurrencyService',
       Tokens_Remaining__c = 5.0,
-      Last_Refill_Time_Ms__c = System.currentTimeMillis() - 1000 // 1 second ago
+      Last_Refill_Time_Ms__c = System.currentTimeMillis() + 1000 // 1 second in the future
     );
     insert existingState;
 

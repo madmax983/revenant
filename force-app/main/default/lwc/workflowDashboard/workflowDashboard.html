@@ -460,7 +460,7 @@
                     </div>
                     <footer class="slds-modal__footer">
                         <lightning-button label="Cancel" onclick={handleCloseModal} class="slds-m-right_small"></lightning-button>
-                        <lightning-button label="Execute Workflow" variant="brand" onclick={handleExecuteWorkflow} loading={executingLaunch} class="brand-button"></lightning-button>
+                        <lightning-button label="Execute Workflow" variant="brand" onclick={handleExecuteWorkflow} loading={executingLaunch} disabled={executingLaunch} class="brand-button"></lightning-button>
                     </footer>
                 </div>
             </section>

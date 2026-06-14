@@ -53,6 +53,32 @@ public class WorkflowFlowStepTest {
   }
 
   @isTest
+  static void testWorkflowFlowStepNullJsonInput() {
+    WorkflowFlowStep step = new WorkflowFlowStep();
+    StepContext ctx = new StepContext(
+      null,
+      'MyWorkflow',
+      'MyStep',
+      'null',
+      null,
+      null,
+      null
+    );
+
+    Test.startTest();
+    Boolean caught = false;
+    try {
+      step.execute(ctx);
+    } catch (WorkflowEngine.WorkflowException ex) {
+      caught = true;
+      System.assert(ex.getMessage().contains('Input must be a valid JSON object'), 'Exception message should contain "Input must be a valid JSON object", but got: ' + ex.getMessage());
+    }
+    Test.stopTest();
+
+    System.assert(caught, 'Expected WorkflowEngine.WorkflowException to be thrown');
+  }
+
+  @isTest
   static void testWorkflowFlowStepMissingFlowName() {
     WorkflowFlowStep step = new WorkflowFlowStep();
     StepContext ctx = new StepContext(
