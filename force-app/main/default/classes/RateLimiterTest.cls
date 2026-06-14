@@ -73,4 +73,85 @@ public class RateLimiterTest {
     }
     Test.stopTest();
   }
+
+  @isTest
+  static void testRateLimiterInvalidCapacity() {
+    String mockConfigJson = '{"DeveloperName":"InvalidCapacityService","Capacity__c":0.5,"Refill_Rate_Per_Second__c":2.0}';
+    Rate_Limit_Config__mdt mockConfig = (Rate_Limit_Config__mdt) JSON.deserialize(
+      mockConfigJson,
+      Rate_Limit_Config__mdt.class
+    );
+    RateLimiter.mockConfigs.put('InvalidCapacityService', mockConfig);
+
+    Test.startTest();
+    try {
+      RateLimiter.acquire('InvalidCapacityService');
+      System.assert(false, 'Should have thrown WorkflowException due to invalid capacity');
+    } catch (WorkflowEngine.WorkflowException e) {
+      System.assert(e.getMessage().contains('Capacity__c must be at least 1.0'), 'Message: ' + e.getMessage());
+    }
+    Test.stopTest();
+  }
+
+  @isTest
+  static void testRateLimiterInvalidRefillRate() {
+    String mockConfigJson = '{"DeveloperName":"InvalidRefillService","Capacity__c":5.0,"Refill_Rate_Per_Second__c":0.0}';
+    Rate_Limit_Config__mdt mockConfig = (Rate_Limit_Config__mdt) JSON.deserialize(
+      mockConfigJson,
+      Rate_Limit_Config__mdt.class
+    );
+    RateLimiter.mockConfigs.put('InvalidRefillService', mockConfig);
+
+    Test.startTest();
+    try {
+      RateLimiter.acquire('InvalidRefillService');
+      System.assert(false, 'Should have thrown WorkflowException due to invalid refill rate');
+    } catch (WorkflowEngine.WorkflowException e) {
+      System.assert(e.getMessage().contains('Refill_Rate_Per_Second__c must be greater than 0.0'), 'Message: ' + e.getMessage());
+    }
+    Test.stopTest();
+  }
+
+  @isTest
+  static void testRateLimiterColdStartConcurrency() {
+    // 1. Setup valid config
+    String mockConfigJson = '{"DeveloperName":"ConcurrencyService","Capacity__c":5.0,"Refill_Rate_Per_Second__c":2.0}';
+    Rate_Limit_Config__mdt mockConfig = (Rate_Limit_Config__mdt) JSON.deserialize(
+      mockConfigJson,
+      Rate_Limit_Config__mdt.class
+    );
+    RateLimiter.mockConfigs.put('ConcurrencyService', mockConfig);
+
+    // 2. Pre-insert a state record representing the concurrent transaction that already won the race
+    Rate_Limit_State__c existingState = new Rate_Limit_State__c(
+      Integration_Key__c = 'ConcurrencyService',
+      Tokens_Remaining__c = 5.0,
+      Last_Refill_Time_Ms__c = System.currentTimeMillis() - 1000 // 1 second ago
+    );
+    insert existingState;
+
+    // 3. Set the simulation flag to force the query to return empty and attempt insert
+    RateLimiter.simulateDuplicateOnInsert = true;
+
+    Test.startTest();
+    // 4. Call acquire. This should:
+    //    - Pretend states list is empty
+    //    - Attempt to insert new Rate_Limit_State__c
+    //    - Fail with DUPLICATE_VALUE DmlException
+    //    - Catch it, re-query the existing record, lock it, and successfully consume a token
+    RateLimiter.AcquireResult res = RateLimiter.acquire('ConcurrencyService');
+    Test.stopTest();
+
+    System.assert(res.isAllowed, 'Should be allowed after recovering from concurrency');
+    
+    // Verify the pre-inserted record was updated (tokens reduced by 1.0 plus any refill)
+    Rate_Limit_State__c updatedState = [
+      SELECT Tokens_Remaining__c
+      FROM Rate_Limit_State__c
+      WHERE Integration_Key__c = 'ConcurrencyService'
+    ];
+    // Original: 5.0. 1 second elapsed -> 2.0 refilled -> capped at Capacity (5.0).
+    // Consumed 1.0 -> should be 4.0 remaining.
+    System.assertEquals(4.0, updatedState.Tokens_Remaining__c);
+  }
 }

@@ -3,6 +3,9 @@ public inherited sharing class RateLimiter {
   @TestVisible
   private static Map<String, Rate_Limit_Config__mdt> mockConfigs = new Map<String, Rate_Limit_Config__mdt>();
 
+  @TestVisible
+  private static Boolean simulateDuplicateOnInsert = false;
+
   public class AcquireResult {
     public Boolean isAllowed { get; private set; }
     public Integer sleepDurationSeconds { get; private set; }
@@ -37,14 +40,31 @@ public inherited sharing class RateLimiter {
       config = configs[0];
     }
 
+    // Validate Config
+    if (config.Capacity__c < 1.0) {
+      throw new WorkflowEngine.WorkflowException(
+        'Capacity__c must be at least 1.0'
+      );
+    }
+    if (config.Refill_Rate_Per_Second__c <= 0.0) {
+      throw new WorkflowEngine.WorkflowException(
+        'Refill_Rate_Per_Second__c must be greater than 0.0'
+      );
+    }
+
     // 2. Query and Lock State Record
-    List<Rate_Limit_State__c> states = [
-      SELECT Tokens_Remaining__c, Last_Refill_Time_Ms__c
-      FROM Rate_Limit_State__c
-      WHERE Integration_Key__c = :integrationKey
-      WITH SYSTEM_MODE
-      FOR UPDATE
-    ];
+    List<Rate_Limit_State__c> states;
+    if (Test.isRunningTest() && simulateDuplicateOnInsert) {
+      states = new List<Rate_Limit_State__c>();
+    } else {
+      states = [
+        SELECT Tokens_Remaining__c, Last_Refill_Time_Ms__c
+        FROM Rate_Limit_State__c
+        WHERE Integration_Key__c = :integrationKey
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ];
+    }
 
     Rate_Limit_State__c state;
     Long now = System.currentTimeMillis();
@@ -56,7 +76,33 @@ public inherited sharing class RateLimiter {
         Tokens_Remaining__c = config.Capacity__c,
         Last_Refill_Time_Ms__c = now
       );
-      insert as system state;
+      try {
+        insert as system state;
+      } catch (DmlException e) {
+        Boolean isDuplicate = false;
+        for (Integer i = 0; i < e.getNumDml(); i++) {
+          if (e.getDmlType(i) == StatusCode.DUPLICATE_VALUE) {
+            isDuplicate = true;
+            break;
+          }
+        }
+        if (isDuplicate || e.getMessage().contains('DUPLICATE_VALUE')) {
+          List<Rate_Limit_State__c> existingStates = [
+            SELECT Tokens_Remaining__c, Last_Refill_Time_Ms__c
+            FROM Rate_Limit_State__c
+            WHERE Integration_Key__c = :integrationKey
+            WITH SYSTEM_MODE
+            FOR UPDATE
+          ];
+          if (!existingStates.isEmpty()) {
+            state = existingStates[0];
+          } else {
+            throw e;
+          }
+        } else {
+          throw e;
+        }
+      }
     } else {
       state = states[0];
     }
