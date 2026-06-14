@@ -208,26 +208,33 @@ To clean up timed-out steps and resume suspended/sleeping instances in productio
 > [!IMPORTANT]
 > **Resolution & Precision Constraints**: The precision of step timeouts, sleep steps, and retry backoffs is strictly bounded by the frequency of the watchdog poller's execution. For example, if the watchdog runs every 5 minutes, a 10-second sleep or a 30-second timeout will only be resolved when the next heartbeat fires (resulting in up to a 5-minute latency). Configure your scheduling frequency accordingly to match your workflow latency requirements.
 
-Because the Salesforce Declarative Scheduler UI only supports hourly increments, you can schedule it at sub-hour intervals (such as every minute or every 5 minutes) via Anonymous Apex using the Cron Trigger API:
+Because the Salesforce Declarative Scheduler UI only supports hourly increments, you can schedule it at sub-hour intervals (such as every minute, every 5 minutes, or every 15 seconds) via Anonymous Apex using the Cron Trigger API:
 
+### Every Minute (Consumes 1 Scheduled Job slot)
+You can schedule a single job to run at second 0 of every minute:
 ```apex
-// Schedule the watchdog to run every minute
-for (Integer i = 0; i < 60; i++) {
-    String jobName = 'Revenant_Watchdog_Min_' + String.valueOf(i).leftPad(2, '0');
-    String cronExpression = '0 ' + i + ' * * * ?';
-    System.schedule(jobName, cronExpression, new WorkflowWatchdog());
-}
+System.schedule('Revenant_Watchdog_1Min', '0 * * * * ?', new WorkflowWatchdog());
 ```
 
-If 5-minute precision is sufficient, you can schedule fewer jobs to conserve cron slots:
-
+### Every 5 Minutes (Consumes 1 Scheduled Job slot)
+You can use the `/` increment operator to run a single job every 5 minutes:
 ```apex
-// Schedule the watchdog to run every 5 minutes
-for (Integer i = 0; i < 60; i += 5) {
-    String jobName = 'Revenant_Watchdog_5Min_' + String.valueOf(i).leftPad(2, '0');
-    String cronExpression = '0 ' + i + ' * * * ?';
-    System.schedule(jobName, cronExpression, new WorkflowWatchdog());
-}
+System.schedule('Revenant_Watchdog_5Min', '0 0/5 * * * ?', new WorkflowWatchdog());
+```
+
+### Every 15 Seconds (Consumes 4 Scheduled Job slots)
+Because Salesforce cron expressions do not support lists or increments in the seconds field, running at sub-minute intervals requires scheduling multiple offset jobs (each running every minute at a different second offset):
+```apex
+System.schedule('Revenant_Watchdog_15s_00', '0 * * * * ?', new WorkflowWatchdog());
+```
+```apex
+System.schedule('Revenant_Watchdog_15s_15', '15 * * * * ?', new WorkflowWatchdog());
+```
+```apex
+System.schedule('Revenant_Watchdog_15s_30', '30 * * * * ?', new WorkflowWatchdog());
+```
+```apex
+System.schedule('Revenant_Watchdog_15s_45', '45 * * * * ?', new WorkflowWatchdog());
 ```
 
 ---
