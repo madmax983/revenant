@@ -48,6 +48,24 @@ public class IdempotentChargeWorkflowExampleTest {
       'The first attempt should have recorded a charge id'
     );
 
+    // The requested amount (4200) must survive the JSON round-trip rather than
+    // silently falling back to the default; guards the numeric-cast handling.
+    Workflow_Step_Execution__c firstExec = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = :stepName
+        AND Status__c = 'Completed'
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    System.assert(
+      firstExec.Output__c.contains('"amountCents":4200'),
+      'The charged amount should be the requested 4200, not the default: ' +
+      firstExec.Output__c
+    );
+
     // Now force three more re-executions of the SAME logical (instance, step),
     // standing in for: a transient retry, an operator re-drive (#1), and a
     // duplicate at-least-once Workflow_Event__e resume. Each writes a NEW

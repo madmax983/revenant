@@ -41,8 +41,20 @@ public inherited sharing class IdempotentChargeWorkflowExample {
           Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
             ctx.workflowInputJson
           );
-          if (input.containsKey('amountCents')) {
-            amountCents = (Integer) input.get('amountCents');
+          if (input.get('amountCents') != null) {
+            // JSON.deserializeUntyped boxes numbers as Integer/Long/Decimal/Double
+            // depending on the value, so a direct (Integer) cast can throw. Handle
+            // each numeric type so the requested amount is preserved.
+            Object amountObj = input.get('amountCents');
+            if (amountObj instanceof Integer) {
+              amountCents = (Integer) amountObj;
+            } else if (amountObj instanceof Long) {
+              amountCents = ((Long) amountObj).intValue();
+            } else if (amountObj instanceof Decimal) {
+              amountCents = ((Decimal) amountObj).intValue();
+            } else if (amountObj instanceof Double) {
+              amountCents = ((Double) amountObj).intValue();
+            }
           }
         } catch (Exception ex) {
           // Fall back to the default amount.
