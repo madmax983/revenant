@@ -102,6 +102,28 @@
         <readable>true</readable>
     </fieldPermissions>
 
+    <!-- fieldPermissions for Workflow_Lifecycle__e subscribers (excluding required fields) -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Lifecycle__e.Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Lifecycle__e.Failure_Detail__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Lifecycle__e.Is_Success__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Lifecycle__e.Workflow_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
     <hasActivationRequired>false</hasActivationRequired>
     <label>Revenant Admin</label>
 
@@ -113,6 +135,17 @@
         <modifyAllRecords>true</modifyAllRecords>
         <object>Workflow_Instance__c</object>
         <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <!-- Publish (create) and subscribe (read) access for the outbound lifecycle event -->
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Lifecycle__e</object>
+        <viewAllRecords>false</viewAllRecords>
     </objectPermissions>
 
     <objectPermissions>

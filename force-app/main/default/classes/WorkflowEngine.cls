@@ -1126,11 +1126,13 @@ public inherited sharing class WorkflowEngine {
           instance.Current_Step__c = null;
           update as system instance;
 
+          // Notify parent completion if this is a child workflow. This publishes
+          // the load-bearing Workflow_Event__e, so it must run BEFORE the
+          // best-effort lifecycle publish to keep first claim on DML budget.
+          notifyParentCompletion(instance);
+
           // Fire-and-forget outbound lifecycle event on terminal transition.
           WorkflowLifecyclePublisher.publish(instance);
-
-          // Notify parent completion if this is a child workflow
-          notifyParentCompletion(instance);
           return;
         }
 
@@ -1245,10 +1247,12 @@ public inherited sharing class WorkflowEngine {
         instance.Current_Step__c = null;
         update as system instance;
 
+        // Parent notification publishes the load-bearing Workflow_Event__e, so it
+        // runs BEFORE the best-effort lifecycle publish (first claim on DML budget).
+        notifyParentCompletion(instance);
+
         // Fire-and-forget outbound lifecycle event on terminal transition.
         WorkflowLifecyclePublisher.publish(instance);
-
-        notifyParentCompletion(instance);
         return;
       }
 
@@ -2480,10 +2484,6 @@ public inherited sharing class WorkflowEngine {
       }
       update as system instance;
 
-      // Fire-and-forget outbound lifecycle event; only fires once the stack is
-      // drained and the instance has reached Compensated/Cancelled.
-      WorkflowLifecyclePublisher.publish(instance);
-
       if (!stack.isEmpty()) {
         scheduleTimeoutJobForInstance(instance.Id);
       }
@@ -2495,6 +2495,11 @@ public inherited sharing class WorkflowEngine {
       } else {
         enqueueOrchestrator(instance.Id, null);
       }
+
+      // Fire-and-forget outbound lifecycle event; only fires once the stack is
+      // drained and the instance has reached Compensated/Cancelled. Runs LAST so
+      // the load-bearing orchestrator enqueue above keeps first claim on DML budget.
+      WorkflowLifecyclePublisher.publish(instance);
     } else if (result.action == StepResult.ActionType.YIELD) {
       stepExec.Status__c = 'Running';
       stepExec.Output__c = savePayloadIfNeeded(
@@ -3199,10 +3204,6 @@ public inherited sharing class WorkflowEngine {
         WorkflowAlertManager.sendAlert(parent, parent.Error_Message__c);
       }
 
-      // Fire-and-forget outbound lifecycle events; only the parents transitioned
-      // to a terminal state (Failed) emit — Compensating parents are skipped.
-      WorkflowLifecyclePublisher.publish(instancesToUpdate.values());
-
       if (!orchestratorInstanceIds.isEmpty()) {
         if (Test.isRunningTest() && disableQueueableInTest) {
           // Do nothing
@@ -3210,6 +3211,11 @@ public inherited sharing class WorkflowEngine {
           enqueueOrchestrators(orchestratorInstanceIds);
         }
       }
+
+      // Fire-and-forget outbound lifecycle events; only the parents transitioned
+      // to a terminal state (Failed) emit — Compensating parents are skipped. Runs
+      // LAST so the load-bearing orchestrator enqueue keeps first claim on DML budget.
+      WorkflowLifecyclePublisher.publish(instancesToUpdate.values());
     }
 
     // 2. Process Sleep Resumptions (bounded per heartbeat; backlog drains on subsequent
