@@ -31,6 +31,40 @@ public class WorkflowInvocableActionsTest {
   }
 
   @isTest
+  static void testStartWorkflowInvocableDuplicateDoesNotFault() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Pre-existing active instance for the key
+    Id existingId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'InvocableDupKey',
+      null
+    );
+
+    WorkflowStartInvocableAction.StartRequest dup = new WorkflowStartInvocableAction.StartRequest();
+    dup.workflowName = 'WorkflowEngineTest.HappyWorkflow';
+    dup.correlationKey = 'InvocableDupKey';
+
+    WorkflowStartInvocableAction.StartRequest fresh = new WorkflowStartInvocableAction.StartRequest();
+    fresh.workflowName = 'WorkflowEngineTest.HappyWorkflow';
+    fresh.correlationKey = 'InvocableFreshKey';
+
+    Test.startTest();
+    List<WorkflowStartInvocableAction.StartResult> results = WorkflowStartInvocableAction.startWorkflow(
+      new List<WorkflowStartInvocableAction.StartRequest>{ dup, fresh }
+    );
+    Test.stopTest();
+
+    System.assertEquals(2, results.size());
+    // Duplicate resolves to existing Id without faulting the Flow
+    System.assertEquals(existingId, results[0].workflowInstanceId);
+    System.assertEquals(false, results[0].isNew);
+    // Sibling unaffected
+    System.assertNotEquals(null, results[1].workflowInstanceId);
+    System.assertEquals(true, results[1].isNew);
+  }
+
+  @isTest
   static void testSignalWorkflowInvocable() {
     // Create active instance
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -89,7 +123,8 @@ public class WorkflowInvocableActionsTest {
     List<Workflow_Instance__c> insts = [
       SELECT Workflow_Name__c, Status__c, Correlation_Key__c, Input__c
       FROM Workflow_Instance__c
-      WHERE Id IN (:results[0].workflowInstanceId, :results[1].workflowInstanceId)
+      WHERE
+        Id IN (:results[0].workflowInstanceId, :results[1].workflowInstanceId)
       ORDER BY Correlation_Key__c ASC
     ];
     System.assertEquals(2, insts.size());
@@ -138,7 +173,13 @@ public class WorkflowInvocableActionsTest {
       ORDER BY Signal_Name__c ASC
     ];
     System.assertEquals(2, signals.size());
-    System.assertEquals('Approve:InvocableApproval1', signals[0].Signal_Name__c);
-    System.assertEquals('Approve:InvocableApproval2', signals[1].Signal_Name__c);
+    System.assertEquals(
+      'Approve:InvocableApproval1',
+      signals[0].Signal_Name__c
+    );
+    System.assertEquals(
+      'Approve:InvocableApproval2',
+      signals[1].Signal_Name__c
+    );
   }
 }

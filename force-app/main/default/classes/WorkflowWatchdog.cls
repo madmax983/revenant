@@ -41,7 +41,8 @@ public inherited sharing class WorkflowWatchdog implements Schedulable {
         SELECT Id
         FROM Workflow_Instance__c
         WHERE
-          (Correlation_Key__c = 'SystemWatchdog' OR Correlation_Key__c LIKE 'SystemWatchdog_run%')
+          (Correlation_Key__c = 'SystemWatchdog'
+          OR Correlation_Key__c LIKE 'SystemWatchdog_run%')
           AND Status__c IN ('Pending', 'Running', 'Suspended')
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC
@@ -49,7 +50,15 @@ public inherited sharing class WorkflowWatchdog implements Schedulable {
       ];
 
       if (latestWatchdogs.isEmpty()) {
-        WorkflowEngine.start('WatchdogWorkflow', 'SystemWatchdog', null);
+        // Active-only start: the watchdog is a self-perpetuating singleton, so a
+        // recent terminal (Failed/Cancelled/ContinuedAsNew) run must never
+        // satisfy the start via the dedup window — otherwise polling stays
+        // offline until the window expires.
+        WorkflowEngine.startSingleton(
+          'WatchdogWorkflow',
+          'SystemWatchdog',
+          null
+        );
       } else {
         Id watchdogId = latestWatchdogs[0].Id;
         Workflow_Instance__c inst = [

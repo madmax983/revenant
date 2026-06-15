@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Dedup_Window_Minutes__c</fullName>
+    <defaultValue>1440</defaultValue>
+    <description>Get-or-start dedup window in minutes. A start with a correlation key matching a recently-terminal instance (Completed/Failed/Compensated/Cancelled/ContinuedAsNew) within this many minutes returns the existing instance Id instead of spawning a duplicate. Active instances are always deduped regardless of this value. Set to 0 (minimum) to preserve active-only behavior.</description>
+    <externalId>false</externalId>
+    <fieldManageability>DeveloperControlled</fieldManageability>
+    <label>Dedup Window Minutes</label>
+    <precision>9</precision>
+    <required>false</required>
+    <scale>0</scale>
+    <type>Number</type>
+</CustomField>
