@@ -168,13 +168,18 @@ Flow Builders interact with the engine through supported Invocable Actions (cate
 - `outputJson` — the workflow output, **fully rehydrated** even when it was offloaded to ContentVersion (>100k); never the raw storage pointer.
 - `errorMessage` — failure detail from `Error_Message__c`.
 
-The action is **strictly read-only** (no transition, enqueue, signal, schedule, or DML), bulk-safe across Flow batch sizes, and — when looked up by Correlation Key — automatically follows a **`ContinuedAsNew`** chain to report the live/terminal successor rather than a stale predecessor.
+The action is **strictly read-only** (no transition, enqueue, signal, schedule, or DML) and bulk-safe across Flow batch sizes. Lookup behavior differs by identifier, which matters for workflows that use `ContinueAsNew`:
+
+- **By Correlation Key** — automatically follows the **`ContinuedAsNew`** chain and reports the live/terminal successor rather than a stale predecessor. **Use the correlation key for outcome polling whenever a workflow may continue-as-new.**
+- **By Instance Id** — reads *that exact instance* and deliberately does **not** follow the chain (an Id is a precise handle). The Id returned by *Start Workflow* points at the original generation, so polling that saved Id on a continue-as-new workflow would keep reading the predecessor and miss the successor's outcome.
+
+> Note: a single read returns the full rehydrated `outputJson` even for offloaded (>100k) payloads. A Flow batch that polls *many* instances whose outputs are *all* large/offloaded materializes them all at once and can approach the Apex heap limit; use smaller batch sizes for that case.
 
 **Reference recipe** — start a workflow, then later branch on its outcome:
 
-1. A record-triggered Flow calls **Start Workflow** (`workflowName`, a stable `correlationKey`, optional `inputJson`) and stores the returned `workflowInstanceId`.
-2. Later (a scheduled Flow, a screen action, or a subsequent automation) calls **Get Workflow Status**, passing that same `correlationKey` (or the saved Id).
-3. A **Decision** element branches on `isSuccess` → success path; on `status = Failed` → surface `errorMessage`; on `found = true` (not yet terminal) → keep waiting; default → not found.
+1. A record-triggered Flow calls **Start Workflow** (`workflowName`, a stable `correlationKey`, optional `inputJson`).
+2. Later (a scheduled Flow, a screen action, or a subsequent automation) calls **Get Workflow Status**, passing that same `correlationKey` (preferred — it resolves continue-as-new chains; the saved Id only reads the original generation).
+3. A **Decision** element branches: `found = false` → not found; `isSuccess = true` → success path; `status = Failed` → surface `errorMessage`; `isTerminal = false` → keep waiting; default → ended without success (e.g. Cancelled/Compensated).
 
 The autolaunched Flow `Revenant_Read_Workflow_Status_Example` (`examples/main/default/flows/`) implements step 2–3 verbatim.
 

@@ -81,15 +81,43 @@
             </value>
         </assignmentItems>
     </assignments>
+    <assignments>
+        <name>Assign_Ended_Other</name>
+        <label>Assign Ended Without Success</label>
+        <locationX>704</locationX>
+        <locationY>458</locationY>
+        <assignmentItems>
+            <assignToReference>branchResult</assignToReference>
+            <operator>Assign</operator>
+            <value>
+                <stringValue>Workflow ended without success (e.g. Cancelled or Compensated).</stringValue>
+            </value>
+        </assignmentItems>
+    </assignments>
     <decisions>
         <name>Branch_On_Outcome</name>
         <label>Branch On Outcome</label>
         <locationX>176</locationX>
         <locationY>326</locationY>
         <defaultConnector>
-            <targetReference>Assign_Not_Found</targetReference>
+            <targetReference>Assign_Ended_Other</targetReference>
         </defaultConnector>
-        <defaultConnectorLabel>Not Found</defaultConnectorLabel>
+        <defaultConnectorLabel>Ended Without Success</defaultConnectorLabel>
+        <rules>
+            <name>Not_Found</name>
+            <conditionLogic>and</conditionLogic>
+            <conditions>
+                <leftValueReference>Get_Workflow_Status.found</leftValueReference>
+                <operator>EqualTo</operator>
+                <rightValue>
+                    <booleanValue>false</booleanValue>
+                </rightValue>
+            </conditions>
+            <connector>
+                <targetReference>Assign_Not_Found</targetReference>
+            </connector>
+            <label>Not Found</label>
+        </rules>
         <rules>
             <name>Succeeded</name>
             <conditionLogic>and</conditionLogic>
@@ -124,10 +152,10 @@
             <name>Still_Running</name>
             <conditionLogic>and</conditionLogic>
             <conditions>
-                <leftValueReference>Get_Workflow_Status.found</leftValueReference>
+                <leftValueReference>Get_Workflow_Status.isTerminal</leftValueReference>
                 <operator>EqualTo</operator>
                 <rightValue>
-                    <booleanValue>true</booleanValue>
+                    <booleanValue>false</booleanValue>
                 </rightValue>
             </conditions>
             <connector>

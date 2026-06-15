@@ -263,6 +263,39 @@ public class WorkflowStatusInvocableActionTest {
   }
 
   @isTest
+  static void testReusedKeyPrefersActiveRunOverTerminalHistory() {
+    // Correlation_Key__c is not unique: an old terminal run and a current active
+    // run can share a key. getStatus must report the live run, not stale history.
+    Workflow_Instance__c oldRun = new Workflow_Instance__c(
+      Workflow_Name__c = 'Test.Workflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'ReuseKey',
+      Output__c = '"stale-output"'
+    );
+    insert oldRun;
+    Workflow_Instance__c currentRun = new Workflow_Instance__c(
+      Workflow_Name__c = 'Test.Workflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'ReuseKey'
+    );
+    insert currentRun;
+
+    Test.startTest();
+    List<WorkflowStatusInvocableAction.StatusResult> results = call('ReuseKey');
+    Test.stopTest();
+
+    WorkflowStatusInvocableAction.StatusResult res = results[0];
+    System.assertEquals(true, res.found);
+    System.assertEquals(
+      currentRun.Id,
+      res.workflowInstanceId,
+      'Should report the live (active) run, not the stale terminal one'
+    );
+    System.assertEquals('Running', res.status);
+    System.assertEquals(false, res.isTerminal);
+  }
+
+  @isTest
   static void testUnknownKeyYieldsNotFound() {
     Test.startTest();
     List<WorkflowStatusInvocableAction.StatusResult> results = call(

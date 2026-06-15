@@ -19,6 +19,17 @@ public inherited sharing class WorkflowStatusInvocableAction {
     'Cancelled'
   };
 
+  // Statuses representing a workflow that is still live (not finished and not a
+  // ContinuedAsNew hand-off). Used to prefer the current run when a non-unique
+  // correlation key maps to several instances.
+  private static final Set<String> ACTIVE_STATUSES = new Set<String>{
+    'Pending',
+    'Running',
+    'Suspended',
+    'Compensating',
+    'Cancelling'
+  };
+
   // Upper bound on ContinuedAsNew links walked forward, bounding SOQL usage so a
   // pathological/cyclic chain cannot exhaust query governor limits.
   @TestVisible
@@ -145,7 +156,8 @@ public inherited sharing class WorkflowStatusInvocableAction {
           Output__c,
           Error_Message__c,
           Correlation_Key__c,
-          Previous_Instance__c
+          Previous_Instance__c,
+          CreatedDate
         FROM Workflow_Instance__c
         WHERE Id IN :lookupIds OR Correlation_Key__c IN :lookupKeys
         WITH SYSTEM_MODE
@@ -155,9 +167,11 @@ public inherited sharing class WorkflowStatusInvocableAction {
           Workflow_Instance__c existing = instByKey.get(
             inst.Correlation_Key__c
           );
-          // When a key maps to several instances (custom-key reuse across a
-          // ContinuedAsNew hand-off), prefer the non-ContinuedAsNew one.
-          if (existing == null || existing.Status__c == 'ContinuedAsNew') {
+          // Correlation_Key__c is not unique: a key can be reused after a run goes
+          // terminal, and a ContinuedAsNew hand-off can reuse a custom key. When a
+          // key maps to several rows, prefer the live run (active status), then the
+          // most recent, so we report the current run rather than stale history.
+          if (existing == null || isPreferredCandidate(inst, existing)) {
             instByKey.put(inst.Correlation_Key__c, inst);
           }
         }
@@ -182,8 +196,16 @@ public inherited sharing class WorkflowStatusInvocableAction {
       walkChain.add(byKey);
     }
 
-    // 4. Forward-walk ContinuedAsNew chains for key-resolved requests. Bulk-safe:
-    //    one SOQL per chain generation, bounded by MAX_CHAIN_DEPTH, never per row.
+    // 4. Forward-walk ContinuedAsNew chains for key-resolved requests whose start
+    //    instance is still a predecessor. Same-key chains are already resolved to
+    //    the live generation by the active/latest preference above; this walk
+    //    covers chains whose successor took a different key (e.g. the default
+    //    `_runN` scheme). Bulk-safe: one SOQL per chain generation, never per row.
+    //    The walk is bounded by MAX_CHAIN_DEPTH because SOQL limits make an
+    //    unbounded link-by-link walk impossible; if a (typically perpetual,
+    //    different-key) chain exceeds the bound we stop on the furthest generation
+    //    reached, which is still a ContinuedAsNew row and is therefore reported as
+    //    non-terminal / non-success -- never as a false completed outcome.
     for (Integer depth = 0; depth < MAX_CHAIN_DEPTH; depth++) {
       Set<Id> predecessorIds = new Set<Id>();
       for (Integer i = 0; i < requests.size(); i++) {
@@ -227,6 +249,12 @@ public inherited sharing class WorkflowStatusInvocableAction {
     }
 
     // 5. Bulk-resolve offloaded outputs in a single ContentVersion query.
+    //    Honoring the contract that outputJson is the full rehydrated payload means
+    //    large (>100k) offloaded outputs are materialized in full, so a Flow batch
+    //    that simultaneously polls many instances whose outputs are all offloaded
+    //    can approach the Apex heap limit. We do not truncate (that would break the
+    //    identical-to-Apex-caller guarantee); callers polling many very large
+    //    outputs at once should use smaller Flow batch sizes.
     Set<Id> attachmentIds = new Set<Id>();
     for (Workflow_Instance__c inst : resolved) {
       if (inst != null) {
@@ -266,6 +294,24 @@ public inherited sharing class WorkflowStatusInvocableAction {
       results.add(res);
     }
     return results;
+  }
+
+  /**
+   * Chooses the better of two instances sharing a correlation key: a live (active)
+   * run wins over a finished/handed-off one; among equals, the most recently
+   * created wins. This keeps getStatus reporting the current run when a key has
+   * been reused across terminal runs or ContinuedAsNew generations.
+   */
+  private static Boolean isPreferredCandidate(
+    Workflow_Instance__c candidate,
+    Workflow_Instance__c existing
+  ) {
+    Boolean candidateActive = ACTIVE_STATUSES.contains(candidate.Status__c);
+    Boolean existingActive = ACTIVE_STATUSES.contains(existing.Status__c);
+    if (candidateActive != existingActive) {
+      return candidateActive;
+    }
+    return candidate.CreatedDate > existing.CreatedDate;
   }
 
   private static Id getAttachmentId(String textValue) {
