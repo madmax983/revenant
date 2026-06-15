@@ -1,4 +1,4 @@
-import { LightningElement, wire } from "lwc";
+﻿﻿import { LightningElement, wire } from "lwc";
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
@@ -206,7 +206,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to retrieve workflow instances: " +
-            (error.body ? error.body.message : error.message),
+          (error.body ? error.body.message : error.message),
           "error",
         );
       })
@@ -511,7 +511,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to load doctor status: " +
-            (error.body ? error.body.message : error.message),
+          (error.body ? error.body.message : error.message),
           "error",
         );
       })
@@ -531,7 +531,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to enqueue watchdog: " +
-            (error.body ? error.body.message : error.message),
+          (error.body ? error.body.message : error.message),
           "error",
         );
         this.loadingDoctor = false;
@@ -571,12 +571,31 @@ export default class WorkflowDashboard extends LightningElement {
 
     // Validate JSON if provided
     if (this.launchInputJson) {
+      let payload = this.launchInputJson;
       try {
-        JSON.parse(this.launchInputJson);
-      } catch (ex) {
-        this.launchError = "Input Payload must be a valid JSON string.";
-        return;
+        JSON.parse(payload);
+      } catch (_) {
+        // First parse failed. Try normalizing common paste artifacts — but only as
+        // a fallback so valid JSON is never rewritten:
+        //   · typographic (“curly”) quotes from Word / macOS autocorrect
+        //   · non-breaking spaces ( ) from Word / Google Docs / some chat
+        //     renderers; they look identical to spaces but are invalid JSON whitespace
+        const normalized = payload
+          .replace(/[\u201C\u201D]/g, '"')
+          .replace(/[\u2018\u2019]/g, "'")
+          .replace(/\u00A0/g, ' ');
+        try {
+          JSON.parse(normalized);
+          payload = normalized;
+        } catch (ex) {
+          this.launchError =
+            "Input Payload must be valid JSON. " +
+            'If you pasted from a chat or document, re-type the quote characters — ' +
+            "“curly quotes” are not valid JSON.";
+          return;
+        }
       }
+      this.launchInputJson = payload;
     }
 
     this.executingLaunch = true;
@@ -668,7 +687,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to count re-drive candidates: " +
-            (error.body ? error.body.message : error.message),
+          (error.body ? error.body.message : error.message),
           "error",
         );
       });
@@ -694,7 +713,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.showToast(
             "Re-drive started",
             `Re-driving ${outcome.eligibleCount} failed instance${outcome.eligibleCount === 1 ? "" : "s"}. ` +
-              "Progress is shown in the detail panel below.",
+            "Progress is shown in the detail panel below.",
             "success",
           );
           this.selectedInstanceId = outcome.redriveInstanceId;
@@ -713,7 +732,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to re-drive matching instances: " +
-            (error.body ? error.body.message : error.message),
+          (error.body ? error.body.message : error.message),
           "error",
         );
       })
@@ -753,7 +772,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to cancel workflow: " +
-            (error.body ? error.body.message : error.message),
+          (error.body ? error.body.message : error.message),
           "error",
         );
       })
@@ -816,7 +835,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to resume workflow: " +
-            (error.body ? error.body.message : error.message),
+          (error.body ? error.body.message : error.message),
           "error",
         );
       })
