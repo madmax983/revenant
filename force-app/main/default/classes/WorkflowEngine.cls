@@ -964,7 +964,8 @@ public inherited sharing class WorkflowEngine {
       resolvePayload(instance.Input__c),
       instance.Definition_Version__c != null
         ? (Integer) instance.Definition_Version__c
-        : 1
+        : 1,
+      loadPendingSignals(instanceId)
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts
@@ -995,7 +996,53 @@ public inherited sharing class WorkflowEngine {
     }
 
     // 6. Handle Step Outcome
-    handleStepResult(instance, stepExec, result);
+    handleStepResult(instance, stepExec, result, context.getConsumedSignalIds());
+  }
+
+  /**
+   * Loads the pending (unconsumed) signals targeting an instance as read-only
+   * StepContext.Signal views, in deterministic arrival order. Cancel control
+   * signals are handled inline by signal() and never persist a Workflow_Signal__c
+   * record, so they are structurally excluded here.
+   */
+  private static List<StepContext.Signal> loadPendingSignals(Id instanceId) {
+    List<StepContext.Signal> signals = new List<StepContext.Signal>();
+    for (Workflow_Signal__c sig : [
+      SELECT Id, Signal_Name__c, Payload__c
+      FROM Workflow_Signal__c
+      WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Received'
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate ASC, Id ASC
+    ]) {
+      signals.add(
+        new StepContext.Signal(sig.Id, sig.Signal_Name__c, sig.Payload__c)
+      );
+    }
+    return signals;
+  }
+
+  /**
+   * Marks the given signal records consumed. Re-queries by id (filtered to those
+   * still Received) so a duplicate consume is a no-op and the append-only audit
+   * is untouched. Invoked only at a step's successful COMPLETE transition.
+   */
+  private static void markSignalsConsumed(Set<Id> signalIds) {
+    if (signalIds == null || signalIds.isEmpty()) {
+      return;
+    }
+    List<Workflow_Signal__c> toConsume = [
+      SELECT Id, Status__c
+      FROM Workflow_Signal__c
+      WHERE Id IN :signalIds AND Status__c = 'Received'
+      WITH SYSTEM_MODE
+    ];
+    if (toConsume.isEmpty()) {
+      return;
+    }
+    for (Workflow_Signal__c sig : toConsume) {
+      sig.Status__c = 'Consumed';
+    }
+    update as system toConsume;
   }
 
   private static void saveStepExec(Workflow_Step_Execution__c stepExec) {
@@ -1009,7 +1056,8 @@ public inherited sharing class WorkflowEngine {
   private static void handleStepResult(
     Workflow_Instance__c instance,
     Workflow_Step_Execution__c stepExec,
-    StepResult result
+    StepResult result,
+    Set<Id> consumedSignalIds
   ) {
     // Re-query to avoid overwriting a timeout or finalizer crash status and race conditions
     Workflow_Instance__c freshInstance = [
@@ -1064,6 +1112,12 @@ public inherited sharing class WorkflowEngine {
         'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
       );
       saveStepExec(stepExec);
+
+      // Tie signal consumption to the step's durable COMPLETE transition: only
+      // now (not on yield/retry/suspend) are the signals this step observed
+      // marked consumed, so an at-least-once redelivered duplicate cannot be
+      // reprocessed by a later step.
+      markSignalsConsumed(consumedSignalIds);
 
       // Update compensation stack if step is CompensatableStep
       Type stepType = Type.forName(stepExec.Step_Name__c);
@@ -2368,7 +2422,8 @@ public inherited sharing class WorkflowEngine {
       resolvePayload(instance.Input__c),
       instance.Definition_Version__c != null
         ? (Integer) instance.Definition_Version__c
-        : 1
+        : 1,
+      loadPendingSignals(instance.Id)
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts
