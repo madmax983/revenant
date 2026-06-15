@@ -24,11 +24,13 @@
  *    in the spec as recoverable "where applicable", but retryWorkflow only
  *    accepts Failed, so re-driving it would require a new state path — out of
  *    scope for this slice.
- *  - SNAPSHOT BOUND: each chunk query includes `LastModifiedDate <= snapshotTime`
- *    (captured at launch, before the first Queueable fires). An instance that was
- *    not Failed when the operator confirmed the count — but transitions to Failed
- *    mid-sweep — has LastModifiedDate > snapshotTime and is therefore excluded,
- *    even if its Id falls below the cursor's upper range.
+ *  - The confirmed count is a pre-flight approximation, not a hard contract.
+ *    Instances that fail between confirmation and the final chunk may be swept
+ *    in; this is acceptable (they are Failed and match the operator's filter),
+ *    and the idempotency guard prevents double-drives. A LastModifiedDate bound
+ *    was considered but rejected: it would silently DROP confirmed rows whenever
+ *    an automation or operator edits a field on a still-Failed instance mid-sweep,
+ *    which is a worse failure mode than re-driving a few extra instances.
  *  - OUROBOROS GUARD: the selection hard-excludes the re-driver's own
  *    Workflow_Name__c, so a future "re-drive all Failed" sweep can never
  *    re-drive a previously-failed re-drive instance and build a self-replaying
@@ -121,18 +123,15 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
 
   /**
    * Returns up to `chunkSize` eligible instance Ids ordered by Id, starting
-   * strictly after `afterId` (the cursor). `snapshotTime` (when non-null) pins
-   * the selection to records whose LastModifiedDate was at or before launch time,
-   * ensuring that instances transitioning to Failed mid-sweep are excluded even if
-   * their Ids fall within the paged range.
+   * strictly after `afterId` (the cursor). Ordering by Id gives a stable,
+   * resumable cursor across yield boundaries.
    */
   public static List<Id> fetchEligibleChunk(
     String workflowName,
     String status,
     String searchTerm,
     Id afterId,
-    Integer chunkSize,
-    Datetime snapshotTime
+    Integer chunkSize
   ) {
     List<String> effStatuses = effectiveStatuses(status);
     if (effStatuses.isEmpty()) {
@@ -149,9 +148,6 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
       'WHERE Status__c IN :effStatuses AND Workflow_Name__c != :excludeName';
     if (afterId != null) {
       q += ' AND Id > :afterId';
-    }
-    if (snapshotTime != null) {
-      q += ' AND LastModifiedDate <= :snapshotTime';
     }
     if (String.isNotBlank(workflowName)) {
       q += ' AND Workflow_Name__c = :workflowName';
@@ -193,7 +189,6 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
           state.put('workflowName', filter.get('workflowName'));
           state.put('status', filter.get('status'));
           state.put('searchTerm', filter.get('searchTerm'));
-          state.put('snapshotTime', filter.get('snapshotTime'));
         }
       }
 
@@ -202,12 +197,6 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
       String searchTerm = (String) state.get('searchTerm');
       Id afterId = state.get('lastId') != null
         ? (Id) (String) state.get('lastId')
-        : null;
-      // snapshotTime is stored as epoch milliseconds (Long) to survive JSON round-trips.
-      Datetime snapshotTime = state.get('snapshotTime') != null
-        ? Datetime.newInstance(
-            Long.valueOf(String.valueOf(state.get('snapshotTime')))
-          )
         : null;
       Integer redriven = intOf(state.get('redriven'));
       Integer skipped = intOf(state.get('skipped'));
@@ -219,8 +208,7 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
         status,
         searchTerm,
         afterId,
-        chunkSize,
-        snapshotTime
+        chunkSize
       );
 
       Integer processed = 0;
@@ -263,10 +251,6 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
       state.put('workflowName', workflowName);
       state.put('status', status);
       state.put('searchTerm', searchTerm);
-      state.put(
-        'snapshotTime',
-        snapshotTime == null ? null : snapshotTime.getTime()
-      );
       state.put('lastId', afterId == null ? null : String.valueOf(afterId));
       state.put('redriven', redriven);
       state.put('skipped', skipped);

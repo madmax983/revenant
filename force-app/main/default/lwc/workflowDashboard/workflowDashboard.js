@@ -650,10 +650,15 @@ export default class WorkflowDashboard extends LightningElement {
           this.showToast(
             "Re-drive started",
             `Re-driving ${outcome.eligibleCount} failed instance${outcome.eligibleCount === 1 ? "" : "s"}. ` +
-              "Track progress on the re-drive workflow in the list.",
+              "Progress is shown in the detail panel below.",
             "success",
           );
+          // Select the re-driver instance so its progress is visible in the
+          // detail panel regardless of the operator's current filter (BulkRedriveWorkflow
+          // instances won't appear in a filter scoped to a different workflow name).
+          this.selectedInstanceId = outcome.redriveInstanceId;
           this.refreshInstances();
+          this.loadDetails(true);
           this.startPolling();
         } else {
           this.showToast(

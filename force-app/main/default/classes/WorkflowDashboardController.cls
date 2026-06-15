@@ -657,14 +657,10 @@ public inherited sharing class WorkflowDashboardController {
         };
       }
 
-      // Capture snapshot time before launching so that fetchEligibleChunk can
-      // exclude instances that transition to Failed during the multi-chunk sweep.
-      Long snapshotMillis = Datetime.now().getTime();
       Map<String, Object> filter = new Map<String, Object>{
         'workflowName' => workflowName,
         'status' => status,
-        'searchTerm' => searchTerm,
-        'snapshotTime' => snapshotMillis
+        'searchTerm' => searchTerm
       };
       String correlationKey =
         'BulkRedrive_' +
