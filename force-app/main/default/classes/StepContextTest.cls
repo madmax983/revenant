@@ -468,6 +468,44 @@ public class StepContextTest {
   }
 
   @isTest
+  static void testGetSignalRecoversClaimedPageWhenSourceSeesNoneAfterCap() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    // A capped page whose rows this branch already claimed (Processing); the
+    // source now sees no still-Received rows of this name, so getLatestSignal
+    // returns null. The branch still owns the rows, so getSignal must not report
+    // a false absence (which would strand a suspend-on-absent branch).
+    List<StepContext.Signal> claimedPage = new List<StepContext.Signal>{
+      new StepContext.Signal(null, 'Foo', '{"seq":1}', DateTime.now().addMinutes(-2), true),
+      new StepContext.Signal(null, 'Foo', '{"seq":2}', DateTime.now().addMinutes(-1), true)
+    };
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      (StepContext.SignalSource) new FakeNameSource(claimedPage, null, true)
+    );
+
+    System.assertEquals(2, ctx.getSignals('Foo').size());
+
+    StepContext.Signal latest = ctx.getSignal('Foo');
+    System.assertEquals(
+      true,
+      latest.isPresent(),
+      'A fully-claimed capped name must not be reported absent'
+    );
+    System.assertEquals(
+      '{"seq":2}',
+      latest.payload,
+      'getSignal must recover the newest claimed row from the cached page'
+    );
+  }
+
+  @isTest
   static void testGetSignalUsesListTailWhenListReadComplete() {
     Id dummyInstanceId = '00D000000000001EAA';
     // A complete (uncapped) list: its last element IS the true latest, so the

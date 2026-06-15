@@ -388,7 +388,50 @@ public inherited sharing class StepContext {
         (signalSource != null) ? signalSource.getLatestSignal(signalName) : null
       );
     }
-    return latestByName.get(key);
+    Signal sourceLatest = latestByName.get(key);
+
+    // We only reach here when a read was capped (the full set is partial, or
+    // this name's page was truncated). In a parallel branch a capped read has
+    // already CLAIMED its rows (Received -> Processing), so the source's
+    // getLatestSignal -- which sees only still-Received rows -- can miss them and
+    // report a false absence, stranding a suspend-on-absent branch whose signal
+    // is sitting in its own claimed page. Recover this branch's newest matching
+    // cached row and return the later-arriving of it and the source result.
+    Signal cachedLatest = newestCachedMatch(key, signalName);
+    if (cachedLatest != null) {
+      if (sourceLatest == null || !sourceLatest.isPresent()) {
+        return cachedLatest;
+      }
+      Boolean cachedNewer =
+        cachedLatest.createdDate != null &&
+        (sourceLatest.createdDate == null ||
+        cachedLatest.createdDate >= sourceLatest.createdDate);
+      return cachedNewer ? cachedLatest : sourceLatest;
+    }
+    return sourceLatest;
+  }
+
+  // Newest matching signal already in this execution's in-memory caches: the
+  // (capped) full set if loaded, else the (capped) per-name page. Returns null
+  // when neither holds the name. Used so a latest lookup never reports absence
+  // for a name whose rows this branch already claimed out of the Received view.
+  private Signal newestCachedMatch(String key, String signalName) {
+    Signal newest = null;
+    if (allLoaded) {
+      // allSignals is in arrival order and includes rows this branch claimed
+      // (loadAll merges them back), so the last match is the newest.
+      for (Signal s : allSignals) {
+        if (s.name != null && s.name.equalsIgnoreCase(signalName)) {
+          newest = s;
+        }
+      }
+    } else if (byNameCache.containsKey(key)) {
+      List<Signal> cached = byNameCache.get(key);
+      if (!cached.isEmpty()) {
+        newest = cached[cached.size() - 1];
+      }
+    }
+    return newest;
   }
 
   /**

@@ -1102,6 +1102,15 @@ public inherited sharing class WorkflowEngine {
       // pass's headroom (the budget caps list reads, not single lookups), so the
       // lookup always queries the true most-recent row rather than gating on the
       // budget. Only a genuine full page is still flagged capped.
+      //
+      // Consume-safety of ungated lookups: each distinct name is queried once
+      // (StepContext caches per name via latestByName), so the number of extra
+      // observed rows past budget exhaustion is bounded by the SOQL-query
+      // governor limit (~200 async) -- far under the 1 000-row headroom between
+      // SERIAL_SIGNAL_ROW_CAP (8 000) and the 9 000-row consume cap. A step
+      // would exhaust SOQL long before it could match more ids than
+      // markSignalsConsumed() can update, so no consume-overflow redelivery
+      // arises (Codex L1108 documented as not reachable, not gated).
       StepContext.Signal latest = loadLatestSignal(this.instanceId, signalName);
       if (latest != null && rowBudget > 0) {
         rowBudget -= 1;
