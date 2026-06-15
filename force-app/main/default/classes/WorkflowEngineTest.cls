@@ -2797,6 +2797,56 @@ public class WorkflowEngineTest {
   }
 
   @isTest
+  static void testCancelSignalReachesStalledRollback() {
+    // A Cancel signal must reach a stalled rollback (CompensationFailed); a non-cancel
+    // signal to the same instance must still be rejected as "no active workflow".
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'CompensationFailed',
+      Correlation_Key__c = 'SignalStalledKey',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+      ),
+      Error_Message__c = 'Rollback incomplete: ...'
+    );
+    insert inst;
+
+    Test.startTest();
+    // A non-cancel signal must NOT find the stalled instance.
+    Boolean rejected = false;
+    try {
+      WorkflowEngine.signal('SignalStalledKey', 'SomethingElse', null);
+    } catch (WorkflowEngine.WorkflowException ex) {
+      rejected = true;
+    }
+    System.assert(
+      rejected,
+      'A non-cancel signal to a stalled rollback must be rejected'
+    );
+
+    // A Cancel signal (without compensations) must reach it and force it terminal.
+    WorkflowEngine.signal(
+      'SignalStalledKey',
+      'CancelWorkflow',
+      '{"runCompensations":false}'
+    );
+    Test.stopTest();
+
+    Workflow_Instance__c cancelled = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'Cancelled',
+      cancelled.Status__c,
+      'A Cancel signal must drive a stalled rollback to a terminal state'
+    );
+  }
+
+  @isTest
   static void testBulkStart() {
     List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
     for (Integer i = 0; i < 5; i++) {

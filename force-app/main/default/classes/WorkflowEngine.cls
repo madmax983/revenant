@@ -1815,15 +1815,29 @@ public inherited sharing class WorkflowEngine {
                    keyOrId.startsWith(wflowPrefix);
     Id targetId = isId ? (Id) keyOrId : null;
 
+    // A Cancel signal must also be able to reach a stalled rollback (CompensationFailed)
+    // so cancellation can resume it to completion or force it terminal. Other signals keep
+    // the active-only lookup — a stalled rollback is not a forward-signal target.
+    Boolean isCancelSignal =
+      String.isNotBlank(signalName) &&
+      (signalName.equalsIgnoreCase('Cancel') ||
+      signalName.equalsIgnoreCase('CancelWorkflow'));
+    List<String> lookupStatuses = isCancelSignal
+      ? new List<String>{
+          'Pending',
+          'Running',
+          'Suspended',
+          'CompensationFailed'
+        }
+      : new List<String>{ 'Pending', 'Running', 'Suspended' };
+
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
     if (isId) {
       // Query by ID first to prevent matching a correlation key that equals this ID string
       instances = [
         SELECT Id, Status__c
         FROM Workflow_Instance__c
-        WHERE
-          Id = :targetId
-          AND Status__c IN ('Pending', 'Running', 'Suspended')
+        WHERE Id = :targetId AND Status__c IN :lookupStatuses
         WITH SYSTEM_MODE
         LIMIT 1
         FOR UPDATE
@@ -1834,9 +1848,7 @@ public inherited sharing class WorkflowEngine {
       instances = [
         SELECT Id, Status__c
         FROM Workflow_Instance__c
-        WHERE
-          Correlation_Key__c = :keyOrId
-          AND Status__c IN ('Pending', 'Running', 'Suspended')
+        WHERE Correlation_Key__c = :keyOrId AND Status__c IN :lookupStatuses
         WITH SYSTEM_MODE
         LIMIT 1
         FOR UPDATE
@@ -1933,6 +1945,9 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
+    // Include CompensationFailed so a Cancel signal can reach a stalled rollback; the
+    // per-request guard below still rejects non-cancel signals to a stalled instance,
+    // preserving the active-only semantics for everything except cancellation.
     List<Workflow_Instance__c> instances = [
       SELECT
         Id,
@@ -1944,7 +1959,7 @@ public inherited sharing class WorkflowEngine {
       WHERE
         (Id IN :ids
         OR Correlation_Key__c IN :keys)
-        AND Status__c IN ('Pending', 'Running', 'Suspended')
+        AND Status__c IN ('Pending', 'Running', 'Suspended', 'CompensationFailed')
       WITH SYSTEM_MODE
       FOR UPDATE
     ];
@@ -1962,13 +1977,22 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    // Verify that we found an active instance for every request, or throw
+    // Verify that we found an active instance for every request, or throw. A stalled
+    // rollback (CompensationFailed) only qualifies for a Cancel signal; any other signal
+    // targeting it is treated as "no active workflow", preserving prior semantics.
     for (SignalRequest req : requests) {
       Workflow_Instance__c inst = instById.get(req.keyOrId);
       if (inst == null) {
         inst = instByKey.get(req.keyOrId);
       }
-      if (inst == null) {
+      Boolean isCancel =
+        String.isNotBlank(req.signalName) &&
+        (req.signalName.equalsIgnoreCase('Cancel') ||
+        req.signalName.equalsIgnoreCase('CancelWorkflow'));
+      if (
+        inst == null ||
+        (inst.Status__c == 'CompensationFailed' && !isCancel)
+      ) {
         throw new WorkflowException(
           'No active workflow found with key or ID: ' + req.keyOrId
         );
