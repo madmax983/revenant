@@ -422,12 +422,18 @@
                                         <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
                                             <div class="slds-text-title slds-text-color_weak">Workflow Input</div>
                                             <pre class="code-block">{selectedInst.Input__c}</pre>
+                                            <template if:true={selectedInst.inputFile}>
+                                                <a href={selectedInst.inputFile.url} target="_blank" rel="noopener" class="slds-text-body_small">{selectedInst.inputFile.label}</a>
+                                            </template>
                                         </div>
                                     </template>
                                     <template if:true={selectedInst.Output__c}>
                                         <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
                                             <div class="slds-text-title slds-text-color_weak">Workflow Output</div>
                                             <pre class="code-block">{selectedInst.Output__c}</pre>
+                                            <template if:true={selectedInst.outputFile}>
+                                                <a href={selectedInst.outputFile.url} target="_blank" rel="noopener" class="slds-text-body_small">{selectedInst.outputFile.label}</a>
+                                            </template>
                                         </div>
                                     </template>
                                     <template if:true={selectedInst.Error_Message__c}>
@@ -524,10 +530,16 @@
                                                                             <template if:true={step.Input__c}>
                                                                                 <div class="slds-text-title slds-text-color_weak slds-m-bottom_xx-small">Step Input</div>
                                                                                 <pre class="code-block slds-m-bottom_small">{step.Input__c}</pre>
+                                                                                <template if:true={step.inputFile}>
+                                                                                    <a href={step.inputFile.url} target="_blank" rel="noopener" class="slds-text-body_small slds-m-bottom_small slds-d-block">{step.inputFile.label}</a>
+                                                                                </template>
                                                                             </template>
                                                                             <template if:true={step.Output__c}>
                                                                                 <div class="slds-text-title slds-text-color_weak slds-m-bottom_xx-small">Step State / Output</div>
                                                                                 <pre class="code-block slds-m-bottom_small">{step.Output__c}</pre>
+                                                                                <template if:true={step.outputFile}>
+                                                                                    <a href={step.outputFile.url} target="_blank" rel="noopener" class="slds-text-body_small slds-m-bottom_small slds-d-block">{step.outputFile.label}</a>
+                                                                                </template>
                                                                             </template>
                                                                             <template if:true={step.Error_Details__c}>
                                                                                 <div class="slds-text-title text-red slds-m-bottom_xx-small">Step Error Details</div>

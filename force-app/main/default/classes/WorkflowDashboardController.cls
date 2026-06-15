@@ -67,23 +67,45 @@ public inherited sharing class WorkflowDashboardController {
     return val;
   }
 
-  private static String resolveSinglePayload(
+  // Character length above which the dashboard shows a truncated preview. Payloads that
+  // are attachment-backed AND exceed this get a download link to the full ContentDocument.
+  @TestVisible
+  private static final Integer PAYLOAD_DISPLAY_LIMIT = 50000;
+
+  /**
+   * Resolves a payload field for display: returns the (possibly truncated) text and, when
+   * the value is attachment-backed and was truncated, records a download descriptor for
+   * the full ContentDocument under fieldKey in payloadFiles so the UI can offer the file.
+   */
+  private static String resolveAndRecordPayload(
     String textValue,
-    Map<Id, String> attachmentIdToData
+    String fieldKey,
+    Map<Id, String> attachmentIdToData,
+    Map<String, Object> payloadFiles
   ) {
     if (String.isBlank(textValue)) {
       return textValue;
     }
     Id attachmentId = getAttachmentId(textValue);
-    if (attachmentId != null) {
-      if (attachmentIdToData.containsKey(attachmentId)) {
-        return truncatePayload(attachmentIdToData.get(attachmentId));
+    if (attachmentId != null && attachmentIdToData.containsKey(attachmentId)) {
+      String full = attachmentIdToData.get(attachmentId);
+      if (full != null && full.length() > PAYLOAD_DISPLAY_LIMIT) {
+        payloadFiles.put(
+          fieldKey,
+          new Map<String, Object>{
+            'contentDocumentId' => attachmentId,
+            'downloadUrl' => '/sfc/servlet.shepherd/document/download/' +
+              attachmentId,
+            'fullLength' => full.length()
+          }
+        );
       }
+      return truncatePayload(full);
     }
     return truncatePayload(textValue);
   }
 
-  private static void resolvePayloadsInBulk(
+  private static Map<String, Object> resolvePayloadsInBulk(
     Workflow_Instance__c instance,
     List<Workflow_Step_Execution__c> steps
   ) {
@@ -124,18 +146,34 @@ public inherited sharing class WorkflowDashboardController {
       }
     }
 
-    instance.Input__c = resolveSinglePayload(
+    Map<String, Object> payloadFiles = new Map<String, Object>();
+    instance.Input__c = resolveAndRecordPayload(
       instance.Input__c,
-      attachmentIdToData
+      'instance.Input',
+      attachmentIdToData,
+      payloadFiles
     );
-    instance.Output__c = resolveSinglePayload(
+    instance.Output__c = resolveAndRecordPayload(
       instance.Output__c,
-      attachmentIdToData
+      'instance.Output',
+      attachmentIdToData,
+      payloadFiles
     );
     for (Workflow_Step_Execution__c step : steps) {
-      step.Input__c = resolveSinglePayload(step.Input__c, attachmentIdToData);
-      step.Output__c = resolveSinglePayload(step.Output__c, attachmentIdToData);
+      step.Input__c = resolveAndRecordPayload(
+        step.Input__c,
+        'step.' + step.Id + '.Input',
+        attachmentIdToData,
+        payloadFiles
+      );
+      step.Output__c = resolveAndRecordPayload(
+        step.Output__c,
+        'step.' + step.Id + '.Output',
+        attachmentIdToData,
+        payloadFiles
+      );
     }
+    return payloadFiles;
   }
 
   private static String buildWhereClause(
@@ -363,7 +401,7 @@ public inherited sharing class WorkflowDashboardController {
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC
     ];
-    resolvePayloadsInBulk(instance, steps);
+    Map<String, Object> payloadFiles = resolvePayloadsInBulk(instance, steps);
 
     List<Workflow_Instance__c> children = [
       SELECT
@@ -427,7 +465,8 @@ public inherited sharing class WorkflowDashboardController {
       'steps' => steps,
       'children' => children,
       'successor' => successors.isEmpty() ? null : successors[0],
-      'waitingOn' => waitingOn
+      'waitingOn' => waitingOn,
+      'payloadFiles' => payloadFiles
     };
   }
 

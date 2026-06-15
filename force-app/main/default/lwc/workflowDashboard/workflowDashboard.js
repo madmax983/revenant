@@ -328,6 +328,7 @@ export default class WorkflowDashboard extends LightningElement {
           return;
         }
         const inst = result.instance;
+        const payloadFiles = result.payloadFiles || {};
         this.successor = result.successor;
         this.selectedInst = {
           ...inst,
@@ -335,6 +336,8 @@ export default class WorkflowDashboard extends LightningElement {
           statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
           Input__c: this.formatJson(inst.Input__c),
           Output__c: this.formatJson(inst.Output__c),
+          inputFile: this.buildPayloadFile(payloadFiles["instance.Input"]),
+          outputFile: this.buildPayloadFile(payloadFiles["instance.Output"]),
           waitingOn: result.waitingOn,
           isWatchdogWaiting: result.waitingOn === "Watchdog",
           waitingOnBadgeClass: result.waitingOn === "Watchdog" ? "badge badge-purple" : (result.waitingOn === "Delayed Queueable" ? "badge badge-indigo" : "badge badge-blue")
@@ -403,6 +406,12 @@ export default class WorkflowDashboard extends LightningElement {
               : null,
             Input__c: this.formatJson(step.Input__c),
             Output__c: this.formatJson(step.Output__c),
+            inputFile: this.buildPayloadFile(
+              payloadFiles["step." + step.Id + ".Input"],
+            ),
+            outputFile: this.buildPayloadFile(
+              payloadFiles["step." + step.Id + ".Output"],
+            ),
           };
         });
 
@@ -711,6 +720,21 @@ export default class WorkflowDashboard extends LightningElement {
     } catch (ex) {
       return str; // Return raw string if not json
     }
+  }
+
+  // Turns a server payloadFiles descriptor into a render-ready download link, or null.
+  // Present only for attachment-backed payloads whose full content was truncated above.
+  buildPayloadFile(file) {
+    if (!file || !file.downloadUrl) {
+      return null;
+    }
+    const chars = file.fullLength || 0;
+    const sizeLabel =
+      chars >= 1024 ? Math.ceil(chars / 1024) + " KB" : chars + " chars";
+    return {
+      url: file.downloadUrl,
+      label: "Download full payload (" + sizeLabel + ")",
+    };
   }
 
   getStatusBadgeClass(status) {

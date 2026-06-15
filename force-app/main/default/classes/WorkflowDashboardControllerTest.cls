@@ -781,6 +781,50 @@ public class WorkflowDashboardControllerTest {
       returnedStepSafety.Input__c
     );
     System.assertEquals('ShortOutput', returnedStepSafety.Output__c);
+
+    // Attachment-backed payloads that were truncated should expose a download
+    // descriptor; tiny/inline payloads should not.
+    Map<String, Object> payloadFiles = (Map<String, Object>) details.get(
+      'payloadFiles'
+    );
+    System.assertNotEquals(null, payloadFiles, 'payloadFiles should be present');
+
+    // instance.Output (cv2, 50005 chars) crossed the display limit -> has a file.
+    System.assert(
+      payloadFiles.containsKey('instance.Output'),
+      'Truncated attachment-backed instance Output should have a download file'
+    );
+    Map<String, Object> outFile = (Map<String, Object>) payloadFiles.get(
+      'instance.Output'
+    );
+    System.assertEquals(50005, (Integer) outFile.get('fullLength'));
+    System.assert(
+      ((String) outFile.get('downloadUrl'))
+        .startsWith('/sfc/servlet.shepherd/document/download/'),
+      'downloadUrl should point at the ContentDocument: ' +
+      outFile.get('downloadUrl')
+    );
+
+    // BulkStep Input (cv3, 60000 chars) crossed the limit -> has a file.
+    System.assert(
+      payloadFiles.containsKey('step.' + returnedStep1.Id + '.Input'),
+      'Truncated attachment-backed step Input should have a download file'
+    );
+
+    // Tiny inline payloads (instance Input cv1, BulkStep Output cv4) get no file.
+    System.assert(
+      !payloadFiles.containsKey('instance.Input'),
+      'Small inline instance Input should not have a download file'
+    );
+    System.assert(
+      !payloadFiles.containsKey('step.' + returnedStep1.Id + '.Output'),
+      'Small inline step Output should not have a download file'
+    );
+    // The raw (non-attachment) 51k Safety Input is truncated but has no file to link.
+    System.assert(
+      !payloadFiles.containsKey('step.' + returnedStepSafety.Id + '.Input'),
+      'Non-attachment truncated payload should not have a download file'
+    );
   }
 
   @isTest
