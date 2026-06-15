@@ -633,12 +633,24 @@ public inherited sharing class WorkflowDashboardController {
     try {
       Object input = null;
       if (String.isNotBlank(inputJson)) {
-        input = JSON.deserializeUntyped(inputJson);
+        try {
+          input = JSON.deserializeUntyped(inputJson);
+        } catch (System.JSONException je) {
+          AuraHandledException ex = new AuraHandledException(
+            'Input Payload is not valid JSON: ' + je.getMessage()
+          );
+          ex.setMessage('Input Payload is not valid JSON: ' + je.getMessage());
+          throw ex;
+        }
       }
       return WorkflowEngine.start(workflowName, correlationKey, input);
+    } catch (AuraHandledException ahe) {
+      throw ahe;
     } catch (Exception ex) {
       System.debug(LoggingLevel.ERROR, 'Aura startWorkflow failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
-      throw new AuraHandledException(ex.getMessage());
+      AuraHandledException ahe = new AuraHandledException(ex.getMessage());
+      ahe.setMessage(ex.getMessage());
+      throw ahe;
     }
   }
 

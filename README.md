@@ -195,6 +195,8 @@ sf apex run test -w 10           # run the full test suite
 
 For testing patterns — `WorkflowTestHarness`, step-level unit tests, governor limit guidance, and when to use each — see **[docs/testing.md](docs/testing.md)**.
 
+For AI and Agentforce integration — `aiplatform.ModelsAPI`, multi-turn agent conversations, sessionId threading, testing mocks, and org setup — see **[docs/agentforce.md](docs/agentforce.md)**.
+
 ---
 
 ## Watchdog Poller Scheduling (Hybrid Model)

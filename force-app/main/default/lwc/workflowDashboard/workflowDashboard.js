@@ -571,10 +571,20 @@ export default class WorkflowDashboard extends LightningElement {
 
     // Validate JSON if provided
     if (this.launchInputJson) {
+      // Replace typographic ("curly") quote marks — common when pasting from
+      // chat apps, Word, or macOS autocorrect. Straight ASCII quotes are required
+      // by the JSON spec; curly ones cause a silent parse failure.
+      const normalized = this.launchInputJson
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, "'");
       try {
-        JSON.parse(this.launchInputJson);
+        JSON.parse(normalized);
+        this.launchInputJson = normalized;
       } catch (ex) {
-        this.launchError = "Input Payload must be a valid JSON string.";
+        this.launchError =
+          "Input Payload must be valid JSON. " +
+          'If you pasted from a chat or document, re-type the quote characters — ' +
+          "“curly quotes” are not valid JSON.";
         return;
       }
     }
