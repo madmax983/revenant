@@ -2691,6 +2691,112 @@ public class WorkflowEngineTest {
   }
 
   @isTest
+  static void testCancelTreeResumesStalledChildRollback() {
+    // Cancelling a parent tree with runCompensations=true must reach a stalled
+    // (CompensationFailed) child and resume its rollback, draining it to Cancelled.
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c parent = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowEngineTest.HappyStep1',
+      Correlation_Key__c = 'ParentCancelKey'
+    );
+    insert parent;
+
+    Workflow_Instance__c child = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'CompensationFailed',
+      Parent_Instance__c = parent.Id,
+      Correlation_Key__c = 'ChildStalledKey',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+      ),
+      Error_Message__c = 'Rollback incomplete: ...'
+    );
+    insert child;
+    // The preserved (failed) compensation attempt that left the child stalled.
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = child.Id,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep_Compensate',
+      Status__c = 'Failed'
+    );
+
+    Test.startTest();
+    WorkflowEngine.cancel(parent.Id, true);
+
+    // The stalled child must now be resumed under the cancel phase.
+    Workflow_Instance__c resumedChild = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :child.Id
+    ];
+    System.assertEquals('Cancelling', resumedChild.Status__c);
+
+    // Drive the resumed child rollback to completion.
+    WorkflowEngine.runStep(child.Id, null); // compensate succeeds -> stack drains
+    Test.stopTest();
+
+    Workflow_Instance__c finalChild = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :child.Id
+    ];
+    System.assertEquals(
+      'Cancelled',
+      finalChild.Status__c,
+      'Stalled child rollback should finish as Cancelled when its tree is cancelled'
+    );
+  }
+
+  @isTest
+  static void testCancelTreeForcesStalledChildTerminalWithoutCompensations() {
+    // Cancelling with runCompensations=false must force a stalled child terminal
+    // (Cancelled), releasing its correlation key rather than leaving it orphaned.
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c parent = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowEngineTest.HappyStep1',
+      Correlation_Key__c = 'ParentCancelKey2'
+    );
+    insert parent;
+
+    Workflow_Instance__c child = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'CompensationFailed',
+      Parent_Instance__c = parent.Id,
+      Correlation_Key__c = 'ChildStalledKey2',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+      ),
+      Error_Message__c = 'Rollback incomplete: ...'
+    );
+    insert child;
+
+    Test.startTest();
+    WorkflowEngine.cancel(parent.Id, false);
+    Test.stopTest();
+
+    Workflow_Instance__c finalChild = [
+      SELECT Status__c, Active_Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :child.Id
+    ];
+    System.assertEquals(
+      'Cancelled',
+      finalChild.Status__c,
+      'Stalled child should be forced terminal when cancelling without compensations'
+    );
+    System.assertEquals(
+      null,
+      finalChild.Active_Correlation_Key__c,
+      'A terminal Cancelled child must release its reserved correlation key'
+    );
+  }
+
+  @isTest
   static void testBulkStart() {
     List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
     for (Integer i = 0; i < 5; i++) {

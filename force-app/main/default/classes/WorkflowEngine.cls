@@ -2842,7 +2842,7 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Instance__c
         WHERE
           Parent_Instance__c IN :frontier
-          AND Status__c IN ('Pending', 'Running', 'Suspended', 'Cancelling')
+          AND Status__c IN ('Pending', 'Running', 'Suspended', 'Cancelling', 'CompensationFailed')
         WITH SYSTEM_MODE
       ];
       List<Id> nextFrontier = new List<Id>();
@@ -2888,12 +2888,14 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c == 'Completed' ||
       instance.Status__c == 'Failed' ||
       instance.Status__c == 'Compensated' ||
-      instance.Status__c == 'CompensationFailed' ||
       instance.Status__c == 'Cancelled' ||
       instance.Status__c == 'ContinuedAsNew'
     ) {
       return; // Already in terminal state
     }
+    // Note: CompensationFailed is intentionally NOT treated as terminal here — a stalled
+    // rollback is resumable and still holds un-reversed side effects, so cancellation must
+    // reach it (handled explicitly below) rather than skip it.
 
     // 1. Lock active step executions FOR UPDATE first
     List<Workflow_Step_Execution__c> stepExecs = new List<Workflow_Step_Execution__c>();
@@ -2946,7 +2948,6 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c == 'Completed' ||
       instance.Status__c == 'Failed' ||
       instance.Status__c == 'Compensated' ||
-      instance.Status__c == 'CompensationFailed' ||
       instance.Status__c == 'Cancelled' ||
       instance.Status__c == 'ContinuedAsNew'
     ) {
@@ -2962,6 +2963,42 @@ public inherited sharing class WorkflowEngine {
     }
     if (!stepExecs.isEmpty()) {
       update as system stepExecs;
+    }
+
+    // A stalled rollback (CompensationFailed) being cancelled is handled per cancel mode:
+    // with compensations requested, resume the remaining rollback under the cancel phase so
+    // it drains to 'Cancelled' (every remaining side effect reversed); without, force it
+    // terminal 'Cancelled', abandoning the un-run compensations but releasing its key.
+    if (instance.Status__c == 'CompensationFailed') {
+      List<String> remaining = new List<String>();
+      if (String.isNotBlank(instance.Compensation_Stack__c)) {
+        remaining = (List<String>) JSON.deserialize(
+          instance.Compensation_Stack__c,
+          List<String>.class
+        );
+      }
+      if (runCompensations && !remaining.isEmpty()) {
+        instance.Status__c = 'Cancelling';
+        instance.Error_Message__c = 'Cancelled by user. Compensating.';
+        update as system instance;
+
+        // Append a fresh attempt for the stalled top-of-stack step (the prior Failed
+        // attempt is preserved) so the existing compensation loop re-runs it.
+        appendCompensationRetryStep(instance, remaining);
+        scheduleTimeoutJobForInstance(instance.Id);
+        if (Test.isRunningTest()) {
+          if (!disableQueueableInTest) {
+            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+          }
+        } else {
+          enqueueOrchestrator(instance.Id, null);
+        }
+      } else {
+        instance.Status__c = 'Cancelled';
+        instance.Error_Message__c = 'Cancelled by user.';
+        update as system instance;
+      }
+      return;
     }
 
     // Check for compensations
