@@ -1311,7 +1311,21 @@ public inherited sharing class WorkflowEngine {
         if (candidates.isEmpty()) {
           break; // no more matching Received rows anywhere
         }
-        // A full page means more matching rows may remain beyond the budget.
+        // A full page means more matching rows may remain beyond the budget,
+        // so flag capped: the COMPLETE consume then preserves (does not clean up)
+        // same-name rows this read did not return, leaving them Received for a
+        // later read rather than losing them.
+        //
+        // Short-page note: if a sibling claims only PART of this page between the
+        // query and the FOR UPDATE lock, we return just the surviving subset
+        // (the sibling exclusively owns the rest -- correct for exactly-once).
+        // When the page was NOT full, the query already returned every matching
+        // Received row, so that subset is the complete backlog. A short page that
+        // still leaves matching rows unreturned can only arise from a FULL page,
+        // which requires >PARALLEL_CLAIM_ROW_CAP pending rows of one name (or a
+        // budget already drawn down by claiming that many) -- the same
+        // pathological >cap regime as the documented at-least-once degradation;
+        // capped is set above so the remainder is preserved for a later read.
         if (candidates.size() >= claimBudget) {
           capped = true;
         }
