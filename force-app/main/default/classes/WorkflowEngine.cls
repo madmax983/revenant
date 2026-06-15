@@ -965,7 +965,7 @@ public inherited sharing class WorkflowEngine {
       instance.Definition_Version__c != null
         ? (Integer) instance.Definition_Version__c
         : 1,
-      loadPendingSignals(instanceId)
+      new PendingSignalSource(instanceId)
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts
@@ -996,7 +996,24 @@ public inherited sharing class WorkflowEngine {
     }
 
     // 6. Handle Step Outcome
-    handleStepResult(instance, stepExec, result, context.getConsumedSignalIds());
+    handleStepResult(instance, stepExec, result, context);
+  }
+
+  /**
+   * Lazily supplies the pending (unconsumed) signals targeting an instance so a
+   * step that never reads signals pays no query/heap cost for unrelated
+   * unconsumed signals on the instance.
+   */
+  private class PendingSignalSource implements StepContext.SignalSource {
+    private final Id instanceId;
+
+    private PendingSignalSource(Id instanceId) {
+      this.instanceId = instanceId;
+    }
+
+    public List<StepContext.Signal> getPendingSignals() {
+      return loadPendingSignals(this.instanceId);
+    }
   }
 
   /**
@@ -1022,27 +1039,42 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Marks the given signal records consumed. Re-queries by id (filtered to those
-   * still Received) so a duplicate consume is a no-op and the append-only audit
-   * is untouched. Invoked only at a step's successful COMPLETE transition.
+   * Marks the signals a step observed consumed at its successful transition.
+   * Re-queries the instance's still-Received signals by the observed names (so a
+   * same-name at-least-once duplicate delivered while the step was executing is
+   * consumed too, not just the snapshot pre-loaded into the context). When the
+   * step read the full pending set, every still-Received signal is consumed. A
+   * step that observed nothing triggers no query, keeping non-signal steps cheap.
    */
-  private static void markSignalsConsumed(Set<Id> signalIds) {
-    if (signalIds == null || signalIds.isEmpty()) {
+  private static void markSignalsConsumed(Id instanceId, StepContext context) {
+    if (context == null) {
       return;
     }
-    List<Workflow_Signal__c> toConsume = [
-      SELECT Id, Status__c
+    Boolean consumeAll = context.isAllObserved();
+    Set<String> observedNames = context.getObservedSignalNames();
+    if (!consumeAll && (observedNames == null || observedNames.isEmpty())) {
+      return;
+    }
+
+    List<Workflow_Signal__c> toConsume = new List<Workflow_Signal__c>();
+    for (Workflow_Signal__c sig : [
+      SELECT Id, Signal_Name__c, Status__c
       FROM Workflow_Signal__c
-      WHERE Id IN :signalIds AND Status__c = 'Received'
+      WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Received'
       WITH SYSTEM_MODE
-    ];
-    if (toConsume.isEmpty()) {
-      return;
+    ]) {
+      Boolean observed =
+        consumeAll ||
+        (sig.Signal_Name__c != null &&
+        observedNames.contains(sig.Signal_Name__c.toLowerCase()));
+      if (observed) {
+        sig.Status__c = 'Consumed';
+        toConsume.add(sig);
+      }
     }
-    for (Workflow_Signal__c sig : toConsume) {
-      sig.Status__c = 'Consumed';
+    if (!toConsume.isEmpty()) {
+      update as system toConsume;
     }
-    update as system toConsume;
   }
 
   private static void saveStepExec(Workflow_Step_Execution__c stepExec) {
@@ -1057,7 +1089,7 @@ public inherited sharing class WorkflowEngine {
     Workflow_Instance__c instance,
     Workflow_Step_Execution__c stepExec,
     StepResult result,
-    Set<Id> consumedSignalIds
+    StepContext context
   ) {
     // Re-query to avoid overwriting a timeout or finalizer crash status and race conditions
     Workflow_Instance__c freshInstance = [
@@ -1117,7 +1149,7 @@ public inherited sharing class WorkflowEngine {
       // now (not on yield/retry/suspend) are the signals this step observed
       // marked consumed, so an at-least-once redelivered duplicate cannot be
       // reprocessed by a later step.
-      markSignalsConsumed(consumedSignalIds);
+      markSignalsConsumed(instance.Id, context);
 
       // Update compensation stack if step is CompensatableStep
       Type stepType = Type.forName(stepExec.Step_Name__c);
@@ -1395,6 +1427,10 @@ public inherited sharing class WorkflowEngine {
         'Output_Split_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
       );
       saveStepExec(stepExec);
+
+      // The spawning step durably completed; consume the signals it observed so
+      // they are not re-loaded into the parallel branches it fans out to.
+      markSignalsConsumed(instance.Id, context);
 
       String parallelStepsStr = String.join(result.parallelStepNames, ',');
       instance.Current_Step__c = parallelStepsStr;
@@ -2423,7 +2459,7 @@ public inherited sharing class WorkflowEngine {
       instance.Definition_Version__c != null
         ? (Integer) instance.Definition_Version__c
         : 1,
-      loadPendingSignals(instance.Id)
+      new PendingSignalSource(instance.Id)
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts
@@ -2467,14 +2503,15 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    handleCompensationStepResult(instance, stepExec, result, stack);
+    handleCompensationStepResult(instance, stepExec, result, stack, context);
   }
 
   private static void handleCompensationStepResult(
     Workflow_Instance__c instance,
     Workflow_Step_Execution__c stepExec,
     StepResult result,
-    List<String> stack
+    List<String> stack,
+    StepContext context
   ) {
     Workflow_Instance__c freshInstance = [
       SELECT Status__c
@@ -2500,6 +2537,11 @@ public inherited sharing class WorkflowEngine {
         'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
       );
       saveStepExec(stepExec);
+
+      // A compensating step that read signals durably completed; consume them on
+      // the same contract as a forward step so a later compensation attempt or
+      // step does not re-observe them.
+      markSignalsConsumed(instance.Id, context);
 
       stack.remove(stack.size() - 1);
       instance.Compensation_Stack__c = JSON.serialize(stack);

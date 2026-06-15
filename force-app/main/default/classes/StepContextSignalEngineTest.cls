@@ -143,4 +143,171 @@ public class StepContextSignalEngineTest {
       'Cancel must still drive cancellation semantics'
     );
   }
+
+  // --- In-flight duplicate consumed by observed-name re-query (AC4b) -------
+
+  public class InFlightDupWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.InFlightDupStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  public class InFlightDupStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Dup');
+      if (!s.isPresent()) {
+        return StepResult.suspend();
+      }
+      // Simulate an at-least-once duplicate of the observed signal arriving in
+      // another transaction *while* this step executes -- i.e. after the context
+      // snapshot was loaded. Consumption must still catch it by name.
+      insert new Workflow_Signal__c(
+        Workflow_Instance__c = ctx.workflowInstanceId,
+        Signal_Name__c = 'Dup',
+        Payload__c = s.payload,
+        Status__c = 'Received'
+      );
+      return StepResult.complete(null, 'handled');
+    }
+  }
+
+  @isTest
+  static void testInFlightDuplicateConsumedByName() {
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.InFlightDupWorkflow',
+      'InFlightKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    WorkflowEngine.signal('InFlightKey', 'Dup', '{"v":1}');
+
+    // Step reads the signal, a duplicate lands mid-execution, then it completes.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Status__c = 'Received'
+      ],
+      'A same-name duplicate delivered during execution must also be consumed'
+    );
+    System.assertEquals(
+      2,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Status__c = 'Consumed'
+      ]
+    );
+  }
+
+  // --- SPLIT consumes the spawning step's observed signals (AC4) ----------
+
+  public class SplitSignalWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.SignalThenSplitStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (
+        currentStepName == 'StepContextSignalEngineTest.SignalThenSplitStep'
+      ) {
+        return 'StepContextSignalEngineTest.SplitJoinStep';
+      }
+      return null;
+    }
+  }
+
+  public class SignalThenSplitStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Fan');
+      if (!s.isPresent()) {
+        return StepResult.suspend();
+      }
+      return StepResult.split(
+        new List<String>{
+          'StepContextSignalEngineTest.BranchAStep',
+          'StepContextSignalEngineTest.BranchBStep'
+        },
+        s.payload
+      );
+    }
+  }
+
+  public class BranchAStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      System.assertEquals(
+        false,
+        ctx.hasSignal('Fan'),
+        'The spawning step signal must not leak into a parallel branch'
+      );
+      return StepResult.complete(null, 'A');
+    }
+  }
+
+  public class BranchBStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      System.assertEquals(
+        false,
+        ctx.hasSignal('Fan'),
+        'The spawning step signal must not leak into a parallel branch'
+      );
+      return StepResult.complete(null, 'B');
+    }
+  }
+
+  public class SplitJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'joined');
+    }
+  }
+
+  @isTest
+  static void testSplitConsumesSpawningStepSignals() {
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.SplitSignalWorkflow',
+      'FanKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    WorkflowEngine.signal('FanKey', 'Fan', '{"x":1}');
+
+    // SignalThenSplitStep observes 'Fan' and fans out: the signal must be
+    // consumed at the split so it is not re-loaded into the parallel branches.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Status__c = 'Received'
+      ],
+      'SPLIT must consume the spawning step observed signals'
+    );
+
+    // Run the parallel branches; their in-step asserts confirm no leak.
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.BranchAStep'
+      )
+      .execute(null);
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.BranchBStep'
+      )
+      .execute(null);
+  }
 }

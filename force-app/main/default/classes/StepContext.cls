@@ -41,8 +41,20 @@ public inherited sharing class StepContext {
     }
   }
 
+  /**
+   * Supplies pending signals on demand so a step that never reads signals pays
+   * no query/heap cost. Implemented by the engine; resolved lazily on first
+   * signal access.
+   */
+  public interface SignalSource {
+    List<Signal> getPendingSignals();
+  }
+
   // Pending (unconsumed) signals targeting this instance, in arrival order.
-  private List<Signal> pendingSignals = new List<Signal>();
+  // Loaded lazily from signalSource on first access.
+  private List<Signal> pendingSignals;
+  private SignalSource signalSource;
+  private Boolean signalsLoaded = false;
   // Signal names the step looked at; drives engine-managed consumption.
   private Set<String> observedNames = new Set<String>();
   private Boolean observedAll = false;
@@ -87,7 +99,7 @@ public inherited sharing class StepContext {
       stepStateJson,
       workflowInputJson,
       workflowVersion,
-      null
+      (List<Signal>) null
     );
   }
 
@@ -110,9 +122,47 @@ public inherited sharing class StepContext {
     this.stepStateJson = stepStateJson;
     this.workflowInputJson = workflowInputJson;
     this.workflowVersion = workflowVersion;
+    // An explicit list is already resolved -- no lazy loading needed.
     this.pendingSignals = (pendingSignals != null)
       ? pendingSignals
       : new List<Signal>();
+    this.signalsLoaded = true;
+  }
+
+  public StepContext(
+    Id workflowInstanceId,
+    String workflowName,
+    String stepName,
+    String inputJson,
+    String previousStepOutput,
+    String stepStateJson,
+    String workflowInputJson,
+    Integer workflowVersion,
+    SignalSource signalSource
+  ) {
+    this.workflowInstanceId = workflowInstanceId;
+    this.workflowName = workflowName;
+    this.stepName = stepName;
+    this.inputJson = inputJson;
+    this.previousStepOutput = previousStepOutput;
+    this.stepStateJson = stepStateJson;
+    this.workflowInputJson = workflowInputJson;
+    this.workflowVersion = workflowVersion;
+    // Defer loading until a signal accessor is actually called.
+    this.signalSource = signalSource;
+  }
+
+  // Resolves pending signals lazily so a step that never touches signals pays
+  // no query or heap cost for unrelated unconsumed signals on the instance.
+  private List<Signal> pending() {
+    if (!signalsLoaded) {
+      List<Signal> loaded = (signalSource != null)
+        ? signalSource.getPendingSignals()
+        : null;
+      this.pendingSignals = (loaded != null) ? loaded : new List<Signal>();
+      this.signalsLoaded = true;
+    }
+    return this.pendingSignals;
   }
 
   /**
@@ -122,7 +172,7 @@ public inherited sharing class StepContext {
    */
   public List<Signal> getSignals() {
     observedAll = true;
-    return pendingSignals.clone();
+    return pending().clone();
   }
 
   /**
@@ -132,7 +182,7 @@ public inherited sharing class StepContext {
   public List<Signal> getSignals(String signalName) {
     observe(signalName);
     List<Signal> matches = new List<Signal>();
-    for (Signal s : pendingSignals) {
+    for (Signal s : pending()) {
       if (s.name == signalName) {
         matches.add(s);
       }
@@ -148,7 +198,7 @@ public inherited sharing class StepContext {
   public Signal getSignal(String signalName) {
     observe(signalName);
     Signal latest = null;
-    for (Signal s : pendingSignals) {
+    for (Signal s : pending()) {
       if (s.name == signalName) {
         latest = s;
       }
@@ -159,7 +209,7 @@ public inherited sharing class StepContext {
   /** True when at least one pending signal matches the given name. Marks observed. */
   public Boolean hasSignal(String signalName) {
     observe(signalName);
-    for (Signal s : pendingSignals) {
+    for (Signal s : pending()) {
       if (s.name == signalName) {
         return true;
       }
@@ -175,7 +225,7 @@ public inherited sharing class StepContext {
    */
   public Set<Id> getConsumedSignalIds() {
     Set<Id> ids = new Set<Id>();
-    for (Signal s : pendingSignals) {
+    for (Signal s : pending()) {
       Boolean observed =
         observedAll ||
         (s.name != null && observedNames.contains(s.name.toLowerCase()));
@@ -184,6 +234,21 @@ public inherited sharing class StepContext {
       }
     }
     return ids;
+  }
+
+  /**
+   * Lower-cased names of the signals the step observed. The engine re-queries by
+   * these names at the step's successful transition, so a same-name duplicate
+   * delivered while the step was executing is consumed too (not just the ones
+   * pre-loaded into this context).
+   */
+  public Set<String> getObservedSignalNames() {
+    return observedNames.clone();
+  }
+
+  /** True when the step read the full pending set (every name is observed). */
+  public Boolean isAllObserved() {
+    return observedAll;
   }
 
   // Records an observed signal name, normalized for case-insensitive matching
