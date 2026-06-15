@@ -3172,7 +3172,14 @@ public inherited sharing class WorkflowEngine {
       new PendingSignalSource(instance.Id)
     );
 
-    // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts
+    // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts.
+    // As in the forward execute() path, a CalloutStep performs a synchronous,
+    // payload-driven callout inside compensate() and Salesforce forbids a
+    // callout once the transaction holds pending DML, so defer this timeout
+    // write past compensate() for a CalloutStep. The step's Timeout_At__c and
+    // scheduled job were already committed when it was queued, so the watchdog
+    // stays armed; the finally block reconciles the timeout afterward.
+    Boolean deferPreExecDml = compensatableStepInstance instanceof CalloutStep;
     stepExec.Status__c = 'Running';
     Integer timeoutSeconds = null;
     if (compensatableStepInstance instanceof TimeoutConfigurable) {
@@ -3181,10 +3188,12 @@ public inherited sharing class WorkflowEngine {
     }
     if (timeoutSeconds != null && timeoutSeconds > 0) {
       stepExec.Timeout_At__c = DateTime.now().addSeconds(timeoutSeconds);
-      saveStepExec(stepExec);
+      if (!deferPreExecDml) {
+        saveStepExec(stepExec);
+      }
     } else {
       stepExec.Timeout_At__c = null;
-      if (stepExec.Id == null) {
+      if (stepExec.Id == null && !deferPreExecDml) {
         saveStepExec(stepExec);
       }
     }

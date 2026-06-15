@@ -1224,6 +1224,85 @@ public class WorkflowEngineTest {
     System.assertEquals('Compensated', stepExecs[2].Status__c);
   }
 
+  // A compensation that reads a signal then makes a synchronous, payload-driven
+  // callout. Also CalloutStep + TimeoutConfigurable: the engine must defer the
+  // pre-compensation timeout DML so the callout in compensate() stays legal.
+  public class CalloutCompensationStep implements CompensatableStep, CalloutStep, TimeoutConfigurable {
+    public Integer getTimeoutSeconds() {
+      return 60;
+    }
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'Success');
+    }
+    public StepResult compensate(StepContext ctx) {
+      ctx.getSignal('CompSig');
+      HttpRequest req = new HttpRequest();
+      req.setEndpoint('https://example.com/rollback');
+      req.setMethod('POST');
+      HttpResponse res = new Http().send(req);
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{ 'status' => res.getStatusCode() }
+      );
+    }
+  }
+
+  public class CompOkMock implements HttpCalloutMock {
+    public HttpResponse respond(HttpRequest req) {
+      HttpResponse res = new HttpResponse();
+      res.setStatusCode(204);
+      res.setBody('');
+      return res;
+    }
+  }
+
+  @isTest
+  static void testCalloutCompensationWithTimeoutDoesNotHitUncommittedWork() {
+    Test.setMock(HttpCalloutMock.class, new CompOkMock());
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Compensating',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CalloutCompensationStep' }
+      ),
+      Input__c = '{"test": true}'
+    );
+    insert inst;
+
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.CalloutCompensationStep',
+      Status__c = 'Completed',
+      Output__c = '{}'
+    );
+
+    Test.startTest();
+    WorkflowEngine.runStep(inst.Id, null); // runs CalloutCompensationStep_Compensate
+    Test.stopTest();
+
+    Workflow_Step_Execution__c compExec = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowEngineTest.CalloutCompensationStep_Compensate'
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    System.assertEquals(
+      'Compensated',
+      compExec.Status__c,
+      'A CalloutStep+TimeoutConfigurable compensation must complete its synchronous callout without an uncommitted-work exception'
+    );
+    System.assert(
+      compExec.Output__c != null && compExec.Output__c.contains('204'),
+      'compensation callout response should be recorded, got: ' +
+      compExec.Output__c
+    );
+  }
+
   @isTest
   static void testCompensationFailureAndRetry() {
     WorkflowEngine.disableQueueableInTest = true;
