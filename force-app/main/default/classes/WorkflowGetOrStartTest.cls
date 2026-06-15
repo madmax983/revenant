@@ -423,6 +423,72 @@ private class WorkflowGetOrStartTest {
   }
 
   // ==========================================
+  // Review fix (P2): in bulk, a hot key's many terminal rows must not crowd a
+  // sibling key out of terminal dedup (per-key resolution)
+  // ==========================================
+  @isTest
+  static void testBulkTerminalDedupPerKeyNoCrowdOut() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.dedupWindowMinutes = 1440;
+
+    List<Workflow_Instance__c> seed = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < 5; i++) {
+      seed.add(
+        new Workflow_Instance__c(
+          Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+          Status__c = 'Completed',
+          Correlation_Key__c = 'GOS_HotA'
+        )
+      );
+    }
+    seed.add(
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+        Status__c = 'Completed',
+        Correlation_Key__c = 'GOS_ColdB'
+      )
+    );
+    insert seed;
+
+    List<WorkflowEngine.StartRequest> reqs = new List<WorkflowEngine.StartRequest>{
+      new WorkflowEngine.StartRequest(
+        'WorkflowEngineTest.HappyWorkflow',
+        'GOS_HotA',
+        null
+      ),
+      new WorkflowEngine.StartRequest(
+        'WorkflowEngineTest.HappyWorkflow',
+        'GOS_ColdB',
+        null
+      )
+    };
+
+    List<WorkflowEngine.StartResult> results = WorkflowEngine.startOrGet(reqs);
+
+    System.assertEquals(2, results.size());
+    System.assertEquals(
+      false,
+      results[0].isNew,
+      'Hot key must dedup to an existing terminal instance'
+    );
+    System.assertEquals(
+      false,
+      results[1].isNew,
+      'Cold key must also dedup (not crowded out by the hot key)'
+    );
+    System.assertEquals(
+      5,
+      totalInstancesForKey('GOS_HotA'),
+      'No new instance for the hot key'
+    );
+    System.assertEquals(
+      1,
+      totalInstancesForKey('GOS_ColdB'),
+      'No new instance for the cold key'
+    );
+  }
+
+  // ==========================================
   // Review fix (P2): a very large dedup window must not fault starts
   // ==========================================
   @isTest

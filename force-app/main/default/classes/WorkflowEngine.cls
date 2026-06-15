@@ -311,35 +311,111 @@ public inherited sharing class WorkflowEngine {
     if (keys == null || keys.isEmpty()) {
       return result;
     }
-    // When terminal dedup is disabled, use a far-future lower bound so no
-    // terminal instance matches (active-only).
-    DateTime windowStart = includeTerminal
-      ? dedupWindowStart()
-      : DateTime.now().addYears(1000);
-    // One indexed query. Active instances carry a null Terminal_At__c, so NULLS
-    // FIRST surfaces the (at most one, per the unique index) active instance
-    // ahead of any terminal one for the same key; among terminal-only keys the
-    // most recent wins. The SOQL equality is case-insensitive, so a stored
-    // "Foo" matches a requested "foo". The row cap bounds governor usage so a
-    // single hot key with many historical terminal runs cannot exhaust the SOQL
-    // row limit; a single-key lookup needs only the top row (keeping the start
-    // path to one indexed SOQL).
-    Integer rowLimit = keys.size() == 1 ? 1 : DEDUP_LOOKUP_ROW_CAP;
-    List<Workflow_Instance__c> matches = [
-      SELECT Id, Correlation_Key__c, Status__c, Terminal_At__c
+    Boolean terminalEnabled =
+      includeTerminal &&
+      dedupWindowMinutes != null &&
+      dedupWindowMinutes > 0;
+
+    // Fast path: a single key needs only the single most-relevant row (an active
+    // instance preferred via NULLS FIRST, else the newest in-window terminal).
+    // One indexed SOQL with LIMIT 1 keeps the common start path to a single
+    // query and bounds the row governor regardless of how many historical
+    // terminal runs the key has. SOQL equality is case-insensitive, so a stored
+    // "Foo" matches a requested "foo".
+    if (keys.size() == 1) {
+      DateTime windowStart = terminalEnabled
+        ? dedupWindowStart()
+        : DateTime.now().addYears(1000);
+      for (Workflow_Instance__c inst : [
+        SELECT Id, Correlation_Key__c
+        FROM Workflow_Instance__c
+        WHERE
+          Correlation_Key__c IN :keys
+          AND (Status__c IN :ACTIVE_STATUSES
+          OR Terminal_At__c >= :windowStart)
+        WITH SYSTEM_MODE
+        ORDER BY Terminal_At__c DESC NULLS FIRST, CreatedDate DESC
+        LIMIT 1
+      ]) {
+        result.put(normalizeKey(inst.Correlation_Key__c), inst);
+      }
+      return result;
+    }
+
+    // Bulk path: resolve each key independently so no single hot key can crowd
+    // out another, and without reading every historical terminal row.
+    // 1) Active instances — bounded to at most one per key by the unique
+    //    Active_Correlation_Key__c index.
+    for (Workflow_Instance__c inst : [
+      SELECT Id, Correlation_Key__c
       FROM Workflow_Instance__c
-      WHERE
-        Correlation_Key__c IN :keys
-        AND (Status__c IN :ACTIVE_STATUSES
-        OR Terminal_At__c >= :windowStart)
+      WHERE Correlation_Key__c IN :keys AND Status__c IN :ACTIVE_STATUSES
       WITH SYSTEM_MODE
-      ORDER BY Terminal_At__c DESC NULLS FIRST, CreatedDate DESC
-      LIMIT :rowLimit
-    ];
-    for (Workflow_Instance__c inst : matches) {
-      String normalized = normalizeKey(inst.Correlation_Key__c);
-      if (!result.containsKey(normalized)) {
-        result.put(normalized, inst);
+      ORDER BY CreatedDate DESC
+    ]) {
+      String n = normalizeKey(inst.Correlation_Key__c);
+      if (!result.containsKey(n)) {
+        result.put(n, inst);
+      }
+    }
+    if (!terminalEnabled) {
+      return result;
+    }
+
+    // 2) Most-recent terminal per key not already resolved to an active
+    //    instance. An aggregate yields one MAX(Terminal_At__c) per key (each
+    //    grouped result counts as a single row toward the SOQL row limit, so a
+    //    hot key cannot exhaust it), then a bounded fetch resolves the Id at
+    //    those timestamps. Because the unique active-key index forces terminal
+    //    runs of one key to occur serially, their Terminal_At__c values are
+    //    distinct, so the fetch matches ~one row per key.
+    Set<String> remaining = new Set<String>();
+    for (String k : keys) {
+      if (!result.containsKey(normalizeKey(k))) {
+        remaining.add(k);
+      }
+    }
+    if (remaining.isEmpty()) {
+      return result;
+    }
+
+    DateTime windowStart = dedupWindowStart();
+    Map<String, Datetime> maxTimeByKey = new Map<String, Datetime>();
+    Set<Datetime> maxTimes = new Set<Datetime>();
+    for (AggregateResult ar : [
+      SELECT Correlation_Key__c ck, MAX(Terminal_At__c) mt
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c IN :remaining AND Terminal_At__c >= :windowStart
+      WITH SYSTEM_MODE
+      GROUP BY Correlation_Key__c
+    ]) {
+      Datetime mt = (Datetime) ar.get('mt');
+      if (mt == null) {
+        continue;
+      }
+      String n = normalizeKey((String) ar.get('ck'));
+      Datetime existing = maxTimeByKey.get(n);
+      if (existing == null || mt > existing) {
+        maxTimeByKey.put(n, mt);
+      }
+      maxTimes.add(mt);
+    }
+    if (maxTimes.isEmpty()) {
+      return result;
+    }
+
+    for (Workflow_Instance__c inst : [
+      SELECT Id, Correlation_Key__c, Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c IN :remaining AND Terminal_At__c IN :maxTimes
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+    ]) {
+      String n = normalizeKey(inst.Correlation_Key__c);
+      if (
+        !result.containsKey(n) && inst.Terminal_At__c == maxTimeByKey.get(n)
+      ) {
+        result.put(n, inst);
       }
     }
     return result;
