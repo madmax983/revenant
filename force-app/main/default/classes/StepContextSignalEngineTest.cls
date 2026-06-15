@@ -1554,4 +1554,80 @@ public class StepContextSignalEngineTest {
       stepExec.Output__c
     );
   }
+
+  // --- Offloaded signal payloads resolve (in bulk) for list accessors --------
+
+  public class OffloadWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.OffloadReadStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  public class OffloadReadStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      List<StepContext.Signal> sigs = ctx.getSignals('Big');
+      List<Integer> lens = new List<Integer>();
+      for (StepContext.Signal s : sigs) {
+        lens.add(s.payload == null ? -1 : s.payload.length());
+      }
+      return StepResult.complete(null, new Map<String, Object>{ 'lens' => lens });
+    }
+  }
+
+  @isTest
+  static void testOffloadedSignalPayloadsResolvedForListRead() {
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.OffloadWorkflow',
+      'OffloadKey',
+      null
+    );
+    // Two signals whose payloads exceed the offload threshold, so each is stored
+    // as a ContentVersion marker rather than inline.
+    String big1 = 'a'.repeat(100001);
+    String big2 = 'b'.repeat(100001);
+    String marker1 = WorkflowEngine.savePayloadIfNeeded(instanceId, big1, 'Big1');
+    String marker2 = WorkflowEngine.savePayloadIfNeeded(instanceId, big2, 'Big2');
+    System.assert(
+      marker1.startsWith('{"$attachmentId":'),
+      'payload should have been offloaded to a marker'
+    );
+    insert new List<Workflow_Signal__c>{
+      new Workflow_Signal__c(
+        Workflow_Instance__c = instanceId,
+        Signal_Name__c = 'Big',
+        Payload__c = marker1,
+        Status__c = 'Received'
+      ),
+      new Workflow_Signal__c(
+        Workflow_Instance__c = instanceId,
+        Signal_Name__c = 'Big',
+        Payload__c = marker2,
+        Status__c = 'Received'
+      )
+    };
+
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    Workflow_Step_Execution__c stepExec = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'StepContextSignalEngineTest.OffloadReadStep'
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    // Both offloaded payloads must resolve to their full content (length 100001),
+    // not the short marker string -- proving bulk resolution returned the right
+    // value per row.
+    System.assert(
+      stepExec.Output__c.contains('100001,100001') ||
+      stepExec.Output__c.contains('100001, 100001'),
+      'Offloaded signal payloads must resolve to full content for a list read, got: ' +
+      stepExec.Output__c
+    );
+  }
 }

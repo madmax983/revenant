@@ -1251,14 +1251,21 @@ public inherited sharing class WorkflowEngine {
     }
 
     private List<StepContext.Signal> toSignals(List<Workflow_Signal__c> rows) {
-      List<StepContext.Signal> out = new List<StepContext.Signal>();
+      List<String> rawPayloads = new List<String>();
       for (Workflow_Signal__c c : rows) {
+        rawPayloads.add(c.Payload__c);
+      }
+      // Resolve offloaded payloads in one bulk query rather than one per row.
+      List<String> resolvedPayloads = resolvePayloads(rawPayloads);
+
+      List<StepContext.Signal> out = new List<StepContext.Signal>();
+      for (Integer i = 0; i < rows.size(); i++) {
         out.add(
           new StepContext.Signal(
-            c.Id,
-            c.Signal_Name__c,
-            resolvePayload(c.Payload__c),
-            c.CreatedDate
+            rows[i].Id,
+            rows[i].Signal_Name__c,
+            resolvedPayloads[i],
+            rows[i].CreatedDate
           )
         );
       }
@@ -1534,14 +1541,21 @@ public inherited sharing class WorkflowEngine {
       ];
     }
 
-    List<StepContext.Signal> signals = new List<StepContext.Signal>();
+    List<String> rawPayloads = new List<String>();
     for (Workflow_Signal__c sig : records) {
+      rawPayloads.add(sig.Payload__c);
+    }
+    // Resolve any offloaded payloads with a single bulk query (not one per row).
+    List<String> resolvedPayloads = resolvePayloads(rawPayloads);
+
+    List<StepContext.Signal> signals = new List<StepContext.Signal>();
+    for (Integer i = 0; i < records.size(); i++) {
       signals.add(
         new StepContext.Signal(
-          sig.Id,
-          sig.Signal_Name__c,
-          resolvePayload(sig.Payload__c),
-          sig.CreatedDate
+          records[i].Id,
+          records[i].Signal_Name__c,
+          resolvedPayloads[i],
+          records[i].CreatedDate
         )
       );
     }
@@ -3845,6 +3859,57 @@ public inherited sharing class WorkflowEngine {
       }
     }
     return textValue;
+  }
+
+  /**
+   * Bulk variant of resolvePayload: resolves a list of payload strings, fetching
+   * every offloaded ContentVersion in ONE query rather than one per row. A list
+   * accessor (e.g. a parent reading a backlog of child-completion signals with
+   * large offloaded outputs) would otherwise issue a ContentVersion query per
+   * offloaded payload and hit the SOQL-query governor limit after ~100-200 rows,
+   * defeating the accessor's design of loading thousands in one call. Inline
+   * (non-marker) payloads and unresolved markers pass through unchanged, index
+   * for index with the input.
+   */
+  private static List<String> resolvePayloads(List<String> rawValues) {
+    Map<Integer, Id> markerDocByIndex = new Map<Integer, Id>();
+    Set<Id> docIds = new Set<Id>();
+    for (Integer i = 0; i < rawValues.size(); i++) {
+      String v = rawValues[i];
+      if (String.isNotBlank(v) && v.startsWith('{"$attachmentId":')) {
+        try {
+          Map<String, Object> marker = (Map<String, Object>) JSON.deserializeUntyped(
+            v
+          );
+          Id docId = (Id) marker.get('$attachmentId');
+          markerDocByIndex.put(i, docId);
+          docIds.add(docId);
+        } catch (Exception ex) {
+          System.debug(LoggingLevel.WARN, 'Failed to parse offload marker, using raw value: ' + ex.getMessage());
+        }
+      }
+    }
+    Map<Id, String> resolvedByDoc = new Map<Id, String>();
+    if (!docIds.isEmpty()) {
+      for (ContentVersion cv : [
+        SELECT ContentDocumentId, VersionData
+        FROM ContentVersion
+        WHERE ContentDocumentId IN :docIds AND IsLatest = TRUE
+        WITH SYSTEM_MODE
+      ]) {
+        resolvedByDoc.put(cv.ContentDocumentId, cv.VersionData.toString());
+      }
+    }
+    List<String> out = new List<String>();
+    for (Integer i = 0; i < rawValues.size(); i++) {
+      Id docId = markerDocByIndex.get(i);
+      out.add(
+        (docId != null && resolvedByDoc.containsKey(docId))
+          ? resolvedByDoc.get(docId)
+          : rawValues[i]
+      );
+    }
+    return out;
   }
 
   public static String savePayloadIfNeeded(
