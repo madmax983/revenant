@@ -8,6 +8,34 @@ public inherited sharing class StepContext {
   public String workflowInputJson { get; set; }
   public Integer workflowVersion { get; set; }
 
+  /**
+   * A stable, read-only idempotency key for this logical step execution.
+   *
+   * The engine guarantees only at-least-once execution: execute() (and
+   * compensate()) may run more than once for the same logical step on transient
+   * RetryPolicy/WorkflowRetryJob retries, on operator re-drive, and on
+   * at-least-once Workflow_Event__e resumes. Forward this key to a non-idempotent
+   * external system (e.g. as a Stripe `Idempotency-Key` header) to get
+   * effective-once side effects despite that contract.
+   *
+   * Guarantees:
+   * - Stable across every re-execution of the same logical (instance, step),
+   *   because it is derived only from `workflowInstanceId` + `stepName` and never
+   *   from the per-attempt, append-only Workflow_Step_Execution__c record Id.
+   * - Distinct per (instance, step): different steps in one instance, the same
+   *   step in two different instances, and the same step name across two parallel
+   *   fan-out branch instances (different Parent_Instance__c, hence different
+   *   `workflowInstanceId`) each observe a different key.
+   * - For compensate(), the engine builds the context with stepName
+   *   "<step>_Compensate", so the compensation key is automatically stable for a
+   *   given forward step yet distinct from that step's own forward key.
+   */
+  public String idempotencyKey {
+    get {
+      return deriveIdempotencyKey(this.workflowInstanceId, this.stepName);
+    }
+  }
+
   @TestVisible
   private static Double mockQueryRowsFraction = null;
   @TestVisible
@@ -131,5 +159,19 @@ public inherited sharing class StepContext {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Derives the per-step idempotency key from logical (instance, step) identity
+   * only. SHA-256 keeps it opaque, uniform-length, and safe to forward verbatim
+   * as an external idempotency token.
+   */
+  private static String deriveIdempotencyKey(Id instanceId, String stepName) {
+    String basis =
+      (instanceId == null ? '' : String.valueOf(instanceId)) +
+      '::' +
+      (stepName == null ? '' : stepName);
+    Blob digest = Crypto.generateDigest('SHA-256', Blob.valueOf(basis));
+    return EncodingUtil.convertToHex(digest);
   }
 }
