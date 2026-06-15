@@ -188,17 +188,12 @@ The engine maps a workflow's class name to a custom metadata record's `Developer
 
 ## Development & Testing
 
-Deploy the codebase to a scratch org:
-
 ```bash
-sf project deploy start
+sf project deploy start          # deploy to default scratch org
+sf apex run test -w 10           # run the full test suite
 ```
 
-Run the suite of unit tests to verify orchestration safety, yielding limits, parallel forks, Saga compensations, and watchdog timeouts:
-
-```bash
-sf apex run test -w 10
-```
+For testing patterns — `WorkflowTestHarness`, step-level unit tests, governor limit guidance, and when to use each — see **[docs/testing.md](docs/testing.md)**.
 
 ---
 

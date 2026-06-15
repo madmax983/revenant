@@ -102,6 +102,81 @@ public class WorkflowTestHarness {
     WorkflowEngine.disableQueueableInTest = true;
   }
 
+  /**
+   * Advances the instance by exactly one logical hop and returns the current
+   * result. Unlike drive(), this never throws when work remains — it lets the
+   * caller decide whether to keep going (via another step() or drive()). If
+   * nothing is advanceable, it returns the current result unchanged.
+   */
+  public Result step() {
+    deliverEvents();
+    for (Workflow_Instance__c inst : collectTree()) {
+      if (isAdvanceable(inst)) {
+        advanceOneStep(inst, 1);
+        deliverEvents();
+        return buildResult();
+      }
+    }
+    return buildResult();
+  }
+
+  /**
+   * Drives until the named step appears in the append-only audit trail, then
+   * stops — useful for asserting intermediate state between specific steps
+   * without knowing the exact hop count. Returns as soon as the step appears
+   * (whether Completed or still Running/Retrying), or when the instance
+   * stabilizes naturally (terminal or signal-suspend), whichever comes first.
+   * Throws HarnessException if the step is never reached within maxHops.
+   */
+  public Result driveUntilStep(String stepName) {
+    return driveUntilStep(stepName, DEFAULT_MAX_HOPS);
+  }
+
+  public Result driveUntilStep(String stepName, Integer maxHops) {
+    if (String.isBlank(stepName)) {
+      throw new HarnessException('stepName is required.');
+    }
+    if (maxHops == null || maxHops <= 0) {
+      throw new HarnessException('maxHops must be a positive number.');
+    }
+
+    Integer hopsThisCall = 0;
+    while (hopsThisCall < maxHops) {
+      deliverEvents();
+      Result current = buildResult();
+      if (current.reachedStep(stepName) || current.isTerminal) {
+        return current;
+      }
+      Boolean advancedAny = false;
+      for (Workflow_Instance__c inst : collectTree()) {
+        if (hopsThisCall >= maxHops) {
+          break;
+        }
+        if (isAdvanceable(inst)) {
+          hopsThisCall += advanceOneStep(inst, maxHops - hopsThisCall);
+          advancedAny = true;
+        }
+      }
+      if (!advancedAny) {
+        return buildResult();
+      }
+    }
+
+    // One final check: the target step may have completed on the last hop.
+    Result finalCheck = buildResult();
+    if (finalCheck.reachedStep(stepName) || finalCheck.isTerminal) {
+      return finalCheck;
+    }
+    throw new HarnessException(
+      'Step ' +
+        stepName +
+        ' was not reached within ' +
+        maxHops +
+        ' hop(s). Root status: ' +
+        finalCheck.status
+    );
+  }
+
   /** Drives to the next stable state using the default hop budget. */
   public Result drive() {
     return drive(DEFAULT_MAX_HOPS);

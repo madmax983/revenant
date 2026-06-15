@@ -149,6 +149,54 @@ public class WorkflowTestHarnessTest {
   }
 
   /**
+   * driveUntilStep: pauses after ChargeCreditCardStep completes, asserts the
+   * intermediate state, then resumes to the final Compensated terminal — proving
+   * that a harness can be paused and resumed across multiple calls.
+   */
+  @isTest
+  static void driveUntilStepPausesAndResumes() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'SagaWorkflowExample.SagaWorkflow',
+      'Harness_UntilStep_1',
+      '{"email":"test@example.com"}'
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+
+    // Pause after the first forward step completes.
+    WorkflowTestHarness.Result mid = harness.driveUntilStep(
+      'SagaWorkflowExample.ChargeCreditCardStep'
+    );
+
+    System.assert(
+      mid.reachedStep('SagaWorkflowExample.ChargeCreditCardStep'),
+      'ChargeCreditCardStep should appear in the audit trail'
+    );
+    System.assert(
+      !mid.isTerminal,
+      'Workflow should still be running after the first step'
+    );
+
+    // Resume from the paused point to the final terminal state.
+    WorkflowTestHarness.Result result = harness.drive();
+    Test.stopTest();
+
+    System.assertEquals(
+      'Compensated',
+      result.status,
+      'Saga should compensate after the SMTP failure'
+    );
+    System.assertEquals(
+      new List<String>{
+        'SagaWorkflowExample.ProvisionServiceStep_Compensate',
+        'SagaWorkflowExample.ChargeCreditCardStep_Compensate'
+      },
+      result.compensatedSteps,
+      'Compensations must run in LIFO order'
+    );
+  }
+
+  /**
    * Watchdog timeout: the harness fires the shipped WorkflowTimeoutJob to fail a
    * pending step, without the author hand-mutating the instance record.
    */
