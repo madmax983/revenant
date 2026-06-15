@@ -1460,4 +1460,90 @@ public class StepContextSignalEngineTest {
       'A yielding branch must not roll back a row it only observed (now a sibling claim)'
     );
   }
+
+  // --- A named lookup must not falsely report absence after the row budget is
+  // spent (a step that suspends as if absent would strand). ------------------
+
+  public class BudgetWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.BudgetReadStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null; // terminal
+    }
+  }
+
+  public class BudgetReadStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      // Spend the row budget on a noisy name, then probe a different name: it
+      // must still be found even though the budget is now exhausted.
+      List<StepContext.Signal> noise = ctx.getSignals('Noise');
+      Boolean importantPresent = ctx.hasSignal('Important');
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{
+          'noiseSeen' => noise.size(),
+          'importantPresent' => importantPresent
+        }
+      );
+    }
+  }
+
+  @isTest
+  static void testNamedLookupNotFalselyAbsentAfterBudgetExhausted() {
+    // Shrink the cap so a single Noise row exhausts the budget.
+    WorkflowEngine.SERIAL_SIGNAL_ROW_CAP = 1;
+
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.BudgetWorkflow',
+      'BudgetKey',
+      null
+    );
+
+    // Land signals as Received before the step runs: two of the noisy name and
+    // one of the name the step probes after exhausting its budget.
+    insert new List<Workflow_Signal__c>{
+      new Workflow_Signal__c(
+        Workflow_Instance__c = instanceId,
+        Signal_Name__c = 'Noise',
+        Payload__c = 'n1',
+        Status__c = 'Received'
+      ),
+      new Workflow_Signal__c(
+        Workflow_Instance__c = instanceId,
+        Signal_Name__c = 'Noise',
+        Payload__c = 'n2',
+        Status__c = 'Received'
+      ),
+      new Workflow_Signal__c(
+        Workflow_Instance__c = instanceId,
+        Signal_Name__c = 'Important',
+        Payload__c = 'imp',
+        Status__c = 'Received'
+      )
+    };
+
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    Workflow_Step_Execution__c stepExec = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'StepContextSignalEngineTest.BudgetReadStep'
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    System.assert(
+      stepExec.Output__c != null &&
+      stepExec.Output__c.contains('"noiseSeen":1'),
+      'The noisy read should have been capped to one row, got: ' +
+      stepExec.Output__c
+    );
+    System.assert(
+      stepExec.Output__c.contains('"importantPresent":true'),
+      'A named lookup after the row budget is spent must still find a Received signal (no false absence), got: ' +
+      stepExec.Output__c
+    );
+  }
 }

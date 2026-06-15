@@ -121,6 +121,11 @@ public inherited sharing class StepContext {
   // Per-name full results, loaded lazily so a single named lookup does not pull
   // every pending signal/payload on the instance. Keyed by lower-cased name.
   private Map<String, List<Signal>> byNameCache = new Map<String, List<Signal>>();
+  // Names whose byNameCache list the source truncated (row-budget cap). Such a
+  // list is only the oldest page, so its last element is NOT necessarily the
+  // most-recent pending signal: latestFor() must not satisfy a latest lookup
+  // from it and instead asks the source for the true most-recent row.
+  private Set<String> partialNameKeys = new Set<String>();
   // Per-name latest-only results for getSignal/hasSignal, so reading one
   // decision never loads every duplicate payload. Keyed by lower-cased name.
   private Map<String, Signal> latestByName = new Map<String, Signal>();
@@ -302,6 +307,11 @@ public inherited sharing class StepContext {
       List<Signal> loaded = (signalSource != null)
         ? signalSource.getPendingSignals(signalName)
         : null;
+      // If the source truncated this read, the cached list is a partial (oldest)
+      // page, so latestFor() must not treat its last row as the true latest.
+      if (signalSource != null && signalSource.readWasCapped()) {
+        partialNameKeys.add(key);
+      }
       List<Signal> matches = (loaded != null) ? loaded : new List<Signal>();
       // A prior getSignal/hasSignal for this name may have already claimed the
       // latest matching row (flipping it out of the source's Received view in a
@@ -345,7 +355,11 @@ public inherited sharing class StepContext {
       return latest;
     }
     String key = signalName.toLowerCase();
-    if (byNameCache.containsKey(key)) {
+    // Only trust a cached per-name list for the latest when it is complete. A
+    // truncated list (partialNameKeys) holds only the oldest page, so its last
+    // element can be an older payload while newer Received rows go unread; fall
+    // through to the source's getLatestSignal for the true most-recent row.
+    if (byNameCache.containsKey(key) && !partialNameKeys.contains(key)) {
       List<Signal> matches = byNameCache.get(key);
       return matches.isEmpty() ? null : matches[matches.size() - 1];
     }

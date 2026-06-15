@@ -398,4 +398,109 @@ public class StepContextTest {
       'A blank named lookup must not mark any signal consumable'
     );
   }
+
+  // A SignalSource test double whose named list read returns only the oldest
+  // page (and reports capped/uncapped on demand), while getLatestSignal always
+  // returns the true most-recent row -- mirroring a row-budget-truncated read.
+  private class FakeNameSource implements StepContext.SignalSource {
+    private final List<StepContext.Signal> page;
+    private final StepContext.Signal trueLatest;
+    private final Boolean capped;
+    private FakeNameSource(
+      List<StepContext.Signal> page,
+      StepContext.Signal trueLatest,
+      Boolean capped
+    ) {
+      this.page = page;
+      this.trueLatest = trueLatest;
+      this.capped = capped;
+    }
+    public List<StepContext.Signal> getPendingSignals(String signalName) {
+      return page.clone();
+    }
+    public StepContext.Signal getLatestSignal(String signalName) {
+      return trueLatest;
+    }
+    public Boolean readWasCapped() {
+      return capped;
+    }
+  }
+
+  @isTest
+  static void testGetSignalUsesTrueLatestWhenListReadCapped() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    // Oldest partial page for 'Evt' (budget-truncated); the true most-recent
+    // 'Evt' row is NOT in this page.
+    List<StepContext.Signal> oldestPage = new List<StepContext.Signal>{
+      new StepContext.Signal(null, 'Evt', '{"seq":1}', DateTime.now().addMinutes(-5)),
+      new StepContext.Signal(null, 'Evt', '{"seq":2}', DateTime.now().addMinutes(-4))
+    };
+    StepContext.Signal trueLatest = new StepContext.Signal(
+      null,
+      'Evt',
+      '{"seq":99}',
+      DateTime.now()
+    );
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      (StepContext.SignalSource) new FakeNameSource(oldestPage, trueLatest, true)
+    );
+
+    // Read the (capped) list first; this populates the partial per-name cache.
+    System.assertEquals(2, ctx.getSignals('Evt').size());
+
+    // A subsequent latest lookup must NOT return the last row of the partial
+    // page ({"seq":2}); it must reflect the true most-recent pending signal.
+    StepContext.Signal latest = ctx.getSignal('Evt');
+    System.assertEquals(true, latest.isPresent());
+    System.assertEquals(
+      '{"seq":99}',
+      latest.payload,
+      'getSignal after a capped getSignals must return the true latest, not the partial page tail'
+    );
+  }
+
+  @isTest
+  static void testGetSignalUsesListTailWhenListReadComplete() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    // A complete (uncapped) list: its last element IS the true latest, so the
+    // cached list is trusted and getLatestSignal must NOT override it.
+    List<StepContext.Signal> fullList = new List<StepContext.Signal>{
+      new StepContext.Signal(null, 'Evt', '{"seq":1}', DateTime.now().addMinutes(-2)),
+      new StepContext.Signal(null, 'Evt', '{"seq":2}', DateTime.now().addMinutes(-1))
+    };
+    // trueLatest differs so a regression that always consults the source fails.
+    StepContext.Signal sentinel = new StepContext.Signal(
+      null,
+      'Evt',
+      '{"seq":99}',
+      DateTime.now()
+    );
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      (StepContext.SignalSource) new FakeNameSource(fullList, sentinel, false)
+    );
+
+    System.assertEquals(2, ctx.getSignals('Evt').size());
+    StepContext.Signal latest = ctx.getSignal('Evt');
+    System.assertEquals(
+      '{"seq":2}',
+      latest.payload,
+      'getSignal after a complete getSignals must reuse the cached list tail, not re-query'
+    );
+  }
 }

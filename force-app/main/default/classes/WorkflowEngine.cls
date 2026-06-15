@@ -1032,7 +1032,10 @@ public inherited sharing class WorkflowEngine {
   // consume; 8 000 keeps the consume update (matched ids + same-name duplicate
   // cleanup) safely under the 10 000 DML-row limit while never exposing more
   // rows than completion can consume. Excess rows stay Received for a later read.
-  private static final Integer SERIAL_SIGNAL_ROW_CAP = 8000;
+  // @TestVisible (non-final) so a test can shrink the cap to exercise budget
+  // exhaustion without inserting thousands of rows.
+  @TestVisible
+  private static Integer SERIAL_SIGNAL_ROW_CAP = 8000;
 
   /**
    * Lazily supplies the pending (unconsumed) signals targeting an instance so a
@@ -1070,12 +1073,16 @@ public inherited sharing class WorkflowEngine {
     }
 
     public StepContext.Signal getLatestSignal(String signalName) {
-      if (rowBudget <= 0) {
-        capped = true;
-        return null;
-      }
+      // A single-row "latest"/"has" lookup must reflect database truth even
+      // after the row budget is spent. Reporting a false absence here is unsafe:
+      // a step that then suspends as if the signal never arrived would never be
+      // re-woken (the signal's wake event already fired on insert), stranding
+      // the instance. One extra observed row stays within the COMPLETE consume
+      // pass's headroom (the budget caps list reads, not single lookups), so the
+      // lookup always queries the true most-recent row rather than gating on the
+      // budget. Only a genuine full page is still flagged capped.
       StepContext.Signal latest = loadLatestSignal(this.instanceId, signalName);
-      if (latest != null) {
+      if (latest != null && rowBudget > 0) {
         rowBudget -= 1;
       }
       return latest;
@@ -1297,7 +1304,7 @@ public inherited sharing class WorkflowEngine {
     }
 
     public StepContext.Signal getLatestSignal(String signalName) {
-      if (String.isBlank(signalName) || claimBudget <= 0) {
+      if (String.isBlank(signalName)) {
         return null;
       }
       // Fetch recent candidates newest-first.
@@ -1315,9 +1322,17 @@ public inherited sharing class WorkflowEngine {
       if (candidates.isEmpty()) {
         return null;
       }
-      // Statement or SOQL budget spent: return the newest read-only
-      // (at-least-once) rather than issuing more claim/lock queries.
-      if (claimStatementBudget <= 0 || nearSoqlLimit()) {
+      // Row, statement or SOQL budget spent: a single-row lookup must still
+      // reflect database truth, so return the newest read-only (at-least-once)
+      // rather than reporting a false absence -- a branch that then suspends as
+      // if the signal never arrived would never be re-woken (its wake event
+      // already fired on insert) and would strand. No claim is issued (no
+      // budget), so mark capped to skip same-name cleanup at consume.
+      if (
+        claimBudget <= 0 ||
+        claimStatementBudget <= 0 ||
+        nearSoqlLimit()
+      ) {
         capped = true;
         Workflow_Signal__c c = candidates[0];
         return new StepContext.Signal(
