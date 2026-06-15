@@ -3144,6 +3144,156 @@ public class WorkflowEngineTest {
   }
 
   @isTest
+  static void testSuspendedCompensationCrashRecordsCompensationStep() {
+    // A sleeping/approval-gated compensation: the engine parked the saga as Suspended
+    // while a _Compensate step waited (SLEEP/SUSPEND/WAIT_FOR_APPROVAL), then resumed it
+    // via WorkflowOrchestrator(instanceId) with no stepName. runStep flips Suspended back
+    // to Compensating in-transaction, but a crash rolls that flip back, so the finalizer's
+    // handleCrash sees status 'Suspended' with a blank stepName. It must still record the
+    // crash against the top-of-stack _Compensate step (not the stale forward step) and
+    // park the saga as recoverable CompensationFailed.
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended', // rolled back from Compensating by the crash
+      Current_Step__c = 'WorkflowEngineTest.HappyStep1', // stale forward step
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+      ),
+      Input__c = '{"test": true}'
+    );
+    insert inst;
+    // The suspended _Compensate attempt (Pending, as the SLEEP/approval branch leaves it).
+    // It is the latest step execution, which is how handleCrash detects mid-rollback.
+    Workflow_Step_Execution__c compLog = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep_Compensate',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+    insert compLog;
+
+    Test.startTest();
+    WorkflowEngine.handleCrash(
+      inst.Id,
+      new WorkflowEngine.WorkflowException('Crash resuming sleeping compensation')
+    );
+
+    Workflow_Step_Execution__c crashedComp = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :compLog.Id
+    ];
+    System.assertEquals('Failed', crashedComp.Status__c);
+
+    Integer forwardFailures = [
+      SELECT COUNT()
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowEngineTest.HappyStep1'
+        AND Status__c = 'Failed'
+    ];
+    System.assertEquals(
+      0,
+      forwardFailures,
+      'A suspended-compensation crash must not create a spurious forward-step failure'
+    );
+
+    Workflow_Instance__c stalled = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('CompensationFailed', stalled.Status__c);
+
+    WorkflowEngine.resumeCompensation(inst.Id);
+    WorkflowEngine.runStep(inst.Id, null);
+    Test.stopTest();
+
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Compensated', finalInst.Status__c);
+
+    List<Workflow_Step_Execution__c> compAttempts = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep_Compensate'
+      ORDER BY CreatedDate ASC, Id ASC
+    ];
+    System.assertEquals(
+      2,
+      compAttempts.size(),
+      'The failed suspended attempt is preserved alongside the successful resume attempt'
+    );
+    System.assertEquals('Failed', compAttempts[0].Status__c);
+  }
+
+  @isTest
+  static void testSuspendedCancelCompensationCrashStaysOnCancelPath() {
+    // A cancel-driven rollback whose compensation was sleeping/approval-gated (Suspended)
+    // when the crash hit. The persisted status is 'Suspended' (the in-transaction flip to
+    // 'Cancelling' rolled back), but the engine-owned 'Cancelled by user' marker survives
+    // in Error_Message__c. handleCrash must keep the saga on the cancel path so it ends
+    // 'Cancelled' rather than 'Compensated' after resume.
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Error_Message__c = 'Cancelled by user. Compensating.',
+      Current_Step__c = 'WorkflowEngineTest.HappyStep1',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+      ),
+      Input__c = '{"test": true}'
+    );
+    insert inst;
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep_Compensate',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+
+    Test.startTest();
+    WorkflowEngine.handleCrash(
+      inst.Id,
+      new WorkflowEngine.WorkflowException('Crash resuming sleeping cancel compensation')
+    );
+
+    Workflow_Instance__c stalled = [
+      SELECT Status__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('CompensationFailed', stalled.Status__c);
+    System.assert(
+      stalled.Error_Message__c.contains('Cancelled by user'),
+      'The cancel marker must survive the suspended-compensation crash'
+    );
+
+    WorkflowEngine.resumeCompensation(inst.Id);
+    WorkflowEngine.runStep(inst.Id, null);
+    Test.stopTest();
+
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'Cancelled',
+      finalInst.Status__c,
+      'A cancel-driven rollback that crashed mid-sleep must finish Cancelled, not Compensated'
+    );
+  }
+
+  @isTest
   static void testBulkStart() {
     List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
     for (Integer i = 0; i < 5; i++) {

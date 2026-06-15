@@ -1531,13 +1531,39 @@ public inherited sharing class WorkflowEngine {
     // against that '_Compensate' step rather than the stale forward Current_Step__c.
     // This keeps the failed compensation in the append-only audit trail and lets the
     // resume path append a fresh attempt instead of mistaking a stale log for in-flight.
+    //
+    // The instance is mid-rollback when its status is Compensating/Cancelling, OR when it
+    // is Suspended and its most recent step execution is a '_Compensate' attempt. The
+    // latter is the sleeping/approval-gated compensation case: a compensation returned
+    // SLEEP/SUSPEND/WAIT_FOR_APPROVAL, so the engine parked the instance as Suspended and
+    // resumed it later via WorkflowOrchestrator(instanceId) with no stepName. runStep()
+    // flips that Suspended status back to Compensating/Cancelling in-transaction (using
+    // the same latest-'_Compensate' signal), but a crash rolls that flip back, leaving the
+    // persisted status as Suspended here. Detect it the same way runStep() does so the
+    // crash is recorded against the '_Compensate' step instead of the stale forward step.
+    Boolean midRollback =
+      instance.Status__c == 'Compensating' ||
+      instance.Status__c == 'Cancelling';
+    if (!midRollback && instance.Status__c == 'Suspended') {
+      List<Workflow_Step_Execution__c> latestSteps = [
+        SELECT Step_Name__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c = :instance.Id
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC, Id DESC
+        LIMIT 1
+      ];
+      midRollback =
+        !latestSteps.isEmpty() &&
+        latestSteps[0].Step_Name__c != null &&
+        latestSteps[0].Step_Name__c.endsWith('_Compensate');
+    }
+
     String targetStepName;
     if (String.isNotBlank(stepName)) {
       targetStepName = stepName;
     } else if (
-      (instance.Status__c == 'Compensating' ||
-      instance.Status__c == 'Cancelling') &&
-      String.isNotBlank(instance.Compensation_Stack__c)
+      midRollback && String.isNotBlank(instance.Compensation_Stack__c)
     ) {
       List<String> stack = (List<String>) JSON.deserialize(
         instance.Compensation_Stack__c,
@@ -1685,7 +1711,17 @@ public inherited sharing class WorkflowEngine {
       // driving to a generic terminal Failed and silently abandoning the deeper
       // (un-run) compensations, park the saga in the recoverable, operator-visible
       // "rollback incomplete" condition so it can be resumed from this exact point.
-      Boolean wasCancelling = (instance.Status__c == 'Cancelling');
+      //
+      // Detect the cancel phase via the engine-owned 'Cancelled by user' marker in
+      // addition to the live status: when a cancel-driven rollback crashed while a
+      // compensation was Suspended (sleep/approval), the in-transaction flip back to
+      // 'Cancelling' was rolled back, so the persisted status is 'Suspended' but the
+      // preserved Error_Message__c still carries the marker. Reading it keeps the saga on
+      // the cancel path so it finishes 'Cancelled' rather than 'Compensated' on resume.
+      Boolean wasCancelling =
+        instance.Status__c == 'Cancelling' ||
+        (instance.Error_Message__c != null &&
+        instance.Error_Message__c.contains('Cancelled by user'));
       instance.Status__c = 'CompensationFailed';
       instance.Error_Message__c = buildRollbackIncompleteMessage(
         wasCancelling,
