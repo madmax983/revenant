@@ -55,9 +55,11 @@ public inherited sharing class StepContext {
   private List<Signal> pendingSignals;
   private SignalSource signalSource;
   private Boolean signalsLoaded = false;
-  // Signal names the step looked at; drives engine-managed consumption.
-  private Set<String> observedNames = new Set<String>();
-  private Boolean observedAll = false;
+  // Snapshot signals the step actually matched (saw a payload for). Only these
+  // drive engine-managed consumption -- a name that was probed but found absent
+  // must NOT consume a same-name signal that arrives later.
+  private Set<Id> matchedSignalIds = new Set<Id>();
+  private Set<String> matchedNames = new Set<String>();
 
   public StepContext(
     Id workflowInstanceId,
@@ -171,7 +173,9 @@ public inherited sharing class StepContext {
    * pending signal observed, so the engine consumes them when the step completes.
    */
   public List<Signal> getSignals() {
-    observedAll = true;
+    for (Signal s : pending()) {
+      markMatched(s);
+    }
     return pending().clone();
   }
 
@@ -180,10 +184,10 @@ public inherited sharing class StepContext {
    * Never null. Marks the name observed.
    */
   public List<Signal> getSignals(String signalName) {
-    observe(signalName);
     List<Signal> matches = new List<Signal>();
     for (Signal s : pending()) {
       if (s.name == signalName) {
+        markMatched(s);
         matches.add(s);
       }
     }
@@ -196,25 +200,29 @@ public inherited sharing class StepContext {
    * none is pending. Never returns null. Marks the name observed.
    */
   public Signal getSignal(String signalName) {
-    observe(signalName);
     Signal latest = null;
     for (Signal s : pending()) {
       if (s.name == signalName) {
         latest = s;
       }
     }
-    return (latest != null) ? latest : new Signal();
+    if (latest != null) {
+      markMatched(latest);
+      return latest;
+    }
+    return new Signal();
   }
 
   /** True when at least one pending signal matches the given name. Marks observed. */
   public Boolean hasSignal(String signalName) {
-    observe(signalName);
+    Boolean found = false;
     for (Signal s : pending()) {
       if (s.name == signalName) {
-        return true;
+        markMatched(s);
+        found = true;
       }
     }
-    return false;
+    return found;
   }
 
   /**
@@ -223,39 +231,30 @@ public inherited sharing class StepContext {
    * name is observed, every pending signal of that name is included so that
    * at-least-once redelivered duplicates do not reappear to a later step.
    */
+  /** Ids of the snapshot signals the step actually matched (saw a payload for). */
   public Set<Id> getConsumedSignalIds() {
-    Set<Id> ids = new Set<Id>();
-    for (Signal s : pending()) {
-      Boolean observed =
-        observedAll ||
-        (s.name != null && observedNames.contains(s.name.toLowerCase()));
-      if (observed && s.signalId != null) {
-        ids.add(s.signalId);
-      }
-    }
-    return ids;
+    return matchedSignalIds.clone();
   }
 
   /**
-   * Lower-cased names of the signals the step observed. The engine re-queries by
-   * these names at the step's successful transition, so a same-name duplicate
-   * delivered while the step was executing is consumed too (not just the ones
-   * pre-loaded into this context).
+   * Names of the signals the step actually matched. The engine re-queries
+   * still-Received signals filtered to these names at the step's successful
+   * transition, so a same-name at-least-once duplicate delivered while the step
+   * was executing is consumed too -- while a name that was only probed absent
+   * never consumes a signal that arrives afterwards.
    */
-  public Set<String> getObservedSignalNames() {
-    return observedNames.clone();
+  public Set<String> getConsumedSignalNames() {
+    return matchedNames.clone();
   }
 
-  /** True when the step read the full pending set (every name is observed). */
-  public Boolean isAllObserved() {
-    return observedAll;
-  }
-
-  // Records an observed signal name, normalized for case-insensitive matching
-  // (Apex String == is case-insensitive, so the consumable set must be too).
-  private void observe(String signalName) {
-    if (signalName != null) {
-      observedNames.add(signalName.toLowerCase());
+  // Records a snapshot signal the step matched, so consumption is scoped to
+  // signals the step actually saw rather than every name it probed.
+  private void markMatched(Signal s) {
+    if (s != null && s.name != null) {
+      matchedNames.add(s.name);
+      if (s.signalId != null) {
+        matchedSignalIds.add(s.signalId);
+      }
     }
   }
 

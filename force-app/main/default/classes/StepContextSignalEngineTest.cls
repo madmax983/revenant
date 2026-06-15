@@ -310,4 +310,78 @@ public class StepContextSignalEngineTest {
       )
       .execute(null);
   }
+
+  // --- A name probed absent must not consume a later arrival (AC4b nuance) -
+
+  public class ProbeAbsentWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.ProbeAbsentStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  public class ProbeAbsentStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal trigger = ctx.getSignal('Trigger');
+      if (!trigger.isPresent()) {
+        return StepResult.suspend();
+      }
+      // A signal of a name we are about to probe lands mid-execution (after the
+      // snapshot was loaded by the getSignal above).
+      insert new Workflow_Signal__c(
+        Workflow_Instance__c = ctx.workflowInstanceId,
+        Signal_Name__c = 'LateGhost',
+        Payload__c = 'boo',
+        Status__c = 'Received'
+      );
+      // Probe it: absent in the cached snapshot, so it must not be consumed.
+      System.assertEquals(
+        false,
+        ctx.hasSignal('LateGhost'),
+        'A signal inserted after the snapshot is not visible to this step'
+      );
+      return StepResult.complete(null, 'done');
+    }
+  }
+
+  @isTest
+  static void testProbeAbsentNamePreservesLaterSignal() {
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.ProbeAbsentWorkflow',
+      'ProbeKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    WorkflowEngine.signal('ProbeKey', 'Trigger', '{"v":1}');
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Trigger was matched and consumed.
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c = 'Trigger'
+          AND Status__c = 'Received'
+      ]
+    );
+    // LateGhost was only probed absent -> it must survive for a later step.
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c = 'LateGhost'
+          AND Status__c = 'Received'
+      ],
+      'A signal that arrived after an absent probe must be preserved'
+    );
+  }
 }

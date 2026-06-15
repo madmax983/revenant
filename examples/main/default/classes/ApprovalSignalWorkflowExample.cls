@@ -10,8 +10,15 @@
  * the reject branch to fire twice.
  */
 public inherited sharing class ApprovalSignalWorkflowExample implements WorkflowDefinition {
-  /** The signal name an approver publishes to convey their decision. */
-  public static final String DECISION_SIGNAL = 'ApprovalDecision';
+  /** The approval gate name passed to waitForApproval. */
+  public static final String APPROVAL_KEY = 'OrderApproval';
+  /**
+   * The signal name an approver publishes to convey their decision. This must
+   * match what the approval gate produces: the dashboard's submitApproval (and
+   * the WorkflowSignalInvocableAction approval convention) publish
+   * 'Approve:' + approvalKey, so the step reads that exact name.
+   */
+  public static final String DECISION_SIGNAL = 'Approve:' + APPROVAL_KEY;
 
   public String getInitialStep() {
     return 'ApprovalSignalWorkflowExample.RequestApprovalStep';
@@ -35,7 +42,7 @@ public inherited sharing class ApprovalSignalWorkflowExample implements Workflow
 
       if (!decision.isPresent()) {
         // First run (or resumed by a timer): nothing decided yet -> suspend.
-        return StepResult.waitForApproval('OrderApproval', 'Manager');
+        return StepResult.waitForApproval(APPROVAL_KEY, 'Manager');
       }
 
       Map<String, Object> payload = (Map<String, Object>) JSON.deserializeUntyped(

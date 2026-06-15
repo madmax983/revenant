@@ -1039,42 +1039,39 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Marks the signals a step observed consumed at its successful transition.
-   * Re-queries the instance's still-Received signals by the observed names (so a
-   * same-name at-least-once duplicate delivered while the step was executing is
-   * consumed too, not just the snapshot pre-loaded into the context). When the
-   * step read the full pending set, every still-Received signal is consumed. A
-   * step that observed nothing triggers no query, keeping non-signal steps cheap.
+   * Marks the signals a step matched consumed at its successful transition.
+   * Re-queries the instance's still-Received signals filtered to the matched
+   * names (so a same-name at-least-once duplicate delivered while the step was
+   * executing is consumed too, not just the snapshot pre-loaded into the
+   * context), while a name that was only probed absent never consumes a signal
+   * that arrives afterwards. A step that matched nothing triggers no query,
+   * keeping non-signal steps cheap and bounding the query to the observed names.
    */
   private static void markSignalsConsumed(Id instanceId, StepContext context) {
     if (context == null) {
       return;
     }
-    Boolean consumeAll = context.isAllObserved();
-    Set<String> observedNames = context.getObservedSignalNames();
-    if (!consumeAll && (observedNames == null || observedNames.isEmpty())) {
+    Set<String> matchedNames = context.getConsumedSignalNames();
+    if (matchedNames == null || matchedNames.isEmpty()) {
       return;
     }
 
-    List<Workflow_Signal__c> toConsume = new List<Workflow_Signal__c>();
-    for (Workflow_Signal__c sig : [
-      SELECT Id, Signal_Name__c, Status__c
+    List<Workflow_Signal__c> toConsume = [
+      SELECT Id, Status__c
       FROM Workflow_Signal__c
-      WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Received'
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Status__c = 'Received'
+        AND Signal_Name__c IN :matchedNames
       WITH SYSTEM_MODE
-    ]) {
-      Boolean observed =
-        consumeAll ||
-        (sig.Signal_Name__c != null &&
-        observedNames.contains(sig.Signal_Name__c.toLowerCase()));
-      if (observed) {
-        sig.Status__c = 'Consumed';
-        toConsume.add(sig);
-      }
+    ];
+    if (toConsume.isEmpty()) {
+      return;
     }
-    if (!toConsume.isEmpty()) {
-      update as system toConsume;
+    for (Workflow_Signal__c sig : toConsume) {
+      sig.Status__c = 'Consumed';
     }
+    update as system toConsume;
   }
 
   private static void saveStepExec(Workflow_Step_Execution__c stepExec) {
