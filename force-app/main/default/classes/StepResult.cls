@@ -49,6 +49,13 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  public static StepResult suspend(String stepStateJson) {
+    StepResult r = new StepResult();
+    r.action = ActionType.SUSPEND;
+    r.stepStateJson = stepStateJson;
+    return r;
+  }
+
   public static StepResult retry(RetryPolicy policy) {
     StepResult r = new StepResult();
     r.action = ActionType.RETRY;

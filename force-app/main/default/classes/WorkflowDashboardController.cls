@@ -560,9 +560,10 @@ public inherited sharing class WorkflowDashboardController {
         String className = pm.group(1);
         if (
           ac.Name.contains('WorkflowEngineTest') ||
-          ac.Name.contains('WorkflowDashboardControllerTest')
+          ac.Name.contains('WorkflowDashboardControllerTest') ||
+          ac.Name.equalsIgnoreCase('BulkRedriveWorkflow')
         ) {
-          continue; // Exclude test classes
+          continue; // Exclude test classes and internal system workflows
         }
         // Outer class match returns the bare name; inner class is qualified.
         definitions.add(
@@ -596,7 +597,8 @@ public inherited sharing class WorkflowDashboardController {
       if (
         String.isBlank(className) ||
         className.contains('WorkflowEngineTest') ||
-        className.contains('WorkflowDashboardControllerTest')
+        className.contains('WorkflowDashboardControllerTest') ||
+        className.equalsIgnoreCase('BulkRedriveWorkflow')
       ) {
         continue;
       }
@@ -633,6 +635,90 @@ public inherited sharing class WorkflowDashboardController {
       WorkflowEngine.retryWorkflow(instanceId);
     } catch (Exception ex) {
       System.debug(LoggingLevel.ERROR, 'Aura retryWorkflowInstance failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  /**
+   * Exact count of failed instances that a "Re-drive matching" action would
+   * re-enqueue for the operator's CURRENT filter. Shown in the confirmation
+   * prompt before anything is enqueued. Uses the same selection surface
+   * (workflowName / status / searchTerm) as getFilteredInstances, restricted to
+   * the operator-recoverable terminal set and excluding the re-driver itself.
+   */
+  @AuraEnabled
+  public static Integer getRedriveEligibleCount(
+    String workflowName,
+    String status,
+    String searchTerm
+  ) {
+    checkAuthorization();
+    try {
+      return BulkRedriveWorkflow.countEligible(
+        workflowName,
+        status,
+        searchTerm
+      );
+    } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura getRedriveEligibleCount failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  /**
+   * Re-drives every failed instance matching the operator's current filter in a
+   * single bounded action. The actual re-drive runs asynchronously as a
+   * BulkRedriveWorkflow instance, which pages over the selection in safe-sized
+   * chunks (so the platform async-enqueue budget is never exceeded) and recovers
+   * each instance through the existing WorkflowEngine.retryWorkflow primitive.
+   *
+   * Returns { started, eligibleCount, redriveInstanceId } so the dashboard can
+   * confirm the launch and link the operator to the re-driver for live progress.
+   */
+  @AuraEnabled
+  public static Map<String, Object> redriveMatchingInstances(
+    String workflowName,
+    String status,
+    String searchTerm
+  ) {
+    checkAuthorization();
+    try {
+      Integer eligibleCount = BulkRedriveWorkflow.countEligible(
+        workflowName,
+        status,
+        searchTerm
+      );
+      if (eligibleCount == 0) {
+        return new Map<String, Object>{
+          'started' => false,
+          'eligibleCount' => 0,
+          'redriveInstanceId' => null
+        };
+      }
+
+      Map<String, Object> filter = new Map<String, Object>{
+        'workflowName' => workflowName,
+        'status' => status,
+        'searchTerm' => searchTerm
+      };
+      String correlationKey =
+        'BulkRedrive_' +
+        DateTime.now().getTime() +
+        '_' +
+        Math.abs(Crypto.getRandomLong());
+      Id redriveInstanceId = WorkflowEngine.start(
+        BulkRedriveWorkflow.REDRIVER_WORKFLOW_NAME,
+        correlationKey,
+        filter
+      );
+
+      return new Map<String, Object>{
+        'started' => true,
+        'eligibleCount' => eligibleCount,
+        'redriveInstanceId' => redriveInstanceId
+      };
+    } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura redriveMatchingInstances failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }

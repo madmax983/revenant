@@ -138,4 +138,94 @@ public class BatchFanoutWorkflowExampleTest {
       updatedAcc.Description.contains('Audited by Revenant Workflow')
     );
   }
+
+  @isTest
+  static void testFanoutStepIdempotentOnRetryWithStaleOffset() {
+    // Seed accounts
+    List<Account> testAccs = new List<Account>{
+      new Account(Name = 'Acme Corp'),
+      new Account(Name = 'Stark Industries'),
+      new Account(Name = 'Wayne Enterprises')
+    };
+    insert testAccs;
+
+    // 1. Start the parent and run through FetchRecordsStep
+    Test.startTest();
+    Id parentId = WorkflowEngine.start(
+      'BatchFanoutWorkflowExample.BatchFanoutWorkflow',
+      'StaleOffsetKey',
+      null
+    );
+    Test.stopTest();
+
+    // 2. Run FanoutStep - spawns 3 children and suspends parent
+    new WorkflowOrchestrator(parentId).execute(null);
+
+    Workflow_Instance__c parentInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals('Suspended', parentInst.Status__c);
+
+    List<Workflow_Instance__c> children = [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentId
+    ];
+    System.assertEquals(3, children.size());
+
+    // 3. Simulate the crash scenario: inject a stale offset=1 into the step
+    //    execution Output__c (as if the step had yielded mid-spawn before suspending)
+    //    and force the parent to Failed so retryWorkflow can be called.
+    Workflow_Step_Execution__c stepExec = [
+      SELECT Id, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :parentId
+        AND Step_Name__c = 'BatchFanoutWorkflowExample.FanoutStep'
+      LIMIT 1
+    ];
+    stepExec.Output__c = '{"offset":1}';
+    update stepExec;
+
+    parentInst.Status__c = 'Failed';
+    update parentInst;
+
+    // 4. Redrive — the stale offset=1 would previously cause WorkflowEngine.start()
+    //    to throw "already exists" for children at index 1 and 2.
+    WorkflowEngine.retryWorkflow(parentId);
+
+    // Run FanoutStep again — must NOT throw
+    Boolean threw = false;
+    try {
+      new WorkflowOrchestrator(parentId).execute(null);
+    } catch (Exception e) {
+      threw = true;
+    }
+    System.assert(!threw, 'FanoutStep re-run with stale offset should be idempotent');
+
+    // 5. Complete the children and verify the workflow can finish normally
+    for (Workflow_Instance__c child : children) {
+      new WorkflowOrchestrator(child.Id).execute(null);
+    }
+    Test.getEventBus().deliver();
+
+    parentInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals('Running', parentInst.Status__c);
+
+    new WorkflowOrchestrator(parentId).execute(null); // FanoutStep join
+    new WorkflowOrchestrator(parentId).execute(null); // VerifyBatchStep
+
+    parentInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals('Completed', parentInst.Status__c);
+  }
 }

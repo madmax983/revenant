@@ -99,6 +99,20 @@
                                     onchange={handleStatusFilterChange}>
                                 </lightning-combobox>
                             </div>
+                            <!-- Bulk Re-drive of failed instances matching the current filter -->
+                            <template if:true={canRedriveMatching}>
+                                <div class="slds-col slds-size_1-of-1 slds-m-top_x-small">
+                                    <lightning-button
+                                        label="Re-drive Matching Failed"
+                                        icon-name="utility:redo"
+                                        variant="destructive-text"
+                                        title="Re-drive every failed instance matching the current filter"
+                                        onclick={handleRedriveMatching}
+                                        disabled={redriving}
+                                        class="slds-button_stretch">
+                                    </lightning-button>
+                                </div>
+                            </template>
                         </div>
                     </div>
 
@@ -616,6 +630,70 @@
                 </div>
             </div>
         </div>
+
+        <!-- Re-drive Confirmation Modal -->
+        <template if:true={redriveModalOpen}>
+            <section role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="redrive-modal-title" class="slds-modal slds-fade-in-open">
+                <div class="slds-modal__container">
+                    <header class="slds-modal__header">
+                        <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse" title="Close" onclick={handleRedriveModalClose}>
+                            <lightning-icon icon-name="utility:close" size="small" alternative-text="Close" variant="inverse"></lightning-icon>
+                        </button>
+                        <h2 id="redrive-modal-title" class="slds-modal__title slds-hyphenate font-outfit">Re-drive Failed Instances</h2>
+                    </header>
+                    <div class="slds-modal__content slds-p-around_medium">
+                        <p class="slds-text-body_regular slds-m-bottom_small">
+                            <strong>{redriveCount}</strong> failed workflow instance{redriveCount === 1 ? '' : 's'} match the current filter and will be re-driven.
+                        </p>
+                        <p class="slds-text-color_weak slds-text-body_small">
+                            Each instance is recovered through the standard retry path, asynchronously, in safe-sized chunks. Already-recovered instances are skipped automatically.
+                        </p>
+                    </div>
+                    <footer class="slds-modal__footer">
+                        <lightning-button label="Never Mind" onclick={handleRedriveModalClose} class="slds-m-right_small"></lightning-button>
+                        <lightning-button label="Re-drive Instances" variant="brand" icon-name="utility:redo" onclick={handleRedriveModalConfirm} class="brand-button"></lightning-button>
+                    </footer>
+                </div>
+            </section>
+            <div class="slds-backdrop slds-backdrop_open" role="presentation"></div>
+        </template>
+
+        <!-- Cancel Workflow Modal -->
+        <template if:true={cancelModalOpen}>
+            <section role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="cancel-modal-title" class="slds-modal slds-fade-in-open">
+                <div class="slds-modal__container">
+                    <header class="slds-modal__header slds-theme_error">
+                        <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse" title="Close" onclick={handleCancelModalClose}>
+                            <lightning-icon icon-name="utility:close" size="small" alternative-text="Close" variant="inverse"></lightning-icon>
+                        </button>
+                        <h2 id="cancel-modal-title" class="slds-modal__title slds-hyphenate font-outfit">Cancel Workflow</h2>
+                    </header>
+                    <div class="slds-modal__content slds-p-around_medium">
+                        <p class="slds-text-body_regular slds-m-bottom_medium">How should this workflow be cancelled?</p>
+                        <div class="slds-grid slds-wrap slds-gutters">
+                            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                                <div class="stat-card slds-p-around_medium">
+                                    <div class="slds-text-title_bold slds-m-bottom_x-small">Run Saga Compensations</div>
+                                    <p class="slds-text-body_small slds-text-color_weak">Roll back completed steps in reverse order before stopping. Recommended for workflows with side effects.</p>
+                                </div>
+                            </div>
+                            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                                <div class="stat-card slds-p-around_medium">
+                                    <div class="slds-text-title_bold slds-m-bottom_x-small">Abort Immediately</div>
+                                    <p class="slds-text-body_small slds-text-color_weak">Stop the workflow now without running any compensations. Use when speed matters more than cleanup.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <footer class="slds-modal__footer">
+                        <lightning-button label="Never Mind" onclick={handleCancelModalClose} class="slds-m-right_small"></lightning-button>
+                        <lightning-button label="Abort Immediately" variant="destructive" icon-name="utility:close" data-compensate="false" onclick={handleCancelModalConfirm} class="slds-m-right_small"></lightning-button>
+                        <lightning-button label="Run Compensations" variant="neutral" icon-name="utility:undo" data-compensate="true" onclick={handleCancelModalConfirm}></lightning-button>
+                    </footer>
+                </div>
+            </section>
+            <div class="slds-backdrop slds-backdrop_open" role="presentation"></div>
+        </template>
 
         <!-- Launch Workflow Modal -->
         <template if:true={modalOpen}>
