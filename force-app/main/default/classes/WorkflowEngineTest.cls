@@ -2570,6 +2570,110 @@ public class WorkflowEngineTest {
   }
 
   @isTest
+  static void testStalledCancellationResumesToCancelled() {
+    // A user-cancelled rollback that stalls must remember it was cancel-driven, so
+    // that resuming it terminates as 'Cancelled' (not 'Compensated').
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Cancelling',
+      Error_Message__c = 'Cancelled by user. Compensating.',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableFailingStep' }
+      ),
+      Input__c = '{"test": true}'
+    );
+    insert inst;
+
+    WorkflowEngineTest.compensationShouldFail = true;
+
+    Test.startTest();
+    WorkflowEngine.runStep(inst.Id, null); // RETRY (attempt 1)
+    WorkflowEngine.runStep(inst.Id, null); // exhausts retries -> stalls
+
+    Workflow_Instance__c stalled = [
+      SELECT Status__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('CompensationFailed', stalled.Status__c);
+    // The cancel-driven phase marker must survive the stall.
+    System.assert(
+      stalled.Error_Message__c.contains('Cancelled'),
+      'Stalled cancel rollback must retain its Cancelled marker: ' +
+        stalled.Error_Message__c
+    );
+
+    // The transient failure clears; the operator resumes the rollback.
+    WorkflowEngineTest.compensationShouldFail = false;
+    WorkflowEngine.resumeCompensation(inst.Id);
+    WorkflowEngine.runStep(inst.Id, null); // compensate succeeds -> stack drains
+    Test.stopTest();
+
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'Cancelled',
+      finalInst.Status__c,
+      'A resumed cancel-driven rollback must terminate as Cancelled, not Compensated'
+    );
+  }
+
+  @isTest
+  static void testStalledRollbackReservesCorrelationKey() {
+    // A stalled rollback still has un-reversed side effects, so its correlation key
+    // must stay reserved: starting a second workflow with the same key must be blocked.
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'CompensationFailed',
+      Correlation_Key__c = 'StalledReservedKey',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+      ),
+      Error_Message__c = 'Rollback incomplete: ...'
+    );
+    insert inst;
+
+    // The trigger should keep the active key reserved for the stalled saga.
+    Workflow_Instance__c reloaded = [
+      SELECT Active_Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'StalledReservedKey',
+      reloaded.Active_Correlation_Key__c,
+      'CompensationFailed must retain its active correlation key'
+    );
+
+    Test.startTest();
+    Boolean blocked = false;
+    try {
+      WorkflowEngine.start(
+        'WorkflowEngineTest.HappyWorkflow',
+        'StalledReservedKey',
+        null
+      );
+    } catch (WorkflowEngine.WorkflowException ex) {
+      blocked = true;
+      System.assert(
+        ex.getMessage().contains('already exists'),
+        'Expected an active-duplicate guard message: ' + ex.getMessage()
+      );
+    }
+    Test.stopTest();
+
+    System.assert(
+      blocked,
+      'Starting a duplicate workflow while a rollback is stalled must be blocked'
+    );
+  }
+
+  @isTest
   static void testBulkStart() {
     List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
     for (Integer i = 0; i < 5; i++) {

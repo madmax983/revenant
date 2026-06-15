@@ -56,7 +56,7 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Instance__c
         WHERE
           Correlation_Key__c = :correlationKey
-          AND Status__c IN ('Pending', 'Running', 'Suspended')
+          AND Status__c IN ('Pending', 'Running', 'Suspended', 'CompensationFailed')
         WITH SYSTEM_MODE
         LIMIT 1
       ];
@@ -152,7 +152,7 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Instance__c
         WHERE
           Correlation_Key__c = :correlationKey
-          AND Status__c IN ('Pending', 'Running', 'Suspended')
+          AND Status__c IN ('Pending', 'Running', 'Suspended', 'CompensationFailed')
         WITH SYSTEM_MODE
         LIMIT 1
       ];
@@ -313,7 +313,7 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Instance__c
         WHERE
           Correlation_Key__c IN :correlationKeys
-          AND Status__c IN ('Pending', 'Running', 'Suspended')
+          AND Status__c IN ('Pending', 'Running', 'Suspended', 'CompensationFailed')
         WITH SYSTEM_MODE
       ];
       if (!existing.isEmpty()) {
@@ -1642,12 +1642,15 @@ public inherited sharing class WorkflowEngine {
       // driving to a generic terminal Failed and silently abandoning the deeper
       // (un-run) compensations, park the saga in the recoverable, operator-visible
       // "rollback incomplete" condition so it can be resumed from this exact point.
+      Boolean wasCancelling = (instance.Status__c == 'Cancelling');
       instance.Status__c = 'CompensationFailed';
-      instance.Error_Message__c =
+      instance.Error_Message__c = buildRollbackIncompleteMessage(
+        wasCancelling,
         'Rollback incomplete at compensation step ' +
-        stepName +
-        ': ' +
-        errorMessage;
+          stepName +
+          ': ' +
+          errorMessage
+      );
       update as system instance;
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       return;
@@ -1685,7 +1688,7 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Instance__c
         WHERE
           Correlation_Key__c = :correlationKey
-          AND Status__c IN ('Pending', 'Running', 'Suspended')
+          AND Status__c IN ('Pending', 'Running', 'Suspended', 'CompensationFailed')
         WITH SYSTEM_MODE
         LIMIT 1
       ];
@@ -2179,6 +2182,22 @@ public inherited sharing class WorkflowEngine {
         }
       }
     }
+  }
+
+  /**
+   * Builds the Error_Message for a stalled ("rollback incomplete") saga, preserving
+   * the cancel-driven phase marker when applicable. The resume paths (resumeCompensation,
+   * the watchdog sleep-resume, and runStep) infer whether to resume as 'Cancelling'
+   * vs 'Compensating' from the presence of 'Cancelled' in this text, so a cancel-driven
+   * rollback must retain that marker across the stall — otherwise a cancelled saga would
+   * resume as a plain compensation and wrongly terminate as 'Compensated' instead of
+   * 'Cancelled'.
+   */
+  private static String buildRollbackIncompleteMessage(
+    Boolean wasCancelling,
+    String detail
+  ) {
+    return (wasCancelling ? 'Cancelled by user. ' : '') + detail;
   }
 
   /**
@@ -2681,11 +2700,14 @@ public inherited sharing class WorkflowEngine {
         // The author's RetryPolicy budget for the automatic phase is exhausted, but
         // the remaining stack is intact. Surface a recoverable "rollback incomplete"
         // state (resumable by an operator) instead of abandoning the deeper steps.
+        Boolean wasCancelling = (instance.Status__c == 'Cancelling');
         instance.Status__c = 'CompensationFailed';
-        instance.Error_Message__c =
+        instance.Error_Message__c = buildRollbackIncompleteMessage(
+          wasCancelling,
           'Rollback incomplete: compensation step ' +
-          stepExec.Step_Name__c +
-          ' failed after max retries.';
+            stepExec.Step_Name__c +
+            ' failed after max retries.'
+        );
         update as system instance;
         WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       } else {
@@ -2712,11 +2734,14 @@ public inherited sharing class WorkflowEngine {
       saveStepExec(stepExec);
 
       // Remaining stack is intact; leave the saga recoverable rather than abandoning it.
+      Boolean wasCancelling = (instance.Status__c == 'Cancelling');
       instance.Status__c = 'CompensationFailed';
-      instance.Error_Message__c =
+      instance.Error_Message__c = buildRollbackIncompleteMessage(
+        wasCancelling,
         'Rollback incomplete: compensation step ' +
-        stepExec.Step_Name__c +
-        ' failed: Unsupported action.';
+          stepExec.Step_Name__c +
+          ' failed: Unsupported action.'
+      );
       update as system instance;
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
     }
@@ -3235,12 +3260,15 @@ public inherited sharing class WorkflowEngine {
             // A compensation step timed out mid-rollback. The remaining stack is
             // intact, so park the saga in the recoverable "rollback incomplete"
             // state rather than abandoning the deeper compensations.
+            Boolean wasCancelling = (parent.Status__c == 'Cancelling');
             parent.Status__c = 'CompensationFailed';
-            parent.Error_Message__c =
+            parent.Error_Message__c = buildRollbackIncompleteMessage(
+              wasCancelling,
               'Rollback incomplete at compensation step ' +
-              step.Step_Name__c +
-              ': ' +
-              errorMsg;
+                step.Step_Name__c +
+                ': ' +
+                errorMsg
+            );
             instancesToUpdate.put(parent.Id, parent);
           } else if (!hasCompensations) {
             parent.Status__c = 'Failed';
