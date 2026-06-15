@@ -213,6 +213,12 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
 
       Integer processed = 0;
       for (Id instId : chunk) {
+        // Pre-flight yield check: a previous high-fan-out parallel retry may have
+        // consumed significant DML/event budget. Yield now rather than enter the
+        // next retryWorkflow call when already near the governor ceiling.
+        if (ctx.shouldYield()) {
+          break;
+        }
         try {
           // Reuse the proven single-instance primitive: it acquires a FOR UPDATE
           // lock and refuses any instance that is no longer Failed, so concurrent
@@ -241,8 +247,8 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
         afterId = instId;
         processed++;
 
-        // Stop early if we are approaching a governor limit; progress is
-        // checkpointed below and resumed in a fresh transaction.
+        // Post-retry yield check: stop early if we are approaching a governor
+        // limit; progress is checkpointed below and resumed in a fresh transaction.
         if (ctx.shouldYield()) {
           break;
         }
