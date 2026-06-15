@@ -242,12 +242,35 @@ public class WorkflowTestHarness {
 
     String currentStep = inst.Current_Step__c;
     if (String.isNotBlank(currentStep) && currentStep.contains(',')) {
-      Integer used = 0;
+      List<String> branches = new List<String>();
       for (String branch : currentStep.split(',')) {
+        branches.add(branch.trim());
+      }
+      // Skip branches that already completed so they never consume the hop budget;
+      // otherwise a low-budget drive would keep re-spending its budget on a
+      // no-op completed branch and never reach the still-pending ones.
+      Set<String> completed = new Set<String>();
+      for (Workflow_Step_Execution__c se : [
+        SELECT Step_Name__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :inst.Id
+          AND Step_Name__c IN :branches
+          AND Status__c = 'Completed'
+        WITH SYSTEM_MODE
+      ]) {
+        completed.add(se.Step_Name__c);
+      }
+
+      Integer used = 0;
+      for (String branch : branches) {
+        if (completed.contains(branch)) {
+          continue;
+        }
         if (used >= remaining) {
           break;
         }
-        runStepSafely(inst.Id, branch.trim());
+        runStepSafely(inst.Id, branch);
         used++;
       }
       return used;
@@ -258,18 +281,17 @@ public class WorkflowTestHarness {
 
   /**
    * Invokes the engine the way WorkflowOrchestrator does, and rescues a thrown
-   * step exactly as WorkflowFinalizer would on a Queueable crash. A savepoint is
-   * rolled back before handleCrash so the failed step's partial DML is discarded —
-   * mirroring production, where the step's Queueable transaction is rolled back
-   * before the finalizer runs in a fresh transaction.
+   * step exactly as WorkflowFinalizer / SagaWorkflowExampleTest do — a synchronous
+   * catch that hands off to WorkflowEngine.handleCrash. (An earlier version wrapped
+   * each hop in a Database savepoint for production-faithful rollback, but that
+   * leaks one unreleased savepoint per successful hop; this matches the engine's
+   * own proven crash-driving pattern instead.)
    */
   private void runStepSafely(Id instanceId, String stepName) {
     totalHops++;
-    System.Savepoint sp = Database.setSavepoint();
     try {
       WorkflowEngine.runStep(instanceId, stepName);
     } catch (Exception ex) {
-      Database.rollback(sp);
       WorkflowEngine.handleCrash(instanceId, stepName, ex);
     }
   }
