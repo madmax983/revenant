@@ -31,11 +31,13 @@ public inherited sharing class WorkflowLifecyclePublisher {
 
   private static final Integer FAILURE_DETAIL_MAX_LENGTH = 255;
 
-  // Guards against emitting more than one event for the same instance within a
-  // single transaction — belt-and-suspenders on top of the engine's write-once
-  // terminal-state guard. (Delivery is still at-least-once across transactions.)
+  // Guards against emitting more than one event for the same transition within a
+  // single transaction. Keyed on (instanceId + '|' + status + '|' + terminalAt)
+  // so a Failed→retry→Failed sequence in the same transaction correctly emits
+  // both events (different Terminal_At__c discriminator) rather than silently
+  // dropping the second. (At-least-once delivery still applies across transactions.)
   @TestVisible
-  private static Set<Id> publishedInstanceIds = new Set<Id>();
+  private static Set<String> publishedTransitionKeys = new Set<String>();
 
   // Captures the events handed to EventBus.publish for test assertions, since
   // platform events cannot be queried via SOQL. Populated in test context only.
@@ -47,8 +49,8 @@ public inherited sharing class WorkflowLifecyclePublisher {
   @TestVisible
   private static Boolean throwTestException = false;
 
-  // When true (test context only), simulates an exhausted DML-statement budget so
-  // the limit-guard skip path can be proven without burning 150 real statements.
+  // When true (test context only), simulates an exhausted DML budget (statements
+  // AND rows) so the limit-guard skip path can be proven without burning real limits.
   @TestVisible
   private static Boolean forceDmlBudgetExhausted = false;
 
@@ -88,18 +90,27 @@ public inherited sharing class WorkflowLifecyclePublisher {
         return;
       }
 
-      // Never spend the transaction's last DML statement here. EventBus.publish
-      // consumes a DML statement, and attempting it over budget throws an
-      // uncatchable System.LimitException that would roll back the terminal-state
-      // write — defeating the fire-and-forget contract precisely for the
-      // high-limit workflows that need it most. Drop the best-effort event instead.
+      // Never spend the transaction's last DML statement or DML rows here.
+      // EventBus.publish consumes a DML statement AND one DML row per event; over
+      // budget either throws an uncatchable System.LimitException that would roll
+      // back the terminal-state write — defeating the fire-and-forget contract
+      // precisely for high-limit workflows. Drop the best-effort events instead.
       if (
         forceDmlBudgetExhausted ||
-        Limits.getDmlStatements() >= Limits.getLimitDmlStatements()
+        Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
+        Limits.getDmlRows() + events.size() > Limits.getLimitDmlRows()
       ) {
         System.debug(
           LoggingLevel.WARN,
-          'Skipping Workflow_Lifecycle__e publish: DML statement budget exhausted.'
+          'Skipping Workflow_Lifecycle__e publish: DML budget exhausted (statements=' +
+            Limits.getDmlStatements() +
+            '/' +
+            Limits.getLimitDmlStatements() +
+            ', rows=' +
+            Limits.getDmlRows() +
+            '/' +
+            Limits.getLimitDmlRows() +
+            ').'
         );
         return;
       }
@@ -154,10 +165,25 @@ public inherited sharing class WorkflowLifecyclePublisher {
       if (!EMITTING_TERMINAL_STATUSES.contains(status)) {
         continue;
       }
-      if (publishedInstanceIds.contains(instance.Id)) {
+
+      // Prefer the instance's Terminal_At__c (stamped by the trigger at the actual
+      // transition, so the event reconciles exactly with the record) and fall back
+      // to now() only if the field wasn't populated on the in-memory record.
+      Object terminalAtObj = f.get('Terminal_At__c');
+      Datetime terminalAt = (terminalAtObj != null)
+        ? (Datetime) terminalAtObj
+        : System.now();
+
+      // Dedupe on (instanceId + status + terminalAt) so a Failed→retry→Failed
+      // sequence in the same transaction still emits two events — different
+      // Terminal_At__c stamps mean different transitions — while a plain duplicate
+      // publish call for the exact same transition is collapsed to one.
+      String transitionKey =
+        instance.Id + '|' + status + '|' + String.valueOf(terminalAt);
+      if (publishedTransitionKeys.contains(transitionKey)) {
         continue;
       }
-      publishedInstanceIds.add(instance.Id);
+      publishedTransitionKeys.add(transitionKey);
 
       Boolean isSuccess = (status == 'Completed');
 
@@ -169,14 +195,6 @@ public inherited sharing class WorkflowLifecyclePublisher {
       if (String.isBlank(rootKey)) {
         rootKey = correlationKey;
       }
-
-      // Prefer the instance's Terminal_At__c (stamped by the trigger at the actual
-      // transition, so the event reconciles exactly with the record) and fall back
-      // to now() only if the field wasn't populated on the in-memory record.
-      Object terminalAtObj = f.get('Terminal_At__c');
-      Datetime terminalAt = (terminalAtObj != null)
-        ? (Datetime) terminalAtObj
-        : System.now();
 
       events.add(
         new Workflow_Lifecycle__e(

@@ -27,7 +27,8 @@ private class WorkflowLifecyclePublisherTest {
         Status__c,
         Workflow_Name__c,
         Correlation_Key__c,
-        Error_Message__c
+        Error_Message__c,
+        Terminal_At__c
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];

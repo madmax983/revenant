@@ -147,10 +147,13 @@ sequenceDiagram
 
 ### Success metric
 
-A Flow that Pauses on `Workflow_Lifecycle__e` resumes within **p95 < 5s** of the
-target workflow reaching a terminal state, for **100%** of runs — replacing a
-scheduled polling Flow that lags by its schedule interval and mis-reports
-offloaded / continue-as-new outcomes.
+An **API / CometD subscriber** receives the event within **p95 < 5s** of the
+workflow reaching a terminal state. A **paused Flow interview** resumes
+asynchronously — Salesforce batches paused-interview resumes on a
+platform-controlled schedule, so end-to-end latency for that path is
+typically seconds-to-minutes rather than sub-second, and is not directly
+controllable. Either way, both replace a scheduled polling Flow that lags by
+its full schedule interval and mis-reports offloaded / continue-as-new outcomes.
 
 ## Out of scope (by design)
 
