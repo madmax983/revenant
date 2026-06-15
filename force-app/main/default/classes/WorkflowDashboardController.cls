@@ -657,16 +657,14 @@ public inherited sharing class WorkflowDashboardController {
         };
       }
 
-      Id maxEligibleId = BulkRedriveWorkflow.findMaxEligibleId(
-        workflowName,
-        status,
-        searchTerm
-      );
+      // Capture snapshot time before launching so that fetchEligibleChunk can
+      // exclude instances that transition to Failed during the multi-chunk sweep.
+      Long snapshotMillis = Datetime.now().getTime();
       Map<String, Object> filter = new Map<String, Object>{
         'workflowName' => workflowName,
         'status' => status,
         'searchTerm' => searchTerm,
-        'maxId' => maxEligibleId == null ? null : String.valueOf(maxEligibleId)
+        'snapshotTime' => snapshotMillis
       };
       String correlationKey =
         'BulkRedrive_' +

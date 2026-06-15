@@ -24,6 +24,11 @@
  *    in the spec as recoverable "where applicable", but retryWorkflow only
  *    accepts Failed, so re-driving it would require a new state path — out of
  *    scope for this slice.
+ *  - SNAPSHOT BOUND: each chunk query includes `LastModifiedDate <= snapshotTime`
+ *    (captured at launch, before the first Queueable fires). An instance that was
+ *    not Failed when the operator confirmed the count — but transitions to Failed
+ *    mid-sweep — has LastModifiedDate > snapshotTime and is therefore excluded,
+ *    even if its Id falls below the cursor's upper range.
  *  - OUROBOROS GUARD: the selection hard-excludes the re-driver's own
  *    Workflow_Name__c, so a future "re-drive all Failed" sweep can never
  *    re-drive a previously-failed re-drive instance and build a self-replaying
@@ -116,9 +121,10 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
 
   /**
    * Returns up to `chunkSize` eligible instance Ids ordered by Id, starting
-   * strictly after `afterId` (the cursor). `maxId` (when non-null) is the
-   * upper bound captured at launch time so that instances which fail AFTER the
-   * operator confirmed the count are never swept into an ongoing re-drive.
+   * strictly after `afterId` (the cursor). `snapshotTime` (when non-null) pins
+   * the selection to records whose LastModifiedDate was at or before launch time,
+   * ensuring that instances transitioning to Failed mid-sweep are excluded even if
+   * their Ids fall within the paged range.
    */
   public static List<Id> fetchEligibleChunk(
     String workflowName,
@@ -126,7 +132,7 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
     String searchTerm,
     Id afterId,
     Integer chunkSize,
-    Id maxId
+    Datetime snapshotTime
   ) {
     List<String> effStatuses = effectiveStatuses(status);
     if (effStatuses.isEmpty()) {
@@ -144,8 +150,8 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
     if (afterId != null) {
       q += ' AND Id > :afterId';
     }
-    if (maxId != null) {
-      q += ' AND Id <= :maxId';
+    if (snapshotTime != null) {
+      q += ' AND LastModifiedDate <= :snapshotTime';
     }
     if (String.isNotBlank(workflowName)) {
       q += ' AND Workflow_Name__c = :workflowName';
@@ -168,45 +174,6 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
     return ids;
   }
 
-  /**
-   * Returns the highest eligible instance Id for the given filter — the upper
-   * bound snapshotted at launch time. Instances that fail AFTER the operator
-   * confirmed the count will have Ids above this value and are excluded.
-   */
-  public static Id findMaxEligibleId(
-    String workflowName,
-    String status,
-    String searchTerm
-  ) {
-    List<String> effStatuses = effectiveStatuses(status);
-    if (effStatuses.isEmpty()) {
-      return null;
-    }
-    String excludeName = REDRIVER_WORKFLOW_NAME;
-    String likeTerm = String.isNotBlank(searchTerm)
-      ? '%' + String.escapeSingleQuotes(searchTerm) + '%'
-      : null;
-
-    String q =
-      'SELECT Id FROM Workflow_Instance__c ' +
-      'WHERE Status__c IN :effStatuses AND Workflow_Name__c != :excludeName';
-    if (String.isNotBlank(workflowName)) {
-      q += ' AND Workflow_Name__c = :workflowName';
-    }
-    if (likeTerm != null) {
-      q +=
-        ' AND (Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm' +
-        ' OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)';
-    }
-    q += ' ORDER BY Id DESC LIMIT 1';
-
-    List<Workflow_Instance__c> rows = Database.query(
-      q,
-      AccessLevel.SYSTEM_MODE
-    );
-    return rows.isEmpty() ? null : rows[0].Id;
-  }
-
   // ---- The re-drive step ----
 
   public class BulkRedriveStep implements WorkflowStep {
@@ -226,7 +193,7 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
           state.put('workflowName', filter.get('workflowName'));
           state.put('status', filter.get('status'));
           state.put('searchTerm', filter.get('searchTerm'));
-          state.put('maxId', filter.get('maxId'));
+          state.put('snapshotTime', filter.get('snapshotTime'));
         }
       }
 
@@ -236,8 +203,11 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
       Id afterId = state.get('lastId') != null
         ? (Id) (String) state.get('lastId')
         : null;
-      Id maxId = state.get('maxId') != null
-        ? (Id) (String) state.get('maxId')
+      // snapshotTime is stored as epoch milliseconds (Long) to survive JSON round-trips.
+      Datetime snapshotTime = state.get('snapshotTime') != null
+        ? Datetime.newInstance(
+            Long.valueOf(String.valueOf(state.get('snapshotTime')))
+          )
         : null;
       Integer redriven = intOf(state.get('redriven'));
       Integer skipped = intOf(state.get('skipped'));
@@ -250,19 +220,19 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
         searchTerm,
         afterId,
         chunkSize,
-        maxId
+        snapshotTime
       );
 
       Integer processed = 0;
       for (Id instId : chunk) {
-        // Savepoint per instance: if retryWorkflow partially writes (e.g. sets
-        // the instance to Running) and then throws (e.g. enqueue fails), rolling
-        // back prevents stranding the instance in Running with no orchestrator.
-        // The pre-DML "not Failed" guard in retryWorkflow throws a WorkflowException
-        // that contains "Failed status" — that guard fires before any DML, so no
-        // rollback is needed for the idempotent-skip path.
-        Savepoint sp = Database.setSavepoint();
         try {
+          // Reuse the proven single-instance primitive: it acquires a FOR UPDATE
+          // lock and refuses any instance that is no longer Failed, so concurrent
+          // / double-click re-drives can never produce two orchestrator chains.
+          // Revenant's orchestration uses Platform Events, which are committed
+          // atomically with the enclosing transaction, so a partial-write scenario
+          // (status updated, enqueue not committed) cannot arise; no savepoint is
+          // needed, and using one per iteration would hit Apex's 5-savepoint limit.
           WorkflowEngine.retryWorkflow(instId);
           redriven++;
         } catch (WorkflowEngine.WorkflowException wex) {
@@ -274,12 +244,10 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
           ) {
             skipped++;
           } else {
-            Database.rollback(sp);
             errored++;
           }
         } catch (Exception ex) {
           // A failure on one instance must not abort the rest of the selection.
-          Database.rollback(sp);
           errored++;
         }
         afterId = instId;
@@ -295,7 +263,10 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
       state.put('workflowName', workflowName);
       state.put('status', status);
       state.put('searchTerm', searchTerm);
-      state.put('maxId', maxId == null ? null : String.valueOf(maxId));
+      state.put(
+        'snapshotTime',
+        snapshotTime == null ? null : snapshotTime.getTime()
+      );
       state.put('lastId', afterId == null ? null : String.valueOf(afterId));
       state.put('redriven', redriven);
       state.put('skipped', skipped);
