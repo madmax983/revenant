@@ -1269,8 +1269,18 @@ public inherited sharing class WorkflowEngine {
       scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.SUSPEND) {
-      // Step suspended (waiting for external signal). Save state and mark instance.
+      // Explicit stepStateJson is preserved; no-arg suspend() nulls Output__c so
+      // stale yield checkpoints from a prior YIELD in the same execution don't
+      // survive into a retry and cause duplicate-spawn collisions.
       stepExec.Status__c = 'Pending';
+      stepExec.Output__c = String.isNotBlank(result.stepStateJson)
+        ? savePayloadIfNeeded(
+            instance.Id,
+            result.stepStateJson,
+            'State_Suspend_' +
+              stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+          )
+        : null;
       saveStepExec(stepExec);
 
       instance.Status__c = 'Suspended';
@@ -2483,6 +2493,14 @@ public inherited sharing class WorkflowEngine {
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.SUSPEND) {
       stepExec.Status__c = 'Pending';
+      stepExec.Output__c = String.isNotBlank(result.stepStateJson)
+        ? savePayloadIfNeeded(
+            instance.Id,
+            result.stepStateJson,
+            'State_Suspend_' +
+              stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+          )
+        : null;
       saveStepExec(stepExec);
       instance.Status__c = 'Suspended';
       update as system instance;
