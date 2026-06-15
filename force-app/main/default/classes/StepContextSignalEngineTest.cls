@@ -1265,4 +1265,102 @@ public class StepContextSignalEngineTest {
       WorkflowEngine.enqueuedBranchKeys
     );
   }
+
+  // --- Rollback must not release a sibling's claim on an observed row (find 1) -
+
+  public class CalloutRollbackWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.CalloutRollbackSpawnStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (
+        currentStepName ==
+        'StepContextSignalEngineTest.CalloutRollbackSpawnStep'
+      ) {
+        return 'StepContextSignalEngineTest.CalloutRollbackJoinStep';
+      }
+      return null;
+    }
+  }
+
+  public class CalloutRollbackSpawnStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Kick');
+      if (!s.isPresent()) {
+        return StepResult.suspend();
+      }
+      return StepResult.split(
+        new List<String>{
+          'StepContextSignalEngineTest.CalloutRollbackBranch',
+          'StepContextSignalEngineTest.CalloutRollbackOtherBranch'
+        },
+        s.payload
+      );
+    }
+  }
+
+  // CalloutStep branch observes 'Shared' without claiming, a sibling then claims
+  // it (Processing), and this branch YIELDs. Rollback must leave the sibling's
+  // claim intact because this branch never claimed the row.
+  public class CalloutRollbackBranch implements WorkflowStep, CalloutStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Shared');
+      if (s.isPresent() && String.isBlank(ctx.stepStateJson)) {
+        // A sibling claims the same row mid-flight.
+        update new Workflow_Signal__c(
+          Id = s.signalId,
+          Status__c = 'Processing'
+        );
+        // Yield without completing -- rollback runs but must not touch the claim.
+        return StepResult.yield('{"seen":true}');
+      }
+      return StepResult.complete(null, 'done');
+    }
+  }
+
+  public class CalloutRollbackOtherBranch implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'other');
+    }
+  }
+
+  public class CalloutRollbackJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, ctx.inputJson);
+    }
+  }
+
+  @isTest
+  static void testYieldDoesNotReleaseSiblingClaimOnObservedRow() {
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.CalloutRollbackWorkflow',
+      'CalloutRollbackKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+    WorkflowEngine.signal('CalloutRollbackKey', 'Kick', '{}');
+    WorkflowEngine.signal('CalloutRollbackKey', 'Shared', '{"s":1}');
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // The CalloutStep branch observes Shared, a sibling claims it, the branch
+    // yields. Its rollback must NOT flip the sibling's claim back to Received.
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.CalloutRollbackBranch'
+      )
+      .execute(null);
+
+    System.assertEquals(
+      'Processing',
+      [
+        SELECT Status__c
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c = 'Shared'
+      ]
+      .Status__c,
+      'A yielding branch must not roll back a row it only observed (now a sibling claim)'
+    );
+  }
 }

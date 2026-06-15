@@ -27,10 +27,15 @@ public inherited sharing class StepContext {
     // claimed out of a later re-query. Null for the empty sentinel and for
     // signals built from an explicit in-memory list (tests).
     public Datetime createdDate { get; private set; }
+    // True when the source atomically CLAIMED this row (flipped it to an
+    // exclusive Processing state for this branch), as opposed to merely reading
+    // it while still Received. The engine uses this to roll back / consume only
+    // rows this branch actually owns, never a sibling's claim.
+    private Boolean claimed;
     private Boolean present;
 
     public Signal(Id signalId, String name, String payload) {
-      this(signalId, name, payload, null);
+      this(signalId, name, payload, null, false);
     }
 
     public Signal(
@@ -39,20 +44,37 @@ public inherited sharing class StepContext {
       String payload,
       Datetime createdDate
     ) {
+      this(signalId, name, payload, createdDate, false);
+    }
+
+    public Signal(
+      Id signalId,
+      String name,
+      String payload,
+      Datetime createdDate,
+      Boolean claimed
+    ) {
       this.signalId = signalId;
       this.name = name;
       this.payload = payload;
       this.createdDate = createdDate;
+      this.claimed = claimed;
       this.present = true;
     }
 
     private Signal() {
       this.present = false;
+      this.claimed = false;
     }
 
     /** True when this represents a real pending signal (not the empty result). */
     public Boolean isPresent() {
       return present;
+    }
+
+    /** True when the engine holds an exclusive claim on this row for this branch. */
+    public Boolean isClaimed() {
+      return claimed;
     }
 
     // Orders by arrival (CreatedDate, then Id) so a merged list preserves the
@@ -81,12 +103,15 @@ public inherited sharing class StepContext {
    * pay heap for) only that name's payloads instead of every pending signal on
    * the instance; a blank/null name requests the full set. getLatestSignal loads
    * only the single most-recent matching signal, so reading one decision does
-   * not pull every duplicate payload. Implemented by the engine; resolved lazily
-   * on first signal access.
+   * not pull every duplicate payload. readWasCapped() reports whether any read
+   * was truncated by a governor-safety cap, so consumption can avoid cleaning up
+   * same-name rows that were never exposed to the step. Implemented by the
+   * engine; resolved lazily on first signal access.
    */
   public interface SignalSource {
     List<Signal> getPendingSignals(String signalName);
     Signal getLatestSignal(String signalName);
+    Boolean readWasCapped();
   }
 
   private SignalSource signalSource;
@@ -104,6 +129,10 @@ public inherited sharing class StepContext {
   // must NOT consume a same-name signal that arrives later.
   private Set<Id> matchedSignalIds = new Set<Id>();
   private Set<String> matchedNames = new Set<String>();
+  // Subset of matchedSignalIds the source actually CLAIMED (exclusive Processing
+  // hold for this branch). Only these may be rolled back or consumed-while-
+  // Processing; merely-observed rows must never disturb a sibling's claim.
+  private Set<Id> claimedSignalIds = new Set<Id>();
 
   public StepContext(
     Id workflowInstanceId,
@@ -400,13 +429,39 @@ public inherited sharing class StepContext {
     return matchedNames.clone();
   }
 
+  /**
+   * Ids the source actually CLAIMED for this branch (exclusive Processing hold).
+   * The engine rolls back only these on a non-completing transition, and may
+   * consume these while Processing -- merely-observed rows (not in this set) are
+   * only consumed while still Received, so a branch never disturbs a sibling's
+   * claim on a row it only read.
+   */
+  public Set<Id> getClaimedSignalIds() {
+    return claimedSignalIds.clone();
+  }
+
+  /**
+   * True when any signal read was truncated by a governor-safety cap, so the
+   * step may not have seen every pending row of a name. The engine then skips
+   * same-name duplicate cleanup, which could otherwise consume backlog rows the
+   * step never observed.
+   */
+  public Boolean signalReadWasCapped() {
+    return signalSource != null && signalSource.readWasCapped();
+  }
+
   // Records a snapshot signal the step matched, so consumption is scoped to
-  // signals the step actually saw rather than every name it probed.
+  // signals the step actually saw rather than every name it probed. A claimed
+  // signal is additionally tracked so rollback/consume can target only rows this
+  // branch exclusively owns.
   private void markMatched(Signal s) {
     if (s != null && s.name != null) {
       matchedNames.add(s.name);
       if (s.signalId != null) {
         matchedSignalIds.add(s.signalId);
+        if (s.isClaimed()) {
+          claimedSignalIds.add(s.signalId);
+        }
       }
     }
   }
