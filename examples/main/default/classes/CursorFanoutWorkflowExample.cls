@@ -66,10 +66,31 @@ public inherited sharing class CursorFanoutWorkflowExample {
       // Serialize the cursor pointer (retains reference to SOQL cache)
       String serializedCursor = JSON.serialize(cursor);
 
+      // Chunk size defaults to 2 for the demo/tests, but can be overridden via the
+      // workflow input (e.g. {"chunkSize": 50}) so a large dataset fans out into a
+      // manageable number of larger chunks instead of hundreds of tiny child workflows.
+      Integer chunkSize = 2;
+      if (String.isNotBlank(ctx.workflowInputJson)) {
+        try {
+          Map<String, Object> inp = (Map<String, Object>) JSON.deserializeUntyped(
+            ctx.workflowInputJson
+          );
+          Object cs = inp.get('chunkSize');
+          if (cs != null) {
+            chunkSize = Integer.valueOf(String.valueOf(cs));
+          }
+        } catch (Exception e) {
+          // Malformed input — keep the default chunk size.
+        }
+      }
+      if (chunkSize < 1) {
+        chunkSize = 1;
+      }
+
       Map<String, Object> output = new Map<String, Object>{
         'totalRecords' => totalRecords,
         'serializedCursor' => serializedCursor,
-        'chunkSize' => 2 // Default small chunk size for testing/demonstration
+        'chunkSize' => chunkSize
       };
       return StepResult.complete(null, output);
     }

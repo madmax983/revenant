@@ -136,4 +136,53 @@ public class CursorFanoutWorkflowExampleTest {
       inst.Output__c.contains('Cursor fan-out verification complete')
     );
   }
+
+  @isTest
+  static void testCursorFanoutConfigurableChunkSize() {
+    // 5 accounts with a chunkSize of 5 supplied via workflow input should fan out into a
+    // SINGLE child chunk (vs the 3 children the default chunkSize of 2 produces).
+    insert new List<Account>{
+      new Account(Name = 'Cfg A'),
+      new Account(Name = 'Cfg B'),
+      new Account(Name = 'Cfg C'),
+      new Account(Name = 'Cfg D'),
+      new Account(Name = 'Cfg E')
+    };
+
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'CursorFanoutWorkflowExample.CursorFanoutWorkflow',
+      'CursorFanoutChunkCfgKey',
+      new Map<String, Object>{ 'chunkSize' => 5 }
+    );
+    Test.stopTest(); // Runs CursorQueryStep
+
+    Workflow_Step_Execution__c queryStepExec = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'CursorFanoutWorkflowExample.CursorQueryStep'
+      LIMIT 1
+    ];
+    System.assert(
+      queryStepExec.Output__c.contains('"chunkSize":5'),
+      'Input chunkSize should override the default: ' + queryStepExec.Output__c
+    );
+
+    // Execute CursorFanoutStep to spawn children.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE Parent_Instance__c = :instanceId
+      ],
+      'chunkSize 5 over 5 records should spawn exactly one child chunk'
+    );
+  }
 }
