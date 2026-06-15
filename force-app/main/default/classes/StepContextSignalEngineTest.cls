@@ -1110,4 +1110,159 @@ public class StepContextSignalEngineTest {
       branchExec.Output__c
     );
   }
+
+  // --- A CalloutStep branch must not consume a sibling's later claim (find 3) -
+
+  public class CalloutSiblingWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.CalloutSiblingSpawnStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (
+        currentStepName == 'StepContextSignalEngineTest.CalloutSiblingSpawnStep'
+      ) {
+        return 'StepContextSignalEngineTest.CalloutSiblingJoinStep';
+      }
+      return null;
+    }
+  }
+
+  public class CalloutSiblingSpawnStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Kick');
+      if (!s.isPresent()) {
+        return StepResult.suspend();
+      }
+      return StepResult.split(
+        new List<String>{
+          'StepContextSignalEngineTest.CalloutSiblingBranch',
+          'StepContextSignalEngineTest.CalloutSiblingOtherBranch'
+        },
+        s.payload
+      );
+    }
+  }
+
+  // CalloutStep branch reads 'Shared' without claiming, then a sibling claims
+  // the same row (Processing) before this branch completes. At COMPLETE this
+  // branch must NOT consume the now-Processing row.
+  public class CalloutSiblingBranch implements WorkflowStep, CalloutStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Shared');
+      if (s.isPresent()) {
+        // Simulate a sibling claiming the same row mid-flight.
+        update new Workflow_Signal__c(
+          Id = s.signalId,
+          Status__c = 'Processing'
+        );
+      }
+      return StepResult.complete(null, 'done');
+    }
+  }
+
+  public class CalloutSiblingOtherBranch implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'other');
+    }
+  }
+
+  public class CalloutSiblingJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, ctx.inputJson);
+    }
+  }
+
+  @isTest
+  static void testCalloutStepBranchDoesNotConsumeSiblingClaim() {
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.CalloutSiblingWorkflow',
+      'CalloutSiblingKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+    WorkflowEngine.signal('CalloutSiblingKey', 'Kick', '{}');
+    WorkflowEngine.signal('CalloutSiblingKey', 'Shared', '{"s":1}');
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.CalloutSiblingBranch'
+      )
+      .execute(null);
+
+    // The row the CalloutStep branch observed was claimed by a sibling mid-flight
+    // (now Processing). The branch must leave it for the sibling, not consume it.
+    System.assertEquals(
+      'Processing',
+      [
+        SELECT Status__c
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c = 'Shared'
+      ]
+      .Status__c,
+      'A non-claiming (CalloutStep) branch must not consume a row a sibling has since claimed'
+    );
+  }
+
+  // --- Bulk signal wakes parallel branches across instances (find 1) --------
+
+  @isTest
+  static void testBulkSignalWakesParallelBranchesAcrossInstances() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Id i1 = WorkflowEngine.start(
+      'StepContextSignalEngineTest.WakeWorkflow',
+      'BulkWakeKey1',
+      null
+    );
+    Id i2 = WorkflowEngine.start(
+      'StepContextSignalEngineTest.WakeWorkflow',
+      'BulkWakeKey2',
+      null
+    );
+    // Spawns suspend for Go.
+    new WorkflowOrchestrator(i1).execute(null);
+    new WorkflowOrchestrator(i2).execute(null);
+    WorkflowEngine.signal('BulkWakeKey1', 'Go', '{}');
+    WorkflowEngine.signal('BulkWakeKey2', 'Go', '{}');
+    // Fan out both.
+    new WorkflowOrchestrator(i1).execute(null);
+    new WorkflowOrchestrator(i2).execute(null);
+    // Wait branches suspend on Resume.
+    new WorkflowOrchestrator(
+        i1,
+        'StepContextSignalEngineTest.WakeWaitBranch'
+      )
+      .execute(null);
+    new WorkflowOrchestrator(
+        i2,
+        'StepContextSignalEngineTest.WakeWaitBranch'
+      )
+      .execute(null);
+
+    WorkflowEngine.enqueuedBranchKeys.clear();
+    // One bulk signal for both parallel instances.
+    WorkflowEngine.signal(
+      new List<WorkflowEngine.SignalRequest>{
+        new WorkflowEngine.SignalRequest('BulkWakeKey1', 'Resume', null),
+        new WorkflowEngine.SignalRequest('BulkWakeKey2', 'Resume', null)
+      }
+    );
+
+    System.assert(
+      WorkflowEngine.enqueuedBranchKeys.contains(
+        i1 + '::StepContextSignalEngineTest.WakeWaitBranch'
+      ),
+      'Bulk signal must wake instance 1 suspended branch by name. Keys: ' +
+      WorkflowEngine.enqueuedBranchKeys
+    );
+    System.assert(
+      WorkflowEngine.enqueuedBranchKeys.contains(
+        i2 + '::StepContextSignalEngineTest.WakeWaitBranch'
+      ),
+      'Bulk signal must wake instance 2 suspended branch by name. Keys: ' +
+      WorkflowEngine.enqueuedBranchKeys
+    );
+  }
 }

@@ -1013,7 +1013,7 @@ public inherited sharing class WorkflowEngine {
     }
 
     // 6. Handle Step Outcome
-    handleStepResult(instance, stepExec, result, context);
+    handleStepResult(instance, stepExec, result, context, claimSignals);
   }
 
   // Caps how many signals a serial step may observe in one execution. Serial
@@ -1071,6 +1071,17 @@ public inherited sharing class WorkflowEngine {
   // redelivery backlog from blowing the limit on every attempt and stalling
   // forever; any rows beyond the cap stay Received for a later read.
   private static final Integer PARALLEL_CLAIM_ROW_CAP = 4000;
+  // Caps how many claim DML *statements* a parallel branch issues in one
+  // execution. Each named getSignal/hasSignal (and each getSignals page) is one
+  // update statement, so a fan-in step probing many distinct names could exceed
+  // the 150 DML-statement governor limit; once this budget is spent the branch
+  // reads remaining signals WITHOUT claiming (at-least-once). 100 leaves room
+  // for the consume statement and the engine's other DML.
+  private static final Integer PARALLEL_CLAIM_STATEMENT_BUDGET = 100;
+  // How many times a parallel getSignals() re-pages past a fully-lost candidate
+  // page (every row claimed by a sibling between query and lock) before giving
+  // up, so a loser does not return empty while later Received rows remain.
+  private static final Integer PARALLEL_CLAIM_PAGE_RETRIES = 3;
 
   /**
    * Signal source for parallel branch steps. Atomically claims each signal at
@@ -1090,98 +1101,147 @@ public inherited sharing class WorkflowEngine {
    */
   private class ParallelBranchSignalSource implements StepContext.SignalSource {
     private final Id instanceId;
-    // Cumulative claim budget across all accessor calls in this execution, so
-    // claim DML (now) + the matching consume DML (at COMPLETE, same transaction)
-    // together stay under the 10 000 DML-row limit no matter how many names the
-    // step reads.
+    // Cumulative claim ROW budget across all accessor calls in this execution,
+    // so claim DML (now) + the matching consume DML (at COMPLETE, same
+    // transaction) together stay under the 10 000 DML-row limit no matter how
+    // many names the step reads.
     private Integer claimBudget = PARALLEL_CLAIM_ROW_CAP;
+    // Cumulative claim DML-STATEMENT budget; bounds how many update statements
+    // the accessors issue so a many-name fan-in cannot exceed the 150 statement
+    // limit. When spent, reads fall back to non-claiming (at-least-once).
+    private Integer claimStatementBudget = PARALLEL_CLAIM_STATEMENT_BUDGET;
 
     private ParallelBranchSignalSource(Id instanceId) {
       this.instanceId = instanceId;
+    }
+
+    // Reads still-Received rows in arrival order, optionally excluding ids and
+    // scoped to a name. Read-only (no claim) -- the callers decide whether to
+    // claim what comes back.
+    private List<Workflow_Signal__c> queryReceived(
+      String signalName,
+      Set<Id> excludeIds,
+      Integer limitN
+    ) {
+      Set<Id> skip = (excludeIds != null) ? excludeIds : new Set<Id>();
+      if (String.isBlank(signalName)) {
+        return [
+          SELECT Id, Signal_Name__c, Payload__c, CreatedDate
+          FROM Workflow_Signal__c
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Status__c = 'Received'
+            AND Id NOT IN :skip
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate ASC, Id ASC
+          LIMIT :limitN
+        ];
+      }
+      return [
+        SELECT Id, Signal_Name__c, Payload__c, CreatedDate
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Status__c = 'Received'
+          AND Signal_Name__c = :signalName
+          AND Id NOT IN :skip
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate ASC, Id ASC
+        LIMIT :limitN
+      ];
+    }
+
+    private List<StepContext.Signal> toSignals(List<Workflow_Signal__c> rows) {
+      List<StepContext.Signal> out = new List<StepContext.Signal>();
+      for (Workflow_Signal__c c : rows) {
+        out.add(
+          new StepContext.Signal(
+            c.Id,
+            c.Signal_Name__c,
+            c.Payload__c,
+            c.CreatedDate
+          )
+        );
+      }
+      return out;
     }
 
     public List<StepContext.Signal> getPendingSignals(String signalName) {
       if (claimBudget <= 0) {
         return new List<StepContext.Signal>();
       }
-      // Step 1: find candidates in arrival order (ORDER BY, no FOR UPDATE),
-      // bounded by the remaining claim budget so a huge backlog cannot be
-      // claimed (and DML'd) all at once.
-      List<Workflow_Signal__c> candidates;
-      if (String.isBlank(signalName)) {
-        candidates = [
-          SELECT Id, Signal_Name__c, Payload__c, CreatedDate
-          FROM Workflow_Signal__c
-          WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Received'
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate ASC, Id ASC
-          LIMIT :claimBudget
-        ];
-      } else {
-        candidates = [
-          SELECT Id, Signal_Name__c, Payload__c, CreatedDate
-          FROM Workflow_Signal__c
-          WHERE
-            Workflow_Instance__c = :instanceId
-            AND Status__c = 'Received'
-            AND Signal_Name__c = :signalName
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate ASC, Id ASC
-          LIMIT :claimBudget
-        ];
-      }
-      if (candidates.isEmpty()) {
-        return new List<StepContext.Signal>();
+      // Statement budget spent: read without claiming so a many-name fan-in
+      // cannot exceed the DML-statement limit (at-least-once for the overflow).
+      if (claimStatementBudget <= 0) {
+        return toSignals(queryReceived(signalName, null, claimBudget));
       }
 
-      Set<Id> candidateIds = new Map<Id, Workflow_Signal__c>(candidates)
-        .keySet();
-
-      // Step 2: atomic claim — lock all candidates still in Received status
-      List<Workflow_Signal__c> locked = [
-        SELECT Id
-        FROM Workflow_Signal__c
-        WHERE Id IN :candidateIds AND Status__c = 'Received'
-        WITH SYSTEM_MODE
-        FOR UPDATE
-      ];
-      if (locked.isEmpty()) {
-        return new List<StepContext.Signal>();
-      }
-
-      Set<Id> claimedIds = new Set<Id>();
-      for (Workflow_Signal__c sig : locked) {
-        sig.Status__c = 'Processing';
-        claimedIds.add(sig.Id);
-      }
-      update as system locked;
-      claimBudget -= claimedIds.size();
-
-      // Return only claimed signals, in original arrival order
-      List<StepContext.Signal> result = new List<StepContext.Signal>();
-      for (Workflow_Signal__c c : candidates) {
-        if (claimedIds.contains(c.Id)) {
-          result.add(
-            new StepContext.Signal(
-              c.Id,
-              c.Signal_Name__c,
-              c.Payload__c,
-              c.CreatedDate
-            )
-          );
+      // Try to claim a page; if a sibling claimed the entire page between query
+      // and lock, re-page past it (bounded) so we do not return empty while
+      // later Received rows remain unclaimed and unwoken.
+      Set<Id> tried = new Set<Id>();
+      Integer attempts = 0;
+      while (
+        claimBudget > 0 &&
+        claimStatementBudget > 0 &&
+        attempts < PARALLEL_CLAIM_PAGE_RETRIES
+      ) {
+        attempts++;
+        List<Workflow_Signal__c> candidates = queryReceived(
+          signalName,
+          tried,
+          claimBudget
+        );
+        if (candidates.isEmpty()) {
+          break; // no more matching Received rows anywhere
         }
+        Set<Id> candidateIds = new Map<Id, Workflow_Signal__c>(candidates)
+          .keySet();
+        tried.addAll(candidateIds);
+
+        List<Workflow_Signal__c> locked = [
+          SELECT Id
+          FROM Workflow_Signal__c
+          WHERE Id IN :candidateIds AND Status__c = 'Received'
+          WITH SYSTEM_MODE
+          FOR UPDATE
+        ];
+        if (locked.isEmpty()) {
+          continue; // whole page lost to siblings; try the next page
+        }
+
+        Set<Id> claimedIds = new Set<Id>();
+        for (Workflow_Signal__c sig : locked) {
+          sig.Status__c = 'Processing';
+          claimedIds.add(sig.Id);
+        }
+        update as system locked; // one statement for the whole page
+        claimBudget -= claimedIds.size();
+        claimStatementBudget -= 1;
+
+        List<StepContext.Signal> result = new List<StepContext.Signal>();
+        for (Workflow_Signal__c c : candidates) {
+          if (claimedIds.contains(c.Id)) {
+            result.add(
+              new StepContext.Signal(
+                c.Id,
+                c.Signal_Name__c,
+                c.Payload__c,
+                c.CreatedDate
+              )
+            );
+          }
+        }
+        return result;
       }
-      return result;
+      return new List<StepContext.Signal>();
     }
 
     public StepContext.Signal getLatestSignal(String signalName) {
       if (String.isBlank(signalName) || claimBudget <= 0) {
         return null;
       }
-      // Fetch recent candidates newest-first, then try to claim each in turn.
-      // If another branch wins the race on the newest row, fall back to the
-      // next-newest still-Received row instead of reporting absence while a
-      // matching signal is still available (which would strand it).
+      // Fetch recent candidates newest-first.
       List<Workflow_Signal__c> candidates = [
         SELECT Id, Signal_Name__c, Payload__c, CreatedDate
         FROM Workflow_Signal__c
@@ -1193,6 +1253,23 @@ public inherited sharing class WorkflowEngine {
         ORDER BY CreatedDate DESC, Id DESC
         LIMIT 10
       ];
+      if (candidates.isEmpty()) {
+        return null;
+      }
+      // Statement budget spent: return the newest read-only (at-least-once)
+      // rather than issuing another claim statement.
+      if (claimStatementBudget <= 0) {
+        Workflow_Signal__c c = candidates[0];
+        return new StepContext.Signal(
+          c.Id,
+          c.Signal_Name__c,
+          c.Payload__c,
+          c.CreatedDate
+        );
+      }
+      // Try to claim each candidate newest-first; if a sibling wins the race on
+      // the newest row, fall back to the next-newest still-Received row instead
+      // of reporting absence while a matching signal is still available.
       for (Workflow_Signal__c cand : candidates) {
         Id targetId = cand.Id;
         List<Workflow_Signal__c> locked = [
@@ -1208,6 +1285,7 @@ public inherited sharing class WorkflowEngine {
         locked[0].Status__c = 'Processing';
         update as system locked[0];
         claimBudget -= 1;
+        claimStatementBudget -= 1;
         return new StepContext.Signal(
           cand.Id,
           cand.Signal_Name__c,
@@ -1371,7 +1449,8 @@ public inherited sharing class WorkflowEngine {
   private static void markSignalsConsumed(
     Id instanceId,
     StepContext context,
-    Boolean parallelBranch
+    Boolean parallelBranch,
+    Boolean claimingContext
   ) {
     if (context == null) {
       return;
@@ -1392,16 +1471,33 @@ public inherited sharing class WorkflowEngine {
     final Integer ROW_CAP = 9000;
     Map<Id, Workflow_Signal__c> toConsume = new Map<Id, Workflow_Signal__c>();
 
-    // 1. Consume the exact rows the step observed/claimed first. For a parallel
-    //    branch these claimed ids are the ONLY safe set (see scoping note above).
+    // 1. Consume the exact rows the step observed/claimed first. A claiming
+    //    branch owns its rows as exclusive 'Processing' claims, so it consumes
+    //    Received OR Processing. A NON-claiming context (serial step, SPLIT
+    //    spawn, compensation, or a CalloutStep branch) only ever observed rows
+    //    as 'Received'; it must consume them only while STILL 'Received'. If a
+    //    sibling has since claimed one (flipped it to 'Processing'), that row
+    //    now belongs to the sibling -- consuming it would defeat the sibling's
+    //    rollback, so it is left alone.
     if (!matchedIds.isEmpty()) {
-      for (Workflow_Signal__c sig : [
-        SELECT Id
-        FROM Workflow_Signal__c
-        WHERE Id IN :matchedIds AND Status__c IN ('Received', 'Processing')
-        WITH SYSTEM_MODE
-        LIMIT 9000
-      ]) {
+      List<Workflow_Signal__c> matchedRows = claimingContext
+        ? [
+            SELECT Id
+            FROM Workflow_Signal__c
+            WHERE
+              Id IN :matchedIds
+              AND Status__c IN ('Received', 'Processing')
+            WITH SYSTEM_MODE
+            LIMIT 9000
+          ]
+        : [
+            SELECT Id
+            FROM Workflow_Signal__c
+            WHERE Id IN :matchedIds AND Status__c = 'Received'
+            WITH SYSTEM_MODE
+            LIMIT 9000
+          ];
+      for (Workflow_Signal__c sig : matchedRows) {
         toConsume.put(sig.Id, sig);
       }
     }
@@ -1409,6 +1505,8 @@ public inherited sharing class WorkflowEngine {
     // 2. Serial steps only: spend remaining budget cleaning up same-name
     //    duplicates that were not part of the snapshot (an at-least-once
     //    redelivery that landed mid-execution), so they cannot reappear later.
+    //    Restricted to still-'Received' rows so it never steals a row a parallel
+    //    sibling has since claimed.
     Integer remaining = ROW_CAP - toConsume.size();
     if (!parallelBranch && !matchedNames.isEmpty() && remaining > 0) {
       for (Workflow_Signal__c sig : [
@@ -1416,7 +1514,7 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Signal__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Status__c IN ('Received', 'Processing')
+          AND Status__c = 'Received'
           AND Signal_Name__c IN :matchedNames
           AND Id NOT IN :matchedIds
         WITH SYSTEM_MODE
@@ -1447,7 +1545,8 @@ public inherited sharing class WorkflowEngine {
     Workflow_Instance__c instance,
     Workflow_Step_Execution__c stepExec,
     StepResult result,
-    StepContext context
+    StepContext context,
+    Boolean claimingContext
   ) {
     // Re-query to avoid overwriting a timeout or finalizer crash status and race conditions
     Workflow_Instance__c freshInstance = [
@@ -1511,7 +1610,7 @@ public inherited sharing class WorkflowEngine {
       // marked consumed, so an at-least-once redelivered duplicate cannot be
       // reprocessed by a later step. A parallel branch consumes only its own
       // claimed ids so it cannot strip a sibling branch's signal.
-      markSignalsConsumed(instance.Id, context, isParallel);
+      markSignalsConsumed(instance.Id, context, isParallel, claimingContext);
 
       // Update compensation stack if step is CompensatableStep
       Type stepType = Type.forName(stepExec.Step_Name__c);
@@ -1812,9 +1911,10 @@ public inherited sharing class WorkflowEngine {
 
       // The spawning step durably completed; consume the signals it observed so
       // they are not re-loaded into the parallel branches it fans out to. The
-      // spawning step runs serially (it is the fan-out point, not a branch), so
-      // same-name duplicate cleanup is safe here.
-      markSignalsConsumed(instance.Id, context, false);
+      // spawning step runs serially (it is the fan-out point, not a branch) and
+      // does not claim, so it consumes still-Received rows plus same-name
+      // duplicate cleanup.
+      markSignalsConsumed(instance.Id, context, false, false);
 
       String parallelStepsStr = String.join(result.parallelStepNames, ',');
       instance.Current_Step__c = parallelStepsStr;
@@ -2567,14 +2667,16 @@ public inherited sharing class WorkflowEngine {
     }
 
     List<Id> instanceIdsToEnqueue = new List<Id>();
+    List<Workflow_Instance__c> parallelInstances = new List<Workflow_Instance__c>();
     for (Workflow_Instance__c inst : activeInstances) {
-      // Parallel instances must wake each branch by name; route them through the
-      // per-branch resume path instead of the blank-stepName bulk enqueue.
+      // Parallel instances must wake each branch by name; collect them for a
+      // single bulk resume rather than a per-instance query each (which would
+      // exhaust the SOQL limit when many parallel workflows are signaled at once).
       if (
         String.isNotBlank(inst.Current_Step__c) &&
         inst.Current_Step__c.contains(',')
       ) {
-        enqueueResume(inst.Id);
+        parallelInstances.add(inst);
         continue;
       }
       if (!enqueuedInstanceIds.contains(inst.Id)) {
@@ -2583,6 +2685,70 @@ public inherited sharing class WorkflowEngine {
       }
     }
     enqueueOrchestrators(instanceIdsToEnqueue);
+    enqueueResumeBulk(parallelInstances);
+  }
+
+  /**
+   * Bulk variant of enqueueResume for the bulk signal() path: wakes the
+   * incomplete branches of many parallel instances using the already-loaded
+   * Current_Step__c values and ONE step-execution query across all of them,
+   * instead of two queries per instance.
+   */
+  private static void enqueueResumeBulk(
+    List<Workflow_Instance__c> parallelInstances
+  ) {
+    if (parallelInstances == null || parallelInstances.isEmpty()) {
+      return;
+    }
+    // Map each instance to its branch step names, and collect all branch names
+    // for a single step-execution lookup.
+    Map<Id, List<String>> branchesByInstance = new Map<Id, List<String>>();
+    Set<String> allBranchNames = new Set<String>();
+    for (Workflow_Instance__c inst : parallelInstances) {
+      List<String> branches = new List<String>();
+      for (String b : inst.Current_Step__c.split(',')) {
+        branches.add(b.trim());
+        allBranchNames.add(b.trim());
+      }
+      branchesByInstance.put(inst.Id, branches);
+    }
+
+    // One query: latest execution per (instance, branch step name).
+    Map<String, String> latestStatusByKey = new Map<String, String>();
+    for (Workflow_Step_Execution__c se : [
+      SELECT Workflow_Instance__c, Step_Name__c, Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c IN :branchesByInstance.keySet()
+        AND Step_Name__c IN :allBranchNames
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ]) {
+      String key = se.Workflow_Instance__c + '::' + se.Step_Name__c;
+      if (!latestStatusByKey.containsKey(key)) {
+        latestStatusByKey.put(key, se.Status__c);
+      }
+    }
+
+    for (Id instId : branchesByInstance.keySet()) {
+      for (String b : branchesByInstance.get(instId)) {
+        String key = instId + '::' + b;
+        if (latestStatusByKey.get(key) == 'Completed') {
+          continue; // branch already finished
+        }
+        if (enqueuedBranchKeys.contains(key)) {
+          continue;
+        }
+        enqueuedBranchKeys.add(key);
+        if (Test.isRunningTest()) {
+          if (!disableQueueableInTest) {
+            System.enqueueJob(new WorkflowOrchestrator(instId, b));
+          }
+        } else {
+          enqueueOrchestrator(instId, b);
+        }
+      }
+    }
   }
 
   /**
@@ -3003,9 +3169,9 @@ public inherited sharing class WorkflowEngine {
 
       // A compensating step that read signals durably completed; consume them on
       // the same contract as a forward step so a later compensation attempt or
-      // step does not re-observe them. Compensation runs serially (LIFO), so
-      // same-name duplicate cleanup is safe.
-      markSignalsConsumed(instance.Id, context, false);
+      // step does not re-observe them. Compensation runs serially (LIFO) and
+      // does not claim, so it consumes still-Received rows plus same-name cleanup.
+      markSignalsConsumed(instance.Id, context, false, false);
 
       stack.remove(stack.size() - 1);
       instance.Compensation_Stack__c = JSON.serialize(stack);
