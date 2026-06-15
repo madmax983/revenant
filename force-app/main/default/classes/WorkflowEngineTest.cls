@@ -2937,6 +2937,154 @@ public class WorkflowEngineTest {
   }
 
   @isTest
+  static void testResumeSeedsFromCompensationCheckpoint() {
+    // A resumed rollback must continue from the failed compensation's saved checkpoint
+    // (YIELD progress stored in its Output__c) rather than restarting from the forward
+    // execution output, so partial rollback work is not re-run.
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'CompensationFailed',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+      ),
+      Error_Message__c = 'Rollback incomplete: ...'
+    );
+    insert inst;
+    // Forward execution output = the initial undo context.
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep',
+      Status__c = 'Completed',
+      Output__c = '{"forward":"output"}'
+    );
+    // A failed compensation attempt that had checkpointed progress via YIELD.
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep_Compensate',
+      Status__c = 'Failed',
+      Output__c = '{"checkpoint":"progress"}'
+    );
+
+    Test.startTest();
+    WorkflowEngine.resumeCompensation(inst.Id);
+    Test.stopTest();
+
+    List<Workflow_Step_Execution__c> attempts = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep_Compensate'
+      ORDER BY CreatedDate ASC, Id ASC
+    ];
+    System.assertEquals(
+      2,
+      attempts.size(),
+      'A fresh attempt is appended alongside the preserved failed one'
+    );
+    Workflow_Step_Execution__c fresh = attempts[attempts.size() - 1];
+    System.assertEquals('Pending', fresh.Status__c);
+    System.assert(
+      fresh.Output__c != null && fresh.Output__c.contains('checkpoint'),
+      'Resume attempt must be seeded from the compensation checkpoint, got: ' +
+        fresh.Output__c
+    );
+  }
+
+  @isTest
+  static void testCompensationCrashViaFinalizerRecordsCompensationStep() {
+    // A finalizer-style crash during compensation (no stepName) must be recorded against
+    // the top-of-stack _Compensate step, not the stale forward Current_Step__c, so the
+    // append-only audit trail and resume path stay correct.
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Compensating',
+      Current_Step__c = 'WorkflowEngineTest.HappyStep1', // stale forward step
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+      ),
+      Input__c = '{"test": true}'
+    );
+    insert inst;
+    // The pre-created pending compensation log (as preCreateFirstCompensationStep makes).
+    Workflow_Step_Execution__c compLog = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep_Compensate',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+    insert compLog;
+
+    Test.startTest();
+    WorkflowEngine.handleCrash(
+      inst.Id,
+      new WorkflowEngine.WorkflowException('Governor limit during compensation')
+    );
+
+    // The crash is recorded against the compensation step, not the stale forward step.
+    Workflow_Step_Execution__c crashedComp = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :compLog.Id
+    ];
+    System.assertEquals('Failed', crashedComp.Status__c);
+
+    Integer forwardFailures = [
+      SELECT COUNT()
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowEngineTest.HappyStep1'
+        AND Status__c = 'Failed'
+    ];
+    System.assertEquals(
+      0,
+      forwardFailures,
+      'A compensation crash must not create a spurious forward-step failure'
+    );
+
+    Workflow_Instance__c stalled = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('CompensationFailed', stalled.Status__c);
+
+    // Resume appends a fresh attempt (append-only) and completes the rollback.
+    WorkflowEngine.resumeCompensation(inst.Id);
+    WorkflowEngine.runStep(inst.Id, null);
+    Test.stopTest();
+
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Compensated', finalInst.Status__c);
+
+    List<Workflow_Step_Execution__c> compAttempts = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep_Compensate'
+      ORDER BY CreatedDate ASC, Id ASC
+    ];
+    System.assertEquals(
+      2,
+      compAttempts.size(),
+      'The failed attempt is preserved alongside the successful resume attempt'
+    );
+    System.assertEquals('Failed', compAttempts[0].Status__c);
+    System.assertEquals(
+      'Compensated',
+      compAttempts[compAttempts.size() - 1].Status__c
+    );
+  }
+
+  @isTest
   static void testBulkStart() {
     List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
     for (Integer i = 0; i < 5; i++) {

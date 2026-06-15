@@ -1511,7 +1511,7 @@ public inherited sharing class WorkflowEngine {
   public static void handleCrash(Id instanceId, String stepName, Exception ex) {
     // Run as separate DML transaction to ensure it's written even if parent rolled back
     List<Workflow_Instance__c> instances = [
-      SELECT Id, Current_Step__c, Input__c
+      SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c, Input__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -1525,10 +1525,30 @@ public inherited sharing class WorkflowEngine {
 
     Workflow_Instance__c instance = instances[0];
 
-    // Resolve target step name: if stepName is passed, use it; otherwise fallback to Current_Step__c
-    String targetStepName = String.isNotBlank(stepName)
-      ? stepName
-      : instance.Current_Step__c;
+    // Resolve target step name. An explicit stepName always wins. Otherwise, if the
+    // instance is mid-rollback the crashing work is the top-of-stack compensation (the
+    // compensation orchestrator is enqueued without a stepName), so record the crash
+    // against that '_Compensate' step rather than the stale forward Current_Step__c.
+    // This keeps the failed compensation in the append-only audit trail and lets the
+    // resume path append a fresh attempt instead of mistaking a stale log for in-flight.
+    String targetStepName;
+    if (String.isNotBlank(stepName)) {
+      targetStepName = stepName;
+    } else if (
+      (instance.Status__c == 'Compensating' ||
+      instance.Status__c == 'Cancelling') &&
+      String.isNotBlank(instance.Compensation_Stack__c)
+    ) {
+      List<String> stack = (List<String>) JSON.deserialize(
+        instance.Compensation_Stack__c,
+        List<String>.class
+      );
+      targetStepName = stack.isEmpty()
+        ? instance.Current_Step__c
+        : stack[stack.size() - 1] + '_Compensate';
+    } else {
+      targetStepName = instance.Current_Step__c;
+    }
 
     // Mark step failed first
     if (String.isNotBlank(targetStepName)) {
@@ -2352,8 +2372,12 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    // Seed the retry attempt's inputs/outputs from the original forward execution so
-    // compensate() sees the same context it had on the first attempt.
+    // Seed the retry attempt. Prefer any checkpoint the failed compensation already saved
+    // (a YIELD stores progress in its own Output__c → StepContext.stepStateJson), so a
+    // resumed compensation continues from where it left off rather than re-running partial
+    // rollback side effects from the start. Fall back to the original forward execution's
+    // input/output (the initial undo context) when the failed attempt has no saved state
+    // (e.g. a RETRY attempt nulls its Output before exhausting).
     List<Workflow_Step_Execution__c> originalExecs = [
       SELECT Input__c, Output__c
       FROM Workflow_Step_Execution__c
@@ -2364,17 +2388,28 @@ public inherited sharing class WorkflowEngine {
       ORDER BY CreatedDate DESC, Id DESC
       LIMIT 1
     ];
+    String forwardInput = !originalExecs.isEmpty()
+      ? originalExecs[0].Input__c
+      : null;
+    String forwardOutput = !originalExecs.isEmpty()
+      ? originalExecs[0].Output__c
+      : null;
+
+    String priorInput = (!existing.isEmpty() &&
+      String.isNotBlank(existing[0].Input__c))
+      ? existing[0].Input__c
+      : forwardInput;
+    String checkpointOutput = (!existing.isEmpty() &&
+      String.isNotBlank(existing[0].Output__c))
+      ? existing[0].Output__c
+      : forwardOutput;
 
     Workflow_Step_Execution__c compStepExec = new Workflow_Step_Execution__c();
     compStepExec.Workflow_Instance__c = instance.Id;
     compStepExec.Step_Name__c = compensationStepLogName;
     compStepExec.Status__c = 'Pending';
-    compStepExec.Input__c = !originalExecs.isEmpty()
-      ? originalExecs[0].Input__c
-      : null;
-    compStepExec.Output__c = !originalExecs.isEmpty()
-      ? originalExecs[0].Output__c
-      : null;
+    compStepExec.Input__c = priorInput;
+    compStepExec.Output__c = checkpointOutput;
     compStepExec.Retry_Count__c = 0;
     insert as system compStepExec;
   }
