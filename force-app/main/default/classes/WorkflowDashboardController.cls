@@ -67,23 +67,45 @@ public inherited sharing class WorkflowDashboardController {
     return val;
   }
 
-  private static String resolveSinglePayload(
+  // Character length above which the dashboard shows a truncated preview. Payloads that
+  // are attachment-backed AND exceed this get a download link to the full ContentDocument.
+  @TestVisible
+  private static final Integer PAYLOAD_DISPLAY_LIMIT = 50000;
+
+  /**
+   * Resolves a payload field for display: returns the (possibly truncated) text and, when
+   * the value is attachment-backed and was truncated, records a download descriptor for
+   * the full ContentDocument under fieldKey in payloadFiles so the UI can offer the file.
+   */
+  private static String resolveAndRecordPayload(
     String textValue,
-    Map<Id, String> attachmentIdToData
+    String fieldKey,
+    Map<Id, String> attachmentIdToData,
+    Map<String, Object> payloadFiles
   ) {
     if (String.isBlank(textValue)) {
       return textValue;
     }
     Id attachmentId = getAttachmentId(textValue);
-    if (attachmentId != null) {
-      if (attachmentIdToData.containsKey(attachmentId)) {
-        return truncatePayload(attachmentIdToData.get(attachmentId));
+    if (attachmentId != null && attachmentIdToData.containsKey(attachmentId)) {
+      String full = attachmentIdToData.get(attachmentId);
+      if (full != null && full.length() > PAYLOAD_DISPLAY_LIMIT) {
+        payloadFiles.put(
+          fieldKey,
+          new Map<String, Object>{
+            'contentDocumentId' => attachmentId,
+            'downloadUrl' => '/sfc/servlet.shepherd/document/download/' +
+              attachmentId,
+            'fullLength' => full.length()
+          }
+        );
       }
+      return truncatePayload(full);
     }
     return truncatePayload(textValue);
   }
 
-  private static void resolvePayloadsInBulk(
+  private static Map<String, Object> resolvePayloadsInBulk(
     Workflow_Instance__c instance,
     List<Workflow_Step_Execution__c> steps
   ) {
@@ -124,18 +146,34 @@ public inherited sharing class WorkflowDashboardController {
       }
     }
 
-    instance.Input__c = resolveSinglePayload(
+    Map<String, Object> payloadFiles = new Map<String, Object>();
+    instance.Input__c = resolveAndRecordPayload(
       instance.Input__c,
-      attachmentIdToData
+      'instance.Input',
+      attachmentIdToData,
+      payloadFiles
     );
-    instance.Output__c = resolveSinglePayload(
+    instance.Output__c = resolveAndRecordPayload(
       instance.Output__c,
-      attachmentIdToData
+      'instance.Output',
+      attachmentIdToData,
+      payloadFiles
     );
     for (Workflow_Step_Execution__c step : steps) {
-      step.Input__c = resolveSinglePayload(step.Input__c, attachmentIdToData);
-      step.Output__c = resolveSinglePayload(step.Output__c, attachmentIdToData);
+      step.Input__c = resolveAndRecordPayload(
+        step.Input__c,
+        'step.' + step.Id + '.Input',
+        attachmentIdToData,
+        payloadFiles
+      );
+      step.Output__c = resolveAndRecordPayload(
+        step.Output__c,
+        'step.' + step.Id + '.Output',
+        attachmentIdToData,
+        payloadFiles
+      );
     }
+    return payloadFiles;
   }
 
   private static String buildWhereClause(
@@ -326,7 +364,12 @@ public inherited sharing class WorkflowDashboardController {
   @AuraEnabled
   public static Map<String, Object> getInstanceDetails(Id instanceId) {
     checkAuthorization();
-    Workflow_Instance__c instance = [
+    if (instanceId == null) {
+      AuraHandledException ex = new AuraHandledException('instanceId is required.');
+      ex.setMessage('instanceId is required.');
+      throw ex;
+    }
+    List<Workflow_Instance__c> instanceList = [
       SELECT
         Id,
         Name,
@@ -348,7 +391,16 @@ public inherited sharing class WorkflowDashboardController {
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
+      LIMIT 1
     ];
+    if (instanceList.isEmpty()) {
+      AuraHandledException ex = new AuraHandledException(
+        'Workflow instance not found: ' + instanceId
+      );
+      ex.setMessage('Workflow instance not found: ' + instanceId);
+      throw ex;
+    }
+    Workflow_Instance__c instance = instanceList[0];
 
     List<Workflow_Step_Execution__c> steps = [
       SELECT
@@ -365,7 +417,7 @@ public inherited sharing class WorkflowDashboardController {
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC
     ];
-    resolvePayloadsInBulk(instance, steps);
+    Map<String, Object> payloadFiles = resolvePayloadsInBulk(instance, steps);
 
     List<Workflow_Instance__c> children = [
       SELECT
@@ -453,7 +505,8 @@ public inherited sharing class WorkflowDashboardController {
       'successor' => successors.isEmpty() ? null : successors[0],
       'waitingOn' => waitingOn,
       'pendingCompensationCount' => pendingCompensations.size(),
-      'pendingCompensations' => pendingCompensations
+      'pendingCompensations' => pendingCompensations,
+      'payloadFiles' => payloadFiles
     };
   }
 
@@ -547,9 +600,10 @@ public inherited sharing class WorkflowDashboardController {
         String className = pm.group(1);
         if (
           ac.Name.contains('WorkflowEngineTest') ||
-          ac.Name.contains('WorkflowDashboardControllerTest')
+          ac.Name.contains('WorkflowDashboardControllerTest') ||
+          ac.Name.equalsIgnoreCase('BulkRedriveWorkflow')
         ) {
-          continue; // Exclude test classes
+          continue; // Exclude test classes and internal system workflows
         }
         // Outer class match returns the bare name; inner class is qualified.
         definitions.add(
@@ -583,7 +637,8 @@ public inherited sharing class WorkflowDashboardController {
       if (
         String.isBlank(className) ||
         className.contains('WorkflowEngineTest') ||
-        className.contains('WorkflowDashboardControllerTest')
+        className.contains('WorkflowDashboardControllerTest') ||
+        className.equalsIgnoreCase('BulkRedriveWorkflow')
       ) {
         continue;
       }
@@ -604,12 +659,24 @@ public inherited sharing class WorkflowDashboardController {
     try {
       Object input = null;
       if (String.isNotBlank(inputJson)) {
-        input = JSON.deserializeUntyped(inputJson);
+        try {
+          input = JSON.deserializeUntyped(inputJson);
+        } catch (System.JSONException je) {
+          AuraHandledException ex = new AuraHandledException(
+            'Input Payload is not valid JSON: ' + je.getMessage()
+          );
+          ex.setMessage('Input Payload is not valid JSON: ' + je.getMessage());
+          throw ex;
+        }
       }
       return WorkflowEngine.start(workflowName, correlationKey, input);
+    } catch (AuraHandledException ahe) {
+      throw ahe;
     } catch (Exception ex) {
       System.debug(LoggingLevel.ERROR, 'Aura startWorkflow failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
-      throw new AuraHandledException(ex.getMessage());
+      AuraHandledException ahe = new AuraHandledException(ex.getMessage());
+      ahe.setMessage(ex.getMessage());
+      throw ahe;
     }
   }
 
@@ -620,6 +687,90 @@ public inherited sharing class WorkflowDashboardController {
       WorkflowEngine.retryWorkflow(instanceId);
     } catch (Exception ex) {
       System.debug(LoggingLevel.ERROR, 'Aura retryWorkflowInstance failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  /**
+   * Exact count of failed instances that a "Re-drive matching" action would
+   * re-enqueue for the operator's CURRENT filter. Shown in the confirmation
+   * prompt before anything is enqueued. Uses the same selection surface
+   * (workflowName / status / searchTerm) as getFilteredInstances, restricted to
+   * the operator-recoverable terminal set and excluding the re-driver itself.
+   */
+  @AuraEnabled
+  public static Integer getRedriveEligibleCount(
+    String workflowName,
+    String status,
+    String searchTerm
+  ) {
+    checkAuthorization();
+    try {
+      return BulkRedriveWorkflow.countEligible(
+        workflowName,
+        status,
+        searchTerm
+      );
+    } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura getRedriveEligibleCount failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  /**
+   * Re-drives every failed instance matching the operator's current filter in a
+   * single bounded action. The actual re-drive runs asynchronously as a
+   * BulkRedriveWorkflow instance, which pages over the selection in safe-sized
+   * chunks (so the platform async-enqueue budget is never exceeded) and recovers
+   * each instance through the existing WorkflowEngine.retryWorkflow primitive.
+   *
+   * Returns { started, eligibleCount, redriveInstanceId } so the dashboard can
+   * confirm the launch and link the operator to the re-driver for live progress.
+   */
+  @AuraEnabled
+  public static Map<String, Object> redriveMatchingInstances(
+    String workflowName,
+    String status,
+    String searchTerm
+  ) {
+    checkAuthorization();
+    try {
+      Integer eligibleCount = BulkRedriveWorkflow.countEligible(
+        workflowName,
+        status,
+        searchTerm
+      );
+      if (eligibleCount == 0) {
+        return new Map<String, Object>{
+          'started' => false,
+          'eligibleCount' => 0,
+          'redriveInstanceId' => null
+        };
+      }
+
+      Map<String, Object> filter = new Map<String, Object>{
+        'workflowName' => workflowName,
+        'status' => status,
+        'searchTerm' => searchTerm
+      };
+      String correlationKey =
+        'BulkRedrive_' +
+        DateTime.now().getTime() +
+        '_' +
+        Math.abs(Crypto.getRandomLong());
+      Id redriveInstanceId = WorkflowEngine.start(
+        BulkRedriveWorkflow.REDRIVER_WORKFLOW_NAME,
+        correlationKey,
+        filter
+      );
+
+      return new Map<String, Object>{
+        'started' => true,
+        'eligibleCount' => eligibleCount,
+        'redriveInstanceId' => redriveInstanceId
+      };
+    } catch (Exception ex) {
+      System.debug(LoggingLevel.ERROR, 'Aura redriveMatchingInstances failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
   }

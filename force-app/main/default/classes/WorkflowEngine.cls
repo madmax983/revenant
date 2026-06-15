@@ -2,6 +2,36 @@ public inherited sharing class WorkflowEngine {
   public static Boolean disableQueueableInTest = false;
   public static Integer watchdogDelayMinutes = 10;
   public static Boolean useDynamicScheduling = true;
+  // Get-or-start dedup window in minutes. Redelivered starts whose correlation
+  // key matches a terminal instance that became terminal within this many
+  // minutes resolve to that instance instead of spawning a duplicate. Set to 0
+  // to preserve active-only dedup behavior.
+  public static Integer dedupWindowMinutes = 1440;
+
+  // Instances in these statuses are considered in-flight; a start that collides
+  // with one of them always dedups to the existing instance.
+  private static final Set<String> ACTIVE_STATUSES = new Set<String>{
+    'Pending',
+    'Running',
+    'Suspended',
+    'Compensating',
+    'Cancelling',
+    // A stalled rollback is non-terminal: it still has un-reversed side effects and
+    // can be resumed, so it must keep reserving its correlation key to prevent a
+    // duplicate active workflow from starting with the same key while half-undone.
+    'CompensationFailed'
+  };
+
+  // Upper bound (~100 years) applied to the dedup window before it is subtracted
+  // from "now", so a large/misconfigured Dedup_Window_Minutes__c cannot push the
+  // computed lower bound outside Salesforce's valid DateTime range and fault
+  // every start.
+  private static final Integer MAX_DEDUP_WINDOW_MINUTES = 52560000;
+
+  // Upper bound on rows read by a single dedup lookup, so a hot correlation key
+  // with many historical terminal runs cannot exhaust the SOQL row governor.
+  // Single-key lookups (the common start path) read only the top row.
+  private static final Integer DEDUP_LOOKUP_ROW_CAP = 10000;
 
   // Max number of timed-out steps a single watchdog heartbeat will fail. Each failure
   // triggers failWorkflowInstance() (its own SOQL/DML + optional alert queries), so this
@@ -15,7 +45,10 @@ public inherited sharing class WorkflowEngine {
   static {
     try {
       List<Revenant_Config__mdt> configs = [
-        SELECT Watchdog_Delay_Minutes__c, Use_Dynamic_Scheduling__c
+        SELECT
+          Watchdog_Delay_Minutes__c,
+          Use_Dynamic_Scheduling__c,
+          Dedup_Window_Minutes__c
         FROM Revenant_Config__mdt
         WHERE DeveloperName = 'Default'
         WITH SYSTEM_MODE
@@ -29,9 +62,15 @@ public inherited sharing class WorkflowEngine {
         if (configs[0].Use_Dynamic_Scheduling__c != null) {
           useDynamicScheduling = configs[0].Use_Dynamic_Scheduling__c;
         }
+        if (configs[0].Dedup_Window_Minutes__c != null) {
+          dedupWindowMinutes = configs[0].Dedup_Window_Minutes__c.intValue();
+        }
       }
     } catch (Exception ex) {
-      System.debug(LoggingLevel.WARN, 'Revenant configuration metadata query failed: ' + ex.getMessage());
+      System.debug(
+        LoggingLevel.WARN,
+        'Revenant configuration metadata query failed: ' + ex.getMessage()
+      );
     }
   }
 
@@ -41,60 +80,146 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Starts a new durable workflow instance.
+   * Outcome of a get-or-start admission decision. Distinguishes a brand-new
+   * instance from an existing instance returned for a deduplicated redelivery.
+   */
+  public class StartResult {
+    public Id instanceId;
+    // true when a new instance was inserted; false when an existing instance
+    // was returned (deduped active or recently-terminal redelivery).
+    public Boolean isNew;
+
+    public StartResult(Id instanceId, Boolean isNew) {
+      this.instanceId = instanceId;
+      this.isNew = isNew;
+    }
+  }
+
+  /**
+   * Starts a new durable workflow instance (get-or-start). If an instance with
+   * the same correlation key already exists within the dedup scope, returns
+   * that instance's Id instead of inserting a duplicate.
    */
   public static Id start(
     String workflowName,
     String correlationKey,
     Object input
   ) {
+    return doStart(workflowName, correlationKey, input, null).instanceId;
+  }
+
+  /**
+   * Starts a new durable workflow instance with a parent workflow reference
+   * (get-or-start).
+   */
+  public static Id start(
+    String workflowName,
+    String correlationKey,
+    Object input,
+    Id parentInstanceId
+  ) {
+    return doStart(workflowName, correlationKey, input, parentInstanceId)
+      .instanceId;
+  }
+
+  /**
+   * Get-or-start variant that exposes whether a new instance was created or an
+   * existing one was returned.
+   */
+  public static StartResult startOrGet(
+    String workflowName,
+    String correlationKey,
+    Object input
+  ) {
+    return doStart(workflowName, correlationKey, input, null);
+  }
+
+  public static StartResult startOrGet(
+    String workflowName,
+    String correlationKey,
+    Object input,
+    Id parentInstanceId
+  ) {
+    return doStart(workflowName, correlationKey, input, parentInstanceId, true);
+  }
+
+  /**
+   * Active-only get-or-start for engine-internal singleton workflows (e.g. the
+   * watchdog). Never dedups against terminal instances, so a failed or
+   * continued-as-new singleton is always restarted rather than resolving to a
+   * dead terminal run within the dedup window.
+   */
+  public static Id startSingleton(
+    String workflowName,
+    String correlationKey,
+    Object input
+  ) {
+    return doStart(workflowName, correlationKey, input, null, false).instanceId;
+  }
+
+  private static StartResult doStart(
+    String workflowName,
+    String correlationKey,
+    Object input,
+    Id parentInstanceId
+  ) {
+    return doStart(workflowName, correlationKey, input, parentInstanceId, true);
+  }
+
+  private static StartResult doStart(
+    String workflowName,
+    String correlationKey,
+    Object input,
+    Id parentInstanceId,
+    Boolean includeTerminal
+  ) {
     validateCorrelationKey(correlationKey);
-    // Enforce uniqueness of active correlation keys if provided
+
+    // Get-or-start: return an existing instance within the dedup scope (active,
+    // and optionally recently terminal within the configured window) instead of
+    // throwing or inserting a duplicate. No step-execution write, no enqueue.
+    //
+    // Concurrency note (known limitation): the unique Active_Correlation_Key__c
+    // index is the hard backstop for the active<->active race. Terminal-window
+    // dedup is best-effort under concurrent redelivery: if a sibling start
+    // inserts AND transitions to terminal in the narrow window between this
+    // pre-query and our insert, the trigger has already cleared its active key,
+    // so our insert succeeds and a duplicate of a just-finished, in-window run
+    // can be created. Closing this fully would require a recheck-after-insert
+    // (an extra SOQL on every successful start) or a lock surviving the terminal
+    // transition; both are intentionally avoided here to keep the start path to
+    // a single indexed SOQL. The common cases (active redelivery, sequential
+    // post-completion redelivery) are fully covered.
     if (String.isNotBlank(correlationKey)) {
-      List<Workflow_Instance__c> existing = [
-        SELECT Id
-        FROM Workflow_Instance__c
-        WHERE
-          Correlation_Key__c = :correlationKey
-          AND Status__c IN ('Pending', 'Running', 'Suspended', 'CompensationFailed')
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (!existing.isEmpty()) {
-        throw new WorkflowException(
-          'An active workflow already exists with correlation key: ' +
-          correlationKey
-        );
+      Workflow_Instance__c match = findExistingByKey(
+          new Set<String>{ correlationKey },
+          includeTerminal
+        )
+        .get(normalizeKey(correlationKey));
+      if (match != null) {
+        return new StartResult(match.Id, false);
       }
     }
 
-    Workflow_Instance__c instance = new Workflow_Instance__c();
-    instance.Workflow_Name__c = workflowName;
-    instance.Status__c = 'Pending';
-    instance.Correlation_Key__c = correlationKey;
-
-    // Resolve version and initial step
-    Type wflowType = Type.forName(workflowName);
-    if (wflowType != null) {
-      Object defObj = wflowType.newInstance();
-      if (defObj instanceof VersionedWorkflow) {
-        instance.Definition_Version__c = ((VersionedWorkflow) defObj)
-          .getLatestVersion();
-      } else {
-        instance.Definition_Version__c = 1;
-      }
-      if (defObj instanceof WorkflowDefinition) {
-        instance.Current_Step__c = ((WorkflowDefinition) defObj)
-          .getInitialStep();
-      }
-    } else {
-      instance.Definition_Version__c = 1;
-    }
+    Workflow_Instance__c instance = buildInstance(
+      new StartRequest(workflowName, correlationKey, input, parentInstanceId)
+    );
 
     try {
       insert as system instance;
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
+        // Concurrency backstop: a sibling start won the race on the unique
+        // Active_Correlation_Key__c index. A sibling provably exists, so resolve
+        // the winner regardless of the dedup window (it may have completed
+        // mid-race) and return its Id so the loser is a safe no-op.
+        Workflow_Instance__c winner = findAnyByKey(
+            new Set<String>{ correlationKey }
+          )
+          .get(normalizeKey(correlationKey));
+        if (winner != null) {
+          return new StartResult(winner.Id, false);
+        }
         throw new WorkflowException(
           'An active workflow already exists with correlation key: ' +
           correlationKey
@@ -133,45 +258,21 @@ public inherited sharing class WorkflowEngine {
     } else {
       enqueueOrchestrator(instance.Id, null);
     }
-    return instance.Id;
+    return new StartResult(instance.Id, true);
   }
 
   /**
-   * Starts a new durable workflow instance with a parent workflow reference.
+   * Builds an unsaved Workflow_Instance__c for a start request, resolving the
+   * definition version and initial step.
    */
-  public static Id start(
-    String workflowName,
-    String correlationKey,
-    Object input,
-    Id parentInstanceId
-  ) {
-    validateCorrelationKey(correlationKey);
-    if (String.isNotBlank(correlationKey)) {
-      List<Workflow_Instance__c> existing = [
-        SELECT Id
-        FROM Workflow_Instance__c
-        WHERE
-          Correlation_Key__c = :correlationKey
-          AND Status__c IN ('Pending', 'Running', 'Suspended', 'CompensationFailed')
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (!existing.isEmpty()) {
-        throw new WorkflowException(
-          'An active workflow already exists with correlation key: ' +
-          correlationKey
-        );
-      }
-    }
-
+  private static Workflow_Instance__c buildInstance(StartRequest req) {
     Workflow_Instance__c instance = new Workflow_Instance__c();
-    instance.Workflow_Name__c = workflowName;
+    instance.Workflow_Name__c = req.workflowName;
     instance.Status__c = 'Pending';
-    instance.Correlation_Key__c = correlationKey;
-    instance.Parent_Instance__c = parentInstanceId;
+    instance.Correlation_Key__c = req.correlationKey;
+    instance.Parent_Instance__c = req.parentInstanceId;
 
-    // Resolve version and initial step
-    Type wflowType = Type.forName(workflowName);
+    Type wflowType = Type.forName(req.workflowName);
     if (wflowType != null) {
       Object defObj = wflowType.newInstance();
       if (defObj instanceof VersionedWorkflow) {
@@ -187,49 +288,189 @@ public inherited sharing class WorkflowEngine {
     } else {
       instance.Definition_Version__c = 1;
     }
+    return instance;
+  }
 
-    try {
-      insert as system instance;
-    } catch (DmlException ex) {
-      if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
-        throw new WorkflowException(
-          'An active workflow already exists with correlation key: ' +
-          correlationKey
-        );
+  /**
+   * Canonical form of a correlation key for in-memory dedup maps/sets.
+   * Correlation_Key__c is case-insensitive (and the unique
+   * Active_Correlation_Key__c index is too), but Apex Map/Set keys are
+   * case-sensitive, so keys are lower-cased to match the database semantics.
+   */
+  private static String normalizeKey(String key) {
+    return key == null ? null : key.toLowerCase();
+  }
+
+  /**
+   * Resolves the dedup-winner instance for each correlation key: an active
+   * instance if one exists, otherwise (when includeTerminal is true) the most
+   * recent terminal instance that became terminal within the configured dedup
+   * window. The returned map is keyed by the normalized correlation key.
+   */
+  private static Map<String, Workflow_Instance__c> findExistingByKey(
+    Set<String> keys,
+    Boolean includeTerminal
+  ) {
+    Map<String, Workflow_Instance__c> result = new Map<String, Workflow_Instance__c>();
+    if (keys == null || keys.isEmpty()) {
+      return result;
+    }
+    Boolean terminalEnabled =
+      includeTerminal &&
+      dedupWindowMinutes != null &&
+      dedupWindowMinutes > 0;
+
+    // Fast path: a single key needs only the single most-relevant row (an active
+    // instance preferred via NULLS FIRST, else the newest in-window terminal).
+    // One indexed SOQL with LIMIT 1 keeps the common start path to a single
+    // query and bounds the row governor regardless of how many historical
+    // terminal runs the key has. SOQL equality is case-insensitive, so a stored
+    // "Foo" matches a requested "foo".
+    if (keys.size() == 1) {
+      DateTime windowStart = terminalEnabled
+        ? dedupWindowStart()
+        : DateTime.now().addYears(1000);
+      for (Workflow_Instance__c inst : [
+        SELECT Id, Correlation_Key__c
+        FROM Workflow_Instance__c
+        WHERE
+          Correlation_Key__c IN :keys
+          AND (Status__c IN :ACTIVE_STATUSES
+          OR Terminal_At__c >= :windowStart)
+        WITH SYSTEM_MODE
+        ORDER BY Terminal_At__c DESC NULLS FIRST, CreatedDate DESC
+        LIMIT 1
+      ]) {
+        result.put(normalizeKey(inst.Correlation_Key__c), inst);
       }
-      throw ex;
+      return result;
     }
 
-    instance.Input__c = savePayloadIfNeeded(
-      instance.Id,
-      (input != null) ? JSON.serialize(input) : null,
-      'Input_' + instance.Id
-    );
-    update as system instance;
-
-    if (String.isNotBlank(instance.Current_Step__c)) {
-      Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
-      stepExec.Workflow_Instance__c = instance.Id;
-      stepExec.Step_Name__c = instance.Current_Step__c;
-      stepExec.Status__c = 'Pending';
-      stepExec.Input__c = instance.Input__c;
-      stepExec.Retry_Count__c = 0;
-      Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
-      if (timeout != null && timeout > 0) {
-        stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+    // Bulk path: resolve each key independently so no single hot key can crowd
+    // out another, and without reading every historical terminal row.
+    // 1) Active instances — bounded to at most one per key by the unique
+    //    Active_Correlation_Key__c index.
+    for (Workflow_Instance__c inst : [
+      SELECT Id, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c IN :keys AND Status__c IN :ACTIVE_STATUSES
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+    ]) {
+      String n = normalizeKey(inst.Correlation_Key__c);
+      if (!result.containsKey(n)) {
+        result.put(n, inst);
       }
-      insert as system stepExec;
+    }
+    if (!terminalEnabled) {
+      return result;
     }
 
-    // Schedule watchdog for the initial step before executing it
-    scheduleTimeoutJobForInstance(instance.Id);
-
-    if (Test.isRunningTest()) {
-      System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-    } else {
-      enqueueOrchestrator(instance.Id, null);
+    // 2) Most-recent terminal per key not already resolved to an active
+    //    instance. An aggregate yields one MAX(Terminal_At__c) per key (each
+    //    grouped result counts as a single row toward the SOQL row limit, so a
+    //    hot key cannot exhaust it), then a bounded fetch resolves the Id at
+    //    those timestamps. Because the unique active-key index forces terminal
+    //    runs of one key to occur serially, their Terminal_At__c values are
+    //    distinct, so the fetch matches ~one row per key.
+    Set<String> remaining = new Set<String>();
+    for (String k : keys) {
+      if (!result.containsKey(normalizeKey(k))) {
+        remaining.add(k);
+      }
     }
-    return instance.Id;
+    if (remaining.isEmpty()) {
+      return result;
+    }
+
+    DateTime windowStart = dedupWindowStart();
+    Map<String, Datetime> maxTimeByKey = new Map<String, Datetime>();
+    Set<Datetime> maxTimes = new Set<Datetime>();
+    for (AggregateResult ar : [
+      SELECT Correlation_Key__c ck, MAX(Terminal_At__c) mt
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c IN :remaining AND Terminal_At__c >= :windowStart
+      WITH SYSTEM_MODE
+      GROUP BY Correlation_Key__c
+    ]) {
+      Datetime mt = (Datetime) ar.get('mt');
+      if (mt == null) {
+        continue;
+      }
+      String n = normalizeKey((String) ar.get('ck'));
+      Datetime existing = maxTimeByKey.get(n);
+      if (existing == null || mt > existing) {
+        maxTimeByKey.put(n, mt);
+      }
+      maxTimes.add(mt);
+    }
+    if (maxTimes.isEmpty()) {
+      return result;
+    }
+
+    for (Workflow_Instance__c inst : [
+      SELECT Id, Correlation_Key__c, Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c IN :remaining AND Terminal_At__c IN :maxTimes
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+    ]) {
+      String n = normalizeKey(inst.Correlation_Key__c);
+      if (
+        !result.containsKey(n) && inst.Terminal_At__c == maxTimeByKey.get(n)
+      ) {
+        result.put(n, inst);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Resolves the existing instance per key regardless of the dedup window,
+   * preferring an active instance then the most recent terminal one. Used as the
+   * post-DUPLICATE_VALUE concurrency backstop, where a sibling is known to exist
+   * and the loser must always resolve to the winner per the get-or-start
+   * contract (even if the winner completed mid-race, and even when the window is
+   * disabled). Row-bounded for the same governor-safety reason as
+   * findExistingByKey.
+   */
+  private static Map<String, Workflow_Instance__c> findAnyByKey(
+    Set<String> keys
+  ) {
+    Map<String, Workflow_Instance__c> result = new Map<String, Workflow_Instance__c>();
+    if (keys == null || keys.isEmpty()) {
+      return result;
+    }
+    Integer rowLimit = keys.size() == 1 ? 1 : DEDUP_LOOKUP_ROW_CAP;
+    for (Workflow_Instance__c inst : [
+      SELECT Id, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c IN :keys
+      WITH SYSTEM_MODE
+      ORDER BY Terminal_At__c DESC NULLS FIRST, CreatedDate DESC
+      LIMIT :rowLimit
+    ]) {
+      String normalized = normalizeKey(inst.Correlation_Key__c);
+      if (!result.containsKey(normalized)) {
+        result.put(normalized, inst);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Lower bound for the terminal dedup window. When the window is at its
+   * minimum (<= 0) a far-future sentinel is returned so no terminal instance
+   * matches, preserving active-only dedup behavior. The window is clamped to a
+   * safe maximum so a misconfigured value cannot underflow the valid DateTime
+   * range.
+   */
+  private static DateTime dedupWindowStart() {
+    if (dedupWindowMinutes != null && dedupWindowMinutes > 0) {
+      Integer minutes = Math.min(dedupWindowMinutes, MAX_DEDUP_WINDOW_MINUTES);
+      return DateTime.now().addMinutes(-minutes);
+    }
+    return DateTime.now().addYears(1000);
   }
 
   public class StartRequest {
@@ -290,14 +531,29 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Starts multiple durable workflow instances in a bulk-friendly transaction.
+   * Starts multiple durable workflow instances in a bulk-friendly transaction
+   * (get-or-start). A duplicate correlation key resolves to the existing
+   * instance and never faults sibling requests in the same invocation.
    */
   public static List<Id> start(List<StartRequest> requests) {
+    List<Id> ids = new List<Id>();
+    for (StartResult r : startOrGet(requests)) {
+      ids.add(r == null ? null : r.instanceId);
+    }
+    return ids;
+  }
+
+  /**
+   * Bulk get-or-start. Returns a result per request (index-aligned) reporting
+   * the resolved instance Id and whether it was newly created or deduped.
+   */
+  public static List<StartResult> startOrGet(List<StartRequest> requests) {
+    List<StartResult> results = new List<StartResult>();
     if (requests == null || requests.isEmpty()) {
-      return new List<Id>();
+      return results;
     }
 
-    // 1. Gather correlation keys and validate
+    // 1. Validate and gather correlation keys
     Set<String> correlationKeys = new Set<String>();
     for (StartRequest req : requests) {
       validateCorrelationKey(req.correlationKey);
@@ -306,68 +562,153 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    // 2. Enforce uniqueness of active correlation keys in bulk
-    if (!correlationKeys.isEmpty()) {
-      List<Workflow_Instance__c> existing = [
-        SELECT Id, Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE
-          Correlation_Key__c IN :correlationKeys
-          AND Status__c IN ('Pending', 'Running', 'Suspended', 'CompensationFailed')
-        WITH SYSTEM_MODE
-      ];
-      if (!existing.isEmpty()) {
-        throw new WorkflowException(
-          'An active workflow already exists with correlation key: ' +
-          existing[0].Correlation_Key__c
-        );
-      }
+    // 2. Pre-resolve existing instances within the dedup scope (keyed by the
+    //    normalized correlation key to honor case-insensitive matching).
+    Map<String, Workflow_Instance__c> existingByKey = findExistingByKey(
+      correlationKeys,
+      true
+    );
+
+    // 3. Decide per request (preserving order): dedup to an existing instance,
+    //    dedup to an intra-batch sibling, or build a fresh instance to insert.
+    for (Integer i = 0; i < requests.size(); i++) {
+      results.add(null);
     }
+    List<Workflow_Instance__c> toInsert = new List<Workflow_Instance__c>();
+    List<Integer> insertReqIndexes = new List<Integer>();
+    Set<String> newKeysInBatch = new Set<String>();
 
-    // 3. Construct Workflow_Instance__c records
-    List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
-    for (StartRequest req : requests) {
-      Workflow_Instance__c instance = new Workflow_Instance__c();
-      instance.Workflow_Name__c = req.workflowName;
-      instance.Status__c = 'Pending';
-      instance.Correlation_Key__c = req.correlationKey;
-      instance.Parent_Instance__c = req.parentInstanceId;
-
-      // Resolve version and initial step
-      Type wflowType = Type.forName(req.workflowName);
-      if (wflowType != null) {
-        Object defObj = wflowType.newInstance();
-        if (defObj instanceof VersionedWorkflow) {
-          instance.Definition_Version__c = ((VersionedWorkflow) defObj)
-            .getLatestVersion();
-        } else {
-          instance.Definition_Version__c = 1;
-        }
-        if (defObj instanceof WorkflowDefinition) {
-          instance.Current_Step__c = ((WorkflowDefinition) defObj)
-            .getInitialStep();
-        }
-      } else {
-        instance.Definition_Version__c = 1;
-      }
-      instances.add(instance);
-    }
-
-    try {
-      insert as system instances;
-    } catch (DmlException ex) {
-      if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
-        throw new WorkflowException(
-          'An active workflow already exists with duplicate correlation key constraint.'
-        );
-      }
-      throw ex;
-    }
-
-    // 4. Resolve input payloads and update instances
     for (Integer i = 0; i < requests.size(); i++) {
       StartRequest req = requests[i];
-      Workflow_Instance__c instance = instances[i];
+      String key = req.correlationKey;
+      String normKey = normalizeKey(key);
+
+      if (String.isNotBlank(key) && existingByKey.containsKey(normKey)) {
+        results[i] = new StartResult(existingByKey.get(normKey).Id, false);
+        continue;
+      }
+      if (String.isNotBlank(key) && newKeysInBatch.contains(normKey)) {
+        // Intra-batch duplicate; resolved to the sibling's Id after insert.
+        continue;
+      }
+
+      toInsert.add(buildInstance(req));
+      insertReqIndexes.add(i);
+      if (String.isNotBlank(key)) {
+        newKeysInBatch.add(normKey);
+      }
+    }
+
+    // 4. Insert fresh instances, tolerating per-row DUPLICATE_VALUE from a
+    //    concurrent winner (the unique Active_Correlation_Key__c backstop).
+    List<Workflow_Instance__c> insertedInstances = new List<Workflow_Instance__c>();
+    List<Integer> insertedReqIndexes = new List<Integer>();
+    Set<String> concurrentLoserKeys = new Set<String>();
+
+    if (!toInsert.isEmpty()) {
+      Database.SaveResult[] saveResults = Database.insert(
+        toInsert,
+        false,
+        AccessLevel.SYSTEM_MODE
+      );
+      String genuineError = null;
+      for (Integer j = 0; j < saveResults.size(); j++) {
+        Database.SaveResult sr = saveResults[j];
+        Integer reqIdx = insertReqIndexes[j];
+        if (sr.isSuccess()) {
+          Workflow_Instance__c inst = toInsert[j];
+          insertedInstances.add(inst);
+          insertedReqIndexes.add(reqIdx);
+          results[reqIdx] = new StartResult(inst.Id, true);
+        } else {
+          Boolean isDup = false;
+          for (Database.Error err : sr.getErrors()) {
+            if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+              isDup = true;
+              break;
+            }
+          }
+          String key = requests[reqIdx].correlationKey;
+          if (isDup && String.isNotBlank(key)) {
+            concurrentLoserKeys.add(key);
+          } else if (genuineError == null) {
+            genuineError = sr.getErrors()[0].getMessage();
+          }
+        }
+      }
+      // A genuine (non-duplicate) row failure restores all-or-none semantics:
+      // delete every sibling row that succeeded in this partial insert (no
+      // savepoint is spent on the all-success path) and surface the error so no
+      // orphan Pending instances are left behind.
+      if (genuineError != null) {
+        if (!insertedInstances.isEmpty()) {
+          delete as system insertedInstances;
+        }
+        throw new WorkflowException(
+          'Failed to start workflow: ' + genuineError
+        );
+      }
+    }
+
+    // 5. Build a key -> resolved Id map for newly inserted instances and for
+    //    any concurrent winners, then fill remaining (intra-batch / loser)
+    //    results. A DUPLICATE_VALUE proves a sibling exists, so losers are
+    //    resolved regardless of the dedup window (the winner may have completed
+    //    mid-race, including when the window is disabled).
+    Map<String, Id> resolvedIdByKey = new Map<String, Id>();
+    for (Integer j = 0; j < insertedInstances.size(); j++) {
+      String key = requests[insertedReqIndexes[j]].correlationKey;
+      if (String.isNotBlank(key)) {
+        resolvedIdByKey.put(normalizeKey(key), insertedInstances[j].Id);
+      }
+    }
+    if (!concurrentLoserKeys.isEmpty()) {
+      Map<String, Workflow_Instance__c> winners = findAnyByKey(
+        concurrentLoserKeys
+      );
+      for (String normalized : winners.keySet()) {
+        if (!resolvedIdByKey.containsKey(normalized)) {
+          resolvedIdByKey.put(normalized, winners.get(normalized).Id);
+        }
+      }
+    }
+    for (Integer i = 0; i < requests.size(); i++) {
+      if (results[i] != null) {
+        continue;
+      }
+      String normKey = normalizeKey(requests[i].correlationKey);
+      if (
+        String.isNotBlank(requests[i].correlationKey) &&
+        resolvedIdByKey.containsKey(normKey)
+      ) {
+        results[i] = new StartResult(resolvedIdByKey.get(normKey), false);
+      }
+    }
+
+    // Safety net: every request carries a non-blank key (validated above) and
+    // must resolve to an instance. A lingering null would mean a duplicate
+    // loser whose winner could not be located; rather than return a null
+    // instance Id, roll back this invocation's inserts and surface an error.
+    List<String> unresolvedKeys = new List<String>();
+    for (Integer i = 0; i < requests.size(); i++) {
+      if (results[i] == null) {
+        unresolvedKeys.add(requests[i].correlationKey);
+      }
+    }
+    if (!unresolvedKeys.isEmpty()) {
+      if (!insertedInstances.isEmpty()) {
+        delete as system insertedInstances;
+      }
+      throw new WorkflowException(
+        'Failed to resolve workflow start for correlation key(s): ' +
+        String.join(unresolvedKeys, ', ')
+      );
+    }
+
+    // 6. Resolve input payloads for newly inserted instances
+    for (Integer j = 0; j < insertedInstances.size(); j++) {
+      StartRequest req = requests[insertedReqIndexes[j]];
+      Workflow_Instance__c instance = insertedInstances[j];
       String inputJson = (req.input != null) ? JSON.serialize(req.input) : null;
       instance.Input__c = savePayloadIfNeeded(
         instance.Id,
@@ -375,11 +716,13 @@ public inherited sharing class WorkflowEngine {
         'Input_' + instance.Id
       );
     }
-    update as system instances;
+    if (!insertedInstances.isEmpty()) {
+      update as system insertedInstances;
+    }
 
-    // 5. Construct initial Step Execution logs
+    // 7. Construct initial Step Execution logs for inserted instances only
     List<Workflow_Step_Execution__c> stepExecs = new List<Workflow_Step_Execution__c>();
-    for (Workflow_Instance__c instance : instances) {
+    for (Workflow_Instance__c instance : insertedInstances) {
       if (String.isNotBlank(instance.Current_Step__c)) {
         Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
         stepExec.Workflow_Instance__c = instance.Id;
@@ -398,17 +741,16 @@ public inherited sharing class WorkflowEngine {
       insert as system stepExecs;
     }
 
-    // 6. Schedule timeout jobs for the instances (bulk-friendly)
-    scheduleTimeoutJobsForInstances(instances);
+    // 8. Schedule timeout jobs and enqueue orchestrators for inserted instances
+    scheduleTimeoutJobsForInstances(insertedInstances);
 
-    // 7. Enqueue orchestrator execution in bulk
     List<Id> instanceIds = new List<Id>();
-    for (Workflow_Instance__c instance : instances) {
+    for (Workflow_Instance__c instance : insertedInstances) {
       instanceIds.add(instance.Id);
     }
     enqueueOrchestrators(instanceIds);
 
-    return instanceIds;
+    return results;
   }
 
   /**
@@ -819,7 +1161,9 @@ public inherited sharing class WorkflowEngine {
       ? stepName
       : instance.Current_Step__c;
 
-    // 3. Retrieve or create Step Execution log with FOR UPDATE lock
+    // 3. Retrieve or create Step Execution log with FOR UPDATE lock.
+    // Load all executions for this step so we can derive the visit count in
+    // Apex without an extra COUNT() SOQL query.
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Id, Step_Name__c, Status__c, Input__c, Output__c, Retry_Count__c
       FROM Workflow_Step_Execution__c
@@ -828,8 +1172,14 @@ public inherited sharing class WorkflowEngine {
         AND Step_Name__c = :activeStepName
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
     ];
+
+    Integer stepVisit = 0;
+    for (Workflow_Step_Execution__c exec : stepExecs) {
+      if (exec.Status__c == 'Completed') {
+        stepVisit++;
+      }
+    }
 
     if (!stepExecs.isEmpty()) {
       stepExecs = [
@@ -956,6 +1306,10 @@ public inherited sharing class WorkflowEngine {
     }
     WorkflowStep stepInstance = (WorkflowStep) stepType.newInstance();
 
+    // stepVisit: number of already-completed runs of this step in this instance.
+    // Computed above from the stepExecs list (before FOR UPDATE re-assigns it)
+    // to avoid a separate COUNT() SOQL query.
+
     StepContext context = new StepContext(
       instanceId,
       instance.Workflow_Name__c,
@@ -966,7 +1320,8 @@ public inherited sharing class WorkflowEngine {
       resolvePayload(instance.Input__c),
       instance.Definition_Version__c != null
         ? (Integer) instance.Definition_Version__c
-        : 1
+        : 1,
+      stepVisit
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts
@@ -1006,6 +1361,28 @@ public inherited sharing class WorkflowEngine {
     } else {
       update as system stepExec;
     }
+  }
+
+  /**
+   * Counts terminal (completed) executions of a step name within an instance.
+   * Used to derive the per-visit idempotency sequence for StepContext: the
+   * current (not-yet-completed) visit is excluded, so this is 0 for the first
+   * visit and increments each time the engine loops back to the same step.
+   */
+  private static Integer countCompletedStepExecutions(
+    Id instanceId,
+    String stepName,
+    Set<String> completedStatuses
+  ) {
+    return [
+      SELECT COUNT()
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = :stepName
+        AND Status__c IN :completedStatuses
+      WITH SYSTEM_MODE
+    ];
   }
 
   private static void handleStepResult(
@@ -1218,7 +1595,11 @@ public inherited sharing class WorkflowEngine {
           try {
             outputVal = JSON.deserializeUntyped(resolvedOutput);
           } catch (Exception ex) {
-            System.debug(LoggingLevel.FINE, 'Parallel step output was not JSON, falling back to raw string: ' + ex.getMessage());
+            System.debug(
+              LoggingLevel.FINE,
+              'Parallel step output was not JSON, falling back to raw string: ' +
+              ex.getMessage()
+            );
             outputVal = resolvedOutput;
           }
         }
@@ -1272,8 +1653,18 @@ public inherited sharing class WorkflowEngine {
       scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.SUSPEND) {
-      // Step suspended (waiting for external signal). Save state and mark instance.
+      // Explicit stepStateJson is preserved; no-arg suspend() nulls Output__c so
+      // stale yield checkpoints from a prior YIELD in the same execution don't
+      // survive into a retry and cause duplicate-spawn collisions.
       stepExec.Status__c = 'Pending';
+      stepExec.Output__c = String.isNotBlank(result.stepStateJson)
+        ? savePayloadIfNeeded(
+            instance.Id,
+            result.stepStateJson,
+            'State_Suspend_' +
+              stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+          )
+        : null;
       saveStepExec(stepExec);
 
       instance.Status__c = 'Suspended';
@@ -1291,7 +1682,10 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c = 'Suspended';
       instance.Sleep_Until__c = DateTime.now()
         .addSeconds(result.sleepDurationSeconds);
-      instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
+      instance.Async_Job_Id__c = scheduleSleepResume(
+        instance.Id,
+        result.sleepDurationSeconds
+      );
       update as system instance;
     } else if (result.action == StepResult.ActionType.START_CHILD) {
       // Step requested child workflow
@@ -1413,7 +1807,11 @@ public inherited sharing class WorkflowEngine {
 
         instance.Status__c = 'Suspended';
         instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
-        instance.Async_Job_Id__c = scheduleRetry(instance.Id, stepExec.Step_Name__c, delay);
+        instance.Async_Job_Id__c = scheduleRetry(
+          instance.Id,
+          stepExec.Step_Name__c,
+          delay
+        );
         update as system instance;
       }
     } else if (result.action == StepResult.ActionType.CONTINUE_AS_NEW) {
@@ -1891,11 +2289,13 @@ public inherited sharing class WorkflowEngine {
    * Sends an external signal to a workflow instance by correlation key or instance ID.
    */
   public static void signal(String keyOrId, String signalName, String payload) {
-    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix();
+    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe()
+      .getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
-    Boolean isId = String.isNotBlank(keyOrId) &&
-                   idPattern.matcher(keyOrId).matches() &&
-                   keyOrId.startsWith(wflowPrefix);
+    Boolean isId =
+      String.isNotBlank(keyOrId) &&
+      idPattern.matcher(keyOrId).matches() &&
+      keyOrId.startsWith(wflowPrefix);
     Id targetId = isId ? (Id) keyOrId : null;
 
     // A Cancel signal must also be able to reach a stalled rollback (CompensationFailed)
@@ -1960,7 +2360,11 @@ public inherited sharing class WorkflowEngine {
             runCompensations = (Boolean) params.get('runCompensations');
           }
         } catch (Exception e) {
-          System.debug(LoggingLevel.WARN, 'Failed to parse cancel payload, using default runCompensations: ' + e.getMessage());
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to parse cancel payload, using default runCompensations: ' +
+            e.getMessage()
+          );
         }
       }
       cancel(instance.Id, runCompensations);
@@ -1997,7 +2401,11 @@ public inherited sharing class WorkflowEngine {
               enqueueOrchestrator(instance.Id, null);
             }
           } catch (Exception ex) {
-            System.debug(LoggingLevel.WARN, 'Queueable enqueue failed, falling back to Platform Event: ' + ex.getMessage());
+            System.debug(
+              LoggingLevel.WARN,
+              'Queueable enqueue failed, falling back to Platform Event: ' +
+              ex.getMessage()
+            );
             enqueueOrchestrator(instance.Id, null);
           }
         }
@@ -2013,14 +2421,18 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix();
+    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe()
+      .getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
     Set<Id> ids = new Set<Id>();
     Set<String> keys = new Set<String>();
 
     for (SignalRequest req : requests) {
       if (String.isNotBlank(req.keyOrId)) {
-        if (idPattern.matcher(req.keyOrId).matches() && req.keyOrId.startsWith(wflowPrefix)) {
+        if (
+          idPattern.matcher(req.keyOrId).matches() &&
+          req.keyOrId.startsWith(wflowPrefix)
+        ) {
           ids.add((Id) req.keyOrId);
         } else {
           keys.add(req.keyOrId);
@@ -2107,7 +2519,10 @@ public inherited sharing class WorkflowEngine {
                 runCompensations = (Boolean) params.get('runCompensations');
               }
             } catch (Exception e) {
-              System.debug(LoggingLevel.WARN, 'Failed to deserialize signal cancel payload: ' + e.getMessage());
+              System.debug(
+                LoggingLevel.WARN,
+                'Failed to deserialize signal cancel payload: ' + e.getMessage()
+              );
             }
           }
           cancel(inst.Id, runCompensations);
@@ -2236,7 +2651,9 @@ public inherited sharing class WorkflowEngine {
 
     List<Workflow_Step_Execution__c> stepsToReset = new List<Workflow_Step_Execution__c>();
     for (String targetStepName : targetStepNames) {
-      Workflow_Step_Execution__c stepExec = latestStepByName.get(targetStepName);
+      Workflow_Step_Execution__c stepExec = latestStepByName.get(
+        targetStepName
+      );
       if (stepExec != null && stepExec.Status__c != 'Completed') {
         stepExec.Status__c = 'Pending';
         stepExec.Retry_Count__c = 0; // reset retry counter
@@ -2276,7 +2693,9 @@ public inherited sharing class WorkflowEngine {
     // already-loaded step map (reset steps are now 'Pending' in memory) instead of
     // re-querying once per branch.
     for (String targetStepName : targetStepNames) {
-      Workflow_Step_Execution__c stepExec = latestStepByName.get(targetStepName);
+      Workflow_Step_Execution__c stepExec = latestStepByName.get(
+        targetStepName
+      );
       if (stepExec == null || stepExec.Status__c != 'Completed') {
         if (Test.isRunningTest()) {
           if (!disableQueueableInTest) {
@@ -2500,7 +2919,9 @@ public inherited sharing class WorkflowEngine {
     // 2. Get the top step to compensate (do not pop yet, only pop on success)
     String activeStepName = stack[stack.size() - 1];
 
-    // 3. Create or retrieve the compensation step execution log with FOR UPDATE lock
+    // 3. Create or retrieve the compensation step execution log with FOR UPDATE lock.
+    // Load all executions so compensateVisit can be derived in Apex without an
+    // extra COUNT() SOQL query.
     String compensationStepLogName = activeStepName + '_Compensate';
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Id, Status__c, Input__c, Output__c, Retry_Count__c, Step_Name__c
@@ -2510,8 +2931,14 @@ public inherited sharing class WorkflowEngine {
         AND Step_Name__c = :compensationStepLogName
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
     ];
+
+    Integer compensateVisit = 0;
+    for (Workflow_Step_Execution__c exec : stepExecs) {
+      if (exec.Status__c == 'Compensated' || exec.Status__c == 'Completed') {
+        compensateVisit++;
+      }
+    }
 
     if (!stepExecs.isEmpty()) {
       stepExecs = [
@@ -2658,6 +3085,9 @@ public inherited sharing class WorkflowEngine {
       prevOutput = completedBefore[0].Output__c;
     }
 
+    // compensateVisit: computed above from the stepExecs list to avoid a
+    // separate COUNT() SOQL query.
+
     StepContext context = new StepContext(
       instance.Id,
       instance.Workflow_Name__c,
@@ -2668,7 +3098,8 @@ public inherited sharing class WorkflowEngine {
       resolvePayload(instance.Input__c),
       instance.Definition_Version__c != null
         ? (Integer) instance.Definition_Version__c
-        : 1
+        : 1,
+      compensateVisit
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts
@@ -2784,6 +3215,14 @@ public inherited sharing class WorkflowEngine {
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.SUSPEND) {
       stepExec.Status__c = 'Pending';
+      stepExec.Output__c = String.isNotBlank(result.stepStateJson)
+        ? savePayloadIfNeeded(
+            instance.Id,
+            result.stepStateJson,
+            'State_Suspend_' +
+              stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+          )
+        : null;
       saveStepExec(stepExec);
       instance.Status__c = 'Suspended';
       update as system instance;
@@ -2799,7 +3238,10 @@ public inherited sharing class WorkflowEngine {
       if (result.sleepDurationSeconds != null) {
         instance.Sleep_Until__c = DateTime.now()
           .addSeconds(result.sleepDurationSeconds);
-        instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
+        instance.Async_Job_Id__c = scheduleSleepResume(
+          instance.Id,
+          result.sleepDurationSeconds
+        );
       }
       update as system instance;
     } else if (result.action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
@@ -2863,7 +3305,11 @@ public inherited sharing class WorkflowEngine {
         delay = Math.min(delay, 86400);
         instance.Status__c = 'Suspended';
         instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
-        instance.Async_Job_Id__c = scheduleRetry(instance.Id, stepExec.Step_Name__c, delay);
+        instance.Async_Job_Id__c = scheduleRetry(
+          instance.Id,
+          stepExec.Step_Name__c,
+          delay
+        );
         update as system instance;
       }
     } else {
@@ -3191,7 +3637,10 @@ public inherited sharing class WorkflowEngine {
       try {
         System.abortJob(triggerJob.Id);
       } catch (Exception e) {
-        System.debug(LoggingLevel.WARN, 'Failed to abort job ' + triggerJob.Id + ': ' + e.getMessage());
+        System.debug(
+          LoggingLevel.WARN,
+          'Failed to abort job ' + triggerJob.Id + ': ' + e.getMessage()
+        );
       }
     }
   }
@@ -3205,7 +3654,13 @@ public inherited sharing class WorkflowEngine {
             System.enqueueJob(new WorkflowOrchestrator(instId));
           }
         } catch (Exception e) {
-          System.debug(LoggingLevel.WARN, 'Failed to enqueue WorkflowOrchestrator for ' + instId + ': ' + e.getMessage());
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to enqueue WorkflowOrchestrator for ' +
+              instId +
+              ': ' +
+              e.getMessage()
+          );
         }
       }
       return;
@@ -3289,7 +3744,11 @@ public inherited sharing class WorkflowEngine {
           return cvs[0].VersionData.toString();
         }
       } catch (Exception ex) {
-        System.debug(LoggingLevel.WARN, 'Failed to resolve offloaded payload, falling back to raw value: ' + ex.getMessage());
+        System.debug(
+          LoggingLevel.WARN,
+          'Failed to resolve offloaded payload, falling back to raw value: ' +
+          ex.getMessage()
+        );
       }
     }
     return textValue;
@@ -3323,7 +3782,11 @@ public inherited sharing class WorkflowEngine {
       try {
         insert as system cdl;
       } catch (DmlException ex) {
-        System.debug(LoggingLevel.FINE, 'ContentDocumentLink insert failed with default visibility, retrying with AllUsers: ' + ex.getMessage());
+        System.debug(
+          LoggingLevel.FINE,
+          'ContentDocumentLink insert failed with default visibility, retrying with AllUsers: ' +
+          ex.getMessage()
+        );
         cdl.Visibility = 'AllUsers';
         insert as system cdl;
       }
@@ -3361,22 +3824,40 @@ public inherited sharing class WorkflowEngine {
       }
 
       // Lock parent instances
-      Map<Id, Workflow_Instance__c> parents = new Map<Id, Workflow_Instance__c>([
-        SELECT Id, Name, Status__c, Current_Step__c, Compensation_Stack__c, Error_Message__c, Workflow_Name__c, Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE Id IN :instanceIds
-        WITH SYSTEM_MODE
-        FOR UPDATE
-      ]);
+      Map<Id, Workflow_Instance__c> parents = new Map<Id, Workflow_Instance__c>(
+        [
+          SELECT
+            Id,
+            Name,
+            Status__c,
+            Current_Step__c,
+            Compensation_Stack__c,
+            Error_Message__c,
+            Workflow_Name__c,
+            Correlation_Key__c
+          FROM Workflow_Instance__c
+          WHERE Id IN :instanceIds
+          WITH SYSTEM_MODE
+          FOR UPDATE
+        ]
+      );
 
       // Lock step executions
-      Map<Id, Workflow_Step_Execution__c> lockedSteps = new Map<Id, Workflow_Step_Execution__c>([
-        SELECT Id, Status__c, Error_Details__c, Timeout_At__c, Step_Name__c, Workflow_Instance__c
-        FROM Workflow_Step_Execution__c
-        WHERE Id IN :stepIds
-        WITH SYSTEM_MODE
-        FOR UPDATE
-      ]);
+      Map<Id, Workflow_Step_Execution__c> lockedSteps = new Map<Id, Workflow_Step_Execution__c>(
+        [
+          SELECT
+            Id,
+            Status__c,
+            Error_Details__c,
+            Timeout_At__c,
+            Step_Name__c,
+            Workflow_Instance__c
+          FROM Workflow_Step_Execution__c
+          WHERE Id IN :stepIds
+          WITH SYSTEM_MODE
+          FOR UPDATE
+        ]
+      );
 
       List<Workflow_Step_Execution__c> stepsToUpdate = new List<Workflow_Step_Execution__c>();
       Map<Id, Workflow_Instance__c> instancesToUpdate = new Map<Id, Workflow_Instance__c>();
@@ -3433,8 +3914,9 @@ public inherited sharing class WorkflowEngine {
           }
 
           Boolean isCompensationFailure = (parent.Status__c == 'Compensating' ||
-            parent.Status__c == 'Cancelling' ||
-            (String.isNotBlank(step.Step_Name__c) && step.Step_Name__c.endsWith('_Compensate')));
+          parent.Status__c == 'Cancelling' ||
+          (String.isNotBlank(step.Step_Name__c) &&
+          step.Step_Name__c.endsWith('_Compensate')));
 
           if (isCompensationFailure && hasCompensations) {
             // A compensation step timed out mid-rollback. The remaining stack is
@@ -3456,11 +3938,19 @@ public inherited sharing class WorkflowEngine {
             instancesToUpdate.put(parent.Id, parent);
           } else if (!hasCompensations) {
             parent.Status__c = 'Failed';
-            parent.Error_Message__c = 'Failed at step ' + step.Step_Name__c + ': ' + errorMsg;
+            parent.Error_Message__c =
+              'Failed at step ' +
+              step.Step_Name__c +
+              ': ' +
+              errorMsg;
             instancesToUpdate.put(parent.Id, parent);
           } else {
             parent.Status__c = 'Compensating';
-            parent.Error_Message__c = 'Failed at step ' + step.Step_Name__c + ': ' + errorMsg;
+            parent.Error_Message__c =
+              'Failed at step ' +
+              step.Step_Name__c +
+              ': ' +
+              errorMsg;
             instancesToUpdate.put(parent.Id, parent);
 
             instancesNeedingCompensationInfo.add(parent.Id);
@@ -3478,18 +3968,23 @@ public inherited sharing class WorkflowEngine {
         List<Workflow_Step_Execution__c> existing = [
           SELECT Id, Workflow_Instance__c, Step_Name__c
           FROM Workflow_Step_Execution__c
-          WHERE Workflow_Instance__c IN :instancesNeedingCompensationInfo
+          WHERE
+            Workflow_Instance__c IN :instancesNeedingCompensationInfo
             AND Step_Name__c LIKE '%\_Compensate'
           WITH SYSTEM_MODE
         ];
         for (Workflow_Step_Execution__c e : existing) {
-          existingCompSteps.put(e.Workflow_Instance__c + ':' + e.Step_Name__c, e);
+          existingCompSteps.put(
+            e.Workflow_Instance__c + ':' + e.Step_Name__c,
+            e
+          );
         }
 
         List<Workflow_Step_Execution__c> originalExecs = [
           SELECT Workflow_Instance__c, Step_Name__c, Input__c, Output__c
           FROM Workflow_Step_Execution__c
-          WHERE Workflow_Instance__c IN :instancesNeedingCompensationInfo
+          WHERE
+            Workflow_Instance__c IN :instancesNeedingCompensationInfo
             AND Step_Name__c IN :activeStepNamesForComp
           WITH SYSTEM_MODE
           ORDER BY CreatedDate DESC, Id DESC
@@ -3511,11 +4006,17 @@ public inherited sharing class WorkflowEngine {
         String activeStepName = stack[stack.size() - 1];
         String compensationStepLogName = activeStepName + '_Compensate';
 
-        if (existingCompSteps.containsKey(parent.Id + ':' + compensationStepLogName)) {
+        if (
+          existingCompSteps.containsKey(
+            parent.Id + ':' + compensationStepLogName
+          )
+        ) {
           continue;
         }
 
-        Workflow_Step_Execution__c orig = originalStepsMap.get(parent.Id + ':' + activeStepName);
+        Workflow_Step_Execution__c orig = originalStepsMap.get(
+          parent.Id + ':' + activeStepName
+        );
 
         Workflow_Step_Execution__c compStepExec = new Workflow_Step_Execution__c();
         compStepExec.Workflow_Instance__c = parent.Id;
@@ -3627,7 +4128,13 @@ public inherited sharing class WorkflowEngine {
         }
       }
     } catch (Exception e) {
-      System.debug(LoggingLevel.FINE, 'Failed to instantiate type to read timeout duration for step: ' + className + ', error: ' + e.getMessage());
+      System.debug(
+        LoggingLevel.FINE,
+        'Failed to instantiate type to read timeout duration for step: ' +
+          className +
+          ', error: ' +
+          e.getMessage()
+      );
     }
     return null;
   }
@@ -3751,9 +4258,16 @@ public inherited sharing class WorkflowEngine {
         System.schedule(jobName, cronStr, job);
       }
     } catch (AsyncException ex) {
-      System.debug(LoggingLevel.INFO, 'Async timeout scheduling limit reached, relying on watchdog: ' + ex.getMessage());
+      System.debug(
+        LoggingLevel.INFO,
+        'Async timeout scheduling limit reached, relying on watchdog: ' +
+        ex.getMessage()
+      );
     } catch (Exception ex) {
-      System.debug(LoggingLevel.WARN, 'Failed to schedule timeout job: ' + ex.getMessage());
+      System.debug(
+        LoggingLevel.WARN,
+        'Failed to schedule timeout job: ' + ex.getMessage()
+      );
     }
   }
 
@@ -3773,10 +4287,12 @@ public inherited sharing class WorkflowEngine {
         Math.mod(delaySeconds, 60) == 0
       ) {
         if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
-          return String.valueOf(System.enqueueJob(
-            new WorkflowRetryJob.QueueableRetryJob(instanceId, stepName),
-            delaySeconds / 60
-          ));
+          return String.valueOf(
+            System.enqueueJob(
+              new WorkflowRetryJob.QueueableRetryJob(instanceId, stepName),
+              delaySeconds / 60
+            )
+          );
         }
       }
       WorkflowRetryJob job = new WorkflowRetryJob(instanceId, stepName);
@@ -3794,21 +4310,33 @@ public inherited sharing class WorkflowEngine {
         runTime.month() +
         ' ? ' +
         runTime.year();
-      return String.valueOf(System.schedule(
-        'WorkflowRetry_' + instanceId + '_' + runTime.getTime(),
-        cronStr,
-        job
-      ));
+      return String.valueOf(
+        System.schedule(
+          'WorkflowRetry_' + instanceId + '_' + runTime.getTime(),
+          cronStr,
+          job
+        )
+      );
     } catch (AsyncException ex) {
-      System.debug(LoggingLevel.INFO, 'Async retry scheduling limit reached, relying on watchdog: ' + ex.getMessage());
+      System.debug(
+        LoggingLevel.INFO,
+        'Async retry scheduling limit reached, relying on watchdog: ' +
+        ex.getMessage()
+      );
       return null;
     } catch (Exception ex) {
-      System.debug(LoggingLevel.WARN, 'Failed to schedule retry job: ' + ex.getMessage());
+      System.debug(
+        LoggingLevel.WARN,
+        'Failed to schedule retry job: ' + ex.getMessage()
+      );
       return null;
     }
   }
 
-  private static String scheduleSleepResume(Id instanceId, Integer delaySeconds) {
+  private static String scheduleSleepResume(
+    Id instanceId,
+    Integer delaySeconds
+  ) {
     if (!useDynamicScheduling) {
       return null;
     }
@@ -3820,10 +4348,12 @@ public inherited sharing class WorkflowEngine {
         Math.mod(delaySeconds, 60) == 0
       ) {
         if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
-          return String.valueOf(System.enqueueJob(
-            new WorkflowSleepJob.QueueableSleepJob(instanceId),
-            delaySeconds / 60
-          ));
+          return String.valueOf(
+            System.enqueueJob(
+              new WorkflowSleepJob.QueueableSleepJob(instanceId),
+              delaySeconds / 60
+            )
+          );
         }
       }
       WorkflowSleepJob job = new WorkflowSleepJob(instanceId);
@@ -3841,16 +4371,25 @@ public inherited sharing class WorkflowEngine {
         runTime.month() +
         ' ? ' +
         runTime.year();
-      return String.valueOf(System.schedule(
-        'WorkflowSleep_' + instanceId + '_' + runTime.getTime(),
-        cronStr,
-        job
-      ));
+      return String.valueOf(
+        System.schedule(
+          'WorkflowSleep_' + instanceId + '_' + runTime.getTime(),
+          cronStr,
+          job
+        )
+      );
     } catch (AsyncException ex) {
-      System.debug(LoggingLevel.INFO, 'Async sleep scheduling limit reached, relying on watchdog: ' + ex.getMessage());
+      System.debug(
+        LoggingLevel.INFO,
+        'Async sleep scheduling limit reached, relying on watchdog: ' +
+        ex.getMessage()
+      );
       return null;
     } catch (Exception ex) {
-      System.debug(LoggingLevel.WARN, 'Failed to schedule sleep job: ' + ex.getMessage());
+      System.debug(
+        LoggingLevel.WARN,
+        'Failed to schedule sleep job: ' + ex.getMessage()
+      );
       return null;
     }
   }
@@ -3868,7 +4407,13 @@ public inherited sharing class WorkflowEngine {
       try {
         System.abortJob(triggerJob.Id);
       } catch (Exception e) {
-        System.debug(LoggingLevel.WARN, 'Failed to cancel timeout job ' + triggerJob.Id + ': ' + e.getMessage());
+        System.debug(
+          LoggingLevel.WARN,
+          'Failed to cancel timeout job ' +
+            triggerJob.Id +
+            ': ' +
+            e.getMessage()
+        );
       }
     }
   }

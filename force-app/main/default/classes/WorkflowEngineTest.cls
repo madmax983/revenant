@@ -1910,6 +1910,8 @@ public class WorkflowEngineTest {
   @isTest
   static void testCorrelationKeyReuse() {
     WorkflowEngine.disableQueueableInTest = true;
+    // Disable the dedup window so a completed key may be reused (legacy reuse)
+    WorkflowEngine.dedupWindowMinutes = 0;
 
     // Run first instance to completion
     Id instanceId1 = WorkflowEngine.start(
@@ -1927,7 +1929,8 @@ public class WorkflowEngineTest {
     ];
     System.assertEquals('Completed', inst1.Status__c);
 
-    // Start a second instance with the same correlation key - should succeed because first one is Completed (terminal)
+    // Start a second instance with the same correlation key - should create a
+    // new instance because the first one is terminal and the window is disabled.
     Test.startTest();
     Id instanceId2 = WorkflowEngine.start(
       'WorkflowEngineTest.HappyWorkflow',
@@ -1936,6 +1939,11 @@ public class WorkflowEngineTest {
     );
     Test.stopTest();
 
+    System.assertNotEquals(
+      instanceId1,
+      instanceId2,
+      'With the dedup window disabled, a terminal key starts a new instance'
+    );
     Workflow_Instance__c inst2 = [
       SELECT Status__c, Correlation_Key__c
       FROM Workflow_Instance__c
@@ -2170,6 +2178,8 @@ public class WorkflowEngineTest {
   @isTest
   static void testActiveCorrelationKeyUniqueness() {
     WorkflowEngine.disableQueueableInTest = true;
+    // Active-only dedup scope (preserves the legacy uniqueness window)
+    WorkflowEngine.dedupWindowMinutes = 0;
 
     // Start a first instance - should succeed
     Id instanceId1 = WorkflowEngine.start(
@@ -2178,37 +2188,46 @@ public class WorkflowEngineTest {
       null
     );
 
-    // Try starting a second instance with the same correlation key - should fail because the first one is active (Pending)
-    Boolean threw = false;
-    try {
-      WorkflowEngine.start(
-        'WorkflowEngineTest.HappyWorkflow',
-        'UniqueActiveKey',
-        null
-      );
-    } catch (WorkflowEngine.WorkflowException ex) {
-      threw = true;
-      System.assert(
-        ex.getMessage().contains('already exists'),
-        'Expected active duplicate error: ' + ex.getMessage()
-      );
-    }
-    System.assert(
-      threw,
-      'Should have blocked starting second active instance with same correlation key'
+    // Get-or-start: a second start with the same active key returns the
+    // existing instance Id instead of throwing or creating a duplicate.
+    Id deduped = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'UniqueActiveKey',
+      null
+    );
+    System.assertEquals(
+      instanceId1,
+      deduped,
+      'Active duplicate must resolve to the existing instance, not throw'
+    );
+    Integer activeCount = [
+      SELECT COUNT()
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c = 'UniqueActiveKey'
+    ];
+    System.assertEquals(
+      1,
+      activeCount,
+      'Only one instance should exist while the key is active'
     );
 
     // Run first instance to completion (terminal)
     WorkflowEngine.runStep(instanceId1, null);
     WorkflowEngine.runStep(instanceId1, null);
 
-    // Now start a new instance with same correlation key - should succeed because the first one completed (terminal)
+    // With the window disabled (active-only), a new instance is created
+    // because the first one is terminal.
     Id instanceId2 = WorkflowEngine.start(
       'WorkflowEngineTest.HappyWorkflow',
       'UniqueActiveKey',
       null
     );
     System.assertNotEquals(null, instanceId2);
+    System.assertNotEquals(
+      instanceId1,
+      instanceId2,
+      'With window disabled, a terminal key starts a fresh instance'
+    );
   }
 
   @isTest

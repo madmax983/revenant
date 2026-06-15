@@ -1,4 +1,13 @@
 {
   "orgName": "Durable Workflow Engine Dev",
-  "edition": "developer"
+  "edition": "developer",
+  "features": ["Einstein1AIPlatform"],
+  "settings": {
+    "agentPlatformSettings": {
+      "enableAgentPlatform": true
+    },
+    "einsteinGptSettings": {
+      "enableEinsteinGptPlatform": true
+    }
+  }
 }

@@ -781,6 +781,50 @@ public class WorkflowDashboardControllerTest {
       returnedStepSafety.Input__c
     );
     System.assertEquals('ShortOutput', returnedStepSafety.Output__c);
+
+    // Attachment-backed payloads that were truncated should expose a download
+    // descriptor; tiny/inline payloads should not.
+    Map<String, Object> payloadFiles = (Map<String, Object>) details.get(
+      'payloadFiles'
+    );
+    System.assertNotEquals(null, payloadFiles, 'payloadFiles should be present');
+
+    // instance.Output (cv2, 50005 chars) crossed the display limit -> has a file.
+    System.assert(
+      payloadFiles.containsKey('instance.Output'),
+      'Truncated attachment-backed instance Output should have a download file'
+    );
+    Map<String, Object> outFile = (Map<String, Object>) payloadFiles.get(
+      'instance.Output'
+    );
+    System.assertEquals(50005, (Integer) outFile.get('fullLength'));
+    System.assert(
+      ((String) outFile.get('downloadUrl'))
+        .startsWith('/sfc/servlet.shepherd/document/download/'),
+      'downloadUrl should point at the ContentDocument: ' +
+      outFile.get('downloadUrl')
+    );
+
+    // BulkStep Input (cv3, 60000 chars) crossed the limit -> has a file.
+    System.assert(
+      payloadFiles.containsKey('step.' + returnedStep1.Id + '.Input'),
+      'Truncated attachment-backed step Input should have a download file'
+    );
+
+    // Tiny inline payloads (instance Input cv1, BulkStep Output cv4) get no file.
+    System.assert(
+      !payloadFiles.containsKey('instance.Input'),
+      'Small inline instance Input should not have a download file'
+    );
+    System.assert(
+      !payloadFiles.containsKey('step.' + returnedStep1.Id + '.Output'),
+      'Small inline step Output should not have a download file'
+    );
+    // The raw (non-attachment) 51k Safety Input is truncated but has no file to link.
+    System.assert(
+      !payloadFiles.containsKey('step.' + returnedStepSafety.Id + '.Input'),
+      'Non-attachment truncated payload should not have a download file'
+    );
   }
 
   @isTest
@@ -1017,5 +1061,164 @@ public class WorkflowDashboardControllerTest {
       ],
       'No signal should be created when the role check fails'
     );
+  }
+
+  // ==========================================
+  // Bulk re-drive of failed instances
+  // ==========================================
+
+  private static void seedFailed(String key) {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Failed',
+      Correlation_Key__c = key,
+      Current_Step__c = 'WorkflowEngineTest.HappyStep1',
+      Error_Message__c = 'Endpoint down'
+    );
+    insert inst;
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.HappyStep1',
+      Status__c = 'Failed',
+      Retry_Count__c = 1,
+      Error_Details__c = 'boom'
+    );
+  }
+
+  @isTest
+  static void testGetRedriveEligibleCount() {
+    seedFailed('CntA');
+    seedFailed('CntB');
+    seedFailed('CntC');
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'CntDone'
+    );
+
+    Test.startTest();
+    Integer eligible = WorkflowDashboardController.getRedriveEligibleCount(
+      'WorkflowEngineTest.HappyWorkflow',
+      'Failed',
+      ''
+    );
+    // The confirm-count must match what getWorkflowStats reports for the same
+    // Failed filter (which, scoped to Failed only, is the failed bucket).
+    Map<String, Integer> stats = WorkflowDashboardController.getWorkflowStats(
+      'WorkflowEngineTest.HappyWorkflow',
+      'Failed',
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(3, eligible, 'Three Failed instances are eligible');
+    System.assertEquals(
+      stats.get('failed'),
+      eligible,
+      'Eligible count must match getWorkflowStats for the Failed filter'
+    );
+  }
+
+  @isTest
+  static void testRedriveMatchingInstancesLaunches() {
+    WorkflowEngine.disableQueueableInTest = true;
+    seedFailed('RdA');
+    seedFailed('RdB');
+
+    Test.startTest();
+    Map<String, Object> outcome = WorkflowDashboardController.redriveMatchingInstances(
+      'WorkflowEngineTest.HappyWorkflow',
+      'Failed',
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(true, outcome.get('started'), 'A re-drive should be launched');
+    System.assertEquals(2, outcome.get('eligibleCount'), 'Exact eligible count returned');
+    System.assertNotEquals(null, outcome.get('redriveInstanceId'));
+
+    // A BulkRedriveWorkflow instance was created to perform the work.
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE Workflow_Name__c = 'BulkRedriveWorkflow'
+      ],
+      'A re-driver workflow instance is created'
+    );
+    // The two targets were re-driven (orchestrator ran at stopTest).
+    System.assertEquals(
+      2,
+      [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE
+          Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow'
+          AND Status__c = 'Running'
+      ],
+      'Both Failed targets transitioned to Running'
+    );
+  }
+
+  @isTest
+  static void testRedriveMatchingZeroEligible() {
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'NoneFailed'
+    );
+
+    Test.startTest();
+    Map<String, Object> outcome = WorkflowDashboardController.redriveMatchingInstances(
+      'WorkflowEngineTest.HappyWorkflow',
+      'Failed',
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(false, outcome.get('started'), 'Nothing to do, no launch');
+    System.assertEquals(0, outcome.get('eligibleCount'));
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Workflow_Name__c = 'BulkRedriveWorkflow'],
+      'No re-driver workflow is created when nothing is eligible'
+    );
+  }
+
+  @isTest
+  static void testRedriveAuthorizationEnforced() {
+    User restricted = buildRestrictedUser();
+    Boolean threw = false;
+    System.runAs(restricted) {
+      Test.startTest();
+      try {
+        WorkflowDashboardController.getRedriveEligibleCount('', 'Failed', '');
+        System.assert(false, 'Expected AuraHandledException for unauthorized user');
+      } catch (AuraHandledException e) {
+        threw = true;
+      }
+      Test.stopTest();
+    }
+    System.assert(threw, 'Unauthorized users must be blocked from re-drive count');
+  }
+
+  private static User buildRestrictedUser() {
+    Profile p = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
+    User u = new User(
+      Alias = 'rdrv',
+      Email = 'redrive.restricted@example.com',
+      EmailEncodingKey = 'UTF-8',
+      LastName = 'Restricted',
+      LanguageLocaleKey = 'en_US',
+      LocaleSidKey = 'en_US',
+      ProfileId = p.Id,
+      TimeZoneSidKey = 'America/Los_Angeles',
+      Username = 'redrive.restricted.' +
+        DateTime.now().getTime() +
+        '@example.com'
+    );
+    insert u;
+    return u;
   }
 }

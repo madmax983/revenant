@@ -20,6 +20,7 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 - **Recoverable Rollbacks (Rollback Incomplete)**: If a `compensate()` step itself exhausts its `RetryPolicy` or throws mid-rollback, the engine preserves the remaining LIFO stack intact and parks the saga in a distinguishable, operator-visible **`CompensationFailed`** ("Rollback Incomplete") state instead of silently abandoning the deeper compensations. The dashboard surfaces exactly how many forward effects are still un-reversed and offers a **Resume Rollback** action that replays the remaining stack from the stalled point — idempotently, append-only, and without ever re-running a successful compensation or a forward step. See [SagaStalledRollbackExample](examples/main/default/classes/SagaStalledRollbackExample.cls).
 - **Watchdog Step Timeouts**: Steps can declare custom execution timeouts. A single global watchdog poller ([WorkflowWatchdog](force-app/main/default/classes/WorkflowWatchdog.cls)) sweeps the database for any timed-out steps or suspended instances, failing or resuming them cleanly without hitting Salesforce's 100 concurrent scheduled jobs limit.
 - **Large Payload Offloading**: When input, output, or state serialization strings exceed 100,000 characters (approaching the 131,072-character long text area limit), the engine transparently offloads the payload to `ContentVersion` files and links them to the parent instance.
+- **Effective-Once Side Effects (Idempotency Keys)**: The engine guarantees only at-least-once execution, so `execute()` (and `compensate()`) can re-run on retries, operator re-drives, and at-least-once event resumes. [StepContext](force-app/main/default/classes/StepContext.cls) exposes a read-only `idempotencyKey` that is stable across every re-execution of the same logical step yet distinct per `(instance, step)`. Forward it to an external system (e.g. as a Stripe `Idempotency-Key` header) for effective-once side effects without inventing your own dedup token. See [IdempotentChargeWorkflowExample](examples/main/default/classes/IdempotentChargeWorkflowExample.cls).
 
 ### Integration & Monitoring
 
@@ -188,17 +189,14 @@ The engine maps a workflow's class name to a custom metadata record's `Developer
 
 ## Development & Testing
 
-Deploy the codebase to a scratch org:
-
 ```bash
-sf project deploy start
+sf project deploy start          # deploy to default scratch org
+sf apex run test -w 10           # run the full test suite
 ```
 
-Run the suite of unit tests to verify orchestration safety, yielding limits, parallel forks, Saga compensations, and watchdog timeouts:
+For testing patterns — `WorkflowTestHarness`, step-level unit tests, governor limit guidance, and when to use each — see **[docs/testing.md](docs/testing.md)**.
 
-```bash
-sf apex run test -w 10
-```
+For AI and Agentforce integration — `aiplatform.ModelsAPI`, multi-turn agent conversations, sessionId threading, testing mocks, and org setup — see **[docs/agentforce.md](docs/agentforce.md)**.
 
 ---
 
@@ -221,6 +219,12 @@ Revenant settings can be configured without code modifications by editing the **
    - **`false`**: The engine completely bypasses `System.schedule` and writes all sleep/retry/timeout states directly to the database. All operations are then processed sequentially by the watchdog poller.
 2. **Watchdog Delay Minutes** (`Watchdog_Delay_Minutes__c` - Number, default `10`):
    - The delay interval (between 1 and 10 minutes) before the watchdog enqueues its next self-chaining execution.
+3. **Dedup Window Minutes** (`Dedup_Window_Minutes__c` - Number, default `1440`):
+   - Controls **idempotent get-or-start** dedup for at-least-once event sources. `WorkflowEngine.start(...)` returns the existing instance's Id when a start arrives with a correlation key that matches an instance that is still active, **or** that became terminal (`Completed`/`Failed`/`Compensated`/`Cancelled`/`ContinuedAsNew`) within this many minutes — rather than throwing or spawning a duplicate that re-runs side effects.
+   - **`0`** (minimum) preserves active-only behavior: only in-flight instances are deduped, and a redelivery after completion starts a fresh instance.
+   - Active instances are always deduped regardless of this value. A blank correlation key is never deduped (a key is required to start).
+   - Use `WorkflowEngine.startOrGet(...)` (or the **Start Workflow** Invocable's `Is New` output) to observe whether a call started a new instance or returned an existing one, without a re-query.
+   - **Concurrency note:** the unique `Active_Correlation_Key__c` index is the hard backstop for two simultaneous *active* starts (the loser receives the winner's Id). Terminal-window dedup is **best-effort under concurrent redelivery**: if a sibling run both starts and reaches a terminal state in the narrow window between a redelivery's lookup and its insert, a duplicate of the just-finished (in-window) run can still be created, because the unique index no longer applies once the original is terminal. Active redelivery and sequential post-completion redelivery are fully covered; closing the concurrent terminal race would require an extra per-start query and is intentionally not done to keep the start path to a single indexed SOQL.
 
 ### Architectural Trade-offs
 
