@@ -82,6 +82,31 @@ private class WorkflowLifecyclePublisherTest {
   }
 
   @isTest
+  static void rootKeyFallsBackToCorrelationKeyWhenAbsent() {
+    // makeInstance does not query Root_Correlation_Key__c, so it is absent from the
+    // populated-field map — mirroring an in-flight instance created before the
+    // field existed. The event must still carry a usable root key.
+    Workflow_Instance__c inst = makeInstance('Completed', null);
+
+    Test.startTest();
+    WorkflowLifecyclePublisher.publish(inst);
+    Test.stopTest();
+
+    System.assertEquals(1, WorkflowLifecyclePublisher.publishedEvents.size());
+    Workflow_Lifecycle__e evt = WorkflowLifecyclePublisher.publishedEvents[0];
+    System.assertEquals(
+      inst.Correlation_Key__c,
+      evt.Root_Correlation_Key__c,
+      'Root key falls back to the correlation key when not populated'
+    );
+    System.assertNotEquals(
+      null,
+      evt.Terminal_At__c,
+      'The event always carries a terminal transition timestamp'
+    );
+  }
+
+  @isTest
   static void publishesCompensatedAndCancelled() {
     Test.startTest();
     WorkflowLifecyclePublisher.publish(

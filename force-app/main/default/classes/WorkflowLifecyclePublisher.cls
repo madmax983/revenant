@@ -160,18 +160,33 @@ public inherited sharing class WorkflowLifecyclePublisher {
       publishedInstanceIds.add(instance.Id);
 
       Boolean isSuccess = (status == 'Completed');
+
+      // Carry the chain root key, falling back to the instance's own correlation
+      // key for in-flight instances created before Root_Correlation_Key__c existed
+      // (the field is only defaulted on insert, so legacy rows have it blank).
+      String correlationKey = (String) f.get('Correlation_Key__c');
+      String rootKey = (String) f.get('Root_Correlation_Key__c');
+      if (String.isBlank(rootKey)) {
+        rootKey = correlationKey;
+      }
+
+      // Prefer the instance's Terminal_At__c (stamped by the trigger at the actual
+      // transition, so the event reconciles exactly with the record) and fall back
+      // to now() only if the field wasn't populated on the in-memory record.
+      Object terminalAtObj = f.get('Terminal_At__c');
+      Datetime terminalAt = (terminalAtObj != null)
+        ? (Datetime) terminalAtObj
+        : System.now();
+
       events.add(
         new Workflow_Lifecycle__e(
           Workflow_Instance_Id__c = instance.Id,
-          Correlation_Key__c = (String) f.get('Correlation_Key__c'),
-          Root_Correlation_Key__c = (String) f.get('Root_Correlation_Key__c'),
+          Correlation_Key__c = correlationKey,
+          Root_Correlation_Key__c = rootKey,
           Workflow_Name__c = (String) f.get('Workflow_Name__c'),
           Status__c = status,
           Is_Success__c = isSuccess,
-          // Transition timestamp (== the instance's Terminal_At__c, set in this
-          // same transaction). Lets idempotent subscribers tell a legitimate
-          // re-failure after retryWorkflow() apart from an at-least-once redelivery.
-          Terminal_At__c = System.now(),
+          Terminal_At__c = terminalAt,
           Failure_Detail__c = isSuccess
             ? null
             : truncate(

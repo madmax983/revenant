@@ -1032,6 +1032,7 @@ public inherited sharing class WorkflowEngine {
         Parent_Instance__c,
         Workflow_Name__c,
         Correlation_Key__c,
+        Root_Correlation_Key__c,
         Input__c,
         Definition_Version__c
       FROM Workflow_Instance__c
@@ -3058,6 +3059,12 @@ public inherited sharing class WorkflowEngine {
   public static void processWatchdogHeartbeat() {
     Datetime now = System.now();
 
+    // Terminal instances finalized by the timed-out-steps section below. Their
+    // lifecycle events are published once at the very END of the heartbeat, after
+    // ALL required work (including the sleep-resume section) is done, so the
+    // best-effort publish can never spend a DML statement the resume section needs.
+    List<Workflow_Instance__c> watchdogTerminalInstances = new List<Workflow_Instance__c>();
+
     // 1. Process Timed-out Steps
     List<Workflow_Step_Execution__c> timedOutSteps = [
       SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Error_Details__c
@@ -3248,10 +3255,10 @@ public inherited sharing class WorkflowEngine {
         }
       }
 
-      // Fire-and-forget outbound lifecycle events; only the parents transitioned
-      // to a terminal state (Failed) emit — Compensating parents are skipped. Runs
-      // LAST so the load-bearing orchestrator enqueue keeps first claim on DML budget.
-      WorkflowLifecyclePublisher.publish(instancesToUpdate.values());
+      // Defer lifecycle publishing to the end of the heartbeat. Only the parents
+      // transitioned to a terminal state (Failed) emit — Compensating parents are
+      // skipped by the publisher.
+      watchdogTerminalInstances.addAll(instancesToUpdate.values());
     }
 
     // 2. Process Sleep Resumptions (bounded per heartbeat; backlog drains on subsequent
@@ -3312,6 +3319,11 @@ public inherited sharing class WorkflowEngine {
       update as system readyToResume;
       enqueueOrchestrators(instanceIds);
     }
+
+    // All required heartbeat work (timed-out-step failures AND sleep resumptions)
+    // is now done, so the best-effort lifecycle publish runs last with no risk of
+    // starving a required update/enqueue of its DML budget.
+    WorkflowLifecyclePublisher.publish(watchdogTerminalInstances);
   }
 
   private static Integer getStepTimeoutSeconds(String stepName) {
