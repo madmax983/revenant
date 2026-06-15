@@ -140,8 +140,14 @@ export default class WorkflowDashboard extends LightningElement {
   get isCancelable() {
     if (!this.selectedInst) return false;
     const status = this.selectedInst.Status__c;
+    // CompensationFailed is included so operators can force-cancel a stalled rollback:
+    // the cancel dialog's "without compensations" choice drives it terminal and releases
+    // its key when the remaining compensation keeps failing.
     return (
-      status === "Pending" || status === "Running" || status === "Suspended"
+      status === "Pending" ||
+      status === "Running" ||
+      status === "Suspended" ||
+      status === "CompensationFailed"
     );
   }
 

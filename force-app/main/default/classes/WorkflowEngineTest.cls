@@ -1260,7 +1260,7 @@ public class WorkflowEngineTest {
     Test.stopTest();
 
     Workflow_Instance__c failedInst = [
-      SELECT Status__c, Error_Message__c
+      SELECT Status__c, Error_Message__c, Sleep_Until__c, Async_Job_Id__c
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
@@ -1270,6 +1270,10 @@ public class WorkflowEngineTest {
     System.assert(
       failedInst.Error_Message__c.contains('failed after max retries')
     );
+    // The elapsed retry deadline must be cleared so the watchdog cannot prematurely
+    // wake a remaining SUSPEND/approval gate once the rollback is resumed.
+    System.assertEquals(null, failedInst.Sleep_Until__c);
+    System.assertEquals(null, failedInst.Async_Job_Id__c);
 
     Workflow_Step_Execution__c failedExec = [
       SELECT Status__c, Retry_Count__c
@@ -2375,6 +2379,26 @@ public class WorkflowEngineTest {
     }
   }
 
+  // Compensation that fails (the first time) with an error whose text merely contains the
+  // word "Cancelled" — e.g. an upstream OrderCancelledException — without being an actual
+  // user cancellation. Used to prove the engine-owned 'Cancelled by user' marker is what
+  // drives the cancel phase, not arbitrary error text.
+  public static Boolean cancelWordCompensationShouldFail = false;
+
+  public class CompensatableCancelWordStep implements CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'Success');
+    }
+    public StepResult compensate(StepContext ctx) {
+      if (cancelWordCompensationShouldFail) {
+        throw new WorkflowEngine.WorkflowException(
+          'OrderCancelledException: the order was Cancelled upstream'
+        );
+      }
+      return StepResult.complete(null, 'Reversed');
+    }
+  }
+
   @isTest
   static void testWatchdogRaceAndStatuses() {
     WorkflowEngine.disableQueueableInTest = true;
@@ -2843,6 +2867,72 @@ public class WorkflowEngineTest {
       'Cancelled',
       cancelled.Status__c,
       'A Cancel signal must drive a stalled rollback to a terminal state'
+    );
+  }
+
+  @isTest
+  static void testFailureRollbackErrorContainingCancelledStillCompensates() {
+    // A failure-driven rollback whose compensation error text merely contains the word
+    // "Cancelled" must NOT be mistaken for a user cancellation on resume: it must finish
+    // 'Compensated', not 'Cancelled'.
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Compensating',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableCancelWordStep' }
+      ),
+      Input__c = '{"test": true}'
+    );
+    insert inst;
+
+    WorkflowEngineTest.cancelWordCompensationShouldFail = true;
+
+    Test.startTest();
+    WorkflowEngine.runStep(inst.Id, null); // compensate throws -> stalls
+
+    Workflow_Instance__c stalled = [
+      SELECT Status__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('CompensationFailed', stalled.Status__c);
+    // The error text contains "Cancelled" but not the engine-owned cancel marker.
+    System.assert(
+      stalled.Error_Message__c.contains('Cancelled'),
+      'Sanity: stalled error contains the word Cancelled'
+    );
+    System.assert(
+      !stalled.Error_Message__c.contains('Cancelled by user'),
+      'This is a failure-driven rollback, not a user cancellation'
+    );
+
+    WorkflowEngineTest.cancelWordCompensationShouldFail = false;
+    WorkflowEngine.resumeCompensation(inst.Id);
+
+    Workflow_Instance__c resumed = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'Compensating',
+      resumed.Status__c,
+      'Resume must treat this as a compensation, not a cancellation'
+    );
+
+    WorkflowEngine.runStep(inst.Id, null); // compensate succeeds -> stack drains
+    Test.stopTest();
+
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'Compensated',
+      finalInst.Status__c,
+      'A failure-driven rollback must finish Compensated even when its error text contains "Cancelled"'
     );
   }
 

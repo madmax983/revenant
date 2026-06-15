@@ -742,7 +742,7 @@ public inherited sharing class WorkflowEngine {
       if (instance.Status__c == 'Suspended') {
         if (
           instance.Error_Message__c != null &&
-          instance.Error_Message__c.contains('Cancelled')
+          instance.Error_Message__c.contains('Cancelled by user')
         ) {
           instance.Status__c = 'Cancelling';
         } else {
@@ -1651,6 +1651,10 @@ public inherited sharing class WorkflowEngine {
           ': ' +
           errorMessage
       );
+      // Clear any stale sleep/retry deadline so the watchdog cannot prematurely wake a
+      // remaining SUSPEND/approval gate once the rollback is resumed.
+      instance.Sleep_Until__c = null;
+      instance.Async_Job_Id__c = null;
       update as system instance;
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       return;
@@ -2270,20 +2274,27 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    // Resume into the same phase the rollback was running in. A cancel-driven
-    // rollback continues as 'Cancelling'; a failure-driven one as 'Compensating'.
+    // Resume into the same phase the rollback was running in. A cancel-driven rollback
+    // continues as 'Cancelling'; a failure-driven one as 'Compensating'. The phase is
+    // identified by the engine-owned 'Cancelled by user' marker (set by cancel() and the
+    // stalled-message builder) rather than an arbitrary 'Cancelled' substring, so a
+    // failure-driven rollback whose compensation error text merely contains the word
+    // "Cancelled" is not mistaken for a cancellation.
     Boolean isCancelling =
       instance.Error_Message__c != null &&
-      instance.Error_Message__c.contains('Cancelled');
+      instance.Error_Message__c.contains('Cancelled by user');
     instance.Status__c = isCancelling ? 'Cancelling' : 'Compensating';
     // Clear the stalled "rollback incomplete" banner, but for a cancel-driven rollback
-    // keep a 'Cancelled' marker: runStep and the watchdog sleep-resume path read it to
-    // restore the phase as 'Cancelling' if a remaining compensation suspends (RETRY/
+    // keep the 'Cancelled by user' marker: runStep and the watchdog sleep-resume path read
+    // it to restore the phase as 'Cancelling' if a remaining compensation suspends (RETRY/
     // SLEEP) before the stack drains. Without it the rollback would finish 'Compensated'
-    // instead of 'Cancelled'.
+    // instead of 'Cancelled'. Also clear any stale sleep deadline so a later SUSPEND/
+    // approval gate is not prematurely woken by the watchdog.
     instance.Error_Message__c = isCancelling
       ? 'Cancelled by user. Compensating.'
       : null;
+    instance.Sleep_Until__c = null;
+    instance.Async_Job_Id__c = null;
     update as system instance;
 
     // Append-only: create a FRESH pending compensation attempt for the stalled
@@ -2738,6 +2749,11 @@ public inherited sharing class WorkflowEngine {
             stepExec.Step_Name__c +
             ' failed after max retries.'
         );
+        // This branch was reached by the scheduled retry firing, so clear that elapsed
+        // sleep deadline; otherwise a later resumed SUSPEND/approval gate would be
+        // immediately re-woken by the watchdog (Sleep_Until__c <= now).
+        instance.Sleep_Until__c = null;
+        instance.Async_Job_Id__c = null;
         update as system instance;
         WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       } else {
@@ -2772,6 +2788,9 @@ public inherited sharing class WorkflowEngine {
           stepExec.Step_Name__c +
           ' failed: Unsupported action.'
       );
+      // Clear any stale sleep/retry deadline (see the max-retries branch above).
+      instance.Sleep_Until__c = null;
+      instance.Async_Job_Id__c = null;
       update as system instance;
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
     }
@@ -3336,6 +3355,10 @@ public inherited sharing class WorkflowEngine {
                 ': ' +
                 errorMsg
             );
+            // Clear any stale sleep/retry deadline so a later resumed SUSPEND/approval
+            // gate is not prematurely woken by the watchdog.
+            parent.Sleep_Until__c = null;
+            parent.Async_Job_Id__c = null;
             instancesToUpdate.put(parent.Id, parent);
           } else if (!hasCompensations) {
             parent.Status__c = 'Failed';
@@ -3476,7 +3499,7 @@ public inherited sharing class WorkflowEngine {
         ) {
           if (
             inst.Error_Message__c != null &&
-            inst.Error_Message__c.contains('Cancelled')
+            inst.Error_Message__c.contains('Cancelled by user')
           ) {
             inst.Status__c = 'Cancelling';
           } else {
