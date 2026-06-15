@@ -711,6 +711,7 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c == 'Completed' ||
       instance.Status__c == 'Failed' ||
       instance.Status__c == 'Compensated' ||
+      instance.Status__c == 'CompensationFailed' ||
       instance.Status__c == 'Cancelled' ||
       instance.Status__c == 'ContinuedAsNew'
     ) {
@@ -869,6 +870,7 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c == 'Completed' ||
       instance.Status__c == 'Failed' ||
       instance.Status__c == 'Compensated' ||
+      instance.Status__c == 'CompensationFailed' ||
       instance.Status__c == 'Cancelled' ||
       instance.Status__c == 'ContinuedAsNew'
     ) {
@@ -1039,6 +1041,7 @@ public inherited sharing class WorkflowEngine {
       freshInstance.Status__c == 'Failed' ||
       freshInstance.Status__c == 'Compensating' ||
       freshInstance.Status__c == 'Compensated' ||
+      freshInstance.Status__c == 'CompensationFailed' ||
       freshInstance.Status__c == 'Cancelled' ||
       freshInstance.Status__c == 'Cancelling' ||
       freshInstance.Status__c == 'ContinuedAsNew'
@@ -1634,9 +1637,14 @@ public inherited sharing class WorkflowEngine {
     (String.isNotBlank(stepName) && stepName.endsWith('_Compensate')));
 
     if (isCompensationFailure) {
-      instance.Status__c = 'Failed';
+      // The rollback itself could not complete. Because the failed step's entry is
+      // never popped, the remaining LIFO stack is still intact here. Rather than
+      // driving to a generic terminal Failed and silently abandoning the deeper
+      // (un-run) compensations, park the saga in the recoverable, operator-visible
+      // "rollback incomplete" condition so it can be resumed from this exact point.
+      instance.Status__c = 'CompensationFailed';
       instance.Error_Message__c =
-        'Failed at step ' +
+        'Rollback incomplete at compensation step ' +
         stepName +
         ': ' +
         errorMessage;
@@ -2173,6 +2181,144 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  /**
+   * Resumes a saga whose rollback stalled (status CompensationFailed) from exactly
+   * the failed compensation point. The remaining LIFO stack — preserved intact when
+   * the compensation failed — is replayed in strict order through the existing
+   * compensation/orchestrator path; no forward step is re-executed and no
+   * already-successful compensation is re-run.
+   *
+   * Idempotent by construction: the status guard + FOR UPDATE lock means a second
+   * (e.g. double-clicked) resume sees the instance already out of CompensationFailed
+   * and is a no-op, so two concurrent orchestrator chains can never roll back the
+   * same instance and no compensation is double-run.
+   */
+  public static void resumeCompensation(Id instanceId) {
+    List<Workflow_Instance__c> instances = [
+      SELECT Id, Status__c, Compensation_Stack__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId AND Status__c = 'CompensationFailed'
+      WITH SYSTEM_MODE
+      LIMIT 1
+      FOR UPDATE
+    ];
+    if (instances.isEmpty()) {
+      // Not stalled (already resumed, fully compensated, or never stalled). The
+      // operator action is idempotent, so treat this as a safe no-op.
+      return;
+    }
+    Workflow_Instance__c instance = instances[0];
+
+    List<String> stack = new List<String>();
+    if (String.isNotBlank(instance.Compensation_Stack__c)) {
+      stack = (List<String>) JSON.deserialize(
+        instance.Compensation_Stack__c,
+        List<String>.class
+      );
+    }
+
+    if (stack.isEmpty()) {
+      // Defensive: a stalled state with no remaining work means the rollback is in
+      // fact complete. Promote it to the fully-compensated terminal state.
+      instance.Status__c = 'Compensated';
+      instance.Current_Step__c = null;
+      instance.Error_Message__c = null;
+      update as system instance;
+      return;
+    }
+
+    // Resume into the same phase the rollback was running in. A cancel-driven
+    // rollback continues as 'Cancelling'; a failure-driven one as 'Compensating'.
+    Boolean isCancelling =
+      instance.Error_Message__c != null &&
+      instance.Error_Message__c.contains('Cancelled');
+    instance.Status__c = isCancelling ? 'Cancelling' : 'Compensating';
+    // Clear the stalled banner so the resumed rollback is no longer flagged.
+    instance.Error_Message__c = null;
+    update as system instance;
+
+    // Append-only: create a FRESH pending compensation attempt for the stalled
+    // top-of-stack step, leaving the failed attempt's record intact for the audit
+    // trail. This is what makes runCompensationStep re-run the stalled compensation
+    // rather than treating the prior Failed record as a terminal "already done".
+    appendCompensationRetryStep(instance, stack);
+
+    scheduleTimeoutJobForInstance(instance.Id);
+    if (Test.isRunningTest()) {
+      if (!disableQueueableInTest) {
+        System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+      }
+    } else {
+      enqueueOrchestrator(instance.Id, null);
+    }
+  }
+
+  /**
+   * Inserts a new Pending compensation step-execution log for the current top of the
+   * rollback stack, unless a non-terminal (Pending/Running/Retrying) attempt already
+   * exists. Unlike preCreateFirstCompensationStep, it does NOT short-circuit on a
+   * prior terminal (Failed) attempt — that record is preserved and a fresh attempt is
+   * appended, keeping the audit trail append-only while letting the rollback resume.
+   */
+  private static void appendCompensationRetryStep(
+    Workflow_Instance__c instance,
+    List<String> stack
+  ) {
+    if (stack == null || stack.isEmpty()) {
+      return;
+    }
+    String activeStepName = stack[stack.size() - 1];
+    String compensationStepLogName = activeStepName + '_Compensate';
+
+    List<Workflow_Step_Execution__c> existing = [
+      SELECT Id, Status__c, Input__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instance.Id
+        AND Step_Name__c = :compensationStepLogName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+
+    // If an attempt is already in flight, do not stack a duplicate (idempotency).
+    if (!existing.isEmpty()) {
+      String latestStatus = existing[0].Status__c;
+      if (
+        latestStatus == 'Pending' ||
+        latestStatus == 'Running' ||
+        latestStatus == 'Retrying'
+      ) {
+        return;
+      }
+    }
+
+    // Seed the retry attempt's inputs/outputs from the original forward execution so
+    // compensate() sees the same context it had on the first attempt.
+    List<Workflow_Step_Execution__c> originalExecs = [
+      SELECT Input__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instance.Id
+        AND Step_Name__c = :activeStepName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+
+    Workflow_Step_Execution__c compStepExec = new Workflow_Step_Execution__c();
+    compStepExec.Workflow_Instance__c = instance.Id;
+    compStepExec.Step_Name__c = compensationStepLogName;
+    compStepExec.Status__c = 'Pending';
+    compStepExec.Input__c = !originalExecs.isEmpty()
+      ? originalExecs[0].Input__c
+      : null;
+    compStepExec.Output__c = !originalExecs.isEmpty()
+      ? originalExecs[0].Output__c
+      : null;
+    compStepExec.Retry_Count__c = 0;
+    insert as system compStepExec;
+  }
+
   private static void runCompensationStep(Workflow_Instance__c instance) {
     // 1. Read the compensation stack
     if (String.isBlank(instance.Compensation_Stack__c)) {
@@ -2430,6 +2576,7 @@ public inherited sharing class WorkflowEngine {
     ];
     if (
       freshInstance.Status__c == 'Failed' ||
+      freshInstance.Status__c == 'CompensationFailed' ||
       freshInstance.Status__c == 'Cancelled'
     ) {
       throw new WorkflowException(
@@ -2531,9 +2678,12 @@ public inherited sharing class WorkflowEngine {
           ') exceeded.';
         saveStepExec(stepExec);
 
-        instance.Status__c = 'Failed';
+        // The author's RetryPolicy budget for the automatic phase is exhausted, but
+        // the remaining stack is intact. Surface a recoverable "rollback incomplete"
+        // state (resumable by an operator) instead of abandoning the deeper steps.
+        instance.Status__c = 'CompensationFailed';
         instance.Error_Message__c =
-          'Compensation step ' +
+          'Rollback incomplete: compensation step ' +
           stepExec.Step_Name__c +
           ' failed after max retries.';
         update as system instance;
@@ -2561,9 +2711,10 @@ public inherited sharing class WorkflowEngine {
         (result != null ? result.action : null);
       saveStepExec(stepExec);
 
-      instance.Status__c = 'Failed';
+      // Remaining stack is intact; leave the saga recoverable rather than abandoning it.
+      instance.Status__c = 'CompensationFailed';
       instance.Error_Message__c =
-        'Compensation step ' +
+        'Rollback incomplete: compensation step ' +
         stepExec.Step_Name__c +
         ' failed: Unsupported action.';
       update as system instance;
@@ -2706,6 +2857,7 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c == 'Completed' ||
       instance.Status__c == 'Failed' ||
       instance.Status__c == 'Compensated' ||
+      instance.Status__c == 'CompensationFailed' ||
       instance.Status__c == 'Cancelled' ||
       instance.Status__c == 'ContinuedAsNew'
     ) {
@@ -2763,6 +2915,7 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c == 'Completed' ||
       instance.Status__c == 'Failed' ||
       instance.Status__c == 'Compensated' ||
+      instance.Status__c == 'CompensationFailed' ||
       instance.Status__c == 'Cancelled' ||
       instance.Status__c == 'ContinuedAsNew'
     ) {
@@ -3078,7 +3231,18 @@ public inherited sharing class WorkflowEngine {
             parent.Status__c == 'Cancelling' ||
             (String.isNotBlank(step.Step_Name__c) && step.Step_Name__c.endsWith('_Compensate')));
 
-          if (!hasCompensations || isCompensationFailure) {
+          if (isCompensationFailure && hasCompensations) {
+            // A compensation step timed out mid-rollback. The remaining stack is
+            // intact, so park the saga in the recoverable "rollback incomplete"
+            // state rather than abandoning the deeper compensations.
+            parent.Status__c = 'CompensationFailed';
+            parent.Error_Message__c =
+              'Rollback incomplete at compensation step ' +
+              step.Step_Name__c +
+              ': ' +
+              errorMsg;
+            instancesToUpdate.put(parent.Id, parent);
+          } else if (!hasCompensations) {
             parent.Status__c = 'Failed';
             parent.Error_Message__c = 'Failed at step ' + step.Step_Name__c + ': ' + errorMsg;
             instancesToUpdate.put(parent.Id, parent);

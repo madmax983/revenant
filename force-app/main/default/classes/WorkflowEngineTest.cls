@@ -1264,7 +1264,9 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
-    System.assertEquals('Failed', failedInst.Status__c);
+    // Exhausting the RetryPolicy budget yields the recoverable "rollback incomplete"
+    // condition, NOT a generic terminal Failed.
+    System.assertEquals('CompensationFailed', failedInst.Status__c);
     System.assert(
       failedInst.Error_Message__c.contains('failed after max retries')
     );
@@ -1277,11 +1279,11 @@ public class WorkflowEngineTest {
     System.assertEquals('Failed', failedExec.Status__c);
     System.assertEquals(2, failedExec.Retry_Count__c);
 
-    // Now test retryWorkflow on failed compensation!
+    // Now resume the stalled rollback from exactly the failed compensation point.
     WorkflowEngineTest.compensationShouldFail = false;
 
-    WorkflowEngine.retryWorkflow(inst.Id);
-    WorkflowEngine.runStep(inst.Id, null); // Runs the compensation step (completes)
+    WorkflowEngine.resumeCompensation(inst.Id);
+    WorkflowEngine.runStep(inst.Id, null); // Runs the fresh compensation attempt (completes)
     WorkflowEngine.runStep(inst.Id, null); // Stack empty -> transition status to Compensated
 
     Workflow_Instance__c retriedInst = [
@@ -1291,13 +1293,34 @@ public class WorkflowEngineTest {
     ];
     System.assertEquals('Compensated', retriedInst.Status__c);
 
-    Workflow_Step_Execution__c finalExec = [
-      SELECT Status__c, Output__c
+    // Append-only: the original failed attempt's record is preserved untouched.
+    Workflow_Step_Execution__c preservedFailedExec = [
+      SELECT Status__c, Retry_Count__c
       FROM Workflow_Step_Execution__c
       WHERE Id = :execs[0].Id
     ];
-    System.assertEquals('Compensated', finalExec.Status__c);
-    System.assertEquals('"CompensatedFailing"', finalExec.Output__c);
+    System.assertEquals('Failed', preservedFailedExec.Status__c);
+    System.assertEquals(2, preservedFailedExec.Retry_Count__c);
+
+    // A fresh, successful compensation attempt was appended for the same step.
+    List<Workflow_Step_Execution__c> compAttempts = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowEngineTest.CompensatableFailingStep_Compensate'
+      ORDER BY CreatedDate ASC, Id ASC
+    ];
+    System.assertEquals(
+      2,
+      compAttempts.size(),
+      'Failed attempt preserved alongside the successful resume attempt'
+    );
+    Workflow_Step_Execution__c successfulAttempt = compAttempts[
+      compAttempts.size() - 1
+    ];
+    System.assertEquals('Compensated', successfulAttempt.Status__c);
+    System.assertEquals('"CompensatedFailing"', successfulAttempt.Output__c);
   }
 
   @isTest
@@ -2498,7 +2521,7 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
-    System.assertEquals('Failed', timedOutInst.Status__c);
+    System.assertEquals('CompensationFailed', timedOutInst.Status__c);
     System.assert(timedOutInst.Error_Message__c.contains('timed out'));
     // Compensation stack should NOT be popped
     List<String> stack = (List<String>) JSON.deserialize(
@@ -2533,7 +2556,7 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
-    System.assertEquals('Failed', failedInst.Status__c);
+    System.assertEquals('CompensationFailed', failedInst.Status__c);
     System.assert(
       failedInst.Error_Message__c.contains('Compensation crash simulation')
     );
