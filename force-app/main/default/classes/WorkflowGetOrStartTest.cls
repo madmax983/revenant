@@ -376,6 +376,53 @@ private class WorkflowGetOrStartTest {
   }
 
   // ==========================================
+  // Review fix (P2): many terminal rows for a key still dedup to one instance
+  // (single-key lookup is row-bounded to the newest match)
+  // ==========================================
+  @isTest
+  static void testTerminalDedupWithMultipleTerminalRows() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.dedupWindowMinutes = 1440;
+
+    List<Workflow_Instance__c> terminals = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < 3; i++) {
+      terminals.add(
+        new Workflow_Instance__c(
+          Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+          Status__c = 'Completed',
+          Correlation_Key__c = 'GOS_MultiTerm'
+        )
+      );
+    }
+    insert terminals;
+
+    WorkflowEngine.StartResult res = WorkflowEngine.startOrGet(
+      'WorkflowEngineTest.HappyWorkflow',
+      'GOS_MultiTerm',
+      null
+    );
+
+    System.assertEquals(
+      false,
+      res.isNew,
+      'Should dedup to an existing terminal instance'
+    );
+    Set<Id> termIds = new Set<Id>();
+    for (Workflow_Instance__c t : terminals) {
+      termIds.add(t.Id);
+    }
+    System.assert(
+      termIds.contains(res.instanceId),
+      'Must dedup to one of the existing terminal instances'
+    );
+    System.assertEquals(
+      3,
+      totalInstancesForKey('GOS_MultiTerm'),
+      'No new instance should be created'
+    );
+  }
+
+  // ==========================================
   // Review fix (P2): a very large dedup window must not fault starts
   // ==========================================
   @isTest

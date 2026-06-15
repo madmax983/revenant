@@ -24,6 +24,11 @@ public inherited sharing class WorkflowEngine {
   // every start.
   private static final Integer MAX_DEDUP_WINDOW_MINUTES = 52560000;
 
+  // Upper bound on rows read by a single dedup lookup, so a hot correlation key
+  // with many historical terminal runs cannot exhaust the SOQL row governor.
+  // Single-key lookups (the common start path) read only the top row.
+  private static final Integer DEDUP_LOOKUP_ROW_CAP = 10000;
+
   // Max number of timed-out steps a single watchdog heartbeat will fail. Each failure
   // triggers failWorkflowInstance() (its own SOQL/DML + optional alert queries), so this
   // bounds the heartbeat's governor usage. Remaining timeouts drain on the next heartbeat.
@@ -201,12 +206,11 @@ public inherited sharing class WorkflowEngine {
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
         // Concurrency backstop: a sibling start won the race on the unique
-        // Active_Correlation_Key__c index. Resolve the winner with the same
-        // active-or-recently-terminal scope used before insert (the winner may
-        // have completed mid-race) and return its Id, so the loser is a no-op.
-        Workflow_Instance__c winner = findExistingByKey(
-            new Set<String>{ correlationKey },
-            includeTerminal
+        // Active_Correlation_Key__c index. A sibling provably exists, so resolve
+        // the winner regardless of the dedup window (it may have completed
+        // mid-race) and return its Id so the loser is a safe no-op.
+        Workflow_Instance__c winner = findAnyByKey(
+            new Set<String>{ correlationKey }
           )
           .get(normalizeKey(correlationKey));
         if (winner != null) {
@@ -312,10 +316,15 @@ public inherited sharing class WorkflowEngine {
     DateTime windowStart = includeTerminal
       ? dedupWindowStart()
       : DateTime.now().addYears(1000);
-    // Active instances carry a null Terminal_At__c, so NULLS FIRST surfaces an
-    // active instance ahead of any terminal one for the same key. Among
-    // terminal-only keys, the most recent terminal wins. The SOQL equality is
-    // case-insensitive, so a stored "Foo" matches a requested "foo".
+    // One indexed query. Active instances carry a null Terminal_At__c, so NULLS
+    // FIRST surfaces the (at most one, per the unique index) active instance
+    // ahead of any terminal one for the same key; among terminal-only keys the
+    // most recent wins. The SOQL equality is case-insensitive, so a stored
+    // "Foo" matches a requested "foo". The row cap bounds governor usage so a
+    // single hot key with many historical terminal runs cannot exhaust the SOQL
+    // row limit; a single-key lookup needs only the top row (keeping the start
+    // path to one indexed SOQL).
+    Integer rowLimit = keys.size() == 1 ? 1 : DEDUP_LOOKUP_ROW_CAP;
     List<Workflow_Instance__c> matches = [
       SELECT Id, Correlation_Key__c, Status__c, Terminal_At__c
       FROM Workflow_Instance__c
@@ -325,8 +334,42 @@ public inherited sharing class WorkflowEngine {
         OR Terminal_At__c >= :windowStart)
       WITH SYSTEM_MODE
       ORDER BY Terminal_At__c DESC NULLS FIRST, CreatedDate DESC
+      LIMIT :rowLimit
     ];
     for (Workflow_Instance__c inst : matches) {
+      String normalized = normalizeKey(inst.Correlation_Key__c);
+      if (!result.containsKey(normalized)) {
+        result.put(normalized, inst);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Resolves the existing instance per key regardless of the dedup window,
+   * preferring an active instance then the most recent terminal one. Used as the
+   * post-DUPLICATE_VALUE concurrency backstop, where a sibling is known to exist
+   * and the loser must always resolve to the winner per the get-or-start
+   * contract (even if the winner completed mid-race, and even when the window is
+   * disabled). Row-bounded for the same governor-safety reason as
+   * findExistingByKey.
+   */
+  private static Map<String, Workflow_Instance__c> findAnyByKey(
+    Set<String> keys
+  ) {
+    Map<String, Workflow_Instance__c> result = new Map<String, Workflow_Instance__c>();
+    if (keys == null || keys.isEmpty()) {
+      return result;
+    }
+    Integer rowLimit = keys.size() == 1 ? 1 : DEDUP_LOOKUP_ROW_CAP;
+    for (Workflow_Instance__c inst : [
+      SELECT Id, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c IN :keys
+      WITH SYSTEM_MODE
+      ORDER BY Terminal_At__c DESC NULLS FIRST, CreatedDate DESC
+      LIMIT :rowLimit
+    ]) {
       String normalized = normalizeKey(inst.Correlation_Key__c);
       if (!result.containsKey(normalized)) {
         result.put(normalized, inst);
@@ -529,8 +572,9 @@ public inherited sharing class WorkflowEngine {
 
     // 5. Build a key -> resolved Id map for newly inserted instances and for
     //    any concurrent winners, then fill remaining (intra-batch / loser)
-    //    results. Winners are resolved with the same active-or-recently-terminal
-    //    scope used before insert, in case a winner completed mid-race.
+    //    results. A DUPLICATE_VALUE proves a sibling exists, so losers are
+    //    resolved regardless of the dedup window (the winner may have completed
+    //    mid-race, including when the window is disabled).
     Map<String, Id> resolvedIdByKey = new Map<String, Id>();
     for (Integer j = 0; j < insertedInstances.size(); j++) {
       String key = requests[insertedReqIndexes[j]].correlationKey;
@@ -539,9 +583,8 @@ public inherited sharing class WorkflowEngine {
       }
     }
     if (!concurrentLoserKeys.isEmpty()) {
-      Map<String, Workflow_Instance__c> winners = findExistingByKey(
-        concurrentLoserKeys,
-        true
+      Map<String, Workflow_Instance__c> winners = findAnyByKey(
+        concurrentLoserKeys
       );
       for (String normalized : winners.keySet()) {
         if (!resolvedIdByKey.containsKey(normalized)) {
@@ -560,6 +603,26 @@ public inherited sharing class WorkflowEngine {
       ) {
         results[i] = new StartResult(resolvedIdByKey.get(normKey), false);
       }
+    }
+
+    // Safety net: every request carries a non-blank key (validated above) and
+    // must resolve to an instance. A lingering null would mean a duplicate
+    // loser whose winner could not be located; rather than return a null
+    // instance Id, roll back this invocation's inserts and surface an error.
+    List<String> unresolvedKeys = new List<String>();
+    for (Integer i = 0; i < requests.size(); i++) {
+      if (results[i] == null) {
+        unresolvedKeys.add(requests[i].correlationKey);
+      }
+    }
+    if (!unresolvedKeys.isEmpty()) {
+      if (!insertedInstances.isEmpty()) {
+        delete as system insertedInstances;
+      }
+      throw new WorkflowException(
+        'Failed to resolve workflow start for correlation key(s): ' +
+        String.join(unresolvedKeys, ', ')
+      );
     }
 
     // 6. Resolve input payloads for newly inserted instances
