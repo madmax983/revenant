@@ -45,20 +45,26 @@ public inherited sharing class StepContext {
    * Supplies pending signals on demand so a step that never reads signals pays
    * no query/heap cost. A non-blank signalName lets a named accessor load (and
    * pay heap for) only that name's payloads instead of every pending signal on
-   * the instance; a blank/null name requests the full set. Implemented by the
-   * engine; resolved lazily on first signal access.
+   * the instance; a blank/null name requests the full set. getLatestSignal loads
+   * only the single most-recent matching signal, so reading one decision does
+   * not pull every duplicate payload. Implemented by the engine; resolved lazily
+   * on first signal access.
    */
   public interface SignalSource {
     List<Signal> getPendingSignals(String signalName);
+    Signal getLatestSignal(String signalName);
   }
 
   private SignalSource signalSource;
   // Full pending set, loaded lazily only when an unscoped accessor needs it.
   private List<Signal> allSignals;
   private Boolean allLoaded = false;
-  // Per-name results, loaded lazily so a single named lookup does not pull every
-  // pending signal/payload on the instance. Keyed by lower-cased name.
+  // Per-name full results, loaded lazily so a single named lookup does not pull
+  // every pending signal/payload on the instance. Keyed by lower-cased name.
   private Map<String, List<Signal>> byNameCache = new Map<String, List<Signal>>();
+  // Per-name latest-only results for getSignal/hasSignal, so reading one
+  // decision never loads every duplicate payload. Keyed by lower-cased name.
+  private Map<String, Signal> latestByName = new Map<String, Signal>();
   // Snapshot signals the step actually matched (saw a payload for). Only these
   // drive engine-managed consumption -- a name that was probed but found absent
   // must NOT consume a same-name signal that arrives later.
@@ -176,6 +182,11 @@ public inherited sharing class StepContext {
   // name (so a single named lookup never pulls every payload on the instance)
   // and caches the result for a consistent per-name view within this execution.
   private List<Signal> matchesFor(String signalName) {
+    // Signal_Name__c is required, so a blank named lookup matches nothing and
+    // must never fall through to the unscoped (all-signals) query.
+    if (String.isBlank(signalName)) {
+      return new List<Signal>();
+    }
     if (allLoaded) {
       List<Signal> matches = new List<Signal>();
       for (Signal s : allSignals) {
@@ -185,7 +196,7 @@ public inherited sharing class StepContext {
       }
       return matches;
     }
-    String key = (signalName != null) ? signalName.toLowerCase() : '';
+    String key = signalName.toLowerCase();
     if (!byNameCache.containsKey(key)) {
       List<Signal> loaded = (signalSource != null)
         ? signalSource.getPendingSignals(signalName)
@@ -193,6 +204,36 @@ public inherited sharing class StepContext {
       byNameCache.put(key, (loaded != null) ? loaded : new List<Signal>());
     }
     return byNameCache.get(key);
+  }
+
+  // Resolves only the most-recent signal matching a name, loading just that one
+  // payload rather than every duplicate. Reuses an already-loaded full set or
+  // per-name list when available. Returns null when none matches.
+  private Signal latestFor(String signalName) {
+    if (String.isBlank(signalName)) {
+      return null;
+    }
+    if (allLoaded) {
+      Signal latest = null;
+      for (Signal s : allSignals) {
+        if (s.name == signalName) {
+          latest = s;
+        }
+      }
+      return latest;
+    }
+    String key = signalName.toLowerCase();
+    if (byNameCache.containsKey(key)) {
+      List<Signal> matches = byNameCache.get(key);
+      return matches.isEmpty() ? null : matches[matches.size() - 1];
+    }
+    if (!latestByName.containsKey(key)) {
+      latestByName.put(
+        key,
+        (signalSource != null) ? signalSource.getLatestSignal(signalName) : null
+      );
+    }
+    return latestByName.get(key);
   }
 
   /**
@@ -226,22 +267,22 @@ public inherited sharing class StepContext {
    * none is pending. Never returns null. Marks the name observed.
    */
   public Signal getSignal(String signalName) {
-    List<Signal> matches = matchesFor(signalName);
-    if (matches.isEmpty()) {
+    Signal latest = latestFor(signalName);
+    if (latest == null) {
       return new Signal();
     }
-    Signal latest = matches[matches.size() - 1];
     markMatched(latest);
     return latest;
   }
 
   /** True when at least one pending signal matches the given name. Marks observed. */
   public Boolean hasSignal(String signalName) {
-    List<Signal> matches = matchesFor(signalName);
-    for (Signal s : matches) {
-      markMatched(s);
+    Signal latest = latestFor(signalName);
+    if (latest == null) {
+      return false;
     }
-    return !matches.isEmpty();
+    markMatched(latest);
+    return true;
   }
 
   /**

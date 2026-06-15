@@ -1014,6 +1014,44 @@ public inherited sharing class WorkflowEngine {
     public List<StepContext.Signal> getPendingSignals(String signalName) {
       return loadPendingSignals(this.instanceId, signalName);
     }
+
+    public StepContext.Signal getLatestSignal(String signalName) {
+      return loadLatestSignal(this.instanceId, signalName);
+    }
+  }
+
+  /**
+   * Loads only the single most-recent pending signal matching a name, so a step
+   * reading one decision via getSignal/hasSignal does not pull every duplicate
+   * payload (consumption still re-queries by name, without payloads). Returns
+   * null when no matching Received signal exists.
+   */
+  private static StepContext.Signal loadLatestSignal(
+    Id instanceId,
+    String signalName
+  ) {
+    if (String.isBlank(signalName)) {
+      return null;
+    }
+    List<Workflow_Signal__c> records = [
+      SELECT Id, Signal_Name__c, Payload__c
+      FROM Workflow_Signal__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Status__c = 'Received'
+        AND Signal_Name__c = :signalName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    if (records.isEmpty()) {
+      return null;
+    }
+    return new StepContext.Signal(
+      records[0].Id,
+      records[0].Signal_Name__c,
+      records[0].Payload__c
+    );
   }
 
   /**

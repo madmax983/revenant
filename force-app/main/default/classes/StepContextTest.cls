@@ -367,4 +367,35 @@ public class StepContextTest {
       'getSignals() (all) must mark every pending signal observed'
     );
   }
+
+  @isTest
+  static void testBlankNamedLookupMatchesNothing() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    List<StepContext.Signal> pending = new List<StepContext.Signal>{
+      new StepContext.Signal(null, 'Real', '{"v":1}')
+    };
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null,
+      1,
+      pending
+    );
+
+    // A blank/null name must never fall through to the unscoped (all) query and
+    // must not mark unrelated signals observed/consumable.
+    System.assertEquals(false, ctx.getSignal('').isPresent());
+    System.assertEquals(false, ctx.getSignal(null).isPresent());
+    System.assertEquals(false, ctx.hasSignal(''));
+    System.assertEquals(0, ctx.getSignals('').size());
+    System.assertEquals(
+      0,
+      ctx.getConsumedSignalIds().size(),
+      'A blank named lookup must not mark any signal consumable'
+    );
+  }
 }
