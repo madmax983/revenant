@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>67.0</apiVersion>
+    <description>Reference recipe: read a Revenant durable workflow's outcome with the Get Workflow Status invocable action and branch on isSuccess, without referencing any internal field API names.</description>
+    <actionCalls>
+        <name>Get_Workflow_Status</name>
+        <label>Get Workflow Status</label>
+        <locationX>176</locationX>
+        <locationY>134</locationY>
+        <actionName>WorkflowStatusInvocableAction</actionName>
+        <actionType>apex</actionType>
+        <connector>
+            <targetReference>Branch_On_Outcome</targetReference>
+        </connector>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
+        <inputParameters>
+            <name>workflowKeyOrId</name>
+            <value>
+                <elementReference>workflowKeyOrIdInput</elementReference>
+            </value>
+        </inputParameters>
+        <nameSegment>WorkflowStatusInvocableAction</nameSegment>
+        <storeOutputAutomatically>true</storeOutputAutomatically>
+    </actionCalls>
+    <assignments>
+        <name>Assign_Not_Found</name>
+        <label>Assign Not Found</label>
+        <locationX>440</locationX>
+        <locationY>458</locationY>
+        <assignmentItems>
+            <assignToReference>branchResult</assignToReference>
+            <operator>Assign</operator>
+            <value>
+                <stringValue>No workflow found for the supplied key or Id.</stringValue>
+            </value>
+        </assignmentItems>
+    </assignments>
+    <assignments>
+        <name>Assign_Pending</name>
+        <label>Assign Still Running</label>
+        <locationX>308</locationX>
+        <locationY>458</locationY>
+        <assignmentItems>
+            <assignToReference>branchResult</assignToReference>
+            <operator>Assign</operator>
+            <value>
+                <stringValue>Workflow has not finished yet.</stringValue>
+            </value>
+        </assignmentItems>
+    </assignments>
+    <assignments>
+        <name>Assign_Succeeded</name>
+        <label>Assign Succeeded</label>
+        <locationX>176</locationX>
+        <locationY>458</locationY>
+        <assignmentItems>
+            <assignToReference>branchResult</assignToReference>
+            <operator>Assign</operator>
+            <value>
+                <stringValue>Workflow completed successfully.</stringValue>
+            </value>
+        </assignmentItems>
+        <assignmentItems>
+            <assignToReference>resolvedOutputJson</assignToReference>
+            <operator>Assign</operator>
+            <value>
+                <elementReference>Get_Workflow_Status.outputJson</elementReference>
+            </value>
+        </assignmentItems>
+    </assignments>
+    <assignments>
+        <name>Assign_Failed</name>
+        <label>Assign Failed</label>
+        <locationX>572</locationX>
+        <locationY>458</locationY>
+        <assignmentItems>
+            <assignToReference>branchResult</assignToReference>
+            <operator>Assign</operator>
+            <value>
+                <elementReference>Get_Workflow_Status.errorMessage</elementReference>
+            </value>
+        </assignmentItems>
+    </assignments>
+    <decisions>
+        <name>Branch_On_Outcome</name>
+        <label>Branch On Outcome</label>
+        <locationX>176</locationX>
+        <locationY>326</locationY>
+        <defaultConnector>
+            <targetReference>Assign_Not_Found</targetReference>
+        </defaultConnector>
+        <defaultConnectorLabel>Not Found</defaultConnectorLabel>
+        <rules>
+            <name>Succeeded</name>
+            <conditionLogic>and</conditionLogic>
+            <conditions>
+                <leftValueReference>Get_Workflow_Status.isSuccess</leftValueReference>
+                <operator>EqualTo</operator>
+                <rightValue>
+                    <booleanValue>true</booleanValue>
+                </rightValue>
+            </conditions>
+            <connector>
+                <targetReference>Assign_Succeeded</targetReference>
+            </connector>
+            <label>Succeeded</label>
+        </rules>
+        <rules>
+            <name>Failed</name>
+            <conditionLogic>and</conditionLogic>
+            <conditions>
+                <leftValueReference>Get_Workflow_Status.status</leftValueReference>
+                <operator>EqualTo</operator>
+                <rightValue>
+                    <stringValue>Failed</stringValue>
+                </rightValue>
+            </conditions>
+            <connector>
+                <targetReference>Assign_Failed</targetReference>
+            </connector>
+            <label>Failed</label>
+        </rules>
+        <rules>
+            <name>Still_Running</name>
+            <conditionLogic>and</conditionLogic>
+            <conditions>
+                <leftValueReference>Get_Workflow_Status.found</leftValueReference>
+                <operator>EqualTo</operator>
+                <rightValue>
+                    <booleanValue>true</booleanValue>
+                </rightValue>
+            </conditions>
+            <connector>
+                <targetReference>Assign_Pending</targetReference>
+            </connector>
+            <label>Still Running</label>
+        </rules>
+    </decisions>
+    <environments>Default</environments>
+    <interviewLabel>Revenant Read Workflow Status Example {!$Flow.CurrentDateTime}</interviewLabel>
+    <label>Revenant Read Workflow Status Example</label>
+    <processType>AutoLaunchedFlow</processType>
+    <start>
+        <locationX>50</locationX>
+        <locationY>0</locationY>
+        <connector>
+            <targetReference>Get_Workflow_Status</targetReference>
+        </connector>
+    </start>
+    <status>Active</status>
+    <variables>
+        <name>workflowKeyOrIdInput</name>
+        <dataType>String</dataType>
+        <isCollection>false</isCollection>
+        <isInput>true</isInput>
+        <isOutput>false</isOutput>
+    </variables>
+    <variables>
+        <name>branchResult</name>
+        <dataType>String</dataType>
+        <isCollection>false</isCollection>
+        <isInput>false</isInput>
+        <isOutput>true</isOutput>
+    </variables>
+    <variables>
+        <name>resolvedOutputJson</name>
+        <dataType>String</dataType>
+        <isCollection>false</isCollection>
+        <isInput>false</isInput>
+        <isOutput>true</isOutput>
+    </variables>
+</Flow>
