@@ -1579,18 +1579,41 @@ public inherited sharing class WorkflowEngine {
           ? ex.getMessage() + '\n' + ex.getStackTraceString()
           : 'Unknown governor limit / crash');
 
-        // Get previous step's output to feed as input
-        List<Workflow_Step_Execution__c> completedSteps = [
-          SELECT Output__c
-          FROM Workflow_Step_Execution__c
-          WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Completed'
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate DESC, Id DESC
-          LIMIT 1
-        ];
-        stepExec.Input__c = !completedSteps.isEmpty()
-          ? completedSteps[0].Output__c
-          : instance.Input__c;
+        if (targetStepName.endsWith('_Compensate')) {
+          // Crash row for a compensation step: seed from THIS step's own forward
+          // execution (input/output), matching how compensation logs are seeded
+          // everywhere else. Using the latest completed step overall would be wrong
+          // once earlier compensations have popped — that row belongs to a step that
+          // is already reversed, giving the wrong undo context on resume.
+          String forwardStepName = targetStepName.removeEnd('_Compensate');
+          List<Workflow_Step_Execution__c> forwardExecs = [
+            SELECT Input__c, Output__c
+            FROM Workflow_Step_Execution__c
+            WHERE
+              Workflow_Instance__c = :instanceId
+              AND Step_Name__c = :forwardStepName
+            WITH SYSTEM_MODE
+            ORDER BY CreatedDate DESC, Id DESC
+            LIMIT 1
+          ];
+          if (!forwardExecs.isEmpty()) {
+            stepExec.Input__c = forwardExecs[0].Input__c;
+            stepExec.Output__c = forwardExecs[0].Output__c;
+          }
+        } else {
+          // Forward step crash: feed the previous step's output as input.
+          List<Workflow_Step_Execution__c> completedSteps = [
+            SELECT Output__c
+            FROM Workflow_Step_Execution__c
+            WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Completed'
+            WITH SYSTEM_MODE
+            ORDER BY CreatedDate DESC, Id DESC
+            LIMIT 1
+          ];
+          stepExec.Input__c = !completedSteps.isEmpty()
+            ? completedSteps[0].Output__c
+            : instance.Input__c;
+        }
         insert as system stepExec;
       }
     }

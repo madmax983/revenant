@@ -3085,6 +3085,65 @@ public class WorkflowEngineTest {
   }
 
   @isTest
+  static void testCrashCreatedCompensationRowSeededFromOwnForwardStep() {
+    // A finalizer crash that has to CREATE the top-of-stack compensation log must seed it
+    // from that step's own forward execution, not the latest completed step overall (which,
+    // after earlier compensations popped, belongs to an already-reversed step).
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Compensating',
+      Current_Step__c = 'WorkflowEngineTest.HappyStep1',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+      ),
+      Input__c = '{"wf":"input"}'
+    );
+    insert inst;
+
+    // The remaining stack entry's forward execution (the correct undo context).
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep',
+      Status__c = 'Completed',
+      Input__c = '{"a":"in"}',
+      Output__c = '{"a":"out"}'
+    );
+    // A later-completed forward step that was already compensated/popped — this is the
+    // "latest completed overall" row the old code would have wrongly seeded from.
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.HappyStep1',
+      Status__c = 'Completed',
+      Output__c = '{"b":"out"}'
+    );
+
+    Test.startTest();
+    WorkflowEngine.handleCrash(
+      inst.Id,
+      new WorkflowEngine.WorkflowException('Crash before comp row created')
+    );
+    Test.stopTest();
+
+    Workflow_Step_Execution__c createdComp = [
+      SELECT Status__c, Input__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep_Compensate'
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    System.assertEquals('Failed', createdComp.Status__c);
+    System.assertEquals(
+      '{"a":"in"}',
+      createdComp.Input__c,
+      'Crash-created comp row must seed from its own forward step, not the latest completed overall'
+    );
+    System.assertEquals('{"a":"out"}', createdComp.Output__c);
+  }
+
+  @isTest
   static void testBulkStart() {
     List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
     for (Integer i = 0; i < 5; i++) {
