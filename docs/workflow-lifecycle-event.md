@@ -138,7 +138,7 @@ sequenceDiagram
     participant Engine as Revenant Engine
     participant Bus as Platform Event Bus
     Flow->>Engine: Start Workflow (correlationKey)
-    Flow->>Flow: Pause (await Workflow_Lifecycle__e where Correlation_Key__c = key)
+    Flow->>Flow: Pause (await Workflow_Lifecycle__e where Root_Correlation_Key__c = key)
     Engine->>Engine: ...durable execution...
     Engine->>Bus: publish Workflow_Lifecycle__e (terminal)
     Bus-->>Flow: resume event (Is_Success__c, Status__c, Failure_Detail__c)
