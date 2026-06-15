@@ -818,7 +818,9 @@ public inherited sharing class WorkflowEngine {
       ? stepName
       : instance.Current_Step__c;
 
-    // 3. Retrieve or create Step Execution log with FOR UPDATE lock
+    // 3. Retrieve or create Step Execution log with FOR UPDATE lock.
+    // Load all executions for this step so we can derive the visit count in
+    // Apex without an extra COUNT() SOQL query.
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Id, Step_Name__c, Status__c, Input__c, Output__c, Retry_Count__c
       FROM Workflow_Step_Execution__c
@@ -827,8 +829,14 @@ public inherited sharing class WorkflowEngine {
         AND Step_Name__c = :activeStepName
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
     ];
+
+    Integer stepVisit = 0;
+    for (Workflow_Step_Execution__c exec : stepExecs) {
+      if (exec.Status__c == 'Completed') {
+        stepVisit++;
+      }
+    }
 
     if (!stepExecs.isEmpty()) {
       stepExecs = [
@@ -954,15 +962,9 @@ public inherited sharing class WorkflowEngine {
     }
     WorkflowStep stepInstance = (WorkflowStep) stepType.newInstance();
 
-    // Visit sequence: number of already-completed runs of this step in this
-    // instance. Stable across retries/re-drives/resumes of the current
-    // (not-yet-completed) visit, but increments when a loop revisits the step --
-    // so the idempotency key stays stable per visit yet distinct across visits.
-    Integer stepVisit = countCompletedStepExecutions(
-      instanceId,
-      activeStepName,
-      new Set<String>{ 'Completed' }
-    );
+    // stepVisit: number of already-completed runs of this step in this instance.
+    // Computed above from the stepExecs list (before FOR UPDATE re-assigns it)
+    // to avoid a separate COUNT() SOQL query.
 
     StepContext context = new StepContext(
       instanceId,
@@ -2243,7 +2245,9 @@ public inherited sharing class WorkflowEngine {
     // 2. Get the top step to compensate (do not pop yet, only pop on success)
     String activeStepName = stack[stack.size() - 1];
 
-    // 3. Create or retrieve the compensation step execution log with FOR UPDATE lock
+    // 3. Create or retrieve the compensation step execution log with FOR UPDATE lock.
+    // Load all executions so compensateVisit can be derived in Apex without an
+    // extra COUNT() SOQL query.
     String compensationStepLogName = activeStepName + '_Compensate';
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Id, Status__c, Input__c, Output__c, Retry_Count__c, Step_Name__c
@@ -2253,8 +2257,14 @@ public inherited sharing class WorkflowEngine {
         AND Step_Name__c = :compensationStepLogName
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
     ];
+
+    Integer compensateVisit = 0;
+    for (Workflow_Step_Execution__c exec : stepExecs) {
+      if (exec.Status__c == 'Compensated' || exec.Status__c == 'Completed') {
+        compensateVisit++;
+      }
+    }
 
     if (!stepExecs.isEmpty()) {
       stepExecs = [
@@ -2401,15 +2411,8 @@ public inherited sharing class WorkflowEngine {
       prevOutput = completedBefore[0].Output__c;
     }
 
-    // Visit sequence for the compensation of this forward step (count of already
-    // -compensated runs of this compensation step name). Almost always 0, but
-    // kept symmetric with the forward path so a looped compensatable step gets a
-    // distinct key per compensation.
-    Integer compensateVisit = countCompletedStepExecutions(
-      instance.Id,
-      compensationStepLogName,
-      new Set<String>{ 'Compensated', 'Completed' }
-    );
+    // compensateVisit: computed above from the stepExecs list to avoid a
+    // separate COUNT() SOQL query.
 
     StepContext context = new StepContext(
       instance.Id,
