@@ -139,9 +139,18 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   get pendingCompensations() {
-    return this.selectedInst && this.selectedInst.pendingCompensations
-      ? this.selectedInst.pendingCompensations
-      : [];
+    const names =
+      this.selectedInst && this.selectedInst.pendingCompensations
+        ? this.selectedInst.pendingCompensations
+        : [];
+    // The compensation stack can legitimately contain the same step name more
+    // than once (a workflow that loops or reuses a compensatable step class), so
+    // the step name alone is not a unique list key. Pair it with the stack index
+    // to give LWC a stable, unique key per entry and keep list diffing correct.
+    return names.map((name, index) => ({
+      key: `${index}_${name}`,
+      name
+    }));
   }
 
   get isCancelable() {

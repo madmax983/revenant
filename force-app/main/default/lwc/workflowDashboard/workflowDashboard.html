@@ -469,7 +469,7 @@
                                             </div>
                                             <ul class="slds-list_dotted">
                                                 <template for:each={pendingCompensations} for:item="comp">
-                                                    <li key={comp} class="slds-text-body_small">{comp}</li>
+                                                    <li key={comp.key} class="slds-text-body_small">{comp.name}</li>
                                                 </template>
                                             </ul>
                                         </div>
