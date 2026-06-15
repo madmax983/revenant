@@ -1,8 +1,19 @@
 @isTest
 public class OnboardingWorkflowExampleTest {
+  /**
+   * The customer-onboarding happy path, driven by WorkflowTestHarness.
+   *
+   * This test previously drove the workflow with 13 hand-written, engine-internal
+   * orchestration calls — constructing WorkflowOrchestrator per step and per parallel
+   * branch, calling Test.getEventBus().deliver() after every signal, and mutating the
+   * child instance record to fake the sleep resumer. It now collapses to two harness
+   * calls (drive + injectSignal) with zero lines touching WorkflowOrchestrator,
+   * Test.getEventBus(), or direct instance-record mutation, while preserving the
+   * behavioural assertions (parallel fan-out/rejoin, executive-approval suspend,
+   * child welcome workflow with a sleep, and final Completed output).
+   */
   @isTest
   static void testCustomerOnboardingWorkflow() {
-    // Define onboarding input
     Map<String, Object> inputMap = new Map<String, Object>{
       'amount' => 15000.0,
       'customerName' => 'Acme Corp',
@@ -10,178 +21,79 @@ public class OnboardingWorkflowExampleTest {
     };
 
     Test.startTest();
-    // 1. Start the workflow definition
+    // 1. Start the workflow and hand it to the harness.
     Id instanceId = WorkflowEngine.start(
       'OnboardingWorkflowExample',
       'Onboarding_Key_123',
       inputMap
     );
-    Test.stopTest(); // Executes VerifyOrderStep synchronously
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
 
-    Workflow_Instance__c inst = [
-      SELECT Status__c, Current_Step__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
-    System.assertEquals('Running', inst.Status__c);
+    // 2. Drive: VerifyOrder -> parallel Provision/Billing fan-out -> Join ->
+    //    VIPApproval, which suspends for executive approval (amount >= 10000).
+    WorkflowTestHarness.Result suspended = harness.drive();
+    Test.stopTest();
+
     System.assertEquals(
-      'OnboardingWorkflowExample.SplitOnboardingStep',
-      inst.Current_Step__c
+      'Suspended',
+      suspended.status,
+      'Workflow should suspend for VIP approval'
     );
-
-    // 2. Execute SplitOnboardingStep to spawn parallel branches
-    new WorkflowOrchestrator(instanceId).execute(null);
-
-    inst = [
-      SELECT Status__c, Current_Step__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
-    System.assertEquals('Running', inst.Status__c);
-    System.assertEquals(
-      'OnboardingWorkflowExample.ProvisionSandboxStep,OnboardingWorkflowExample.CreateBillingAccountStep',
-      inst.Current_Step__c
+    System.assert(
+      suspended.reachedStep('OnboardingWorkflowExample.ProvisionSandboxStep'),
+      'Parallel ProvisionSandboxStep should have run'
     );
-
-    // 3. Run parallel ProvisionSandboxStep manually
-    new WorkflowOrchestrator(
-        instanceId,
-        'OnboardingWorkflowExample.ProvisionSandboxStep'
-      )
-      .execute(null);
-
-    // 4. Run parallel CreateBillingAccountStep manually
-    new WorkflowOrchestrator(
-        instanceId,
+    System.assert(
+      suspended.reachedStep(
         'OnboardingWorkflowExample.CreateBillingAccountStep'
-      )
-      .execute(null);
-
-    // 5. Run JoinOnboardingStep manually (since both parallel branches are done)
-    new WorkflowOrchestrator(instanceId).execute(null);
-
-    inst = [
-      SELECT Status__c, Current_Step__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
-    System.assertEquals('Running', inst.Status__c);
-    System.assertEquals(
-      'OnboardingWorkflowExample.VIPApprovalStep',
-      inst.Current_Step__c
+      ),
+      'Parallel CreateBillingAccountStep should have run'
+    );
+    System.assert(
+      suspended.reachedStep('OnboardingWorkflowExample.JoinOnboardingStep'),
+      'Rejoin JoinOnboardingStep should have run'
     );
 
-    // 6. Run VIPApprovalStep manually. Since amount >= 10000, it should suspend.
-    new WorkflowOrchestrator(instanceId).execute(null);
-
-    inst = [
-      SELECT Status__c, Current_Step__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
-    System.assertEquals('Suspended', inst.Status__c);
-    System.assertEquals(
-      'OnboardingWorkflowExample.VIPApprovalStep',
-      inst.Current_Step__c
-    );
-
-    // 7. Submit Executive Approval
-    WorkflowEngine.signal(
+    // 3. Submit executive approval. The harness delivers the signal and resumes the
+    //    workflow — including the child WelcomeEmail workflow and its sleep — to the end.
+    WorkflowTestHarness.Result completed = harness.injectSignal(
       'Onboarding_Key_123',
       'Approve:VIPOrderApproval',
       '{"approved":true,"comments":"Approved VIP Customer"}'
     );
-    Test.getEventBus().deliver();
 
-    // 8. Execute VIPApprovalStep again to consume approval and transition to welcome launcher
-    new WorkflowOrchestrator(instanceId).execute(null);
-
-    inst = [
-      SELECT Status__c, Current_Step__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
-    System.assertEquals('Running', inst.Status__c);
     System.assertEquals(
-      'OnboardingWorkflowExample.WelcomeWorkflowLauncherStep',
-      inst.Current_Step__c
+      'Completed',
+      completed.status,
+      'Workflow should complete after approval'
+    );
+    System.assert(
+      completed.output.contains('"status":"Completed"'),
+      'Final output should carry the completed status payload'
+    );
+    System.assert(
+      completed.reachedStep(
+        'OnboardingWorkflowExample.WelcomeWorkflowLauncherStep'
+      ),
+      'WelcomeWorkflowLauncherStep should have run'
+    );
+    System.assert(
+      completed.reachedStep('OnboardingWorkflowExample.CompleteOnboardingStep'),
+      'CompleteOnboardingStep should have run'
     );
 
-    // 9. Execute WelcomeWorkflowLauncherStep manually. It will launch the child WelcomeEmailWorkflow.
-    new WorkflowOrchestrator(instanceId).execute(null);
-
-    inst = [
-      SELECT Status__c, Current_Step__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
-    System.assertEquals('Suspended', inst.Status__c);
-
-    // Verify child instance was created
+    // The child WelcomeEmail workflow ran to completion (its DelayEmailStep sleep was
+    // resumed by the harness through the engine, not by mutating the instance record).
     Workflow_Instance__c childInst = [
-      SELECT Id, Status__c, Current_Step__c, Parent_Instance__c
+      SELECT Status__c
       FROM Workflow_Instance__c
       WHERE Parent_Instance__c = :instanceId
       LIMIT 1
     ];
-    System.assertEquals('Pending', childInst.Status__c);
-
-    // 10. Execute child workflow's DelayEmailStep (which will suspend for sleep)
-    new WorkflowOrchestrator(childInst.Id).execute(null);
-
-    childInst = [
-      SELECT Status__c, Current_Step__c
-      FROM Workflow_Instance__c
-      WHERE Id = :childInst.Id
-    ];
-    System.assertEquals('Suspended', childInst.Status__c);
     System.assertEquals(
-      'OnboardingWorkflowExample.DelayEmailStep',
-      childInst.Current_Step__c
+      'Completed',
+      childInst.Status__c,
+      'Child welcome workflow should complete'
     );
-
-    // Simulating the Schedulable Sleep Resumer Job firing
-    childInst.Status__c = 'Running';
-    childInst.Current_Step__c = 'OnboardingWorkflowExample.SendEmailStep';
-    update childInst;
-
-    // 11. Execute SendEmailStep manually (which completes the child workflow and notifies the parent)
-    new WorkflowOrchestrator(childInst.Id).execute(null);
-
-    // Deliver child completion platform event to parent
-    Test.getEventBus().deliver();
-
-    // Verify parent is Running again
-    inst = [
-      SELECT Status__c, Current_Step__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
-    System.assertEquals('Running', inst.Status__c);
-
-    // 12. Run WelcomeWorkflowLauncherStep again to consume child completion signal and transition to final step
-    new WorkflowOrchestrator(instanceId).execute(null);
-
-    inst = [
-      SELECT Status__c, Current_Step__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
-    System.assertEquals('Running', inst.Status__c);
-    System.assertEquals(
-      'OnboardingWorkflowExample.CompleteOnboardingStep',
-      inst.Current_Step__c
-    );
-
-    // 13. Run CompleteOnboardingStep to finish the workflow
-    new WorkflowOrchestrator(instanceId).execute(null);
-
-    inst = [
-      SELECT Status__c, Output__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
-    System.assertEquals('Completed', inst.Status__c);
-    System.assert(inst.Output__c.contains('"status":"Completed"'));
   }
 }

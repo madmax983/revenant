@@ -9,31 +9,24 @@ public class IdempotentChargeWorkflowExampleTest {
    */
   @isTest
   static void testForwardingIdempotencyKeyYieldsExactlyOneSideEffect() {
-    WorkflowEngine.disableQueueableInTest = true;
     MockIdempotentPaymentGateway.reset();
 
     String stepName = 'IdempotentChargeWorkflowExample.ChargePaymentStep';
 
     Test.startTest();
-    // First, real attempt: drive the charge step through the engine so the key
-    // is the engine-constructed one (proving the engine populates it at the
-    // existing StepContext construction site).
+    // First, real attempt: drive through the engine so the idempotency key is
+    // the engine-constructed one (proving the engine populates it correctly).
     Id instanceId = WorkflowEngine.start(
       'IdempotentChargeWorkflowExample.ChargeWorkflow',
       'idem-charge-1',
       new Map<String, Object>{ 'amountCents' => 4200 }
     );
-    WorkflowEngine.runStep(instanceId, null);
+    WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId).drive();
     Test.stopTest();
 
-    Workflow_Instance__c inst = [
-      SELECT Status__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
     System.assertEquals(
       'Completed',
-      inst.Status__c,
+      result.status,
       'Single-step charge workflow should complete'
     );
     System.assertEquals(
