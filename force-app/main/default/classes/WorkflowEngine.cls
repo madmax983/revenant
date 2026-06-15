@@ -985,7 +985,16 @@ public inherited sharing class WorkflowEngine {
       signalSrc
     );
 
-    // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts
+    // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts.
+    // A CalloutStep performs a synchronous, payload-driven HTTP callout inside
+    // execute(), and Salesforce forbids a callout once the transaction holds
+    // pending DML. We already skip signal claiming for such a step (claimSignals
+    // above), but this timeout bookkeeping also writes DML, so defer that write
+    // past execute() for a CalloutStep. The step's Timeout_At__c and scheduled
+    // timeout job were already committed when it was queued, so the watchdog
+    // stays armed across the callout; the finally block reconciles the timeout
+    // once execute() returns.
+    Boolean deferPreExecDml = stepInstance instanceof CalloutStep;
     stepExec.Status__c = 'Running';
     Integer timeoutSeconds = null;
     if (stepInstance instanceof TimeoutConfigurable) {
@@ -993,10 +1002,12 @@ public inherited sharing class WorkflowEngine {
     }
     if (timeoutSeconds != null && timeoutSeconds > 0) {
       stepExec.Timeout_At__c = DateTime.now().addSeconds(timeoutSeconds);
-      saveStepExec(stepExec);
+      if (!deferPreExecDml) {
+        saveStepExec(stepExec);
+      }
     } else {
       stepExec.Timeout_At__c = null;
-      if (stepExec.Id == null) {
+      if (stepExec.Id == null && !deferPreExecDml) {
         saveStepExec(stepExec);
       }
     }

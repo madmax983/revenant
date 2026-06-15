@@ -913,6 +913,103 @@ public class StepContextSignalEngineTest {
     );
   }
 
+  // --- A CalloutStep that is also TimeoutConfigurable must run its synchronous
+  // callout without the engine's pre-execute timeout DML triggering an
+  // uncommitted-work exception. ----------------------------------------------
+
+  public class CalloutTimeoutWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.CTSpawnStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null; // branch is terminal
+    }
+  }
+
+  public class CTSpawnStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Kick');
+      if (!s.isPresent()) {
+        return StepResult.suspend();
+      }
+      return StepResult.split(
+        new List<String>{ 'StepContextSignalEngineTest.CTCalloutTimeoutBranch' },
+        s.payload
+      );
+    }
+  }
+
+  // Reads a signal (the reason CalloutStep exists) then makes a synchronous,
+  // payload-driven callout. Also TimeoutConfigurable: the engine must defer its
+  // timeout DML past execute() so this callout stays legal.
+  public class CTCalloutTimeoutBranch implements WorkflowStep, CalloutStep, TimeoutConfigurable {
+    public Integer getTimeoutSeconds() {
+      return 60;
+    }
+    public StepResult execute(StepContext ctx) {
+      ctx.getSignal('CTSig');
+      HttpRequest req = new HttpRequest();
+      req.setEndpoint('https://example.com/probe');
+      req.setMethod('GET');
+      HttpResponse res = new Http().send(req);
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{ 'status' => res.getStatusCode() }
+      );
+    }
+  }
+
+  public class CTOkMock implements HttpCalloutMock {
+    public HttpResponse respond(HttpRequest req) {
+      HttpResponse res = new HttpResponse();
+      res.setStatusCode(200);
+      res.setBody('{"ok":true}');
+      return res;
+    }
+  }
+
+  @isTest
+  static void testCalloutStepWithTimeoutDoesNotHitUncommittedWork() {
+    Test.setMock(HttpCalloutMock.class, new CTOkMock());
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.CalloutTimeoutWorkflow',
+      'CTKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null); // spawn suspends on Kick
+    WorkflowEngine.signal('CTKey', 'Kick', '{}');
+    WorkflowEngine.signal('CTKey', 'CTSig', '{"v":1}');
+    new WorkflowOrchestrator(instanceId).execute(null); // fan out
+
+    // Run the CalloutStep + TimeoutConfigurable branch. Before the fix the
+    // engine persisted Timeout_At__c before execute(), so this synchronous
+    // callout threw "You have uncommitted work pending".
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.CTCalloutTimeoutBranch'
+      )
+      .execute(null);
+
+    Workflow_Step_Execution__c branchExec = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'StepContextSignalEngineTest.CTCalloutTimeoutBranch'
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    System.assertEquals(
+      'Completed',
+      branchExec.Status__c,
+      'A CalloutStep+TimeoutConfigurable branch must complete its synchronous callout without an uncommitted-work exception'
+    );
+    System.assert(
+      branchExec.Output__c != null && branchExec.Output__c.contains('200'),
+      'callout response status should be recorded, got: ' + branchExec.Output__c
+    );
+  }
+
   // --- Unscoped getSignals() preserves arrival order after a claim (B) ------
 
   public class OrderWorkflow implements WorkflowDefinition {
