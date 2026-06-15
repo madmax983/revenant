@@ -144,4 +144,227 @@ public class StepContextTest {
     // Reset
     StepContext.mockAsyncExecutionsFraction = null;
   }
+
+  // --- Inbound signal payload accessors (issue #11) ---
+
+  @isTest
+  static void testNoPendingSignalsReturnsCleanEmptyResult() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    // Construct via the existing 8-arg constructor (no signals supplied).
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null,
+      1
+    );
+
+    System.assertEquals(
+      0,
+      ctx.getSignals().size(),
+      'getSignals() must return an empty (never null) list when none pending'
+    );
+    System.assertEquals(
+      0,
+      ctx.getSignals('Anything').size(),
+      'getSignals(name) must return an empty list when none pending'
+    );
+    System.assertEquals(
+      false,
+      ctx.hasSignal('Anything'),
+      'hasSignal must be false when none pending'
+    );
+
+    StepContext.Signal sig = ctx.getSignal('Anything');
+    System.assertNotEquals(
+      null,
+      sig,
+      'getSignal must never return null (clean empty result)'
+    );
+    System.assertEquals(
+      false,
+      sig.isPresent(),
+      'Empty signal must report isPresent() == false'
+    );
+    System.assertEquals(
+      null,
+      sig.payload,
+      'Empty signal payload must be null, not a null-deref hazard'
+    );
+  }
+
+  @isTest
+  static void testPendingSignalsExposedInArrivalOrder() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    List<StepContext.Signal> pending = new List<StepContext.Signal>{
+      new StepContext.Signal(null, 'First', '{"n":1}'),
+      new StepContext.Signal(null, 'Second', '{"n":2}'),
+      new StepContext.Signal(null, 'First', '{"n":3}')
+    };
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null,
+      1,
+      pending
+    );
+
+    List<StepContext.Signal> all = ctx.getSignals();
+    System.assertEquals(3, all.size(), 'All pending signals must be exposed');
+    System.assertEquals('First', all[0].name);
+    System.assertEquals('{"n":1}', all[0].payload);
+    System.assertEquals('Second', all[1].name);
+    System.assertEquals('First', all[2].name);
+  }
+
+  @isTest
+  static void testGetSignalReturnsMostRecentMatchingName() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    List<StepContext.Signal> pending = new List<StepContext.Signal>{
+      new StepContext.Signal(null, 'Approval', '{"approved":true}'),
+      new StepContext.Signal(null, 'Other', '{"x":1}'),
+      new StepContext.Signal(null, 'Approval', '{"approved":false}')
+    };
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null,
+      1,
+      pending
+    );
+
+    StepContext.Signal latest = ctx.getSignal('Approval');
+    System.assertEquals(true, latest.isPresent());
+    System.assertEquals(
+      '{"approved":false}',
+      latest.payload,
+      'getSignal must return the most recent (last-arriving) signal of that name'
+    );
+
+    List<StepContext.Signal> approvals = ctx.getSignals('Approval');
+    System.assertEquals(2, approvals.size());
+    System.assertEquals(true, ctx.hasSignal('Approval'));
+    System.assertEquals(false, ctx.hasSignal('Nope'));
+  }
+
+  @isTest
+  static void testConsumedSignalIdsTracksObservedNamesOnly() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'X',
+      Status__c = 'Running'
+    );
+    insert inst;
+
+    Workflow_Signal__c sA = new Workflow_Signal__c(
+      Workflow_Instance__c = inst.Id,
+      Signal_Name__c = 'Approval',
+      Payload__c = '{"approved":false}',
+      Status__c = 'Received'
+    );
+    Workflow_Signal__c sB = new Workflow_Signal__c(
+      Workflow_Instance__c = inst.Id,
+      Signal_Name__c = 'Other',
+      Payload__c = '{"x":1}',
+      Status__c = 'Received'
+    );
+    insert new List<Workflow_Signal__c>{ sA, sB };
+
+    List<StepContext.Signal> pending = new List<StepContext.Signal>{
+      new StepContext.Signal(sA.Id, 'Approval', sA.Payload__c),
+      new StepContext.Signal(sB.Id, 'Other', sB.Payload__c)
+    };
+    StepContext ctx = new StepContext(
+      inst.Id,
+      'X',
+      'Step',
+      null,
+      null,
+      null,
+      null,
+      1,
+      pending
+    );
+
+    // Before observing anything, nothing is consumable.
+    System.assertEquals(
+      0,
+      ctx.getConsumedSignalIds().size(),
+      'Nothing is consumed until observed'
+    );
+
+    // Observe only the "Approval" name.
+    ctx.getSignal('Approval');
+    Set<Id> consumed = ctx.getConsumedSignalIds();
+    System.assertEquals(
+      1,
+      consumed.size(),
+      'Only observed signal names should be consumable'
+    );
+    System.assert(
+      consumed.contains(sA.Id),
+      'Observed Approval signal must be consumable'
+    );
+    System.assert(
+      !consumed.contains(sB.Id),
+      'Unobserved Other signal must NOT be consumed'
+    );
+  }
+
+  @isTest
+  static void testGetSignalsAllMarksEverythingObserved() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'X',
+      Status__c = 'Running'
+    );
+    insert inst;
+
+    Workflow_Signal__c sA = new Workflow_Signal__c(
+      Workflow_Instance__c = inst.Id,
+      Signal_Name__c = 'A',
+      Payload__c = 'a',
+      Status__c = 'Received'
+    );
+    Workflow_Signal__c sB = new Workflow_Signal__c(
+      Workflow_Instance__c = inst.Id,
+      Signal_Name__c = 'B',
+      Payload__c = 'b',
+      Status__c = 'Received'
+    );
+    insert new List<Workflow_Signal__c>{ sA, sB };
+
+    List<StepContext.Signal> pending = new List<StepContext.Signal>{
+      new StepContext.Signal(sA.Id, 'A', 'a'),
+      new StepContext.Signal(sB.Id, 'B', 'b')
+    };
+    StepContext ctx = new StepContext(
+      inst.Id,
+      'X',
+      'Step',
+      null,
+      null,
+      null,
+      null,
+      1,
+      pending
+    );
+
+    // Reading the full list observes every pending signal.
+    ctx.getSignals();
+    System.assertEquals(
+      2,
+      ctx.getConsumedSignalIds().size(),
+      'getSignals() (all) must mark every pending signal observed'
+    );
+  }
 }
