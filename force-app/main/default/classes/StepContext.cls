@@ -130,7 +130,7 @@ public inherited sharing class StepContext {
    * Never null. Marks the name observed.
    */
   public List<Signal> getSignals(String signalName) {
-    observedNames.add(signalName);
+    observe(signalName);
     List<Signal> matches = new List<Signal>();
     for (Signal s : pendingSignals) {
       if (s.name == signalName) {
@@ -146,7 +146,7 @@ public inherited sharing class StepContext {
    * none is pending. Never returns null. Marks the name observed.
    */
   public Signal getSignal(String signalName) {
-    observedNames.add(signalName);
+    observe(signalName);
     Signal latest = null;
     for (Signal s : pendingSignals) {
       if (s.name == signalName) {
@@ -158,7 +158,7 @@ public inherited sharing class StepContext {
 
   /** True when at least one pending signal matches the given name. Marks observed. */
   public Boolean hasSignal(String signalName) {
-    observedNames.add(signalName);
+    observe(signalName);
     for (Signal s : pendingSignals) {
       if (s.name == signalName) {
         return true;
@@ -176,11 +176,22 @@ public inherited sharing class StepContext {
   public Set<Id> getConsumedSignalIds() {
     Set<Id> ids = new Set<Id>();
     for (Signal s : pendingSignals) {
-      if ((observedAll || observedNames.contains(s.name)) && s.signalId != null) {
+      Boolean observed =
+        observedAll ||
+        (s.name != null && observedNames.contains(s.name.toLowerCase()));
+      if (observed && s.signalId != null) {
         ids.add(s.signalId);
       }
     }
     return ids;
+  }
+
+  // Records an observed signal name, normalized for case-insensitive matching
+  // (Apex String == is case-insensitive, so the consumable set must be too).
+  private void observe(String signalName) {
+    if (signalName != null) {
+      observedNames.add(signalName.toLowerCase());
+    }
   }
 
   /**

@@ -22,7 +22,7 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 
 ### Integration & Monitoring
 
-- **Platform Event Signaling**: External integrations, webhook listeners, or human-in-the-loop approvals wake up suspended workflows by publishing `Workflow_Event__e` platform events.
+- **Platform Event Signaling**: External integrations, webhook listeners, or human-in-the-loop approvals wake up suspended workflows by publishing `Workflow_Event__e` platform events. The resuming step reads the inbound signal name and payload directly from `StepContext` (e.g. `ctx.getSignal('Approve:Order')`), and the engine marks observed signals consumed at the step's `COMPLETE` transition so at-least-once redelivered duplicates are never double-processed.
 - **Salesforce Flow Interoperability**: Launches or signals workflows using Invocable Actions from Salesforce Flow, or executes standard Autolaunched Flows as steps within a workflow using the generic `WorkflowFlowStep` wrapper.
 - **Custom Metadata Alerts**: Supports operator-configurable failure notification thresholds (consecutive failures, sliding rate counts) using `Workflow_Alert_Config__mdt` custom metadata records.
 
@@ -148,6 +148,41 @@ Id instanceId = WorkflowEngine.start(
     '{"accountId": "001As0000012345", "vipOnboarding": true}'
 );
 ```
+
+### 4. Read Inbound Signals & Approvals
+
+A step that suspends for an approval (`StepResult.waitForApproval(...)`) or an external event (`StepResult.suspend()`) is woken by `WorkflowEngine.signal(keyOrId, name, payload)` (or a `SIGNAL:`-typed `Workflow_Event__e`). On resume, the step reads the signal that woke it directly from `StepContext` — no SOQL against engine-internal objects, and no hand-rolled "consumed" marker:
+
+```java
+public StepResult execute(StepContext ctx) {
+    // Most recent signal of this name; never null.
+    StepContext.Signal decision = ctx.getSignal('Approve:Order');
+
+    if (!decision.isPresent()) {
+        // First run (or resumed by a timer): nothing has signaled us yet.
+        return StepResult.waitForApproval('Order', 'Manager');
+    }
+
+    Map<String, Object> payload =
+        (Map<String, Object>) JSON.deserializeUntyped(decision.payload);
+    Boolean approved = (Boolean) payload.get('approved');
+
+    return approved
+        ? StepResult.complete('ApproveStep', payload)
+        : StepResult.complete('RejectStep', payload);
+}
+```
+
+Accessors available inside `execute()` and `compensate()`:
+
+| Accessor | Returns |
+| --- | --- |
+| `ctx.getSignals()` | All pending signals, in arrival order (never null). |
+| `ctx.getSignals(name)` | Pending signals matching `name`, in arrival order. |
+| `ctx.getSignal(name)` | The most recent pending signal of `name`, or a clean empty result (`isPresent() == false`, `payload == null`) when none is pending — never null. |
+| `ctx.hasSignal(name)` | `true` if any pending signal matches `name`. |
+
+Consumption is engine-managed and tied to the step's successful `COMPLETE` transition: signals the step observes are marked consumed only once the step completes, so a step that yields or retries before completing re-observes the same pending signal, and an at-least-once redelivered duplicate cannot be reprocessed by a later step. `Cancel` / `CancelWorkflow` control signals remain engine-handled and are never surfaced as readable payloads. See [`ApprovalSignalWorkflowExample`](examples/main/default/classes/ApprovalSignalWorkflowExample.cls) for a complete approve/reject example with a redelivery test.
 
 ---
 
