@@ -220,6 +220,11 @@ Revenant settings can be configured without code modifications by editing the **
    - **`false`**: The engine completely bypasses `System.schedule` and writes all sleep/retry/timeout states directly to the database. All operations are then processed sequentially by the watchdog poller.
 2. **Watchdog Delay Minutes** (`Watchdog_Delay_Minutes__c` - Number, default `10`):
    - The delay interval (between 1 and 10 minutes) before the watchdog enqueues its next self-chaining execution.
+3. **Dedup Window Minutes** (`Dedup_Window_Minutes__c` - Number, default `1440`):
+   - Controls **idempotent get-or-start** dedup for at-least-once event sources. `WorkflowEngine.start(...)` returns the existing instance's Id when a start arrives with a correlation key that matches an instance that is still active, **or** that became terminal (`Completed`/`Failed`/`Compensated`/`Cancelled`/`ContinuedAsNew`) within this many minutes — rather than throwing or spawning a duplicate that re-runs side effects.
+   - **`0`** (minimum) preserves active-only behavior: only in-flight instances are deduped, and a redelivery after completion starts a fresh instance.
+   - Active instances are always deduped regardless of this value. A blank correlation key is never deduped (a key is required to start).
+   - Use `WorkflowEngine.startOrGet(...)` (or the **Start Workflow** Invocable's `Is New` output) to observe whether a call started a new instance or returned an existing one, without a re-query.
 
 ### Architectural Trade-offs
 
