@@ -99,6 +99,20 @@
                                     onchange={handleStatusFilterChange}>
                                 </lightning-combobox>
                             </div>
+                            <!-- Bulk Re-drive of failed instances matching the current filter -->
+                            <template if:true={canRedriveMatching}>
+                                <div class="slds-col slds-size_1-of-1 slds-m-top_x-small">
+                                    <lightning-button
+                                        label="Re-drive Matching Failed"
+                                        icon-name="utility:redo"
+                                        variant="destructive-text"
+                                        title="Re-drive every failed instance matching the current filter"
+                                        onclick={handleRedriveMatching}
+                                        disabled={redriving}
+                                        class="slds-button_stretch">
+                                    </lightning-button>
+                                </div>
+                            </template>
                         </div>
                     </div>
 

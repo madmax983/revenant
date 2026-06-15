@@ -6,6 +6,8 @@ import getInstanceDetails from "@salesforce/apex/WorkflowDashboardController.get
 import getDefinitions from "@salesforce/apex/WorkflowDashboardController.getDefinitions";
 import startWorkflow from "@salesforce/apex/WorkflowDashboardController.startWorkflow";
 import retryWorkflowInstance from "@salesforce/apex/WorkflowDashboardController.retryWorkflowInstance";
+import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardController.getRedriveEligibleCount";
+import redriveMatchingInstances from "@salesforce/apex/WorkflowDashboardController.redriveMatchingInstances";
 import resumeWorkflowInstance from "@salesforce/apex/WorkflowDashboardController.resumeWorkflowInstance";
 import cancelWorkflow from "@salesforce/apex/WorkflowDashboardController.cancelWorkflow";
 import submitApproval from "@salesforce/apex/WorkflowDashboardController.submitApproval";
@@ -47,6 +49,7 @@ export default class WorkflowDashboard extends LightningElement {
   @track hasMore = true;
   @track loadingMore = false;
   @track cacheBuster = "";
+  @track redriving = false;
 
   wiredDefinitionsResult;
   pollingInterval;
@@ -597,6 +600,83 @@ export default class WorkflowDashboard extends LightningElement {
       })
       .finally(() => {
         this.loadingDetails = false;
+      });
+  }
+
+  // Enable bulk re-drive only when the current filter actually contains failed
+  // (recoverable) instances. stats.failed is scoped to the active filter.
+  get canRedriveMatching() {
+    return this.stats && this.stats.failed > 0 && !this.redriving;
+  }
+
+  handleRedriveMatching() {
+    if (this.redriving) {
+      return;
+    }
+    this.redriving = true;
+    // Resolve the exact count for the CURRENT filter, then require explicit
+    // confirmation before anything is enqueued.
+    getRedriveEligibleCount({
+      workflowName: this.selectedWorkflow,
+      status: this.selectedStatus,
+      searchTerm: this.searchTerm,
+    })
+      .then((count) => {
+        if (!count || count === 0) {
+          this.redriving = false;
+          this.showToast(
+            "Nothing to re-drive",
+            "No failed instances match the current filter.",
+            "info",
+          );
+          return null;
+        }
+        const proceed = confirm(
+          `Re-drive ${count} failed workflow instance${count === 1 ? "" : "s"} matching the current filter?\n\n` +
+            "Each is recovered through the standard retry path, asynchronously, " +
+            "in safe-sized chunks. Already-recovered instances are skipped.",
+        );
+        if (!proceed) {
+          this.redriving = false;
+          return null;
+        }
+        return redriveMatchingInstances({
+          workflowName: this.selectedWorkflow,
+          status: this.selectedStatus,
+          searchTerm: this.searchTerm,
+        });
+      })
+      .then((outcome) => {
+        if (!outcome) {
+          return;
+        }
+        if (outcome.started) {
+          this.showToast(
+            "Re-drive started",
+            `Re-driving ${outcome.eligibleCount} failed instance${outcome.eligibleCount === 1 ? "" : "s"}. ` +
+              "Track progress on the re-drive workflow in the list.",
+            "success",
+          );
+          this.refreshInstances();
+          this.startPolling();
+        } else {
+          this.showToast(
+            "Nothing to re-drive",
+            "No failed instances match the current filter.",
+            "info",
+          );
+        }
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to re-drive matching instances: " +
+            (error.body ? error.body.message : error.message),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.redriving = false;
       });
   }
 
