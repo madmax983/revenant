@@ -521,9 +521,10 @@ public inherited sharing class WorkflowDashboardController {
         String className = pm.group(1);
         if (
           ac.Name.contains('WorkflowEngineTest') ||
-          ac.Name.contains('WorkflowDashboardControllerTest')
+          ac.Name.contains('WorkflowDashboardControllerTest') ||
+          ac.Name.equalsIgnoreCase('BulkRedriveWorkflow')
         ) {
-          continue; // Exclude test classes
+          continue; // Exclude test classes and internal system workflows
         }
         // Outer class match returns the bare name; inner class is qualified.
         definitions.add(
@@ -557,7 +558,8 @@ public inherited sharing class WorkflowDashboardController {
       if (
         String.isBlank(className) ||
         className.contains('WorkflowEngineTest') ||
-        className.contains('WorkflowDashboardControllerTest')
+        className.contains('WorkflowDashboardControllerTest') ||
+        className.equalsIgnoreCase('BulkRedriveWorkflow')
       ) {
         continue;
       }
@@ -655,10 +657,16 @@ public inherited sharing class WorkflowDashboardController {
         };
       }
 
+      Id maxEligibleId = BulkRedriveWorkflow.findMaxEligibleId(
+        workflowName,
+        status,
+        searchTerm
+      );
       Map<String, Object> filter = new Map<String, Object>{
         'workflowName' => workflowName,
         'status' => status,
-        'searchTerm' => searchTerm
+        'searchTerm' => searchTerm,
+        'maxId' => maxEligibleId == null ? null : String.valueOf(maxEligibleId)
       };
       String correlationKey =
         'BulkRedrive_' +

@@ -614,13 +614,13 @@ export default class WorkflowDashboard extends LightningElement {
       return;
     }
     this.redriving = true;
-    // Resolve the exact count for the CURRENT filter, then require explicit
-    // confirmation before anything is enqueued.
-    getRedriveEligibleCount({
-      workflowName: this.selectedWorkflow,
-      status: this.selectedStatus,
-      searchTerm: this.searchTerm,
-    })
+    // Snapshot the filter values at click time so that both the count call and
+    // the launch call target the same selection, even if the operator changes
+    // the filter while the count request is in flight.
+    const workflowName = this.selectedWorkflow;
+    const status = this.selectedStatus;
+    const searchTerm = this.searchTerm;
+    getRedriveEligibleCount({ workflowName, status, searchTerm })
       .then((count) => {
         if (!count || count === 0) {
           this.redriving = false;
@@ -640,11 +640,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.redriving = false;
           return null;
         }
-        return redriveMatchingInstances({
-          workflowName: this.selectedWorkflow,
-          status: this.selectedStatus,
-          searchTerm: this.searchTerm,
-        });
+        return redriveMatchingInstances({ workflowName, status, searchTerm });
       })
       .then((outcome) => {
         if (!outcome) {
