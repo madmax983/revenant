@@ -22,6 +22,16 @@
  *    shipped WorkflowTimeoutJob for watchdog-timeout waits.
  *  - It is bounded by a caller-supplied max-hop budget and fails the test with a
  *    clear message if the workflow has not stabilized.
+ *
+ * Usage note — the initial Queueable: WorkflowEngine.start() always enqueues the
+ * first orchestrator in test context (it does not consult disableQueueableInTest),
+ * and there is no Apex API to drain a queued job. That job runs at the next
+ * Test.stopTest(). The harness keeps this harmless by driving synchronously and by
+ * suppressing every enqueue it can (disableQueueableInTest), so the only stray run
+ * re-enters the instance's current step — which is a no-op once terminal and an
+ * idempotent re-suspend while parked on a suspend-style step. For workflows whose
+ * suspended step is not idempotent, flush that job by calling Test.stopTest()
+ * before driving past the suspend.
  */
 @IsTest
 public class WorkflowTestHarness {
@@ -73,6 +83,9 @@ public class WorkflowTestHarness {
 
   private final Id rootInstanceId;
   private Integer totalHops = 0;
+  // Instances discovered so far (root + spawned children). Cached so the per-hop
+  // tree scan stays cheap on SOQL instead of re-walking the whole tree each hop.
+  private final Set<Id> knownInstanceIds;
 
   public WorkflowTestHarness(Id instanceId) {
     if (!Test.isRunningTest()) {
@@ -82,6 +95,7 @@ public class WorkflowTestHarness {
       throw new HarnessException('A workflow instance Id is required.');
     }
     this.rootInstanceId = instanceId;
+    this.knownInstanceIds = new Set<Id>{ instanceId };
     // Keep the async chain quiet: drive synchronously and suppress the engine's
     // in-test Queueable hand-offs so they cannot double-run or pile up against the
     // queueable limit. The harness invokes runStep directly instead.
@@ -115,7 +129,7 @@ public class WorkflowTestHarness {
           break;
         }
         if (isAdvanceable(inst)) {
-          hopsThisCall += advanceOneStep(inst);
+          hopsThisCall += advanceOneStep(inst, maxHops - hopsThisCall);
           advancedAny = true;
         }
       }
@@ -212,16 +226,27 @@ public class WorkflowTestHarness {
   }
 
   /**
-   * Advances a single instance by one logical step and returns the hop count
-   * consumed. Parallel instances run every not-yet-complete branch (the engine
-   * no-ops already-completed branches and auto-inserts the rejoin once the last
-   * branch finishes).
+   * Advances a single instance by one logical step, consuming at most `remaining`
+   * hops, and returns the hop count actually consumed. Parallel instances run each
+   * not-yet-complete branch (the engine no-ops already-completed branches and
+   * auto-inserts the rejoin once the last branch finishes), but never more branches
+   * than the remaining budget allows — any leftover branches resume on the next hop.
    */
-  private Integer advanceOneStep(Workflow_Instance__c inst) {
+  private Integer advanceOneStep(Workflow_Instance__c inst, Integer remaining) {
+    // Resuming a sleep/retry wait: clear the wake markers first, exactly as the
+    // engine's own watchdog resume does (processWatchdogHeartbeat), so a later
+    // external suspend on this same instance is not misread as a sleep to skip.
+    if (inst.Status__c == 'Suspended') {
+      clearSleepMarkers(inst.Id);
+    }
+
     String currentStep = inst.Current_Step__c;
     if (String.isNotBlank(currentStep) && currentStep.contains(',')) {
       Integer used = 0;
       for (String branch : currentStep.split(',')) {
+        if (used >= remaining) {
+          break;
+        }
         runStepSafely(inst.Id, branch.trim());
         used++;
       }
@@ -233,47 +258,75 @@ public class WorkflowTestHarness {
 
   /**
    * Invokes the engine the way WorkflowOrchestrator does, and rescues a thrown
-   * step exactly as WorkflowFinalizer would on a Queueable crash — so a failing
-   * step deterministically flows into the fail/compensation path.
+   * step exactly as WorkflowFinalizer would on a Queueable crash. A savepoint is
+   * rolled back before handleCrash so the failed step's partial DML is discarded —
+   * mirroring production, where the step's Queueable transaction is rolled back
+   * before the finalizer runs in a fresh transaction.
    */
   private void runStepSafely(Id instanceId, String stepName) {
     totalHops++;
+    System.Savepoint sp = Database.setSavepoint();
     try {
       WorkflowEngine.runStep(instanceId, stepName);
     } catch (Exception ex) {
+      Database.rollback(sp);
       WorkflowEngine.handleCrash(instanceId, stepName, ex);
     }
   }
 
   /**
-   * Root instance plus all live descendants (children spawned via START_CHILD),
-   * fetched in a single pass per tree level to stay frugal with SOQL — the whole
-   * drive runs inside the caller's one governor-limit budget.
+   * Clears the sleep/retry wake markers on an instance (never Status__c or
+   * Current_Step__c). This is the same field reset the engine performs when its
+   * watchdog or WorkflowSleepJob wakes a sleeping instance, so resuming a sleep
+   * here leaves no stale Sleep_Until__c to confuse a later external suspend.
+   */
+  private void clearSleepMarkers(Id instanceId) {
+    update as system new Workflow_Instance__c(
+      Id = instanceId,
+      Sleep_Until__c = null,
+      Async_Job_Id__c = null
+    );
+  }
+
+  /**
+   * Root instance plus all live descendants (children spawned via START_CHILD).
+   *
+   * Stays frugal with SOQL — the whole drive runs inside the caller's one
+   * governor-limit budget. The known-instance set is cached across hops, so the
+   * common case costs a single status query per hop. The descendant scan only runs
+   * when some instance is parked in a non-sleep suspend (the state a START_CHILD
+   * leaves its parent in), which is the only way a new child can have appeared.
    */
   private List<Workflow_Instance__c> collectTree() {
     Map<Id, Workflow_Instance__c> byId = new Map<Id, Workflow_Instance__c>(
       [
         SELECT Id, Status__c, Current_Step__c, Sleep_Until__c
         FROM Workflow_Instance__c
-        WHERE Id = :rootInstanceId
+        WHERE Id IN :knownInstanceIds
         WITH SYSTEM_MODE
       ]
     );
-    List<Id> frontier = new List<Id>(byId.keySet());
-    while (!frontier.isEmpty()) {
-      List<Id> next = new List<Id>();
+
+    Boolean maybeSpawnedChild = false;
+    for (Workflow_Instance__c inst : byId.values()) {
+      if (inst.Status__c == 'Suspended' && inst.Sleep_Until__c == null) {
+        maybeSpawnedChild = true;
+        break;
+      }
+    }
+
+    if (maybeSpawnedChild) {
       for (Workflow_Instance__c child : [
         SELECT Id, Status__c, Current_Step__c, Sleep_Until__c
         FROM Workflow_Instance__c
-        WHERE Parent_Instance__c IN :frontier
+        WHERE
+          Parent_Instance__c IN :knownInstanceIds
+          AND Id NOT IN :knownInstanceIds
         WITH SYSTEM_MODE
       ]) {
-        if (!byId.containsKey(child.Id)) {
-          byId.put(child.Id, child);
-          next.add(child.Id);
-        }
+        byId.put(child.Id, child);
+        knownInstanceIds.add(child.Id);
       }
-      frontier = next;
     }
     return byId.values();
   }
