@@ -618,4 +618,119 @@ public class StepContextTest {
     );
     System.assertEquals(1, ctx.getSignals('approve:ORDER').size());
   }
+
+  // Simulates a parallel claiming source: a read 'claims' the rows it returns so
+  // they leave the still-Received view, and a later read no longer sees them.
+  // readWasCapped() is fixed true to model a budget-truncated read.
+  private class ClaimingFakeSource implements StepContext.SignalSource {
+    private final List<StepContext.Signal> allRows;
+    private final Set<Id> claimed = new Set<Id>();
+    private ClaimingFakeSource(List<StepContext.Signal> allRows) {
+      this.allRows = allRows;
+    }
+    public List<StepContext.Signal> getPendingSignals(String signalName) {
+      List<StepContext.Signal> out = new List<StepContext.Signal>();
+      for (StepContext.Signal s : allRows) {
+        if (claimed.contains(s.signalId)) {
+          continue;
+        }
+        if (
+          String.isBlank(signalName) ||
+          (s.name != null && s.name.equalsIgnoreCase(signalName))
+        ) {
+          out.add(s);
+          claimed.add(s.signalId); // claim on read, leaving the Received view
+        }
+      }
+      return out;
+    }
+    public StepContext.Signal getLatestSignal(String signalName) {
+      StepContext.Signal latest = null;
+      for (StepContext.Signal s : allRows) {
+        if (claimed.contains(s.signalId)) {
+          continue;
+        }
+        if (s.name != null && s.name.equalsIgnoreCase(signalName)) {
+          latest = s;
+        }
+      }
+      return latest;
+    }
+    public Boolean readWasCapped() {
+      return true;
+    }
+  }
+
+  @isTest
+  static void testNamedListIncludesClaimedRowsFromCappedFullRead() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    String prefix = Workflow_Signal__c.SObjectType.getDescribe().getKeyPrefix();
+    List<StepContext.Signal> allRows = new List<StepContext.Signal>{
+      new StepContext.Signal(prefix + '000000000001', 'Foo', '{"f":1}', DateTime.now().addMinutes(-2)),
+      new StepContext.Signal(prefix + '000000000002', 'Bar', '{"b":1}', DateTime.now().addMinutes(-1))
+    };
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      (StepContext.SignalSource) new ClaimingFakeSource(allRows)
+    );
+
+    // Capped full read claims both rows and marks them for consumption.
+    System.assertEquals(2, ctx.getSignals().size());
+
+    // 'Foo' was claimed out of the Received view by the full read, but this
+    // branch owns it and already marked it -- it must still appear in the named
+    // list, or the step would consume it without ever handling the payload.
+    List<StepContext.Signal> foos = ctx.getSignals('Foo');
+    System.assertEquals(
+      1,
+      foos.size(),
+      'A row claimed by a capped full read must remain in the named list'
+    );
+    System.assertEquals('{"f":1}', foos[0].payload);
+  }
+
+  @isTest
+  static void testLatestMergeUsesIdTieBreakOnEqualTimestamp() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    DateTime ts = DateTime.now();
+    String prefix = Workflow_Signal__c.SObjectType.getDescribe().getKeyPrefix();
+    // Capped page row (claimed) shares the timestamp with the source's latest
+    // but has a LOWER id, so the source row is the true latest (Id DESC).
+    List<StepContext.Signal> page = new List<StepContext.Signal>{
+      new StepContext.Signal(prefix + '000000000002', 'Foo', '{"seq":2}', ts, true)
+    };
+    StepContext.Signal sourceLatest = new StepContext.Signal(
+      prefix + '000000000003',
+      'Foo',
+      '{"seq":3}',
+      ts,
+      false
+    );
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      (StepContext.SignalSource) new FakeNameSource(page, sourceLatest, true)
+    );
+
+    ctx.getSignals('Foo');
+    StepContext.Signal latest = ctx.getSignal('Foo');
+    System.assertEquals(
+      '{"seq":3}',
+      latest.payload,
+      'On equal CreatedDate the higher-Id source row is the true latest, not the cached page row'
+    );
+  }
 }

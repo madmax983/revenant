@@ -1303,6 +1303,54 @@ public class WorkflowEngineTest {
     );
   }
 
+  // A normal FORWARD step whose class name happens to end in '_Compensate'. It
+  // suspends until signaled, exercising the signal-resumed (Suspended->Running)
+  // path where the compensation-suffix heuristic must not misfire.
+  public class Stage_Compensate implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (!ctx.hasSignal('Go')) {
+        return StepResult.suspend();
+      }
+      return StepResult.complete(null, 'done');
+    }
+  }
+
+  public class SuffixForwardWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.Stage_Compensate';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      return null; // terminal
+    }
+  }
+
+  @isTest
+  static void testForwardStepNamedCompensateNotMisroutedAsCompensation() {
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SuffixForwardWorkflow',
+      'SuffixKey',
+      null
+    );
+    // First run: forward step suspends waiting for 'Go'. It must NOT be treated
+    // as a compensation despite its '_Compensate' suffix (empty stack).
+    new WorkflowOrchestrator(instanceId).execute(null);
+    WorkflowEngine.signal('SuffixKey', 'Go', '{}');
+    // Resume: signal() flipped the instance to Running. The suffix heuristic must
+    // still route forward (no matching compensation stack), not to compensation.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    Workflow_Instance__c inst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'Completed',
+      inst.Status__c,
+      'A forward step named *_Compensate with no compensation stack must resume forward, not be marked Compensated'
+    );
+  }
+
   // A compensation that waits for a signal before rolling back.
   public class SignalWaitCompensationStep implements CompensatableStep {
     public StepResult execute(StepContext ctx) {

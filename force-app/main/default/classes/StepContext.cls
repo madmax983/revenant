@@ -327,25 +327,46 @@ public inherited sharing class StepContext {
         partialNameKeys.add(key);
       }
       List<Signal> matches = (loaded != null) ? loaded : new List<Signal>();
-      // A prior getSignal/hasSignal for this name may have already claimed the
-      // latest matching row (flipping it out of the source's Received view in a
-      // parallel branch), so merge that cached claim back in. Otherwise a
-      // guard-then-read pattern (hasSignal/getSignal then getSignals(name)) would
-      // omit the very payload it matched while still consuming it at COMPLETE.
+      Set<Id> present = new Set<Id>();
+      for (Signal s : matches) {
+        if (s.signalId != null) {
+          present.add(s.signalId);
+        }
+      }
+      // Merge back rows this branch already claimed out of the source's Received
+      // view but still owns and has marked for consumption, so neither a
+      // guard-then-read pattern nor a capped full read drops a matched payload
+      // from the named list (otherwise the step could complete -- consuming the
+      // ids -- without the named accessor ever returning them):
+      //  - the per-name latest claimed by an earlier getSignal/hasSignal, and
+      //  - matching rows from a capped full-set read (allSignals; reached here
+      //    only when allReadCapped, since a complete full set returns above).
+      List<Signal> reclaim = new List<Signal>();
       Signal cachedLatest = latestByName.get(key);
       if (cachedLatest != null && cachedLatest.isPresent()) {
-        Boolean alreadyIn = false;
-        for (Signal s : matches) {
-          if (s.signalId != null && s.signalId == cachedLatest.signalId) {
-            alreadyIn = true;
-            break;
+        reclaim.add(cachedLatest);
+      }
+      if (allLoaded) {
+        for (Signal s : allSignals) {
+          if (s.name != null && s.name.equalsIgnoreCase(signalName)) {
+            reclaim.add(s);
           }
         }
-        if (!alreadyIn) {
-          matches.add(cachedLatest);
-          // Keep arrival order after merging the claimed latest back in.
-          matches.sort();
+      }
+      Boolean merged = false;
+      for (Signal s : reclaim) {
+        if (s.signalId != null && present.contains(s.signalId)) {
+          continue;
         }
+        matches.add(s);
+        if (s.signalId != null) {
+          present.add(s.signalId);
+        }
+        merged = true;
+      }
+      if (merged) {
+        // Keep arrival order after merging the claimed rows back in.
+        matches.sort();
       }
       byNameCache.put(key, matches);
     }
@@ -402,10 +423,12 @@ public inherited sharing class StepContext {
       if (sourceLatest == null || !sourceLatest.isPresent()) {
         return cachedLatest;
       }
-      Boolean cachedNewer =
-        cachedLatest.createdDate != null &&
-        (sourceLatest.createdDate == null ||
-        cachedLatest.createdDate >= sourceLatest.createdDate);
+      // Compare on the full (CreatedDate, Id) order the source uses for "latest"
+      // (ORDER BY CreatedDate DESC, Id DESC) via Signal.compareTo, not the
+      // timestamp alone: bulk inserts routinely share a CreatedDate, and a
+      // timestamp-only test would wrongly favor the cached row and return an
+      // older payload than sourceLatest.
+      Boolean cachedNewer = cachedLatest.compareTo(sourceLatest) > 0;
       return cachedNewer ? cachedLatest : sourceLatest;
     }
     return sourceLatest;

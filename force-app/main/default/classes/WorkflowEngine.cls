@@ -733,20 +733,42 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c == 'Suspended' ||
       instance.Status__c == 'Running'
     ) {
-      List<Workflow_Step_Execution__c> latestSteps = [
-        SELECT Step_Name__c
-        FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c = :instance.Id
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC, Id DESC
-        LIMIT 1
-      ];
-      if (
-        !latestSteps.isEmpty() &&
-        latestSteps[0].Step_Name__c != null &&
-        latestSteps[0].Step_Name__c.endsWith('_Compensate')
-      ) {
-        isCompensating = true;
+      // Only treat a trailing-'_Compensate' latest step as a live compensation
+      // when the instance's compensation stack actually holds the matching base
+      // step. A normal forward step that happens to be named '<x>_Compensate'
+      // and is resumed by signal() (Suspended/Running with no -- or unrelated --
+      // stack) must NOT be misrouted to runCompensationStep, which would see no
+      // matching stack entry and mark the instance Compensated instead of
+      // resuming it. The forward execution of compensatable steps grows the
+      // stack too, so a non-empty stack alone is not enough; require the base
+      // name to be on it.
+      List<String> compStack = String.isNotBlank(
+          instance.Compensation_Stack__c
+        )
+        ? (List<String>) JSON.deserialize(
+            instance.Compensation_Stack__c,
+            List<String>.class
+          )
+        : new List<String>();
+      if (!compStack.isEmpty()) {
+        List<Workflow_Step_Execution__c> latestSteps = [
+          SELECT Step_Name__c
+          FROM Workflow_Step_Execution__c
+          WHERE Workflow_Instance__c = :instance.Id
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate DESC, Id DESC
+          LIMIT 1
+        ];
+        if (
+          !latestSteps.isEmpty() &&
+          latestSteps[0].Step_Name__c != null &&
+          latestSteps[0].Step_Name__c.endsWith('_Compensate') &&
+          compStack.contains(
+            latestSteps[0].Step_Name__c.removeEnd('_Compensate')
+          )
+        ) {
+          isCompensating = true;
+        }
       }
     }
 
