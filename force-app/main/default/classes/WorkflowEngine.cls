@@ -1203,9 +1203,19 @@ public inherited sharing class WorkflowEngine {
       // Statement or SOQL budget spent: read without claiming so a many-name
       // fan-in cannot exceed the DML-statement or SOQL limit. These rows are
       // returned read-only (claimed = false) and at-least-once; mark capped.
+      // Debit the row budget just like the claim path so total observed rows
+      // stay bounded by PARALLEL_CLAIM_ROW_CAP -- otherwise repeated fallback
+      // pages could mark more observed-only ids than the COMPLETE consume pass
+      // (capped at 9 000) can handle, leaving the remainder Received.
       if (claimStatementBudget <= 0 || nearSoqlLimit()) {
         capped = true;
-        return toSignals(queryReceived(signalName, null, claimBudget));
+        List<Workflow_Signal__c> rows = queryReceived(
+          signalName,
+          null,
+          claimBudget
+        );
+        claimBudget -= rows.size();
+        return toSignals(rows);
       }
 
       // Try to claim a page; if a sibling claimed the entire page between query
@@ -2519,7 +2529,7 @@ public inherited sharing class WorkflowEngine {
    */
   private static void enqueueResume(Id instanceId) {
     List<Workflow_Instance__c> rows = [
-      SELECT Current_Step__c
+      SELECT Id, Current_Step__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -2528,42 +2538,11 @@ public inherited sharing class WorkflowEngine {
     String currentStep = rows.isEmpty() ? null : rows[0].Current_Step__c;
 
     if (String.isNotBlank(currentStep) && currentStep.contains(',')) {
-      List<String> branches = new List<String>();
-      for (String b : currentStep.split(',')) {
-        branches.add(b.trim());
-      }
-      Map<String, Workflow_Step_Execution__c> latestByName = new Map<String, Workflow_Step_Execution__c>();
-      for (Workflow_Step_Execution__c se : [
-        SELECT Step_Name__c, Status__c
-        FROM Workflow_Step_Execution__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Step_Name__c IN :branches
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC, Id DESC
-      ]) {
-        if (!latestByName.containsKey(se.Step_Name__c)) {
-          latestByName.put(se.Step_Name__c, se);
-        }
-      }
-      for (String b : branches) {
-        Workflow_Step_Execution__c se = latestByName.get(b);
-        if (se != null && se.Status__c == 'Completed') {
-          continue; // branch already finished; nothing to wake
-        }
-        String dedupKey = instanceId + '::' + b;
-        if (enqueuedBranchKeys.contains(dedupKey)) {
-          continue;
-        }
-        enqueuedBranchKeys.add(dedupKey);
-        if (Test.isRunningTest()) {
-          if (!disableQueueableInTest) {
-            System.enqueueJob(new WorkflowOrchestrator(instanceId, b));
-          }
-        } else {
-          enqueueOrchestrator(instanceId, b);
-        }
-      }
+      // Delegate to the batched bulk path (single-element list) so a parallel
+      // instance with many unfinished branches publishes one EventBus call
+      // rather than one publish per branch (which could exceed the 150
+      // publish/DML-statement limit).
+      enqueueResumeBulk(rows);
       return;
     }
 
