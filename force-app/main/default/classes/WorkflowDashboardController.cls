@@ -363,7 +363,12 @@ public inherited sharing class WorkflowDashboardController {
   @AuraEnabled
   public static Map<String, Object> getInstanceDetails(Id instanceId) {
     checkAuthorization();
-    Workflow_Instance__c instance = [
+    if (instanceId == null) {
+      AuraHandledException ex = new AuraHandledException('instanceId is required.');
+      ex.setMessage('instanceId is required.');
+      throw ex;
+    }
+    List<Workflow_Instance__c> instanceList = [
       SELECT
         Id,
         Name,
@@ -384,7 +389,16 @@ public inherited sharing class WorkflowDashboardController {
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
+      LIMIT 1
     ];
+    if (instanceList.isEmpty()) {
+      AuraHandledException ex = new AuraHandledException(
+        'Workflow instance not found: ' + instanceId
+      );
+      ex.setMessage('Workflow instance not found: ' + instanceId);
+      throw ex;
+    }
+    Workflow_Instance__c instance = instanceList[0];
 
     List<Workflow_Step_Execution__c> steps = [
       SELECT
