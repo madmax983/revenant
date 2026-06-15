@@ -2711,25 +2711,30 @@ public class WorkflowEngineTest {
     );
 
     Test.startTest();
-    Boolean blocked = false;
-    try {
-      WorkflowEngine.start(
-        'WorkflowEngineTest.HappyWorkflow',
-        'StalledReservedKey',
-        null
-      );
-    } catch (WorkflowEngine.WorkflowException ex) {
-      blocked = true;
-      System.assert(
-        ex.getMessage().contains('already exists'),
-        'Expected an active-duplicate guard message: ' + ex.getMessage()
-      );
-    }
+    // Get-or-start: because CompensationFailed is an active status, a second start
+    // with the same key must dedup to the stalled instance rather than create a
+    // duplicate active workflow while side effects are still un-reversed.
+    Id deduped = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'StalledReservedKey',
+      null
+    );
     Test.stopTest();
 
-    System.assert(
-      blocked,
-      'Starting a duplicate workflow while a rollback is stalled must be blocked'
+    System.assertEquals(
+      inst.Id,
+      deduped,
+      'A start colliding with a stalled rollback must resolve to the stalled instance'
+    );
+    Integer activeCount = [
+      SELECT COUNT()
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c = 'StalledReservedKey'
+    ];
+    System.assertEquals(
+      1,
+      activeCount,
+      'No duplicate instance may be created while the rollback is stalled'
     );
   }
 
