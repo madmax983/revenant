@@ -384,4 +384,227 @@ public class StepContextSignalEngineTest {
       'A signal that arrived after an absent probe must be preserved'
     );
   }
+
+  // --- Atomic claim-at-read for parallel branches (AC6) --------------------
+
+  public class ClaimRaceWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.ClaimRaceSpawnStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (currentStepName == 'StepContextSignalEngineTest.ClaimRaceSpawnStep') {
+        return 'StepContextSignalEngineTest.ClaimRaceJoinStep';
+      }
+      return null;
+    }
+  }
+
+  // Spawning step: wait for a signal, then fan out two branches.
+  public class ClaimRaceSpawnStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Fan');
+      if (!s.isPresent()) {
+        return StepResult.suspend();
+      }
+      return StepResult.split(
+        new List<String>{
+          'StepContextSignalEngineTest.ClaimBranchAlpha',
+          'StepContextSignalEngineTest.ClaimBranchBeta'
+        },
+        s.payload
+      );
+    }
+  }
+
+  // Branch Alpha: claims a shared "Shared" signal if present; stores result in output.
+  public class ClaimBranchAlpha implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Shared');
+      return StepResult.complete(null, s.isPresent() ? 'claimed' : 'absent');
+    }
+  }
+
+  // Branch Beta: also tries to claim the same "Shared" signal.
+  public class ClaimBranchBeta implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Shared');
+      return StepResult.complete(null, s.isPresent() ? 'claimed' : 'absent');
+    }
+  }
+
+  public class ClaimRaceJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, ctx.inputJson);
+    }
+  }
+
+  /**
+   * Verifies that when a "Shared" signal is present before both branches run,
+   * exactly one branch claims it (the first to execute) and the second sees it
+   * as absent (Processing, not Received) -- atomic claim-at-read for parallel
+   * branches.  The signal ends up Consumed after the claiming branch completes.
+   */
+  @isTest
+  static void testParallelBranchAtomicClaimAtRead() {
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.ClaimRaceWorkflow',
+      'ClaimRaceKey',
+      null
+    );
+
+    // Suspends waiting for Fan signal.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Send the fan-out trigger.
+    WorkflowEngine.signal('ClaimRaceKey', 'Fan', '{"x":1}');
+    // Send the shared signal that both branches will race to claim.
+    WorkflowEngine.signal('ClaimRaceKey', 'Shared', '{"s":1}');
+
+    // Spawning step consumes 'Fan' and fans out; 'Shared' is untouched.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c = 'Shared'
+          AND Status__c = 'Received'
+      ],
+      'Shared signal must still be Received after spawn'
+    );
+
+    // Run Alpha branch first -- it claims 'Shared'.
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.ClaimBranchAlpha'
+      )
+      .execute(null);
+
+    // After Alpha completes, the signal is Consumed (claim + consume in one transaction).
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c = 'Shared'
+          AND Status__c = 'Received'
+      ],
+      'Shared signal must no longer be Received after Alpha completes'
+    );
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c = 'Shared'
+          AND Status__c = 'Consumed'
+      ],
+      'Shared signal must be Consumed once Alpha completes'
+    );
+
+    // Run Beta branch -- it must find no Received signal (Alpha claimed it).
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.ClaimBranchBeta'
+      )
+      .execute(null);
+
+    // Verify Beta output was 'absent'.
+    List<Workflow_Step_Execution__c> betaExecs = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'StepContextSignalEngineTest.ClaimBranchBeta'
+        AND Status__c = 'Completed'
+    ];
+    System.assertEquals(1, betaExecs.size());
+    System.assertEquals(
+      '"absent"',
+      betaExecs[0].Output__c,
+      'Beta must have seen signal as absent (already claimed by Alpha)'
+    );
+  }
+
+  /**
+   * Verifies that a Processing signal (one already claimed by another branch)
+   * is also consumed when the SAME signal name is matched at COMPLETE time.
+   * This ensures in-flight duplicates cannot be re-processed even if they were
+   * claimed as Processing by a parallel branch and another branch completes.
+   */
+  @isTest
+  static void testProcessingSignalConsumedAtParallelComplete() {
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.ClaimRaceWorkflow',
+      'ProcessingConsumeKey',
+      null
+    );
+
+    new WorkflowOrchestrator(instanceId).execute(null);
+    WorkflowEngine.signal('ProcessingConsumeKey', 'Fan', '{"x":1}');
+    WorkflowEngine.signal('ProcessingConsumeKey', 'Shared', '{"s":1}');
+    // Fan-out: spawn step reads Fan (consumed), fans out branches.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Inject a duplicate 'Shared' signal in Processing status — simulating a
+    // racing branch that claimed it but has not yet committed.
+    Workflow_Signal__c processingDup = new Workflow_Signal__c(
+      Workflow_Instance__c = instanceId,
+      Signal_Name__c = 'Shared',
+      Payload__c = '{"s":2}',
+      Status__c = 'Processing'
+    );
+    insert processingDup;
+
+    // Alpha reads the Received 'Shared' (claims it), completes.
+    // markSignalsConsumed queries Status IN ('Received','Processing') for 'Shared',
+    // so it consumes BOTH the original (now Processing from Alpha's claim) AND
+    // the injected Processing duplicate.
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.ClaimBranchAlpha'
+      )
+      .execute(null);
+
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c = 'Shared'
+          AND Status__c NOT IN ('Consumed')
+      ],
+      'Both the claimed and in-flight Processing duplicates must be consumed at COMPLETE'
+    );
+
+    // Beta runs after — 'Shared' is fully consumed, output must be "absent".
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.ClaimBranchBeta'
+      )
+      .execute(null);
+
+    List<Workflow_Step_Execution__c> betaExecs = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'StepContextSignalEngineTest.ClaimBranchBeta'
+        AND Status__c = 'Completed'
+    ];
+    System.assertEquals(
+      '"absent"',
+      betaExecs[0].Output__c,
+      'Beta must see Shared as absent once Alpha consumed all copies'
+    );
+  }
 }

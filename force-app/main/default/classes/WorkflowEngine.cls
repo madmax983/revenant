@@ -954,6 +954,13 @@ public inherited sharing class WorkflowEngine {
     }
     WorkflowStep stepInstance = (WorkflowStep) stepType.newInstance();
 
+    Boolean isParallelBranchStep =
+      String.isNotBlank(stepName) &&
+      String.isNotBlank(instance.Current_Step__c) &&
+      instance.Current_Step__c.contains(',');
+    StepContext.SignalSource signalSrc = isParallelBranchStep
+      ? (StepContext.SignalSource) new ParallelBranchSignalSource(instanceId)
+      : (StepContext.SignalSource) new PendingSignalSource(instanceId);
     StepContext context = new StepContext(
       instanceId,
       instance.Workflow_Name__c,
@@ -965,7 +972,7 @@ public inherited sharing class WorkflowEngine {
       instance.Definition_Version__c != null
         ? (Integer) instance.Definition_Version__c
         : 1,
-      new PendingSignalSource(instanceId)
+      signalSrc
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts
@@ -1017,6 +1024,137 @@ public inherited sharing class WorkflowEngine {
 
     public StepContext.Signal getLatestSignal(String signalName) {
       return loadLatestSignal(this.instanceId, signalName);
+    }
+  }
+
+  /**
+   * Signal source for parallel branch steps. Atomically claims each signal at
+   * read time (Received → Processing) so two concurrent branches cannot both
+   * process the same payload. The claim is held for the lifetime of the current
+   * execution attempt: COMPLETE promotes Processing → Consumed; any other
+   * outcome (YIELD, SUSPEND, SLEEP, RETRY, …) rolls the claim back to Received
+   * so the branch can re-observe the signal on its next run.
+   *
+   * Two-step pattern: ORDER BY query to find the target ID, then a FOR UPDATE
+   * lock on that ID alone to atomically claim it without holding a broad table
+   * lock.  FOR UPDATE prevents callouts after the first signal access in the
+   * same transaction; steps that need both callouts and signal reads should
+   * perform the callout before the first ctx.getSignal / ctx.hasSignal call.
+   */
+  private class ParallelBranchSignalSource implements StepContext.SignalSource {
+    private final Id instanceId;
+
+    private ParallelBranchSignalSource(Id instanceId) {
+      this.instanceId = instanceId;
+    }
+
+    public List<StepContext.Signal> getPendingSignals(String signalName) {
+      // Step 1: find candidates in arrival order (ORDER BY, no FOR UPDATE)
+      List<Workflow_Signal__c> candidates;
+      if (String.isBlank(signalName)) {
+        candidates = [
+          SELECT Id, Signal_Name__c, Payload__c
+          FROM Workflow_Signal__c
+          WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Received'
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate ASC, Id ASC
+        ];
+      } else {
+        candidates = [
+          SELECT Id, Signal_Name__c, Payload__c
+          FROM Workflow_Signal__c
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Status__c = 'Received'
+            AND Signal_Name__c = :signalName
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate ASC, Id ASC
+        ];
+      }
+      if (candidates.isEmpty()) {
+        return new List<StepContext.Signal>();
+      }
+
+      // Preserve ordering and payload data keyed by Id before the lock query
+      // (which cannot carry ORDER BY or extra fields alongside FOR UPDATE).
+      Map<Id, Workflow_Signal__c> ordered = new Map<Id, Workflow_Signal__c>();
+      for (Workflow_Signal__c c : candidates) {
+        ordered.put(c.Id, c);
+      }
+      Set<Id> candidateIds = ordered.keySet();
+
+      // Step 2: atomic claim — lock all candidates still in Received status
+      List<Workflow_Signal__c> locked = [
+        SELECT Id
+        FROM Workflow_Signal__c
+        WHERE Id IN :candidateIds AND Status__c = 'Received'
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ];
+      if (locked.isEmpty()) {
+        return new List<StepContext.Signal>();
+      }
+
+      Set<Id> claimedIds = new Set<Id>();
+      for (Workflow_Signal__c sig : locked) {
+        sig.Status__c = 'Processing';
+        claimedIds.add(sig.Id);
+      }
+      update as system locked;
+
+      // Return only claimed signals, in original arrival order
+      List<StepContext.Signal> result = new List<StepContext.Signal>();
+      for (Workflow_Signal__c c : candidates) {
+        if (claimedIds.contains(c.Id)) {
+          result.add(
+            new StepContext.Signal(c.Id, c.Signal_Name__c, c.Payload__c)
+          );
+        }
+      }
+      return result;
+    }
+
+    public StepContext.Signal getLatestSignal(String signalName) {
+      if (String.isBlank(signalName)) {
+        return null;
+      }
+      // Step 1: find the most-recent candidate (ORDER BY, no FOR UPDATE)
+      List<Workflow_Signal__c> candidates = [
+        SELECT Id, Signal_Name__c, Payload__c
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Status__c = 'Received'
+          AND Signal_Name__c = :signalName
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC, Id DESC
+        LIMIT 1
+      ];
+      if (candidates.isEmpty()) {
+        return null;
+      }
+      Id targetId = candidates[0].Id;
+
+      // Step 2: atomic claim — lock the specific row, check it is still Received
+      List<Workflow_Signal__c> locked = [
+        SELECT Id, Signal_Name__c, Payload__c
+        FROM Workflow_Signal__c
+        WHERE Id = :targetId AND Status__c = 'Received'
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ];
+      if (locked.isEmpty()) {
+        // Another branch claimed it between step 1 and step 2
+        return null;
+      }
+      locked[0].Status__c = 'Processing';
+      update as system locked[0];
+
+      return new StepContext.Signal(
+        locked[0].Id,
+        locked[0].Signal_Name__c,
+        locked[0].Payload__c
+      );
     }
   }
 
@@ -1099,13 +1237,45 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Rolls back any Processing claims made by a parallel branch step that did
+   * not reach a durable COMPLETE transition (e.g. YIELD, SUSPEND, SLEEP,
+   * WAIT_FOR_APPROVAL, START_CHILD, RETRY). Restoring to Received allows the
+   * same branch (on its next run) or another branch to re-observe the signal.
+   * No-op for serial steps (which never claim; they use PendingSignalSource).
+   */
+  private static void rollbackClaimedSignals(StepContext context) {
+    if (context == null) {
+      return;
+    }
+    Set<Id> claimedIds = context.getConsumedSignalIds();
+    if (claimedIds == null || claimedIds.isEmpty()) {
+      return;
+    }
+    List<Workflow_Signal__c> toRollback = [
+      SELECT Id
+      FROM Workflow_Signal__c
+      WHERE Id IN :claimedIds AND Status__c = 'Processing'
+      WITH SYSTEM_MODE
+    ];
+    if (toRollback.isEmpty()) {
+      return;
+    }
+    for (Workflow_Signal__c sig : toRollback) {
+      sig.Status__c = 'Received';
+    }
+    update as system toRollback;
+  }
+
+  /**
    * Marks the signals a step matched consumed at its successful transition.
-   * Re-queries the instance's still-Received signals filtered to the matched
-   * names (so a same-name at-least-once duplicate delivered while the step was
-   * executing is consumed too, not just the snapshot pre-loaded into the
-   * context), while a name that was only probed absent never consumes a signal
-   * that arrives afterwards. A step that matched nothing triggers no query,
-   * keeping non-signal steps cheap and bounding the query to the observed names.
+   * Re-queries the instance's still-Received (or parallel-branch-claimed
+   * Processing) signals filtered to the matched names so a same-name
+   * at-least-once duplicate delivered while the step executed is consumed too.
+   * A name only probed absent never consumes a signal that arrives afterwards.
+   * Capped at 9 000 rows per call to stay safely below the 10 000 DML-row
+   * governor limit; any excess Received rows for the same names are consumed on
+   * the next COMPLETE that observes them (which cannot re-process them since the
+   * step no longer matches once it has completed).
    */
   private static void markSignalsConsumed(Id instanceId, StepContext context) {
     if (context == null) {
@@ -1121,9 +1291,10 @@ public inherited sharing class WorkflowEngine {
       FROM Workflow_Signal__c
       WHERE
         Workflow_Instance__c = :instanceId
-        AND Status__c = 'Received'
+        AND Status__c IN ('Received', 'Processing')
         AND Signal_Name__c IN :matchedNames
       WITH SYSTEM_MODE
+      LIMIT 9000
     ];
     if (toConsume.isEmpty()) {
       return;
@@ -1191,6 +1362,9 @@ public inherited sharing class WorkflowEngine {
       freshInstance.Status__c = 'Running';
     }
     instance = freshInstance;
+    Boolean isParallel =
+      String.isNotBlank(instance.Current_Step__c) &&
+      instance.Current_Step__c.contains(',');
 
     if (result.action == StepResult.ActionType.COMPLETE) {
       // Step is complete. Store output.
@@ -1228,9 +1402,6 @@ public inherited sharing class WorkflowEngine {
         }
       }
 
-      Boolean isParallel =
-        String.isNotBlank(instance.Current_Step__c) &&
-        instance.Current_Step__c.contains(',');
       if (!isParallel) {
         // Determine next step
         Type wflowType = Type.forName(instance.Workflow_Name__c);
@@ -1399,6 +1570,9 @@ public inherited sharing class WorkflowEngine {
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.YIELD) {
       // Step yielded (e.g. Apex Cursor chunk). Save state to Output and run again in a new transaction.
+      if (isParallel) {
+        rollbackClaimedSignals(context);
+      }
       stepExec.Status__c = 'Running';
       stepExec.Output__c = savePayloadIfNeeded(
         instance.Id,
@@ -1413,6 +1587,9 @@ public inherited sharing class WorkflowEngine {
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.SUSPEND) {
       // Step suspended (waiting for external signal). Save state and mark instance.
+      if (isParallel) {
+        rollbackClaimedSignals(context);
+      }
       stepExec.Status__c = 'Pending';
       saveStepExec(stepExec);
 
@@ -1420,6 +1597,9 @@ public inherited sharing class WorkflowEngine {
       update as system instance;
     } else if (result.action == StepResult.ActionType.SLEEP) {
       // Step requested sleep
+      if (isParallel) {
+        rollbackClaimedSignals(context);
+      }
       stepExec.Status__c = 'Pending';
       stepExec.Output__c = savePayloadIfNeeded(
         instance.Id,
@@ -1443,6 +1623,9 @@ public inherited sharing class WorkflowEngine {
       // its kickoff signal on resume to confirm it is still in the active flow.
       // A START_CHILD step should therefore check the child-completion signal
       // before re-acting on a kickoff signal (or stash needed data in step state).
+      if (isParallel) {
+        rollbackClaimedSignals(context);
+      }
       stepExec.Status__c = 'Pending';
       Map<String, Object> childInfo = new Map<String, Object>{
         'childWorkflowName' => result.childWorkflowName,
@@ -1466,6 +1649,9 @@ public inherited sharing class WorkflowEngine {
         result.childInputJson
       );
     } else if (result.action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
+      if (isParallel) {
+        rollbackClaimedSignals(context);
+      }
       stepExec.Status__c = 'Pending';
       Map<String, Object> state = new Map<String, Object>{
         'waitingForApproval' => true,
@@ -1530,6 +1716,9 @@ public inherited sharing class WorkflowEngine {
       }
     } else if (result.action == StepResult.ActionType.RETRY) {
       // Step requested retry
+      if (isParallel) {
+        rollbackClaimedSignals(context);
+      }
       stepExec.Retry_Count__c += 1;
 
       // Get or default retry policy
@@ -1569,6 +1758,9 @@ public inherited sharing class WorkflowEngine {
         update as system instance;
       }
     } else if (result.action == StepResult.ActionType.CONTINUE_AS_NEW) {
+      if (isParallel) {
+        rollbackClaimedSignals(context);
+      }
       stepExec.Status__c = 'ContinuedAsNew';
       stepExec.Output__c = savePayloadIfNeeded(
         instance.Id,
