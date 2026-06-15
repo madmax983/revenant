@@ -43,18 +43,22 @@ public inherited sharing class StepContext {
 
   /**
    * Supplies pending signals on demand so a step that never reads signals pays
-   * no query/heap cost. Implemented by the engine; resolved lazily on first
-   * signal access.
+   * no query/heap cost. A non-blank signalName lets a named accessor load (and
+   * pay heap for) only that name's payloads instead of every pending signal on
+   * the instance; a blank/null name requests the full set. Implemented by the
+   * engine; resolved lazily on first signal access.
    */
   public interface SignalSource {
-    List<Signal> getPendingSignals();
+    List<Signal> getPendingSignals(String signalName);
   }
 
-  // Pending (unconsumed) signals targeting this instance, in arrival order.
-  // Loaded lazily from signalSource on first access.
-  private List<Signal> pendingSignals;
   private SignalSource signalSource;
-  private Boolean signalsLoaded = false;
+  // Full pending set, loaded lazily only when an unscoped accessor needs it.
+  private List<Signal> allSignals;
+  private Boolean allLoaded = false;
+  // Per-name results, loaded lazily so a single named lookup does not pull every
+  // pending signal/payload on the instance. Keyed by lower-cased name.
+  private Map<String, List<Signal>> byNameCache = new Map<String, List<Signal>>();
   // Snapshot signals the step actually matched (saw a payload for). Only these
   // drive engine-managed consumption -- a name that was probed but found absent
   // must NOT consume a same-name signal that arrives later.
@@ -125,10 +129,10 @@ public inherited sharing class StepContext {
     this.workflowInputJson = workflowInputJson;
     this.workflowVersion = workflowVersion;
     // An explicit list is already resolved -- no lazy loading needed.
-    this.pendingSignals = (pendingSignals != null)
+    this.allSignals = (pendingSignals != null)
       ? pendingSignals
       : new List<Signal>();
-    this.signalsLoaded = true;
+    this.allLoaded = true;
   }
 
   public StepContext(
@@ -154,17 +158,41 @@ public inherited sharing class StepContext {
     this.signalSource = signalSource;
   }
 
-  // Resolves pending signals lazily so a step that never touches signals pays
-  // no query or heap cost for unrelated unconsumed signals on the instance.
-  private List<Signal> pending() {
-    if (!signalsLoaded) {
+  // Resolves the full pending set lazily so a step that never touches signals
+  // pays no query/heap cost for unrelated unconsumed signals on the instance.
+  private List<Signal> loadAll() {
+    if (!allLoaded) {
       List<Signal> loaded = (signalSource != null)
-        ? signalSource.getPendingSignals()
+        ? signalSource.getPendingSignals(null)
         : null;
-      this.pendingSignals = (loaded != null) ? loaded : new List<Signal>();
-      this.signalsLoaded = true;
+      this.allSignals = (loaded != null) ? loaded : new List<Signal>();
+      this.allLoaded = true;
     }
-    return this.pendingSignals;
+    return this.allSignals;
+  }
+
+  // Resolves just the signals matching a name. When the full set is already
+  // loaded it filters in memory; otherwise it asks the source for only that
+  // name (so a single named lookup never pulls every payload on the instance)
+  // and caches the result for a consistent per-name view within this execution.
+  private List<Signal> matchesFor(String signalName) {
+    if (allLoaded) {
+      List<Signal> matches = new List<Signal>();
+      for (Signal s : allSignals) {
+        if (s.name == signalName) {
+          matches.add(s);
+        }
+      }
+      return matches;
+    }
+    String key = (signalName != null) ? signalName.toLowerCase() : '';
+    if (!byNameCache.containsKey(key)) {
+      List<Signal> loaded = (signalSource != null)
+        ? signalSource.getPendingSignals(signalName)
+        : null;
+      byNameCache.put(key, (loaded != null) ? loaded : new List<Signal>());
+    }
+    return byNameCache.get(key);
   }
 
   /**
@@ -173,10 +201,11 @@ public inherited sharing class StepContext {
    * pending signal observed, so the engine consumes them when the step completes.
    */
   public List<Signal> getSignals() {
-    for (Signal s : pending()) {
+    List<Signal> all = loadAll();
+    for (Signal s : all) {
       markMatched(s);
     }
-    return pending().clone();
+    return all.clone();
   }
 
   /**
@@ -184,14 +213,11 @@ public inherited sharing class StepContext {
    * Never null. Marks the name observed.
    */
   public List<Signal> getSignals(String signalName) {
-    List<Signal> matches = new List<Signal>();
-    for (Signal s : pending()) {
-      if (s.name == signalName) {
-        markMatched(s);
-        matches.add(s);
-      }
+    List<Signal> matches = matchesFor(signalName);
+    for (Signal s : matches) {
+      markMatched(s);
     }
-    return matches;
+    return matches.clone();
   }
 
   /**
@@ -200,29 +226,22 @@ public inherited sharing class StepContext {
    * none is pending. Never returns null. Marks the name observed.
    */
   public Signal getSignal(String signalName) {
-    Signal latest = null;
-    for (Signal s : pending()) {
-      if (s.name == signalName) {
-        latest = s;
-      }
+    List<Signal> matches = matchesFor(signalName);
+    if (matches.isEmpty()) {
+      return new Signal();
     }
-    if (latest != null) {
-      markMatched(latest);
-      return latest;
-    }
-    return new Signal();
+    Signal latest = matches[matches.size() - 1];
+    markMatched(latest);
+    return latest;
   }
 
   /** True when at least one pending signal matches the given name. Marks observed. */
   public Boolean hasSignal(String signalName) {
-    Boolean found = false;
-    for (Signal s : pending()) {
-      if (s.name == signalName) {
-        markMatched(s);
-        found = true;
-      }
+    List<Signal> matches = matchesFor(signalName);
+    for (Signal s : matches) {
+      markMatched(s);
     }
-    return found;
+    return !matches.isEmpty();
   }
 
   /**

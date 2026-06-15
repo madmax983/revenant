@@ -1011,26 +1011,48 @@ public inherited sharing class WorkflowEngine {
       this.instanceId = instanceId;
     }
 
-    public List<StepContext.Signal> getPendingSignals() {
-      return loadPendingSignals(this.instanceId);
+    public List<StepContext.Signal> getPendingSignals(String signalName) {
+      return loadPendingSignals(this.instanceId, signalName);
     }
   }
 
   /**
    * Loads the pending (unconsumed) signals targeting an instance as read-only
-   * StepContext.Signal views, in deterministic arrival order. Cancel control
-   * signals are handled inline by signal() and never persist a Workflow_Signal__c
-   * record, so they are structurally excluded here.
+   * StepContext.Signal views, in deterministic arrival order. A non-blank
+   * signalName scopes the query (and its payload heap cost) to that one name so
+   * a single named accessor never pulls every pending payload on the instance;
+   * a blank name loads them all. Cancel control signals are handled inline by
+   * signal() and never persist a Workflow_Signal__c record, so they are
+   * structurally excluded here.
    */
-  private static List<StepContext.Signal> loadPendingSignals(Id instanceId) {
+  private static List<StepContext.Signal> loadPendingSignals(
+    Id instanceId,
+    String signalName
+  ) {
+    List<Workflow_Signal__c> records;
+    if (String.isBlank(signalName)) {
+      records = [
+        SELECT Id, Signal_Name__c, Payload__c
+        FROM Workflow_Signal__c
+        WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Received'
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate ASC, Id ASC
+      ];
+    } else {
+      records = [
+        SELECT Id, Signal_Name__c, Payload__c
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Status__c = 'Received'
+          AND Signal_Name__c = :signalName
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate ASC, Id ASC
+      ];
+    }
+
     List<StepContext.Signal> signals = new List<StepContext.Signal>();
-    for (Workflow_Signal__c sig : [
-      SELECT Id, Signal_Name__c, Payload__c
-      FROM Workflow_Signal__c
-      WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Received'
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate ASC, Id ASC
-    ]) {
+    for (Workflow_Signal__c sig : records) {
       signals.add(
         new StepContext.Signal(sig.Id, sig.Signal_Name__c, sig.Payload__c)
       );

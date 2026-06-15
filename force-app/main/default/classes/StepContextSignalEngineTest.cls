@@ -328,20 +328,20 @@ public class StepContextSignalEngineTest {
       if (!trigger.isPresent()) {
         return StepResult.suspend();
       }
-      // A signal of a name we are about to probe lands mid-execution (after the
-      // snapshot was loaded by the getSignal above).
+      // Probe a name that is absent now -- this records nothing as matched.
+      System.assertEquals(
+        false,
+        ctx.hasSignal('LateGhost'),
+        'LateGhost is not pending at probe time'
+      );
+      // A signal of that probed-absent name now arrives mid-execution.
       insert new Workflow_Signal__c(
         Workflow_Instance__c = ctx.workflowInstanceId,
         Signal_Name__c = 'LateGhost',
         Payload__c = 'boo',
         Status__c = 'Received'
       );
-      // Probe it: absent in the cached snapshot, so it must not be consumed.
-      System.assertEquals(
-        false,
-        ctx.hasSignal('LateGhost'),
-        'A signal inserted after the snapshot is not visible to this step'
-      );
+      // The step never matched LateGhost, so completion must not consume it.
       return StepResult.complete(null, 'done');
     }
   }

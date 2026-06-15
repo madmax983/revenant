@@ -106,26 +106,37 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
       Decimal amount = (Decimal) instanceInput.get('amount');
 
       if (amount >= 10000.0) {
-        // Read the approver's decision straight from StepContext. No SOQL
-        // against the engine's internal signal object and no hand-rolled
-        // "consumed" marker -- the engine marks the observed signal consumed at
-        // this step's COMPLETE transition, so a redelivered duplicate approval
-        // is not processed twice.
-        StepContext.Signal decision = ctx.getSignal('Approve:VIPOrderApproval');
+        List<Workflow_Signal__c> signals = [
+          SELECT Id, Payload__c
+          FROM Workflow_Signal__c
+          WHERE
+            Workflow_Instance__c = :ctx.workflowInstanceId
+            AND Signal_Name__c = 'Approve:VIPOrderApproval'
+            AND Status__c = 'Received'
+          LIMIT 1
+        ];
 
-        if (!decision.isPresent()) {
+        if (signals.isEmpty()) {
           return StepResult.waitForApproval(
             'VIPOrderApproval',
             'Executive Manager'
           );
         }
 
+        // Consume the decision before potentially throwing: a rejection must not
+        // remain Received to be re-loaded (and re-fail) on a retry. Engine-managed
+        // consumption only fires on a successful COMPLETE, so a step that throws
+        // on rejection consumes the signal itself here. See
+        // ApprovalSignalWorkflowExample for the engine-managed (non-throwing)
+        // approve/reject pattern using ctx.getSignal(...).
+        Workflow_Signal__c sig = signals[0];
+        sig.Status__c = 'Consumed';
+        update sig;
+
         Map<String, Object> payloadMap = (Map<String, Object>) JSON.deserializeUntyped(
-          decision.payload
+          sig.Payload__c
         );
-        Boolean approved = payloadMap.get('approved') == null
-          ? false
-          : (Boolean) payloadMap.get('approved');
+        Boolean approved = (Boolean) payloadMap.get('approved');
         if (!approved) {
           throw new WorkflowEngine.WorkflowException(
             'VIP order was rejected by executive manager.'
