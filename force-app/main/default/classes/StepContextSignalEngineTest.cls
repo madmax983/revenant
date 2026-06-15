@@ -700,4 +700,414 @@ public class StepContextSignalEngineTest {
       branchExec.Output__c
     );
   }
+
+  // --- A parallel branch suspended on a signal is woken by name (D) ---------
+
+  public class WakeWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.WakeSpawnStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (currentStepName == 'StepContextSignalEngineTest.WakeSpawnStep') {
+        return 'StepContextSignalEngineTest.WakeJoinStep';
+      }
+      return null;
+    }
+  }
+
+  public class WakeSpawnStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Go');
+      if (!s.isPresent()) {
+        return StepResult.suspend();
+      }
+      return StepResult.split(
+        new List<String>{
+          'StepContextSignalEngineTest.WakeWaitBranch',
+          'StepContextSignalEngineTest.WakeOtherBranch'
+        },
+        s.payload
+      );
+    }
+  }
+
+  public class WakeWaitBranch implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (!ctx.getSignal('Resume').isPresent()) {
+        return StepResult.suspend();
+      }
+      return StepResult.complete(null, 'resumed');
+    }
+  }
+
+  public class WakeOtherBranch implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'other');
+    }
+  }
+
+  public class WakeJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, ctx.inputJson);
+    }
+  }
+
+  @isTest
+  static void testParallelBranchSuspendedOnSignalIsWokenByName() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.WakeWorkflow',
+      'WakeKey',
+      null
+    );
+    // Spawn suspends waiting for Go.
+    new WorkflowOrchestrator(instanceId).execute(null);
+    WorkflowEngine.signal('WakeKey', 'Go', '{}');
+    // Spawn fans out into the two branches.
+    new WorkflowOrchestrator(instanceId).execute(null);
+    // The waiting branch suspends on the Resume signal.
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.WakeWaitBranch'
+      )
+      .execute(null);
+
+    // Signal Resume: the suspended parallel branch must be enqueued BY NAME,
+    // not via a blank-stepName enqueue that runStep would discard.
+    WorkflowEngine.enqueuedBranchKeys.clear();
+    WorkflowEngine.signal('WakeKey', 'Resume', '{}');
+
+    System.assert(
+      WorkflowEngine.enqueuedBranchKeys.contains(
+        instanceId + '::StepContextSignalEngineTest.WakeWaitBranch'
+      ),
+      'A parallel branch suspended on a signal must be woken by its step name. Keys: ' +
+      WorkflowEngine.enqueuedBranchKeys
+    );
+  }
+
+  // --- CalloutStep branches read without claiming (C) -----------------------
+
+  public class ProbeWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.ProbeSpawnStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (currentStepName == 'StepContextSignalEngineTest.ProbeSpawnStep') {
+        return 'StepContextSignalEngineTest.ProbeJoinStep';
+      }
+      return null;
+    }
+  }
+
+  public class ProbeSpawnStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Kick');
+      if (!s.isPresent()) {
+        return StepResult.suspend();
+      }
+      return StepResult.split(
+        new List<String>{
+          'StepContextSignalEngineTest.ProbeClaimBranch',
+          'StepContextSignalEngineTest.ProbeCalloutBranch'
+        },
+        s.payload
+      );
+    }
+  }
+
+  // Default branch: claims, so its signal flips to Processing mid-execution.
+  public class ProbeClaimBranch implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('ProbeA');
+      String status = '';
+      if (s.isPresent()) {
+        status = [
+          SELECT Status__c
+          FROM Workflow_Signal__c
+          WHERE Id = :s.signalId
+        ]
+        .Status__c;
+      }
+      return StepResult.complete(null, status);
+    }
+  }
+
+  // CalloutStep branch: must NOT claim, so its signal stays Received mid-step
+  // and a subsequent payload-driven callout would be legal.
+  public class ProbeCalloutBranch implements WorkflowStep, CalloutStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('ProbeB');
+      String status = '';
+      if (s.isPresent()) {
+        status = [
+          SELECT Status__c
+          FROM Workflow_Signal__c
+          WHERE Id = :s.signalId
+        ]
+        .Status__c;
+      }
+      return StepResult.complete(null, status);
+    }
+  }
+
+  public class ProbeJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, ctx.inputJson);
+    }
+  }
+
+  @isTest
+  static void testCalloutStepBranchReadsWithoutClaiming() {
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.ProbeWorkflow',
+      'ProbeKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+    WorkflowEngine.signal('ProbeKey', 'Kick', '{}');
+    WorkflowEngine.signal('ProbeKey', 'ProbeA', '{"a":1}');
+    WorkflowEngine.signal('ProbeKey', 'ProbeB', '{"b":1}');
+    // Fan out.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Default (claiming) branch: its signal is Processing while it runs.
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.ProbeClaimBranch'
+      )
+      .execute(null);
+    // CalloutStep branch: its signal stays Received while it runs (no claim).
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.ProbeCalloutBranch'
+      )
+      .execute(null);
+
+    Workflow_Step_Execution__c claimExec = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'StepContextSignalEngineTest.ProbeClaimBranch'
+        AND Status__c = 'Completed'
+    ];
+    Workflow_Step_Execution__c calloutExec = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'StepContextSignalEngineTest.ProbeCalloutBranch'
+        AND Status__c = 'Completed'
+    ];
+
+    System.assert(
+      claimExec.Output__c.contains('Processing'),
+      'A claiming parallel branch must flip its signal to Processing mid-step, got: ' +
+      claimExec.Output__c
+    );
+    System.assert(
+      calloutExec.Output__c.contains('Received'),
+      'A CalloutStep branch must read its signal without claiming (stays Received), got: ' +
+      calloutExec.Output__c
+    );
+  }
+
+  // --- Unscoped getSignals() preserves arrival order after a claim (B) ------
+
+  public class OrderWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.OrderSpawnStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (currentStepName == 'StepContextSignalEngineTest.OrderSpawnStep') {
+        return 'StepContextSignalEngineTest.OrderJoinStep';
+      }
+      return null;
+    }
+  }
+
+  public class OrderSpawnStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Kick');
+      if (!s.isPresent()) {
+        return StepResult.suspend();
+      }
+      return StepResult.split(
+        new List<String>{
+          'StepContextSignalEngineTest.OrderBranch',
+          'StepContextSignalEngineTest.OrderOtherBranch'
+        },
+        s.payload
+      );
+    }
+  }
+
+  public class OrderBranch implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      // Claim the older 'Foo' first, then read the full list. The merged-in
+      // claimed Foo must sort before the newer still-Received Bar.
+      ctx.getSignal('Foo');
+      String names = '';
+      for (StepContext.Signal s : ctx.getSignals()) {
+        names += s.name + ',';
+      }
+      return StepResult.complete(null, names);
+    }
+  }
+
+  public class OrderOtherBranch implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'other');
+    }
+  }
+
+  public class OrderJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, ctx.inputJson);
+    }
+  }
+
+  @isTest
+  static void testUnscopedGetSignalsPreservesArrivalOrderAfterClaim() {
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.OrderWorkflow',
+      'OrderKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+    WorkflowEngine.signal('OrderKey', 'Kick', '{}');
+    WorkflowEngine.signal('OrderKey', 'Foo', '{"foo":1}');
+    WorkflowEngine.signal('OrderKey', 'Bar', '{"bar":1}');
+    // Fan out.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.OrderBranch'
+      )
+      .execute(null);
+
+    Workflow_Step_Execution__c branchExec = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'StepContextSignalEngineTest.OrderBranch'
+        AND Status__c = 'Completed'
+    ];
+    Integer fooIdx = branchExec.Output__c.indexOf('Foo');
+    Integer barIdx = branchExec.Output__c.indexOf('Bar');
+    System.assert(fooIdx >= 0, 'Foo must be present: ' + branchExec.Output__c);
+    System.assert(barIdx >= 0, 'Bar must be present: ' + branchExec.Output__c);
+    System.assert(
+      fooIdx < barIdx,
+      'The earlier-arriving Foo (claimed) must sort before the later Bar even after being merged back in, got: ' +
+      branchExec.Output__c
+    );
+  }
+
+  // --- getSignal falls back to an older signal when the newest is taken (E) -
+
+  public class FallbackWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.FallbackSpawnStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (currentStepName == 'StepContextSignalEngineTest.FallbackSpawnStep') {
+        return 'StepContextSignalEngineTest.FallbackJoinStep';
+      }
+      return null;
+    }
+  }
+
+  public class FallbackSpawnStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Kick');
+      if (!s.isPresent()) {
+        return StepResult.suspend();
+      }
+      return StepResult.split(
+        new List<String>{
+          'StepContextSignalEngineTest.FallbackBranch',
+          'StepContextSignalEngineTest.FallbackOtherBranch'
+        },
+        s.payload
+      );
+    }
+  }
+
+  public class FallbackBranch implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Foo');
+      return StepResult.complete(null, s.isPresent() ? s.payload : 'absent');
+    }
+  }
+
+  public class FallbackOtherBranch implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'other');
+    }
+  }
+
+  public class FallbackJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, ctx.inputJson);
+    }
+  }
+
+  @isTest
+  static void testGetSignalFallsBackToOlderWhenNewestUnavailable() {
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.FallbackWorkflow',
+      'FallbackKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+    WorkflowEngine.signal('FallbackKey', 'Kick', '{}');
+    WorkflowEngine.signal('FallbackKey', 'Foo', '{"old":1}');
+    WorkflowEngine.signal('FallbackKey', 'Foo', '{"new":1}');
+    // Fan out.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Simulate a racing sibling having already claimed the NEWEST Foo.
+    Workflow_Signal__c newest = [
+      SELECT Id
+      FROM Workflow_Signal__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Signal_Name__c = 'Foo'
+        AND Status__c = 'Received'
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    newest.Status__c = 'Processing';
+    update newest;
+
+    // The branch must fall back to the older still-Received Foo, not report absent.
+    new WorkflowOrchestrator(
+        instanceId,
+        'StepContextSignalEngineTest.FallbackBranch'
+      )
+      .execute(null);
+
+    Workflow_Step_Execution__c branchExec = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'StepContextSignalEngineTest.FallbackBranch'
+        AND Status__c = 'Completed'
+    ];
+    System.assert(
+      branchExec.Output__c.contains('old'),
+      'getSignal must fall back to the older available Foo when the newest is unavailable, got: ' +
+      branchExec.Output__c
+    );
+    System.assert(
+      !branchExec.Output__c.contains('absent'),
+      'getSignal must not report absent while a matching signal remains, got: ' +
+      branchExec.Output__c
+    );
+  }
 }

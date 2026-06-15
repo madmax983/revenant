@@ -18,16 +18,31 @@ public inherited sharing class StepContext {
    * Carries the author-interpreted name and payload string; the internal record
    * id is exposed so the engine can tie consumption to the step's transition.
    */
-  public class Signal {
+  public class Signal implements Comparable {
     public Id signalId { get; private set; }
     public String name { get; private set; }
     public String payload { get; private set; }
+    // Arrival timestamp (Workflow_Signal__c.CreatedDate). Used to keep merged
+    // signal lists in deterministic arrival order even when a row was already
+    // claimed out of a later re-query. Null for the empty sentinel and for
+    // signals built from an explicit in-memory list (tests).
+    public Datetime createdDate { get; private set; }
     private Boolean present;
 
     public Signal(Id signalId, String name, String payload) {
+      this(signalId, name, payload, null);
+    }
+
+    public Signal(
+      Id signalId,
+      String name,
+      String payload,
+      Datetime createdDate
+    ) {
       this.signalId = signalId;
       this.name = name;
       this.payload = payload;
+      this.createdDate = createdDate;
       this.present = true;
     }
 
@@ -38,6 +53,25 @@ public inherited sharing class StepContext {
     /** True when this represents a real pending signal (not the empty result). */
     public Boolean isPresent() {
       return present;
+    }
+
+    // Orders by arrival (CreatedDate, then Id) so a merged list preserves the
+    // engine's deterministic signal ordering. Nulls (in-memory signals) sort
+    // first, then by id, which is a stable fallback when no timestamp is known.
+    public Integer compareTo(Object other) {
+      Signal o = (Signal) other;
+      if (this.createdDate != o.createdDate) {
+        if (this.createdDate == null) {
+          return -1;
+        }
+        if (o.createdDate == null) {
+          return 1;
+        }
+        return this.createdDate < o.createdDate ? -1 : 1;
+      }
+      String a = (this.signalId == null) ? '' : String.valueOf(this.signalId);
+      String b = (o.signalId == null) ? '' : String.valueOf(o.signalId);
+      return a.compareTo(b);
     }
   }
 
@@ -205,6 +239,10 @@ public inherited sharing class StepContext {
           }
         }
       }
+      // Re-sort into arrival order: merged-in claims (out of the source's
+      // Received view) must not simply trail the still-Received rows, which
+      // would violate the accessor's arrival-order contract.
+      all.sort();
       this.allSignals = all;
       this.allLoaded = true;
     }
@@ -252,6 +290,8 @@ public inherited sharing class StepContext {
         }
         if (!alreadyIn) {
           matches.add(cachedLatest);
+          // Keep arrival order after merging the claimed latest back in.
+          matches.sort();
         }
       }
       byNameCache.put(key, matches);
