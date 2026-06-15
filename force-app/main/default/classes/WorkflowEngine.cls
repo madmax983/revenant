@@ -1056,7 +1056,12 @@ public inherited sharing class WorkflowEngine {
     public List<StepContext.Signal> getPendingSignals(String signalName) {
       if (rowBudget <= 0) {
         capped = true;
-        return new List<StepContext.Signal>();
+        // Don't report a false absence once the budget is spent: return one
+        // still-Received row so a step that suspends-if-empty is not stranded
+        // while a matching signal is pending (its wake event already fired on
+        // insert). Bounded to a single row; the budget still bounds full
+        // enumeration, and the remainder stays Received for a later read.
+        return loadPendingSignals(this.instanceId, signalName, 1);
       }
       List<StepContext.Signal> loaded = loadPendingSignals(
         this.instanceId,
@@ -1205,7 +1210,7 @@ public inherited sharing class WorkflowEngine {
           new StepContext.Signal(
             c.Id,
             c.Signal_Name__c,
-            c.Payload__c,
+            resolvePayload(c.Payload__c),
             c.CreatedDate
           )
         );
@@ -1216,7 +1221,11 @@ public inherited sharing class WorkflowEngine {
     public List<StepContext.Signal> getPendingSignals(String signalName) {
       if (claimBudget <= 0) {
         capped = true;
-        return new List<StepContext.Signal>();
+        // Don't report a false absence once the claim budget is spent: return
+        // one still-Received row read-only (at-least-once) so a branch that
+        // suspends-if-empty is not stranded while a matching signal is pending.
+        // Bounded to a single row; no claim is issued.
+        return toSignals(queryReceived(signalName, null, 1));
       }
       // Statement or SOQL budget spent: read without claiming so a many-name
       // fan-in cannot exceed the DML-statement or SOQL limit. These rows are
@@ -1291,7 +1300,7 @@ public inherited sharing class WorkflowEngine {
               new StepContext.Signal(
                 c.Id,
                 c.Signal_Name__c,
-                c.Payload__c,
+                resolvePayload(c.Payload__c),
                 c.CreatedDate,
                 true
               )
@@ -1338,7 +1347,7 @@ public inherited sharing class WorkflowEngine {
         return new StepContext.Signal(
           c.Id,
           c.Signal_Name__c,
-          c.Payload__c,
+          resolvePayload(c.Payload__c),
           c.CreatedDate
         );
       }
@@ -1365,7 +1374,7 @@ public inherited sharing class WorkflowEngine {
         return new StepContext.Signal(
           cand.Id,
           cand.Signal_Name__c,
-          cand.Payload__c,
+          resolvePayload(cand.Payload__c),
           cand.CreatedDate,
           true
         );
@@ -1404,7 +1413,7 @@ public inherited sharing class WorkflowEngine {
     return new StepContext.Signal(
       records[0].Id,
       records[0].Signal_Name__c,
-      records[0].Payload__c,
+      resolvePayload(records[0].Payload__c),
       records[0].CreatedDate
     );
   }
@@ -1457,7 +1466,7 @@ public inherited sharing class WorkflowEngine {
         new StepContext.Signal(
           sig.Id,
           sig.Signal_Name__c,
-          sig.Payload__c,
+          resolvePayload(sig.Payload__c),
           sig.CreatedDate
         )
       );

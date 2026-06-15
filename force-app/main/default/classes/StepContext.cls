@@ -118,6 +118,11 @@ public inherited sharing class StepContext {
   // Full pending set, loaded lazily only when an unscoped accessor needs it.
   private List<Signal> allSignals;
   private Boolean allLoaded = false;
+  // True when the unscoped full-list read was truncated by the source row cap.
+  // The cached allSignals is then only a partial page, so named latest/list
+  // lookups must NOT be answered from it (they could miss a pending row and
+  // report a false absence) -- they fall through to the source instead.
+  private Boolean allReadCapped = false;
   // Per-name full results, loaded lazily so a single named lookup does not pull
   // every pending signal/payload on the instance. Keyed by lower-cased name.
   private Map<String, List<Signal>> byNameCache = new Map<String, List<Signal>>();
@@ -239,6 +244,9 @@ public inherited sharing class StepContext {
       List<Signal> loaded = (signalSource != null)
         ? signalSource.getPendingSignals(null)
         : null;
+      // Remember whether this full read was truncated, so named lookups don't
+      // treat the partial page as the authoritative pending set.
+      this.allReadCapped = (signalSource != null) && signalSource.readWasCapped();
       List<Signal> all = (loaded != null) ? loaded : new List<Signal>();
       // A parallel-branch source claims rows it returns (Received -> Processing),
       // so a row already claimed by an earlier named accessor is no longer in the
@@ -293,7 +301,10 @@ public inherited sharing class StepContext {
     if (String.isBlank(signalName)) {
       return new List<Signal>();
     }
-    if (allLoaded) {
+    // Only filter the in-memory full set when it is complete. A capped full
+    // read holds a partial page, so a name beyond it would look absent; fall
+    // through to the source's per-name accessor instead.
+    if (allLoaded && !allReadCapped) {
       List<Signal> matches = new List<Signal>();
       for (Signal s : allSignals) {
         if (s.name == signalName) {
@@ -345,7 +356,11 @@ public inherited sharing class StepContext {
     if (String.isBlank(signalName)) {
       return null;
     }
-    if (allLoaded) {
+    // Only trust the in-memory full set for the latest when it is complete. A
+    // capped full read is a partial page, so its newest matching row may not be
+    // the true latest (or the name may be missing entirely); fall through to the
+    // source's getLatestSignal for the authoritative most-recent row.
+    if (allLoaded && !allReadCapped) {
       Signal latest = null;
       for (Signal s : allSignals) {
         if (s.name == signalName) {

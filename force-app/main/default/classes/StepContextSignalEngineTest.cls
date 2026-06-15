@@ -1475,15 +1475,18 @@ public class StepContextSignalEngineTest {
 
   public class BudgetReadStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      // Spend the row budget on a noisy name, then probe a different name: it
-      // must still be found even though the budget is now exhausted.
+      // Spend the row budget on a noisy name, then probe a different name via
+      // both the latest lookup and the list accessor: neither may report a
+      // false absence even though the budget is now exhausted.
       List<StepContext.Signal> noise = ctx.getSignals('Noise');
       Boolean importantPresent = ctx.hasSignal('Important');
+      List<StepContext.Signal> importantList = ctx.getSignals('Important');
       return StepResult.complete(
         null,
         new Map<String, Object>{
           'noiseSeen' => noise.size(),
-          'importantPresent' => importantPresent
+          'importantPresent' => importantPresent,
+          'importantListSize' => importantList.size()
         }
       );
     }
@@ -1543,6 +1546,11 @@ public class StepContextSignalEngineTest {
     System.assert(
       stepExec.Output__c.contains('"importantPresent":true'),
       'A named lookup after the row budget is spent must still find a Received signal (no false absence), got: ' +
+      stepExec.Output__c
+    );
+    System.assert(
+      stepExec.Output__c.contains('"importantListSize":1'),
+      'A list accessor after the row budget is spent must still return the pending signal (no empty false absence), got: ' +
       stepExec.Output__c
     );
   }

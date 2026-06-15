@@ -503,4 +503,46 @@ public class StepContextTest {
       'getSignal after a complete getSignals must reuse the cached list tail, not re-query'
     );
   }
+
+  @isTest
+  static void testNamedLookupFallsThroughWhenFullListReadCapped() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    // A capped unscoped read sees only a partial page (e.g. a Noise backlog)
+    // that does NOT contain 'Important', while the source can still resolve the
+    // true latest 'Important' row.
+    List<StepContext.Signal> partialAll = new List<StepContext.Signal>{
+      new StepContext.Signal(null, 'Noise', '{"n":1}', DateTime.now().addMinutes(-3)),
+      new StepContext.Signal(null, 'Noise', '{"n":2}', DateTime.now().addMinutes(-2))
+    };
+    StepContext.Signal important = new StepContext.Signal(
+      null,
+      'Important',
+      '{"go":true}',
+      DateTime.now()
+    );
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      (StepContext.SignalSource) new FakeNameSource(partialAll, important, true)
+    );
+
+    // Unscoped read caps and only sees the Noise page.
+    System.assertEquals(2, ctx.getSignals().size());
+
+    // A named latest lookup must NOT be answered from the partial full-list
+    // cache (which would report 'Important' absent); it must reflect the true
+    // pending signal so the step does not suspend and strand.
+    System.assertEquals(
+      true,
+      ctx.hasSignal('Important'),
+      'hasSignal after a capped full-list read must not falsely report absence'
+    );
+    System.assertEquals('{"go":true}', ctx.getSignal('Important').payload);
+  }
 }
