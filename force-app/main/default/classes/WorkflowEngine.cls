@@ -818,7 +818,9 @@ public inherited sharing class WorkflowEngine {
       ? stepName
       : instance.Current_Step__c;
 
-    // 3. Retrieve or create Step Execution log with FOR UPDATE lock
+    // 3. Retrieve or create Step Execution log with FOR UPDATE lock.
+    // Load all executions for this step so we can derive the visit count in
+    // Apex without an extra COUNT() SOQL query.
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Id, Step_Name__c, Status__c, Input__c, Output__c, Retry_Count__c
       FROM Workflow_Step_Execution__c
@@ -827,8 +829,14 @@ public inherited sharing class WorkflowEngine {
         AND Step_Name__c = :activeStepName
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
     ];
+
+    Integer stepVisit = 0;
+    for (Workflow_Step_Execution__c exec : stepExecs) {
+      if (exec.Status__c == 'Completed') {
+        stepVisit++;
+      }
+    }
 
     if (!stepExecs.isEmpty()) {
       stepExecs = [
@@ -954,6 +962,10 @@ public inherited sharing class WorkflowEngine {
     }
     WorkflowStep stepInstance = (WorkflowStep) stepType.newInstance();
 
+    // stepVisit: number of already-completed runs of this step in this instance.
+    // Computed above from the stepExecs list (before FOR UPDATE re-assigns it)
+    // to avoid a separate COUNT() SOQL query.
+
     StepContext context = new StepContext(
       instanceId,
       instance.Workflow_Name__c,
@@ -964,7 +976,8 @@ public inherited sharing class WorkflowEngine {
       resolvePayload(instance.Input__c),
       instance.Definition_Version__c != null
         ? (Integer) instance.Definition_Version__c
-        : 1
+        : 1,
+      stepVisit
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts
@@ -1004,6 +1017,28 @@ public inherited sharing class WorkflowEngine {
     } else {
       update as system stepExec;
     }
+  }
+
+  /**
+   * Counts terminal (completed) executions of a step name within an instance.
+   * Used to derive the per-visit idempotency sequence for StepContext: the
+   * current (not-yet-completed) visit is excluded, so this is 0 for the first
+   * visit and increments each time the engine loops back to the same step.
+   */
+  private static Integer countCompletedStepExecutions(
+    Id instanceId,
+    String stepName,
+    Set<String> completedStatuses
+  ) {
+    return [
+      SELECT COUNT()
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = :stepName
+        AND Status__c IN :completedStatuses
+      WITH SYSTEM_MODE
+    ];
   }
 
   private static void handleStepResult(
@@ -1269,8 +1304,18 @@ public inherited sharing class WorkflowEngine {
       scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.SUSPEND) {
-      // Step suspended (waiting for external signal). Save state and mark instance.
+      // Explicit stepStateJson is preserved; no-arg suspend() nulls Output__c so
+      // stale yield checkpoints from a prior YIELD in the same execution don't
+      // survive into a retry and cause duplicate-spawn collisions.
       stepExec.Status__c = 'Pending';
+      stepExec.Output__c = String.isNotBlank(result.stepStateJson)
+        ? savePayloadIfNeeded(
+            instance.Id,
+            result.stepStateJson,
+            'State_Suspend_' +
+              stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+          )
+        : null;
       saveStepExec(stepExec);
 
       instance.Status__c = 'Suspended';
@@ -2200,7 +2245,9 @@ public inherited sharing class WorkflowEngine {
     // 2. Get the top step to compensate (do not pop yet, only pop on success)
     String activeStepName = stack[stack.size() - 1];
 
-    // 3. Create or retrieve the compensation step execution log with FOR UPDATE lock
+    // 3. Create or retrieve the compensation step execution log with FOR UPDATE lock.
+    // Load all executions so compensateVisit can be derived in Apex without an
+    // extra COUNT() SOQL query.
     String compensationStepLogName = activeStepName + '_Compensate';
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Id, Status__c, Input__c, Output__c, Retry_Count__c, Step_Name__c
@@ -2210,8 +2257,14 @@ public inherited sharing class WorkflowEngine {
         AND Step_Name__c = :compensationStepLogName
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
     ];
+
+    Integer compensateVisit = 0;
+    for (Workflow_Step_Execution__c exec : stepExecs) {
+      if (exec.Status__c == 'Compensated' || exec.Status__c == 'Completed') {
+        compensateVisit++;
+      }
+    }
 
     if (!stepExecs.isEmpty()) {
       stepExecs = [
@@ -2358,6 +2411,9 @@ public inherited sharing class WorkflowEngine {
       prevOutput = completedBefore[0].Output__c;
     }
 
+    // compensateVisit: computed above from the stepExecs list to avoid a
+    // separate COUNT() SOQL query.
+
     StepContext context = new StepContext(
       instance.Id,
       instance.Workflow_Name__c,
@@ -2368,7 +2424,8 @@ public inherited sharing class WorkflowEngine {
       resolvePayload(instance.Input__c),
       instance.Definition_Version__c != null
         ? (Integer) instance.Definition_Version__c
-        : 1
+        : 1,
+      compensateVisit
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts
@@ -2483,6 +2540,14 @@ public inherited sharing class WorkflowEngine {
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.SUSPEND) {
       stepExec.Status__c = 'Pending';
+      stepExec.Output__c = String.isNotBlank(result.stepStateJson)
+        ? savePayloadIfNeeded(
+            instance.Id,
+            result.stepStateJson,
+            'State_Suspend_' +
+              stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+          )
+        : null;
       saveStepExec(stepExec);
       instance.Status__c = 'Suspended';
       update as system instance;

@@ -135,6 +135,17 @@ public inherited sharing class BatchFanoutWorkflowExample {
         WITH SYSTEM_MODE
       ];
 
+      // Build a set of already-spawned keys so the loop is idempotent on retry.
+      // A yield-then-suspend sequence leaves a stale offset in stepExec.Output__c
+      // that survives retryWorkflow, causing needsSpawning=true even when children
+      // at those offsets already exist. Skipping existing keys prevents collisions.
+      Set<String> spawnedChildKeys = new Set<String>();
+      for (Workflow_Instance__c child : childInstances) {
+        if (String.isNotBlank(child.Correlation_Key__c)) {
+          spawnedChildKeys.add(child.Correlation_Key__c);
+        }
+      }
+
       Boolean needsSpawning =
         (offset < accountsList.size()) &&
         (offset > 0 || childInstances.isEmpty());
@@ -154,13 +165,14 @@ public inherited sharing class BatchFanoutWorkflowExample {
           // Generate unique child correlation key
           String childKey = 'Process_' + accId + '_' + ctx.workflowInstanceId;
 
-          // Start child workflow dynamically
-          WorkflowEngine.start(
-            'BatchFanoutWorkflowExample.ProcessRecordWorkflow',
-            childKey,
-            acc,
-            ctx.workflowInstanceId
-          );
+          if (!spawnedChildKeys.contains(childKey)) {
+            WorkflowEngine.start(
+              'BatchFanoutWorkflowExample.ProcessRecordWorkflow',
+              childKey,
+              acc,
+              ctx.workflowInstanceId
+            );
+          }
         }
 
         if (yielded) {
