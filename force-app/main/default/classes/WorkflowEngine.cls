@@ -1396,7 +1396,15 @@ public inherited sharing class WorkflowEngine {
       instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, result.sleepDurationSeconds);
       update as system instance;
     } else if (result.action == StepResult.ActionType.START_CHILD) {
-      // Step requested child workflow
+      // Step requested child workflow.
+      //
+      // Observed signals are intentionally NOT consumed here. START_CHILD
+      // suspends and re-runs the SAME step when the child completes (like
+      // SUSPEND/WAIT_FOR_APPROVAL), rather than transitioning forward like
+      // COMPLETE/SPLIT. Consuming on this path would break a step that re-reads
+      // its kickoff signal on resume to confirm it is still in the active flow.
+      // A START_CHILD step should therefore check the child-completion signal
+      // before re-acting on a kickoff signal (or stash needed data in step state).
       stepExec.Status__c = 'Pending';
       Map<String, Object> childInfo = new Map<String, Object>{
         'childWorkflowName' => result.childWorkflowName,
