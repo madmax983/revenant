@@ -18,6 +18,12 @@ public inherited sharing class WorkflowEngine {
     'Cancelling'
   };
 
+  // Upper bound (~100 years) applied to the dedup window before it is subtracted
+  // from "now", so a large/misconfigured Dedup_Window_Minutes__c cannot push the
+  // computed lower bound outside Salesforce's valid DateTime range and fault
+  // every start.
+  private static final Integer MAX_DEDUP_WINDOW_MINUTES = 52560000;
+
   // Max number of timed-out steps a single watchdog heartbeat will fail. Each failure
   // triggers failWorkflowInstance() (its own SOQL/DML + optional alert queries), so this
   // bounds the heartbeat's governor usage. Remaining timeouts drain on the next heartbeat.
@@ -125,7 +131,21 @@ public inherited sharing class WorkflowEngine {
     Object input,
     Id parentInstanceId
   ) {
-    return doStart(workflowName, correlationKey, input, parentInstanceId);
+    return doStart(workflowName, correlationKey, input, parentInstanceId, true);
+  }
+
+  /**
+   * Active-only get-or-start for engine-internal singleton workflows (e.g. the
+   * watchdog). Never dedups against terminal instances, so a failed or
+   * continued-as-new singleton is always restarted rather than resolving to a
+   * dead terminal run within the dedup window.
+   */
+  public static Id startSingleton(
+    String workflowName,
+    String correlationKey,
+    Object input
+  ) {
+    return doStart(workflowName, correlationKey, input, null, false).instanceId;
   }
 
   private static StartResult doStart(
@@ -134,16 +154,27 @@ public inherited sharing class WorkflowEngine {
     Object input,
     Id parentInstanceId
   ) {
+    return doStart(workflowName, correlationKey, input, parentInstanceId, true);
+  }
+
+  private static StartResult doStart(
+    String workflowName,
+    String correlationKey,
+    Object input,
+    Id parentInstanceId,
+    Boolean includeTerminal
+  ) {
     validateCorrelationKey(correlationKey);
 
     // Get-or-start: return an existing instance within the dedup scope (active,
-    // or recently terminal within the configured window) instead of throwing
-    // or inserting a duplicate. No step-execution write, no enqueue.
+    // and optionally recently terminal within the configured window) instead of
+    // throwing or inserting a duplicate. No step-execution write, no enqueue.
     if (String.isNotBlank(correlationKey)) {
       Workflow_Instance__c match = findExistingByKey(
-          new Set<String>{ correlationKey }
+          new Set<String>{ correlationKey },
+          includeTerminal
         )
-        .get(correlationKey);
+        .get(normalizeKey(correlationKey));
       if (match != null) {
         return new StartResult(match.Id, false);
       }
@@ -236,21 +267,38 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Canonical form of a correlation key for in-memory dedup maps/sets.
+   * Correlation_Key__c is case-insensitive (and the unique
+   * Active_Correlation_Key__c index is too), but Apex Map/Set keys are
+   * case-sensitive, so keys are lower-cased to match the database semantics.
+   */
+  private static String normalizeKey(String key) {
+    return key == null ? null : key.toLowerCase();
+  }
+
+  /**
    * Resolves the dedup-winner instance for each correlation key: an active
-   * instance if one exists, otherwise the most recent terminal instance that
-   * became terminal within the configured dedup window.
+   * instance if one exists, otherwise (when includeTerminal is true) the most
+   * recent terminal instance that became terminal within the configured dedup
+   * window. The returned map is keyed by the normalized correlation key.
    */
   private static Map<String, Workflow_Instance__c> findExistingByKey(
-    Set<String> keys
+    Set<String> keys,
+    Boolean includeTerminal
   ) {
     Map<String, Workflow_Instance__c> result = new Map<String, Workflow_Instance__c>();
     if (keys == null || keys.isEmpty()) {
       return result;
     }
-    DateTime windowStart = dedupWindowStart();
+    // When terminal dedup is disabled, use a far-future lower bound so no
+    // terminal instance matches (active-only).
+    DateTime windowStart = includeTerminal
+      ? dedupWindowStart()
+      : DateTime.now().addYears(1000);
     // Active instances carry a null Terminal_At__c, so NULLS FIRST surfaces an
     // active instance ahead of any terminal one for the same key. Among
-    // terminal-only keys, the most recent terminal wins.
+    // terminal-only keys, the most recent terminal wins. The SOQL equality is
+    // case-insensitive, so a stored "Foo" matches a requested "foo".
     List<Workflow_Instance__c> matches = [
       SELECT Id, Correlation_Key__c, Status__c, Terminal_At__c
       FROM Workflow_Instance__c
@@ -262,8 +310,9 @@ public inherited sharing class WorkflowEngine {
       ORDER BY Terminal_At__c DESC NULLS FIRST, CreatedDate DESC
     ];
     for (Workflow_Instance__c inst : matches) {
-      if (!result.containsKey(inst.Correlation_Key__c)) {
-        result.put(inst.Correlation_Key__c, inst);
+      String normalized = normalizeKey(inst.Correlation_Key__c);
+      if (!result.containsKey(normalized)) {
+        result.put(normalized, inst);
       }
     }
     return result;
@@ -272,11 +321,14 @@ public inherited sharing class WorkflowEngine {
   /**
    * Lower bound for the terminal dedup window. When the window is at its
    * minimum (<= 0) a far-future sentinel is returned so no terminal instance
-   * matches, preserving active-only dedup behavior.
+   * matches, preserving active-only dedup behavior. The window is clamped to a
+   * safe maximum so a misconfigured value cannot underflow the valid DateTime
+   * range.
    */
   private static DateTime dedupWindowStart() {
     if (dedupWindowMinutes != null && dedupWindowMinutes > 0) {
-      return DateTime.now().addMinutes(-dedupWindowMinutes);
+      Integer minutes = Math.min(dedupWindowMinutes, MAX_DEDUP_WINDOW_MINUTES);
+      return DateTime.now().addMinutes(-minutes);
     }
     return DateTime.now().addYears(1000);
   }
@@ -389,9 +441,11 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    // 2. Pre-resolve existing instances within the dedup scope
+    // 2. Pre-resolve existing instances within the dedup scope (keyed by the
+    //    normalized correlation key to honor case-insensitive matching).
     Map<String, Workflow_Instance__c> existingByKey = findExistingByKey(
-      correlationKeys
+      correlationKeys,
+      true
     );
 
     // 3. Decide per request (preserving order): dedup to an existing instance,
@@ -406,12 +460,13 @@ public inherited sharing class WorkflowEngine {
     for (Integer i = 0; i < requests.size(); i++) {
       StartRequest req = requests[i];
       String key = req.correlationKey;
+      String normKey = normalizeKey(key);
 
-      if (String.isNotBlank(key) && existingByKey.containsKey(key)) {
-        results[i] = new StartResult(existingByKey.get(key).Id, false);
+      if (String.isNotBlank(key) && existingByKey.containsKey(normKey)) {
+        results[i] = new StartResult(existingByKey.get(normKey).Id, false);
         continue;
       }
-      if (String.isNotBlank(key) && newKeysInBatch.contains(key)) {
+      if (String.isNotBlank(key) && newKeysInBatch.contains(normKey)) {
         // Intra-batch duplicate; resolved to the sibling's Id after insert.
         continue;
       }
@@ -419,7 +474,7 @@ public inherited sharing class WorkflowEngine {
       toInsert.add(buildInstance(req));
       insertReqIndexes.add(i);
       if (String.isNotBlank(key)) {
-        newKeysInBatch.add(key);
+        newKeysInBatch.add(normKey);
       }
     }
 
@@ -430,6 +485,10 @@ public inherited sharing class WorkflowEngine {
     Set<String> concurrentLoserKeys = new Set<String>();
 
     if (!toInsert.isEmpty()) {
+      // Savepoint so a genuine (non-duplicate) row failure can roll back any
+      // sibling rows already inserted in this partial DML, restoring all-or-none
+      // semantics for real errors and never leaving orphan Pending instances.
+      System.Savepoint sp = Database.setSavepoint();
       Database.SaveResult[] saveResults = Database.insert(
         toInsert,
         false,
@@ -455,6 +514,7 @@ public inherited sharing class WorkflowEngine {
           if (isDup && String.isNotBlank(key)) {
             concurrentLoserKeys.add(key);
           } else {
+            Database.rollback(sp);
             throw new WorkflowException(
               'Failed to start workflow: ' + sr.getErrors()[0].getMessage()
             );
@@ -470,7 +530,7 @@ public inherited sharing class WorkflowEngine {
     for (Integer j = 0; j < insertedInstances.size(); j++) {
       String key = requests[insertedReqIndexes[j]].correlationKey;
       if (String.isNotBlank(key)) {
-        resolvedIdByKey.put(key, insertedInstances[j].Id);
+        resolvedIdByKey.put(normalizeKey(key), insertedInstances[j].Id);
       }
     }
     if (!concurrentLoserKeys.isEmpty()) {
@@ -483,8 +543,9 @@ public inherited sharing class WorkflowEngine {
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC
       ]) {
-        if (!resolvedIdByKey.containsKey(w.Correlation_Key__c)) {
-          resolvedIdByKey.put(w.Correlation_Key__c, w.Id);
+        String normalized = normalizeKey(w.Correlation_Key__c);
+        if (!resolvedIdByKey.containsKey(normalized)) {
+          resolvedIdByKey.put(normalized, w.Id);
         }
       }
     }
@@ -492,9 +553,12 @@ public inherited sharing class WorkflowEngine {
       if (results[i] != null) {
         continue;
       }
-      String key = requests[i].correlationKey;
-      if (String.isNotBlank(key) && resolvedIdByKey.containsKey(key)) {
-        results[i] = new StartResult(resolvedIdByKey.get(key), false);
+      String normKey = normalizeKey(requests[i].correlationKey);
+      if (
+        String.isNotBlank(requests[i].correlationKey) &&
+        resolvedIdByKey.containsKey(normKey)
+      ) {
+        results[i] = new StartResult(resolvedIdByKey.get(normKey), false);
       }
     }
 

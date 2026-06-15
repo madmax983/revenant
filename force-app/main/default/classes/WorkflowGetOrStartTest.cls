@@ -273,4 +273,127 @@ private class WorkflowGetOrStartTest {
     System.assertEquals(id1, id2, 'Legacy start() must return the existing Id');
     System.assertEquals(1, totalInstancesForKey('GOS_Legacy'));
   }
+
+  // ==========================================
+  // Review fix (P2): correlation keys dedup case-insensitively
+  // ==========================================
+  @isTest
+  static void testGetOrStartCaseInsensitiveKey() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    WorkflowEngine.StartResult first = WorkflowEngine.startOrGet(
+      'WorkflowEngineTest.HappyWorkflow',
+      'MixedCaseKey',
+      null
+    );
+    System.assertEquals(true, first.isNew);
+
+    // Redelivery with different casing must resolve to the same instance, since
+    // Correlation_Key__c is case-insensitive.
+    WorkflowEngine.StartResult second = WorkflowEngine.startOrGet(
+      'WorkflowEngineTest.HappyWorkflow',
+      'mixedcasekey',
+      null
+    );
+    System.assertEquals(
+      first.instanceId,
+      second.instanceId,
+      'A different-cased key must dedup to the same instance'
+    );
+    System.assertEquals(false, second.isNew);
+  }
+
+  // ==========================================
+  // Review fix (P2): case-variant duplicate keys in one batch -> one instance
+  // ==========================================
+  @isTest
+  static void testBulkCaseInsensitiveIntraBatch() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    List<WorkflowEngine.StartRequest> reqs = new List<WorkflowEngine.StartRequest>{
+      new WorkflowEngine.StartRequest(
+        'WorkflowEngineTest.HappyWorkflow',
+        'BatchCase',
+        null
+      ),
+      new WorkflowEngine.StartRequest(
+        'WorkflowEngineTest.HappyWorkflow',
+        'batchcase',
+        null
+      )
+    };
+
+    List<WorkflowEngine.StartResult> results = WorkflowEngine.startOrGet(reqs);
+
+    System.assertEquals(
+      results[0].instanceId,
+      results[1].instanceId,
+      'Case-variant duplicate keys in one batch must yield one instance'
+    );
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE Correlation_Key__c IN ('BatchCase', 'batchcase')
+      ],
+      'Only one instance should exist across the case variants'
+    );
+  }
+
+  // ==========================================
+  // Review fix (P1): startSingleton ignores the terminal dedup window
+  // ==========================================
+  @isTest
+  static void testStartSingletonIgnoresTerminalWindow() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.dedupWindowMinutes = 1440;
+
+    // A recent terminal instance for the singleton key (window would cover it)
+    Workflow_Instance__c terminal = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'GOS_Singleton'
+    );
+    insert terminal;
+
+    Id newId = WorkflowEngine.startSingleton(
+      'WorkflowEngineTest.HappyWorkflow',
+      'GOS_Singleton',
+      null
+    );
+
+    System.assertNotEquals(
+      terminal.Id,
+      newId,
+      'Singleton start must not resolve to a terminal instance in the window'
+    );
+    System.assertEquals(
+      2,
+      totalInstancesForKey('GOS_Singleton'),
+      'A fresh singleton instance must be started alongside the terminal one'
+    );
+  }
+
+  // ==========================================
+  // Review fix (P2): a very large dedup window must not fault starts
+  // ==========================================
+  @isTest
+  static void testLargeDedupWindowDoesNotFault() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.dedupWindowMinutes = 999999999; // near the 9-digit maximum
+
+    WorkflowEngine.StartResult res = WorkflowEngine.startOrGet(
+      'WorkflowEngineTest.HappyWorkflow',
+      'GOS_BigWindow',
+      null
+    );
+
+    System.assertNotEquals(
+      null,
+      res.instanceId,
+      'A large dedup window must be clamped, not throw a DateTime range error'
+    );
+    System.assertEquals(true, res.isNew);
+  }
 }
