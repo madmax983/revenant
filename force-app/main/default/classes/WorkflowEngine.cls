@@ -2,6 +2,9 @@ public inherited sharing class WorkflowEngine {
   public static Boolean disableQueueableInTest = false;
   public static Integer watchdogDelayMinutes = 10;
   public static Boolean useDynamicScheduling = true;
+  // Operator toggle (Revenant_Config__mdt.Publish_Lifecycle_Events__c): when true
+  // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
+  public static Boolean publishLifecycleEvents = true;
 
   // Max number of timed-out steps a single watchdog heartbeat will fail. Each failure
   // triggers failWorkflowInstance() (its own SOQL/DML + optional alert queries), so this
@@ -15,7 +18,10 @@ public inherited sharing class WorkflowEngine {
   static {
     try {
       List<Revenant_Config__mdt> configs = [
-        SELECT Watchdog_Delay_Minutes__c, Use_Dynamic_Scheduling__c
+        SELECT
+          Watchdog_Delay_Minutes__c,
+          Use_Dynamic_Scheduling__c,
+          Publish_Lifecycle_Events__c
         FROM Revenant_Config__mdt
         WHERE DeveloperName = 'Default'
         WITH SYSTEM_MODE
@@ -28,6 +34,9 @@ public inherited sharing class WorkflowEngine {
         }
         if (configs[0].Use_Dynamic_Scheduling__c != null) {
           useDynamicScheduling = configs[0].Use_Dynamic_Scheduling__c;
+        }
+        if (configs[0].Publish_Lifecycle_Events__c != null) {
+          publishLifecycleEvents = configs[0].Publish_Lifecycle_Events__c;
         }
       }
     } catch (Exception ex) {
@@ -1117,6 +1126,9 @@ public inherited sharing class WorkflowEngine {
           instance.Current_Step__c = null;
           update as system instance;
 
+          // Fire-and-forget outbound lifecycle event on terminal transition.
+          WorkflowLifecyclePublisher.publish(instance);
+
           // Notify parent completion if this is a child workflow
           notifyParentCompletion(instance);
           return;
@@ -1232,6 +1244,9 @@ public inherited sharing class WorkflowEngine {
         );
         instance.Current_Step__c = null;
         update as system instance;
+
+        // Fire-and-forget outbound lifecycle event on terminal transition.
+        WorkflowLifecyclePublisher.publish(instance);
 
         notifyParentCompletion(instance);
         return;
@@ -1626,6 +1641,7 @@ public inherited sharing class WorkflowEngine {
         errorMessage;
       update as system instance;
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
+      WorkflowLifecyclePublisher.publish(instance);
       return;
     }
 
@@ -1642,6 +1658,7 @@ public inherited sharing class WorkflowEngine {
         errorMessage;
       update as system instance;
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
+      WorkflowLifecyclePublisher.publish(instance);
       return;
     }
 
@@ -2181,6 +2198,8 @@ public inherited sharing class WorkflowEngine {
         : 'Compensated';
       instance.Current_Step__c = null;
       update as system instance;
+      // Fire-and-forget outbound lifecycle event on terminal transition.
+      WorkflowLifecyclePublisher.publish(instance);
       return;
     }
 
@@ -2194,6 +2213,8 @@ public inherited sharing class WorkflowEngine {
         : 'Compensated';
       instance.Current_Step__c = null;
       update as system instance;
+      // Fire-and-forget outbound lifecycle event on terminal transition.
+      WorkflowLifecyclePublisher.publish(instance);
       return;
     }
 
@@ -2457,6 +2478,10 @@ public inherited sharing class WorkflowEngine {
       }
       update as system instance;
 
+      // Fire-and-forget outbound lifecycle event; only fires once the stack is
+      // drained and the instance has reached Compensated/Cancelled.
+      WorkflowLifecyclePublisher.publish(instance);
+
       if (!stack.isEmpty()) {
         scheduleTimeoutJobForInstance(instance.Id);
       }
@@ -2538,6 +2563,7 @@ public inherited sharing class WorkflowEngine {
           ' failed after max retries.';
         update as system instance;
         WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
+        WorkflowLifecyclePublisher.publish(instance);
       } else {
         stepExec.Status__c = 'Retrying';
         stepExec.Output__c = null;
@@ -2568,6 +2594,7 @@ public inherited sharing class WorkflowEngine {
         ' failed: Unsupported action.';
       update as system instance;
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
+      WorkflowLifecyclePublisher.publish(instance);
     }
   }
 
@@ -2741,7 +2768,9 @@ public inherited sharing class WorkflowEngine {
         Status__c,
         Current_Step__c,
         Compensation_Stack__c,
-        Error_Message__c
+        Error_Message__c,
+        Workflow_Name__c,
+        Correlation_Key__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -2808,6 +2837,8 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c = 'Cancelled';
       instance.Error_Message__c = 'Cancelled by user.';
       update as system instance;
+      // Fire-and-forget outbound lifecycle event on terminal transition.
+      WorkflowLifecyclePublisher.publish(instance);
     }
     // Active child workflows are handled by the caller (cancel()) via iterative
     // descendant traversal, so no recursive child cancellation happens here.
@@ -3165,6 +3196,10 @@ public inherited sharing class WorkflowEngine {
       for (Workflow_Instance__c parent : instancesToUpdate.values()) {
         WorkflowAlertManager.sendAlert(parent, parent.Error_Message__c);
       }
+
+      // Fire-and-forget outbound lifecycle events; only the parents transitioned
+      // to a terminal state (Failed) emit — Compensating parents are skipped.
+      WorkflowLifecyclePublisher.publish(instancesToUpdate.values());
 
       if (!orchestratorInstanceIds.isEmpty()) {
         if (Test.isRunningTest() && disableQueueableInTest) {

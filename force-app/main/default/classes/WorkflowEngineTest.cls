@@ -2685,4 +2685,219 @@ public class WorkflowEngineTest {
       System.assertEquals('Consumed', sig.Status__c);
     }
   }
+
+  // ==========================================
+  // OUTBOUND Workflow_Lifecycle__e EVENT (issue #14)
+  // ==========================================
+
+  @isTest
+  static void testLifecycleEventOnCompletion() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'LifecycleHappyKey',
+      'StartVal'
+    );
+    Test.stopTest(); // Runs HappyStep1 synchronously
+
+    // Execute the second/terminal step synchronously
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    Workflow_Instance__c inst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', inst.Status__c);
+
+    // Exactly one lifecycle event, describing the successful terminal outcome.
+    System.assertEquals(
+      1,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'A completed workflow publishes exactly one lifecycle event'
+    );
+    Workflow_Lifecycle__e evt = WorkflowLifecyclePublisher.publishedEvents[0];
+    System.assertEquals(instanceId, evt.Workflow_Instance_Id__c);
+    System.assertEquals('Completed', evt.Status__c);
+    System.assertEquals(true, evt.Is_Success__c);
+    System.assertEquals('LifecycleHappyKey', evt.Correlation_Key__c);
+    System.assertEquals(
+      'WorkflowEngineTest.HappyWorkflow',
+      evt.Workflow_Name__c
+    );
+  }
+
+  @isTest
+  static void testLifecycleEventOnFailure() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.CustomRetryWorkflow',
+      'LifecycleRetryKey',
+      null
+    );
+    Test.stopTest(); // First attempt -> Retrying
+
+    WorkflowEngine.runStep(instanceId); // Second attempt -> Retrying
+    WorkflowEngine.runStep(instanceId); // Third attempt -> exceeds max -> Failed
+
+    Workflow_Instance__c inst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', inst.Status__c);
+
+    System.assertEquals(
+      1,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'A failed workflow publishes exactly one lifecycle event'
+    );
+    Workflow_Lifecycle__e evt = WorkflowLifecyclePublisher.publishedEvents[0];
+    System.assertEquals('Failed', evt.Status__c);
+    System.assertEquals(false, evt.Is_Success__c);
+    System.assertNotEquals(
+      null,
+      evt.Failure_Detail__c,
+      'Failure detail is sourced from Error_Message__c'
+    );
+    System.assert(
+      evt.Failure_Detail__c.contains('Max retries exceeded'),
+      'Failure detail carries the engine error message'
+    );
+  }
+
+  @isTest
+  static void testLifecycleExactlyOnceForContinueAsNewChain() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.DaemonWorkflow',
+      'LifecycleDaemonKey',
+      0
+    );
+    // Run 1: counter 0 -> ContinuedAsNew (no event)
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    Workflow_Instance__c run2 = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :instanceId
+    ];
+    // Run 2: counter 1 -> ContinuedAsNew (no event)
+    new WorkflowOrchestrator(run2.Id).execute(null);
+
+    Workflow_Instance__c run3 = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :run2.Id
+    ];
+    // Run 3: counter 2 -> Completed (exactly one event for the whole chain)
+    new WorkflowOrchestrator(run3.Id).execute(null);
+
+    System.assertEquals(
+      'Completed',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :run3.Id].Status__c
+    );
+
+    System.assertEquals(
+      1,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'A ContinuedAsNew chain emits exactly one terminal event — on the final successor only'
+    );
+    Workflow_Lifecycle__e evt = WorkflowLifecyclePublisher.publishedEvents[0];
+    System.assertEquals(
+      run3.Id,
+      evt.Workflow_Instance_Id__c,
+      'The single event references the final successor instance'
+    );
+    System.assertEquals('Completed', evt.Status__c);
+    System.assertEquals(true, evt.Is_Success__c);
+  }
+
+  @isTest
+  static void testLifecycleEventOnCancellation() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SignaledWorkflow',
+      'LifecycleCancelKey',
+      null
+    );
+    Test.stopTest(); // Runs SignaledStep which suspends awaiting a signal
+
+    WorkflowEngine.cancel(instanceId, false); // No compensations -> Cancelled
+
+    Workflow_Instance__c inst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Cancelled', inst.Status__c);
+
+    System.assertEquals(
+      1,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'A cancelled workflow publishes exactly one lifecycle event'
+    );
+    Workflow_Lifecycle__e evt = WorkflowLifecyclePublisher.publishedEvents[0];
+    System.assertEquals('Cancelled', evt.Status__c);
+    System.assertEquals(false, evt.Is_Success__c);
+    System.assertEquals(
+      'WorkflowEngineTest.SignaledWorkflow',
+      evt.Workflow_Name__c,
+      'Cancellation event carries the workflow name (query was widened for it)'
+    );
+  }
+
+  @isTest
+  static void testLifecycleToggleDisablesEmission() {
+    WorkflowEngine.publishLifecycleEvents = false;
+
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'LifecycleToggleKey',
+      'StartVal'
+    );
+    Test.stopTest();
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    System.assertEquals(
+      'Completed',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId]
+      .Status__c,
+      'Disabling the toggle does not affect the terminal transition itself'
+    );
+    System.assertEquals(
+      0,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'No lifecycle event is published when the operator toggle is off'
+    );
+  }
+
+  @isTest
+  static void testLifecyclePublishFailureDoesNotBreakTransition() {
+    WorkflowLifecyclePublisher.throwTestException = true;
+
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'LifecycleIsolationKey',
+      'StartVal'
+    );
+    Test.stopTest();
+    // Terminal transition runs through the (failing) publish site and must survive.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    System.assertEquals(
+      'Completed',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId]
+      .Status__c,
+      'A publish failure is swallowed and never rolls back the terminal write'
+    );
+    System.assertEquals(
+      0,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'The simulated publish failure recorded no delivered event'
+    );
+  }
 }
