@@ -2900,4 +2900,56 @@ public class WorkflowEngineTest {
       'The simulated publish failure recorded no delivered event'
     );
   }
+
+  @isTest
+  static void testLifecycleEventOnCompensationDrain() {
+    // Regression: the compensation drain re-queries the instance, and the
+    // terminal publish must carry Correlation_Key__c (was dropped from that
+    // re-query, which would have thrown an unqueried-field exception and rolled
+    // back the Compensated write).
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Correlation_Key__c = 'LifecycleCompKey',
+      Status__c = 'Compensating',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+      ),
+      Input__c = '{"test": true}'
+    );
+    insert inst;
+
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep',
+      Status__c = 'Completed',
+      Input__c = '{"stepInput": 1}',
+      Output__c = '{"stepOutput": 2}'
+    );
+
+    Test.startTest();
+    WorkflowEngine.runStep(inst.Id, null); // Compensate step
+    WorkflowEngine.runStep(inst.Id, null); // Stack drained -> Compensated + publish
+    Test.stopTest();
+
+    System.assertEquals(
+      'Compensated',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
+      .Status__c,
+      'Compensation drain reaches the terminal state (no publish-induced rollback)'
+    );
+    System.assertEquals(
+      1,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'Compensation drain publishes exactly one lifecycle event'
+    );
+    Workflow_Lifecycle__e evt = WorkflowLifecyclePublisher.publishedEvents[0];
+    System.assertEquals('Compensated', evt.Status__c);
+    System.assertEquals(false, evt.Is_Success__c);
+    System.assertEquals(
+      'LifecycleCompKey',
+      evt.Correlation_Key__c,
+      'The event carries the correlation key from the widened re-query'
+    );
+  }
 }

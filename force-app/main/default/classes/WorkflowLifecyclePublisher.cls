@@ -47,6 +47,11 @@ public inherited sharing class WorkflowLifecyclePublisher {
   @TestVisible
   private static Boolean throwTestException = false;
 
+  // When true (test context only), simulates an exhausted DML-statement budget so
+  // the limit-guard skip path can be proven without burning 150 real statements.
+  @TestVisible
+  private static Boolean forceDmlBudgetExhausted = false;
+
   /**
    * Publishes a lifecycle event for a single instance, if it is in an emitting
    * terminal state. Safe to call after any instance write; non-terminal and
@@ -62,6 +67,12 @@ public inherited sharing class WorkflowLifecyclePublisher {
   /**
    * Bulk variant for transitions that finalize many instances at once (e.g. the
    * watchdog heartbeat). Only emitting terminal states publish.
+   *
+   * The entire body is wrapped in a single catch-all: building an event reads
+   * instance fields (e.g. Correlation_Key__c), and a caller passing an
+   * under-queried SObject would otherwise throw an SObjectException that rolls
+   * back the terminal-state write. Fire-and-forget must never disrupt the
+   * workflow transaction, so any failure here is logged and swallowed.
    */
   public static void publish(List<Workflow_Instance__c> instances) {
     if (!WorkflowEngine.publishLifecycleEvents) {
@@ -71,6 +82,64 @@ public inherited sharing class WorkflowLifecyclePublisher {
       return;
     }
 
+    try {
+      List<Workflow_Lifecycle__e> events = buildEvents(instances);
+      if (events.isEmpty()) {
+        return;
+      }
+
+      // Never spend the transaction's last DML statement here. EventBus.publish
+      // consumes a DML statement, and attempting it over budget throws an
+      // uncatchable System.LimitException that would roll back the terminal-state
+      // write — defeating the fire-and-forget contract precisely for the
+      // high-limit workflows that need it most. Drop the best-effort event instead.
+      if (
+        forceDmlBudgetExhausted ||
+        Limits.getDmlStatements() >= Limits.getLimitDmlStatements()
+      ) {
+        System.debug(
+          LoggingLevel.WARN,
+          'Skipping Workflow_Lifecycle__e publish: DML statement budget exhausted.'
+        );
+        return;
+      }
+
+      if (Test.isRunningTest() && throwTestException) {
+        throw new WorkflowEngine.WorkflowException(
+          'Simulated EventBus.publish failure'
+        );
+      }
+
+      List<Database.SaveResult> results = EventBus.publish(events);
+      for (Database.SaveResult sr : results) {
+        if (!sr.isSuccess()) {
+          for (Database.Error err : sr.getErrors()) {
+            System.debug(
+              LoggingLevel.WARN,
+              'Workflow_Lifecycle__e publish error: ' +
+                err.getStatusCode() +
+                ': ' +
+                err.getMessage()
+            );
+          }
+        }
+      }
+      if (Test.isRunningTest()) {
+        publishedEvents.addAll(events);
+      }
+    } catch (Exception ex) {
+      // Fire-and-forget: log and swallow. A publish failure must never roll back
+      // the terminal-state write, fail the instance, or break the RUN_STEP chain.
+      System.debug(
+        LoggingLevel.WARN,
+        'Workflow_Lifecycle__e publish failed (suppressed): ' + ex.getMessage()
+      );
+    }
+  }
+
+  private static List<Workflow_Lifecycle__e> buildEvents(
+    List<Workflow_Instance__c> instances
+  ) {
     List<Workflow_Lifecycle__e> events = new List<Workflow_Lifecycle__e>();
     for (Workflow_Instance__c instance : instances) {
       if (instance == null || instance.Id == null) {
@@ -99,45 +168,7 @@ public inherited sharing class WorkflowLifecyclePublisher {
         )
       );
     }
-
-    if (events.isEmpty()) {
-      return;
-    }
-    publishEvents(events);
-  }
-
-  private static void publishEvents(List<Workflow_Lifecycle__e> events) {
-    try {
-      if (Test.isRunningTest() && throwTestException) {
-        throw new WorkflowEngine.WorkflowException(
-          'Simulated EventBus.publish failure'
-        );
-      }
-      List<Database.SaveResult> results = EventBus.publish(events);
-      for (Database.SaveResult sr : results) {
-        if (!sr.isSuccess()) {
-          for (Database.Error err : sr.getErrors()) {
-            System.debug(
-              LoggingLevel.WARN,
-              'Workflow_Lifecycle__e publish error: ' +
-                err.getStatusCode() +
-                ': ' +
-                err.getMessage()
-            );
-          }
-        }
-      }
-      if (Test.isRunningTest()) {
-        publishedEvents.addAll(events);
-      }
-    } catch (Exception ex) {
-      // Fire-and-forget: log and swallow. A publish failure must never roll back
-      // the terminal-state write, fail the instance, or break the RUN_STEP chain.
-      System.debug(
-        LoggingLevel.WARN,
-        'Workflow_Lifecycle__e publish failed (suppressed): ' + ex.getMessage()
-      );
-    }
+    return events;
   }
 
   private static String truncate(String value, Integer maxLength) {

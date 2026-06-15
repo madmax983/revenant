@@ -2252,7 +2252,9 @@ public inherited sharing class WorkflowEngine {
         Compensation_Stack__c,
         Definition_Version__c,
         Workflow_Name__c,
-        Input__c
+        Input__c,
+        Correlation_Key__c,
+        Error_Message__c
       FROM Workflow_Instance__c
       WHERE Id = :instance.Id
       WITH SYSTEM_MODE

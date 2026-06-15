@@ -244,4 +244,57 @@ private class WorkflowLifecyclePublisherTest {
 
     System.assertEquals(0, WorkflowLifecyclePublisher.publishedEvents.size());
   }
+
+  @isTest
+  static void skipsPublishWhenDmlBudgetExhausted() {
+    // EventBus.publish consumes a DML statement; over budget it throws an
+    // uncatchable LimitException that would roll back the terminal write. The
+    // guard must drop the event instead — never attempt the publish.
+    WorkflowLifecyclePublisher.forceDmlBudgetExhausted = true;
+    Workflow_Instance__c inst = makeInstance('Completed', null);
+
+    Test.startTest();
+    WorkflowLifecyclePublisher.publish(inst);
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'When the DML budget is exhausted the event is dropped, not published'
+    );
+    // The terminal-state write is untouched (no rollback).
+    System.assertEquals(
+      'Completed',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id].Status__c
+    );
+  }
+
+  @isTest
+  static void underQueriedInstanceFieldDoesNotThrow() {
+    // A caller that passes a terminal instance missing a queried field (here
+    // Correlation_Key__c) must not blow up the transaction: building the event
+    // is inside the catch-all, so the SObjectException is swallowed.
+    Workflow_Instance__c full = makeInstance('Completed', null);
+    Workflow_Instance__c partial = [
+      SELECT Id, Status__c, Workflow_Name__c
+      FROM Workflow_Instance__c
+      WHERE Id = :full.Id
+    ];
+
+    Test.startTest();
+    WorkflowLifecyclePublisher.publish(partial); // reads Correlation_Key__c (unqueried)
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'An under-queried instance is swallowed, not published, and never throws'
+    );
+    System.assertEquals(
+      'Completed',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :full.Id]
+      .Status__c,
+      'The terminal-state write is preserved despite the under-queried instance'
+    );
+  }
 }
