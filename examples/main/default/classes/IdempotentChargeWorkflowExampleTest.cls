@@ -134,6 +134,73 @@ public class IdempotentChargeWorkflowExampleTest {
     );
   }
 
+  /**
+   * The loop/polling case (Codex P2): when a workflow genuinely revisits the
+   * same step in the same instance, each completed visit must produce a distinct
+   * key so the second visit's side effect is NOT wrongly deduped as a retry.
+   */
+  @isTest
+  static void testDistinctVisitsAreNotDeduped() {
+    MockIdempotentPaymentGateway.reset();
+    Id instanceId = '00D000000000009';
+    String stepName = 'IdempotentChargeWorkflowExample.ChargePaymentStep';
+
+    StepContext visitZero = new StepContext(
+      instanceId,
+      'IdempotentChargeWorkflowExample.ChargeWorkflow',
+      stepName,
+      '{"amountCents":500}',
+      null,
+      null,
+      '{"amountCents":500}',
+      1,
+      0
+    );
+    StepContext visitOne = new StepContext(
+      instanceId,
+      'IdempotentChargeWorkflowExample.ChargeWorkflow',
+      stepName,
+      '{"amountCents":500}',
+      null,
+      null,
+      '{"amountCents":500}',
+      1,
+      1
+    );
+
+    Map<String, Object> outZero = (Map<String, Object>) JSON.deserializeUntyped(
+      new IdempotentChargeWorkflowExample.ChargePaymentStep()
+        .execute(visitZero)
+        .outputJson
+    );
+    Map<String, Object> outOne = (Map<String, Object>) JSON.deserializeUntyped(
+      new IdempotentChargeWorkflowExample.ChargePaymentStep()
+        .execute(visitOne)
+        .outputJson
+    );
+
+    System.assertEquals(
+      false,
+      outZero.get('deduplicated'),
+      'First visit should produce a real charge'
+    );
+    System.assertEquals(
+      false,
+      outOne.get('deduplicated'),
+      'A genuine second visit must charge again, not be deduped as a retry'
+    );
+    System.assertNotEquals(
+      outZero.get('chargeId'),
+      outOne.get('chargeId'),
+      'Distinct visits must produce distinct charges'
+    );
+    System.assertEquals(
+      2,
+      MockIdempotentPaymentGateway.effectiveSideEffectCount,
+      'Two distinct visits must produce two effective charges'
+    );
+  }
+
   private static String completedChargeId(Id instanceId, String stepName) {
     Workflow_Step_Execution__c se = [
       SELECT Output__c

@@ -954,6 +954,16 @@ public inherited sharing class WorkflowEngine {
     }
     WorkflowStep stepInstance = (WorkflowStep) stepType.newInstance();
 
+    // Visit sequence: number of already-completed runs of this step in this
+    // instance. Stable across retries/re-drives/resumes of the current
+    // (not-yet-completed) visit, but increments when a loop revisits the step --
+    // so the idempotency key stays stable per visit yet distinct across visits.
+    Integer stepVisit = countCompletedStepExecutions(
+      instanceId,
+      activeStepName,
+      new Set<String>{ 'Completed' }
+    );
+
     StepContext context = new StepContext(
       instanceId,
       instance.Workflow_Name__c,
@@ -964,7 +974,8 @@ public inherited sharing class WorkflowEngine {
       resolvePayload(instance.Input__c),
       instance.Definition_Version__c != null
         ? (Integer) instance.Definition_Version__c
-        : 1
+        : 1,
+      stepVisit
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts
@@ -1004,6 +1015,28 @@ public inherited sharing class WorkflowEngine {
     } else {
       update as system stepExec;
     }
+  }
+
+  /**
+   * Counts terminal (completed) executions of a step name within an instance.
+   * Used to derive the per-visit idempotency sequence for StepContext: the
+   * current (not-yet-completed) visit is excluded, so this is 0 for the first
+   * visit and increments each time the engine loops back to the same step.
+   */
+  private static Integer countCompletedStepExecutions(
+    Id instanceId,
+    String stepName,
+    Set<String> completedStatuses
+  ) {
+    return [
+      SELECT COUNT()
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = :stepName
+        AND Status__c IN :completedStatuses
+      WITH SYSTEM_MODE
+    ];
   }
 
   private static void handleStepResult(
@@ -2358,6 +2391,16 @@ public inherited sharing class WorkflowEngine {
       prevOutput = completedBefore[0].Output__c;
     }
 
+    // Visit sequence for the compensation of this forward step (count of already
+    // -compensated runs of this compensation step name). Almost always 0, but
+    // kept symmetric with the forward path so a looped compensatable step gets a
+    // distinct key per compensation.
+    Integer compensateVisit = countCompletedStepExecutions(
+      instance.Id,
+      compensationStepLogName,
+      new Set<String>{ 'Compensated', 'Completed' }
+    );
+
     StepContext context = new StepContext(
       instance.Id,
       instance.Workflow_Name__c,
@@ -2368,7 +2411,8 @@ public inherited sharing class WorkflowEngine {
       resolvePayload(instance.Input__c),
       instance.Definition_Version__c != null
         ? (Integer) instance.Definition_Version__c
-        : 1
+        : 1,
+      compensateVisit
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts
