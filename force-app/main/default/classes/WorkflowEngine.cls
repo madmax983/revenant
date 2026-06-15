@@ -169,6 +169,18 @@ public inherited sharing class WorkflowEngine {
     // Get-or-start: return an existing instance within the dedup scope (active,
     // and optionally recently terminal within the configured window) instead of
     // throwing or inserting a duplicate. No step-execution write, no enqueue.
+    //
+    // Concurrency note (known limitation): the unique Active_Correlation_Key__c
+    // index is the hard backstop for the active<->active race. Terminal-window
+    // dedup is best-effort under concurrent redelivery: if a sibling start
+    // inserts AND transitions to terminal in the narrow window between this
+    // pre-query and our insert, the trigger has already cleared its active key,
+    // so our insert succeeds and a duplicate of a just-finished, in-window run
+    // can be created. Closing this fully would require a recheck-after-insert
+    // (an extra SOQL on every successful start) or a lock surviving the terminal
+    // transition; both are intentionally avoided here to keep the start path to
+    // a single indexed SOQL. The common cases (active redelivery, sequential
+    // post-completion redelivery) are fully covered.
     if (String.isNotBlank(correlationKey)) {
       Workflow_Instance__c match = findExistingByKey(
           new Set<String>{ correlationKey },
