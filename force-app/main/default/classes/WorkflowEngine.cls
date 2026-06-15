@@ -1027,13 +1027,24 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  // Caps how many signals a single parallel-branch accessor call claims at read
+  // time. A claim writes Processing now and the matching COMPLETE writes
+  // Consumed later in the SAME transaction, so claim + consume both draw on the
+  // 10 000 DML-row governor limit; 4 000 leaves headroom for the consume pass
+  // and the engine's other DML. Bounding the claim keeps a branch facing a huge
+  // redelivery backlog from blowing the limit on every attempt and stalling
+  // forever; any rows beyond the cap stay Received for a later read.
+  private static final Integer PARALLEL_CLAIM_ROW_CAP = 4000;
+
   /**
    * Signal source for parallel branch steps. Atomically claims each signal at
    * read time (Received → Processing) so two concurrent branches cannot both
    * process the same payload. The claim is held for the lifetime of the current
    * execution attempt: COMPLETE promotes Processing → Consumed; any other
    * outcome (YIELD, SUSPEND, SLEEP, RETRY, …) rolls the claim back to Received
-   * so the branch can re-observe the signal on its next run.
+   * so the branch can re-observe the signal on its next run. Each call claims at
+   * most PARALLEL_CLAIM_ROW_CAP rows so the read can never exceed the DML-row
+   * limit before the step returns.
    *
    * Two-step pattern: ORDER BY query to find the target ID, then a FOR UPDATE
    * lock on that ID alone to atomically claim it without holding a broad table
@@ -1049,7 +1060,8 @@ public inherited sharing class WorkflowEngine {
     }
 
     public List<StepContext.Signal> getPendingSignals(String signalName) {
-      // Step 1: find candidates in arrival order (ORDER BY, no FOR UPDATE)
+      // Step 1: find candidates in arrival order (ORDER BY, no FOR UPDATE),
+      // bounded so a huge backlog cannot be claimed (and DML'd) all at once.
       List<Workflow_Signal__c> candidates;
       if (String.isBlank(signalName)) {
         candidates = [
@@ -1058,6 +1070,7 @@ public inherited sharing class WorkflowEngine {
           WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Received'
           WITH SYSTEM_MODE
           ORDER BY CreatedDate ASC, Id ASC
+          LIMIT :PARALLEL_CLAIM_ROW_CAP
         ];
       } else {
         candidates = [
@@ -1069,6 +1082,7 @@ public inherited sharing class WorkflowEngine {
             AND Signal_Name__c = :signalName
           WITH SYSTEM_MODE
           ORDER BY CreatedDate ASC, Id ASC
+          LIMIT :PARALLEL_CLAIM_ROW_CAP
         ];
       }
       if (candidates.isEmpty()) {
@@ -1268,41 +1282,97 @@ public inherited sharing class WorkflowEngine {
 
   /**
    * Marks the signals a step matched consumed at its successful transition.
-   * Re-queries the instance's still-Received (or parallel-branch-claimed
-   * Processing) signals filtered to the matched names so a same-name
-   * at-least-once duplicate delivered while the step executed is consumed too.
-   * A name only probed absent never consumes a signal that arrives afterwards.
-   * Capped at 9 000 rows per call to stay safely below the 10 000 DML-row
-   * governor limit; any excess Received rows for the same names are consumed on
-   * the next COMPLETE that observes them (which cannot re-process them since the
-   * step no longer matches once it has completed).
+   * The exact rows the step observed/claimed (context.getConsumedSignalIds())
+   * are consumed FIRST so they can never be starved by the row cap when a name
+   * has a large backlog of duplicates; only then is any remaining budget spent
+   * cleaning up same-name at-least-once duplicates (including one delivered
+   * mid-execution after the snapshot was taken). A name only probed absent never
+   * consumes a signal that arrives afterwards (it contributes no matched id and
+   * no matched name).
+   *
+   * Scoping by transition kind:
+   *  - A parallel branch consumes ONLY its own claimed ids. Those rows are its
+   *    exclusively-held Processing claims (locked + flipped atomically at read),
+   *    so promoting them to Consumed cannot race a sibling. Name-based duplicate
+   *    cleanup is deliberately skipped here: a concurrent sibling may legitimately
+   *    hold (or be about to claim) another row of the same name, and consuming it
+   *    would strip a signal from a branch that has not durably finished.
+   *  - A serial step additionally cleans up same-name duplicates (no sibling can
+   *    be racing them), catching an at-least-once redelivery that arrived after
+   *    the snapshot was taken.
+   *
+   * Matched ids are always consumed first so the exact row the step read is never
+   * left behind in favor of unrelated duplicates when a name has a large backlog.
+   * The combined update is capped at 9 000 rows to stay below the 10 000 DML-row
+   * governor limit; any excess duplicate rows are consumed on the next COMPLETE
+   * that observes them (which cannot re-process them since the step no longer
+   * matches once it has completed).
    */
-  private static void markSignalsConsumed(Id instanceId, StepContext context) {
+  private static void markSignalsConsumed(
+    Id instanceId,
+    StepContext context,
+    Boolean parallelBranch
+  ) {
     if (context == null) {
       return;
     }
+    Set<Id> matchedIds = context.getConsumedSignalIds();
+    if (matchedIds == null) {
+      matchedIds = new Set<Id>();
+    }
     Set<String> matchedNames = context.getConsumedSignalNames();
-    if (matchedNames == null || matchedNames.isEmpty()) {
+    if (matchedNames == null) {
+      matchedNames = new Set<String>();
+    }
+    // A step that matched nothing triggers no query, keeping non-signal steps cheap.
+    if (matchedIds.isEmpty() && matchedNames.isEmpty()) {
       return;
     }
 
-    List<Workflow_Signal__c> toConsume = [
-      SELECT Id, Status__c
-      FROM Workflow_Signal__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Status__c IN ('Received', 'Processing')
-        AND Signal_Name__c IN :matchedNames
-      WITH SYSTEM_MODE
-      LIMIT 9000
-    ];
+    final Integer ROW_CAP = 9000;
+    Map<Id, Workflow_Signal__c> toConsume = new Map<Id, Workflow_Signal__c>();
+
+    // 1. Consume the exact rows the step observed/claimed first. For a parallel
+    //    branch these claimed ids are the ONLY safe set (see scoping note above).
+    if (!matchedIds.isEmpty()) {
+      for (Workflow_Signal__c sig : [
+        SELECT Id
+        FROM Workflow_Signal__c
+        WHERE Id IN :matchedIds AND Status__c IN ('Received', 'Processing')
+        WITH SYSTEM_MODE
+        LIMIT 9000
+      ]) {
+        toConsume.put(sig.Id, sig);
+      }
+    }
+
+    // 2. Serial steps only: spend remaining budget cleaning up same-name
+    //    duplicates that were not part of the snapshot (an at-least-once
+    //    redelivery that landed mid-execution), so they cannot reappear later.
+    Integer remaining = ROW_CAP - toConsume.size();
+    if (!parallelBranch && !matchedNames.isEmpty() && remaining > 0) {
+      for (Workflow_Signal__c sig : [
+        SELECT Id
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Status__c IN ('Received', 'Processing')
+          AND Signal_Name__c IN :matchedNames
+          AND Id NOT IN :matchedIds
+        WITH SYSTEM_MODE
+        LIMIT :remaining
+      ]) {
+        toConsume.put(sig.Id, sig);
+      }
+    }
+
     if (toConsume.isEmpty()) {
       return;
     }
-    for (Workflow_Signal__c sig : toConsume) {
+    for (Workflow_Signal__c sig : toConsume.values()) {
       sig.Status__c = 'Consumed';
     }
-    update as system toConsume;
+    update as system toConsume.values();
   }
 
   private static void saveStepExec(Workflow_Step_Execution__c stepExec) {
@@ -1379,8 +1449,9 @@ public inherited sharing class WorkflowEngine {
       // Tie signal consumption to the step's durable COMPLETE transition: only
       // now (not on yield/retry/suspend) are the signals this step observed
       // marked consumed, so an at-least-once redelivered duplicate cannot be
-      // reprocessed by a later step.
-      markSignalsConsumed(instance.Id, context);
+      // reprocessed by a later step. A parallel branch consumes only its own
+      // claimed ids so it cannot strip a sibling branch's signal.
+      markSignalsConsumed(instance.Id, context, isParallel);
 
       // Update compensation stack if step is CompensatableStep
       Type stepType = Type.forName(stepExec.Step_Name__c);
@@ -1680,8 +1751,10 @@ public inherited sharing class WorkflowEngine {
       saveStepExec(stepExec);
 
       // The spawning step durably completed; consume the signals it observed so
-      // they are not re-loaded into the parallel branches it fans out to.
-      markSignalsConsumed(instance.Id, context);
+      // they are not re-loaded into the parallel branches it fans out to. The
+      // spawning step runs serially (it is the fan-out point, not a branch), so
+      // same-name duplicate cleanup is safe here.
+      markSignalsConsumed(instance.Id, context, false);
 
       String parallelStepsStr = String.join(result.parallelStepNames, ',');
       instance.Current_Step__c = parallelStepsStr;
@@ -2797,8 +2870,9 @@ public inherited sharing class WorkflowEngine {
 
       // A compensating step that read signals durably completed; consume them on
       // the same contract as a forward step so a later compensation attempt or
-      // step does not re-observe them.
-      markSignalsConsumed(instance.Id, context);
+      // step does not re-observe them. Compensation runs serially (LIFO), so
+      // same-name duplicate cleanup is safe.
+      markSignalsConsumed(instance.Id, context, false);
 
       stack.remove(stack.size() - 1);
       instance.Compensation_Stack__c = JSON.serialize(stack);

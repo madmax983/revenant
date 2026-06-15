@@ -171,7 +171,41 @@ public inherited sharing class StepContext {
       List<Signal> loaded = (signalSource != null)
         ? signalSource.getPendingSignals(null)
         : null;
-      this.allSignals = (loaded != null) ? loaded : new List<Signal>();
+      List<Signal> all = (loaded != null) ? loaded : new List<Signal>();
+      // A parallel-branch source claims rows it returns (Received -> Processing),
+      // so a row already claimed by an earlier named accessor is no longer in the
+      // source's Received view. Merge those cached claims back in so the full
+      // list stays consistent with everything this context has observed/claimed.
+      Set<Id> present = new Set<Id>();
+      for (Signal s : all) {
+        if (s.signalId != null) {
+          present.add(s.signalId);
+        }
+      }
+      for (Signal cached : latestByName.values()) {
+        if (
+          cached != null &&
+          cached.isPresent() &&
+          cached.signalId != null &&
+          !present.contains(cached.signalId)
+        ) {
+          all.add(cached);
+          present.add(cached.signalId);
+        }
+      }
+      for (List<Signal> cachedList : byNameCache.values()) {
+        for (Signal cached : cachedList) {
+          if (
+            cached != null &&
+            cached.signalId != null &&
+            !present.contains(cached.signalId)
+          ) {
+            all.add(cached);
+            present.add(cached.signalId);
+          }
+        }
+      }
+      this.allSignals = all;
       this.allLoaded = true;
     }
     return this.allSignals;
@@ -201,7 +235,26 @@ public inherited sharing class StepContext {
       List<Signal> loaded = (signalSource != null)
         ? signalSource.getPendingSignals(signalName)
         : null;
-      byNameCache.put(key, (loaded != null) ? loaded : new List<Signal>());
+      List<Signal> matches = (loaded != null) ? loaded : new List<Signal>();
+      // A prior getSignal/hasSignal for this name may have already claimed the
+      // latest matching row (flipping it out of the source's Received view in a
+      // parallel branch), so merge that cached claim back in. Otherwise a
+      // guard-then-read pattern (hasSignal/getSignal then getSignals(name)) would
+      // omit the very payload it matched while still consuming it at COMPLETE.
+      Signal cachedLatest = latestByName.get(key);
+      if (cachedLatest != null && cachedLatest.isPresent()) {
+        Boolean alreadyIn = false;
+        for (Signal s : matches) {
+          if (s.signalId != null && s.signalId == cachedLatest.signalId) {
+            alreadyIn = true;
+            break;
+          }
+        }
+        if (!alreadyIn) {
+          matches.add(cachedLatest);
+        }
+      }
+      byNameCache.put(key, matches);
     }
     return byNameCache.get(key);
   }

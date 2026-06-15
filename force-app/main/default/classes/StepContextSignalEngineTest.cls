@@ -534,77 +534,170 @@ public class StepContextSignalEngineTest {
   }
 
   /**
-   * Verifies that a Processing signal (one already claimed by another branch)
-   * is also consumed when the SAME signal name is matched at COMPLETE time.
-   * This ensures in-flight duplicates cannot be re-processed even if they were
-   * claimed as Processing by a parallel branch and another branch completes.
+   * Verifies that a completing parallel branch consumes ONLY its own claimed
+   * signal and never a sibling branch's claim of the same name. A sibling that
+   * has not durably finished (its claim is still Processing, or was rolled back
+   * to Received after a yield/retry) must keep its signal so it can finish.
    */
   @isTest
-  static void testProcessingSignalConsumedAtParallelComplete() {
+  static void testParallelCompleteDoesNotConsumeSiblingClaim() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.ClaimRaceWorkflow',
-      'ProcessingConsumeKey',
+      'SiblingClaimKey',
       null
     );
 
     new WorkflowOrchestrator(instanceId).execute(null);
-    WorkflowEngine.signal('ProcessingConsumeKey', 'Fan', '{"x":1}');
-    WorkflowEngine.signal('ProcessingConsumeKey', 'Shared', '{"s":1}');
+    WorkflowEngine.signal('SiblingClaimKey', 'Fan', '{"x":1}');
+    WorkflowEngine.signal('SiblingClaimKey', 'Shared', '{"s":1}');
     // Fan-out: spawn step reads Fan (consumed), fans out branches.
     new WorkflowOrchestrator(instanceId).execute(null);
 
-    // Inject a duplicate 'Shared' signal in Processing status — simulating a
-    // racing branch that claimed it but has not yet committed.
-    Workflow_Signal__c processingDup = new Workflow_Signal__c(
+    // Simulate a sibling branch (Beta) that has already claimed its OWN copy of
+    // 'Shared' but has not yet durably completed -- its claim sits in Processing.
+    Workflow_Signal__c siblingClaim = new Workflow_Signal__c(
       Workflow_Instance__c = instanceId,
       Signal_Name__c = 'Shared',
       Payload__c = '{"s":2}',
       Status__c = 'Processing'
     );
-    insert processingDup;
+    insert siblingClaim;
 
-    // Alpha reads the Received 'Shared' (claims it), completes.
-    // markSignalsConsumed queries Status IN ('Received','Processing') for 'Shared',
-    // so it consumes BOTH the original (now Processing from Alpha's claim) AND
-    // the injected Processing duplicate.
+    // Alpha reads the Received 'Shared' (claims its own copy), then completes.
     new WorkflowOrchestrator(
         instanceId,
         'StepContextSignalEngineTest.ClaimBranchAlpha'
       )
       .execute(null);
 
+    // Alpha consumed only the row IT claimed.
     System.assertEquals(
-      0,
+      'Consumed',
       [
-        SELECT COUNT()
+        SELECT Status__c
         FROM Workflow_Signal__c
         WHERE
           Workflow_Instance__c = :instanceId
           AND Signal_Name__c = 'Shared'
-          AND Status__c NOT IN ('Consumed')
-      ],
-      'Both the claimed and in-flight Processing duplicates must be consumed at COMPLETE'
+          AND Id != :siblingClaim.Id
+      ]
+      .Status__c,
+      'Alpha must consume the copy it claimed'
     );
 
-    // Beta runs after — 'Shared' is fully consumed, output must be "absent".
+    // The sibling branch's Processing claim must be untouched -- consuming it
+    // would strip a signal from a branch that has not durably finished.
+    System.assertEquals(
+      'Processing',
+      [SELECT Status__c FROM Workflow_Signal__c WHERE Id = :siblingClaim.Id]
+      .Status__c,
+      'A completing branch must NOT consume a sibling branch claim of the same name'
+    );
+  }
+
+  // --- Guard-then-read returns the claimed payload (StepContext cache merge) --
+
+  public class GuardReadWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.GuardReadSpawnStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (currentStepName == 'StepContextSignalEngineTest.GuardReadSpawnStep') {
+        return 'StepContextSignalEngineTest.GuardReadJoinStep';
+      }
+      return null;
+    }
+  }
+
+  public class GuardReadSpawnStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      StepContext.Signal s = ctx.getSignal('Fan');
+      if (!s.isPresent()) {
+        return StepResult.suspend();
+      }
+      return StepResult.split(
+        new List<String>{
+          'StepContextSignalEngineTest.GuardReadBranch',
+          'StepContextSignalEngineTest.GuardReadOtherBranch'
+        },
+        s.payload
+      );
+    }
+  }
+
+  // Guard-then-read: hasSignal('Shared') (claims the latest row out of the
+  // source's Received view), then getSignals('Shared') -- which must still
+  // return that already-claimed payload, not an empty list.
+  public class GuardReadBranch implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      Boolean guard = ctx.hasSignal('Shared');
+      List<StepContext.Signal> all = ctx.getSignals('Shared');
+      String marker = guard
+        ? 'guard=true;count=' + all.size()
+        : 'guard=false;count=' + all.size();
+      // Confirm the payload survived the guard-then-read.
+      if (!all.isEmpty()) {
+        marker += ';payload=' + all[0].payload;
+      }
+      return StepResult.complete(null, marker);
+    }
+  }
+
+  public class GuardReadOtherBranch implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'other');
+    }
+  }
+
+  public class GuardReadJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, ctx.inputJson);
+    }
+  }
+
+  @isTest
+  static void testParallelGuardThenReadReturnsClaimedPayload() {
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.GuardReadWorkflow',
+      'GuardReadKey',
+      null
+    );
+
+    new WorkflowOrchestrator(instanceId).execute(null);
+    WorkflowEngine.signal('GuardReadKey', 'Fan', '{"x":1}');
+    WorkflowEngine.signal('GuardReadKey', 'Shared', '{"s":1}');
+    // Fan-out.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Run the guard-then-read branch.
     new WorkflowOrchestrator(
         instanceId,
-        'StepContextSignalEngineTest.ClaimBranchBeta'
+        'StepContextSignalEngineTest.GuardReadBranch'
       )
       .execute(null);
 
-    List<Workflow_Step_Execution__c> betaExecs = [
+    Workflow_Step_Execution__c branchExec = [
       SELECT Output__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :instanceId
-        AND Step_Name__c = 'StepContextSignalEngineTest.ClaimBranchBeta'
+        AND Step_Name__c = 'StepContextSignalEngineTest.GuardReadBranch'
         AND Status__c = 'Completed'
     ];
-    System.assertEquals(
-      '"absent"',
-      betaExecs[0].Output__c,
-      'Beta must see Shared as absent once Alpha consumed all copies'
+    System.assert(
+      branchExec.Output__c.contains('guard=true'),
+      'hasSignal must have observed the Shared signal'
+    );
+    System.assert(
+      branchExec.Output__c.contains('count=1'),
+      'getSignals(name) after hasSignal must still return the claimed signal, got: ' +
+      branchExec.Output__c
+    );
+    System.assert(
+      branchExec.Output__c.contains('payload={\\"s\\":1}') ||
+      branchExec.Output__c.contains('payload={"s":1}'),
+      'The claimed payload must survive the guard-then-read: ' +
+      branchExec.Output__c
     );
   }
 }
