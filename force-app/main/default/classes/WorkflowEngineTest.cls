@@ -2607,6 +2607,23 @@ public class WorkflowEngineTest {
     // The transient failure clears; the operator resumes the rollback.
     WorkflowEngineTest.compensationShouldFail = false;
     WorkflowEngine.resumeCompensation(inst.Id);
+
+    // The resumed rollback must remain cancel-driven, with the 'Cancelled' marker
+    // intact so that a suspend (RETRY/SLEEP) before the stack drains still restores
+    // the phase as 'Cancelling' rather than 'Compensating'.
+    Workflow_Instance__c resumed = [
+      SELECT Status__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Cancelling', resumed.Status__c);
+    System.assert(
+      resumed.Error_Message__c != null &&
+      resumed.Error_Message__c.contains('Cancelled'),
+      'Resumed cancel rollback must retain the Cancelled phase marker: ' +
+        resumed.Error_Message__c
+    );
+
     WorkflowEngine.runStep(inst.Id, null); // compensate succeeds -> stack drains
     Test.stopTest();
 

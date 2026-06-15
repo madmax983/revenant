@@ -2252,8 +2252,14 @@ public inherited sharing class WorkflowEngine {
       instance.Error_Message__c != null &&
       instance.Error_Message__c.contains('Cancelled');
     instance.Status__c = isCancelling ? 'Cancelling' : 'Compensating';
-    // Clear the stalled banner so the resumed rollback is no longer flagged.
-    instance.Error_Message__c = null;
+    // Clear the stalled "rollback incomplete" banner, but for a cancel-driven rollback
+    // keep a 'Cancelled' marker: runStep and the watchdog sleep-resume path read it to
+    // restore the phase as 'Cancelling' if a remaining compensation suspends (RETRY/
+    // SLEEP) before the stack drains. Without it the rollback would finish 'Compensated'
+    // instead of 'Cancelled'.
+    instance.Error_Message__c = isCancelling
+      ? 'Cancelled by user. Compensating.'
+      : null;
     update as system instance;
 
     // Append-only: create a FRESH pending compensation attempt for the stalled
