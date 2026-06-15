@@ -723,7 +723,16 @@ public inherited sharing class WorkflowEngine {
 
     Boolean isCompensating = (instance.Status__c == 'Compensating' ||
     instance.Status__c == 'Cancelling');
-    if (instance.Status__c == 'Suspended') {
+    // A compensation step that SUSPENDed (e.g. waiting on a signal) leaves the
+    // instance Suspended; signal() then flips it to Running before re-enqueueing.
+    // In either state a latest step ending in '_Compensate' means the instance
+    // is still compensating and must route to runCompensationStep, not the
+    // forward path -- otherwise a signal-driven compensation is skipped and the
+    // instance stays stuck Running with the compensation step pending.
+    if (
+      instance.Status__c == 'Suspended' ||
+      instance.Status__c == 'Running'
+    ) {
       List<Workflow_Step_Execution__c> latestSteps = [
         SELECT Step_Name__c
         FROM Workflow_Step_Execution__c
@@ -742,7 +751,14 @@ public inherited sharing class WorkflowEngine {
     }
 
     if (isCompensating) {
-      if (instance.Status__c == 'Suspended') {
+      // Re-assert the compensating status before running the step: runCompensationStep
+      // early-exits unless the instance is Compensating/Cancelling, so a
+      // Suspended (initial detection) or Running (signal-resumed) instance must
+      // be restored to the right compensation status first.
+      if (
+        instance.Status__c == 'Suspended' ||
+        instance.Status__c == 'Running'
+      ) {
         if (
           instance.Error_Message__c != null &&
           instance.Error_Message__c.contains('Cancelled')
@@ -1316,69 +1332,82 @@ public inherited sharing class WorkflowEngine {
       if (String.isBlank(signalName)) {
         return null;
       }
-      // Fetch recent candidates newest-first.
-      List<Workflow_Signal__c> candidates = [
-        SELECT Id, Signal_Name__c, Payload__c, CreatedDate
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Status__c = 'Received'
-          AND Signal_Name__c = :signalName
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC, Id DESC
-        LIMIT 10
-      ];
-      if (candidates.isEmpty()) {
-        return null;
-      }
-      // Row, statement or SOQL budget spent: a single-row lookup must still
-      // reflect database truth, so return the newest read-only (at-least-once)
-      // rather than reporting a false absence -- a branch that then suspends as
-      // if the signal never arrived would never be re-woken (its wake event
-      // already fired on insert) and would strand. No claim is issued (no
-      // budget), so mark capped to skip same-name cleanup at consume.
-      if (
-        claimBudget <= 0 ||
-        claimStatementBudget <= 0 ||
-        nearSoqlLimit()
-      ) {
-        capped = true;
-        Workflow_Signal__c c = candidates[0];
-        return new StepContext.Signal(
-          c.Id,
-          c.Signal_Name__c,
-          resolvePayload(c.Payload__c),
-          c.CreatedDate
-        );
-      }
-      // Try to claim each candidate newest-first; if a sibling wins the race on
-      // the newest row, fall back to the next-newest still-Received row instead
-      // of reporting absence while a matching signal is still available.
-      for (Workflow_Signal__c cand : candidates) {
-        Id targetId = cand.Id;
-        List<Workflow_Signal__c> locked = [
-          SELECT Id
+      // A sibling can claim the newest candidates between our query and lock. If
+      // an entire page of 10 is lost that way, a still-Received row just beyond
+      // the page must not be reported absent (which could strand it), so re-page
+      // (claimed rows are now Processing and drop out of the Received view) up to
+      // a bounded number of times.
+      for (Integer attempt = 0; attempt <= PARALLEL_CLAIM_PAGE_RETRIES; attempt++) {
+        // Fetch recent candidates newest-first.
+        List<Workflow_Signal__c> candidates = [
+          SELECT Id, Signal_Name__c, Payload__c, CreatedDate
           FROM Workflow_Signal__c
-          WHERE Id = :targetId AND Status__c = 'Received'
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Status__c = 'Received'
+            AND Signal_Name__c = :signalName
           WITH SYSTEM_MODE
-          FOR UPDATE
+          ORDER BY CreatedDate DESC, Id DESC
+          LIMIT 10
         ];
-        if (locked.isEmpty()) {
-          continue; // lost the race on this row; try the next-newest
+        if (candidates.isEmpty()) {
+          return null; // no matching Received rows remain
         }
-        locked[0].Status__c = 'Processing';
-        update as system locked[0];
-        claimBudget -= 1;
-        claimStatementBudget -= 1;
-        // claimed = true: this branch now exclusively owns the row.
-        return new StepContext.Signal(
-          cand.Id,
-          cand.Signal_Name__c,
-          resolvePayload(cand.Payload__c),
-          cand.CreatedDate,
-          true
-        );
+        // Row, statement or SOQL budget spent: a single-row lookup must still
+        // reflect database truth, so return the newest read-only (at-least-once)
+        // rather than reporting a false absence -- a branch that then suspends as
+        // if the signal never arrived would never be re-woken (its wake event
+        // already fired on insert) and would strand. No claim is issued (no
+        // budget), so mark capped to skip same-name cleanup at consume.
+        if (
+          claimBudget <= 0 ||
+          claimStatementBudget <= 0 ||
+          nearSoqlLimit()
+        ) {
+          capped = true;
+          Workflow_Signal__c c = candidates[0];
+          return new StepContext.Signal(
+            c.Id,
+            c.Signal_Name__c,
+            resolvePayload(c.Payload__c),
+            c.CreatedDate
+          );
+        }
+        // Try to claim each candidate newest-first; if a sibling wins the race on
+        // the newest row, fall back to the next-newest still-Received row instead
+        // of reporting absence while a matching signal is still available.
+        for (Workflow_Signal__c cand : candidates) {
+          Id targetId = cand.Id;
+          List<Workflow_Signal__c> locked = [
+            SELECT Id
+            FROM Workflow_Signal__c
+            WHERE Id = :targetId AND Status__c = 'Received'
+            WITH SYSTEM_MODE
+            FOR UPDATE
+          ];
+          if (locked.isEmpty()) {
+            continue; // lost the race on this row; try the next-newest
+          }
+          locked[0].Status__c = 'Processing';
+          update as system locked[0];
+          claimBudget -= 1;
+          claimStatementBudget -= 1;
+          // claimed = true: this branch now exclusively owns the row.
+          return new StepContext.Signal(
+            cand.Id,
+            cand.Signal_Name__c,
+            resolvePayload(cand.Payload__c),
+            cand.CreatedDate,
+            true
+          );
+        }
+        // Every candidate in this page was claimed by a sibling between query and
+        // lock; those rows are now Processing and drop out of the next query, so
+        // re-page to consider rows beyond the first 10.
       }
+      // Could not claim a matching row within the retry budget (siblings own the
+      // visible matches). Mark capped so consume skips same-name cleanup.
+      capped = true;
       return null;
     }
   }
@@ -1597,6 +1626,16 @@ public inherited sharing class WorkflowEngine {
     //    capped read so backlog rows the step never observed are not consumed
     //    (lost); restricted to still-Received rows so it never steals a sibling's
     //    claim.
+    //
+    //    Known limitation (accepted): signalReadWasCapped() is a single flag for
+    //    the whole execution, so if ANY name's read was capped, duplicate cleanup
+    //    is suppressed for EVERY matched name -- even names whose own read was not
+    //    capped. Those names then degrade to at-least-once (an older duplicate may
+    //    survive and be reprocessed later). Scoping suppression per-name would
+    //    require threading capped-name tracking through the SignalSource into
+    //    consume; it is not done because the cap only triggers at pathological
+    //    scale (thousands of unconsumed same-name rows on one instance), where
+    //    at-least-once is already the documented contract.
     Integer remaining = ROW_CAP - toConsume.size();
     if (
       !parallelBranch &&

@@ -307,7 +307,10 @@ public inherited sharing class StepContext {
     if (allLoaded && !allReadCapped) {
       List<Signal> matches = new List<Signal>();
       for (Signal s : allSignals) {
-        if (s.name == signalName) {
+        // Case-insensitive to match the source SOQL (Text field equality) and
+        // the lower-cased per-name caches; a case-only difference must not make
+        // an already-delivered signal look absent.
+        if (s.name != null && s.name.equalsIgnoreCase(signalName)) {
           matches.add(s);
         }
       }
@@ -363,7 +366,8 @@ public inherited sharing class StepContext {
     if (allLoaded && !allReadCapped) {
       Signal latest = null;
       for (Signal s : allSignals) {
-        if (s.name == signalName) {
+        // Case-insensitive, matching the source SOQL and lower-cased caches.
+        if (s.name != null && s.name.equalsIgnoreCase(signalName)) {
           latest = s;
         }
       }

@@ -1303,6 +1303,72 @@ public class WorkflowEngineTest {
     );
   }
 
+  // A compensation that waits for a signal before rolling back.
+  public class SignalWaitCompensationStep implements CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'Success');
+    }
+    public StepResult compensate(StepContext ctx) {
+      if (!ctx.hasSignal('Rollback')) {
+        return StepResult.suspend();
+      }
+      return StepResult.complete(null, 'CompensatedAfterSignal');
+    }
+  }
+
+  @isTest
+  static void testSignalDrivenCompensationResumes() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Compensating',
+      Correlation_Key__c = 'CompKey',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.SignalWaitCompensationStep' }
+      ),
+      Input__c = '{"test": true}'
+    );
+    insert inst;
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.SignalWaitCompensationStep',
+      Status__c = 'Completed',
+      Output__c = '{}'
+    );
+
+    // First run: compensate() suspends waiting for the Rollback signal.
+    WorkflowEngine.runStep(inst.Id, null);
+    System.assertEquals(
+      'Suspended',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
+      .Status__c,
+      'Compensation should suspend until the signal arrives'
+    );
+
+    // Signal arrives: signal() flips the instance to Running and enqueues a resume.
+    WorkflowEngine.signal('CompKey', 'Rollback', '{}');
+
+    // Resume run: must route back into compensation (not the forward path) and finish.
+    WorkflowEngine.runStep(inst.Id, null);
+
+    System.assertEquals(
+      'Compensated',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
+      .Status__c,
+      'A signal-driven compensation must resume and complete, not stay stuck Running'
+    );
+    Workflow_Step_Execution__c compExec = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowEngineTest.SignalWaitCompensationStep_Compensate'
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    System.assertEquals('Compensated', compExec.Status__c);
+  }
+
   @isTest
   static void testCompensationFailureAndRetry() {
     WorkflowEngine.disableQueueableInTest = true;

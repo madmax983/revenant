@@ -545,4 +545,39 @@ public class StepContextTest {
     );
     System.assertEquals('{"go":true}', ctx.getSignal('Important').payload);
   }
+
+  @isTest
+  static void testCachedNamedLookupIsCaseInsensitive() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    List<StepContext.Signal> pending = new List<StepContext.Signal>{
+      new StepContext.Signal(null, 'Approve:Order', '{"ok":true}', DateTime.now())
+    };
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      pending
+    );
+
+    // Load the full list first (in-memory allLoaded path), then probe the name
+    // with different casing. The source SOQL and lower-cased caches match names
+    // case-insensitively, so the in-memory path must too -- a case-only mismatch
+    // must not make an already-delivered signal look absent.
+    ctx.getSignals();
+    System.assertEquals(
+      true,
+      ctx.hasSignal('approve:order'),
+      'Cached named lookup must match case-insensitively'
+    );
+    System.assertEquals(
+      '{"ok":true}',
+      ctx.getSignal('APPROVE:ORDER').payload
+    );
+    System.assertEquals(1, ctx.getSignals('approve:ORDER').size());
+  }
 }
