@@ -189,9 +189,14 @@ public inherited sharing class WorkflowEngine {
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
         // Concurrency backstop: a sibling start won the race on the unique
-        // Active_Correlation_Key__c index. Return the winner's Id rather than
-        // throwing so the loser becomes a safe no-op.
-        Workflow_Instance__c winner = resolveExistingActive(correlationKey);
+        // Active_Correlation_Key__c index. Resolve the winner with the same
+        // active-or-recently-terminal scope used before insert (the winner may
+        // have completed mid-race) and return its Id, so the loser is a no-op.
+        Workflow_Instance__c winner = findExistingByKey(
+            new Set<String>{ correlationKey },
+            includeTerminal
+          )
+          .get(normalizeKey(correlationKey));
         if (winner != null) {
           return new StartResult(winner.Id, false);
         }
@@ -333,25 +338,6 @@ public inherited sharing class WorkflowEngine {
     return DateTime.now().addYears(1000);
   }
 
-  /**
-   * Resolves the active instance that won an insert race for a correlation key.
-   */
-  private static Workflow_Instance__c resolveExistingActive(
-    String correlationKey
-  ) {
-    List<Workflow_Instance__c> actives = [
-      SELECT Id
-      FROM Workflow_Instance__c
-      WHERE
-        Correlation_Key__c = :correlationKey
-        AND Status__c IN :ACTIVE_STATUSES
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC
-      LIMIT 1
-    ];
-    return actives.isEmpty() ? null : actives[0];
-  }
-
   public class StartRequest {
     public String workflowName;
     public String correlationKey;
@@ -485,15 +471,12 @@ public inherited sharing class WorkflowEngine {
     Set<String> concurrentLoserKeys = new Set<String>();
 
     if (!toInsert.isEmpty()) {
-      // Savepoint so a genuine (non-duplicate) row failure can roll back any
-      // sibling rows already inserted in this partial DML, restoring all-or-none
-      // semantics for real errors and never leaving orphan Pending instances.
-      System.Savepoint sp = Database.setSavepoint();
       Database.SaveResult[] saveResults = Database.insert(
         toInsert,
         false,
         AccessLevel.SYSTEM_MODE
       );
+      String genuineError = null;
       for (Integer j = 0; j < saveResults.size(); j++) {
         Database.SaveResult sr = saveResults[j];
         Integer reqIdx = insertReqIndexes[j];
@@ -513,19 +496,29 @@ public inherited sharing class WorkflowEngine {
           String key = requests[reqIdx].correlationKey;
           if (isDup && String.isNotBlank(key)) {
             concurrentLoserKeys.add(key);
-          } else {
-            Database.rollback(sp);
-            throw new WorkflowException(
-              'Failed to start workflow: ' + sr.getErrors()[0].getMessage()
-            );
+          } else if (genuineError == null) {
+            genuineError = sr.getErrors()[0].getMessage();
           }
         }
+      }
+      // A genuine (non-duplicate) row failure restores all-or-none semantics:
+      // delete every sibling row that succeeded in this partial insert (no
+      // savepoint is spent on the all-success path) and surface the error so no
+      // orphan Pending instances are left behind.
+      if (genuineError != null) {
+        if (!insertedInstances.isEmpty()) {
+          delete as system insertedInstances;
+        }
+        throw new WorkflowException(
+          'Failed to start workflow: ' + genuineError
+        );
       }
     }
 
     // 5. Build a key -> resolved Id map for newly inserted instances and for
     //    any concurrent winners, then fill remaining (intra-batch / loser)
-    //    results.
+    //    results. Winners are resolved with the same active-or-recently-terminal
+    //    scope used before insert, in case a winner completed mid-race.
     Map<String, Id> resolvedIdByKey = new Map<String, Id>();
     for (Integer j = 0; j < insertedInstances.size(); j++) {
       String key = requests[insertedReqIndexes[j]].correlationKey;
@@ -534,18 +527,13 @@ public inherited sharing class WorkflowEngine {
       }
     }
     if (!concurrentLoserKeys.isEmpty()) {
-      for (Workflow_Instance__c w : [
-        SELECT Id, Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE
-          Correlation_Key__c IN :concurrentLoserKeys
-          AND Status__c IN :ACTIVE_STATUSES
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC
-      ]) {
-        String normalized = normalizeKey(w.Correlation_Key__c);
+      Map<String, Workflow_Instance__c> winners = findExistingByKey(
+        concurrentLoserKeys,
+        true
+      );
+      for (String normalized : winners.keySet()) {
         if (!resolvedIdByKey.containsKey(normalized)) {
-          resolvedIdByKey.put(normalized, w.Id);
+          resolvedIdByKey.put(normalized, winners.get(normalized).Id);
         }
       }
     }
