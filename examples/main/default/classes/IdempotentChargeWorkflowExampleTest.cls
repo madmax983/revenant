@@ -10,7 +10,7 @@ public class IdempotentChargeWorkflowExampleTest {
   @isTest
   static void testForwardingIdempotencyKeyYieldsExactlyOneSideEffect() {
     WorkflowEngine.disableQueueableInTest = true;
-    IdempotentChargeWorkflowExample.MockIdempotentPaymentGateway.reset();
+    MockIdempotentPaymentGateway.reset();
 
     String stepName = 'IdempotentChargeWorkflowExample.ChargePaymentStep';
 
@@ -38,7 +38,7 @@ public class IdempotentChargeWorkflowExampleTest {
     );
     System.assertEquals(
       1,
-      IdempotentChargeWorkflowExample.MockIdempotentPaymentGateway.effectiveSideEffectCount,
+      MockIdempotentPaymentGateway.effectiveSideEffectCount,
       'First execution should produce exactly one effective charge'
     );
 
@@ -111,7 +111,7 @@ public class IdempotentChargeWorkflowExampleTest {
     // effective-side-effect count is still exactly one. Duplicate rate = 0%.
     System.assertEquals(
       1,
-      IdempotentChargeWorkflowExample.MockIdempotentPaymentGateway.effectiveSideEffectCount,
+      MockIdempotentPaymentGateway.effectiveSideEffectCount,
       'Forwarding ctx.idempotencyKey must yield exactly one effective side effect across all re-executions'
     );
   }
