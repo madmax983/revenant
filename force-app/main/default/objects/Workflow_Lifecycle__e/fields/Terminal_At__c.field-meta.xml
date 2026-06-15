@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Terminal_At__c</fullName>
+    <description>Timestamp of the terminal transition. Combine with Workflow_Instance_Id__c + Status__c for idempotent dedupe: it distinguishes a genuine second terminal transition (e.g. a Failed instance retried via retryWorkflow() that fails again) from an at-least-once redelivery of the same event.</description>
+    <externalId>false</externalId>
+    <label>Terminal At</label>
+    <required>false</required>
+    <type>DateTime</type>
+</CustomField>

@@ -4,7 +4,7 @@
     <defaultValue>true</defaultValue>
     <description>If checked (default), the engine publishes a Workflow_Lifecycle__e platform event each time an instance reaches a terminal state. Uncheck to suppress the event and avoid its platform-event publishing allocation cost. Disabling has no effect on instance status, the audit trail, compensation, or email alerting.</description>
     <externalId>false</externalId>
-    <fieldManageability>DeveloperControlled</fieldManageability>
+    <fieldManageability>SubscriberControlled</fieldManageability>
     <label>Publish Lifecycle Events</label>
     <type>Checkbox</type>
 </CustomField>

@@ -64,6 +64,11 @@
     </fieldPermissions>
     <fieldPermissions>
         <editable>true</editable>
+        <field>Workflow_Instance__c.Root_Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
         <field>Workflow_Instance__c.Sleep_Until__c</field>
         <readable>true</readable>
     </fieldPermissions>
@@ -116,6 +121,16 @@
     <fieldPermissions>
         <editable>false</editable>
         <field>Workflow_Lifecycle__e.Is_Success__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Lifecycle__e.Root_Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Lifecycle__e.Terminal_At__c</field>
         <readable>true</readable>
     </fieldPermissions>
     <fieldPermissions>

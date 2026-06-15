@@ -270,10 +270,11 @@ private class WorkflowLifecyclePublisherTest {
   }
 
   @isTest
-  static void underQueriedInstanceFieldDoesNotThrow() {
-    // A caller that passes a terminal instance missing a queried field (here
-    // Correlation_Key__c) must not blow up the transaction: building the event
-    // is inside the catch-all, so the SObjectException is swallowed.
+  static void underQueriedInstanceFieldDegradesGracefully() {
+    // A caller that passes a terminal instance missing an optional field (here
+    // Correlation_Key__c) must never throw or roll back the transaction. Reading
+    // fields via getPopulatedFieldsAsMap yields null for the unqueried field, so
+    // the event still publishes (with a null key) rather than failing.
     Workflow_Instance__c full = makeInstance('Completed', null);
     Workflow_Instance__c partial = [
       SELECT Id, Status__c, Workflow_Name__c
@@ -282,19 +283,29 @@ private class WorkflowLifecyclePublisherTest {
     ];
 
     Test.startTest();
-    WorkflowLifecyclePublisher.publish(partial); // reads Correlation_Key__c (unqueried)
+    WorkflowLifecyclePublisher.publish(partial); // Correlation_Key__c not queried
     Test.stopTest();
 
     System.assertEquals(
-      0,
+      1,
       WorkflowLifecyclePublisher.publishedEvents.size(),
-      'An under-queried instance is swallowed, not published, and never throws'
+      'An under-queried instance still publishes; it never throws'
+    );
+    Workflow_Lifecycle__e evt = WorkflowLifecyclePublisher.publishedEvents[0];
+    System.assertEquals(
+      null,
+      evt.Correlation_Key__c,
+      'The unqueried optional field degrades to null instead of throwing'
+    );
+    System.assertEquals(
+      'WorkflowEngineTest.HappyWorkflow',
+      evt.Workflow_Name__c
     );
     System.assertEquals(
       'Completed',
       [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :full.Id]
       .Status__c,
-      'The terminal-state write is preserved despite the under-queried instance'
+      'The terminal-state write is preserved'
     );
   }
 }

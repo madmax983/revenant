@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
     <deploymentStatus>Deployed</deploymentStatus>
-    <description>Outbound lifecycle event published once when a workflow instance reaches a terminal state (Completed, Failed, Compensated, Cancelled). Carries outcome metadata only (not the full payload) so Flows and external subscribers can react event-driven instead of polling Workflow_Instance__c. ContinuedAsNew chains emit exactly one event, on the final successor's terminal transition. Delivery is at-least-once; subscribers dedupe on Workflow_Instance_Id__c + Status__c.</description>
+    <description>Outbound lifecycle event published once when a workflow instance reaches a terminal state (Completed, Failed, Compensated, Cancelled). Carries outcome metadata only (not the full payload) so Flows and external subscribers can react event-driven instead of polling Workflow_Instance__c. ContinuedAsNew chains emit exactly one event, on the final successor's terminal transition; correlate the chain via Root_Correlation_Key__c. Delivery is at-least-once; subscribers dedupe on Workflow_Instance_Id__c + Status__c + Terminal_At__c (the timestamp distinguishes a genuine re-failure after retryWorkflow() from a redelivery).</description>
     <eventType>HighVolume</eventType>
     <label>Workflow Lifecycle</label>
     <pluralLabel>Workflow Lifecycle Events</pluralLabel>

@@ -26,26 +26,43 @@ current key.
 
 ## Event payload (metadata, not the full output)
 
-| Field                     | Type     | Meaning                                                     |
-| ------------------------- | -------- | ---------------------------------------------------------- |
-| `Workflow_Instance_Id__c` | Text(18) | Id of the terminal instance (final successor for a chain). |
-| `Correlation_Key__c`      | Text     | External correlation key (may be blank).                   |
-| `Workflow_Name__c`        | Text     | Apex `WorkflowDefinition` type name.                       |
-| `Status__c`               | Text     | Terminal status (one of the four above).                   |
-| `Is_Success__c`           | Checkbox | `true` only for `Completed`.                               |
-| `Failure_Detail__c`       | Text     | Failure message for non-success outcomes; blank otherwise. |
+| Field                      | Type     | Meaning                                                                            |
+| -------------------------- | -------- | --------------------------------------------------------------------------------- |
+| `Workflow_Instance_Id__c`  | Text(18) | Id of the terminal instance (final successor for a chain).                        |
+| `Correlation_Key__c`       | Text     | The terminal instance's own correlation key (rewritten per continue-as-new run).  |
+| `Root_Correlation_Key__c`  | Text     | Stable key of the chain's first instance; equals `Correlation_Key__c` if no chain.|
+| `Workflow_Name__c`         | Text     | Apex `WorkflowDefinition` type name.                                               |
+| `Status__c`                | Text     | Terminal status (one of the four above).                                          |
+| `Is_Success__c`            | Checkbox | `true` only for `Completed`.                                                       |
+| `Terminal_At__c`           | DateTime | Timestamp of the terminal transition (dedupe discriminator — see below).          |
+| `Failure_Detail__c`        | Text     | Failure message for non-success outcomes; blank otherwise.                         |
 
 The **full output payload is intentionally not in the event** — platform-event
 field-size limits make shipping large/offloaded payloads in-event wrong. Read the
-output from `Workflow_Instance__c.Output__c` (the engine transparently rehydrates
-offloaded `ContentVersion` payloads) once you have the instance Id.
+output from `Workflow_Instance__c.Output__c` once you have the instance Id — but see
+the rehydration note below: large outputs are offloaded and the raw field holds only
+a marker.
+
+### Reading the output (large/offloaded payloads)
+
+When an output exceeds ~100k characters the engine offloads it to `ContentVersion`
+and leaves a marker (`{"$attachmentId":...}`) in `Workflow_Instance__c.Output__c`.
+Only Apex paths that call `WorkflowEngine.resolvePayload()` (and the dashboard
+helpers) rehydrate the real body. **A Flow/API subscriber that reads `Output__c`
+directly will get the marker, not the JSON**, for those runs. To read output
+reliably, route through a rehydrating Apex invocable / the #9 read action, or look up
+the linked `ContentVersion` — do not bind a Flow directly to the raw `Output__c` field
+when outputs can be large.
 
 ## At-least-once delivery — subscribers must be idempotent
 
 Platform Event delivery is **at-least-once**, so a subscriber may observe a
-redelivery. The event carries stable identity — `Workflow_Instance_Id__c` +
-`Status__c` — so an idempotent subscriber can safely ignore duplicates (e.g. record
-the `(instanceId, status)` pair and no-op if already seen).
+redelivery. Dedupe on **`Workflow_Instance_Id__c` + `Status__c` + `Terminal_At__c`**.
+The `Terminal_At__c` discriminator matters because a terminal transition is **not**
+necessarily once-per-instance: a `Failed` instance resurrected with
+`retryWorkflow()` that fails again emits a second, legitimate `Failed` event with the
+same instance Id and status — only `Terminal_At__c` distinguishes it from a redelivery
+of the first. (Record the triple and no-op if already seen.)
 
 ## Operator toggle
 
@@ -86,11 +103,17 @@ match the resume event on it).
 Add a **Pause** element. Configure its **resume event**:
 
 - **Platform Event** → `Workflow Lifecycle` (`Workflow_Lifecycle__e`)
-- **Condition (event matching)** → `Correlation_Key__c` **Equals** `{!varCorrelationKey}`
-  - (If you prefer to match on the instance Id, capture the Id returned by the start
-    action into a variable and match `Workflow_Instance_Id__c` instead. For a
-    `ContinuedAsNew` chain, match on `Correlation_Key__c` — the event references the
-    chain's resolved current key.)
+- **Condition (event matching)** → `Root_Correlation_Key__c` **Equals** `{!varCorrelationKey}`
+  - Match on **`Root_Correlation_Key__c`**, not `Correlation_Key__c`. For a workflow
+    that uses **continue-as-new**, the engine rewrites the successor's
+    `Correlation_Key__c` (e.g. `myKey_run2`, `myKey_run3`), and only the final
+    successor's terminal transition emits an event. `Root_Correlation_Key__c` carries
+    the original start key unchanged across the whole chain, so the Flow that launched
+    on `myKey` still matches. (For workflows that never continue-as-new the two keys
+    are identical, so this also works for the simple case.)
+  - Matching on `Workflow_Instance_Id__c` does **not** work for continue-as-new chains:
+    the start action returns the first instance's Id, but the event references the final
+    successor's Id.
 - Map the resumed event into Flow record variable `evtLifecycle` so its fields are
   available after the Pause.
 
@@ -102,8 +125,10 @@ After the Pause, add a **Decision**:
 - **Failed / Cancelled / Compensated** → otherwise; surface
   `{!evtLifecycle.Failure_Detail__c}` to the user or route for remediation.
 
-If you need the workflow's **output**, use a **Get Records** on `Workflow_Instance__c`
-filtered by `Id = {!evtLifecycle.Workflow_Instance_Id__c}` and read `Output__c`.
+If you need the workflow's **output**, read it via a rehydrating path keyed off
+`{!evtLifecycle.Workflow_Instance_Id__c}` (see "Reading the output" above) — a raw
+**Get Records** on `Workflow_Instance__c.Output__c` returns the offload marker, not the
+JSON, whenever the output was large enough to be offloaded to `ContentVersion`.
 
 ### Closed-loop diagram
 

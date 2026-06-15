@@ -145,7 +145,12 @@ public inherited sharing class WorkflowLifecyclePublisher {
       if (instance == null || instance.Id == null) {
         continue;
       }
-      String status = instance.Status__c;
+      // Read every optional field through getPopulatedFieldsAsMap so a caller that
+      // passed an under-queried SObject yields a null field rather than an
+      // SObjectException — the publish can never throw and roll back the terminal
+      // write because of a missing field.
+      Map<String, Object> f = instance.getPopulatedFieldsAsMap();
+      String status = (String) f.get('Status__c');
       if (!EMITTING_TERMINAL_STATUSES.contains(status)) {
         continue;
       }
@@ -158,13 +163,21 @@ public inherited sharing class WorkflowLifecyclePublisher {
       events.add(
         new Workflow_Lifecycle__e(
           Workflow_Instance_Id__c = instance.Id,
-          Correlation_Key__c = instance.Correlation_Key__c,
-          Workflow_Name__c = instance.Workflow_Name__c,
+          Correlation_Key__c = (String) f.get('Correlation_Key__c'),
+          Root_Correlation_Key__c = (String) f.get('Root_Correlation_Key__c'),
+          Workflow_Name__c = (String) f.get('Workflow_Name__c'),
           Status__c = status,
           Is_Success__c = isSuccess,
+          // Transition timestamp (== the instance's Terminal_At__c, set in this
+          // same transaction). Lets idempotent subscribers tell a legitimate
+          // re-failure after retryWorkflow() apart from an at-least-once redelivery.
+          Terminal_At__c = System.now(),
           Failure_Detail__c = isSuccess
             ? null
-            : truncate(instance.Error_Message__c, FAILURE_DETAIL_MAX_LENGTH)
+            : truncate(
+                (String) f.get('Error_Message__c'),
+                FAILURE_DETAIL_MAX_LENGTH
+              )
         )
       );
     }

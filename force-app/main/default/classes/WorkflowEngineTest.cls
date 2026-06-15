@@ -2722,8 +2722,18 @@ public class WorkflowEngineTest {
     System.assertEquals(true, evt.Is_Success__c);
     System.assertEquals('LifecycleHappyKey', evt.Correlation_Key__c);
     System.assertEquals(
+      'LifecycleHappyKey',
+      evt.Root_Correlation_Key__c,
+      'Root key equals the correlation key for a non-continue-as-new workflow'
+    );
+    System.assertEquals(
       'WorkflowEngineTest.HappyWorkflow',
       evt.Workflow_Name__c
+    );
+    System.assertNotEquals(
+      null,
+      evt.Terminal_At__c,
+      'The event carries a terminal transition timestamp for retry-aware dedupe'
     );
   }
 
@@ -2812,6 +2822,18 @@ public class WorkflowEngineTest {
     );
     System.assertEquals('Completed', evt.Status__c);
     System.assertEquals(true, evt.Is_Success__c);
+    // The successor's own key was rewritten (DaemonKey_run3), but the chain root
+    // key stays the original start key so the launcher can correlate the event.
+    System.assertEquals(
+      'LifecycleDaemonKey_run3',
+      evt.Correlation_Key__c,
+      'The event carries the final successor key'
+    );
+    System.assertEquals(
+      'LifecycleDaemonKey',
+      evt.Root_Correlation_Key__c,
+      'The event carries the stable chain root key from the original start request'
+    );
   }
 
   @isTest
@@ -2950,6 +2972,57 @@ public class WorkflowEngineTest {
       'LifecycleCompKey',
       evt.Correlation_Key__c,
       'The event carries the correlation key from the widened re-query'
+    );
+  }
+
+  @isTest
+  static void testLifecycleEventsOnParentChildCancelTree() {
+    // The cancel tree publishes one bulk batch after every node is cancelled, so
+    // the best-effort publish never starves a later child cancellation of DML.
+    WorkflowEngine.disableQueueableInTest = true;
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.ParentWorkflow',
+      'CancelTreeParent',
+      null
+    );
+    WorkflowEngine.runStep(parentId, null); // parent starts child, suspends
+
+    Workflow_Instance__c childInst = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentId
+      LIMIT 1
+    ];
+
+    Test.startTest();
+    WorkflowEngine.cancel(parentId, false); // cancels parent + child, then bulk-publishes
+    Test.stopTest();
+
+    System.assertEquals(
+      'Cancelled',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :parentId]
+      .Status__c
+    );
+    System.assertEquals(
+      'Cancelled',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :childInst.Id]
+      .Status__c
+    );
+
+    // One lifecycle event per terminally-cancelled node, emitted as a single bulk
+    // batch after the whole tree was cancelled.
+    Set<Id> eventInstanceIds = new Set<Id>();
+    for (
+      Workflow_Lifecycle__e evt : WorkflowLifecyclePublisher.publishedEvents
+    ) {
+      System.assertEquals('Cancelled', evt.Status__c);
+      System.assertEquals(false, evt.Is_Success__c);
+      eventInstanceIds.add((Id) evt.Workflow_Instance_Id__c);
+    }
+    System.assertEquals(
+      new Set<Id>{ parentId, childInst.Id },
+      eventInstanceIds,
+      'Both the parent and child cancellations emit exactly one lifecycle event'
     );
   }
 }

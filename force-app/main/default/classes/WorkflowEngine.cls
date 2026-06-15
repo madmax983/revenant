@@ -701,6 +701,7 @@ public inherited sharing class WorkflowEngine {
         Current_Step__c,
         Input__c,
         Correlation_Key__c,
+        Root_Correlation_Key__c,
         Parent_Instance__c,
         Compensation_Stack__c,
         Definition_Version__c,
@@ -1462,10 +1463,18 @@ public inherited sharing class WorkflowEngine {
         }
       }
 
-      // Spawn successor instance
+      // Spawn successor instance. Carry the chain's root correlation key forward
+      // unchanged so the whole continue-as-new chain shares one stable key that
+      // external callers can correlate the terminal lifecycle event against.
+      // Fall back to the predecessor's own key if the root was never populated
+      // (pre-existing data created before the Root_Correlation_Key__c field).
+      String rootKey = String.isNotBlank(instance.Root_Correlation_Key__c)
+        ? instance.Root_Correlation_Key__c
+        : instance.Correlation_Key__c;
       Workflow_Instance__c nextInstance = new Workflow_Instance__c(
         Workflow_Name__c = instance.Workflow_Name__c,
         Correlation_Key__c = newKey,
+        Root_Correlation_Key__c = rootKey,
         Previous_Instance__c = instance.Id,
         Definition_Version__c = instance.Definition_Version__c,
         Current_Step__c = initialStep
@@ -1614,7 +1623,8 @@ public inherited sharing class WorkflowEngine {
         Error_Message__c,
         Compensation_Stack__c,
         Workflow_Name__c,
-        Correlation_Key__c
+        Correlation_Key__c,
+        Root_Correlation_Key__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -2258,6 +2268,7 @@ public inherited sharing class WorkflowEngine {
         Workflow_Name__c,
         Input__c,
         Correlation_Key__c,
+        Root_Correlation_Key__c,
         Error_Message__c
       FROM Workflow_Instance__c
       WHERE Id = :instance.Id
@@ -2674,9 +2685,22 @@ public inherited sharing class WorkflowEngine {
     // scope here — the goal is to remove the recursion-driven multiplication.
     // The traversal always yields the target first, so it is cancelled with the original
     // not-found semantics (throwIfMissing = true); descendants are best-effort.
+    //
+    // Lifecycle events are collected and published in a single bulk batch AFTER every
+    // node is cancelled, so the best-effort publish never spends a DML statement that a
+    // later child cancellation still needs.
+    List<Workflow_Instance__c> terminallyCancelled = new List<Workflow_Instance__c>();
     for (Id targetId : collectInstanceAndActiveDescendants(instanceId)) {
-      cancelSingleInstance(targetId, runCompensations, targetId == instanceId);
+      Workflow_Instance__c cancelled = cancelSingleInstance(
+        targetId,
+        runCompensations,
+        targetId == instanceId
+      );
+      if (cancelled != null) {
+        terminallyCancelled.add(cancelled);
+      }
     }
+    WorkflowLifecyclePublisher.publish(terminallyCancelled);
   }
 
   /**
@@ -2713,8 +2737,15 @@ public inherited sharing class WorkflowEngine {
   /**
    * Cancels a single workflow instance (no descendant traversal). When throwIfMissing is
    * true the original not-found exception is preserved for the top-level target.
+   *
+   * Returns the instance when this call drove it to a terminal Cancelled state (the
+   * no-compensation path), otherwise null. The caller (cancel()) collects these and
+   * publishes one bulk lifecycle batch AFTER the whole tree is cancelled, so a
+   * per-node publish can never spend the DML budget that a later child cancellation
+   * still needs. (The compensation path reaches Cancelled asynchronously and emits
+   * its own event from the orchestrator.)
    */
-  private static void cancelSingleInstance(
+  private static Workflow_Instance__c cancelSingleInstance(
     Id instanceId,
     Boolean runCompensations,
     Boolean throwIfMissing
@@ -2732,7 +2763,7 @@ public inherited sharing class WorkflowEngine {
           'Workflow instance not found: ' + instanceId
         );
       }
-      return;
+      return null;
     }
 
     Workflow_Instance__c instance = instances[0];
@@ -2743,7 +2774,7 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c == 'Cancelled' ||
       instance.Status__c == 'ContinuedAsNew'
     ) {
-      return; // Already in terminal state
+      return null; // Already in terminal state
     }
 
     // 1. Lock active step executions FOR UPDATE first
@@ -2777,7 +2808,8 @@ public inherited sharing class WorkflowEngine {
         Compensation_Stack__c,
         Error_Message__c,
         Workflow_Name__c,
-        Correlation_Key__c
+        Correlation_Key__c,
+        Root_Correlation_Key__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -2790,7 +2822,7 @@ public inherited sharing class WorkflowEngine {
           'Workflow instance not found: ' + instanceId
         );
       }
-      return;
+      return null;
     }
     instance = instances[0];
 
@@ -2802,7 +2834,7 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c == 'Cancelled' ||
       instance.Status__c == 'ContinuedAsNew'
     ) {
-      return;
+      return null;
     }
 
     // Abort all scheduled jobs for this instance (sleeps, retries, timeouts)
@@ -2840,15 +2872,19 @@ public inherited sharing class WorkflowEngine {
       } else {
         enqueueOrchestrator(instance.Id, null);
       }
-    } else {
-      instance.Status__c = 'Cancelled';
-      instance.Error_Message__c = 'Cancelled by user.';
-      update as system instance;
-      // Fire-and-forget outbound lifecycle event on terminal transition.
-      WorkflowLifecyclePublisher.publish(instance);
+      // Not terminal yet (Cancelling); the orchestrator emits the lifecycle event
+      // when the compensation stack drains to Cancelled.
+      return null;
     }
+
+    instance.Status__c = 'Cancelled';
+    instance.Error_Message__c = 'Cancelled by user.';
+    update as system instance;
+    // Terminal: hand the instance back to cancel() for a single bulk publish after
+    // the whole descendant tree is cancelled (preserves DML headroom mid-loop).
     // Active child workflows are handled by the caller (cancel()) via iterative
     // descendant traversal, so no recursive child cancellation happens here.
+    return instance;
   }
 
   /**
@@ -3042,7 +3078,7 @@ public inherited sharing class WorkflowEngine {
 
       // Lock parent instances
       Map<Id, Workflow_Instance__c> parents = new Map<Id, Workflow_Instance__c>([
-        SELECT Id, Name, Status__c, Current_Step__c, Compensation_Stack__c, Error_Message__c, Workflow_Name__c, Correlation_Key__c
+        SELECT Id, Name, Status__c, Current_Step__c, Compensation_Stack__c, Error_Message__c, Workflow_Name__c, Correlation_Key__c, Root_Correlation_Key__c
         FROM Workflow_Instance__c
         WHERE Id IN :instanceIds
         WITH SYSTEM_MODE

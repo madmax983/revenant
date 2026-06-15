@@ -3,6 +3,13 @@ trigger WorkflowInstanceTrigger on Workflow_Instance__c(
   before update
 ) {
   for (Workflow_Instance__c instance : Trigger.new) {
+    // Default the chain root key to this instance's own correlation key on insert.
+    // continueAsNew successors set Root_Correlation_Key__c explicitly (to the
+    // predecessor's root), so they are already non-blank and are left untouched.
+    if (Trigger.isInsert && String.isBlank(instance.Root_Correlation_Key__c)) {
+      instance.Root_Correlation_Key__c = instance.Correlation_Key__c;
+    }
+
     if (
       instance.Status__c == 'Pending' ||
       instance.Status__c == 'Running' ||
