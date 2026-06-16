@@ -22,6 +22,16 @@ public inherited sharing class StepContext {
    *       ? ctx.previousRunAt
    *       : Datetime.now().addHours(-24); // cold-start fallback
    *   [SELECT ... WHERE LastModifiedDate >= :since]
+   *
+   * Skip-free only when each run drains its ENTIRE window: capping the query
+   * with a LIMIT lets this wall-clock cursor advance past the unprocessed tail
+   * and starve it. If you must bound batch size, carry a data-derived
+   * high-water mark (max processed timestamp) via ContinueAsNew instead.
+   *
+   * NOT a compensation primitive. It is populated in compensate() contexts only
+   * for parity with execute(); a compensation must undo exactly what the forward
+   * step did using that step's recorded input/output, never a re-scan since
+   * previousRunAt (which can drift to records the forward run never touched).
    */
   public Datetime previousRunAt { get; private set; }
 
