@@ -9,7 +9,8 @@
  *
  *   SyncChangedAccountsStep  -->  SleepStep  -->  ContinueStep
  *
- * This example omits the sleep step to keep the demo self-contained.
+ * Shape: SyncChangedAccountsStep --> SleepStep --> ContinueStep
+ * The sleep step is skipped automatically when running inside a test.
  * The workflow loops forever; extend SyncChangedAccountsStep to call
  * StepResult.complete() when a termination condition is met.
  */
@@ -18,6 +19,10 @@ public inherited sharing class IncrementalSyncWorkflowExample {
   @TestVisible
   private static Integer COLD_START_LOOKBACK_HOURS = 24;
 
+  /** Seconds to sleep between polling runs. Ignored in test context. */
+  @TestVisible
+  private static Integer SLEEP_INTERVAL_SECONDS = 300;
+
   public class SyncPollerWorkflow implements WorkflowDefinition {
     public String getInitialStep() {
       return 'IncrementalSyncWorkflowExample.SyncChangedAccountsStep';
@@ -25,6 +30,9 @@ public inherited sharing class IncrementalSyncWorkflowExample {
 
     public String getNextStep(String currentStepName, StepResult result) {
       if (currentStepName == 'IncrementalSyncWorkflowExample.SyncChangedAccountsStep') {
+        return 'IncrementalSyncWorkflowExample.SleepStep';
+      }
+      if (currentStepName == 'IncrementalSyncWorkflowExample.SleepStep') {
         return 'IncrementalSyncWorkflowExample.ContinueStep';
       }
       return null;
@@ -57,16 +65,25 @@ public inherited sharing class IncrementalSyncWorkflowExample {
         null,
         new Map<String, Object>{
           'processedCount' => processed,
-          'since' => since.format('yyyy-MM-dd\'T\'HH:mm:ss\'Z\'')
+          'since' => since.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss\'Z\'')
         }
       );
     }
   }
 
+  public class SleepStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      // Skip the actual sleep when running inside a test so the harness
+      // can drive the workflow to completion without waiting.
+      if (Test.isRunningTest() || ctx.stepStateJson != null) {
+        return StepResult.complete(null, null);
+      }
+      return StepResult.sleep(SLEEP_INTERVAL_SECONDS, 'sleeping');
+    }
+  }
+
   public class ContinueStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      // Spawn a successor run to clear heap and debug-log history.
-      // In production, insert a SleepStep before this to throttle the loop.
       return StepResult.continueAsNew(null);
     }
   }

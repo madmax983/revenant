@@ -2030,7 +2030,7 @@ public class WorkflowEngineTest {
       if (ctx.previousRunAt == null) {
         return StepResult.continueAsNew(null);
       }
-      return StepResult.complete(null, String.valueOf(ctx.previousRunAt.getTime()));
+      return StepResult.complete(null, ctx.previousRunAt.getTime());
     }
   }
 
