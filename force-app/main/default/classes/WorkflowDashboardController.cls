@@ -15,6 +15,14 @@ public inherited sharing class WorkflowDashboardController {
     'CompensationFailed'
   };
 
+  // Terminal statuses that are nonetheless re-drivable on their original version
+  // (Retry/Re-drive replays the run on the same Definition_Version__c). Reported as
+  // a distinct count by getVersionDrain so retiring a version's code never silently
+  // breaks a still-recoverable failed run.
+  private static final Set<String> RECOVERABLE_TERMINAL_STATUSES = new Set<String>{
+    'Failed'
+  };
+
   private static void checkAuthorization() {
     if (FeatureManagement.checkPermission('Workflow_Admin')) {
       return;
@@ -1066,8 +1074,14 @@ public inherited sharing class WorkflowDashboardController {
 
   /**
    * Returns a per-Definition_Version__c drain view for the given workflow name.
-   * Each row carries the count of non-terminal and terminal instances plus a
-   * safeToRetire flag (true only when nonTerminalCount == 0).
+   * Each row carries three buckets — non-terminal (still executing), failed
+   * (terminal but re-drivable on this version), and clean terminal — plus a
+   * safeToRetire flag that is true only when BOTH the non-terminal and failed
+   * counts are 0. Failed runs are surfaced separately rather than folded into
+   * either bucket: a transient failure may recover on re-drive (so the version's
+   * code is still needed), while a failure caused by the very bug a new version
+   * fixes will never recover — the engine cannot tell which, so it reports the
+   * count and leaves the retire/re-drive judgement to the operator.
    * Only versions actually observed in Workflow_Instance__c are returned;
    * absence from results is NOT reported as "safe".
    */
@@ -1087,6 +1101,7 @@ public inherited sharing class WorkflowDashboardController {
 
     // Accumulate counts per version: key = version (may be null → use 'null' string key)
     Map<String, Integer> nonTerminalByVersion = new Map<String, Integer>();
+    Map<String, Integer> failedByVersion = new Map<String, Integer>();
     Map<String, Integer> terminalByVersion = new Map<String, Integer>();
     Map<String, Integer> versionKeyToInt = new Map<String, Integer>();
 
@@ -1102,12 +1117,15 @@ public inherited sharing class WorkflowDashboardController {
 
       if (!nonTerminalByVersion.containsKey(verKey)) {
         nonTerminalByVersion.put(verKey, 0);
+        failedByVersion.put(verKey, 0);
         terminalByVersion.put(verKey, 0);
         versionKeyToInt.put(verKey, ver);
       }
 
       if (NON_TERMINAL_STATUSES.contains(stat)) {
         nonTerminalByVersion.put(verKey, nonTerminalByVersion.get(verKey) + cnt);
+      } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
+        failedByVersion.put(verKey, failedByVersion.get(verKey) + cnt);
       } else {
         terminalByVersion.put(verKey, terminalByVersion.get(verKey) + cnt);
       }
@@ -1124,14 +1142,16 @@ public inherited sharing class WorkflowDashboardController {
     List<Map<String, Object>> results = new List<Map<String, Object>>();
     for (String verKey : sortedKeys) {
       Integer nonTerminal = nonTerminalByVersion.get(verKey);
+      Integer failed = failedByVersion.get(verKey);
       Integer terminal = terminalByVersion.get(verKey);
       results.add(
         new Map<String, Object>{
           'version' => versionKeyToInt.get(verKey),
           'nonTerminalCount' => nonTerminal,
+          'failedCount' => failed,
           'terminalCount' => terminal,
-          'totalCount' => nonTerminal + terminal,
-          'safeToRetire' => nonTerminal == 0
+          'totalCount' => nonTerminal + failed + terminal,
+          'safeToRetire' => nonTerminal == 0 && failed == 0
         }
       );
     }

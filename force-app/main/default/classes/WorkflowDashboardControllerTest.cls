@@ -1270,13 +1270,77 @@ public class WorkflowDashboardControllerTest {
 
     System.assertNotEquals(null, v1Row, 'Expected a row for version 1');
     System.assertEquals(1, (Integer) v1Row.get('nonTerminalCount'), 'v1 nonTerminal should be 1');
+    System.assertEquals(0, (Integer) v1Row.get('failedCount'), 'v1 failed should be 0');
     System.assertEquals(1, (Integer) v1Row.get('terminalCount'), 'v1 terminal should be 1');
     System.assertEquals(false, (Boolean) v1Row.get('safeToRetire'), 'v1 should NOT be safe');
 
     System.assertNotEquals(null, v2Row, 'Expected a row for version 2');
     System.assertEquals(0, (Integer) v2Row.get('nonTerminalCount'), 'v2 nonTerminal should be 0');
+    System.assertEquals(0, (Integer) v2Row.get('failedCount'), 'v2 failed should be 0');
     System.assertEquals(1, (Integer) v2Row.get('terminalCount'), 'v2 terminal should be 1');
     System.assertEquals(true, (Boolean) v2Row.get('safeToRetire'), 'v2 SHOULD be safe');
+  }
+
+  @isTest
+  static void testGetVersionDrain_failedCountedSeparatelyAndBlocksRetire() {
+    String wfName = 'TestVersionDrainWorkflow.Failed';
+
+    // v1: only Failed instances — terminal in lifecycle, but re-drivable on this
+    // version, so it must be surfaced as failedCount and block safeToRetire.
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed',
+      Correlation_Key__c = 'drain-failed-v1-a',
+      Definition_Version__c = 1
+    );
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed',
+      Correlation_Key__c = 'drain-failed-v1-b',
+      Definition_Version__c = 1
+    );
+
+    // v2: Failed + Completed — failed and clean-terminal must be in distinct buckets.
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed',
+      Correlation_Key__c = 'drain-failed-v2',
+      Definition_Version__c = 2
+    );
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Completed',
+      Correlation_Key__c = 'drain-done-v2',
+      Definition_Version__c = 2
+    );
+
+    Test.startTest();
+    List<Map<String, Object>> rows = WorkflowDashboardController.getVersionDrain(
+      wfName
+    );
+    Test.stopTest();
+
+    Map<String, Object> v1Row = null;
+    Map<String, Object> v2Row = null;
+    for (Map<String, Object> row : rows) {
+      if ((Integer) row.get('version') == 1) {
+        v1Row = row;
+      } else if ((Integer) row.get('version') == 2) {
+        v2Row = row;
+      }
+    }
+
+    System.assertNotEquals(null, v1Row, 'Expected a row for version 1');
+    System.assertEquals(0, (Integer) v1Row.get('nonTerminalCount'), 'v1 nonTerminal should be 0');
+    System.assertEquals(2, (Integer) v1Row.get('failedCount'), 'v1 failed should be 2');
+    System.assertEquals(0, (Integer) v1Row.get('terminalCount'), 'Failed must NOT be counted as clean terminal');
+    System.assertEquals(2, (Integer) v1Row.get('totalCount'), 'v1 total should be 2');
+    System.assertEquals(false, (Boolean) v1Row.get('safeToRetire'), 're-drivable failures must block retire');
+
+    System.assertNotEquals(null, v2Row, 'Expected a row for version 2');
+    System.assertEquals(1, (Integer) v2Row.get('failedCount'), 'v2 failed should be 1');
+    System.assertEquals(1, (Integer) v2Row.get('terminalCount'), 'v2 clean terminal should be 1');
+    System.assertEquals(false, (Boolean) v2Row.get('safeToRetire'), 'v2 still has a re-drivable failure');
   }
 
   @isTest

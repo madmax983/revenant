@@ -364,7 +364,7 @@
                                                 <lightning-icon icon-name="utility:layers" size="small" class="slds-m-right_small text-primary"></lightning-icon>
                                                 Version Drain
                                             </h2>
-                                            <p class="slds-text-color_weak slds-m-top_xx-small">Per-version count of in-flight instances. A version is safe to retire only when its non-terminal count is 0.</p>
+                                            <p class="slds-text-color_weak slds-m-top_xx-small">Per-version headcount of instances still bound to each definition version. A version is safe to retire only when it has no in-flight instances and no re-drivable failures.</p>
                                         </div>
                                         <lightning-button
                                             label="Close"
@@ -389,6 +389,7 @@
                                                     <tr class="slds-line-height_reset">
                                                         <th scope="col"><div class="slds-truncate">Version</div></th>
                                                         <th scope="col"><div class="slds-truncate">In-flight (non-terminal)</div></th>
+                                                        <th scope="col"><div class="slds-truncate" title="Failed runs are terminal but re-drivable on this version, so retiring its code breaks recovery">Failed (re-drivable)</div></th>
                                                         <th scope="col"><div class="slds-truncate">Terminal</div></th>
                                                         <th scope="col"><div class="slds-truncate">Total</div></th>
                                                         <th scope="col"><div class="slds-truncate">Retire Status</div></th>
@@ -399,6 +400,7 @@
                                                         <tr key={row.versionLabel}>
                                                             <td><div class="slds-truncate font-mono">{row.versionLabel}</div></td>
                                                             <td><div class="slds-truncate">{row.nonTerminalCount}</div></td>
+                                                            <td><div class="slds-truncate">{row.failedCount}</div></td>
                                                             <td><div class="slds-truncate">{row.terminalCount}</div></td>
                                                             <td><div class="slds-truncate">{row.totalCount}</div></td>
                                                             <td><span class={row.badgeClass}>{row.badgeLabel}</span></td>

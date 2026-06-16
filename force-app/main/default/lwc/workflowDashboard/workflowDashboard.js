@@ -531,6 +531,9 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   handleRefresh() {
+    if (this.viewingDrain) {
+      this.loadDrain(true);
+    }
     this.refreshInstances().then(() => {
       this.showToast("Success", "Workflow dashboard refreshed", "success");
     });
@@ -571,7 +574,12 @@ export default class WorkflowDashboard extends LightningElement {
     this.loadDrain();
   }
 
-  loadDrain() {
+  // isRefresh = true is a silent periodic/toolbar re-fetch of the same workflow:
+  // it keeps the current rows visible (no spinner, no flicker) and swallows
+  // errors. A fresh load (workflow change / panel open) clears prior rows up front
+  // so a slow or failing request never leaves a previous definition's retirement
+  // status showing under the new selection.
+  loadDrain(isRefresh) {
     if (!this.drainWorkflow) {
       this.drainRows = [];
       return;
@@ -579,25 +587,41 @@ export default class WorkflowDashboard extends LightningElement {
     // Capture the requested workflow so a slower, earlier response for a
     // previously-selected workflow can't overwrite the current selection.
     const requestedWorkflow = this.drainWorkflow;
-    this.loadingDrain = true;
+    if (!isRefresh) {
+      this.drainRows = [];
+      this.loadingDrain = true;
+    }
     getVersionDrain({ workflowName: requestedWorkflow })
       .then((rows) => {
         if (this.drainWorkflow !== requestedWorkflow) {
           return;
         }
-        this.drainRows = rows.map((row) => ({
-          ...row,
-          badgeClass: row.safeToRetire
-            ? "badge badge-green"
-            : "badge badge-red",
-          badgeLabel: row.safeToRetire
-            ? "Safe to retire"
-            : `In-flight: ${row.nonTerminalCount}`,
-          versionLabel: row.version != null ? `v${row.version}` : "(none)",
-        }));
+        this.drainRows = rows.map((row) => {
+          let badgeClass;
+          let badgeLabel;
+          if (row.nonTerminalCount > 0) {
+            badgeClass = "badge badge-red";
+            badgeLabel = `In-flight: ${row.nonTerminalCount}`;
+          } else if (row.failedCount > 0) {
+            // Re-drivable failures: not in-flight, but retiring the version's
+            // code would break Retry/Re-drive — operator must review first.
+            badgeClass = "badge badge-orange";
+            badgeLabel = `Review failures: ${row.failedCount}`;
+          } else {
+            badgeClass = "badge badge-green";
+            badgeLabel = "Safe to retire";
+          }
+          return {
+            ...row,
+            badgeClass,
+            badgeLabel,
+            versionLabel: row.version != null ? `v${row.version}` : "(none)",
+          };
+        });
       })
       .catch((error) => {
-        if (this.drainWorkflow !== requestedWorkflow) {
+        if (this.drainWorkflow !== requestedWorkflow || isRefresh) {
+          // Silent on background refresh — keep the last good rows.
           return;
         }
         this.showToast(
@@ -608,7 +632,7 @@ export default class WorkflowDashboard extends LightningElement {
         );
       })
       .finally(() => {
-        if (this.drainWorkflow === requestedWorkflow) {
+        if (this.drainWorkflow === requestedWorkflow && !isRefresh) {
           this.loadingDrain = false;
         }
       });
@@ -1129,6 +1153,11 @@ export default class WorkflowDashboard extends LightningElement {
   startAutoRefresh() {
     this.stopAutoRefresh();
     this.autoRefreshInterval = setInterval(() => {
+      // Keep the open Version Drain panel live so a version doesn't keep showing
+      // "Safe to retire" after new in-flight instances start under it.
+      if (this.viewingDrain) {
+        this.loadDrain(true);
+      }
       this.refreshInstances();
     }, 5000);
   }
