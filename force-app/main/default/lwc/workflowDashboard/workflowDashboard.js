@@ -9,6 +9,7 @@ import retryWorkflowInstance from "@salesforce/apex/WorkflowDashboardController.
 import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardController.getRedriveEligibleCount";
 import redriveMatchingInstances from "@salesforce/apex/WorkflowDashboardController.redriveMatchingInstances";
 import resumeWorkflowInstance from "@salesforce/apex/WorkflowDashboardController.resumeWorkflowInstance";
+import resumeCompensationInstance from "@salesforce/apex/WorkflowDashboardController.resumeCompensationInstance";
 import cancelWorkflow from "@salesforce/apex/WorkflowDashboardController.cancelWorkflow";
 import submitApproval from "@salesforce/apex/WorkflowDashboardController.submitApproval";
 import getWatchdogStatus from "@salesforce/apex/WorkflowDashboardController.getWatchdogStatus";
@@ -76,6 +77,7 @@ export default class WorkflowDashboard extends LightningElement {
     { label: "Retrying", value: "Retrying" },
     { label: "Compensating", value: "Compensating" },
     { label: "Compensated", value: "Compensated" },
+    { label: "Rollback Incomplete", value: "CompensationFailed" },
     { label: "Completed", value: "Completed" },
     { label: "Failed", value: "Failed" },
     { label: "Cancelling", value: "Cancelling" },
@@ -125,11 +127,43 @@ export default class WorkflowDashboard extends LightningElement {
     return this.selectedInst && this.selectedInst.Status__c === "Failed";
   }
 
+  get isRollbackIncomplete() {
+    return (
+      this.selectedInst &&
+      this.selectedInst.Status__c === "CompensationFailed"
+    );
+  }
+
+  get pendingCompensationCount() {
+    return this.selectedInst ? this.selectedInst.pendingCompensationCount : 0;
+  }
+
+  get pendingCompensations() {
+    const names =
+      this.selectedInst && this.selectedInst.pendingCompensations
+        ? this.selectedInst.pendingCompensations
+        : [];
+    // The compensation stack can legitimately contain the same step name more
+    // than once (a workflow that loops or reuses a compensatable step class), so
+    // the step name alone is not a unique list key. Pair it with the stack index
+    // to give LWC a stable, unique key per entry and keep list diffing correct.
+    return names.map((name, index) => ({
+      key: `${index}_${name}`,
+      name
+    }));
+  }
+
   get isCancelable() {
     if (!this.selectedInst) return false;
     const status = this.selectedInst.Status__c;
+    // CompensationFailed is included so operators can force-cancel a stalled rollback:
+    // the cancel dialog's "without compensations" choice drives it terminal and releases
+    // its key when the remaining compensation keeps failing.
     return (
-      status === "Pending" || status === "Running" || status === "Suspended"
+      status === "Pending" ||
+      status === "Running" ||
+      status === "Suspended" ||
+      status === "CompensationFailed"
     );
   }
 
@@ -358,7 +392,9 @@ export default class WorkflowDashboard extends LightningElement {
           outputFile: this.buildPayloadFile(payloadFiles["instance.Output"]),
           waitingOn: result.waitingOn,
           isWatchdogWaiting: result.waitingOn === "Watchdog",
-          waitingOnBadgeClass: result.waitingOn === "Watchdog" ? "badge badge-purple" : (result.waitingOn === "Delayed Queueable" ? "badge badge-indigo" : "badge badge-blue")
+          waitingOnBadgeClass: result.waitingOn === "Watchdog" ? "badge badge-purple" : (result.waitingOn === "Delayed Queueable" ? "badge badge-indigo" : "badge badge-blue"),
+          pendingCompensationCount: result.pendingCompensationCount || 0,
+          pendingCompensations: result.pendingCompensations || []
         };
 
         // Map children
@@ -844,6 +880,32 @@ export default class WorkflowDashboard extends LightningElement {
       });
   }
 
+  handleResumeRollback() {
+    this.loadingDetails = true;
+    resumeCompensationInstance({ instanceId: this.selectedInstanceId })
+      .then(() => {
+        this.showToast(
+          "Success",
+          "Rollback resumed. Remaining compensations will run in LIFO order.",
+          "success",
+        );
+        this.refreshInstances();
+        this.loadDetails(true);
+        this.startPolling();
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to resume rollback: " +
+            (error.body ? error.body.message : error.message),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.loadingDetails = false;
+      });
+  }
+
   // UTILITIES
   formatDateTime(dateStr) {
     if (!dateStr) return "";
@@ -896,6 +958,8 @@ export default class WorkflowDashboard extends LightningElement {
         return "badge badge-yellow pulse-glow";
       case "Compensated":
         return "badge badge-orange";
+      case "CompensationFailed":
+        return "badge badge-red pulse-glow";
       case "Cancelling":
         return "badge badge-yellow pulse-glow";
       case "Cancelled":
@@ -923,6 +987,8 @@ export default class WorkflowDashboard extends LightningElement {
         return "timeline-marker bg-yellow";
       case "Compensated":
         return "timeline-marker bg-orange";
+      case "CompensationFailed":
+        return "timeline-marker bg-red";
       case "Cancelling":
         return "timeline-marker bg-yellow";
       case "Cancelled":

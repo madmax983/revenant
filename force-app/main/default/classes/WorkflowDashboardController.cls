@@ -351,6 +351,7 @@ public inherited sharing class WorkflowDashboardController {
         results.put('completed', results.get('completed') + count);
       } else if (
         stat == 'Failed' ||
+        stat == 'CompensationFailed' ||
         stat == 'Compensated' ||
         stat == 'Cancelled'
       ) {
@@ -385,7 +386,8 @@ public inherited sharing class WorkflowDashboardController {
         Previous_Instance__c,
         Previous_Instance__r.Name,
         Async_Job_Id__c,
-        Sleep_Until__c
+        Sleep_Until__c,
+        Compensation_Stack__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -474,12 +476,36 @@ public inherited sharing class WorkflowDashboardController {
       }
     }
 
+    // Derive the un-run remainder of the LIFO compensation stack so a stalled
+    // ("rollback incomplete") saga can show, at a glance, how many and which forward
+    // steps still have un-reversed side effects — no manual JSON inspection required.
+    // The stack is presented top-of-stack first (next to be compensated).
+    List<String> pendingCompensations = new List<String>();
+    if (String.isNotBlank(instance.Compensation_Stack__c)) {
+      try {
+        List<String> stack = (List<String>) JSON.deserialize(
+          instance.Compensation_Stack__c,
+          List<String>.class
+        );
+        for (Integer i = stack.size() - 1; i >= 0; i--) {
+          pendingCompensations.add(stack[i]);
+        }
+      } catch (Exception ex) {
+        System.debug(
+          LoggingLevel.WARN,
+          'Failed to parse Compensation_Stack__c: ' + ex.getMessage()
+        );
+      }
+    }
+
     return new Map<String, Object>{
       'instance' => instance,
       'steps' => steps,
       'children' => children,
       'successor' => successors.isEmpty() ? null : successors[0],
       'waitingOn' => waitingOn,
+      'pendingCompensationCount' => pendingCompensations.size(),
+      'pendingCompensations' => pendingCompensations,
       'payloadFiles' => payloadFiles
     };
   }
@@ -771,6 +797,28 @@ public inherited sharing class WorkflowDashboardController {
       }
     } catch (Exception ex) {
       System.debug(LoggingLevel.ERROR, 'Aura resumeWorkflowInstance failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  /**
+   * Operator action to resume a stalled saga rollback (status CompensationFailed)
+   * from exactly the failed compensation point. Idempotent: a repeated/overlapping
+   * call after the rollback has already resumed is a safe no-op in the engine.
+   */
+  @AuraEnabled
+  public static void resumeCompensationInstance(Id instanceId) {
+    checkAuthorization();
+    try {
+      WorkflowEngine.resumeCompensation(instanceId);
+    } catch (Exception ex) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura resumeCompensationInstance failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
       throw new AuraHandledException(ex.getMessage());
     }
   }

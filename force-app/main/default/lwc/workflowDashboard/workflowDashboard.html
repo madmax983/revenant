@@ -368,12 +368,21 @@
                                              </lightning-button>
                                          </template>
                                          <template if:true={isFailed}>
-                                             <lightning-button 
-                                                 label="Retry / Replay" 
-                                                 icon-name="utility:refresh" 
-                                                 variant="neutral" 
+                                             <lightning-button
+                                                 label="Retry / Replay"
+                                                 icon-name="utility:refresh"
+                                                 variant="neutral"
                                                  onclick={handleRetryWorkflow}
                                                  class="slds-m-right_small">
+                                             </lightning-button>
+                                         </template>
+                                         <template if:true={isRollbackIncomplete}>
+                                             <lightning-button
+                                                 label="Resume Rollback"
+                                                 icon-name="utility:undo"
+                                                 variant="brand"
+                                                 onclick={handleResumeRollback}
+                                                 class="slds-m-right_small brand-button">
                                              </lightning-button>
                                          </template>
                                          <template if:true={isCancelable}>
@@ -448,6 +457,21 @@
                                             <template if:true={selectedInst.outputFile}>
                                                 <a href={selectedInst.outputFile.url} target="_blank" rel="noopener" class="slds-text-body_small">{selectedInst.outputFile.label}</a>
                                             </template>
+                                        </div>
+                                    </template>
+                                    <template if:true={isRollbackIncomplete}>
+                                        <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
+                                            <div class="slds-text-title text-red">Rollback Incomplete</div>
+                                            <div class="slds-text-body_regular slds-m-bottom_x-small">
+                                                This saga's rollback stalled on a failed compensation.
+                                                <strong>{pendingCompensationCount}</strong> forward step(s) still have un-reversed side effects.
+                                                Use <strong>Resume Rollback</strong> to finish compensating them in LIFO order.
+                                            </div>
+                                            <ul class="slds-list_dotted">
+                                                <template for:each={pendingCompensations} for:item="comp">
+                                                    <li key={comp.key} class="slds-text-body_small">{comp.name}</li>
+                                                </template>
+                                            </ul>
                                         </div>
                                     </template>
                                     <template if:true={selectedInst.Error_Message__c}>
