@@ -595,16 +595,17 @@ public inherited sharing class WorkflowDashboardController {
       if (ac.Body == null) {
         continue;
       }
+      // Skip @isTest classes (any class whose body carries the annotation) and
+      // system-only workflows that must not be launched from the dashboard.
+      if (
+        ac.Body.toLowerCase().contains('@istest') ||
+        ac.Name.equalsIgnoreCase('BulkRedriveWorkflow')
+      ) {
+        continue;
+      }
       Matcher pm = classPattern.matcher(ac.Body);
       while (pm.find()) {
         String className = pm.group(1);
-        if (
-          ac.Name.contains('WorkflowEngineTest') ||
-          ac.Name.contains('WorkflowDashboardControllerTest') ||
-          ac.Name.equalsIgnoreCase('BulkRedriveWorkflow')
-        ) {
-          continue; // Exclude test classes and internal system workflows
-        }
         // Outer class match returns the bare name; inner class is qualified.
         definitions.add(
           className.equalsIgnoreCase(ac.Name)
@@ -634,10 +635,17 @@ public inherited sharing class WorkflowDashboardController {
       WITH SYSTEM_MODE
     ]) {
       String className = impl.ClassName;
+      if (String.isBlank(className)) {
+        continue;
+      }
+      // By convention all test classes end with 'Test'. Extract the outer class
+      // name (before '.' for inner classes) to catch inners of test classes too.
+      // Also exclude system-only workflows not meant to be launched from the UI.
+      String outerClass = className.contains('.')
+        ? className.substringBefore('.')
+        : className;
       if (
-        String.isBlank(className) ||
-        className.contains('WorkflowEngineTest') ||
-        className.contains('WorkflowDashboardControllerTest') ||
+        outerClass.toLowerCase().endsWith('test') ||
         className.equalsIgnoreCase('BulkRedriveWorkflow')
       ) {
         continue;
