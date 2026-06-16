@@ -1,3 +1,19 @@
+/**
+ * These tests do NOT use WorkflowTestHarness because they exercise engine
+ * internals rather than the workflow DAG:
+ *
+ *  - testCalloutSuccess / testCalloutFailureAndRetry use Test.stopTest() to fire
+ *    the enqueued Queueable, which is the correct way to test the async-callout
+ *    suspend/resume handshake with the platform scheduler.
+ *  - testCalloutTimeoutWatchdog / testTimeoutTriggersSagaCompensation inject
+ *    raw DB state (Running step with expired Timeout_At__c) and call
+ *    processWatchdogHeartbeat() directly — they are unit tests of the watchdog
+ *    sweep path, not the workflow DAG.
+ *  - testCalloutAsyncRetryFlow exercises the future-method/resume handshake step
+ *    by step; the harness cannot intercept future method execution.
+ *
+ * See docs/testing.md §"When not to use the harness" for the full rationale.
+ */
 @isTest
 public class CalloutTimeoutWorkflowExampleTest {
   private class SingleRequestMock implements HttpCalloutMock {

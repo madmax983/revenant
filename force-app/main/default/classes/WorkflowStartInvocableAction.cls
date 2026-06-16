@@ -13,6 +13,12 @@ public inherited sharing class WorkflowStartInvocableAction {
   public class StartResult {
     @InvocableVariable(label='Workflow Instance ID')
     public Id workflowInstanceId;
+
+    @InvocableVariable(
+      label='Is New'
+      description='True if a new instance was started; false if an existing instance was returned for a deduplicated (already-seen) correlation key.'
+    )
+    public Boolean isNew;
   }
 
   @InvocableMethod(
@@ -40,12 +46,17 @@ public inherited sharing class WorkflowStartInvocableAction {
       );
     }
 
-    List<Id> instanceIds = WorkflowEngine.start(engineRequests);
+    List<WorkflowEngine.StartResult> engineResults = WorkflowEngine.startOrGet(
+      engineRequests
+    );
 
     List<StartResult> results = new List<StartResult>();
-    for (Id instanceId : instanceIds) {
+    for (WorkflowEngine.StartResult engineResult : engineResults) {
       StartResult res = new StartResult();
-      res.workflowInstanceId = instanceId;
+      res.workflowInstanceId = engineResult == null
+        ? null
+        : engineResult.instanceId;
+      res.isNew = engineResult == null ? null : engineResult.isNew;
       results.add(res);
     }
     return results;

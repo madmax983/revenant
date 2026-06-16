@@ -17,8 +17,10 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 ### Fault Tolerance & Safety
 
 - **Distributed Transaction Rollbacks (Sagas)**: Steps implementing [CompensatableStep](force-app/main/default/classes/CompensatableStep.cls) register on a LIFO rollback stack upon successful forward completion. If a forward step fails permanently, the engine automatically executes their `compensate` methods in reverse order.
+- **Recoverable Rollbacks (Rollback Incomplete)**: If a `compensate()` step itself exhausts its `RetryPolicy` or throws mid-rollback, the engine preserves the remaining LIFO stack intact and parks the saga in a distinguishable, operator-visible **`CompensationFailed`** ("Rollback Incomplete") state instead of silently abandoning the deeper compensations. The dashboard surfaces exactly how many forward effects are still un-reversed and offers a **Resume Rollback** action that replays the remaining stack from the stalled point — idempotently, append-only, and without ever re-running a successful compensation or a forward step. See [SagaStalledRollbackExample](examples/main/default/classes/SagaStalledRollbackExample.cls).
 - **Watchdog Step Timeouts**: Steps can declare custom execution timeouts. A single global watchdog poller ([WorkflowWatchdog](force-app/main/default/classes/WorkflowWatchdog.cls)) sweeps the database for any timed-out steps or suspended instances, failing or resuming them cleanly without hitting Salesforce's 100 concurrent scheduled jobs limit.
 - **Large Payload Offloading**: When input, output, or state serialization strings exceed 100,000 characters (approaching the 131,072-character long text area limit), the engine transparently offloads the payload to `ContentVersion` files and links them to the parent instance.
+- **Effective-Once Side Effects (Idempotency Keys)**: The engine guarantees only at-least-once execution, so `execute()` (and `compensate()`) can re-run on retries, operator re-drives, and at-least-once event resumes. [StepContext](force-app/main/default/classes/StepContext.cls) exposes a read-only `idempotencyKey` that is stable across every re-execution of the same logical step yet distinct per `(instance, step)`. Forward it to an external system (e.g. as a Stripe `Idempotency-Key` header) for effective-once side effects without inventing your own dedup token. See [IdempotentChargeWorkflowExample](examples/main/default/classes/IdempotentChargeWorkflowExample.cls).
 
 ### Integration & Monitoring
 
@@ -191,6 +193,39 @@ When a step reads a signal while running as one branch of a parallel (scatter-ga
 Claims are bounded for governor safety. A branch that needs to inspect **many distinct signal names** should call `ctx.getSignals()` once and filter in memory rather than issuing a separate `ctx.getSignal(name)` / `ctx.hasSignal(name)` lookup per name: each named claim is its own DML statement and lock query, so beyond an internal claim budget the overflow reads degrade to **at-least-once** (read without claiming) instead of failing. `getSignals()` claims a whole page in one statement and stays exactly-once.
 
 Because claiming writes uncommitted DML, a parallel-branch step that makes an **HTTP callout whose endpoint or body comes from the signal payload** must implement the [`CalloutStep`](force-app/main/default/classes/CalloutStep.cls) marker. Such a step reads signals *without* claiming (at-least-once delivery instead of exactly-once), so the callout is legal; use distinct signal names per branch or idempotent callouts when relying on this mode. A `CalloutStep` may also be `TimeoutConfigurable`: the engine defers its pre-execution timeout write past `execute()` (and past `compensate()` for a `CalloutStep` that is also a `CompensatableStep`) so the synchronous callout is not blocked by uncommitted work (the step's timeout was already armed when it was queued, so the watchdog stays in effect).
+### 5. Flow Interoperability (Start, Signal, Read)
+
+Flow Builders interact with the engine through supported Invocable Actions (category **Revenant Workflows**) — no internal field API names required:
+
+| Action | Apex Class | Purpose |
+| --- | --- | --- |
+| **Start Workflow** | `WorkflowStartInvocableAction` | Launch a durable workflow, returning its Instance Id. |
+| **Signal Workflow** | `WorkflowSignalInvocableAction` | Send a signal (approve, cancel, resume) to a running instance. |
+| **Get Workflow Status** | `WorkflowStatusInvocableAction` | Read an instance's outcome back into Flow (read-only). |
+
+**Reading a workflow's outcome.** *Get Workflow Status* accepts **either** a `Workflow_Instance__c` Id **or** a Correlation Key and returns typed outputs a Decision element can branch on:
+
+- `found` — `false` (instead of a fault) when nothing matches the key/Id.
+- `status` — the raw `Status__c` value (e.g. `Running`, `Completed`, `Failed`).
+- `isTerminal` — `true` once the workflow has finished (`Completed`/`Failed`/`Compensated`/`Cancelled`).
+- `isSuccess` — `true` only for `Completed`.
+- `outputJson` — the workflow output, **fully rehydrated** even when it was offloaded to ContentVersion (>100k); never the raw storage pointer.
+- `errorMessage` — failure detail from `Error_Message__c`.
+
+The action is **strictly read-only** (no transition, enqueue, signal, schedule, or DML) and bulk-safe across Flow batch sizes. Lookup behavior differs by identifier, which matters for workflows that use `ContinueAsNew`:
+
+- **By Correlation Key** — automatically follows the **`ContinuedAsNew`** chain and reports the live/terminal successor rather than a stale predecessor. **Use the correlation key for outcome polling whenever a workflow may continue-as-new.**
+- **By Instance Id** — reads *that exact instance* and deliberately does **not** follow the chain (an Id is a precise handle). The Id returned by *Start Workflow* points at the original generation, so polling that saved Id on a continue-as-new workflow would keep reading the predecessor and miss the successor's outcome.
+
+> Note: a single read returns the full rehydrated `outputJson` even for offloaded (>100k) payloads. A Flow batch that polls *many* instances whose outputs are *all* large/offloaded materializes them all at once and can approach the Apex heap limit; use smaller batch sizes for that case.
+
+**Reference recipe** — start a workflow, then later branch on its outcome:
+
+1. A record-triggered Flow calls **Start Workflow** (`workflowName`, a stable `correlationKey`, optional `inputJson`).
+2. Later (a scheduled Flow, a screen action, or a subsequent automation) calls **Get Workflow Status**, passing that same `correlationKey` (preferred — it resolves continue-as-new chains; the saved Id only reads the original generation).
+3. A **Decision** element branches: `found = false` → not found; `isSuccess = true` → success path; `status = Failed` → surface `errorMessage`; `isTerminal = false` → keep waiting; default → ended without success (e.g. Cancelled/Compensated).
+
+The autolaunched Flow `Revenant_Read_Workflow_Status_Example` (`examples/main/default/flows/`) implements step 2–3 verbatim.
 
 ---
 
@@ -225,22 +260,20 @@ The engine maps a workflow's class name to a custom metadata record's `Developer
 - `examples/main/default/` - Reference Architectures
   - `classes/` - Onboarding, Saga rollback, version upgrades, Apex Cursor parallel processing, and HTTP Callout/Timeout Watchdog implementations.
   - `triggers/` - Opportunity stage triggers demonstrating automated workflow instantiation.
+  - `flows/` - Reference Flow demonstrating reading a workflow's outcome via the Get Workflow Status invocable action.
 
 ---
 
 ## Development & Testing
 
-Deploy the codebase to a scratch org:
-
 ```bash
-sf project deploy start
+sf project deploy start          # deploy to default scratch org
+sf apex run test -w 10           # run the full test suite
 ```
 
-Run the suite of unit tests to verify orchestration safety, yielding limits, parallel forks, Saga compensations, and watchdog timeouts:
+For testing patterns — `WorkflowTestHarness`, step-level unit tests, governor limit guidance, and when to use each — see **[docs/testing.md](docs/testing.md)**.
 
-```bash
-sf apex run test -w 10
-```
+For AI and Agentforce integration — `aiplatform.ModelsAPI`, multi-turn agent conversations, sessionId threading, testing mocks, and org setup — see **[docs/agentforce.md](docs/agentforce.md)**.
 
 ---
 
@@ -263,6 +296,12 @@ Revenant settings can be configured without code modifications by editing the **
    - **`false`**: The engine completely bypasses `System.schedule` and writes all sleep/retry/timeout states directly to the database. All operations are then processed sequentially by the watchdog poller.
 2. **Watchdog Delay Minutes** (`Watchdog_Delay_Minutes__c` - Number, default `10`):
    - The delay interval (between 1 and 10 minutes) before the watchdog enqueues its next self-chaining execution.
+3. **Dedup Window Minutes** (`Dedup_Window_Minutes__c` - Number, default `1440`):
+   - Controls **idempotent get-or-start** dedup for at-least-once event sources. `WorkflowEngine.start(...)` returns the existing instance's Id when a start arrives with a correlation key that matches an instance that is still active, **or** that became terminal (`Completed`/`Failed`/`Compensated`/`Cancelled`/`ContinuedAsNew`) within this many minutes — rather than throwing or spawning a duplicate that re-runs side effects.
+   - **`0`** (minimum) preserves active-only behavior: only in-flight instances are deduped, and a redelivery after completion starts a fresh instance.
+   - Active instances are always deduped regardless of this value. A blank correlation key is never deduped (a key is required to start).
+   - Use `WorkflowEngine.startOrGet(...)` (or the **Start Workflow** Invocable's `Is New` output) to observe whether a call started a new instance or returned an existing one, without a re-query.
+   - **Concurrency note:** the unique `Active_Correlation_Key__c` index is the hard backstop for two simultaneous *active* starts (the loser receives the winner's Id). Terminal-window dedup is **best-effort under concurrent redelivery**: if a sibling run both starts and reaches a terminal state in the narrow window between a redelivery's lookup and its insert, a duplicate of the just-finished (in-window) run can still be created, because the unique index no longer applies once the original is terminal. Active redelivery and sequential post-completion redelivery are fully covered; closing the concurrent terminal race would require an extra per-start query and is intentionally not done to keep the start path to a single indexed SOQL.
 
 ### Architectural Trade-offs
 
