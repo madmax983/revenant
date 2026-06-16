@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Root_Correlation_Key__c</fullName>
+    <description>The stable correlation key of the first instance in the workflow's continue-as-new chain (equals Correlation_Key__c for workflows that never continue-as-new). Because a continueAsNew successor's Correlation_Key__c is rewritten (e.g. base_run2), subscribers that started the workflow on the original key should match the terminal event on this field.</description>
+    <externalId>false</externalId>
+    <label>Root Correlation Key</label>
+    <length>255</length>
+    <required>false</required>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>

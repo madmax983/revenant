@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Root_Correlation_Key__c</fullName>
+    <caseSensitive>false</caseSensitive>
+    <description>Stable correlation key of the first instance in this continue-as-new chain. Defaulted to Correlation_Key__c on insert and inherited unchanged by each continueAsNew successor, so the whole chain shares one key that external callers can correlate the terminal lifecycle event against.</description>
+    <externalId>true</externalId>
+    <label>Root Correlation Key</label>
+    <length>255</length>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>

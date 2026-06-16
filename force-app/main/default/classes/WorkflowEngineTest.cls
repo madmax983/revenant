@@ -3750,4 +3750,344 @@ public class WorkflowEngineTest {
       System.assertEquals('Consumed', sig.Status__c);
     }
   }
+
+  // ==========================================
+  // OUTBOUND Workflow_Lifecycle__e EVENT (issue #14)
+  // ==========================================
+
+  @isTest
+  static void testLifecycleEventOnCompletion() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'LifecycleHappyKey',
+      'StartVal'
+    );
+    Test.stopTest(); // Runs HappyStep1 synchronously
+
+    // Execute the second/terminal step synchronously
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    Workflow_Instance__c inst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', inst.Status__c);
+
+    // Exactly one lifecycle event, describing the successful terminal outcome.
+    System.assertEquals(
+      1,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'A completed workflow publishes exactly one lifecycle event'
+    );
+    Workflow_Lifecycle__e evt = WorkflowLifecyclePublisher.publishedEvents[0];
+    System.assertEquals(instanceId, evt.Workflow_Instance_Id__c);
+    System.assertEquals('Completed', evt.Status__c);
+    System.assertEquals(true, evt.Is_Success__c);
+    System.assertEquals('LifecycleHappyKey', evt.Correlation_Key__c);
+    System.assertEquals(
+      'LifecycleHappyKey',
+      evt.Root_Correlation_Key__c,
+      'Root key equals the correlation key for a non-continue-as-new workflow'
+    );
+    System.assertEquals(
+      'WorkflowEngineTest.HappyWorkflow',
+      evt.Workflow_Name__c
+    );
+    System.assertNotEquals(
+      null,
+      evt.Terminal_At__c,
+      'The event carries a terminal transition timestamp for retry-aware dedupe'
+    );
+  }
+
+  @isTest
+  static void testLifecycleEventOnFailure() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.CustomRetryWorkflow',
+      'LifecycleRetryKey',
+      null
+    );
+    Test.stopTest(); // First attempt -> Retrying
+
+    WorkflowEngine.runStep(instanceId); // Second attempt -> Retrying
+    WorkflowEngine.runStep(instanceId); // Third attempt -> exceeds max -> Failed
+
+    Workflow_Instance__c inst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', inst.Status__c);
+
+    System.assertEquals(
+      1,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'A failed workflow publishes exactly one lifecycle event'
+    );
+    Workflow_Lifecycle__e evt = WorkflowLifecyclePublisher.publishedEvents[0];
+    System.assertEquals('Failed', evt.Status__c);
+    System.assertEquals(false, evt.Is_Success__c);
+    System.assertNotEquals(
+      null,
+      evt.Failure_Detail__c,
+      'Failure detail is sourced from Error_Message__c'
+    );
+    System.assert(
+      evt.Failure_Detail__c.contains('Max retries exceeded'),
+      'Failure detail carries the engine error message'
+    );
+  }
+
+  @isTest
+  static void testLifecycleExactlyOnceForContinueAsNewChain() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.DaemonWorkflow',
+      'LifecycleDaemonKey',
+      0
+    );
+    // Run 1: counter 0 -> ContinuedAsNew (no event)
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    Workflow_Instance__c run2 = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :instanceId
+    ];
+    // Run 2: counter 1 -> ContinuedAsNew (no event)
+    new WorkflowOrchestrator(run2.Id).execute(null);
+
+    Workflow_Instance__c run3 = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :run2.Id
+    ];
+    // Run 3: counter 2 -> Completed (exactly one event for the whole chain)
+    new WorkflowOrchestrator(run3.Id).execute(null);
+
+    System.assertEquals(
+      'Completed',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :run3.Id].Status__c
+    );
+
+    System.assertEquals(
+      1,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'A ContinuedAsNew chain emits exactly one terminal event — on the final successor only'
+    );
+    Workflow_Lifecycle__e evt = WorkflowLifecyclePublisher.publishedEvents[0];
+    System.assertEquals(
+      run3.Id,
+      evt.Workflow_Instance_Id__c,
+      'The single event references the final successor instance'
+    );
+    System.assertEquals('Completed', evt.Status__c);
+    System.assertEquals(true, evt.Is_Success__c);
+    // The successor's own key was rewritten (DaemonKey_run3), but the chain root
+    // key stays the original start key so the launcher can correlate the event.
+    System.assertEquals(
+      'LifecycleDaemonKey_run3',
+      evt.Correlation_Key__c,
+      'The event carries the final successor key'
+    );
+    System.assertEquals(
+      'LifecycleDaemonKey',
+      evt.Root_Correlation_Key__c,
+      'The event carries the stable chain root key from the original start request'
+    );
+  }
+
+  @isTest
+  static void testLifecycleEventOnCancellation() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SignaledWorkflow',
+      'LifecycleCancelKey',
+      null
+    );
+    Test.stopTest(); // Runs SignaledStep which suspends awaiting a signal
+
+    WorkflowEngine.cancel(instanceId, false); // No compensations -> Cancelled
+
+    Workflow_Instance__c inst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Cancelled', inst.Status__c);
+
+    System.assertEquals(
+      1,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'A cancelled workflow publishes exactly one lifecycle event'
+    );
+    Workflow_Lifecycle__e evt = WorkflowLifecyclePublisher.publishedEvents[0];
+    System.assertEquals('Cancelled', evt.Status__c);
+    System.assertEquals(false, evt.Is_Success__c);
+    System.assertEquals(
+      'WorkflowEngineTest.SignaledWorkflow',
+      evt.Workflow_Name__c,
+      'Cancellation event carries the workflow name (query was widened for it)'
+    );
+  }
+
+  @isTest
+  static void testLifecycleToggleDisablesEmission() {
+    WorkflowEngine.publishLifecycleEvents = false;
+
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'LifecycleToggleKey',
+      'StartVal'
+    );
+    Test.stopTest();
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    System.assertEquals(
+      'Completed',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId]
+      .Status__c,
+      'Disabling the toggle does not affect the terminal transition itself'
+    );
+    System.assertEquals(
+      0,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'No lifecycle event is published when the operator toggle is off'
+    );
+  }
+
+  @isTest
+  static void testLifecyclePublishFailureDoesNotBreakTransition() {
+    WorkflowLifecyclePublisher.throwTestException = true;
+
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'LifecycleIsolationKey',
+      'StartVal'
+    );
+    Test.stopTest();
+    // Terminal transition runs through the (failing) publish site and must survive.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    System.assertEquals(
+      'Completed',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId]
+      .Status__c,
+      'A publish failure is swallowed and never rolls back the terminal write'
+    );
+    System.assertEquals(
+      0,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'The simulated publish failure recorded no delivered event'
+    );
+  }
+
+  @isTest
+  static void testLifecycleEventOnCompensationDrain() {
+    // Regression: the compensation drain re-queries the instance, and the
+    // terminal publish must carry Correlation_Key__c (was dropped from that
+    // re-query, which would have thrown an unqueried-field exception and rolled
+    // back the Compensated write).
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Correlation_Key__c = 'LifecycleCompKey',
+      Status__c = 'Compensating',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+      ),
+      Input__c = '{"test": true}'
+    );
+    insert inst;
+
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep',
+      Status__c = 'Completed',
+      Input__c = '{"stepInput": 1}',
+      Output__c = '{"stepOutput": 2}'
+    );
+
+    Test.startTest();
+    WorkflowEngine.runStep(inst.Id, null); // Compensate step
+    WorkflowEngine.runStep(inst.Id, null); // Stack drained -> Compensated + publish
+    Test.stopTest();
+
+    System.assertEquals(
+      'Compensated',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
+      .Status__c,
+      'Compensation drain reaches the terminal state (no publish-induced rollback)'
+    );
+    System.assertEquals(
+      1,
+      WorkflowLifecyclePublisher.publishedEvents.size(),
+      'Compensation drain publishes exactly one lifecycle event'
+    );
+    Workflow_Lifecycle__e evt = WorkflowLifecyclePublisher.publishedEvents[0];
+    System.assertEquals('Compensated', evt.Status__c);
+    System.assertEquals(false, evt.Is_Success__c);
+    System.assertEquals(
+      'LifecycleCompKey',
+      evt.Correlation_Key__c,
+      'The event carries the correlation key from the widened re-query'
+    );
+  }
+
+  @isTest
+  static void testLifecycleEventsOnParentChildCancelTree() {
+    // The cancel tree publishes one bulk batch after every node is cancelled, so
+    // the best-effort publish never starves a later child cancellation of DML.
+    WorkflowEngine.disableQueueableInTest = true;
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.ParentWorkflow',
+      'CancelTreeParent',
+      null
+    );
+    WorkflowEngine.runStep(parentId, null); // parent starts child, suspends
+
+    Workflow_Instance__c childInst = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentId
+      LIMIT 1
+    ];
+
+    Test.startTest();
+    WorkflowEngine.cancel(parentId, false); // cancels parent + child, then bulk-publishes
+    Test.stopTest();
+
+    System.assertEquals(
+      'Cancelled',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :parentId]
+      .Status__c
+    );
+    System.assertEquals(
+      'Cancelled',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :childInst.Id]
+      .Status__c
+    );
+
+    // One lifecycle event per terminally-cancelled node, emitted as a single bulk
+    // batch after the whole tree was cancelled.
+    Set<Id> eventInstanceIds = new Set<Id>();
+    for (
+      Workflow_Lifecycle__e evt : WorkflowLifecyclePublisher.publishedEvents
+    ) {
+      System.assertEquals('Cancelled', evt.Status__c);
+      System.assertEquals(false, evt.Is_Success__c);
+      eventInstanceIds.add((Id) evt.Workflow_Instance_Id__c);
+    }
+    System.assertEquals(
+      new Set<Id>{ parentId, childInst.Id },
+      eventInstanceIds,
+      'Both the parent and child cancellations emit exactly one lifecycle event'
+    );
+  }
 }
