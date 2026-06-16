@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Previous_Run_At__c</fullName>
+    <description>CreatedDate of the predecessor instance in a ContinueAsNew chain — the moment the predecessor started, not when it finished. Available in StepContext.previousRunAt as the polling cursor for incremental workflows, ensuring no records fall into the gap between two run windows.</description>
+    <externalId>false</externalId>
+    <label>Previous Run At</label>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>DateTime</type>
+</CustomField>

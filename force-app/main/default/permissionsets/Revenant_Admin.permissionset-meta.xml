@@ -64,6 +64,11 @@
     </fieldPermissions>
     <fieldPermissions>
         <editable>true</editable>
+        <field>Workflow_Instance__c.Previous_Run_At__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
         <field>Workflow_Instance__c.Root_Correlation_Key__c</field>
         <readable>true</readable>
     </fieldPermissions>

@@ -8,6 +8,33 @@ public inherited sharing class StepContext {
   public String workflowInputJson { get; set; }
   public Integer workflowVersion { get; set; }
 
+  /**
+   * Start time of the predecessor instance (its CreatedDate). Null for the
+   * first instance in a chain or non-continuation contexts.
+   *
+   * Use as the polling cursor for incremental queries — query records modified
+   * since the predecessor STARTED, not since it finished. This prevents a gap:
+   * records modified during the predecessor's execution window are covered by
+   * the successor's query. Near-boundary records may be processed by both runs
+   * (bounded overlap), but nothing is ever skipped.
+   *
+   *   Datetime since = ctx.previousRunAt != null
+   *       ? ctx.previousRunAt
+   *       : Datetime.now().addHours(-24); // cold-start fallback
+   *   [SELECT ... WHERE LastModifiedDate >= :since]
+   *
+   * Skip-free only when each run drains its ENTIRE window: capping the query
+   * with a LIMIT lets this wall-clock cursor advance past the unprocessed tail
+   * and starve it. If you must bound batch size, carry a data-derived
+   * high-water mark (max processed timestamp) via ContinueAsNew instead.
+   *
+   * NOT a compensation primitive. It is populated in compensate() contexts only
+   * for parity with execute(); a compensation must undo exactly what the forward
+   * step did using that step's recorded input/output, never a re-scan since
+   * previousRunAt (which can drift to records the forward run never touched).
+   */
+  public Datetime previousRunAt { get; private set; }
+
   // 0-based sequence of this visit to `stepName` within this instance: the count
   // of already-completed executions of the step when this context was built. It
   // stays constant across retries/re-drives/resumes of the current (not yet
@@ -339,6 +366,39 @@ public inherited sharing class StepContext {
       signalSource
     );
     this.stepVisit = (stepVisit != null && stepVisit > 0) ? stepVisit : 0;
+  }
+
+  /**
+   * Full engine context with continuation metadata. Carries the stepVisit
+   * sequence, a lazy SignalSource, and the previousRunAt timestamp for
+   * ContinueAsNew chains (null for the first instance in a chain).
+   */
+  public StepContext(
+    Id workflowInstanceId,
+    String workflowName,
+    String stepName,
+    String inputJson,
+    String previousStepOutput,
+    String stepStateJson,
+    String workflowInputJson,
+    Integer workflowVersion,
+    Integer stepVisit,
+    SignalSource signalSource,
+    Datetime previousRunAt
+  ) {
+    this(
+      workflowInstanceId,
+      workflowName,
+      stepName,
+      inputJson,
+      previousStepOutput,
+      stepStateJson,
+      workflowInputJson,
+      workflowVersion,
+      stepVisit,
+      signalSource
+    );
+    this.previousRunAt = previousRunAt;
   }
 
   // Resolves the full pending set lazily so a step that never touches signals

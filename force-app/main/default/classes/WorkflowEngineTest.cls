@@ -1165,6 +1165,23 @@ public class WorkflowEngineTest {
     }
   }
 
+  // Captures the previousRunAt the engine exposes inside compensate(), so a test
+  // can assert the forward-context continuation metadata is threaded into the
+  // compensation context too (parity), not silently null.
+  public static Datetime capturedCompensatePreviousRunAt = null;
+  public static Boolean compensatePreviousRunAtCaptured = false;
+
+  public class PreviousRunAtCompensatableStep implements CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'Success');
+    }
+    public StepResult compensate(StepContext ctx) {
+      capturedCompensatePreviousRunAt = ctx.previousRunAt;
+      compensatePreviousRunAtCaptured = true;
+      return StepResult.complete(null, 'Compensated');
+    }
+  }
+
   @isTest
   static void testCompensationFlow() {
     WorkflowEngine.disableQueueableInTest = true;
@@ -1222,6 +1239,53 @@ public class WorkflowEngineTest {
       stepExecs[2].Step_Name__c
     );
     System.assertEquals('Compensated', stepExecs[2].Status__c);
+  }
+
+  // Parity: the continuation cursor available to execute() must also be visible
+  // to compensate(), so a compensation never sees a surprising null where the
+  // forward path saw a value. (It must not be USED to scope what to undo -- that
+  // comes from the recorded step input/output -- but it must be present.)
+  @isTest
+  static void testCompensationContextCarriesPreviousRunAt() {
+    WorkflowEngine.disableQueueableInTest = true;
+    capturedCompensatePreviousRunAt = null;
+    compensatePreviousRunAtCaptured = false;
+
+    Datetime priorRun = Datetime.newInstanceGmt(2026, 1, 2, 3, 4, 5);
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Compensating',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{
+          'WorkflowEngineTest.PreviousRunAtCompensatableStep'
+        }
+      ),
+      Input__c = '{"test": true}',
+      Previous_Run_At__c = priorRun
+    );
+    insert inst;
+
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.PreviousRunAtCompensatableStep',
+      Status__c = 'Completed',
+      Input__c = '{"stepInput": 1}',
+      Output__c = '{"stepOutput": 2}'
+    );
+
+    Test.startTest();
+    WorkflowEngine.runStep(inst.Id, null); // runs *_Compensate
+    Test.stopTest();
+
+    System.assert(
+      compensatePreviousRunAtCaptured,
+      'compensate() should have been invoked'
+    );
+    System.assertEquals(
+      priorRun,
+      capturedCompensatePreviousRunAt,
+      'compensate() must observe the instance Previous_Run_At__c, not null'
+    );
   }
 
   // A compensation that reads a signal then makes a synchronous, payload-driven
@@ -2016,6 +2080,24 @@ public class WorkflowEngineTest {
     }
   }
 
+  public class PreviousRunAtWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.PreviousRunAtCaptureStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  public class PreviousRunAtCaptureStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (ctx.previousRunAt == null) {
+        return StepResult.continueAsNew(null);
+      }
+      return StepResult.complete(null, ctx.previousRunAt.getTime());
+    }
+  }
+
   public class IncrementCounterStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       Integer counter = 0;
@@ -2053,13 +2135,14 @@ public class WorkflowEngineTest {
 
     // Find and run Run 2
     Workflow_Instance__c run2 = [
-      SELECT Id, Status__c, Correlation_Key__c, Input__c, Previous_Instance__c
+      SELECT Id, Status__c, Correlation_Key__c, Input__c, Previous_Instance__c, Previous_Run_At__c
       FROM Workflow_Instance__c
       WHERE Previous_Instance__c = :run1.Id
     ];
     System.assertEquals('Pending', run2.Status__c);
     System.assertEquals('DaemonKey_run2', run2.Correlation_Key__c);
     System.assertEquals('1', run2.Input__c);
+    System.assertNotEquals(null, run2.Previous_Run_At__c, 'Successor instance must carry the predecessor run timestamp');
 
     // Execute Run 2 (counter 1 -> continueAsNew 2)
     new WorkflowOrchestrator(run2.Id).execute(null);
@@ -4089,5 +4172,44 @@ public class WorkflowEngineTest {
       eventInstanceIds,
       'Both the parent and child cancellations emit exactly one lifecycle event'
     );
+  }
+
+  @isTest
+  static void testPreviousRunAtFlowsThroughContinueAsNew() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id run1Id = WorkflowEngine.start(
+      'WorkflowEngineTest.PreviousRunAtWorkflow',
+      'PreviousRunAtKey',
+      null
+    );
+    new WorkflowOrchestrator(run1Id).execute(null);
+
+    Workflow_Instance__c run1 = [
+      SELECT Status__c, Previous_Run_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :run1Id
+    ];
+    System.assertEquals('ContinuedAsNew', run1.Status__c);
+    System.assertEquals(null, run1.Previous_Run_At__c, 'First instance must not have Previous_Run_At__c set');
+
+    Workflow_Instance__c run2 = [
+      SELECT Id, Previous_Run_At__c
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :run1Id
+    ];
+    System.assertNotEquals(null, run2.Previous_Run_At__c, 'Continuation instance must have Previous_Run_At__c set');
+
+    new WorkflowOrchestrator(run2.Id).execute(null);
+
+    Workflow_Instance__c run2Final = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :run2.Id
+    ];
+    System.assertEquals('Completed', run2Final.Status__c);
+    Long outputTime = Long.valueOf(run2Final.Output__c);
+    Long fieldTime = run2.Previous_Run_At__c.getTime();
+    System.assertEquals(fieldTime, outputTime, 'StepContext.previousRunAt must equal Previous_Run_At__c on the instance');
   }
 }
