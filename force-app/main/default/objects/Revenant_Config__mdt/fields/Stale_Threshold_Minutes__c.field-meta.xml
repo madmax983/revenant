@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Stale_Threshold_Minutes__c</fullName>
+    <defaultValue>60</defaultValue>
+    <description>Minutes of inactivity after which a Suspended instance with no active resume mechanism (no scheduled job, no sleep timer, no step timeout) is classified as stalled on the dashboard. Leave blank to use the documented default of 60 minutes. Set to 0 to flag any Suspended instance with no resume mechanism regardless of idle time.</description>
+    <externalId>false</externalId>
+    <fieldManageability>DeveloperControlled</fieldManageability>
+    <label>Stale Threshold Minutes</label>
+    <precision>9</precision>
+    <required>false</required>
+    <scale>0</scale>
+    <type>Number</type>
+</CustomField>

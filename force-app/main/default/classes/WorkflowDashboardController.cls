@@ -3,6 +3,17 @@ public inherited sharing class WorkflowDashboardController {
   // This is required because dynamic SOQL string bindings (:variable) must be in scope
   // when Database.query() is executed, even if the WHERE clause is built in a helper method.
   private static String likeTerm;
+  // Binding variable for the stalled-instance cutoff DateTime (used in getStalledInstances /
+  // getStalledCount dynamic SOQL — same reason as likeTerm above).
+  private static Datetime stalledCutoff;
+
+  private static final Set<String> TERMINAL_STATUSES = new Set<String>{
+    'Completed',
+    'Failed',
+    'Compensated',
+    'Cancelled',
+    'ContinuedAsNew'
+  };
 
   private static void checkAuthorization() {
     if (FeatureManagement.checkPermission('Workflow_Admin')) {
@@ -33,15 +44,15 @@ public inherited sharing class WorkflowDashboardController {
    */
   private static Boolean currentUserHasModifyAllData() {
     return ![
-      SELECT Id
-      FROM PermissionSetAssignment
-      WHERE
-        AssigneeId = :UserInfo.getUserId()
-        AND PermissionSet.PermissionsModifyAllData = TRUE
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ]
-    .isEmpty();
+        SELECT Id
+        FROM PermissionSetAssignment
+        WHERE
+          AssigneeId = :UserInfo.getUserId()
+          AND PermissionSet.PermissionsModifyAllData = TRUE
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ]
+      .isEmpty();
   }
 
   private static Id getAttachmentId(String textValue) {
@@ -54,7 +65,10 @@ public inherited sharing class WorkflowDashboardController {
         );
         return (Id) marker.get('$attachmentId');
       } catch (Exception ex) {
-        System.debug(LoggingLevel.FINE, 'getAttachmentId parsing fallback: ' + ex.getMessage());
+        System.debug(
+          LoggingLevel.FINE,
+          'getAttachmentId parsing fallback: ' + ex.getMessage()
+        );
       }
     }
     return null;
@@ -95,7 +109,7 @@ public inherited sharing class WorkflowDashboardController {
           new Map<String, Object>{
             'contentDocumentId' => attachmentId,
             'downloadUrl' => '/sfc/servlet.shepherd/document/download/' +
-              attachmentId,
+            attachmentId,
             'fullLength' => full.length()
           }
         );
@@ -223,53 +237,44 @@ public inherited sharing class WorkflowDashboardController {
     }
 
     String query =
-      'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c ' +
+      'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c ' +
       'FROM Workflow_Instance__c' +
       buildWhereClause(workflowName, status, searchTerm);
 
     query += ' ORDER BY CreatedDate DESC LIMIT :limitSize OFFSET :offsetSize';
 
-    List<Workflow_Instance__c> instances = Database.query(query, AccessLevel.SYSTEM_MODE);
+    List<Workflow_Instance__c> instances = Database.query(
+      query,
+      AccessLevel.SYSTEM_MODE
+    );
 
     Set<Id> cronIds = new Set<Id>();
     Set<Id> asyncIds = new Set<Id>();
+    Set<Id> pageIds = new Set<Id>();
     for (Workflow_Instance__c inst : instances) {
-      if (String.isNotBlank(inst.Async_Job_Id__c)) {
-        String jobIdStr = inst.Async_Job_Id__c;
-        if ((jobIdStr.length() == 15 || jobIdStr.length() == 18) && 
-            (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))) {
-          try {
-            Id jobId = (Id) jobIdStr;
-            if (jobId.getSobjectType() == CronTrigger.SObjectType) {
-              cronIds.add(jobId);
-            } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
-              asyncIds.add(jobId);
-            }
-          } catch (Exception ex) {
-            System.debug(LoggingLevel.WARN, 'Failed to cast Async Job ID: ' + jobIdStr + ', error: ' + ex.getMessage());
-          }
-        } else {
-          System.debug(LoggingLevel.WARN, 'Invalid Async Job ID format: ' + jobIdStr);
-        }
-      }
+      pageIds.add(inst.Id);
+      collectJobId(inst.Async_Job_Id__c, cronIds, asyncIds);
     }
 
-    Set<Id> activeCronIds = new Set<Id>();
-    if (!cronIds.isEmpty()) {
-      for (CronTrigger ct : [SELECT Id FROM CronTrigger WHERE Id IN :cronIds AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING') WITH SYSTEM_MODE]) {
-        activeCronIds.add(ct.Id);
-      }
-    }
+    Set<Id> activeCronIds = queryActiveCronIds(cronIds);
+    Set<Id> activeAsyncIds = queryActiveAsyncIds(asyncIds);
+    Set<Id> instancesWithStepTimeout = queryInstancesWithStepTimeout(pageIds);
 
-    Set<Id> activeAsyncIds = new Set<Id>();
-    if (!asyncIds.isEmpty()) {
-      for (AsyncApexJob aaj : [SELECT Id FROM AsyncApexJob WHERE Id IN :asyncIds AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing') WITH SYSTEM_MODE]) {
-        activeAsyncIds.add(aaj.Id);
-      }
-    }
-
+    Long nowMs = Datetime.now().getTime();
     List<Map<String, Object>> results = new List<Map<String, Object>>();
     for (Workflow_Instance__c inst : instances) {
+      String waitingOn = computeWaitingOn(inst, activeCronIds, activeAsyncIds);
+      Long idleMinutes = TERMINAL_STATUSES.contains(inst.Status__c)
+        ? null
+        : Math.max(0L, (nowMs - inst.LastModifiedDate.getTime()) / 60000L);
+      Boolean stalled = computeStalled(
+        inst,
+        waitingOn,
+        instancesWithStepTimeout,
+        idleMinutes,
+        WorkflowEngine.staleThresholdMinutes
+      );
+
       Map<String, Object> m = new Map<String, Object>{
         'Id' => inst.Id,
         'Name' => inst.Name,
@@ -277,42 +282,362 @@ public inherited sharing class WorkflowDashboardController {
         'Status__c' => inst.Status__c,
         'Correlation_Key__c' => inst.Correlation_Key__c,
         'CreatedDate' => inst.CreatedDate,
+        'LastModifiedDate' => inst.LastModifiedDate,
         'Error_Message__c' => inst.Error_Message__c,
         'Async_Job_Id__c' => inst.Async_Job_Id__c,
-        'Sleep_Until__c' => inst.Sleep_Until__c
+        'Sleep_Until__c' => inst.Sleep_Until__c,
+        'waitingOn' => waitingOn,
+        'idleMinutes' => idleMinutes,
+        'stalled' => stalled
       };
-
-      String waitingOn = null;
-      if (inst.Status__c == 'Suspended') {
-        if (String.isNotBlank(inst.Async_Job_Id__c)) {
-          String jobIdStr = inst.Async_Job_Id__c;
-          if ((jobIdStr.length() == 15 || jobIdStr.length() == 18) && 
-              (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))) {
-            try {
-              Id jobId = (Id) jobIdStr;
-              if (jobId.getSobjectType() == CronTrigger.SObjectType && activeCronIds.contains(jobId)) {
-                waitingOn = 'Scheduled Job';
-              } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType && activeAsyncIds.contains(jobId)) {
-                waitingOn = 'Delayed Queueable';
-              } else {
-                waitingOn = 'Watchdog';
-              }
-            } catch (Exception ex) {
-              System.debug(LoggingLevel.WARN, 'Failed to cast Async Job ID: ' + jobIdStr + ', error: ' + ex.getMessage());
-              waitingOn = 'Watchdog';
-            }
-          } else {
-            System.debug(LoggingLevel.WARN, 'Invalid Async Job ID format: ' + jobIdStr);
-            waitingOn = 'Watchdog';
-          }
-        } else if (inst.Sleep_Until__c != null) {
-          waitingOn = 'Watchdog';
-        }
-      }
-      m.put('waitingOn', waitingOn);
       results.add(m);
     }
     return results;
+  }
+
+  @AuraEnabled(cacheable=true)
+  public static List<Map<String, Object>> getStalledInstances(
+    String workflowName,
+    String searchTerm,
+    Integer thresholdMinutes,
+    Integer limitSize,
+    Integer offsetSize
+  ) {
+    checkAuthorization();
+
+    if (limitSize == null || limitSize <= 0) {
+      limitSize = 50;
+    } else if (limitSize > 100) {
+      limitSize = 100;
+    }
+    if (offsetSize == null || offsetSize < 0) {
+      offsetSize = 0;
+    } else if (offsetSize > 2000) {
+      offsetSize = 2000;
+    }
+
+    Integer threshold = (thresholdMinutes == null)
+      ? WorkflowEngine.staleThresholdMinutes
+      : thresholdMinutes;
+    stalledCutoff = Datetime.now().addMinutes(-threshold);
+
+    List<String> conditions = new List<String>{
+      'Status__c = \'Suspended\'',
+      'Sleep_Until__c = null',
+      'LastModifiedDate <= :stalledCutoff'
+    };
+    if (String.isNotBlank(workflowName)) {
+      conditions.add('Workflow_Name__c = :workflowName');
+    }
+    if (String.isNotBlank(searchTerm)) {
+      likeTerm = '%' + String.escapeSingleQuotes(searchTerm) + '%';
+      conditions.add(
+        '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
+      );
+    }
+
+    String query =
+      'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c ' +
+      'FROM Workflow_Instance__c WHERE ' +
+      String.join(conditions, ' AND ') +
+      ' ORDER BY LastModifiedDate ASC LIMIT :limitSize OFFSET :offsetSize';
+
+    List<Workflow_Instance__c> instances = Database.query(
+      query,
+      AccessLevel.SYSTEM_MODE
+    );
+
+    Set<Id> cronIds = new Set<Id>();
+    Set<Id> asyncIds = new Set<Id>();
+    Set<Id> pageIds = new Set<Id>();
+    for (Workflow_Instance__c inst : instances) {
+      pageIds.add(inst.Id);
+      collectJobId(inst.Async_Job_Id__c, cronIds, asyncIds);
+    }
+
+    Set<Id> activeCronIds = queryActiveCronIds(cronIds);
+    Set<Id> activeAsyncIds = queryActiveAsyncIds(asyncIds);
+    Set<Id> instancesWithStepTimeout = queryInstancesWithStepTimeout(pageIds);
+
+    Long nowMs = Datetime.now().getTime();
+    List<Map<String, Object>> results = new List<Map<String, Object>>();
+    for (Workflow_Instance__c inst : instances) {
+      String waitingOn = computeWaitingOn(inst, activeCronIds, activeAsyncIds);
+      Long idleMinutes = Math.max(
+        0L,
+        (nowMs - inst.LastModifiedDate.getTime()) / 60000L
+      );
+      if (
+        !computeStalled(
+          inst,
+          waitingOn,
+          instancesWithStepTimeout,
+          idleMinutes,
+          threshold
+        )
+      ) {
+        continue;
+      }
+      results.add(
+        new Map<String, Object>{
+          'Id' => inst.Id,
+          'Name' => inst.Name,
+          'Workflow_Name__c' => inst.Workflow_Name__c,
+          'Status__c' => inst.Status__c,
+          'Correlation_Key__c' => inst.Correlation_Key__c,
+          'CreatedDate' => inst.CreatedDate,
+          'LastModifiedDate' => inst.LastModifiedDate,
+          'Error_Message__c' => inst.Error_Message__c,
+          'Async_Job_Id__c' => inst.Async_Job_Id__c,
+          'Sleep_Until__c' => inst.Sleep_Until__c,
+          'waitingOn' => waitingOn,
+          'idleMinutes' => idleMinutes,
+          'stalled' => true
+        }
+      );
+    }
+    return results;
+  }
+
+  @AuraEnabled
+  public static Map<String, Object> getStalledCount(
+    String workflowName,
+    String searchTerm,
+    Integer thresholdMinutes
+  ) {
+    checkAuthorization();
+
+    Integer threshold = (thresholdMinutes == null)
+      ? WorkflowEngine.staleThresholdMinutes
+      : thresholdMinutes;
+    stalledCutoff = Datetime.now().addMinutes(-threshold);
+
+    final Integer CAP = 2000;
+    List<String> conditions = new List<String>{
+      'Status__c = \'Suspended\'',
+      'Sleep_Until__c = null',
+      'LastModifiedDate <= :stalledCutoff'
+    };
+    if (String.isNotBlank(workflowName)) {
+      conditions.add('Workflow_Name__c = :workflowName');
+    }
+    if (String.isNotBlank(searchTerm)) {
+      likeTerm = '%' + String.escapeSingleQuotes(searchTerm) + '%';
+      conditions.add(
+        '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
+      );
+    }
+
+    String query =
+      'SELECT Id, Async_Job_Id__c, Sleep_Until__c, Status__c, LastModifiedDate ' +
+      'FROM Workflow_Instance__c WHERE ' +
+      String.join(conditions, ' AND ') +
+      ' LIMIT :CAP';
+
+    List<Workflow_Instance__c> candidates = Database.query(
+      query,
+      AccessLevel.SYSTEM_MODE
+    );
+    Boolean capped = candidates.size() >= CAP;
+
+    Set<Id> cronIds = new Set<Id>();
+    Set<Id> asyncIds = new Set<Id>();
+    Set<Id> pageIds = new Set<Id>();
+    for (Workflow_Instance__c inst : candidates) {
+      pageIds.add(inst.Id);
+      collectJobId(inst.Async_Job_Id__c, cronIds, asyncIds);
+    }
+
+    Set<Id> activeCronIds = queryActiveCronIds(cronIds);
+    Set<Id> activeAsyncIds = queryActiveAsyncIds(asyncIds);
+    Set<Id> instancesWithStepTimeout = queryInstancesWithStepTimeout(pageIds);
+
+    Long nowMs = Datetime.now().getTime();
+    Integer count = 0;
+    for (Workflow_Instance__c inst : candidates) {
+      String waitingOn = computeWaitingOn(inst, activeCronIds, activeAsyncIds);
+      Long idleMinutes = Math.max(
+        0L,
+        (nowMs - inst.LastModifiedDate.getTime()) / 60000L
+      );
+      if (
+        computeStalled(
+          inst,
+          waitingOn,
+          instancesWithStepTimeout,
+          idleMinutes,
+          threshold
+        )
+      ) {
+        count++;
+      }
+    }
+
+    return new Map<String, Object>{ 'count' => count, 'capped' => capped };
+  }
+
+  // ── Private helpers shared by getFilteredInstances / getStalledInstances / getStalledCount ──
+
+  private static void collectJobId(
+    String jobIdStr,
+    Set<Id> cronIds,
+    Set<Id> asyncIds
+  ) {
+    if (String.isBlank(jobIdStr)) {
+      return;
+    }
+    if (
+      (jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
+      (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))
+    ) {
+      try {
+        Id jobId = (Id) jobIdStr;
+        if (jobId.getSobjectType() == CronTrigger.SObjectType) {
+          cronIds.add(jobId);
+        } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
+          asyncIds.add(jobId);
+        }
+      } catch (Exception ex) {
+        System.debug(
+          LoggingLevel.WARN,
+          'Failed to cast Async Job ID: ' +
+            jobIdStr +
+            ', error: ' +
+            ex.getMessage()
+        );
+      }
+    } else {
+      System.debug(
+        LoggingLevel.WARN,
+        'Invalid Async Job ID format: ' + jobIdStr
+      );
+    }
+  }
+
+  private static Set<Id> queryActiveCronIds(Set<Id> cronIds) {
+    Set<Id> result = new Set<Id>();
+    if (cronIds.isEmpty()) {
+      return result;
+    }
+    for (CronTrigger ct : [
+      SELECT Id
+      FROM CronTrigger
+      WHERE
+        Id IN :cronIds
+        AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING')
+      WITH SYSTEM_MODE
+    ]) {
+      result.add(ct.Id);
+    }
+    return result;
+  }
+
+  private static Set<Id> queryActiveAsyncIds(Set<Id> asyncIds) {
+    Set<Id> result = new Set<Id>();
+    if (asyncIds.isEmpty()) {
+      return result;
+    }
+    for (AsyncApexJob aaj : [
+      SELECT Id
+      FROM AsyncApexJob
+      WHERE
+        Id IN :asyncIds
+        AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing')
+      WITH SYSTEM_MODE
+    ]) {
+      result.add(aaj.Id);
+    }
+    return result;
+  }
+
+  private static Set<Id> queryInstancesWithStepTimeout(Set<Id> instanceIds) {
+    Set<Id> result = new Set<Id>();
+    if (instanceIds.isEmpty()) {
+      return result;
+    }
+    for (Workflow_Step_Execution__c se : [
+      SELECT Workflow_Instance__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :instanceIds AND Timeout_At__c != NULL
+      WITH SYSTEM_MODE
+    ]) {
+      result.add(se.Workflow_Instance__c);
+    }
+    return result;
+  }
+
+  private static String computeWaitingOn(
+    Workflow_Instance__c inst,
+    Set<Id> activeCronIds,
+    Set<Id> activeAsyncIds
+  ) {
+    if (inst.Status__c != 'Suspended') {
+      return null;
+    }
+    if (String.isNotBlank(inst.Async_Job_Id__c)) {
+      String jobIdStr = inst.Async_Job_Id__c;
+      if (
+        (jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
+        (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))
+      ) {
+        try {
+          Id jobId = (Id) jobIdStr;
+          if (
+            jobId.getSobjectType() == CronTrigger.SObjectType &&
+            activeCronIds.contains(jobId)
+          ) {
+            return 'Scheduled Job';
+          } else if (
+            jobId.getSobjectType() == AsyncApexJob.SObjectType &&
+            activeAsyncIds.contains(jobId)
+          ) {
+            return 'Delayed Queueable';
+          } else {
+            return 'Watchdog';
+          }
+        } catch (Exception ex) {
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to cast Async Job ID: ' +
+              jobIdStr +
+              ', error: ' +
+              ex.getMessage()
+          );
+          return 'Watchdog';
+        }
+      } else {
+        System.debug(
+          LoggingLevel.WARN,
+          'Invalid Async Job ID format: ' + jobIdStr
+        );
+        return 'Watchdog';
+      }
+    } else if (inst.Sleep_Until__c != null) {
+      return 'Watchdog';
+    }
+    return null;
+  }
+
+  private static Boolean computeStalled(
+    Workflow_Instance__c inst,
+    String waitingOn,
+    Set<Id> instancesWithStepTimeout,
+    Long idleMinutes,
+    Integer thresholdMinutes
+  ) {
+    if (inst.Status__c != 'Suspended') {
+      return false;
+    }
+    if (waitingOn == 'Scheduled Job' || waitingOn == 'Delayed Queueable') {
+      return false;
+    }
+    if (inst.Sleep_Until__c != null) {
+      return false;
+    }
+    if (instancesWithStepTimeout.contains(inst.Id)) {
+      return false;
+    }
+    return idleMinutes > thresholdMinutes;
   }
 
   @AuraEnabled
@@ -365,7 +690,9 @@ public inherited sharing class WorkflowDashboardController {
   public static Map<String, Object> getInstanceDetails(Id instanceId) {
     checkAuthorization();
     if (instanceId == null) {
-      AuraHandledException ex = new AuraHandledException('instanceId is required.');
+      AuraHandledException ex = new AuraHandledException(
+        'instanceId is required.'
+      );
       ex.setMessage('instanceId is required.');
       throw ex;
     }
@@ -444,19 +771,37 @@ public inherited sharing class WorkflowDashboardController {
     if (instance.Status__c == 'Suspended') {
       if (String.isNotBlank(instance.Async_Job_Id__c)) {
         String jobIdStr = instance.Async_Job_Id__c;
-        if ((jobIdStr.length() == 15 || jobIdStr.length() == 18) && 
-            (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))) {
+        if (
+          (jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
+          (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))
+        ) {
           try {
             Id jobId = (Id) jobIdStr;
             if (jobId.getSobjectType() == CronTrigger.SObjectType) {
-              List<CronTrigger> cronJobs = [SELECT Id FROM CronTrigger WHERE Id = :jobId AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING') WITH SYSTEM_MODE LIMIT 1];
+              List<CronTrigger> cronJobs = [
+                SELECT Id
+                FROM CronTrigger
+                WHERE
+                  Id = :jobId
+                  AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING')
+                WITH SYSTEM_MODE
+                LIMIT 1
+              ];
               if (!cronJobs.isEmpty()) {
                 waitingOn = 'Scheduled Job';
               } else {
                 waitingOn = 'Watchdog';
               }
             } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
-              List<AsyncApexJob> asyncJobs = [SELECT Id FROM AsyncApexJob WHERE Id = :jobId AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing') WITH SYSTEM_MODE LIMIT 1];
+              List<AsyncApexJob> asyncJobs = [
+                SELECT Id
+                FROM AsyncApexJob
+                WHERE
+                  Id = :jobId
+                  AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing')
+                WITH SYSTEM_MODE
+                LIMIT 1
+              ];
               if (!asyncJobs.isEmpty()) {
                 waitingOn = 'Delayed Queueable';
               } else {
@@ -464,11 +809,20 @@ public inherited sharing class WorkflowDashboardController {
               }
             }
           } catch (Exception ex) {
-            System.debug(LoggingLevel.WARN, 'Failed to cast Async Job ID: ' + jobIdStr + ', error: ' + ex.getMessage());
+            System.debug(
+              LoggingLevel.WARN,
+              'Failed to cast Async Job ID: ' +
+                jobIdStr +
+                ', error: ' +
+                ex.getMessage()
+            );
             waitingOn = 'Watchdog';
           }
         } else {
-          System.debug(LoggingLevel.WARN, 'Invalid Async Job ID format: ' + jobIdStr);
+          System.debug(
+            LoggingLevel.WARN,
+            'Invalid Async Job ID format: ' + jobIdStr
+          );
           waitingOn = 'Watchdog';
         }
       } else if (instance.Sleep_Until__c != null) {
@@ -555,8 +909,8 @@ public inherited sharing class WorkflowDashboardController {
       System.debug(
         LoggingLevel.WARN,
         'getDefinitions: source scan hit governor guard, falling back to ' +
-        'ApexTypeImplementor (inner-class definitions will be omitted): ' +
-        ex.getMessage()
+          'ApexTypeImplementor (inner-class definitions will be omitted): ' +
+          ex.getMessage()
       );
       return getDefinitionsFromTypeIndex();
     }
@@ -574,9 +928,9 @@ public inherited sharing class WorkflowDashboardController {
     );
 
     Long heapGuard = (Long) (Limits.getLimitHeapSize() *
-      definitionScanGuardFraction);
+    definitionScanGuardFraction);
     Integer cpuGuard = (Integer) (Limits.getLimitCpuTime() *
-      definitionScanGuardFraction);
+    definitionScanGuardFraction);
 
     // SOQL for-loop retrieves records in chunks of 200, bounding resident heap so a
     // large org's class bodies are not all materialized at once.
@@ -681,7 +1035,13 @@ public inherited sharing class WorkflowDashboardController {
     } catch (AuraHandledException ahe) {
       throw ahe;
     } catch (Exception ex) {
-      System.debug(LoggingLevel.ERROR, 'Aura startWorkflow failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura startWorkflow failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
       AuraHandledException ahe = new AuraHandledException(ex.getMessage());
       ahe.setMessage(ex.getMessage());
       throw ahe;
@@ -694,7 +1054,13 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowEngine.retryWorkflow(instanceId);
     } catch (Exception ex) {
-      System.debug(LoggingLevel.ERROR, 'Aura retryWorkflowInstance failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura retryWorkflowInstance failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -720,7 +1086,13 @@ public inherited sharing class WorkflowDashboardController {
         searchTerm
       );
     } catch (Exception ex) {
-      System.debug(LoggingLevel.ERROR, 'Aura getRedriveEligibleCount failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura getRedriveEligibleCount failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -778,7 +1150,13 @@ public inherited sharing class WorkflowDashboardController {
         'redriveInstanceId' => redriveInstanceId
       };
     } catch (Exception ex) {
-      System.debug(LoggingLevel.ERROR, 'Aura redriveMatchingInstances failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura redriveMatchingInstances failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -804,7 +1182,13 @@ public inherited sharing class WorkflowDashboardController {
         WorkflowEngine.enqueueOrchestrators(new List<Id>{ inst.Id });
       }
     } catch (Exception ex) {
-      System.debug(LoggingLevel.ERROR, 'Aura resumeWorkflowInstance failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura resumeWorkflowInstance failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -837,7 +1221,13 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowEngine.cancel(instanceId, runCompensations);
     } catch (Exception ex) {
-      System.debug(LoggingLevel.ERROR, 'Aura cancelWorkflow failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura cancelWorkflow failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -873,7 +1263,13 @@ public inherited sharing class WorkflowDashboardController {
         payloadJson
       );
     } catch (Exception ex) {
-      System.debug(LoggingLevel.ERROR, 'Aura submitApproval failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura submitApproval failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -900,8 +1296,7 @@ public inherited sharing class WorkflowDashboardController {
     ]) {
       String resolved = WorkflowEngine.resolvePayload(se.Output__c);
       if (
-        String.isBlank(resolved) ||
-        !resolved.contains('waitingForApproval')
+        String.isBlank(resolved) || !resolved.contains('waitingForApproval')
       ) {
         continue;
       }
@@ -956,8 +1351,9 @@ public inherited sharing class WorkflowDashboardController {
           CreatedDate,
           LastModifiedDate
         FROM Workflow_Instance__c
-        WHERE Correlation_Key__c = 'SystemWatchdog'
-           OR Correlation_Key__c LIKE 'SystemWatchdog_run%'
+        WHERE
+          Correlation_Key__c = 'SystemWatchdog'
+          OR Correlation_Key__c LIKE 'SystemWatchdog_run%'
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC
         LIMIT 5
@@ -1037,7 +1433,13 @@ public inherited sharing class WorkflowDashboardController {
         'elasticAsyncLimit' => elasticAsyncLimit
       };
     } catch (Exception ex) {
-      System.debug(LoggingLevel.ERROR, 'Aura getWatchdogStatus failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura getWatchdogStatus failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -1048,7 +1450,13 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowWatchdog.bootstrap();
     } catch (Exception ex) {
-      System.debug(LoggingLevel.ERROR, 'Aura enqueueWatchdog failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura enqueueWatchdog failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
       throw new AuraHandledException(ex.getMessage());
     }
   }

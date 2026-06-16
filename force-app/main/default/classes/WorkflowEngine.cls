@@ -12,6 +12,11 @@ public inherited sharing class WorkflowEngine {
   // to preserve active-only dedup behavior.
   public static Integer dedupWindowMinutes = 1440;
 
+  // Minutes of inactivity after which a Suspended instance with no active resume
+  // mechanism is classified as stalled on the dashboard. Configurable via
+  // Revenant_Config__mdt.Stale_Threshold_Minutes__c; default 60 minutes.
+  public static Integer staleThresholdMinutes = 60;
+
   // Instances in these statuses are considered in-flight; a start that collides
   // with one of them always dedups to the existing instance.
   private static final Set<String> ACTIVE_STATUSES = new Set<String>{
@@ -53,7 +58,8 @@ public inherited sharing class WorkflowEngine {
           Watchdog_Delay_Minutes__c,
           Use_Dynamic_Scheduling__c,
           Publish_Lifecycle_Events__c,
-          Dedup_Window_Minutes__c
+          Dedup_Window_Minutes__c,
+          Stale_Threshold_Minutes__c
         FROM Revenant_Config__mdt
         WHERE DeveloperName = 'Default'
         WITH SYSTEM_MODE
@@ -72,6 +78,10 @@ public inherited sharing class WorkflowEngine {
         }
         if (configs[0].Dedup_Window_Minutes__c != null) {
           dedupWindowMinutes = configs[0].Dedup_Window_Minutes__c.intValue();
+        }
+        if (configs[0].Stale_Threshold_Minutes__c != null) {
+          staleThresholdMinutes = configs[0]
+            .Stale_Threshold_Minutes__c.intValue();
         }
       }
     } catch (Exception ex) {
@@ -1081,10 +1091,7 @@ public inherited sharing class WorkflowEngine {
     // is still compensating and must route to runCompensationStep, not the
     // forward path -- otherwise a signal-driven compensation is skipped and the
     // instance stays stuck Running with the compensation step pending.
-    if (
-      instance.Status__c == 'Suspended' ||
-      instance.Status__c == 'Running'
-    ) {
+    if (instance.Status__c == 'Suspended' || instance.Status__c == 'Running') {
       // Only treat a trailing-'_Compensate' latest step as a live compensation
       // when the instance's compensation stack actually holds the matching base
       // step. A normal forward step that happens to be named '<x>_Compensate'
@@ -1094,9 +1101,7 @@ public inherited sharing class WorkflowEngine {
       // resuming it. The forward execution of compensatable steps grows the
       // stack too, so a non-empty stack alone is not enough; require the base
       // name to be on it.
-      List<String> compStack = String.isNotBlank(
-          instance.Compensation_Stack__c
-        )
+      List<String> compStack = String.isNotBlank(instance.Compensation_Stack__c)
         ? (List<String>) JSON.deserialize(
             instance.Compensation_Stack__c,
             List<String>.class
@@ -1772,7 +1777,9 @@ public inherited sharing class WorkflowEngine {
       // the page must not be reported absent (which could strand it), so re-page
       // (claimed rows are now Processing and drop out of the Received view) up to
       // a bounded number of times.
-      for (Integer attempt = 0; attempt <= PARALLEL_CLAIM_PAGE_RETRIES; attempt++) {
+      for (
+        Integer attempt = 0; attempt <= PARALLEL_CLAIM_PAGE_RETRIES; attempt++
+      ) {
         // Fetch recent candidates newest-first.
         List<Workflow_Signal__c> candidates = [
           SELECT Id, Signal_Name__c, Payload__c, CreatedDate
@@ -1794,11 +1801,7 @@ public inherited sharing class WorkflowEngine {
         // if the signal never arrived would never be re-woken (its wake event
         // already fired on insert) and would strand. No claim is issued (no
         // budget), so mark capped to skip same-name cleanup at consume.
-        if (
-          claimBudget <= 0 ||
-          claimStatementBudget <= 0 ||
-          nearSoqlLimit()
-        ) {
+        if (claimBudget <= 0 || claimStatementBudget <= 0 || nearSoqlLimit()) {
           capped = true;
           Workflow_Signal__c c = candidates[0];
           return new StepContext.Signal(
@@ -1897,7 +1900,8 @@ public inherited sharing class WorkflowEngine {
     String signalName,
     Integer rowLimit
   ) {
-    Integer effectiveLimit = (rowLimit != null && rowLimit > 0)
+    Integer effectiveLimit = (rowLimit != null &&
+      rowLimit > 0)
       ? rowLimit
       : SERIAL_SIGNAL_ROW_CAP;
     List<Workflow_Signal__c> records;
@@ -2442,7 +2446,7 @@ public inherited sharing class WorkflowEngine {
             instance.Id,
             result.stepStateJson,
             'State_Suspend_' +
-              stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+            stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
           )
         : null;
       saveStepExec(stepExec);
@@ -2990,7 +2994,12 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Instance__c
         WHERE
           Correlation_Key__c = :correlationKey
-          AND Status__c IN ('Pending', 'Running', 'Suspended', 'CompensationFailed')
+          AND Status__c IN (
+            'Pending',
+            'Running',
+            'Suspended',
+            'CompensationFailed'
+          )
         WITH SYSTEM_MODE
         LIMIT 1
       ];
@@ -3250,7 +3259,8 @@ public inherited sharing class WorkflowEngine {
     // the forward phase. Only forward parallel instances fan out per branch.
     Boolean isCompensatingInst =
       !rows.isEmpty() &&
-      (rows[0].Status__c == 'Compensating' || rows[0].Status__c == 'Cancelling');
+      (rows[0].Status__c == 'Compensating' ||
+      rows[0].Status__c == 'Cancelling');
 
     if (
       !isCompensatingInst &&
@@ -3369,8 +3379,7 @@ public inherited sharing class WorkflowEngine {
         (req.signalName.equalsIgnoreCase('Cancel') ||
         req.signalName.equalsIgnoreCase('CancelWorkflow'));
       if (
-        inst == null ||
-        (inst.Status__c == 'CompensationFailed' && !isCancel)
+        inst == null || (inst.Status__c == 'CompensationFailed' && !isCancel)
       ) {
         throw new WorkflowException(
           'No active workflow found with key or ID: ' + req.keyOrId
@@ -3457,7 +3466,8 @@ public inherited sharing class WorkflowEngine {
       // from the forward phase. Otherwise one compensation signal would publish a
       // RUN_STEP per stale branch and pile up duplicate rollback workers.
       Boolean isCompensatingInst =
-        inst.Status__c == 'Compensating' || inst.Status__c == 'Cancelling';
+        inst.Status__c == 'Compensating' ||
+        inst.Status__c == 'Cancelling';
       // Parallel (forward) instances must wake each branch by name; collect them
       // for a single bulk resume rather than a per-instance query each (which would
       // exhaust the SOQL limit when many parallel workflows are signaled at once).
@@ -3994,7 +4004,8 @@ public inherited sharing class WorkflowEngine {
     // terminal/failed value is left intact so the guard can early-exit on it.
     if (
       reassertedStatus != null &&
-      (instance.Status__c == 'Suspended' || instance.Status__c == 'Running')
+      (instance.Status__c == 'Suspended' ||
+      instance.Status__c == 'Running')
     ) {
       instance.Status__c = reassertedStatus;
       instance.Async_Job_Id__c = null;
@@ -4281,7 +4292,7 @@ public inherited sharing class WorkflowEngine {
             instance.Id,
             result.stepStateJson,
             'State_Suspend_' +
-              stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+            stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
           )
         : null;
       saveStepExec(stepExec);
@@ -4501,7 +4512,13 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Instance__c
         WHERE
           Parent_Instance__c IN :frontier
-          AND Status__c IN ('Pending', 'Running', 'Suspended', 'Cancelling', 'CompensationFailed')
+          AND Status__c IN (
+            'Pending',
+            'Running',
+            'Suspended',
+            'Cancelling',
+            'CompensationFailed'
+          )
         WITH SYSTEM_MODE
       ];
       List<Id> nextFrontier = new List<Id>();
@@ -4874,7 +4891,11 @@ public inherited sharing class WorkflowEngine {
           markerDocByIndex.put(i, docId);
           docIds.add(docId);
         } catch (Exception ex) {
-          System.debug(LoggingLevel.WARN, 'Failed to parse offload marker, using raw value: ' + ex.getMessage());
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to parse offload marker, using raw value: ' +
+            ex.getMessage()
+          );
         }
       }
     }

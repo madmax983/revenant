@@ -64,6 +64,9 @@
 .text-red {
   color: hsl(0, 80%, 55%);
 }
+.text-purple {
+  color: hsl(270, 75%, 50%);
+}
 
 /* Layout Cards */
 .panel-card {
@@ -157,7 +160,6 @@
   background-color: hsl(240, 100%, 95%);
   color: hsl(240, 95%, 38%);
 }
-
 
 /* Code Blocks */
 .code-block {

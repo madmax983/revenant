@@ -18,4 +18,8 @@
         <field>Dedup_Window_Minutes__c</field>
         <value xsi:type="xsd:double">1440.0</value>
     </values>
+    <values>
+        <field>Stale_Threshold_Minutes__c</field>
+        <value xsi:type="xsd:double">60.0</value>
+    </values>
 </CustomMetadata>
