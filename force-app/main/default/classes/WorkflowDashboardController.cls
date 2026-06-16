@@ -1091,7 +1091,11 @@ public inherited sharing class WorkflowDashboardController {
     Map<String, Integer> versionKeyToInt = new Map<String, Integer>();
 
     for (AggregateResult ar : Database.query(query, AccessLevel.SYSTEM_MODE)) {
-      Integer ver = (Integer) ar.get('v');
+      // A grouped Number field comes back as Decimal in an AggregateResult, so it
+      // must be read as Decimal and converted — a direct (Integer) cast throws
+      // "Invalid conversion from runtime type Decimal to Integer" at runtime.
+      Decimal verDecimal = (Decimal) ar.get('v');
+      Integer ver = verDecimal == null ? null : verDecimal.intValue();
       String verKey = ver == null ? 'null' : String.valueOf(ver);
       String stat = (String) ar.get('s');
       Integer cnt = (Integer) ar.get('cnt');

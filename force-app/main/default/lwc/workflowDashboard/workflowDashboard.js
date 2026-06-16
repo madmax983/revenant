@@ -553,7 +553,13 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDoctor = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
-    this.drainRows = [];
+    // Re-run the query if a workflow is already selected; the combobox value
+    // hasn't changed, so its onchange won't fire to refresh the table itself.
+    if (this.drainWorkflow) {
+      this.loadDrain();
+    } else {
+      this.drainRows = [];
+    }
   }
 
   handleCloseDrain() {
@@ -570,9 +576,15 @@ export default class WorkflowDashboard extends LightningElement {
       this.drainRows = [];
       return;
     }
+    // Capture the requested workflow so a slower, earlier response for a
+    // previously-selected workflow can't overwrite the current selection.
+    const requestedWorkflow = this.drainWorkflow;
     this.loadingDrain = true;
-    getVersionDrain({ workflowName: this.drainWorkflow })
+    getVersionDrain({ workflowName: requestedWorkflow })
       .then((rows) => {
+        if (this.drainWorkflow !== requestedWorkflow) {
+          return;
+        }
         this.drainRows = rows.map((row) => ({
           ...row,
           badgeClass: row.safeToRetire
@@ -585,6 +597,9 @@ export default class WorkflowDashboard extends LightningElement {
         }));
       })
       .catch((error) => {
+        if (this.drainWorkflow !== requestedWorkflow) {
+          return;
+        }
         this.showToast(
           "Error",
           "Failed to load version drain: " +
@@ -593,7 +608,9 @@ export default class WorkflowDashboard extends LightningElement {
         );
       })
       .finally(() => {
-        this.loadingDrain = false;
+        if (this.drainWorkflow === requestedWorkflow) {
+          this.loadingDrain = false;
+        }
       });
   }
 
