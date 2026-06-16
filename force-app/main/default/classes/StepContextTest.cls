@@ -968,4 +968,39 @@ public class StepContextTest {
       'Default visit (0) must match an explicit stepVisit of 0'
     );
   }
+
+  @isTest
+  static void testPreviousRunAtNullByDefault() {
+    StepContext ctx = new StepContext(
+      '00D000000000001',
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null,
+      1
+    );
+    System.assertNotEquals(null, ctx, 'Context should be constructed');
+    System.assertEquals(null, ctx.previousRunAt, 'Non-continuation context must have null previousRunAt');
+  }
+
+  @isTest
+  static void testPreviousRunAtSetViaFullConstructor() {
+    Datetime ts = Datetime.now().addMinutes(-5);
+    StepContext ctx = new StepContext(
+      '00D000000000001',
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null,
+      1,
+      0,
+      null,
+      ts
+    );
+    System.assertEquals(ts, ctx.previousRunAt, 'previousRunAt should match the value passed to the full constructor');
+  }
 }

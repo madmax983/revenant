@@ -2016,6 +2016,24 @@ public class WorkflowEngineTest {
     }
   }
 
+  public class PreviousRunAtWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.PreviousRunAtCaptureStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  public class PreviousRunAtCaptureStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (ctx.previousRunAt == null) {
+        return StepResult.continueAsNew(null);
+      }
+      return StepResult.complete(null, String.valueOf(ctx.previousRunAt.getTime()));
+    }
+  }
+
   public class IncrementCounterStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       Integer counter = 0;
@@ -2053,13 +2071,14 @@ public class WorkflowEngineTest {
 
     // Find and run Run 2
     Workflow_Instance__c run2 = [
-      SELECT Id, Status__c, Correlation_Key__c, Input__c, Previous_Instance__c
+      SELECT Id, Status__c, Correlation_Key__c, Input__c, Previous_Instance__c, Previous_Run_At__c
       FROM Workflow_Instance__c
       WHERE Previous_Instance__c = :run1.Id
     ];
     System.assertEquals('Pending', run2.Status__c);
     System.assertEquals('DaemonKey_run2', run2.Correlation_Key__c);
     System.assertEquals('1', run2.Input__c);
+    System.assertNotEquals(null, run2.Previous_Run_At__c, 'Successor instance must carry the predecessor run timestamp');
 
     // Execute Run 2 (counter 1 -> continueAsNew 2)
     new WorkflowOrchestrator(run2.Id).execute(null);
@@ -4089,5 +4108,44 @@ public class WorkflowEngineTest {
       eventInstanceIds,
       'Both the parent and child cancellations emit exactly one lifecycle event'
     );
+  }
+
+  @isTest
+  static void testPreviousRunAtFlowsThroughContinueAsNew() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id run1Id = WorkflowEngine.start(
+      'WorkflowEngineTest.PreviousRunAtWorkflow',
+      'PreviousRunAtKey',
+      null
+    );
+    new WorkflowOrchestrator(run1Id).execute(null);
+
+    Workflow_Instance__c run1 = [
+      SELECT Status__c, Previous_Run_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :run1Id
+    ];
+    System.assertEquals('ContinuedAsNew', run1.Status__c);
+    System.assertEquals(null, run1.Previous_Run_At__c, 'First instance must not have Previous_Run_At__c set');
+
+    Workflow_Instance__c run2 = [
+      SELECT Id, Previous_Run_At__c
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :run1Id
+    ];
+    System.assertNotEquals(null, run2.Previous_Run_At__c, 'Continuation instance must have Previous_Run_At__c set');
+
+    new WorkflowOrchestrator(run2.Id).execute(null);
+
+    Workflow_Instance__c run2Final = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :run2.Id
+    ];
+    System.assertEquals('Completed', run2Final.Status__c);
+    Long outputTime = Long.valueOf(run2Final.Output__c);
+    Long fieldTime = run2.Previous_Run_At__c.getTime();
+    System.assertEquals(fieldTime, outputTime, 'StepContext.previousRunAt must equal Previous_Run_At__c on the instance');
   }
 }
