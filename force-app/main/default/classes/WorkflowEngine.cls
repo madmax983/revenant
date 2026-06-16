@@ -1050,7 +1050,9 @@ public inherited sharing class WorkflowEngine {
         Parent_Instance__c,
         Compensation_Stack__c,
         Definition_Version__c,
-        Error_Message__c
+        Error_Message__c,
+        Previous_Run_At__c,
+        CreatedDate
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -1259,10 +1261,13 @@ public inherited sharing class WorkflowEngine {
         Current_Step__c,
         Input__c,
         Correlation_Key__c,
+        Root_Correlation_Key__c,
         Parent_Instance__c,
         Compensation_Stack__c,
         Definition_Version__c,
-        Error_Message__c
+        Error_Message__c,
+        Previous_Run_At__c,
+        CreatedDate
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -1392,7 +1397,8 @@ public inherited sharing class WorkflowEngine {
         ? (Integer) instance.Definition_Version__c
         : 1,
       stepVisit,
-      signalSrc
+      signalSrc,
+      instance.Previous_Run_At__c
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts.
@@ -2158,7 +2164,9 @@ public inherited sharing class WorkflowEngine {
         Correlation_Key__c,
         Root_Correlation_Key__c,
         Input__c,
-        Definition_Version__c
+        Definition_Version__c,
+        Previous_Run_At__c,
+        CreatedDate
       FROM Workflow_Instance__c
       WHERE Id = :instance.Id
       WITH SYSTEM_MODE
@@ -2668,7 +2676,14 @@ public inherited sharing class WorkflowEngine {
         Root_Correlation_Key__c = rootKey,
         Previous_Instance__c = instance.Id,
         Definition_Version__c = instance.Definition_Version__c,
-        Current_Step__c = initialStep
+        Current_Step__c = initialStep,
+        // Use the predecessor's CreatedDate (when it started) rather than
+        // System.now() (when it finished). This prevents a gap: records
+        // modified during the predecessor's execution window are covered by
+        // the successor's query (>= predecessor start). The tradeoff is
+        // bounded overlap near the boundary, which is correct at-least-once
+        // behavior — the same contract Temporal/DBOS use for polling cursors.
+        Previous_Run_At__c = instance.CreatedDate
       );
       try {
         insert as system nextInstance;

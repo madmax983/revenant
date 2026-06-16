@@ -12,7 +12,7 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 
 - **Resumable Execution (Yielding)**: Long-running processing loops or query pagination steps can call `shouldYield()` to monitor governor limits. If limits are exceeded, the step checkpoints its state to custom objects and resumes execution transparently in a fresh asynchronous transaction.
 - **Scatter-Gather (Parallel Processing)**: Split execution flow across multiple parallel branches and rejoin their output payloads before moving to subsequent steps.
-- **Continue-As-New (Perpetual Loops)**: Execute perpetual poller tasks or long-lived daemons. A step can request a transition to a new successor run linked via `Previous_Instance__c` to prevent storage footprint explosion and clear heap and debug log limits.
+- **Continue-As-New (Perpetual Loops)**: Execute perpetual poller tasks or long-lived daemons. A step can request a transition to a new successor run linked via `Previous_Instance__c` to prevent storage footprint explosion and clear heap and debug log limits. The successor's `StepContext.previousRunAt` carries the engine-set timestamp of when the predecessor completed, so incremental polling workflows can query only records modified since the last run without any manual timestamp bookkeeping. See [docs/incremental-polling.md](docs/incremental-polling.md) and [IncrementalSyncWorkflowExample](examples/main/default/classes/IncrementalSyncWorkflowExample.cls).
 
 ### Fault Tolerance & Safety
 
