@@ -44,17 +44,17 @@ public class WorkflowEngineTest {
 
   public class CalloutWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
-      return new List<String>{ 'WorkflowEngineTest.CalloutStep' };
+      return new List<String>{ 'WorkflowEngineTest.DirectCalloutStep' };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTest.CalloutStep';
+      return 'WorkflowEngineTest.DirectCalloutStep';
     }
     public String getNextStep(String currentStepName, StepResult result) {
       return null;
     }
   }
 
-  public class CalloutStep implements WorkflowStep {
+  public class DirectCalloutStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       HttpRequest req = new HttpRequest();
       req.setEndpoint('https://api.example.com/test');

@@ -324,8 +324,8 @@ public class StepContextSignalEngineTest {
 
   public class ProbeAbsentStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal trigger = ctx.getSignal('Trigger');
-      if (!trigger.isPresent()) {
+      StepContext.Signal triggerSig = ctx.getSignal('Trigger');
+      if (!triggerSig.isPresent()) {
         return StepResult.suspend();
       }
       // Probe a name that is absent now -- this records nothing as matched.
