@@ -216,7 +216,10 @@ public StepResult execute(StepContext ctx) {
 
     if (!decision.isPresent()) {
         // First run: nothing decided yet -- suspend until an approver signals the workflow.
-        return StepResult.waitForApproval('PurchaseApproval', 'Manager');
+        // The second argument is an optional Custom Permission API name the dashboard
+        // requires an approver to hold; null leaves the gate unrestricted (pass e.g.
+        // 'Workflow_Admin' to restrict who may decide).
+        return StepResult.waitForApproval('PurchaseApproval', null);
     }
 
     // Resume: forward the decision payload; getNextStep() will route to approve or reject.

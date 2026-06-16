@@ -120,7 +120,12 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
       StepContext.Signal decision = ctx.getSignal(DECISION_SIGNAL);
 
       if (!decision.isPresent()) {
-        return StepResult.waitForApproval(APPROVAL_KEY, 'Manager');
+        // The second argument is an optional Custom Permission API name that the
+        // built-in dashboard (WorkflowDashboardController.enforceApprovalRole) requires
+        // an approver to hold. null leaves the gate unrestricted for this demo so any
+        // authorized dashboard/Flow user can approve out of the box; pass a shipped
+        // permission such as 'Workflow_Admin' to restrict who may decide.
+        return StepResult.waitForApproval(APPROVAL_KEY, null);
       }
 
       Map<String, Object> payload = (Map<String, Object>) JSON.deserializeUntyped(
@@ -158,8 +163,14 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
           Map<String, Object> decision = (Map<String, Object>) JSON.deserializeUntyped(
             ctx.inputJson
           );
-          if (decision.containsKey('reason')) {
-            reason = (String) decision.get('reason');
+          // The built-in dashboard's submitApproval records the approver's note under
+          // 'comments'; a Flow or Apex signal might instead use 'reason'. Accept either
+          // so the approver's audit note survives into the failure message.
+          Object note = decision.containsKey('reason')
+            ? decision.get('reason')
+            : decision.get('comments');
+          if (note != null) {
+            reason = String.valueOf(note);
           }
         } catch (Exception e) {
         }

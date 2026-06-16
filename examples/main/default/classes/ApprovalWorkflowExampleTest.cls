@@ -3,115 +3,105 @@ private class ApprovalWorkflowExampleTest {
 
   static final String KEY_PREFIX = 'ApprovalWorkflow_Test_';
 
+  /**
+   * Approved round trip: start -> Suspended on the approval gate -> approval signal
+   * -> resume -> Completed, with no compensation.
+   *
+   * Drives through WorkflowTestHarness so the failing/throwing reject path (in the
+   * other cases) is rescued by the engine's own crash handler (WorkflowEngine.handleCrash),
+   * exactly as WorkflowFinalizer does in production. A raw WorkflowOrchestrator.execute(null)
+   * would not attach the finalizer and a thrown step would escape the test instead of
+   * triggering compensation.
+   */
   @isTest
   static void testApprovedRoundTripReachesCompleted() {
     String key = KEY_PREFIX + '1';
+
+    Test.startTest();
     Id instanceId = WorkflowEngine.start(
       'ApprovalWorkflowExample',
       key,
       new Map<String, Object>{ 'purchaseAmount' => 500 }
     );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    // Drives ReserveBudgetStep -> RequestApprovalStep -> suspends awaiting approval.
+    WorkflowTestHarness.Result suspended = harness.drive();
+    Test.stopTest();
 
-    // Hop 1: ReserveBudgetStep executes and completes (pushed onto Compensation_Stack__c).
-    new WorkflowOrchestrator(instanceId).execute(null);
-    // Hop 2: RequestApprovalStep — first run, no signal yet -> instance Suspended.
-    new WorkflowOrchestrator(instanceId).execute(null);
-
-    Workflow_Instance__c inst = [
-      SELECT Status__c, Current_Step__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
-    System.assertEquals('Suspended', inst.Status__c, 'Instance must be Suspended awaiting approval');
     System.assertEquals(
-      'ApprovalWorkflowExample.RequestApprovalStep',
-      inst.Current_Step__c,
-      'Current step must be RequestApprovalStep while suspended'
+      'Suspended',
+      suspended.status,
+      'Instance must suspend awaiting the approval signal'
+    );
+    System.assert(
+      suspended.reachedStep('ApprovalWorkflowExample.ReserveBudgetStep'),
+      'Budget should have been reserved before the approval gate'
     );
 
-    // Approver delivers an approval signal.
-    WorkflowEngine.signal(
+    // The "human" approves by signalling the workflow through the shipped signal path.
+    WorkflowTestHarness.Result done = harness.injectSignal(
       key,
       ApprovalWorkflowExample.DECISION_SIGNAL,
       '{"approved":true,"approver":"manager@example.com"}'
     );
 
-    // Hop 3: RequestApprovalStep resumes, reads signal, returns decision -> getNextStep -> PlaceOrderStep.
-    new WorkflowOrchestrator(instanceId).execute(null);
-    // Hop 4: PlaceOrderStep executes -> terminal Completed.
-    new WorkflowOrchestrator(instanceId).execute(null);
-
-    inst = [SELECT Status__c, Output__c FROM Workflow_Instance__c WHERE Id = :instanceId];
-    System.assertEquals('Completed', inst.Status__c, 'Approved workflow must reach Completed');
+    System.assertEquals('Completed', done.status, 'Approved workflow must reach Completed');
     System.assert(
-      inst.Output__c.contains('"result":"approved"'),
-      'Output must confirm the approved outcome, got: ' + inst.Output__c
+      done.output.contains('"result":"approved"'),
+      'Output must confirm the approved outcome, got: ' + done.output
     );
-
-    // No compensation steps should have run on the happy path.
     System.assertEquals(
       0,
-      [
-        SELECT COUNT()
-        FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c = :instanceId AND Step_Name__c LIKE '%_Compensate'
-      ],
+      done.compensatedSteps.size(),
       'Approved path must not trigger any compensation'
     );
   }
 
+  /**
+   * Rejected round trip: the reject branch throws, the engine rolls the prior
+   * CompensatableStep back in LIFO order, and the instance reaches Compensated.
+   */
   @isTest
   static void testRejectedRoundTripCompensatesPriorWork() {
     String key = KEY_PREFIX + '2';
+
+    Test.startTest();
     Id instanceId = WorkflowEngine.start(
       'ApprovalWorkflowExample',
       key,
       new Map<String, Object>{ 'purchaseAmount' => 9000 }
     );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    WorkflowTestHarness.Result suspended = harness.drive();
+    Test.stopTest();
 
-    new WorkflowOrchestrator(instanceId).execute(null); // ReserveBudgetStep
-    new WorkflowOrchestrator(instanceId).execute(null); // RequestApprovalStep -> Suspended
+    System.assertEquals('Suspended', suspended.status);
 
-    Workflow_Instance__c inst = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId];
-    System.assertEquals('Suspended', inst.Status__c);
-
-    // Approver delivers a rejection.
-    WorkflowEngine.signal(
+    // The "human" rejects.
+    WorkflowTestHarness.Result done = harness.injectSignal(
       key,
       ApprovalWorkflowExample.DECISION_SIGNAL,
       '{"approved":false,"reason":"over budget"}'
     );
 
-    // Hop 3: RequestApprovalStep resumes -> getNextStep -> RejectStep.
-    new WorkflowOrchestrator(instanceId).execute(null);
-    // Hop 4: RejectStep throws WorkflowException -> LIFO compensation enqueued.
-    new WorkflowOrchestrator(instanceId).execute(null);
-    // Hop 5: ReserveBudgetStep_Compensate runs -> stack empty -> instance Compensated.
-    new WorkflowOrchestrator(instanceId).execute(null);
-
-    inst = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId];
     System.assertEquals(
       'Compensated',
-      inst.Status__c,
+      done.status,
       'Rejected workflow must reach Compensated after LIFO rollback'
     );
+    System.assertEquals(
+      new List<String>{ 'ApprovalWorkflowExample.ReserveBudgetStep_Compensate' },
+      done.compensatedSteps,
+      'The reserved budget must be the (only) compensated step'
+    );
 
-    // Verify the compensation audit trail.
+    // Verify the compensation detail from the append-only audit trail.
     List<Workflow_Step_Execution__c> compLogs = [
       SELECT Step_Name__c, Status__c, Output__c
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c = :instanceId AND Step_Name__c LIKE '%_Compensate'
     ];
-    System.assertEquals(
-      1,
-      compLogs.size(),
-      'Exactly one CompensatableStep should have been rolled back'
-    );
-    System.assertEquals(
-      'ApprovalWorkflowExample.ReserveBudgetStep_Compensate',
-      compLogs[0].Step_Name__c,
-      'ReserveBudgetStep must be compensated'
-    );
+    System.assertEquals(1, compLogs.size());
     System.assertEquals('Compensated', compLogs[0].Status__c);
     System.assert(
       compLogs[0].Output__c != null && compLogs[0].Output__c.contains('released'),
@@ -119,19 +109,28 @@ private class ApprovalWorkflowExampleTest {
     );
   }
 
+  /**
+   * At-least-once redelivery: the same rejection signal delivered twice must not
+   * double-advance the workflow or compensate twice. The engine consumes both
+   * buffered signal records when the gate step completes.
+   */
   @isTest
   static void testDuplicateRejectSignalIsIdempotent() {
     String key = KEY_PREFIX + '3';
+
+    Test.startTest();
     Id instanceId = WorkflowEngine.start(
       'ApprovalWorkflowExample',
       key,
       new Map<String, Object>{ 'purchaseAmount' => 1000 }
     );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    WorkflowTestHarness.Result suspended = harness.drive();
+    Test.stopTest();
 
-    new WorkflowOrchestrator(instanceId).execute(null); // ReserveBudgetStep
-    new WorkflowOrchestrator(instanceId).execute(null); // RequestApprovalStep -> Suspended
+    System.assertEquals('Suspended', suspended.status);
 
-    // Deliver the rejection twice to simulate at-least-once redelivery.
+    // Deliver the rejection twice (at-least-once redelivery) before resuming.
     String decision = '{"approved":false,"reason":"duplicate test"}';
     WorkflowEngine.signal(key, ApprovalWorkflowExample.DECISION_SIGNAL, decision);
     WorkflowEngine.signal(key, ApprovalWorkflowExample.DECISION_SIGNAL, decision);
@@ -146,12 +145,9 @@ private class ApprovalWorkflowExampleTest {
       'Both signals must be buffered before resume'
     );
 
-    new WorkflowOrchestrator(instanceId).execute(null); // RequestApprovalStep resumes -> RejectStep
-    new WorkflowOrchestrator(instanceId).execute(null); // RejectStep throws -> compensation
-    new WorkflowOrchestrator(instanceId).execute(null); // ReserveBudgetStep_Compensate
+    WorkflowTestHarness.Result done = harness.drive();
 
-    Workflow_Instance__c inst = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId];
-    System.assertEquals('Compensated', inst.Status__c, 'Instance must reach Compensated');
+    System.assertEquals('Compensated', done.status, 'Instance must reach Compensated');
 
     // RejectStep must have fired exactly once despite the duplicate signal.
     System.assertEquals(
