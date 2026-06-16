@@ -4662,12 +4662,16 @@ public inherited sharing class WorkflowEngine {
         } else {
           enqueueOrchestrator(instance.Id, null);
         }
+        // Not terminal yet — the orchestrator emits the lifecycle event when the
+        // compensation stack drains to Cancelled.
+        return null;
       } else {
         instance.Status__c = 'Cancelled';
         instance.Error_Message__c = 'Cancelled by user.';
         update as system instance;
+        // Terminal immediately — hand back to cancel() for bulk lifecycle publish.
+        return instance;
       }
-      return;
     }
 
     // Check for compensations
