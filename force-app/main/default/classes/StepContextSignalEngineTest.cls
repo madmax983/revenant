@@ -971,6 +971,9 @@ public class StepContextSignalEngineTest {
   @isTest
   static void testCalloutStepWithTimeoutDoesNotHitUncommittedWork() {
     Test.setMock(HttpCalloutMock.class, new CTOkMock());
+    // Drive setup synchronously with queueable suppressed so we control every
+    // hop without auto-enqueuing noise.
+    WorkflowEngine.disableQueueableInTest = true;
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.CalloutTimeoutWorkflow',
       'CTKey',
@@ -981,14 +984,24 @@ public class StepContextSignalEngineTest {
     WorkflowEngine.signal('CTKey', 'CTSig', '{"v":1}');
     new WorkflowOrchestrator(instanceId).execute(null); // fan out
 
-    // Run the CalloutStep + TimeoutConfigurable branch. Before the fix the
-    // engine persisted Timeout_At__c before execute(), so this synchronous
-    // callout threw "You have uncommitted work pending".
-    new WorkflowOrchestrator(
+    // Run the CalloutStep + TimeoutConfigurable branch via the async Queueable
+    // path. In production each orchestrator hop is a separate Queueable
+    // transaction, so the callout never sees uncommitted work from prior hops.
+    // Test.stopTest() replicates that: it executes enqueued jobs in a fresh
+    // async context where prior test DML appears committed. Calling execute(null)
+    // directly (synchronously) would leave all the setup DML uncommitted and the
+    // callout would throw "You have uncommitted work pending" regardless of the
+    // deferPreExecDml fix — the fix only removes DML *within* the current
+    // runStep call, not DML from previous calls in the same test transaction.
+    WorkflowEngine.disableQueueableInTest = false;
+    Test.startTest();
+    System.enqueueJob(
+      new WorkflowOrchestrator(
         instanceId,
         'StepContextSignalEngineTest.CTCalloutTimeoutBranch'
       )
-      .execute(null);
+    );
+    Test.stopTest();
 
     Workflow_Step_Execution__c branchExec = [
       SELECT Status__c, Output__c
