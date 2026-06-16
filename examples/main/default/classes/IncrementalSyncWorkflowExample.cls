@@ -47,12 +47,20 @@ public inherited sharing class IncrementalSyncWorkflowExample {
         ? ctx.previousRunAt
         : Datetime.now().addHours(-COLD_START_LOOKBACK_HOURS);
 
+      // Drain the ENTIRE window each run. With previousRunAt as the cursor,
+      // run N queries >= start(N-1) and run N+1 queries >= start(N), so every
+      // record modified before this run started was already covered by this
+      // run's query -- nothing is skipped (boundary records may be seen by two
+      // runs, so keep processing idempotent). Capping this with a LIMIT would
+      // break that guarantee: the wall-clock cursor would advance past the
+      // unprocessed tail and starve it. If you must bound batch size, stop
+      // using previousRunAt and carry a data-derived high-water mark
+      // (max LastModifiedDate actually processed) forward via ContinueAsNew.
       List<Account> changed = [
         SELECT Id, Name, LastModifiedDate
         FROM Account
         WHERE LastModifiedDate >= :since
         ORDER BY LastModifiedDate ASC
-        LIMIT 200
       ];
 
       Integer processed = 0;

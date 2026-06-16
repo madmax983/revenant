@@ -1165,6 +1165,23 @@ public class WorkflowEngineTest {
     }
   }
 
+  // Captures the previousRunAt the engine exposes inside compensate(), so a test
+  // can assert the forward-context continuation metadata is threaded into the
+  // compensation context too (parity), not silently null.
+  public static Datetime capturedCompensatePreviousRunAt = null;
+  public static Boolean compensatePreviousRunAtCaptured = false;
+
+  public class PreviousRunAtCompensatableStep implements CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'Success');
+    }
+    public StepResult compensate(StepContext ctx) {
+      capturedCompensatePreviousRunAt = ctx.previousRunAt;
+      compensatePreviousRunAtCaptured = true;
+      return StepResult.complete(null, 'Compensated');
+    }
+  }
+
   @isTest
   static void testCompensationFlow() {
     WorkflowEngine.disableQueueableInTest = true;
@@ -1222,6 +1239,53 @@ public class WorkflowEngineTest {
       stepExecs[2].Step_Name__c
     );
     System.assertEquals('Compensated', stepExecs[2].Status__c);
+  }
+
+  // Parity: the continuation cursor available to execute() must also be visible
+  // to compensate(), so a compensation never sees a surprising null where the
+  // forward path saw a value. (It must not be USED to scope what to undo -- that
+  // comes from the recorded step input/output -- but it must be present.)
+  @isTest
+  static void testCompensationContextCarriesPreviousRunAt() {
+    WorkflowEngine.disableQueueableInTest = true;
+    capturedCompensatePreviousRunAt = null;
+    compensatePreviousRunAtCaptured = false;
+
+    Datetime priorRun = Datetime.newInstanceGmt(2026, 1, 2, 3, 4, 5);
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Compensating',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{
+          'WorkflowEngineTest.PreviousRunAtCompensatableStep'
+        }
+      ),
+      Input__c = '{"test": true}',
+      Previous_Run_At__c = priorRun
+    );
+    insert inst;
+
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.PreviousRunAtCompensatableStep',
+      Status__c = 'Completed',
+      Input__c = '{"stepInput": 1}',
+      Output__c = '{"stepOutput": 2}'
+    );
+
+    Test.startTest();
+    WorkflowEngine.runStep(inst.Id, null); // runs *_Compensate
+    Test.stopTest();
+
+    System.assert(
+      compensatePreviousRunAtCaptured,
+      'compensate() should have been invoked'
+    );
+    System.assertEquals(
+      priorRun,
+      capturedCompensatePreviousRunAt,
+      'compensate() must observe the instance Previous_Run_At__c, not null'
+    );
   }
 
   // A compensation that reads a signal then makes a synchronous, payload-driven

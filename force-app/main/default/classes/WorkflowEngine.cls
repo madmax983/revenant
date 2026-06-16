@@ -3986,7 +3986,8 @@ public inherited sharing class WorkflowEngine {
         Input__c,
         Correlation_Key__c,
         Root_Correlation_Key__c,
-        Error_Message__c
+        Error_Message__c,
+        Previous_Run_At__c
       FROM Workflow_Instance__c
       WHERE Id = :instance.Id
       WITH SYSTEM_MODE
@@ -4132,6 +4133,12 @@ public inherited sharing class WorkflowEngine {
     // compensateVisit: computed above from the stepExecs list to avoid a
     // separate COUNT() SOQL query.
 
+    // previousRunAt is threaded here only for parity with the forward execute()
+    // context, so compensate() sees the same instance metadata rather than a
+    // surprising null. It is NOT how a compensation identifies what to undo: a
+    // correct compensate() reverses exactly what the forward step did, using the
+    // recorded step Input__c/Output__c above -- never a fresh "scan since
+    // previousRunAt", which can drift to records the forward run never touched.
     StepContext context = new StepContext(
       instance.Id,
       instance.Workflow_Name__c,
@@ -4144,7 +4151,8 @@ public inherited sharing class WorkflowEngine {
         ? (Integer) instance.Definition_Version__c
         : 1,
       compensateVisit,
-      new PendingSignalSource(instance.Id)
+      new PendingSignalSource(instance.Id),
+      instance.Previous_Run_At__c
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts.
