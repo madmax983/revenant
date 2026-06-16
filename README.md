@@ -151,6 +151,40 @@ Id instanceId = WorkflowEngine.start(
 );
 ```
 
+### 4. Flow Interoperability (Start, Signal, Read)
+
+Flow Builders interact with the engine through supported Invocable Actions (category **Revenant Workflows**) — no internal field API names required:
+
+| Action | Apex Class | Purpose |
+| --- | --- | --- |
+| **Start Workflow** | `WorkflowStartInvocableAction` | Launch a durable workflow, returning its Instance Id. |
+| **Signal Workflow** | `WorkflowSignalInvocableAction` | Send a signal (approve, cancel, resume) to a running instance. |
+| **Get Workflow Status** | `WorkflowStatusInvocableAction` | Read an instance's outcome back into Flow (read-only). |
+
+**Reading a workflow's outcome.** *Get Workflow Status* accepts **either** a `Workflow_Instance__c` Id **or** a Correlation Key and returns typed outputs a Decision element can branch on:
+
+- `found` — `false` (instead of a fault) when nothing matches the key/Id.
+- `status` — the raw `Status__c` value (e.g. `Running`, `Completed`, `Failed`).
+- `isTerminal` — `true` once the workflow has finished (`Completed`/`Failed`/`Compensated`/`Cancelled`).
+- `isSuccess` — `true` only for `Completed`.
+- `outputJson` — the workflow output, **fully rehydrated** even when it was offloaded to ContentVersion (>100k); never the raw storage pointer.
+- `errorMessage` — failure detail from `Error_Message__c`.
+
+The action is **strictly read-only** (no transition, enqueue, signal, schedule, or DML) and bulk-safe across Flow batch sizes. Lookup behavior differs by identifier, which matters for workflows that use `ContinueAsNew`:
+
+- **By Correlation Key** — automatically follows the **`ContinuedAsNew`** chain and reports the live/terminal successor rather than a stale predecessor. **Use the correlation key for outcome polling whenever a workflow may continue-as-new.**
+- **By Instance Id** — reads *that exact instance* and deliberately does **not** follow the chain (an Id is a precise handle). The Id returned by *Start Workflow* points at the original generation, so polling that saved Id on a continue-as-new workflow would keep reading the predecessor and miss the successor's outcome.
+
+> Note: a single read returns the full rehydrated `outputJson` even for offloaded (>100k) payloads. A Flow batch that polls *many* instances whose outputs are *all* large/offloaded materializes them all at once and can approach the Apex heap limit; use smaller batch sizes for that case.
+
+**Reference recipe** — start a workflow, then later branch on its outcome:
+
+1. A record-triggered Flow calls **Start Workflow** (`workflowName`, a stable `correlationKey`, optional `inputJson`).
+2. Later (a scheduled Flow, a screen action, or a subsequent automation) calls **Get Workflow Status**, passing that same `correlationKey` (preferred — it resolves continue-as-new chains; the saved Id only reads the original generation).
+3. A **Decision** element branches: `found = false` → not found; `isSuccess = true` → success path; `status = Failed` → surface `errorMessage`; `isTerminal = false` → keep waiting; default → ended without success (e.g. Cancelled/Compensated).
+
+The autolaunched Flow `Revenant_Read_Workflow_Status_Example` (`examples/main/default/flows/`) implements step 2–3 verbatim.
+
 ---
 
 ## Operations & Alerting Configuration
@@ -184,6 +218,7 @@ The engine maps a workflow's class name to a custom metadata record's `Developer
 - `examples/main/default/` - Reference Architectures
   - `classes/` - Onboarding, Saga rollback, version upgrades, Apex Cursor parallel processing, and HTTP Callout/Timeout Watchdog implementations.
   - `triggers/` - Opportunity stage triggers demonstrating automated workflow instantiation.
+  - `flows/` - Reference Flow demonstrating reading a workflow's outcome via the Get Workflow Status invocable action.
 
 ---
 
