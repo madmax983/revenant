@@ -14,4 +14,8 @@
         <field>Watchdog_Delay_Minutes__c</field>
         <value xsi:type="xsd:double">10.0</value>
     </values>
+    <values>
+        <field>Dedup_Window_Minutes__c</field>
+        <value xsi:type="xsd:double">1440.0</value>
+    </values>
 </CustomMetadata>

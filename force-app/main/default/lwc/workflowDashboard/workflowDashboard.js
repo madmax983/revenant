@@ -1,4 +1,4 @@
-import { LightningElement, wire, track } from "lwc";
+﻿﻿import { LightningElement, wire } from "lwc";
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
@@ -6,52 +6,85 @@ import getInstanceDetails from "@salesforce/apex/WorkflowDashboardController.get
 import getDefinitions from "@salesforce/apex/WorkflowDashboardController.getDefinitions";
 import startWorkflow from "@salesforce/apex/WorkflowDashboardController.startWorkflow";
 import retryWorkflowInstance from "@salesforce/apex/WorkflowDashboardController.retryWorkflowInstance";
+import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardController.getRedriveEligibleCount";
+import redriveMatchingInstances from "@salesforce/apex/WorkflowDashboardController.redriveMatchingInstances";
 import resumeWorkflowInstance from "@salesforce/apex/WorkflowDashboardController.resumeWorkflowInstance";
+import resumeCompensationInstance from "@salesforce/apex/WorkflowDashboardController.resumeCompensationInstance";
 import cancelWorkflow from "@salesforce/apex/WorkflowDashboardController.cancelWorkflow";
 import submitApproval from "@salesforce/apex/WorkflowDashboardController.submitApproval";
 import getWatchdogStatus from "@salesforce/apex/WorkflowDashboardController.getWatchdogStatus";
 import enqueueWatchdog from "@salesforce/apex/WorkflowDashboardController.enqueueWatchdog";
 
 export default class WorkflowDashboard extends LightningElement {
-  @track instances = [];
-  @track filteredInstances = [];
-  @track definitions = [];
-  @track stats = { total: 0, active: 0, completed: 0, failed: 0 };
+  instances = [];
+  filteredInstances = [];
+  definitions = [];
+  stats = { total: 0, active: 0, completed: 0, failed: 0 };
 
   // UI state
-  @track selectedInstanceId;
-  @track selectedInst = {};
-  @track steps = [];
-  @track childInstances = [];
-  @track loadingDetails = false;
-  @track successor = null;
-  @track approvalComments = "";
-  @track modalOpen = false;
-  @track searchTerm = "";
-  @track viewingDoctor = false;
-  @track loadingDoctor = false;
-  @track doctorData = { config: {} };
+  selectedInstanceId;
+  selectedInst = {};
+  steps = [];
+  childInstances = [];
+  loadingDetails = false;
+  successor = null;
+  approvalComments = "";
+  modalOpen = false;
+  searchTerm = "";
+  viewingDoctor = false;
+  loadingDoctor = false;
+  doctorData = { config: {} };
 
   // Launch Modal Fields
-  @track launchName = "";
-  @track launchKey = "";
-  @track launchInputJson = "";
-  @track executingLaunch = false;
-  @track launchError = "";
+  launchName = "";
+  launchKey = "";
+  launchInputJson = "";
+  executingLaunch = false;
+  launchError = "";
 
   // Pagination & Filters State
-  @track selectedWorkflow = "";
-  @track selectedStatus = "";
-  @track limitSize = 50;
-  @track offsetSize = 0;
-  @track hasMore = true;
-  @track loadingMore = false;
-  @track cacheBuster = "";
+  selectedWorkflow = "";
+  selectedStatus = "";
+  limitSize = 50;
+  offsetSize = 0;
+  hasMore = true;
+  loadingMore = false;
+  cacheBuster = "";
+  redriving = false;
+
+  // Confirmation modals
+  redriveModalOpen = false;
+  redriveCount = 0;
+  cancelModalOpen = false;
+  redriveSnapshotName;
+  redriveSnapshotStatus;
+  redriveSnapshotSearchTerm;
 
   wiredDefinitionsResult;
   pollingInterval;
   autoRefreshInterval;
   searchTimeout;
+
+  // Stable option arrays — only rebuilt when source data changes, not on every render.
+  // Getter forms would return a new array reference every render cycle, which causes
+  // lightning-combobox to re-initialize (closing the dropdown and resetting its scroll).
+  workflowOptions = [{ label: "-- All Definitions --", value: "" }];
+  definitionOptions = [];
+  statusOptions = [
+    { label: "-- All Statuses --", value: "" },
+    { label: "Running", value: "Running" },
+    { label: "Pending", value: "Pending" },
+    { label: "Suspended", value: "Suspended" },
+    { label: "Retrying", value: "Retrying" },
+    { label: "Compensating", value: "Compensating" },
+    { label: "Compensated", value: "Compensated" },
+    { label: "Rollback Incomplete", value: "CompensationFailed" },
+    { label: "Completed", value: "Completed" },
+    { label: "Failed", value: "Failed" },
+    { label: "Cancelling", value: "Cancelling" },
+    { label: "Cancelled", value: "Cancelled" },
+    { label: "ContinuedAsNew", value: "ContinuedAsNew" },
+  ];
 
   connectedCallback() {
     this.fetchInstances(false);
@@ -68,38 +101,12 @@ export default class WorkflowDashboard extends LightningElement {
     this.wiredDefinitionsResult = result;
     if (result.data) {
       this.definitions = result.data;
+      this.workflowOptions = [
+        { label: "-- All Definitions --", value: "" },
+        ...result.data.map((def) => ({ label: def, value: def })),
+      ];
+      this.definitionOptions = result.data.map((def) => ({ label: def, value: def }));
     }
-  }
-
-  get definitionOptions() {
-    return this.definitions.map((def) => ({ label: def, value: def }));
-  }
-
-  get workflowOptions() {
-    const options = [{ label: "-- All Definitions --", value: "" }];
-    if (this.definitions) {
-      this.definitions.forEach((def) => {
-        options.push({ label: def, value: def });
-      });
-    }
-    return options;
-  }
-
-  get statusOptions() {
-    return [
-      { label: "-- All Statuses --", value: "" },
-      { label: "Running", value: "Running" },
-      { label: "Pending", value: "Pending" },
-      { label: "Suspended", value: "Suspended" },
-      { label: "Retrying", value: "Retrying" },
-      { label: "Compensating", value: "Compensating" },
-      { label: "Compensated", value: "Compensated" },
-      { label: "Completed", value: "Completed" },
-      { label: "Failed", value: "Failed" },
-      { label: "Cancelling", value: "Cancelling" },
-      { label: "Cancelled", value: "Cancelled" },
-      { label: "ContinuedAsNew", value: "ContinuedAsNew" },
-    ];
   }
 
   get hasFilteredInstances() {
@@ -118,11 +125,43 @@ export default class WorkflowDashboard extends LightningElement {
     return this.selectedInst && this.selectedInst.Status__c === "Failed";
   }
 
+  get isRollbackIncomplete() {
+    return (
+      this.selectedInst &&
+      this.selectedInst.Status__c === "CompensationFailed"
+    );
+  }
+
+  get pendingCompensationCount() {
+    return this.selectedInst ? this.selectedInst.pendingCompensationCount : 0;
+  }
+
+  get pendingCompensations() {
+    const names =
+      this.selectedInst && this.selectedInst.pendingCompensations
+        ? this.selectedInst.pendingCompensations
+        : [];
+    // The compensation stack can legitimately contain the same step name more
+    // than once (a workflow that loops or reuses a compensatable step class), so
+    // the step name alone is not a unique list key. Pair it with the stack index
+    // to give LWC a stable, unique key per entry and keep list diffing correct.
+    return names.map((name, index) => ({
+      key: `${index}_${name}`,
+      name
+    }));
+  }
+
   get isCancelable() {
     if (!this.selectedInst) return false;
     const status = this.selectedInst.Status__c;
+    // CompensationFailed is included so operators can force-cancel a stalled rollback:
+    // the cancel dialog's "without compensations" choice drives it terminal and releases
+    // its key when the remaining compensation keeps failing.
     return (
-      status === "Pending" || status === "Running" || status === "Suspended"
+      status === "Pending" ||
+      status === "Running" ||
+      status === "Suspended" ||
+      status === "CompensationFailed"
     );
   }
 
@@ -199,7 +238,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to retrieve workflow instances: " +
-            (error.body ? error.body.message : error.message),
+          (error.body ? error.body.message : error.message),
           "error",
         );
       })
@@ -213,6 +252,9 @@ export default class WorkflowDashboard extends LightningElement {
     const currentSize =
       this.instances.length > 0 ? this.instances.length : this.limitSize;
     this.cacheBuster = Date.now().toString();
+
+    const listEl = this.template.querySelector(".slds-scrollable_y");
+    const savedScrollTop = listEl ? listEl.scrollTop : 0;
 
     const instancesPromise = getFilteredInstances({
       workflowName: this.selectedWorkflow,
@@ -247,6 +289,12 @@ export default class WorkflowDashboard extends LightningElement {
         if (this.selectedInstanceId) {
           this.loadDetails(false);
         }
+
+        // Restore scroll position after LWC reconciles the list DOM
+        requestAnimationFrame(() => {
+          const el = this.template.querySelector(".slds-scrollable_y");
+          if (el) el.scrollTop = savedScrollTop;
+        });
       })
       .catch((error) => {
         console.error("Error refreshing instances:", error);
@@ -321,13 +369,16 @@ export default class WorkflowDashboard extends LightningElement {
       this.loadingDetails = true;
     }
     const currentInstanceId = this.selectedInstanceId;
-    this.successor = null;
+    if (showSpinner) {
+      this.successor = null;
+    }
     getInstanceDetails({ instanceId: currentInstanceId })
       .then((result) => {
         if (currentInstanceId !== this.selectedInstanceId) {
           return;
         }
         const inst = result.instance;
+        const payloadFiles = result.payloadFiles || {};
         this.successor = result.successor;
         this.selectedInst = {
           ...inst,
@@ -335,9 +386,13 @@ export default class WorkflowDashboard extends LightningElement {
           statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
           Input__c: this.formatJson(inst.Input__c),
           Output__c: this.formatJson(inst.Output__c),
+          inputFile: this.buildPayloadFile(payloadFiles["instance.Input"]),
+          outputFile: this.buildPayloadFile(payloadFiles["instance.Output"]),
           waitingOn: result.waitingOn,
           isWatchdogWaiting: result.waitingOn === "Watchdog",
-          waitingOnBadgeClass: result.waitingOn === "Watchdog" ? "badge badge-purple" : (result.waitingOn === "Delayed Queueable" ? "badge badge-indigo" : "badge badge-blue")
+          waitingOnBadgeClass: result.waitingOn === "Watchdog" ? "badge badge-purple" : (result.waitingOn === "Delayed Queueable" ? "badge badge-indigo" : "badge badge-blue"),
+          pendingCompensationCount: result.pendingCompensationCount || 0,
+          pendingCompensations: result.pendingCompensations || []
         };
 
         // Map children
@@ -403,6 +458,12 @@ export default class WorkflowDashboard extends LightningElement {
               : null,
             Input__c: this.formatJson(step.Input__c),
             Output__c: this.formatJson(step.Output__c),
+            inputFile: this.buildPayloadFile(
+              payloadFiles["step." + step.Id + ".Input"],
+            ),
+            outputFile: this.buildPayloadFile(
+              payloadFiles["step." + step.Id + ".Output"],
+            ),
           };
         });
 
@@ -484,7 +545,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to load doctor status: " +
-            (error.body ? error.body.message : error.message),
+          (error.body ? error.body.message : error.message),
           "error",
         );
       })
@@ -504,7 +565,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to enqueue watchdog: " +
-            (error.body ? error.body.message : error.message),
+          (error.body ? error.body.message : error.message),
           "error",
         );
         this.loadingDoctor = false;
@@ -544,12 +605,31 @@ export default class WorkflowDashboard extends LightningElement {
 
     // Validate JSON if provided
     if (this.launchInputJson) {
+      let payload = this.launchInputJson;
       try {
-        JSON.parse(this.launchInputJson);
-      } catch (ex) {
-        this.launchError = "Input Payload must be a valid JSON string.";
-        return;
+        JSON.parse(payload);
+      } catch (_) {
+        // First parse failed. Try normalizing common paste artifacts — but only as
+        // a fallback so valid JSON is never rewritten:
+        //   · typographic (“curly”) quotes from Word / macOS autocorrect
+        //   · non-breaking spaces ( ) from Word / Google Docs / some chat
+        //     renderers; they look identical to spaces but are invalid JSON whitespace
+        const normalized = payload
+          .replace(/[\u201C\u201D]/g, '"')
+          .replace(/[\u2018\u2019]/g, "'")
+          .replace(/\u00A0/g, ' ');
+        try {
+          JSON.parse(normalized);
+          payload = normalized;
+        } catch (ex) {
+          this.launchError =
+            "Input Payload must be valid JSON. " +
+            'If you pasted from a chat or document, re-type the quote characters — ' +
+            "“curly quotes” are not valid JSON.";
+          return;
+        }
       }
+      this.launchInputJson = payload;
     }
 
     this.executingLaunch = true;
@@ -600,15 +680,117 @@ export default class WorkflowDashboard extends LightningElement {
       });
   }
 
-  handleCancelWorkflow() {
-    const runCompensate = confirm(
-      "Cancel this workflow? Click OK to run Saga compensations and roll back completed steps, or Cancel to abort immediately without compensations.",
-    );
+  // Enable bulk re-drive only when the current filter actually contains failed
+  // (recoverable) instances. stats.failed is scoped to the active filter.
+  get canRedriveMatching() {
+    return this.stats && this.stats.failed > 0 && !this.redriving;
+  }
 
+  handleRedriveMatching() {
+    if (this.redriving) {
+      return;
+    }
+    this.redriving = true;
+    // Snapshot filter values so the count call and the launch call always
+    // target the same selection, even if the operator changes filters while
+    // the count request is in flight.
+    this.redriveSnapshotName = this.selectedWorkflow;
+    this.redriveSnapshotStatus = this.selectedStatus;
+    this.redriveSnapshotSearchTerm = this.searchTerm;
+    getRedriveEligibleCount({
+      workflowName: this.redriveSnapshotName,
+      status: this.redriveSnapshotStatus,
+      searchTerm: this.redriveSnapshotSearchTerm,
+    })
+      .then((count) => {
+        if (!count || count === 0) {
+          this.redriving = false;
+          this.showToast(
+            "Nothing to re-drive",
+            "No failed instances match the current filter.",
+            "info",
+          );
+          return;
+        }
+        this.redriveCount = count;
+        this.redriving = false;
+        this.redriveModalOpen = true;
+      })
+      .catch((error) => {
+        this.redriving = false;
+        this.showToast(
+          "Error",
+          "Failed to count re-drive candidates: " +
+          (error.body ? error.body.message : error.message),
+          "error",
+        );
+      });
+  }
+
+  handleRedriveModalClose() {
+    this.redriveModalOpen = false;
+  }
+
+  handleRedriveModalConfirm() {
+    this.redriveModalOpen = false;
+    this.redriving = true;
+    redriveMatchingInstances({
+      workflowName: this.redriveSnapshotName,
+      status: this.redriveSnapshotStatus,
+      searchTerm: this.redriveSnapshotSearchTerm,
+    })
+      .then((outcome) => {
+        if (!outcome) {
+          return;
+        }
+        if (outcome.started) {
+          this.showToast(
+            "Re-drive started",
+            `Re-driving ${outcome.eligibleCount} failed instance${outcome.eligibleCount === 1 ? "" : "s"}. ` +
+            "Progress is shown in the detail panel below.",
+            "success",
+          );
+          this.selectedInstanceId = outcome.redriveInstanceId;
+          this.refreshInstances();
+          this.loadDetails(true);
+          this.startPolling();
+        } else {
+          this.showToast(
+            "Nothing to re-drive",
+            "No failed instances match the current filter.",
+            "info",
+          );
+        }
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to re-drive matching instances: " +
+          (error.body ? error.body.message : error.message),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.redriving = false;
+      });
+  }
+
+  handleCancelWorkflow() {
+    this.cancelModalOpen = true;
+  }
+
+  handleCancelModalClose() {
+    this.cancelModalOpen = false;
+  }
+
+  handleCancelModalConfirm(event) {
+    const runCompensations =
+      event.currentTarget.dataset.compensate === "true";
+    this.cancelModalOpen = false;
     this.loadingDetails = true;
     cancelWorkflow({
       instanceId: this.selectedInstanceId,
-      runCompensations: runCompensate,
+      runCompensations,
     })
       .then(() => {
         this.showToast(
@@ -624,7 +806,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to cancel workflow: " +
-            (error.body ? error.body.message : error.message),
+          (error.body ? error.body.message : error.message),
           "error",
         );
       })
@@ -687,7 +869,33 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to resume workflow: " +
-            (error.body ? error.body.message : error.message),
+          (error.body ? error.body.message : error.message),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.loadingDetails = false;
+      });
+  }
+
+  handleResumeRollback() {
+    this.loadingDetails = true;
+    resumeCompensationInstance({ instanceId: this.selectedInstanceId })
+      .then(() => {
+        this.showToast(
+          "Success",
+          "Rollback resumed. Remaining compensations will run in LIFO order.",
+          "success",
+        );
+        this.refreshInstances();
+        this.loadDetails(true);
+        this.startPolling();
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to resume rollback: " +
+          (error.body ? error.body.message : error.message),
           "error",
         );
       })
@@ -713,6 +921,21 @@ export default class WorkflowDashboard extends LightningElement {
     }
   }
 
+  // Turns a server payloadFiles descriptor into a render-ready download link, or null.
+  // Present only for attachment-backed payloads whose full content was truncated above.
+  buildPayloadFile(file) {
+    if (!file || !file.downloadUrl) {
+      return null;
+    }
+    const chars = file.fullLength || 0;
+    const sizeLabel =
+      chars >= 1024 ? Math.ceil(chars / 1024) + " KB" : chars + " chars";
+    return {
+      url: file.downloadUrl,
+      label: "Download full payload (" + sizeLabel + ")",
+    };
+  }
+
   getStatusBadgeClass(status) {
     switch (status) {
       case "Completed":
@@ -733,6 +956,8 @@ export default class WorkflowDashboard extends LightningElement {
         return "badge badge-yellow pulse-glow";
       case "Compensated":
         return "badge badge-orange";
+      case "CompensationFailed":
+        return "badge badge-red pulse-glow";
       case "Cancelling":
         return "badge badge-yellow pulse-glow";
       case "Cancelled":
@@ -760,6 +985,8 @@ export default class WorkflowDashboard extends LightningElement {
         return "timeline-marker bg-yellow";
       case "Compensated":
         return "timeline-marker bg-orange";
+      case "CompensationFailed":
+        return "timeline-marker bg-red";
       case "Cancelling":
         return "timeline-marker bg-yellow";
       case "Cancelled":

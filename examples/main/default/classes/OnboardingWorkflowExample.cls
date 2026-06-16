@@ -123,6 +123,12 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
           );
         }
 
+        // Consume the decision before potentially throwing: a rejection must not
+        // remain Received to be re-loaded (and re-fail) on a retry. Engine-managed
+        // consumption only fires on a successful COMPLETE, so a step that throws
+        // on rejection consumes the signal itself here. See
+        // ApprovalSignalWorkflowExample for the engine-managed (non-throwing)
+        // approve/reject pattern using ctx.getSignal(...).
         Workflow_Signal__c sig = signals[0];
         sig.Status__c = 'Consumed';
         update sig;

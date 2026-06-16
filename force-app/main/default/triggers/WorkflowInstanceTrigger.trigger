@@ -15,8 +15,13 @@ trigger WorkflowInstanceTrigger on Workflow_Instance__c(
       instance.Status__c == 'Running' ||
       instance.Status__c == 'Suspended' ||
       instance.Status__c == 'Compensating' ||
-      instance.Status__c == 'Cancelling'
+      instance.Status__c == 'Cancelling' ||
+      instance.Status__c == 'CompensationFailed'
     ) {
+      // A stalled rollback (CompensationFailed) is non-terminal: it still has
+      // un-reversed side effects and can be resumed, so it must keep reserving its
+      // correlation key to prevent a duplicate active workflow from starting with the
+      // same key while the saga is only half-undone.
       instance.Active_Correlation_Key__c = instance.Correlation_Key__c;
     } else {
       instance.Active_Correlation_Key__c = null;

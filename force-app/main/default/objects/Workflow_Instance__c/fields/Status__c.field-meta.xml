@@ -47,6 +47,11 @@
                 <label>Compensated</label>
             </value>
             <value>
+                <fullName>CompensationFailed</fullName>
+                <default>false</default>
+                <label>Rollback Incomplete</label>
+            </value>
+            <value>
                 <fullName>Cancelling</fullName>
                 <default>false</default>
                 <label>Cancelling</label>
