@@ -1120,6 +1120,7 @@ public inherited sharing class WorkflowEngine {
       // early-exits unless the instance is Compensating/Cancelling, so a
       // Suspended (initial detection) or Running (signal-resumed) instance must
       // be restored to the right compensation status first.
+      Boolean reassertStatusPending = false;
       if (
         instance.Status__c == 'Suspended' ||
         instance.Status__c == 'Running'
@@ -1133,9 +1134,18 @@ public inherited sharing class WorkflowEngine {
           instance.Status__c = 'Compensating';
         }
         instance.Async_Job_Id__c = null;
-        update as system instance;
+        // Set the compensating status in memory but DEFER its DML to
+        // runCompensationStep. A compensation step resumed by a signal may be a
+        // CalloutStep that makes a payload-driven callout in compensate(), and
+        // Salesforce forbids a callout once the transaction holds uncommitted
+        // DML. Committing here (as this used to) made that callout illegal.
+        // runCompensationStep commits the status before compensate() for an
+        // ordinary step and after it for a CalloutStep. A crash before that
+        // commit leaves the instance Suspended/Running with the '_Compensate'
+        // step still on the stack, which this same detection re-routes next drive.
+        reassertStatusPending = true;
       }
-      runCompensationStep(instance);
+      runCompensationStep(instance, reassertStatusPending);
       return;
     }
 
@@ -3084,7 +3094,13 @@ public inherited sharing class WorkflowEngine {
           'Suspended',
           'CompensationFailed'
         }
-      : new List<String>{ 'Pending', 'Running', 'Suspended' };
+      : new List<String>{
+          'Pending',
+          'Running',
+          'Suspended',
+          'Compensating',
+          'Cancelling'
+        };
 
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
     if (isId) {
@@ -3152,8 +3168,18 @@ public inherited sharing class WorkflowEngine {
     insert as system sig;
 
     // If the workflow is suspended or running, resume/orchestrate it. A parallel
-    // instance must wake each incomplete branch by name (see enqueueResume).
-    if (instance.Status__c == 'Suspended' || instance.Status__c == 'Running') {
+    // instance must wake each incomplete branch by name (see enqueueResume). A
+    // Compensating/Cancelling instance is mid-rollback: a compensation step can
+    // depend on inbound signals, so wake it too rather than rejecting the signal
+    // as "no active workflow". The compensation status is left untouched (only a
+    // Suspended instance flips to Running); runStep re-detects the compensation
+    // from the trailing '_Compensate' step and routes to runCompensationStep.
+    if (
+      instance.Status__c == 'Suspended' ||
+      instance.Status__c == 'Running' ||
+      instance.Status__c == 'Compensating' ||
+      instance.Status__c == 'Cancelling'
+    ) {
       if (instance.Status__c == 'Suspended') {
         instance.Status__c = 'Running';
         update as system instance;
@@ -3795,7 +3821,10 @@ public inherited sharing class WorkflowEngine {
     insert as system compStepExec;
   }
 
-  private static void runCompensationStep(Workflow_Instance__c instance) {
+  private static void runCompensationStep(
+    Workflow_Instance__c instance,
+    Boolean reassertStatusPending
+  ) {
     // 1. Read the compensation stack
     if (String.isBlank(instance.Compensation_Stack__c)) {
       instance.Status__c = (instance.Status__c == 'Cancelling')
@@ -4014,6 +4043,16 @@ public inherited sharing class WorkflowEngine {
     // scheduled job were already committed when it was queued, so the watchdog
     // stays armed; the finally block reconciles the timeout afterward.
     Boolean deferPreExecDml = compensatableStepInstance instanceof CalloutStep;
+    // Persist the compensating status that runStep re-asserted in memory. For an
+    // ordinary step commit it now (matching the prior commit-before-compensate()
+    // behavior); for a CalloutStep leave it uncommitted so the payload-driven
+    // callout in compensate() below stays legal -- handleCompensationStepResult
+    // writes the instance after compensate() returns. The earlier early-return
+    // branches (already-terminal exec, non-CompensatableStep) commit the status
+    // via their own update, so a pending re-assert is never dropped.
+    if (reassertStatusPending && !deferPreExecDml) {
+      update as system instance;
+    }
     stepExec.Status__c = 'Running';
     Integer timeoutSeconds = null;
     if (compensatableStepInstance instanceof TimeoutConfigurable) {

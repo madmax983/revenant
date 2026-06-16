@@ -1303,6 +1303,107 @@ public class WorkflowEngineTest {
     );
   }
 
+  // #793: a CalloutStep compensation that SUSPENDED waiting on a signal and is
+  // then resumed must still make its payload-driven callout. On resume runStep
+  // re-asserts the compensating status from Suspended -> Compensating; committing
+  // that DML before compensate() (as it used to) would make the callout illegal
+  // with an uncommitted-work exception. The engine now defers the status DML for a
+  // CalloutStep compensation, so the synchronous callout stays legal.
+  @isTest
+  static void testSignalResumedCalloutCompensationDefersStatusDml() {
+    Test.setMock(HttpCalloutMock.class, new CompOkMock());
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CalloutCompensationStep' }
+      ),
+      Input__c = '{"test": true}'
+    );
+    insert inst;
+
+    // The forward step completed (so it is on the stack), then the compensation
+    // step that suspended waiting for the signal: its '_Compensate' execution is
+    // the latest row and still Pending, which is how runStep detects that this
+    // Suspended instance is actually mid-rollback.
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.CalloutCompensationStep',
+      Status__c = 'Completed',
+      Output__c = '{}'
+    );
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.CalloutCompensationStep_Compensate',
+      Status__c = 'Pending'
+    );
+
+    // The signal that resumes the suspended compensation step.
+    insert new Workflow_Signal__c(
+      Workflow_Instance__c = inst.Id,
+      Signal_Name__c = 'CompSig',
+      Payload__c = 'go',
+      Status__c = 'Received'
+    );
+
+    Test.startTest();
+    WorkflowEngine.runStep(inst.Id, null); // resumes CalloutCompensationStep_Compensate
+    Test.stopTest();
+
+    Workflow_Step_Execution__c compExec = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowEngineTest.CalloutCompensationStep_Compensate'
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    System.assertEquals(
+      'Compensated',
+      compExec.Status__c,
+      'A signal-resumed CalloutStep compensation must complete its callout; the Suspended->Compensating status DML must be deferred past compensate()'
+    );
+    System.assert(
+      compExec.Output__c != null && compExec.Output__c.contains('204'),
+      'compensation callout response should be recorded, got: ' +
+      compExec.Output__c
+    );
+  }
+
+  // #3229: a non-cancel signal that arrives while the instance is mid-rollback
+  // (Compensating) must be stored for the compensation step to read, not rejected
+  // as "no active workflow" the way the lookup used to do.
+  @isTest
+  static void testSignalStoredWhileCompensating() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Compensating',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CalloutCompensationStep' }
+      ),
+      Input__c = '{}'
+    );
+    insert inst;
+
+    // No startTest/stopTest: enqueueResume queues an orchestrator that does not
+    // execute during the test, so this isolates signal()'s store-vs-reject choice.
+    WorkflowEngine.signal(inst.Id, 'CompSig', '{"ok":true}');
+
+    List<Workflow_Signal__c> sigs = [
+      SELECT Id
+      FROM Workflow_Signal__c
+      WHERE Workflow_Instance__c = :inst.Id AND Signal_Name__c = 'CompSig'
+    ];
+    System.assertEquals(
+      1,
+      sigs.size(),
+      'A signal sent while Compensating must be stored for the compensation step, not rejected as no-active-workflow'
+    );
+  }
+
   // A normal FORWARD step whose class name happens to end in '_Compensate'. It
   // suspends until signaled, exercising the signal-resumed (Suspended->Running)
   // path where the compensation-suffix heuristic must not misfire.
