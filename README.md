@@ -24,7 +24,7 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 
 ### Integration & Monitoring
 
-- **Platform Event Signaling**: External integrations, webhook listeners, or human-in-the-loop approvals wake up suspended workflows by publishing `Workflow_Event__e` platform events.
+- **Platform Event Signaling**: External integrations, webhook listeners, or human-in-the-loop approvals wake up suspended workflows by publishing `Workflow_Event__e` platform events. The resuming step reads the inbound signal name and payload directly from `StepContext` (e.g. `ctx.getSignal('Approve:Order')`), and the engine marks observed signals consumed at the step's `COMPLETE` transition so at-least-once redelivered duplicates are never double-processed.
 - **Salesforce Flow Interoperability**: Launches or signals workflows using Invocable Actions from Salesforce Flow, or executes standard Autolaunched Flows as steps within a workflow using the generic `WorkflowFlowStep` wrapper.
 - **Custom Metadata Alerts**: Supports operator-configurable failure notification thresholds (consecutive failures, sliding rate counts) using `Workflow_Alert_Config__mdt` custom metadata records.
 
@@ -151,7 +151,56 @@ Id instanceId = WorkflowEngine.start(
 );
 ```
 
-### 4. Flow Interoperability (Start, Signal, Read)
+### 4. Read Inbound Signals & Approvals
+
+A step that suspends for an approval (`StepResult.waitForApproval(...)`) or an external event (`StepResult.suspend()`) is woken by `WorkflowEngine.signal(keyOrId, name, payload)` (or a `SIGNAL:`-typed `Workflow_Event__e`). On resume, the step reads the signal that woke it directly from `StepContext` — no SOQL against engine-internal objects, and no hand-rolled "consumed" marker:
+
+```java
+public StepResult execute(StepContext ctx) {
+    // Most recent signal of this name; never null.
+    StepContext.Signal decision = ctx.getSignal('Approve:Order');
+
+    if (!decision.isPresent()) {
+        // First run (or resumed by a timer): nothing has signaled us yet.
+        return StepResult.waitForApproval('Order', 'Manager');
+    }
+
+    Map<String, Object> payload =
+        (Map<String, Object>) JSON.deserializeUntyped(decision.payload);
+    Boolean approved = (Boolean) payload.get('approved');
+
+    return approved
+        ? StepResult.complete('ApproveStep', payload)
+        : StepResult.complete('RejectStep', payload);
+}
+```
+
+Accessors available inside `execute()` and `compensate()`:
+
+| Accessor | Returns |
+| --- | --- |
+| `ctx.getSignals()` | All pending signals, in arrival order (never null). |
+| `ctx.getSignals(name)` | Pending signals matching `name`, in arrival order. |
+| `ctx.getSignal(name)` | The most recent pending signal of `name`, or a clean empty result (`isPresent() == false`, `payload == null`) when none is pending — never null. |
+| `ctx.hasSignal(name)` | `true` if any pending signal matches `name`. |
+
+Consumption is engine-managed and tied to the step's successful `COMPLETE` (or `SPLIT`) transition: signals the step observes are marked consumed only once the step completes, so a step that yields or retries before completing re-observes the same pending signal, and an at-least-once redelivered duplicate cannot be reprocessed by a later step. Transitions that suspend and **re-run the same step** — `SUSPEND`, `WAIT_FOR_APPROVAL`, `SLEEP`, and `START_CHILD` — intentionally do *not* consume, so the signal that resumes the step survives to be read. A `START_CHILD` step that also reads a kickoff signal should therefore check its child-completion signal before re-acting on the kickoff (or stash what it needs in step state). `Cancel` / `CancelWorkflow` control signals remain engine-handled and are never surfaced as readable payloads. See [`ApprovalSignalWorkflowExample`](examples/main/default/classes/ApprovalSignalWorkflowExample.cls) for a complete approve/reject example with a redelivery test.
+
+#### Reading signals inside parallel branches
+
+When a step reads a signal while running as one branch of a parallel (scatter-gather) fan-out, the engine **atomically claims** each signal it reads (moving it to an internal `Processing` state) so two concurrent branches can never both process the same payload; the claim is promoted to consumed when the branch completes, and rolled back if the branch yields/suspends/retries. Each branch consumes (and rolls back) only the signals it itself claimed, tracked per row, so it never disturbs a signal a sibling has claimed or merely observed. A parallel instance suspended on a signal is resumed branch-by-branch when the signal arrives, and a bulk signal to many parallel instances wakes their branches with a single platform-event publish.
+
+Claims are bounded for governor safety. A branch that needs to inspect **many distinct signal names** should call `ctx.getSignals()` once and filter in memory rather than issuing a separate `ctx.getSignal(name)` / `ctx.hasSignal(name)` lookup per name: each named claim is its own DML statement and lock query, so beyond an internal claim budget the overflow reads degrade to **at-least-once** (read without claiming) instead of failing. `getSignals()` claims a whole page in one statement and stays exactly-once.
+
+Because claiming writes uncommitted DML, a parallel-branch step that makes an **HTTP callout whose endpoint or body comes from the signal payload** must implement the [`CalloutStep`](force-app/main/default/classes/CalloutStep.cls) marker. Such a step reads signals *without* claiming (at-least-once delivery instead of exactly-once), so the callout is legal; use distinct signal names per branch or idempotent callouts when relying on this mode. A `CalloutStep` may also be `TimeoutConfigurable`: the engine defers its pre-execution timeout write past `execute()` (and past `compensate()` for a `CalloutStep` that is also a `CompensatableStep`) so the synchronous callout is not blocked by uncommitted work (the step's timeout was already armed when it was queued, so the watchdog stays in effect).
+
+**Recommended pattern — keep exactly-once *and* the callout by splitting them into two steps.** The at-least-once `CalloutStep` mode above exists because a single step cannot atomically own two un-rollback-able concerns: a signal *claim* is transactional DML, but an HTTP callout is not, and the two cannot be made to commit or roll back together. Rather than dropping the signal claim to at-least-once, give each concern its own step:
+
+1. A **signal-wait step** reads the signal the normal (claiming) way — pure transactional DML, so consumption stays **exactly-once** — and on receipt transitions (`StepResult.complete('DoCallout', payload)`) to
+2. A **callout step** that issues the HTTP callout from the payload it was handed. With no signal claim in its transaction, this is an ordinary callout the engine already makes safe (continuation + deferred timeout), so its only commit concern is the callout itself.
+
+This decomposition removes the claim-vs-callout conflict entirely: the signal is consumed exactly once in step 1, and the callout in step 2 carries no uncommitted signal DML. Reach for the inline `CalloutStep`+signal mode only when the callout must react to the signal *in place* — e.g. a compensating callout fired in response to a signal during unwind, where the wait and the callout cannot be pre-split — and make that callout idempotent.
+### 5. Flow Interoperability (Start, Signal, Read)
 
 Flow Builders interact with the engine through supported Invocable Actions (category **Revenant Workflows**) — no internal field API names required:
 
