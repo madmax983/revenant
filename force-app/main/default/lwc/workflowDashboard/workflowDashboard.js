@@ -69,6 +69,7 @@ export default class WorkflowDashboard extends LightningElement {
   // Getter forms would return a new array reference every render cycle, which causes
   // lightning-combobox to re-initialize (closing the dropdown and resetting its scroll).
   workflowOptions = [{ label: "-- All Definitions --", value: "" }];
+  definitionOptions = [];
   statusOptions = [
     { label: "-- All Statuses --", value: "" },
     { label: "Running", value: "Running" },
@@ -104,11 +105,8 @@ export default class WorkflowDashboard extends LightningElement {
         { label: "-- All Definitions --", value: "" },
         ...result.data.map((def) => ({ label: def, value: def })),
       ];
+      this.definitionOptions = result.data.map((def) => ({ label: def, value: def }));
     }
-  }
-
-  get definitionOptions() {
-    return this.definitions.map((def) => ({ label: def, value: def }));
   }
 
   get hasFilteredInstances() {
@@ -897,7 +895,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to resume rollback: " +
-            (error.body ? error.body.message : error.message),
+          (error.body ? error.body.message : error.message),
           "error",
         );
       })
