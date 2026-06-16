@@ -1723,20 +1723,31 @@ public inherited sharing class WorkflowEngine {
         claimBudget -= claimedIds.size();
         claimStatementBudget -= 1;
 
-        List<StepContext.Signal> result = new List<StepContext.Signal>();
+        List<Workflow_Signal__c> claimedRows = new List<Workflow_Signal__c>();
+        List<String> rawPayloads = new List<String>();
         for (Workflow_Signal__c c : candidates) {
           if (claimedIds.contains(c.Id)) {
-            // claimed = true: this branch now exclusively owns the row.
-            result.add(
-              new StepContext.Signal(
-                c.Id,
-                c.Signal_Name__c,
-                resolvePayload(c.Payload__c),
-                c.CreatedDate,
-                true
-              )
-            );
+            claimedRows.add(c);
+            rawPayloads.add(c.Payload__c);
           }
+        }
+        // Resolve any offloaded payloads with a single bulk query (not one per
+        // row), matching the read-only list path: a claimed page of offloaded
+        // child-completion signals would otherwise run one ContentVersion query
+        // each and could exhaust SOQL.
+        List<String> resolvedPayloads = resolvePayloads(rawPayloads);
+        List<StepContext.Signal> result = new List<StepContext.Signal>();
+        for (Integer i = 0; i < claimedRows.size(); i++) {
+          // claimed = true: this branch now exclusively owns the row.
+          result.add(
+            new StepContext.Signal(
+              claimedRows[i].Id,
+              claimedRows[i].Signal_Name__c,
+              resolvedPayloads[i],
+              claimedRows[i].CreatedDate,
+              true
+            )
+          );
         }
         return result;
       }
