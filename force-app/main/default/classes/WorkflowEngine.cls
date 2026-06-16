@@ -1120,32 +1120,29 @@ public inherited sharing class WorkflowEngine {
       // early-exits unless the instance is Compensating/Cancelling, so a
       // Suspended (initial detection) or Running (signal-resumed) instance must
       // be restored to the right compensation status first.
-      Boolean reassertStatusPending = false;
+      String reassertedStatus = null;
       if (
         instance.Status__c == 'Suspended' ||
         instance.Status__c == 'Running'
       ) {
-        if (
-          instance.Error_Message__c != null &&
-          instance.Error_Message__c.contains('Cancelled by user')
-        ) {
-          instance.Status__c = 'Cancelling';
-        } else {
-          instance.Status__c = 'Compensating';
-        }
+        reassertedStatus = (instance.Error_Message__c != null &&
+          instance.Error_Message__c.contains('Cancelled by user'))
+          ? 'Cancelling'
+          : 'Compensating';
+        instance.Status__c = reassertedStatus;
         instance.Async_Job_Id__c = null;
         // Set the compensating status in memory but DEFER its DML to
         // runCompensationStep. A compensation step resumed by a signal may be a
         // CalloutStep that makes a payload-driven callout in compensate(), and
         // Salesforce forbids a callout once the transaction holds uncommitted
         // DML. Committing here (as this used to) made that callout illegal.
-        // runCompensationStep commits the status before compensate() for an
-        // ordinary step and after it for a CalloutStep. A crash before that
-        // commit leaves the instance Suspended/Running with the '_Compensate'
-        // step still on the stack, which this same detection re-routes next drive.
-        reassertStatusPending = true;
+        // runCompensationStep re-applies this phase after its own re-query and
+        // commits it before compensate() for an ordinary step / after it for a
+        // CalloutStep. A crash before that commit leaves the instance Suspended/
+        // Running with the '_Compensate' step on the stack, which this same
+        // detection re-routes on the next drive.
       }
-      runCompensationStep(instance, reassertStatusPending);
+      runCompensationStep(instance, reassertedStatus);
       return;
     }
 
@@ -3198,15 +3195,26 @@ public inherited sharing class WorkflowEngine {
    */
   private static void enqueueResume(Id instanceId) {
     List<Workflow_Instance__c> rows = [
-      SELECT Id, Current_Step__c
+      SELECT Id, Current_Step__c, Status__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
       LIMIT 1
     ];
     String currentStep = rows.isEmpty() ? null : rows[0].Current_Step__c;
+    // A Compensating/Cancelling instance rolls back serially off the LIFO stack,
+    // so it needs a single compensation wake, never per-branch fan-out -- even if
+    // Current_Step__c still holds a stale comma-separated parallel branch list from
+    // the forward phase. Only forward parallel instances fan out per branch.
+    Boolean isCompensatingInst =
+      !rows.isEmpty() &&
+      (rows[0].Status__c == 'Compensating' || rows[0].Status__c == 'Cancelling');
 
-    if (String.isNotBlank(currentStep) && currentStep.contains(',')) {
+    if (
+      !isCompensatingInst &&
+      String.isNotBlank(currentStep) &&
+      currentStep.contains(',')
+    ) {
       // Delegate to the batched bulk path (single-element list) so a parallel
       // instance with many unfinished branches publishes one EventBus call
       // rather than one publish per branch (which could exceed the 150
@@ -3281,7 +3289,14 @@ public inherited sharing class WorkflowEngine {
       WHERE
         (Id IN :ids
         OR Correlation_Key__c IN :keys)
-        AND Status__c IN ('Pending', 'Running', 'Suspended', 'CompensationFailed')
+        AND Status__c IN (
+          'Pending',
+          'Running',
+          'Suspended',
+          'Compensating',
+          'Cancelling',
+          'CompensationFailed'
+        )
       WITH SYSTEM_MODE
       FOR UPDATE
     ];
@@ -3364,8 +3379,17 @@ public inherited sharing class WorkflowEngine {
         sig.Status__c = 'Received';
         signalsToInsert.add(sig);
 
-        // If the workflow is suspended or running, resume/orchestrate it
-        if (inst.Status__c == 'Suspended' || inst.Status__c == 'Running') {
+        // If the workflow is suspended or running, resume/orchestrate it. A
+        // Compensating/Cancelling instance is mid-rollback: a compensation step
+        // may depend on this signal, so wake it too rather than rejecting it. The
+        // compensation status is left untouched (only Suspended flips to Running);
+        // runStep re-detects the rollback from the trailing '_Compensate' step.
+        if (
+          inst.Status__c == 'Suspended' ||
+          inst.Status__c == 'Running' ||
+          inst.Status__c == 'Compensating' ||
+          inst.Status__c == 'Cancelling'
+        ) {
           if (inst.Status__c == 'Suspended') {
             inst.Status__c = 'Running';
             instancesToUpdate.add(inst);
@@ -3385,10 +3409,18 @@ public inherited sharing class WorkflowEngine {
     List<Id> instanceIdsToEnqueue = new List<Id>();
     List<Workflow_Instance__c> parallelInstances = new List<Workflow_Instance__c>();
     for (Workflow_Instance__c inst : activeInstances) {
-      // Parallel instances must wake each branch by name; collect them for a
-      // single bulk resume rather than a per-instance query each (which would
+      // A Compensating/Cancelling instance rolls back serially off the LIFO stack,
+      // so it needs exactly one compensation wake -- never per-branch fan-out, even
+      // if Current_Step__c still holds a stale comma-separated parallel branch list
+      // from the forward phase. Otherwise one compensation signal would publish a
+      // RUN_STEP per stale branch and pile up duplicate rollback workers.
+      Boolean isCompensatingInst =
+        inst.Status__c == 'Compensating' || inst.Status__c == 'Cancelling';
+      // Parallel (forward) instances must wake each branch by name; collect them
+      // for a single bulk resume rather than a per-instance query each (which would
       // exhaust the SOQL limit when many parallel workflows are signaled at once).
       if (
+        !isCompensatingInst &&
         String.isNotBlank(inst.Current_Step__c) &&
         inst.Current_Step__c.contains(',')
       ) {
@@ -3823,7 +3855,7 @@ public inherited sharing class WorkflowEngine {
 
   private static void runCompensationStep(
     Workflow_Instance__c instance,
-    Boolean reassertStatusPending
+    String reassertedStatus
   ) {
     // 1. Read the compensation stack
     if (String.isBlank(instance.Compensation_Stack__c)) {
@@ -3902,6 +3934,22 @@ public inherited sharing class WorkflowEngine {
       );
     }
     instance = freshInstances[0];
+
+    // A signal-resumed compensation: runStep detected the rollback but DEFERRED
+    // the Suspended/Running -> Compensating status DML (so a CalloutStep callout
+    // stays legal), so the re-queried status is still Suspended/Running. Restore
+    // the in-memory compensating phase runStep computed so the guard below and the
+    // terminal-status decisions use the correct phase; the DML is committed later
+    // (before compensate() for an ordinary step, after it for a CalloutStep). Only
+    // restore from Suspended/Running -- a status another transaction drove to a
+    // terminal/failed value is left intact so the guard can early-exit on it.
+    if (
+      reassertedStatus != null &&
+      (instance.Status__c == 'Suspended' || instance.Status__c == 'Running')
+    ) {
+      instance.Status__c = reassertedStatus;
+      instance.Async_Job_Id__c = null;
+    }
 
     // Check early exit conditions for instance status
     if (
@@ -4050,7 +4098,7 @@ public inherited sharing class WorkflowEngine {
     // writes the instance after compensate() returns. The earlier early-return
     // branches (already-terminal exec, non-CompensatableStep) commit the status
     // via their own update, so a pending re-assert is never dropped.
-    if (reassertStatusPending && !deferPreExecDml) {
+    if (reassertedStatus != null && !deferPreExecDml) {
       update as system instance;
     }
     stepExec.Status__c = 'Running';
