@@ -4,6 +4,17 @@ public inherited sharing class WorkflowDashboardController {
   // when Database.query() is executed, even if the WHERE clause is built in a helper method.
   private static String likeTerm;
 
+  // Statuses that mean an instance still needs its definition-version code deployed.
+  // CompensationFailed is included because such instances can still be Resume-Rollback'd.
+  private static final Set<String> NON_TERMINAL_STATUSES = new Set<String>{
+    'Pending',
+    'Running',
+    'Suspended',
+    'Compensating',
+    'Cancelling',
+    'CompensationFailed'
+  };
+
   private static void checkAuthorization() {
     if (FeatureManagement.checkPermission('Workflow_Admin')) {
       return;
@@ -1051,5 +1062,76 @@ public inherited sharing class WorkflowDashboardController {
       System.debug(LoggingLevel.ERROR, 'Aura enqueueWatchdog failed: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
       throw new AuraHandledException(ex.getMessage());
     }
+  }
+
+  /**
+   * Returns a per-Definition_Version__c drain view for the given workflow name.
+   * Each row carries the count of non-terminal and terminal instances plus a
+   * safeToRetire flag (true only when nonTerminalCount == 0).
+   * Only versions actually observed in Workflow_Instance__c are returned;
+   * absence from results is NOT reported as "safe".
+   */
+  @AuraEnabled
+  public static List<Map<String, Object>> getVersionDrain(String workflowName) {
+    checkAuthorization();
+
+    if (String.isBlank(workflowName)) {
+      return new List<Map<String, Object>>();
+    }
+
+    String query =
+      'SELECT Definition_Version__c v, Status__c s, COUNT(Id) cnt' +
+      ' FROM Workflow_Instance__c' +
+      ' WHERE Workflow_Name__c = :workflowName' +
+      ' GROUP BY Definition_Version__c, Status__c';
+
+    // Accumulate counts per version: key = version (may be null → use 'null' string key)
+    Map<String, Integer> nonTerminalByVersion = new Map<String, Integer>();
+    Map<String, Integer> terminalByVersion = new Map<String, Integer>();
+    Map<String, Integer> versionKeyToInt = new Map<String, Integer>();
+
+    for (AggregateResult ar : Database.query(query, AccessLevel.SYSTEM_MODE)) {
+      Integer ver = (Integer) ar.get('v');
+      String verKey = ver == null ? 'null' : String.valueOf(ver);
+      String stat = (String) ar.get('s');
+      Integer cnt = (Integer) ar.get('cnt');
+
+      if (!nonTerminalByVersion.containsKey(verKey)) {
+        nonTerminalByVersion.put(verKey, 0);
+        terminalByVersion.put(verKey, 0);
+        versionKeyToInt.put(verKey, ver);
+      }
+
+      if (NON_TERMINAL_STATUSES.contains(stat)) {
+        nonTerminalByVersion.put(verKey, nonTerminalByVersion.get(verKey) + cnt);
+      } else {
+        terminalByVersion.put(verKey, terminalByVersion.get(verKey) + cnt);
+      }
+    }
+
+    // Sort version keys numerically (null sorts last)
+    List<String> sortedKeys = new List<String>(nonTerminalByVersion.keySet());
+    sortedKeys.sort();
+    // Move 'null' key to end if present
+    if (sortedKeys.remove('null')) {
+      sortedKeys.add('null');
+    }
+
+    List<Map<String, Object>> results = new List<Map<String, Object>>();
+    for (String verKey : sortedKeys) {
+      Integer nonTerminal = nonTerminalByVersion.get(verKey);
+      Integer terminal = terminalByVersion.get(verKey);
+      results.add(
+        new Map<String, Object>{
+          'version' => versionKeyToInt.get(verKey),
+          'nonTerminalCount' => nonTerminal,
+          'terminalCount' => terminal,
+          'totalCount' => nonTerminal + terminal,
+          'safeToRetire' => nonTerminal == 0
+        }
+      );
+    }
+
+    return results;
   }
 }

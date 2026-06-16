@@ -1,4 +1,4 @@
-﻿﻿import { LightningElement, wire } from "lwc";
+﻿import { LightningElement, wire } from "lwc";
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
@@ -14,6 +14,7 @@ import cancelWorkflow from "@salesforce/apex/WorkflowDashboardController.cancelW
 import submitApproval from "@salesforce/apex/WorkflowDashboardController.submitApproval";
 import getWatchdogStatus from "@salesforce/apex/WorkflowDashboardController.getWatchdogStatus";
 import enqueueWatchdog from "@salesforce/apex/WorkflowDashboardController.enqueueWatchdog";
+import getVersionDrain from "@salesforce/apex/WorkflowDashboardController.getVersionDrain";
 
 export default class WorkflowDashboard extends LightningElement {
   instances = [];
@@ -34,6 +35,12 @@ export default class WorkflowDashboard extends LightningElement {
   viewingDoctor = false;
   loadingDoctor = false;
   doctorData = { config: {} };
+
+  // Version Drain state
+  viewingDrain = false;
+  loadingDrain = false;
+  drainRows = [];
+  drainWorkflow = "";
 
   // Launch Modal Fields
   launchName = "";
@@ -105,7 +112,10 @@ export default class WorkflowDashboard extends LightningElement {
         { label: "-- All Definitions --", value: "" },
         ...result.data.map((def) => ({ label: def, value: def })),
       ];
-      this.definitionOptions = result.data.map((def) => ({ label: def, value: def }));
+      this.definitionOptions = result.data.map((def) => ({
+        label: def,
+        value: def,
+      }));
     }
   }
 
@@ -127,8 +137,7 @@ export default class WorkflowDashboard extends LightningElement {
 
   get isRollbackIncomplete() {
     return (
-      this.selectedInst &&
-      this.selectedInst.Status__c === "CompensationFailed"
+      this.selectedInst && this.selectedInst.Status__c === "CompensationFailed"
     );
   }
 
@@ -147,7 +156,7 @@ export default class WorkflowDashboard extends LightningElement {
     // to give LWC a stable, unique key per entry and keep list diffing correct.
     return names.map((name, index) => ({
       key: `${index}_${name}`,
-      name
+      name,
     }));
   }
 
@@ -206,7 +215,12 @@ export default class WorkflowDashboard extends LightningElement {
             listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? "item-selected" : ""}`,
             statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
             isWatchdogWaiting: inst.waitingOn === "Watchdog",
-            waitingOnBadgeClass: inst.waitingOn === "Watchdog" ? "badge badge-purple" : (inst.waitingOn === "Delayed Queueable" ? "badge badge-indigo" : "badge badge-blue")
+            waitingOnBadgeClass:
+              inst.waitingOn === "Watchdog"
+                ? "badge badge-purple"
+                : inst.waitingOn === "Delayed Queueable"
+                  ? "badge badge-indigo"
+                  : "badge badge-blue",
           };
         });
 
@@ -238,7 +252,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to retrieve workflow instances: " +
-          (error.body ? error.body.message : error.message),
+            (error.body ? error.body.message : error.message),
           "error",
         );
       })
@@ -280,7 +294,12 @@ export default class WorkflowDashboard extends LightningElement {
             listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? "item-selected" : ""}`,
             statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
             isWatchdogWaiting: inst.waitingOn === "Watchdog",
-            waitingOnBadgeClass: inst.waitingOn === "Watchdog" ? "badge badge-purple" : (inst.waitingOn === "Delayed Queueable" ? "badge badge-indigo" : "badge badge-blue")
+            waitingOnBadgeClass:
+              inst.waitingOn === "Watchdog"
+                ? "badge badge-purple"
+                : inst.waitingOn === "Delayed Queueable"
+                  ? "badge badge-indigo"
+                  : "badge badge-blue",
           };
         });
         this.stats = statsResult;
@@ -351,6 +370,7 @@ export default class WorkflowDashboard extends LightningElement {
   handleSelectInstance(event) {
     this.stopPolling();
     this.viewingDoctor = false;
+    this.viewingDrain = false;
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
@@ -390,9 +410,14 @@ export default class WorkflowDashboard extends LightningElement {
           outputFile: this.buildPayloadFile(payloadFiles["instance.Output"]),
           waitingOn: result.waitingOn,
           isWatchdogWaiting: result.waitingOn === "Watchdog",
-          waitingOnBadgeClass: result.waitingOn === "Watchdog" ? "badge badge-purple" : (result.waitingOn === "Delayed Queueable" ? "badge badge-indigo" : "badge badge-blue"),
+          waitingOnBadgeClass:
+            result.waitingOn === "Watchdog"
+              ? "badge badge-purple"
+              : result.waitingOn === "Delayed Queueable"
+                ? "badge badge-indigo"
+                : "badge badge-blue",
           pendingCompensationCount: result.pendingCompensationCount || 0,
-          pendingCompensations: result.pendingCompensations || []
+          pendingCompensations: result.pendingCompensations || [],
         };
 
         // Map children
@@ -513,6 +538,7 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleOpenDoctor() {
     this.viewingDoctor = true;
+    this.viewingDrain = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     this.loadDoctorStatus();
@@ -520,6 +546,63 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleCloseDoctor() {
     this.viewingDoctor = false;
+  }
+
+  handleOpenDrain() {
+    this.viewingDrain = true;
+    this.viewingDoctor = false;
+    this.selectedInstanceId = null;
+    this.filterInstancesList();
+    this.drainRows = [];
+  }
+
+  handleCloseDrain() {
+    this.viewingDrain = false;
+  }
+
+  handleDrainWorkflowChange(event) {
+    this.drainWorkflow = event.detail.value;
+    this.loadDrain();
+  }
+
+  loadDrain() {
+    if (!this.drainWorkflow) {
+      this.drainRows = [];
+      return;
+    }
+    this.loadingDrain = true;
+    getVersionDrain({ workflowName: this.drainWorkflow })
+      .then((rows) => {
+        this.drainRows = rows.map((row) => ({
+          ...row,
+          badgeClass: row.safeToRetire
+            ? "badge badge-green"
+            : "badge badge-red",
+          badgeLabel: row.safeToRetire
+            ? "Safe to retire"
+            : `In-flight: ${row.nonTerminalCount}`,
+          versionLabel: row.version != null ? `v${row.version}` : "(none)",
+        }));
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to load version drain: " +
+            (error.body ? error.body.message : error.message),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.loadingDrain = false;
+      });
+  }
+
+  get hasDrainRows() {
+    return this.drainRows.length > 0;
+  }
+
+  get drainWorkflowSelected() {
+    return !!this.drainWorkflow;
   }
 
   loadDoctorStatus() {
@@ -530,7 +613,9 @@ export default class WorkflowDashboard extends LightningElement {
         if (result.latestJob) {
           latestJobVal = {
             ...result.latestJob,
-            statusBadgeClass: this.getStatusBadgeClass(result.latestJob.Status__c)
+            statusBadgeClass: this.getStatusBadgeClass(
+              result.latestJob.Status__c,
+            ),
           };
         }
         this.doctorData = {
@@ -545,7 +630,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to load doctor status: " +
-          (error.body ? error.body.message : error.message),
+            (error.body ? error.body.message : error.message),
           "error",
         );
       })
@@ -565,7 +650,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to enqueue watchdog: " +
-          (error.body ? error.body.message : error.message),
+            (error.body ? error.body.message : error.message),
           "error",
         );
         this.loadingDoctor = false;
@@ -617,14 +702,14 @@ export default class WorkflowDashboard extends LightningElement {
         const normalized = payload
           .replace(/[\u201C\u201D]/g, '"')
           .replace(/[\u2018\u2019]/g, "'")
-          .replace(/\u00A0/g, ' ');
+          .replace(/\u00A0/g, " ");
         try {
           JSON.parse(normalized);
           payload = normalized;
         } catch (ex) {
           this.launchError =
             "Input Payload must be valid JSON. " +
-            'If you pasted from a chat or document, re-type the quote characters — ' +
+            "If you pasted from a chat or document, re-type the quote characters — " +
             "“curly quotes” are not valid JSON.";
           return;
         }
@@ -721,7 +806,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to count re-drive candidates: " +
-          (error.body ? error.body.message : error.message),
+            (error.body ? error.body.message : error.message),
           "error",
         );
       });
@@ -747,7 +832,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.showToast(
             "Re-drive started",
             `Re-driving ${outcome.eligibleCount} failed instance${outcome.eligibleCount === 1 ? "" : "s"}. ` +
-            "Progress is shown in the detail panel below.",
+              "Progress is shown in the detail panel below.",
             "success",
           );
           this.selectedInstanceId = outcome.redriveInstanceId;
@@ -766,7 +851,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to re-drive matching instances: " +
-          (error.body ? error.body.message : error.message),
+            (error.body ? error.body.message : error.message),
           "error",
         );
       })
@@ -784,8 +869,7 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   handleCancelModalConfirm(event) {
-    const runCompensations =
-      event.currentTarget.dataset.compensate === "true";
+    const runCompensations = event.currentTarget.dataset.compensate === "true";
     this.cancelModalOpen = false;
     this.loadingDetails = true;
     cancelWorkflow({
@@ -806,7 +890,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to cancel workflow: " +
-          (error.body ? error.body.message : error.message),
+            (error.body ? error.body.message : error.message),
           "error",
         );
       })
@@ -869,7 +953,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to resume workflow: " +
-          (error.body ? error.body.message : error.message),
+            (error.body ? error.body.message : error.message),
           "error",
         );
       })
@@ -895,7 +979,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to resume rollback: " +
-          (error.body ? error.body.message : error.message),
+            (error.body ? error.body.message : error.message),
           "error",
         );
       })
