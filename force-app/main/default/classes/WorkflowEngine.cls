@@ -3319,7 +3319,9 @@ public inherited sharing class WorkflowEngine {
     }
     enqueuedInstanceIds.add(instanceId);
     if (Test.isRunningTest()) {
-      System.enqueueJob(new WorkflowOrchestrator(instanceId));
+      if (!disableQueueableInTest) {
+        System.enqueueJob(new WorkflowOrchestrator(instanceId));
+      }
     } else {
       try {
         if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
