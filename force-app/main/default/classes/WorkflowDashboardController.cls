@@ -1093,11 +1093,12 @@ public inherited sharing class WorkflowDashboardController {
       return new List<Map<String, Object>>();
     }
 
-    String query =
-      'SELECT Definition_Version__c v, Status__c s, COUNT(Id) cnt' +
-      ' FROM Workflow_Instance__c' +
-      ' WHERE Workflow_Name__c = :workflowName' +
-      ' GROUP BY Definition_Version__c, Status__c';
+    // Definition_Version__c is a Number field, and Number fields are not groupable
+    // in SOQL (isGroupable() == false) — a `GROUP BY Definition_Version__c` throws
+    // "field ... can not be grouped in a query call". So we tally per version+status
+    // in Apex instead. The inline SOQL for-loop streams rows in 200-record chunks,
+    // keeping heap flat up to the 50k query-row limit. WITH SYSTEM_MODE mirrors the
+    // dashboard's intent to aggregate across all instances regardless of sharing/FLS.
 
     // Accumulate counts per version: key = version (may be null → use 'null' string key)
     Map<String, Integer> nonTerminalByVersion = new Map<String, Integer>();
@@ -1105,15 +1106,17 @@ public inherited sharing class WorkflowDashboardController {
     Map<String, Integer> terminalByVersion = new Map<String, Integer>();
     Map<String, Integer> versionKeyToInt = new Map<String, Integer>();
 
-    for (AggregateResult ar : Database.query(query, AccessLevel.SYSTEM_MODE)) {
-      // A grouped Number field comes back as Decimal in an AggregateResult, so it
-      // must be read as Decimal and converted — a direct (Integer) cast throws
-      // "Invalid conversion from runtime type Decimal to Integer" at runtime.
-      Decimal verDecimal = (Decimal) ar.get('v');
+    for (Workflow_Instance__c inst : [
+      SELECT Definition_Version__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Workflow_Name__c = :workflowName
+      WITH SYSTEM_MODE
+    ]) {
+      // Definition_Version__c is a Number, so it materializes as Decimal on the SObject.
+      Decimal verDecimal = inst.Definition_Version__c;
       Integer ver = verDecimal == null ? null : verDecimal.intValue();
       String verKey = ver == null ? 'null' : String.valueOf(ver);
-      String stat = (String) ar.get('s');
-      Integer cnt = (Integer) ar.get('cnt');
+      String stat = inst.Status__c;
 
       if (!nonTerminalByVersion.containsKey(verKey)) {
         nonTerminalByVersion.put(verKey, 0);
@@ -1123,19 +1126,22 @@ public inherited sharing class WorkflowDashboardController {
       }
 
       if (NON_TERMINAL_STATUSES.contains(stat)) {
-        nonTerminalByVersion.put(verKey, nonTerminalByVersion.get(verKey) + cnt);
+        nonTerminalByVersion.put(verKey, nonTerminalByVersion.get(verKey) + 1);
       } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
-        failedByVersion.put(verKey, failedByVersion.get(verKey) + cnt);
+        failedByVersion.put(verKey, failedByVersion.get(verKey) + 1);
       } else {
-        terminalByVersion.put(verKey, terminalByVersion.get(verKey) + cnt);
+        terminalByVersion.put(verKey, terminalByVersion.get(verKey) + 1);
       }
     }
 
     // Sort version keys numerically (null sorts last)
     List<String> sortedKeys = new List<String>(nonTerminalByVersion.keySet());
     sortedKeys.sort();
-    // Move 'null' key to end if present
-    if (sortedKeys.remove('null')) {
+    // Move 'null' key to end if present.
+    // Apex List.remove() only accepts an Integer index, so locate-then-remove.
+    Integer nullKeyIdx = sortedKeys.indexOf('null');
+    if (nullKeyIdx != -1) {
+      sortedKeys.remove(nullKeyIdx);
       sortedKeys.add('null');
     }
 
