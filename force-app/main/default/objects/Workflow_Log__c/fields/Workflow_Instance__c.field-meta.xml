@@ -7,8 +7,6 @@
     <referenceTo>Workflow_Instance__c</referenceTo>
     <relationshipLabel>Workflow Logs</relationshipLabel>
     <relationshipName>Workflow_Logs</relationshipName>
-    <relationshipOrder>0</relationshipOrder>
-    <reparentableMasterDetail>false</reparentableMasterDetail>
     <trackTrending>false</trackTrending>
     <type>Lookup</type>
 </CustomField>

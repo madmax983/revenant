@@ -301,12 +301,12 @@ public inherited sharing class WorkflowScheduleSweeper {
     if (String.isBlank(sched.Input_Json__c)) {
       return null;
     }
-    String json = sched.Input_Json__c.replace(
+    String jsonStr = sched.Input_Json__c.replace(
         '{{fireTime}}',
         String.valueOf(fireTime)
       )
       .replace('{{scheduleName}}', sched.Name);
-    return JSON.deserializeUntyped(json);
+    return JSON.deserializeUntyped(jsonStr);
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────

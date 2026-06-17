@@ -68,8 +68,9 @@ public inherited sharing class WorkflowCronEvaluator {
       Integer cDay = candidate.dayGmt();
       Integer cMonth = candidate.monthGmt();
       Integer cYear = candidate.yearGmt();
-      // Apex dayOfWeekGmt(): Sun=1 … Sat=7. Subtract 1 to get 0=Sun … 6=Sat (cron convention).
-      Integer cDow = candidate.dayOfWeekGmt() - 1;
+      // formatGmt('u') is ISO-8601 day-of-week: Mon=1 … Sun=7. Math.mod(u, 7)
+      // maps that to cron convention 0=Sun … 6=Sat (Sun: 7→0, Mon..Sat: 1..6).
+      Integer cDow = Math.mod(Integer.valueOf(candidate.formatGmt('u')), 7);
 
       // Check month.
       if (!months.contains(cMonth)) {
@@ -189,7 +190,8 @@ public inherited sharing class WorkflowCronEvaluator {
       Integer cDay = candidate.dayGmt();
       Integer cMonth = candidate.monthGmt();
       Integer cYear = candidate.yearGmt();
-      Integer cDow = candidate.dayOfWeekGmt() - 1; // 0=Sun … 6=Sat
+      // ISO-8601 day-of-week (Mon=1…Sun=7) → cron 0=Sun…6=Sat via Math.mod(u, 7).
+      Integer cDow = Math.mod(Integer.valueOf(candidate.formatGmt('u')), 7);
 
       if (!months.contains(cMonth)) {
         candidate = firstOfNextMonth(cYear, cMonth);

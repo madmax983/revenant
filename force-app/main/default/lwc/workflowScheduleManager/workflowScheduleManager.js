@@ -165,6 +165,13 @@ export default class WorkflowScheduleManager extends LightningElement {
         return this.schedules && this.schedules.length > 0;
     }
 
+    // Held in JS rather than inline in the template: the LWC template compiler
+    // treats `{...}` as a binding expression, so curly-brace example text must
+    // not appear directly in markup.
+    get inputJsonPlaceholder() {
+        return '{"key":"value"} — supports {{fireTime}} and {{scheduleName}}';
+    }
+
     get enabledCount() {
         return this.schedules.filter((s) => s.Enabled__c).length;
     }
