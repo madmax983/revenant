@@ -270,6 +270,21 @@ public class WorkflowScheduleSweeperTest {
     sched.Dedicated_Slot__c = true;
     insert sched;
 
+    // Verify the 0-slot sweep ignores dedicated schedules BEFORE registering the
+    // dedicated job (so Test.stopTest cannot fire the job and create an instance
+    // that would be counted here).
+    WorkflowScheduleSweeper.sweep();
+    List<Workflow_Instance__c> instancesBefore = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c LIKE :PREFIX + '8_%'
+    ];
+    System.assertEquals(
+      0,
+      instancesBefore.size(),
+      'Dedicated-slot schedule should not be swept by 0-slot sweeper'
+    );
+
     Integer before = [SELECT COUNT() FROM CronTrigger];
 
     Test.startTest();
@@ -278,15 +293,6 @@ public class WorkflowScheduleSweeperTest {
 
     Integer afterRegister = [SELECT COUNT() FROM CronTrigger];
     System.assertEquals(before + 1, afterRegister, 'registerDedicatedJob should add 1 CronTrigger');
-
-    // Dedicated schedule must NOT be swept by the 0-slot sweeper.
-    WorkflowScheduleSweeper.sweep();
-    List<Workflow_Instance__c> instances = [
-      SELECT Id
-      FROM Workflow_Instance__c
-      WHERE Correlation_Key__c LIKE :PREFIX + '8_%'
-    ];
-    System.assertEquals(0, instances.size(), 'Dedicated-slot schedule should not be swept by 0-slot sweeper');
 
     // Jobs are keyed by the immutable schedule Id (not the mutable Name).
     String dedJobName = WorkflowScheduleSweeper.dedicatedJobName(sched.Id);
