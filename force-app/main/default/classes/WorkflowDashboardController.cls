@@ -15,6 +15,11 @@ public inherited sharing class WorkflowDashboardController {
     'ContinuedAsNew'
   };
 
+  // Upper bound on Suspended candidate rows a single stalled query/count scans, so a
+  // large backlog of long-suspended instances cannot exhaust governor limits. The list
+  // filters then paginates within this bound; the count reports `capped` when hit.
+  private static final Integer STALLED_CANDIDATE_CAP = 2000;
+
   private static void checkAuthorization() {
     if (FeatureManagement.checkPermission('Workflow_Admin')) {
       return;
@@ -213,6 +218,33 @@ public inherited sharing class WorkflowDashboardController {
       : ' WHERE ' + String.join(conditions, ' AND ');
   }
 
+  // Shared WHERE body (no leading "WHERE") for the stalled list and count. Selects
+  // Suspended instances idle beyond the cutoff with no sleep timer and no declared step
+  // timeout (anti-join). The remaining "no active job" check is applied in Apex by the
+  // caller since job liveness cannot be expressed in SOQL. Requires the `stalledCutoff`
+  // binding to be set by the caller before query execution.
+  private static String buildStalledWhereClause(
+    String workflowName,
+    String searchTerm
+  ) {
+    List<String> conditions = new List<String>{
+      'Status__c = \'Suspended\'',
+      'Sleep_Until__c = null',
+      'LastModifiedDate <= :stalledCutoff',
+      'Id NOT IN (SELECT Workflow_Instance__c FROM Workflow_Step_Execution__c WHERE Timeout_At__c != null)'
+    };
+    if (String.isNotBlank(workflowName)) {
+      conditions.add('Workflow_Name__c = :workflowName');
+    }
+    if (String.isNotBlank(searchTerm)) {
+      likeTerm = '%' + String.escapeSingleQuotes(searchTerm) + '%';
+      conditions.add(
+        '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
+      );
+    }
+    return String.join(conditions, ' AND ');
+  }
+
   @AuraEnabled(cacheable=true)
   public static List<Map<String, Object>> getFilteredInstances(
     String workflowName,
@@ -295,13 +327,17 @@ public inherited sharing class WorkflowDashboardController {
     return results;
   }
 
+  // cacheBuster is unused in Apex; it only varies the client-side cache key so a
+  // dashboard refresh re-queries instead of serving a stale cached list (mirrors
+  // getFilteredInstances).
   @AuraEnabled(cacheable=true)
   public static List<Map<String, Object>> getStalledInstances(
     String workflowName,
     String searchTerm,
     Integer thresholdMinutes,
     Integer limitSize,
-    Integer offsetSize
+    Integer offsetSize,
+    String cacheBuster
   ) {
     checkAuthorization();
 
@@ -312,8 +348,6 @@ public inherited sharing class WorkflowDashboardController {
     }
     if (offsetSize == null || offsetSize < 0) {
       offsetSize = 0;
-    } else if (offsetSize > 2000) {
-      offsetSize = 2000;
     }
 
     Integer threshold = (thresholdMinutes == null)
@@ -321,64 +355,46 @@ public inherited sharing class WorkflowDashboardController {
       : thresholdMinutes;
     stalledCutoff = Datetime.now().addMinutes(-threshold);
 
-    List<String> conditions = new List<String>{
-      'Status__c = \'Suspended\'',
-      'Sleep_Until__c = null',
-      'LastModifiedDate <= :stalledCutoff'
-    };
-    if (String.isNotBlank(workflowName)) {
-      conditions.add('Workflow_Name__c = :workflowName');
-    }
-    if (String.isNotBlank(searchTerm)) {
-      likeTerm = '%' + String.escapeSingleQuotes(searchTerm) + '%';
-      conditions.add(
-        '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
-      );
-    }
-
     String query =
       'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c ' +
       'FROM Workflow_Instance__c WHERE ' +
-      String.join(conditions, ' AND ') +
-      ' ORDER BY LastModifiedDate ASC LIMIT :limitSize OFFSET :offsetSize';
+      buildStalledWhereClause(workflowName, searchTerm) +
+      ' ORDER BY LastModifiedDate ASC LIMIT :STALLED_CANDIDATE_CAP';
 
-    List<Workflow_Instance__c> instances = Database.query(
+    List<Workflow_Instance__c> candidates = Database.query(
       query,
       AccessLevel.SYSTEM_MODE
     );
 
     Set<Id> cronIds = new Set<Id>();
     Set<Id> asyncIds = new Set<Id>();
-    Set<Id> pageIds = new Set<Id>();
-    for (Workflow_Instance__c inst : instances) {
-      pageIds.add(inst.Id);
+    for (Workflow_Instance__c inst : candidates) {
       collectJobId(inst.Async_Job_Id__c, cronIds, asyncIds);
     }
 
     Set<Id> activeCronIds = queryActiveCronIds(cronIds);
     Set<Id> activeAsyncIds = queryActiveAsyncIds(asyncIds);
-    Set<Id> instancesWithStepTimeout = queryInstancesWithStepTimeout(pageIds);
+    // Step-timeout instances are already excluded by the WHERE clause anti-join,
+    // so pass an empty set to computeStalled.
+    Set<Id> noStepTimeout = new Set<Id>();
 
     Long nowMs = Datetime.now().getTime();
-    List<Map<String, Object>> results = new List<Map<String, Object>>();
-    for (Workflow_Instance__c inst : instances) {
+    // Filter to genuinely stalled rows FIRST, then paginate, so the in-memory
+    // job-liveness filter (which SOQL cannot express) never returns a short page
+    // that would make the LWC stop paging before later stalled rows are reached.
+    List<Map<String, Object>> stalledRows = new List<Map<String, Object>>();
+    for (Workflow_Instance__c inst : candidates) {
       String waitingOn = computeWaitingOn(inst, activeCronIds, activeAsyncIds);
       Long idleMinutes = Math.max(
         0L,
         (nowMs - inst.LastModifiedDate.getTime()) / 60000L
       );
       if (
-        !computeStalled(
-          inst,
-          waitingOn,
-          instancesWithStepTimeout,
-          idleMinutes,
-          threshold
-        )
+        !computeStalled(inst, waitingOn, noStepTimeout, idleMinutes, threshold)
       ) {
         continue;
       }
-      results.add(
+      stalledRows.add(
         new Map<String, Object>{
           'Id' => inst.Id,
           'Name' => inst.Name,
@@ -396,6 +412,16 @@ public inherited sharing class WorkflowDashboardController {
         }
       );
     }
+
+    List<Map<String, Object>> results = new List<Map<String, Object>>();
+    for (
+      Integer i = offsetSize;
+      i < stalledRows.size() &&
+      results.size() < limitSize;
+      i++
+    ) {
+      results.add(stalledRows[i]);
+    }
     return results;
   }
 
@@ -412,45 +438,28 @@ public inherited sharing class WorkflowDashboardController {
       : thresholdMinutes;
     stalledCutoff = Datetime.now().addMinutes(-threshold);
 
-    final Integer CAP = 2000;
-    List<String> conditions = new List<String>{
-      'Status__c = \'Suspended\'',
-      'Sleep_Until__c = null',
-      'LastModifiedDate <= :stalledCutoff'
-    };
-    if (String.isNotBlank(workflowName)) {
-      conditions.add('Workflow_Name__c = :workflowName');
-    }
-    if (String.isNotBlank(searchTerm)) {
-      likeTerm = '%' + String.escapeSingleQuotes(searchTerm) + '%';
-      conditions.add(
-        '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
-      );
-    }
-
     String query =
       'SELECT Id, Async_Job_Id__c, Sleep_Until__c, Status__c, LastModifiedDate ' +
       'FROM Workflow_Instance__c WHERE ' +
-      String.join(conditions, ' AND ') +
-      ' LIMIT :CAP';
+      buildStalledWhereClause(workflowName, searchTerm) +
+      ' LIMIT :STALLED_CANDIDATE_CAP';
 
     List<Workflow_Instance__c> candidates = Database.query(
       query,
       AccessLevel.SYSTEM_MODE
     );
-    Boolean capped = candidates.size() >= CAP;
+    Boolean capped = candidates.size() >= STALLED_CANDIDATE_CAP;
 
     Set<Id> cronIds = new Set<Id>();
     Set<Id> asyncIds = new Set<Id>();
-    Set<Id> pageIds = new Set<Id>();
     for (Workflow_Instance__c inst : candidates) {
-      pageIds.add(inst.Id);
       collectJobId(inst.Async_Job_Id__c, cronIds, asyncIds);
     }
 
     Set<Id> activeCronIds = queryActiveCronIds(cronIds);
     Set<Id> activeAsyncIds = queryActiveAsyncIds(asyncIds);
-    Set<Id> instancesWithStepTimeout = queryInstancesWithStepTimeout(pageIds);
+    // Step-timeout instances are excluded by the WHERE clause anti-join.
+    Set<Id> noStepTimeout = new Set<Id>();
 
     Long nowMs = Datetime.now().getTime();
     Integer count = 0;
@@ -461,13 +470,7 @@ public inherited sharing class WorkflowDashboardController {
         (nowMs - inst.LastModifiedDate.getTime()) / 60000L
       );
       if (
-        computeStalled(
-          inst,
-          waitingOn,
-          instancesWithStepTimeout,
-          idleMinutes,
-          threshold
-        )
+        computeStalled(inst, waitingOn, noStepTimeout, idleMinutes, threshold)
       ) {
         count++;
       }

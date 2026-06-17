@@ -197,6 +197,7 @@ export default class WorkflowDashboard extends LightningElement {
           thresholdMinutes: null,
           limitSize: currentLimit,
           offsetSize: currentOffset,
+          cacheBuster: this.cacheBuster,
         })
       : getFilteredInstances({
           workflowName: this.selectedWorkflow,
@@ -277,6 +278,7 @@ export default class WorkflowDashboard extends LightningElement {
           thresholdMinutes: null,
           limitSize: currentSize,
           offsetSize: 0,
+          cacheBuster: this.cacheBuster,
         })
       : getFilteredInstances({
           workflowName: this.selectedWorkflow,

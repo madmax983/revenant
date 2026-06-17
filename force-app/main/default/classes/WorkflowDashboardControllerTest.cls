@@ -1410,7 +1410,8 @@ public class WorkflowDashboardControllerTest {
       '',
       -1,
       10,
-      0
+      0,
+      ''
     );
     Test.stopTest();
 
@@ -1444,7 +1445,8 @@ public class WorkflowDashboardControllerTest {
       '',
       null,
       10,
-      0
+      0,
+      ''
     );
     Test.stopTest();
 
@@ -1470,7 +1472,8 @@ public class WorkflowDashboardControllerTest {
       '',
       -1,
       10,
-      0
+      0,
+      ''
     );
     Test.stopTest();
 
@@ -1483,6 +1486,101 @@ public class WorkflowDashboardControllerTest {
       true,
       (Boolean) stalled[0].get('stalled'),
       'Returned record should be marked stalled'
+    );
+  }
+
+  @isTest
+  static void testGetStalledInstancesPaginatesAfterFiltering() {
+    // Two genuinely stalled instances, plus one that must be excluded because it
+    // has a step with a declared timeout (anti-join). With limitSize=1 the two
+    // stalled rows must page out one-per-page and the excluded one must never
+    // appear — proving pagination runs over the filtered set, not raw candidates.
+    List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>{
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'StallTest.ZombieWorkflow',
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'Stall-Page-A'
+      ),
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'StallTest.ZombieWorkflow',
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'Stall-Page-B'
+      ),
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'StallTest.ZombieWorkflow',
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'Stall-Page-Excluded'
+      )
+    };
+    insert as system insts;
+
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = insts[2].Id,
+      Step_Name__c = 'StallTest.SomeStep',
+      Status__c = 'Running',
+      Retry_Count__c = 0,
+      Timeout_At__c = DateTime.now().addMinutes(5)
+    );
+    insert as system step;
+
+    Test.startTest();
+    List<Map<String, Object>> page0 = WorkflowDashboardController.getStalledInstances(
+      '',
+      '',
+      -1,
+      1,
+      0,
+      ''
+    );
+    List<Map<String, Object>> page1 = WorkflowDashboardController.getStalledInstances(
+      '',
+      '',
+      -1,
+      1,
+      1,
+      ''
+    );
+    List<Map<String, Object>> page2 = WorkflowDashboardController.getStalledInstances(
+      '',
+      '',
+      -1,
+      1,
+      2,
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      page0.size(),
+      'First page should hold exactly one stalled row'
+    );
+    System.assertEquals(
+      1,
+      page1.size(),
+      'Second page should hold the other stalled row'
+    );
+    System.assertEquals(
+      0,
+      page2.size(),
+      'Third page should be empty — only two stalled rows exist (excluded one filtered out)'
+    );
+
+    Set<Id> returned = new Set<Id>{
+      (Id) page0[0].get('Id'),
+      (Id) page1[0].get('Id')
+    };
+    System.assert(
+      returned.contains(insts[0].Id),
+      'Stall-Page-A should be surfaced across pages'
+    );
+    System.assert(
+      returned.contains(insts[1].Id),
+      'Stall-Page-B should be surfaced across pages'
+    );
+    System.assert(
+      !returned.contains(insts[2].Id),
+      'Instance with a declared step timeout must be excluded from the stalled set'
     );
   }
 
@@ -1636,7 +1734,7 @@ public class WorkflowDashboardControllerTest {
       0,
       ''
     );
-    WorkflowDashboardController.getStalledInstances('', '', -1, 10, 0);
+    WorkflowDashboardController.getStalledInstances('', '', -1, 10, 0, '');
     WorkflowDashboardController.getStalledCount('', '', -1);
     Test.stopTest();
 
@@ -1688,7 +1786,7 @@ public class WorkflowDashboardControllerTest {
     System.runAs(stdUser) {
       Test.startTest();
       try {
-        WorkflowDashboardController.getStalledInstances('', '', -1, 10, 0);
+        WorkflowDashboardController.getStalledInstances('', '', -1, 10, 0, '');
         System.assert(
           false,
           'Expected AuraHandledException for getStalledInstances'
