@@ -26,6 +26,11 @@
                 <default>false</default>
                 <label>Processing</label>
             </value>
+            <value>
+                <fullName>Unrouted</fullName>
+                <default>false</default>
+                <label>Unrouted</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

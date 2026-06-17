@@ -35,6 +35,13 @@
                     onclick={handleOpenSchedules}
                     class="slds-m-left_small">
                 </lightning-button>
+                <lightning-button
+                    label="Unrouted Signals"
+                    icon-name="utility:warning"
+                    variant="neutral"
+                    onclick={handleOpenUnrouted}
+                    class="slds-m-left_small">
+                </lightning-button>
                 <lightning-button-icon
                     icon-name="utility:refresh"
                     variant="border-filled"
@@ -89,6 +96,12 @@
                 <div class="stat-card border-left-purple">
                     <div class="slds-text-title_caps slds-text-color_weak">Stalled</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-purple">{stalledCountDisplay}</div>
+                </div>
+            </div>
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-5">
+                <div class="stat-card border-left-orange">
+                    <div class="slds-text-title_caps slds-text-color_weak">Unrouted Signals</div>
+                    <div class="slds-text-heading_large slds-m-top_xx-small text-orange">{unroutedCountDisplay}</div>
                 </div>
             </div>
         </div>
@@ -466,6 +479,78 @@
                             </template>
                         </template>
                         <template if:false={viewingDrain}>
+                        <!-- Unrouted Signals Panel -->
+                        <template if:true={viewingUnrouted}>
+                            <template if:true={loadingUnrouted}>
+                                <div class="slds-align_absolute-center slds-p-around_large spinner-height">
+                                    <lightning-spinner alternative-text="Loading unrouted signals..." size="medium"></lightning-spinner>
+                                </div>
+                            </template>
+                            <template if:false={loadingUnrouted}>
+                                <div class="slds-p-around_medium">
+                                    <div class="slds-grid slds-grid_align-spread slds-m-bottom_medium border-bottom slds-p-bottom_small">
+                                        <div>
+                                            <h2 class="slds-text-heading_medium font-outfit slds-grid slds-grid_vertical-align-center">
+                                                <lightning-icon icon-name="utility:warning" size="small" class="slds-m-right_small text-orange"></lightning-icon>
+                                                Unrouted Signals
+                                            </h2>
+                                            <p class="slds-text-color_weak slds-m-top_xx-small">Signals that arrived when no active workflow instance matched. Use Re-deliver to wake a now-waiting instance.</p>
+                                        </div>
+                                        <div class="slds-grid slds-grid_vertical-align-center">
+                                            <lightning-button
+                                                label="Refresh"
+                                                icon-name="utility:refresh"
+                                                variant="neutral"
+                                                onclick={loadUnroutedSignals}
+                                                class="slds-m-right_small">
+                                            </lightning-button>
+                                            <lightning-button
+                                                label="Close"
+                                                variant="neutral"
+                                                icon-name="utility:close"
+                                                onclick={handleCloseUnrouted}>
+                                            </lightning-button>
+                                        </div>
+                                    </div>
+                                    <template if:true={hasUnroutedSignals}>
+                                        <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+                                            <thead>
+                                                <tr class="slds-line-height_reset">
+                                                    <th scope="col"><div class="slds-truncate">Correlation Key</div></th>
+                                                    <th scope="col"><div class="slds-truncate">Signal Name</div></th>
+                                                    <th scope="col"><div class="slds-truncate">Age (min)</div></th>
+                                                    <th scope="col"><div class="slds-truncate">Action</div></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <template for:each={unroutedSignals} for:item="sig">
+                                                    <tr key={sig.id}>
+                                                        <td><div class="slds-truncate" title={sig.correlationKey}>{sig.correlationKey}</div></td>
+                                                        <td><div class="slds-truncate" title={sig.signalName}>{sig.signalName}</div></td>
+                                                        <td><div class="slds-truncate">{sig.ageMinutes}</div></td>
+                                                        <td>
+                                                            <lightning-button
+                                                                label="Re-deliver"
+                                                                icon-name="utility:send"
+                                                                variant="neutral"
+                                                                data-signal-id={sig.id}
+                                                                onclick={handleRedeliver}>
+                                                            </lightning-button>
+                                                        </td>
+                                                    </tr>
+                                                </template>
+                                            </tbody>
+                                        </table>
+                                    </template>
+                                    <template if:false={hasUnroutedSignals}>
+                                        <div class="slds-align_absolute-center slds-p-around_large">
+                                            <p class="slds-text-color_weak">No unrouted signals. All wake-ups reached their target.</p>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                        </template>
+                        <template if:false={viewingUnrouted}>
                         <template if:true={selectedInstanceId}>
                         <template if:true={loadingDetails}>
                             <div class="slds-align_absolute-center slds-p-around_large spinner-height">
@@ -774,6 +859,7 @@
                             <p class="slds-text-color_weak slds-m-top_x-small">Select a workflow instance from the list to view its DAG path, state values, and execution steps.</p>
                         </div>
                     </template>
+                        </template>
                         </template>
                     </template>
                 </div>
