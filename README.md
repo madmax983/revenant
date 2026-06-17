@@ -257,7 +257,63 @@ WorkflowEngine.signal(correlationKey, 'Approve:PurchaseApproval', '{"approved":t
 
 **Saga rollback on rejection.** The reject step throws a `WorkflowEngine.WorkflowException`. Because the prior `CompensatableStep` is on `Compensation_Stack__c`, the engine automatically calls its `compensate()` method in LIFO order — reading the original step output from `ctx.stepStateJson` to retrieve any resource identifiers — and the instance reaches `Compensated` when the rollback is done. No additional wiring is required: the stack is maintained by the engine whenever a `CompensatableStep` completes on the forward path.
 
-### 6. Flow Interoperability (Start, Signal, Read)
+### 6. Parent→Child Workflow Composition
+
+The engine ships full parent→child orchestration: `StepResult.startChild()` suspends the parent, runs the child in its own durable Queueable chain, and resumes the parent via a `ChildCompleted:<childKey>` Platform Event when the child **successfully completes**. [`ChildWorkflowCompositionExample`](examples/main/default/classes/ChildWorkflowCompositionExample.cls) is the copyable reference — a loan-application parent that delegates credit scoring to a child and then branches on the child's score.
+
+**Contract that authors must get exactly right**
+
+| Concern | Rule |
+| --- | --- |
+| **Suspend** | Return `StepResult.startChild(childWorkflowName, childKey, input)` from the step that launches the child. The engine suspends the parent automatically — do **not** also return `StepResult.suspend()`. |
+| **Child output** | The child's final output arrives as the payload of the `ChildCompleted:<childKey>` signal. Read it with `ctx.getSignal("ChildCompleted:" + childKey).payload` — no hand-rolled SOQL against `Workflow_Signal__c`. |
+| **Idempotent resume** | The step that launched the child also handles the resume: check for the completion signal first, then act on it. Return `StepResult.complete()` (not `suspend()`) on the resume path — returning COMPLETE triggers engine-managed signal consumption, so an at-least-once redelivered duplicate `ChildCompleted` event cannot double-advance the parent. |
+| **Idempotent launch** | The engine re-runs the current step on stray orchestrator hops / watchdog re-checks while the parent is `Suspended`. Before calling `startChild()` again, check whether the child already exists (query `Workflow_Instance__c` by `Parent_Instance__c` + `Correlation_Key__c`) and re-suspend if so — a second `startChild()` with the same key hits the engine's duplicate-active-key guard and **fails** the parent. |
+| **Cancellation** | `WorkflowEngine.cancel(parentId, false)` cancels the parent and all of its active descendants (root-first traversal over `Parent_Instance__c`), so explicitly cancelling a parent reaps its in-flight children. |
+
+**Caveats (failure paths are not auto-handled).** This contract covers the *successful* child path. Two failure modes need explicit handling in a production composite:
+
+- **A child that fails or times out never publishes `ChildCompleted`** (`notifyParentCompletion()` runs only on the child's Completed transition), so the parent stays `Suspended` indefinitely. Add your own child-failure/timeout signal — or a watchdog timeout on the launcher step — if you must react to a failed child.
+- **A parent that *fails* does not cascade to its children.** `failWorkflowInstance()` does not traverse `Parent_Instance__c`; only explicit `WorkflowEngine.cancel()` reaps descendants. A failing parent leaves its in-flight children running unless you cancel them.
+
+**Minimal launcher + resume step**
+
+```java
+public class RequestCreditCheckStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+        String childKey = 'CreditCheck_' + ctx.workflowInstanceId;
+        StepContext.Signal done = ctx.getSignal('ChildCompleted:' + childKey);
+
+        if (done.isPresent()) {
+            // Resume: read the child's output from the signal payload.
+            Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(
+                WorkflowEngine.resolvePayload(done.payload)
+            );
+            // ... inspect childResult and return StepResult.complete(nextStep, output)
+        }
+
+        // No completion signal yet. If the child already exists (a re-entrant hop),
+        // re-suspend rather than launching a duplicate (see "Idempotent launch").
+        List<Workflow_Instance__c> alreadyLaunched = [
+            SELECT Id FROM Workflow_Instance__c
+            WHERE Parent_Instance__c = :ctx.workflowInstanceId
+              AND Correlation_Key__c = :childKey
+            LIMIT 1
+        ];
+        if (!alreadyLaunched.isEmpty()) {
+            return StepResult.suspend();
+        }
+
+        // First run: start the child and suspend.
+        Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(ctx.workflowInputJson);
+        return StepResult.startChild('MyChildWorkflow', childKey, input);
+    }
+}
+```
+
+The correlation key format `'<prefix>_' + ctx.workflowInstanceId` guarantees uniqueness across concurrent parent instances while remaining stable across retries of the same step.
+
+### 7. Flow Interoperability (Start, Signal, Read)
 
 Flow Builders interact with the engine through supported Invocable Actions (category **Revenant Workflows**) — no internal field API names required:
 
@@ -322,7 +378,7 @@ The engine maps a workflow's class name to a custom metadata record's `Developer
   - `objects/` - Core database schemas (`Workflow_Instance__c`, `Workflow_Step_Execution__c`), Platform Events, and Custom Metadata Types.
   - `lwc/` - Responsive visual monitoring timeline dashboard.
 - `examples/main/default/` - Reference Architectures
-  - `classes/` - Onboarding, Saga rollback, version upgrades, Apex Cursor parallel processing, and HTTP Callout/Timeout Watchdog implementations.
+  - `classes/` - Onboarding, Saga rollback, version upgrades, Apex Cursor parallel processing, HTTP Callout/Timeout Watchdog, and parent→child workflow composition implementations.
   - `triggers/` - Opportunity stage triggers demonstrating automated workflow instantiation.
   - `flows/` - Reference Flow demonstrating reading a workflow's outcome via the Get Workflow Status invocable action.
 
