@@ -188,8 +188,9 @@ private class ChildWorkflowCompositionExampleTest {
       'Child Parent_Instance__c must reference the parent'
     );
 
-    // Cancel the parent — the engine BFS-traverses Parent_Instance__c and reaps
-    // all active descendants before marking the parent itself Cancelled.
+    // Cancel the parent — the engine cancels the parent and all of its active
+    // descendants (root-first traversal over Parent_Instance__c), reaping the
+    // in-flight child.
     WorkflowEngine.cancel(parentId, false);
 
     Workflow_Instance__c cancelledParent = [
@@ -212,6 +213,62 @@ private class ChildWorkflowCompositionExampleTest {
       'Cancelled',
       cancelledChild.Status__c,
       'Descendant child must be Cancelled when parent is cancelled'
+    );
+  }
+
+  /**
+   * Idempotent launch — re-entering the launcher while the child is still in flight
+   * (no ChildCompleted signal yet) must NOT start a second child.  The engine
+   * re-runs the current step on any stray orchestrator hop while Suspended; without
+   * the guard the second startChild() would hit the duplicate-active-key check and
+   * fail the parent.  Here we reproduce that stray hop with a direct runStep().
+   */
+  @isTest
+  static void testReentrantLaunchDoesNotStartDuplicateChild() {
+    Test.startTest();
+    Id parentId = WorkflowEngine.start(
+      'ChildWorkflowCompositionExample',
+      'LoanApp_Reentry',
+      HIGH_SCORE_INPUT
+    );
+    WorkflowTestHarness parentHarness = new WorkflowTestHarness(parentId);
+
+    // First run: startChild → parent Suspended, exactly one child created.
+    parentHarness.step();
+
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE Parent_Instance__c = :parentId
+      ],
+      'Exactly one child must exist after the first launcher run'
+    );
+
+    // Reproduce a stray orchestrator hop re-entering the still-suspended launcher.
+    // The guard must re-suspend rather than launching a duplicate or failing.
+    WorkflowEngine.runStep(parentId, null);
+    Test.stopTest();
+
+    Workflow_Instance__c parentInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals(
+      'Suspended',
+      parentInst.Status__c,
+      'Parent must remain Suspended after a re-entrant launcher run (not Failed)'
+    );
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE Parent_Instance__c = :parentId
+      ],
+      'Re-entry must NOT start a duplicate child'
     );
   }
 

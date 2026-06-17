@@ -21,8 +21,13 @@
  *    Consumed at the COMPLETE transition.  A redelivered at-least-once duplicate
  *    therefore cannot double-advance the parent.
  *
- * 4. WorkflowEngine.cancel(parentId, false) BFS-traverses Parent_Instance__c and
- *    cancels all active descendants before the parent itself.
+ * 4. WorkflowEngine.cancel(parentId, false) cancels the parent and all of its
+ *    active descendants (root-first traversal over Parent_Instance__c), so
+ *    explicitly cancelling a parent reaps its in-flight children.  Note this is
+ *    cancellation only: a parent that FAILS is not cascaded — failWorkflowInstance
+ *    does not traverse Parent_Instance__c — and a child that fails or times out
+ *    never publishes ChildCompleted, so its parent stays Suspended.  A production
+ *    composite would add its own child-failure/timeout signal to cover that path.
  */
 public inherited sharing class ChildWorkflowCompositionExample
   implements WorkflowDefinition {
@@ -60,55 +65,77 @@ public inherited sharing class ChildWorkflowCompositionExample
   /**
    * Launcher + resume handler in one idempotent step.
    *
-   * First run  — ChildCompleted signal is absent → issue startChild.  The engine
-   *              suspends the parent and starts the child's own Queueable chain.
-   *              This step will be re-run (not a new step) when the child completes.
-   *
    * Resume run — ChildCompleted:<childKey> signal is present → read the child's
    *              credit score from the payload, decide the branch, and return
    *              COMPLETE.  The COMPLETE transition marks every Received signal of
    *              the observed name Consumed, so at-least-once redelivered duplicates
    *              cannot cause a second advance.
+   *
+   * Re-entry  — no signal yet, but a child with this correlation key already
+   *              exists → re-suspend.  The engine re-runs the current step on any
+   *              stray orchestrator hop / watchdog re-check / redelivered resume
+   *              while the instance is Suspended; calling startChild() a second time
+   *              with the same key would hit the engine's duplicate-active-key guard
+   *              and FAIL the parent, so we must idempotently wait instead.
+   *
+   * First run — no signal and no child yet → startChild.  The engine suspends the
+   *              parent and starts the child's own Queueable chain.  This same step
+   *              is re-run (not a new step) when the child completes.
    */
   public class RequestCreditCheckStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       String childKey = 'CreditCheck_' + ctx.workflowInstanceId;
       StepContext.Signal done = ctx.getSignal('ChildCompleted:' + childKey);
 
-      if (!done.isPresent()) {
-        // First run: delegate credit scoring to the child workflow and suspend.
-        Map<String, Object> applicantData = (Map<String, Object>) JSON.deserializeUntyped(
-          ctx.workflowInputJson
+      if (done.isPresent()) {
+        // Resume: the child completed.  Its serialised output is the signal payload.
+        // For large child outputs the payload may be a blob reference; resolve it.
+        String childOutputJson = WorkflowEngine.resolvePayload(done.payload);
+        Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(
+          childOutputJson
         );
-        return StepResult.startChild(
-          'ChildWorkflowCompositionExample.CreditCheckWorkflow',
-          childKey,
-          applicantData
-        );
+        Integer creditScore = ((Decimal) childResult.get('creditScore'))
+          .intValue();
+        Boolean approved = creditScore >= APPROVE_THRESHOLD;
+
+        Map<String, Object> decision = new Map<String, Object>{
+          'approved' => approved,
+          'creditScore' => creditScore,
+          'applicant' => childResult.get('applicant')
+        };
+
+        String nextStep = approved
+          ? 'ChildWorkflowCompositionExample.ApproveLoanStep'
+          : 'ChildWorkflowCompositionExample.DeclineLoanStep';
+
+        // Returning COMPLETE lets the engine consume all same-name Received signals
+        // (engine-managed idempotency — no manual sig.Status__c='Consumed' needed).
+        return StepResult.complete(nextStep, decision);
       }
 
-      // Resume: the child completed.  Its serialised output is the signal payload.
-      // For large child outputs the payload may be a blob reference; resolve it.
-      String childOutputJson = WorkflowEngine.resolvePayload(done.payload);
-      Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(
-        childOutputJson
+      // No completion signal yet.  If we already launched the child on a prior run
+      // of this step, re-suspend idempotently rather than starting a duplicate.
+      List<Workflow_Instance__c> alreadyLaunched = [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE
+          Parent_Instance__c = :ctx.workflowInstanceId
+          AND Correlation_Key__c = :childKey
+        LIMIT 1
+      ];
+      if (!alreadyLaunched.isEmpty()) {
+        return StepResult.suspend();
+      }
+
+      // First run: delegate credit scoring to the child workflow and suspend.
+      Map<String, Object> applicantData = (Map<String, Object>) JSON.deserializeUntyped(
+        ctx.workflowInputJson
       );
-      Integer creditScore = ((Decimal) childResult.get('creditScore')).intValue();
-      Boolean approved = creditScore >= APPROVE_THRESHOLD;
-
-      Map<String, Object> decision = new Map<String, Object>{
-        'approved' => approved,
-        'creditScore' => creditScore,
-        'applicant' => childResult.get('applicant')
-      };
-
-      String nextStep = approved
-        ? 'ChildWorkflowCompositionExample.ApproveLoanStep'
-        : 'ChildWorkflowCompositionExample.DeclineLoanStep';
-
-      // Returning COMPLETE lets the engine consume all same-name Received signals
-      // (engine-managed idempotency — no manual sig.Status__c='Consumed' needed).
-      return StepResult.complete(nextStep, decision);
+      return StepResult.startChild(
+        'ChildWorkflowCompositionExample.CreditCheckWorkflow',
+        childKey,
+        applicantData
+      );
     }
   }
 
