@@ -20,6 +20,6 @@
         <type>AutoNumber</type>
     </nameField>
     <pluralLabel>Workflow Signals</pluralLabel>
-    <sharingModel>ReadWrite</sharingModel>
+    <sharingModel>Private</sharingModel>
     <visibility>Public</visibility>
 </CustomObject>

@@ -5700,11 +5700,12 @@ public inherited sharing class WorkflowEngine {
         Signal_Name__c,
         Payload__c
       FROM Workflow_Signal__c
-      WHERE Id = :signalId
+      WHERE Id = :signalId AND Status__c = 'Unrouted'
       WITH SYSTEM_MODE
       LIMIT 1
+      FOR UPDATE
     ];
-    if (rows.isEmpty() || rows[0].Status__c != 'Unrouted') {
+    if (rows.isEmpty()) {
       return false;
     }
     Workflow_Signal__c sig = rows[0];
