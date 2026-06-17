@@ -352,9 +352,8 @@ export default class WorkflowDashboard extends LightningElement {
 
   get stalledCountDisplay() {
     if (!this.stalledCountData) return "0";
-    return this.stalledCountData.capped
-      ? "2000+"
-      : String(this.stalledCountData.count || 0);
+    const count = this.stalledCountData.count || 0;
+    return this.stalledCountData.capped ? `${count}+` : String(count);
   }
 
   get stalledFilterLabel() {
@@ -752,9 +751,12 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   // Enable bulk re-drive only when the current filter actually contains failed
-  // (recoverable) instances. stats.failed is scoped to the active filter.
+  // (recoverable) instances and the stalled view is not active (stalled rows are
+  // Suspended, not Failed; showing the button there would re-drive hidden failures).
   get canRedriveMatching() {
-    return this.stats && this.stats.failed > 0 && !this.redriving;
+    return (
+      this.stats && this.stats.failed > 0 && !this.redriving && !this.showingStalled
+    );
   }
 
   handleRedriveMatching() {

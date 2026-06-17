@@ -1816,6 +1816,136 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
+  @isTest
+  static void testStalledExcludesPendingStepWait() {
+    // A Suspended instance with a Pending step-exec (signal/approval/child wait)
+    // must NOT be flagged stalled — it has a legitimate active wait.
+    WorkflowEngine.staleThresholdMinutes = -1;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.SignalWaitWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-PendingStep-FilteredInstances'
+    );
+    insert as system inst;
+
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'StallTest.AwaitSignalStep',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+    insert as system step;
+
+    Test.startTest();
+    List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
+      '',
+      'Suspended',
+      '',
+      10,
+      0,
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, instances.size());
+    System.assertEquals(
+      false,
+      (Boolean) instances[0].get('stalled'),
+      'Suspended instance with a Pending step (signal/approval/child wait) must not be stalled'
+    );
+  }
+
+  @isTest
+  static void testGetStalledInstancesExcludesPendingStepWait() {
+    // getStalledInstances must not surface instances that have a Pending step-exec,
+    // because those are legitimate signal/approval/child waits (engine invariant).
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.SignalWaitWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-PendingStep-StalledList'
+    );
+    insert as system inst;
+
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'StallTest.AwaitSignalStep',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+    insert as system step;
+
+    Test.startTest();
+    List<Map<String, Object>> stalled = WorkflowDashboardController.getStalledInstances(
+      '',
+      '',
+      -1,
+      10,
+      0,
+      ''
+    );
+    Test.stopTest();
+
+    for (Map<String, Object> row : stalled) {
+      System.assertNotEquals(
+        inst.Id,
+        row.get('Id'),
+        'Instance with a Pending step-exec must be excluded from stalled list'
+      );
+    }
+  }
+
+  @isTest
+  static void testGetStalledCountExcludesPendingStepWait() {
+    // getStalledCount must not count instances that have a Pending step-exec.
+    Workflow_Instance__c stalledInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.ZombieWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-PendingStep-CountA'
+    );
+    Workflow_Instance__c waitingInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.SignalWaitWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-PendingStep-CountB'
+    );
+    insert as system new List<Workflow_Instance__c>{ stalledInst, waitingInst };
+
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = waitingInst.Id,
+      Step_Name__c = 'StallTest.AwaitSignalStep',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+    insert as system step;
+
+    Test.startTest();
+    Map<String, Object> result = WorkflowDashboardController.getStalledCount(
+      '',
+      '',
+      -1
+    );
+    Test.stopTest();
+
+    Integer count = (Integer) result.get('count');
+    System.assert(count >= 1, 'At least the true zombie must be counted');
+    // Verify the waiting instance's Id is not surfaced by getStalledInstances
+    List<Map<String, Object>> stalledList = WorkflowDashboardController.getStalledInstances(
+      '',
+      '',
+      -1,
+      50,
+      0,
+      ''
+    );
+    for (Map<String, Object> row : stalledList) {
+      System.assertNotEquals(
+        waitingInst.Id,
+        row.get('Id'),
+        'Instance with Pending step must be excluded from stalled list'
+      );
+    }
+  }
+
   private static User buildRestrictedUser() {
     Profile p = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
     User u = new User(

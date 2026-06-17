@@ -219,10 +219,12 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   // Shared WHERE body (no leading "WHERE") for the stalled list and count. Selects
-  // Suspended instances idle beyond the cutoff with no sleep timer and no declared step
-  // timeout (anti-join). The remaining "no active job" check is applied in Apex by the
-  // caller since job liveness cannot be expressed in SOQL. Requires the `stalledCutoff`
-  // binding to be set by the caller before query execution.
+  // Suspended instances idle beyond the cutoff with no sleep timer, no declared step
+  // timeout, and no pending step (signal/approval/child waits park exactly one Pending
+  // step-exec row; excluding those avoids false-positives on legitimate waits). The
+  // remaining "no active job" check is applied in Apex by the caller since job liveness
+  // cannot be expressed in SOQL. Requires the `stalledCutoff` binding to be set by the
+  // caller before query execution.
   private static String buildStalledWhereClause(
     String workflowName,
     String searchTerm
@@ -231,7 +233,8 @@ public inherited sharing class WorkflowDashboardController {
       'Status__c = \'Suspended\'',
       'Sleep_Until__c = null',
       'LastModifiedDate <= :stalledCutoff',
-      'Id NOT IN (SELECT Workflow_Instance__c FROM Workflow_Step_Execution__c WHERE Timeout_At__c != null)'
+      'Id NOT IN (SELECT Workflow_Instance__c FROM Workflow_Step_Execution__c WHERE Timeout_At__c != null)',
+      'Id NOT IN (SELECT Workflow_Instance__c FROM Workflow_Step_Execution__c WHERE Status__c = \'Pending\')'
     };
     if (String.isNotBlank(workflowName)) {
       conditions.add('Workflow_Name__c = :workflowName');
@@ -291,6 +294,7 @@ public inherited sharing class WorkflowDashboardController {
     Set<Id> activeCronIds = queryActiveCronIds(cronIds);
     Set<Id> activeAsyncIds = queryActiveAsyncIds(asyncIds);
     Set<Id> instancesWithStepTimeout = queryInstancesWithStepTimeout(pageIds);
+    Set<Id> instancesWithPendingStep = queryInstancesWithPendingStep(pageIds);
 
     Long nowMs = Datetime.now().getTime();
     List<Map<String, Object>> results = new List<Map<String, Object>>();
@@ -303,6 +307,7 @@ public inherited sharing class WorkflowDashboardController {
         inst,
         waitingOn,
         instancesWithStepTimeout,
+        instancesWithPendingStep,
         idleMinutes,
         WorkflowEngine.staleThresholdMinutes
       );
@@ -374,9 +379,10 @@ public inherited sharing class WorkflowDashboardController {
 
     Set<Id> activeCronIds = queryActiveCronIds(cronIds);
     Set<Id> activeAsyncIds = queryActiveAsyncIds(asyncIds);
-    // Step-timeout instances are already excluded by the WHERE clause anti-join,
-    // so pass an empty set to computeStalled.
+    // Step-timeout and pending-step instances are already excluded by the WHERE clause
+    // anti-joins, so pass empty sets to computeStalled.
     Set<Id> noStepTimeout = new Set<Id>();
+    Set<Id> noPendingStep = new Set<Id>();
 
     Long nowMs = Datetime.now().getTime();
     // Filter to genuinely stalled rows FIRST, then paginate, so the in-memory
@@ -390,7 +396,14 @@ public inherited sharing class WorkflowDashboardController {
         (nowMs - inst.LastModifiedDate.getTime()) / 60000L
       );
       if (
-        !computeStalled(inst, waitingOn, noStepTimeout, idleMinutes, threshold)
+        !computeStalled(
+          inst,
+          waitingOn,
+          noStepTimeout,
+          noPendingStep,
+          idleMinutes,
+          threshold
+        )
       ) {
         continue;
       }
@@ -458,8 +471,9 @@ public inherited sharing class WorkflowDashboardController {
 
     Set<Id> activeCronIds = queryActiveCronIds(cronIds);
     Set<Id> activeAsyncIds = queryActiveAsyncIds(asyncIds);
-    // Step-timeout instances are excluded by the WHERE clause anti-join.
+    // Step-timeout and pending-step instances are excluded by the WHERE clause anti-joins.
     Set<Id> noStepTimeout = new Set<Id>();
+    Set<Id> noPendingStep = new Set<Id>();
 
     Long nowMs = Datetime.now().getTime();
     Integer count = 0;
@@ -470,7 +484,14 @@ public inherited sharing class WorkflowDashboardController {
         (nowMs - inst.LastModifiedDate.getTime()) / 60000L
       );
       if (
-        computeStalled(inst, waitingOn, noStepTimeout, idleMinutes, threshold)
+        computeStalled(
+          inst,
+          waitingOn,
+          noStepTimeout,
+          noPendingStep,
+          idleMinutes,
+          threshold
+        )
       ) {
         count++;
       }
@@ -569,6 +590,22 @@ public inherited sharing class WorkflowDashboardController {
     return result;
   }
 
+  private static Set<Id> queryInstancesWithPendingStep(Set<Id> instanceIds) {
+    Set<Id> result = new Set<Id>();
+    if (instanceIds.isEmpty()) {
+      return result;
+    }
+    for (Workflow_Step_Execution__c se : [
+      SELECT Workflow_Instance__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :instanceIds AND Status__c = 'Pending'
+      WITH SYSTEM_MODE
+    ]) {
+      result.add(se.Workflow_Instance__c);
+    }
+    return result;
+  }
+
   private static String computeWaitingOn(
     Workflow_Instance__c inst,
     Set<Id> activeCronIds,
@@ -625,6 +662,7 @@ public inherited sharing class WorkflowDashboardController {
     Workflow_Instance__c inst,
     String waitingOn,
     Set<Id> instancesWithStepTimeout,
+    Set<Id> instancesWithPendingStep,
     Long idleMinutes,
     Integer thresholdMinutes
   ) {
@@ -638,6 +676,11 @@ public inherited sharing class WorkflowDashboardController {
       return false;
     }
     if (instancesWithStepTimeout.contains(inst.Id)) {
+      return false;
+    }
+    // Signal/approval/child-completion waits park a Pending step-exec row;
+    // exclude them so only true orphans (no resume mechanism at all) are flagged.
+    if (instancesWithPendingStep.contains(inst.Id)) {
       return false;
     }
     return idleMinutes > thresholdMinutes;
