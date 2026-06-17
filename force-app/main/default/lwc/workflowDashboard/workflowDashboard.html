@@ -14,17 +14,24 @@
                     onclick={handleOpenModal}
                     class="brand-button">
                 </lightning-button>
-                <lightning-button 
-                    label="System Doctor" 
-                    icon-name="utility:heart" 
-                    variant="neutral" 
+                <lightning-button
+                    label="System Doctor"
+                    icon-name="utility:heart"
+                    variant="neutral"
                     onclick={handleOpenDoctor}
                     class="slds-m-left_small">
                 </lightning-button>
-                <lightning-button-icon 
-                    icon-name="utility:refresh" 
-                    variant="border-filled" 
-                    alternative-text="Refresh" 
+                <lightning-button
+                    label="Version Drain"
+                    icon-name="utility:layers"
+                    variant="neutral"
+                    onclick={handleOpenDrain}
+                    class="slds-m-left_small">
+                </lightning-button>
+                <lightning-button-icon
+                    icon-name="utility:refresh"
+                    variant="border-filled"
+                    alternative-text="Refresh"
                     onclick={handleRefresh}
                     class="slds-m-left_small">
                 </lightning-button-icon>
@@ -342,6 +349,82 @@
                         </template>
                     </template>
                     <template if:false={viewingDoctor}>
+                        <!-- Version Drain Panel -->
+                        <template if:true={viewingDrain}>
+                            <template if:true={loadingDrain}>
+                                <div class="slds-align_absolute-center slds-p-around_large spinner-height">
+                                    <lightning-spinner alternative-text="Loading version drain..." size="medium"></lightning-spinner>
+                                </div>
+                            </template>
+                            <template if:false={loadingDrain}>
+                                <div class="slds-p-around_medium">
+                                    <div class="slds-grid slds-grid_align-spread slds-m-bottom_medium border-bottom slds-p-bottom_small">
+                                        <div>
+                                            <h2 class="slds-text-heading_medium font-outfit slds-grid slds-grid_vertical-align-center">
+                                                <lightning-icon icon-name="utility:layers" size="small" class="slds-m-right_small text-primary"></lightning-icon>
+                                                Version Drain
+                                            </h2>
+                                            <p class="slds-text-color_weak slds-m-top_xx-small">Per-version headcount of instances still bound to each definition version. A version is safe to retire only when it has no in-flight instances and no re-drivable failures.</p>
+                                        </div>
+                                        <lightning-button
+                                            label="Close"
+                                            variant="neutral"
+                                            icon-name="utility:close"
+                                            onclick={handleCloseDrain}>
+                                        </lightning-button>
+                                    </div>
+                                    <div class="slds-m-bottom_medium">
+                                        <lightning-combobox
+                                            label="Workflow Definition"
+                                            value={drainWorkflow}
+                                            options={definitionOptions}
+                                            placeholder="-- Select a Definition --"
+                                            onchange={handleDrainWorkflowChange}>
+                                        </lightning-combobox>
+                                    </div>
+                                    <template if:true={drainWorkflowSelected}>
+                                        <template if:true={hasDrainRows}>
+                                            <table class="slds-table slds-table_cell-buffer slds-table_bordered slds-table_striped">
+                                                <thead>
+                                                    <tr class="slds-line-height_reset">
+                                                        <th scope="col"><div class="slds-truncate">Version</div></th>
+                                                        <th scope="col"><div class="slds-truncate">In-flight (non-terminal)</div></th>
+                                                        <th scope="col"><div class="slds-truncate" title="Failed runs are terminal but re-drivable on this version, so retiring its code breaks recovery">Failed (re-drivable)</div></th>
+                                                        <th scope="col"><div class="slds-truncate">Terminal</div></th>
+                                                        <th scope="col"><div class="slds-truncate">Total</div></th>
+                                                        <th scope="col"><div class="slds-truncate">Retire Status</div></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <template for:each={drainRows} for:item="row">
+                                                        <tr key={row.versionLabel}>
+                                                            <td><div class="slds-truncate font-mono">{row.versionLabel}</div></td>
+                                                            <td><div class="slds-truncate">{row.nonTerminalCount}</div></td>
+                                                            <td><div class="slds-truncate">{row.failedCount}</div></td>
+                                                            <td><div class="slds-truncate">{row.terminalCount}</div></td>
+                                                            <td><div class="slds-truncate">{row.totalCount}</div></td>
+                                                            <td><span class={row.badgeClass}>{row.badgeLabel}</span></td>
+                                                        </tr>
+                                                    </template>
+                                                </tbody>
+                                            </table>
+                                        </template>
+                                        <template if:false={hasDrainRows}>
+                                            <div class="slds-align_absolute-center slds-p-around_large slds-text-align_center">
+                                                <p class="slds-text-color_weak">No instances found for this definition.</p>
+                                            </div>
+                                        </template>
+                                    </template>
+                                    <template if:false={drainWorkflowSelected}>
+                                        <div class="slds-align_absolute-center slds-p-around_large slds-text-align_center">
+                                            <lightning-icon icon-name="utility:layers" size="large" class="slds-m-bottom_medium text-weak-icon"></lightning-icon>
+                                            <p class="slds-text-color_weak slds-m-top_small">Select a workflow definition above to see its version drain.</p>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                        </template>
+                        <template if:false={viewingDrain}>
                         <template if:true={selectedInstanceId}>
                         <template if:true={loadingDetails}>
                             <div class="slds-align_absolute-center slds-p-around_large spinner-height">
@@ -650,6 +733,7 @@
                             <p class="slds-text-color_weak slds-m-top_x-small">Select a workflow instance from the list to view its DAG path, state values, and execution steps.</p>
                         </div>
                     </template>
+                        </template>
                     </template>
                 </div>
             </div>
