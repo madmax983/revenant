@@ -165,6 +165,23 @@ This arms one `CronTrigger` using the existing `WorkflowScheduler` primitive and
 
 > **Note:** The `Dedicated_Slot__c` checkbox must be `true` on the record so the 0-slot sweep ignores it (preventing double-fires).
 
+### Dedicated-slot caveats
+
+Dedicated-slot mode arms a native `CronTrigger` via `System.schedule`, which behaves
+differently from the 0-slot evaluator in three ways:
+
+- **Timezone:** `System.schedule` interprets the cron in the **time zone of the user who
+  arms the job**, whereas the 0-slot path evaluates in **UTC**. A dedicated `0 2 * * *`
+  armed by a `America/New_York` admin fires at 02:00 Eastern, not 02:00 UTC. Arm dedicated
+  jobs as a UTC user (or account for the offset) if you need them to match 0-slot timing.
+- **Day-of-month + day-of-week together:** the 0-slot evaluator ORs them (standard cron),
+  but Salesforce cron cannot. A cron that restricts **both** (e.g. `0 9 1 * 1`) is
+  **rejected** when arming a dedicated job — use 0-slot mode for that schedule.
+- **Enable/disable & input tokens:** the dedicated job re-reads the schedule at fire time,
+  so disabling it stops firing on the next tick (and disabling via the UI also aborts the
+  CronTrigger immediately), and `{{fireTime}}` / `{{scheduleName}}` tokens are resolved
+  just like the 0-slot path.
+
 To remove it:
 
 ```apex

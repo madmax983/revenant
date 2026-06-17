@@ -217,6 +217,85 @@ public class WorkflowScheduleControllerTest {
   }
 
   @isTest
+  static void testSavePrefixTooLong() {
+    Boolean threw = false;
+    String longPrefix = '';
+    for (Integer k = 0; k < 81; k++) {
+      longPrefix += 'P';
+    }
+    Test.startTest();
+    try {
+      WorkflowScheduleController.saveSchedule(
+        new Map<String, Object>{
+          'Name' => 'LongPrefix',
+          'Workflow_Name__c' => TEST_WF,
+          'Cron_Expression__c' => '0 2 * * *',
+          'Correlation_Key_Prefix__c' => longPrefix
+        }
+      );
+    } catch (AuraHandledException e) {
+      threw = true;
+    }
+    Test.stopTest();
+    System.assert(threw, 'Prefix over 80 chars should be rejected');
+  }
+
+  @isTest
+  static void testSaveDuplicatePrefix() {
+    insert new Workflow_Schedule__c(
+      Name = 'FirstSched',
+      Workflow_Name__c = TEST_WF,
+      Cron_Expression__c = '0 2 * * *',
+      Correlation_Key_Prefix__c = 'SharedPrefix',
+      Enabled__c = true,
+      Overlap_Policy__c = 'Skip'
+    );
+
+    Boolean threw = false;
+    Test.startTest();
+    try {
+      WorkflowScheduleController.saveSchedule(
+        new Map<String, Object>{
+          'Name' => 'SecondSched',
+          'Workflow_Name__c' => TEST_WF,
+          'Cron_Expression__c' => '0 3 * * *',
+          'Correlation_Key_Prefix__c' => 'SharedPrefix'
+        }
+      );
+    } catch (AuraHandledException e) {
+      threw = true;
+    }
+    Test.stopTest();
+    System.assert(threw, 'Duplicate prefix should be rejected');
+  }
+
+  @isTest
+  static void testSetEnabledAbortsDedicatedJob() {
+    Workflow_Schedule__c sched = makeSchedule('CtrlDisableDed');
+    sched.Dedicated_Slot__c = true;
+    insert sched;
+
+    Test.startTest();
+    WorkflowScheduleController.registerDedicatedJob(sched.Id);
+    Integer armed = [
+      SELECT COUNT()
+      FROM CronTrigger
+      WHERE CronJobDetail.Name = 'RevenantSched_CtrlDisableDed'
+    ];
+    System.assertEquals(1, armed, 'Dedicated job should be armed');
+
+    WorkflowScheduleController.setEnabled(sched.Id, false);
+    Test.stopTest();
+
+    Integer afterDisable = [
+      SELECT COUNT()
+      FROM CronTrigger
+      WHERE CronJobDetail.Name = 'RevenantSched_CtrlDisableDed'
+    ];
+    System.assertEquals(0, afterDisable, 'Disabling a dedicated schedule should abort its CronTrigger');
+  }
+
+  @isTest
   static void testUnauthorized() {
     // Create a user with a minimal profile and NO Revenant permission sets.
     User u = buildMinimalUser();

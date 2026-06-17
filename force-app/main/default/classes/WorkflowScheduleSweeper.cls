@@ -8,6 +8,11 @@
  * fire instant ≤ now via WorkflowCronEvaluator. If Last_Fired_Window__c already
  * equals that instant the window has been handled; otherwise it is due.
  *
+ * The sweep is bulkified: overlap checks are resolved with a single query and all
+ * due starts go through the bulk WorkflowEngine.startOrGet(List) so the per-heartbeat
+ * SOQL/DML cost stays bounded regardless of how many schedules are due. Schedules are
+ * processed least-recently-fired first so none can starve behind the batch limit.
+ *
  * Overlap policies:
  *   Skip  — if the prior run for this schedule is still active, log Skipped and
  *            do not start a new instance. Still advances Last_Fired_Window__c.
@@ -22,12 +27,25 @@
  * before JSON deserialization. Static JSON passes through unchanged.
  */
 public inherited sharing class WorkflowScheduleSweeper {
-  // Max schedules processed per heartbeat to respect governor limits.
+  // Max schedules processed per heartbeat. The sweep is bulkified, but this bounds
+  // the up-front cron evaluation and keeps a single heartbeat's footprint small.
   @TestVisible
-  private static Integer SWEEP_BATCH_SIZE = 200;
+  private static Integer SWEEP_BATCH_SIZE = 50;
 
   private static final String LOG_TYPE = 'ScheduleFire';
   private static final String LEVEL_INFO = 'Info';
+
+  public class WorkflowScheduleException extends Exception {
+  }
+
+  // Internal holder for a schedule that is due this sweep.
+  private class DueItem {
+    Workflow_Schedule__c sched;
+    DateTime fireTime;
+    String prefix;
+    String corrKey;
+    String overlapPolicy;
+  }
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -37,6 +55,7 @@ public inherited sharing class WorkflowScheduleSweeper {
   public static void sweep() {
     DateTime now = DateTime.now();
 
+    // Least-recently-fired first so schedules beyond SWEEP_BATCH_SIZE cannot starve.
     List<Workflow_Schedule__c> schedules = [
       SELECT
         Id,
@@ -50,6 +69,7 @@ public inherited sharing class WorkflowScheduleSweeper {
       FROM Workflow_Schedule__c
       WHERE Enabled__c = TRUE AND Dedicated_Slot__c = FALSE
       WITH SYSTEM_MODE
+      ORDER BY Last_Fired_Window__c ASC NULLS FIRST, Name ASC
       LIMIT :SWEEP_BATCH_SIZE
     ];
 
@@ -60,16 +80,111 @@ public inherited sharing class WorkflowScheduleSweeper {
     List<Workflow_Schedule__c> toUpdate = new List<Workflow_Schedule__c>();
     List<Workflow_Log__c> logsToUpsert = new List<Workflow_Log__c>();
 
+    // Phase 1: determine which schedules are due (cheap, no per-row SOQL/DML).
+    List<DueItem> dueItems = new List<DueItem>();
     for (Workflow_Schedule__c sched : schedules) {
       try {
-        processSingleSchedule(sched, now, toUpdate, logsToUpsert);
+        DateTime fireTime = WorkflowCronEvaluator.previousFireTime(
+          sched.Cron_Expression__c,
+          now
+        );
+        if (fireTime == null) {
+          continue; // invalid cron or no match in lookback window
+        }
+        if (
+          sched.Last_Fired_Window__c != null &&
+          sched.Last_Fired_Window__c == fireTime
+        ) {
+          continue; // window already handled
+        }
+        DueItem item = new DueItem();
+        item.sched = sched;
+        item.fireTime = fireTime;
+        item.prefix = effectivePrefix(sched);
+        item.corrKey = item.prefix + '_' + fireTime.formatGmt('yyyyMMddHHmm');
+        item.overlapPolicy = String.isNotBlank(sched.Overlap_Policy__c)
+          ? sched.Overlap_Policy__c
+          : 'Skip';
+        dueItems.add(item);
       } catch (Exception ex) {
         System.debug(
           LoggingLevel.ERROR,
-          'WorkflowScheduleSweeper: error processing schedule "' +
+          'WorkflowScheduleSweeper: error evaluating "' +
             sched.Name +
             '": ' +
             ex.getMessage()
+        );
+      }
+    }
+
+    if (dueItems.isEmpty()) {
+      return;
+    }
+
+    // Phase 2: bulk-resolve which Skip schedules are blocked by an active prior run.
+    Set<String> blockedPrefixes = computeBlockedPrefixes(dueItems);
+
+    // Phase 3: build a single bulk start for everything that should start.
+    List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
+    List<DueItem> starting = new List<DueItem>();
+    for (DueItem item : dueItems) {
+      if (item.overlapPolicy == 'Skip' && blockedPrefixes.contains(item.prefix)) {
+        logsToUpsert.add(
+          buildLog(
+            item.sched,
+            item.corrKey,
+            item.fireTime,
+            'Skipped',
+            null,
+            'Prior run still active'
+          )
+        );
+        toUpdate.add(
+          new Workflow_Schedule__c(
+            Id = item.sched.Id,
+            Last_Fired_Window__c = item.fireTime,
+            Last_Outcome__c = 'Skipped'
+          )
+        );
+      } else {
+        requests.add(
+          new WorkflowEngine.StartRequest(
+            item.sched.Workflow_Name__c,
+            item.corrKey,
+            resolveInput(item.sched, item.fireTime)
+          )
+        );
+        starting.add(item);
+      }
+    }
+
+    if (!requests.isEmpty()) {
+      List<WorkflowEngine.StartResult> results = WorkflowEngine.startOrGet(
+        requests
+      );
+      for (Integer i = 0; i < starting.size(); i++) {
+        DueItem item = starting[i];
+        WorkflowEngine.StartResult sr = results[i];
+        Boolean isNew = sr != null && sr.isNew;
+        String outcome = isNew ? 'Started' : 'Deduped';
+        if (isNew) {
+          logsToUpsert.add(
+            buildLog(
+              item.sched,
+              item.corrKey,
+              item.fireTime,
+              outcome,
+              sr.instanceId,
+              null
+            )
+          );
+        }
+        toUpdate.add(
+          new Workflow_Schedule__c(
+            Id = item.sched.Id,
+            Last_Fired_Window__c = item.fireTime,
+            Last_Outcome__c = outcome
+          )
         );
       }
     }
@@ -84,12 +199,15 @@ public inherited sharing class WorkflowScheduleSweeper {
 
   /**
    * Arms a dedicated CronTrigger (1 scheduled-job slot) for a Dedicated_Slot__c
-   * schedule. The schedule is excluded from the 0-slot sweep while Dedicated_Slot__c
-   * is true. Use this for sub-cadence precision.
+   * schedule via the schedule-aware WorkflowScheduleJob, which re-reads the record
+   * at fire time (so disabling the schedule stops it) and resolves input tokens.
+   *
+   * NOTE: System.schedule interprets the cron in the ARMING USER'S time zone, unlike
+   * the UTC 0-slot path — see docs/recurring-schedules.md.
    */
   public static void registerDedicatedJob(Id scheduleId) {
     Workflow_Schedule__c sched = [
-      SELECT Id, Name, Workflow_Name__c, Cron_Expression__c, Correlation_Key_Prefix__c, Input_Json__c
+      SELECT Id, Name, Cron_Expression__c
       FROM Workflow_Schedule__c
       WHERE Id = :scheduleId
       WITH SYSTEM_MODE
@@ -98,12 +216,7 @@ public inherited sharing class WorkflowScheduleSweeper {
 
     String sfCron = toSalesforceCron(sched.Cron_Expression__c);
     String jobName = 'RevenantSched_' + sched.Name;
-    WorkflowScheduler scheduler = new WorkflowScheduler(
-      sched.Workflow_Name__c,
-      sched.Correlation_Key_Prefix__c,
-      sched.Input_Json__c
-    );
-    System.schedule(jobName, sfCron, scheduler);
+    System.schedule(jobName, sfCron, new WorkflowScheduleJob(sched.Id));
   }
 
   /**
@@ -121,10 +234,10 @@ public inherited sharing class WorkflowScheduleSweeper {
     ];
 
     DateTime now = DateTime.now();
-    String prefix = String.isNotBlank(sched.Correlation_Key_Prefix__c)
-      ? sched.Correlation_Key_Prefix__c
-      : sched.Name;
-    String corrKey = prefix + '_manual_' + now.formatGmt('yyyyMMddHHmmss');
+    String corrKey =
+      effectivePrefix(sched) +
+      '_manual_' +
+      now.formatGmt('yyyyMMddHHmmss');
 
     WorkflowEngine.StartResult sr = WorkflowEngine.startOrGet(
       sched.Workflow_Name__c,
@@ -132,7 +245,14 @@ public inherited sharing class WorkflowScheduleSweeper {
       resolveInput(sched, now)
     );
 
-    Workflow_Log__c log = buildLog(sched, corrKey, now, 'Started', sr.instanceId, 'Manual run');
+    Workflow_Log__c log = buildLog(
+      sched,
+      corrKey,
+      now,
+      'Started',
+      sr.instanceId,
+      'Manual run'
+    );
     log.Log_Type__c = 'ScheduleManualFire';
     upsert as system log Fire_Key__c;
 
@@ -163,96 +283,93 @@ public inherited sharing class WorkflowScheduleSweeper {
     }
   }
 
-  // ── Private helpers ────────────────────────────────────────────────────────
+  // ── Shared helpers (also used by WorkflowScheduleJob) ───────────────────────
 
-  private static void processSingleSchedule(
-    Workflow_Schedule__c sched,
-    DateTime now,
-    List<Workflow_Schedule__c> toUpdate,
-    List<Workflow_Log__c> logsToUpsert
-  ) {
-    DateTime fireTime = WorkflowCronEvaluator.previousFireTime(sched.Cron_Expression__c, now);
-    if (fireTime == null) {
-      return; // Invalid cron or no match in lookback window.
-    }
-
-    // Check if this window has already been handled.
-    if (sched.Last_Fired_Window__c != null && sched.Last_Fired_Window__c == fireTime) {
-      return; // Not due.
-    }
-
-    String prefix = String.isNotBlank(sched.Correlation_Key_Prefix__c)
+  public static String effectivePrefix(Workflow_Schedule__c sched) {
+    return String.isNotBlank(sched.Correlation_Key_Prefix__c)
       ? sched.Correlation_Key_Prefix__c
       : sched.Name;
-    String corrKey = prefix + '_' + fireTime.formatGmt('yyyyMMddHHmm');
-    String overlapPolicy = String.isNotBlank(sched.Overlap_Policy__c)
-      ? sched.Overlap_Policy__c
-      : 'Skip';
-
-    String outcome;
-    Id instanceId;
-
-    if (overlapPolicy == 'Skip') {
-      // Check for any currently active instance with this schedule's prefix.
-      List<Workflow_Instance__c> activeRuns = [
-        SELECT Id, Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE
-          Correlation_Key__c LIKE :prefix + '_%'
-          AND Active_Correlation_Key__c != NULL
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-
-      if (!activeRuns.isEmpty() && activeRuns[0].Correlation_Key__c != corrKey) {
-        // A different window's instance is still active → skip this window.
-        outcome = 'Skipped';
-        logsToUpsert.add(buildLog(sched, corrKey, fireTime, outcome, null, 'Prior run still active'));
-      } else {
-        // No conflicting active run; start (or dedup to existing current window).
-        WorkflowEngine.StartResult sr = WorkflowEngine.startOrGet(
-          sched.Workflow_Name__c,
-          corrKey,
-          resolveInput(sched, fireTime)
-        );
-        instanceId = sr.instanceId;
-        outcome = sr.isNew ? 'Started' : 'Deduped';
-        if (sr.isNew) {
-          logsToUpsert.add(buildLog(sched, corrKey, fireTime, outcome, instanceId, null));
-        }
-      }
-    } else {
-      // Allow: start regardless of in-flight runs.
-      WorkflowEngine.StartResult sr = WorkflowEngine.startOrGet(
-        sched.Workflow_Name__c,
-        corrKey,
-        resolveInput(sched, fireTime)
-      );
-      instanceId = sr.instanceId;
-      outcome = sr.isNew ? 'Started' : 'Deduped';
-      if (sr.isNew) {
-        logsToUpsert.add(buildLog(sched, corrKey, fireTime, outcome, instanceId, null));
-      }
-    }
-
-    // Advance the window marker so this window isn't retried.
-    toUpdate.add(
-      new Workflow_Schedule__c(
-        Id = sched.Id,
-        Last_Fired_Window__c = fireTime,
-        Last_Outcome__c = outcome
-      )
-    );
   }
 
-  private static Object resolveInput(Workflow_Schedule__c sched, DateTime fireTime) {
+  /**
+   * Resolves a schedule's Input_Json__c into a workflow input, substituting the
+   * {{fireTime}} and {{scheduleName}} tokens. Returns null when no input is set.
+   * Shared by the 0-slot sweep, run-now, and the dedicated WorkflowScheduleJob so
+   * the three paths cannot drift.
+   */
+  public static Object resolveInput(Workflow_Schedule__c sched, DateTime fireTime) {
     if (String.isBlank(sched.Input_Json__c)) {
       return null;
     }
-    String json = sched.Input_Json__c
-      .replace('{{fireTime}}', String.valueOf(fireTime))
+    String json = sched.Input_Json__c.replace(
+        '{{fireTime}}',
+        String.valueOf(fireTime)
+      )
       .replace('{{scheduleName}}', sched.Name);
     return JSON.deserializeUntyped(json);
+  }
+
+  // ── Private helpers ────────────────────────────────────────────────────────
+
+  /**
+   * For all Skip-policy due items, returns the set of prefixes that currently have
+   * an ACTIVE instance from a DIFFERENT window (i.e. a prior run still in flight).
+   *
+   * Uses a single dynamic query (coarse LIKE per prefix) and then an EXACT
+   * `startsWith(prefix + '_')` filter in Apex, so an unrelated key such as
+   * "JobManual_..." can never falsely block the "Job" schedule, and admin-entered
+   * `%`/`_` wildcards in a prefix cannot widen the match.
+   */
+  private static Set<String> computeBlockedPrefixes(List<DueItem> dueItems) {
+    Map<String, DueItem> skipByPrefix = new Map<String, DueItem>();
+    for (DueItem item : dueItems) {
+      if (item.overlapPolicy == 'Skip') {
+        skipByPrefix.put(item.prefix, item);
+      }
+    }
+
+    Set<String> blocked = new Set<String>();
+    if (skipByPrefix.isEmpty()) {
+      return blocked;
+    }
+
+    Map<String, Object> binds = new Map<String, Object>();
+    List<String> ors = new List<String>();
+    Integer i = 0;
+    for (String prefix : skipByPrefix.keySet()) {
+      String key = 'p' + i;
+      // Coarse pre-filter only; the exact startsWith below guarantees correctness.
+      binds.put(key, prefix + '_%');
+      ors.add('Correlation_Key__c LIKE :' + key);
+      i++;
+    }
+
+    String soql =
+      'SELECT Correlation_Key__c FROM Workflow_Instance__c ' +
+      'WHERE Active_Correlation_Key__c != null AND (' +
+      String.join(ors, ' OR ') +
+      ')';
+
+    List<Workflow_Instance__c> active = Database.queryWithBinds(
+      soql,
+      binds,
+      AccessLevel.SYSTEM_MODE
+    );
+
+    for (Workflow_Instance__c inst : active) {
+      if (inst.Correlation_Key__c == null) {
+        continue;
+      }
+      for (DueItem item : skipByPrefix.values()) {
+        if (
+          inst.Correlation_Key__c.startsWith(item.prefix + '_') &&
+          inst.Correlation_Key__c != item.corrKey
+        ) {
+          blocked.add(item.prefix);
+        }
+      }
+    }
+    return blocked;
   }
 
   private static Workflow_Log__c buildLog(
@@ -280,25 +397,88 @@ public inherited sharing class WorkflowScheduleSweeper {
   /**
    * Converts a 5-field cron (min hour dom month dow) to the 7-field Salesforce
    * format required by System.schedule: seconds minutes hours dom month dow year.
-   * Seconds default to 0, year defaults to *.
    *
-   * Salesforce requires exactly one of dom/dow to be '?'. Rules applied:
-   *   - dom is '*' and dow is '*'      → use ? for dom (fire every day)
-   *   - dom is specific, dow is '*'    → use ? for dow (dom takes precedence)
-   *   - dom is '*', dow is specific    → use ? for dom (dow takes precedence)
-   *   - both specific (OR semantics)   → dom takes precedence, dow replaced with ?
+   * Two Salesforce-specific translations are applied:
+   *   - Day-of-week is remapped from this engine's 0–6 (0=Sun) to Salesforce's
+   *     1–7 (1=Sun…7=Sat), preserving lists/ranges/steps.
+   *   - Salesforce requires exactly one of dom/dow to be '?'. Because Salesforce
+   *     cron has no DOM-OR-DOW semantics, a cron that restricts BOTH is rejected
+   *     for dedicated mode (the 0-slot evaluator still supports it).
    */
   @TestVisible
   static String toSalesforceCron(String fiveFieldCron) {
     List<String> parts = fiveFieldCron.trim().split('\\s+');
-    String sfDom = parts[2];
-    String sfDow = parts[4];
-    if (sfDom == '*') {
-      sfDom = '?'; // Defer to dow (or wildcard if dow is * too).
-    } else {
-      sfDow = '?'; // dom is specific; don't also restrict dow.
+    String minute = parts[0];
+    String hour = parts[1];
+    String dom = parts[2];
+    String month = parts[3];
+    String dow = parts[4];
+
+    Boolean domRestricted = dom != '*';
+    Boolean dowRestricted = dow != '*';
+
+    if (domRestricted && dowRestricted) {
+      throw new WorkflowScheduleException(
+        'Dedicated-slot mode cannot schedule a cron that restricts BOTH day-of-month ' +
+          'and day-of-week (Salesforce cron has no OR semantics). Use 0-slot mode ' +
+          'for "' +
+          fiveFieldCron +
+          '".'
+      );
     }
-    // seconds minutes hours dom month dow year
-    return '0 ' + parts[0] + ' ' + parts[1] + ' ' + sfDom + ' ' + parts[3] + ' ' + sfDow + ' *';
+
+    String sfDom;
+    String sfDow;
+    if (dowRestricted) {
+      sfDom = '?';
+      sfDow = mapDowField(dow);
+    } else {
+      sfDom = dom; // '*' or a specific day-of-month
+      sfDow = '?';
+    }
+
+    return '0 ' +
+      minute +
+      ' ' +
+      hour +
+      ' ' +
+      sfDom +
+      ' ' +
+      month +
+      ' ' +
+      sfDow +
+      ' *';
+  }
+
+  // Remaps a (restricted) day-of-week field from 0–6 (0=Sun) to Salesforce 1–7.
+  private static String mapDowField(String dowField) {
+    List<String> outParts = new List<String>();
+    for (String part : dowField.split(',')) {
+      outParts.add(mapDowPart(part.trim()));
+    }
+    return String.join(outParts, ',');
+  }
+
+  private static String mapDowPart(String part) {
+    if (part.contains('/')) {
+      List<String> sp = part.split('/');
+      return mapDowRange(sp[0]) + '/' + sp[1];
+    }
+    return mapDowRange(part);
+  }
+
+  private static String mapDowRange(String token) {
+    if (token == '*') {
+      return '*';
+    }
+    if (token.contains('-')) {
+      List<String> b = token.split('-');
+      return shiftDow(b[0]) + '-' + shiftDow(b[1]);
+    }
+    return shiftDow(token);
+  }
+
+  private static String shiftDow(String value) {
+    return String.valueOf(Integer.valueOf(value.trim()) + 1);
   }
 }

@@ -388,4 +388,150 @@ public class WorkflowScheduleSweeperTest {
       'Token {{scheduleName}} should have been substituted'
     );
   }
+
+  // ── Fairness: least-recently-fired first, no starvation past the batch limit ─
+
+  @isTest
+  static void testNoStarvationOrdering() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowScheduleSweeper.SWEEP_BATCH_SIZE = 2;
+
+    Workflow_Schedule__c a = makeSchedule('StarveA', EVERY_MINUTE_CRON, true, 'Allow');
+    Workflow_Schedule__c b = makeSchedule('StarveB', EVERY_MINUTE_CRON, true, 'Allow');
+    Workflow_Schedule__c c = makeSchedule('StarveC', EVERY_MINUTE_CRON, true, 'Allow');
+    // A and B never fired (null window) → highest priority; C fired long ago.
+    c.Last_Fired_Window__c = DateTime.now().addHours(-2);
+    insert new List<Workflow_Schedule__c>{ a, b, c };
+
+    Test.startTest();
+    WorkflowScheduleSweeper.sweep();
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'StarveA_%'],
+      'Never-fired A should be processed first'
+    );
+    System.assertEquals(
+      1,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'StarveB_%'],
+      'Never-fired B should be processed first'
+    );
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'StarveC_%'],
+      'C is beyond the batch this sweep but will be picked next sweep (oldest window)'
+    );
+  }
+
+  // ── Overlap Skip must NOT false-positive on a wildcard-overlapping key ────
+
+  @isTest
+  static void testOverlapSkipNoFalsePositive() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Schedule__c sched = makeSchedule('Job', EVERY_MINUTE_CRON, true, 'Skip');
+    insert sched;
+
+    // Active instance for an UNRELATED prefix that the coarse "Job_%" LIKE matches
+    // (because "_" is a wildcard) but is not actually this schedule's prior run.
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = TEST_WF,
+      Correlation_Key__c = 'JobManual_197001010000',
+      Status__c = 'Running'
+    );
+
+    DateTime fireTime = WorkflowCronEvaluator.previousFireTime(EVERY_MINUTE_CRON, DateTime.now());
+    String currentKey = 'Job_' + fireTime.formatGmt('yyyyMMddHHmm');
+
+    Test.startTest();
+    WorkflowScheduleSweeper.sweep();
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c = :currentKey],
+      'Unrelated "JobManual" instance must not skip the "Job" schedule'
+    );
+  }
+
+  // ── toSalesforceCron: DOW remap + DOM/DOW rejection ───────────────────────
+
+  @isTest
+  static void testToSalesforceCron_dowRemap() {
+    System.assertEquals(
+      '0 0 9 ? * 2 *',
+      WorkflowScheduleSweeper.toSalesforceCron('0 9 * * 1'),
+      'Monday (engine 1) should map to Salesforce 2'
+    );
+    System.assertEquals(
+      '0 0 9 ? * 1 *',
+      WorkflowScheduleSweeper.toSalesforceCron('0 9 * * 0'),
+      'Sunday (engine 0) should map to Salesforce 1'
+    );
+    System.assertEquals(
+      '0 0 9 ? * 2-6 *',
+      WorkflowScheduleSweeper.toSalesforceCron('0 9 * * 1-5'),
+      'Weekday range should remap each bound'
+    );
+    System.assertEquals(
+      '0 0 2 * * ? *',
+      WorkflowScheduleSweeper.toSalesforceCron('0 2 * * *'),
+      'Daily uses ? for day-of-week'
+    );
+    System.assertEquals(
+      '0 0 0 1 * ? *',
+      WorkflowScheduleSweeper.toSalesforceCron('0 0 1 * *'),
+      'Day-of-month uses ? for day-of-week'
+    );
+  }
+
+  @isTest
+  static void testToSalesforceCron_rejectsDomAndDow() {
+    Boolean threw = false;
+    try {
+      WorkflowScheduleSweeper.toSalesforceCron('0 9 1 * 1');
+    } catch (WorkflowScheduleSweeper.WorkflowScheduleException e) {
+      threw = true;
+    }
+    System.assert(threw, 'Restricting both DOM and DOW must be rejected for dedicated mode');
+  }
+
+  // ── WorkflowScheduleJob: enabled re-check + token resolution ──────────────
+
+  @isTest
+  static void testDedicatedJobFires() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Schedule__c sched = makeSchedule('DedJobOn', '0 2 * * *', true, 'Allow');
+    sched.Dedicated_Slot__c = true;
+    insert sched;
+
+    Test.startTest();
+    new WorkflowScheduleJob(sched.Id).execute(null);
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'DedJobOn_%'],
+      'Enabled dedicated job should start an instance'
+    );
+  }
+
+  @isTest
+  static void testDedicatedJobNoopWhenDisabled() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Schedule__c sched = makeSchedule('DedJobOff', '0 2 * * *', false, 'Allow');
+    sched.Dedicated_Slot__c = true;
+    insert sched;
+
+    Test.startTest();
+    new WorkflowScheduleJob(sched.Id).execute(null);
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'DedJobOff_%'],
+      'Disabled dedicated job must be a no-op even if its CronTrigger fires'
+    );
+  }
 }

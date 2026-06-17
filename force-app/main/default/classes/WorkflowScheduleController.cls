@@ -229,14 +229,57 @@ public with sharing class WorkflowScheduleController {
       }
     }
 
-    Workflow_Schedule__c sched = new Workflow_Schedule__c();
+    String prefix = (String) fields.get('Correlation_Key_Prefix__c');
+    if (String.isBlank(prefix)) {
+      throwAura('Correlation Key Prefix is required.');
+    }
+    // 80-char cap keeps the generated key (prefix + "_manual_" + 14-digit stamp)
+    // within WorkflowEngine's 200-character correlation-key limit.
+    if (prefix.length() > 80) {
+      throwAura('Correlation Key Prefix must be 80 characters or fewer.');
+    }
+
+    Id existingId = null;
     if (fields.get('Id') != null && String.isNotBlank((String) fields.get('Id'))) {
-      sched.Id = (Id) fields.get('Id');
+      existingId = (Id) fields.get('Id');
+    }
+
+    // Enforce prefix uniqueness with a friendly message (the field is also unique
+    // at the database level as a backstop).
+    List<Workflow_Schedule__c> dupes;
+    if (existingId == null) {
+      dupes = [
+        SELECT Id
+        FROM Workflow_Schedule__c
+        WHERE Correlation_Key_Prefix__c = :prefix
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+    } else {
+      dupes = [
+        SELECT Id
+        FROM Workflow_Schedule__c
+        WHERE Correlation_Key_Prefix__c = :prefix AND Id != :existingId
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+    }
+    if (!dupes.isEmpty()) {
+      throwAura(
+        'Another schedule already uses the correlation key prefix "' +
+          prefix +
+          '". Prefixes must be unique.'
+      );
+    }
+
+    Workflow_Schedule__c sched = new Workflow_Schedule__c();
+    if (existingId != null) {
+      sched.Id = existingId;
     }
     sched.Name = (String) fields.get('Name');
     sched.Workflow_Name__c = (String) fields.get('Workflow_Name__c');
     sched.Cron_Expression__c = cron;
-    sched.Correlation_Key_Prefix__c = (String) fields.get('Correlation_Key_Prefix__c');
+    sched.Correlation_Key_Prefix__c = prefix;
     sched.Input_Json__c = inputJson;
     sched.Enabled__c = toBool(fields.get('Enabled__c'));
     sched.Overlap_Policy__c = (String) fields.get('Overlap_Policy__c');
@@ -273,7 +316,7 @@ public with sharing class WorkflowScheduleController {
   public static void setEnabled(Id scheduleId, Boolean enabled) {
     checkAuthorization();
     Workflow_Schedule__c sched = [
-      SELECT Id, Enabled__c
+      SELECT Id, Enabled__c, Dedicated_Slot__c
       FROM Workflow_Schedule__c
       WHERE Id = :scheduleId
       WITH USER_MODE
@@ -281,6 +324,20 @@ public with sharing class WorkflowScheduleController {
     ];
     sched.Enabled__c = enabled;
     update as user sched;
+
+    // Disabling a dedicated schedule must also tear down its CronTrigger so it
+    // stops firing immediately (the job re-checks Enabled__c too, but this avoids
+    // a lingering scheduled job entirely).
+    if (!enabled && sched.Dedicated_Slot__c) {
+      try {
+        WorkflowScheduleSweeper.unregisterDedicatedJob(scheduleId);
+      } catch (Exception e) {
+        System.debug(
+          LoggingLevel.WARN,
+          'setEnabled: failed to abort dedicated job: ' + e.getMessage()
+        );
+      }
+    }
   }
 
   @AuraEnabled

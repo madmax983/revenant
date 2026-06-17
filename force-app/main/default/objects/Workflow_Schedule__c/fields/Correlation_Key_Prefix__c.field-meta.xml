@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Correlation_Key_Prefix__c</fullName>
-    <description>Prefix for the correlation key of each fired workflow instance. The sweeper appends the fire-window timestamp: prefix_yyyyMMddHHmm. Must be unique across schedules.</description>
+    <caseSensitive>false</caseSensitive>
+    <description>Unique prefix for the correlation key of each fired workflow instance. The sweeper appends the fire-window timestamp: prefix_yyyyMMddHHmm. Capped at 80 characters to leave room for the generated suffix within the 200-character correlation-key limit.</description>
     <externalId>false</externalId>
     <label>Correlation Key Prefix</label>
-    <length>200</length>
+    <length>80</length>
     <required>true</required>
     <trackTrending>false</trackTrending>
     <type>Text</type>
-    <unique>false</unique>
+    <unique>true</unique>
 </CustomField>
