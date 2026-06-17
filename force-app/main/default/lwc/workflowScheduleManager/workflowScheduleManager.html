@@ -1,0 +1,306 @@
+<template>
+    <div class="slds-card slds-p-around_medium schedule-container">
+        <!-- Header -->
+        <div
+            class="slds-grid slds-grid_align-spread slds-m-bottom_medium slds-grid_vertical-align-center"
+        >
+            <div>
+                <h1 class="slds-text-heading_large slds-m-bottom_xx-small font-outfit">
+                    Workflow Schedules
+                </h1>
+                <p class="slds-text-color_weak">
+                    Declarative recurring workflows — {enabledCount} enabled,
+                    {dedicatedCount} dedicated-slot
+                </p>
+            </div>
+            <div>
+                <lightning-button
+                    label="New Schedule"
+                    icon-name="utility:add"
+                    variant="brand"
+                    onclick={handleNew}
+                    class="brand-button"
+                >
+                </lightning-button>
+                <lightning-button-icon
+                    icon-name="utility:refresh"
+                    variant="border-filled"
+                    alternative-text="Refresh"
+                    onclick={handleRefresh}
+                    class="slds-m-left_small"
+                >
+                </lightning-button-icon>
+            </div>
+        </div>
+
+        <!-- List -->
+        <template if:true={hasSchedules}>
+            <div class="panel-card">
+                <lightning-datatable
+                    key-field="Id"
+                    data={schedules}
+                    columns={columns}
+                    hide-checkbox-column
+                    onrowaction={handleRowAction}
+                >
+                </lightning-datatable>
+            </div>
+        </template>
+        <template if:false={hasSchedules}>
+            <div class="slds-align_absolute-center slds-p-vertical_large slds-text-color_weak">
+                No schedules yet. Click "New Schedule" to create one.
+            </div>
+        </template>
+    </div>
+
+    <!-- Editor Modal -->
+    <template if:true={editorOpen}>
+        <section role="dialog" tabindex="-1" class="slds-modal slds-fade-in-open">
+            <div class="slds-modal__container">
+                <header class="slds-modal__header">
+                    <button
+                        class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse"
+                        title="Close"
+                        onclick={closeEditor}
+                    >
+                        <lightning-icon
+                            icon-name="utility:close"
+                            alternative-text="close"
+                            size="small"
+                        ></lightning-icon>
+                    </button>
+                    <h2 class="slds-modal__title slds-hyphenate font-outfit">
+                        <template if:false={form.Id}>New Schedule</template>
+                        <template if:true={form.Id}>Edit Schedule</template>
+                    </h2>
+                </header>
+                <div class="slds-modal__content slds-p-around_medium">
+                    <lightning-input
+                        label="Schedule Name"
+                        data-field="Name"
+                        value={form.Name}
+                        onchange={handleFormChange}
+                        required
+                    ></lightning-input>
+
+                    <lightning-combobox
+                        label="Workflow Definition"
+                        data-field="Workflow_Name__c"
+                        value={form.Workflow_Name__c}
+                        options={definitionOptions}
+                        onchange={handleFormChange}
+                        placeholder="Select or type a class name"
+                        required
+                        class="slds-m-top_small"
+                    ></lightning-combobox>
+
+                    <lightning-input
+                        label="Cron Expression (min hour dom month dow)"
+                        data-field="Cron_Expression__c"
+                        value={form.Cron_Expression__c}
+                        onchange={handleFormChange}
+                        placeholder="0 2 * * *"
+                        required
+                        class="slds-m-top_small"
+                    ></lightning-input>
+                    <template if:true={cronValid}>
+                        <p class="slds-text-color_success slds-text-body_small slds-m-top_xx-small">
+                            ✓ Valid. Next run:
+                            <lightning-formatted-date-time
+                                value={cronPreview.nextFire}
+                                year="numeric"
+                                month="short"
+                                day="2-digit"
+                                hour="2-digit"
+                                minute="2-digit"
+                            ></lightning-formatted-date-time>
+                        </p>
+                    </template>
+                    <template if:true={cronInvalid}>
+                        <p class="slds-text-color_error slds-text-body_small slds-m-top_xx-small">
+                            ✗ Invalid cron expression.
+                        </p>
+                    </template>
+
+                    <lightning-input
+                        label="Correlation Key Prefix"
+                        data-field="Correlation_Key_Prefix__c"
+                        value={form.Correlation_Key_Prefix__c}
+                        onchange={handleFormChange}
+                        required
+                        class="slds-m-top_small"
+                    ></lightning-input>
+
+                    <lightning-combobox
+                        label="Overlap Policy"
+                        data-field="Overlap_Policy__c"
+                        value={form.Overlap_Policy__c}
+                        options={overlapOptions}
+                        onchange={handleFormChange}
+                        class="slds-m-top_small"
+                    ></lightning-combobox>
+
+                    <lightning-textarea
+                        label="Input JSON (optional)"
+                        data-field="Input_Json__c"
+                        value={form.Input_Json__c}
+                        onchange={handleFormChange}
+                        placeholder='{"key":"value"} — supports {{fireTime}} and {{scheduleName}}'
+                        class="slds-m-top_small"
+                    ></lightning-textarea>
+
+                    <div class="slds-grid slds-gutters slds-m-top_small">
+                        <div class="slds-col">
+                            <lightning-input
+                                type="checkbox"
+                                label="Enabled"
+                                data-field="Enabled__c"
+                                checked={form.Enabled__c}
+                                onchange={handleFormChange}
+                            ></lightning-input>
+                        </div>
+                        <div class="slds-col">
+                            <lightning-input
+                                type="checkbox"
+                                label="Dedicated Slot (opt out of 0-slot sweep)"
+                                data-field="Dedicated_Slot__c"
+                                checked={form.Dedicated_Slot__c}
+                                onchange={handleFormChange}
+                            ></lightning-input>
+                        </div>
+                    </div>
+                </div>
+                <footer class="slds-modal__footer">
+                    <lightning-button
+                        label="Cancel"
+                        onclick={closeEditor}
+                    ></lightning-button>
+                    <lightning-button
+                        label="Save"
+                        variant="brand"
+                        onclick={handleSave}
+                        disabled={saveDisabled}
+                        class="slds-m-left_x-small"
+                    ></lightning-button>
+                </footer>
+            </div>
+        </section>
+        <div class="slds-backdrop slds-backdrop_open"></div>
+    </template>
+
+    <!-- Delete Confirm Modal -->
+    <template if:true={deleteOpen}>
+        <section role="dialog" tabindex="-1" class="slds-modal slds-fade-in-open">
+            <div class="slds-modal__container">
+                <header class="slds-modal__header">
+                    <h2 class="slds-modal__title font-outfit">Delete Schedule</h2>
+                </header>
+                <div class="slds-modal__content slds-p-around_medium">
+                    <p>
+                        Delete schedule
+                        <strong>{deleteTarget.Name}</strong>? Any armed dedicated job
+                        will be aborted. This cannot be undone.
+                    </p>
+                </div>
+                <footer class="slds-modal__footer">
+                    <lightning-button
+                        label="Cancel"
+                        onclick={closeDelete}
+                    ></lightning-button>
+                    <lightning-button
+                        label="Delete"
+                        variant="destructive"
+                        onclick={confirmDelete}
+                        class="slds-m-left_x-small"
+                    ></lightning-button>
+                </footer>
+            </div>
+        </section>
+        <div class="slds-backdrop slds-backdrop_open"></div>
+    </template>
+
+    <!-- Logs Modal -->
+    <template if:true={logsOpen}>
+        <section role="dialog" tabindex="-1" class="slds-modal slds-fade-in-open">
+            <div class="slds-modal__container">
+                <header class="slds-modal__header">
+                    <button
+                        class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse"
+                        title="Close"
+                        onclick={closeLogs}
+                    >
+                        <lightning-icon
+                            icon-name="utility:close"
+                            alternative-text="close"
+                            size="small"
+                        ></lightning-icon>
+                    </button>
+                    <h2 class="slds-modal__title font-outfit">
+                        Fire Logs — {logsScheduleName}
+                    </h2>
+                </header>
+                <div class="slds-modal__content slds-p-around_medium logs-content">
+                    <template if:true={logsLoading}>
+                        <lightning-spinner
+                            alternative-text="Loading"
+                            size="small"
+                        ></lightning-spinner>
+                    </template>
+                    <template if:false={logsLoading}>
+                        <template if:true={hasLogs}>
+                            <table
+                                class="slds-table slds-table_cell-buffer slds-table_bordered"
+                            >
+                                <thead>
+                                    <tr class="slds-line-height_reset">
+                                        <th scope="col">Fire Time</th>
+                                        <th scope="col">Outcome</th>
+                                        <th scope="col">Correlation Key</th>
+                                        <th scope="col">Message</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template for:each={logs} for:item="log">
+                                        <tr key={log.Id}>
+                                            <td>
+                                                <lightning-formatted-date-time
+                                                    value={log.Fire_Time__c}
+                                                    year="numeric"
+                                                    month="short"
+                                                    day="2-digit"
+                                                    hour="2-digit"
+                                                    minute="2-digit"
+                                                ></lightning-formatted-date-time>
+                                            </td>
+                                            <td>
+                                                <span class={log.outcomeClass}
+                                                    >{log.Outcome__c}</span
+                                                >
+                                            </td>
+                                            <td>{log.Correlation_Key__c}</td>
+                                            <td>{log.Message__c}</td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </template>
+                        <template if:false={hasLogs}>
+                            <div
+                                class="slds-align_absolute-center slds-p-vertical_medium slds-text-color_weak"
+                            >
+                                No fire logs yet for this schedule.
+                            </div>
+                        </template>
+                    </template>
+                </div>
+                <footer class="slds-modal__footer">
+                    <lightning-button
+                        label="Close"
+                        onclick={closeLogs}
+                    ></lightning-button>
+                </footer>
+            </div>
+        </section>
+        <div class="slds-backdrop slds-backdrop_open"></div>
+    </template>
+</template>

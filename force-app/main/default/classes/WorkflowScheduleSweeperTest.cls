@@ -323,6 +323,35 @@ public class WorkflowScheduleSweeperTest {
     System.assertEquals(1, instances.size(), 'Heartbeat: schedule should fire through processWatchdogHeartbeat');
   }
 
+  // ── runNow: manual one-off fire independent of cron ──────────────────────
+
+  @isTest
+  static void testRunNow() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Schedule__c sched = makeSchedule(PREFIX + 'RN', '0 2 * * *', true, 'Allow');
+    insert sched;
+
+    Test.startTest();
+    Id instanceId = WorkflowScheduleSweeper.runNow(sched.Id);
+    Test.stopTest();
+
+    System.assertNotEquals(null, instanceId, 'runNow should return an instance Id');
+    List<Workflow_Instance__c> instances = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c LIKE :PREFIX + 'RN_manual_%'
+    ];
+    System.assertEquals(1, instances.size(), 'runNow should start exactly one manual instance');
+
+    List<Workflow_Log__c> logs = [
+      SELECT Id
+      FROM Workflow_Log__c
+      WHERE Schedule_Name__c = :(PREFIX + 'RN') AND Log_Type__c = 'ScheduleManualFire'
+    ];
+    System.assertEquals(1, logs.size(), 'runNow should write a ScheduleManualFire log');
+  }
+
   // ── Token substitution in Input_Json__c ──────────────────────────────────
 
   @isTest

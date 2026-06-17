@@ -19,12 +19,37 @@ For most operational schedules (hourly, nightly, weekly) the 0-slot mode is suff
 
 ## Creating a schedule (zero-to-running in < 5 minutes)
 
-1. In Setup → Custom Objects, create a new `Workflow Schedule` record.
-2. Fill in the required fields (see below).
-3. Check **Enabled**.
-4. Save. The schedule fires on the next watchdog heartbeat.
+The fastest path is the **Workflow Schedule Manager** UI (see below). You can also
+create a `Workflow Schedule` record directly in Setup → Object Manager. Either way:
+fill in the required fields, check **Enabled**, and save — the schedule fires on the
+next watchdog heartbeat. No Apex, no deployment.
 
-No Apex, no deployment.
+## Managing schedules from the UI
+
+The `workflowScheduleManager` Lightning Web Component is a full management surface for
+schedules. Add it to any Lightning app/home/record page in App Builder, or open it from
+the **Schedules** button in the Workflow Orchestrator Dashboard (it is embedded there).
+
+From the component you can:
+- **Create / edit / delete** schedules via a guided modal — pick the workflow from a
+  combobox of discovered `WorkflowDefinition` classes, enter a cron expression with a
+  **live "next run" preview and validity check**, set the overlap policy, and write an
+  optional input-JSON template.
+- **Enable / disable** a schedule inline.
+- **Run now** — fire a schedule immediately, independent of its cron cadence (uses a
+  distinct `<prefix>_manual_<timestamp>` correlation key).
+- **View fire logs** — the recent `Workflow_Log__c` rows for a schedule
+  (Started / Skipped / Deduped) with timestamps and correlation keys.
+- **Arm / abort a dedicated-slot job** for schedules flagged `Dedicated_Slot__c`.
+
+### Access
+
+The UI and its Apex controller are gated on the **`Workflow_Schedule_Admin`** custom
+permission, the **`Workflow_Admin`** custom permission, or Modify All Data. Two
+permission sets ship:
+- **`Revenant_Schedule_Admin`** — schedule-only access (manage schedules + read logs)
+  for admins who should not see full engine monitoring.
+- **`Revenant_Admin`** — full engine access, including schedules.
 
 ## Field reference (`Workflow_Schedule__c`)
 

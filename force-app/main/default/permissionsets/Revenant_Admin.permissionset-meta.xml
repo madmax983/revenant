@@ -4,6 +4,10 @@
         <enabled>true</enabled>
         <name>Workflow_Admin</name>
     </customPermissions>
+    <customPermissions>
+        <enabled>true</enabled>
+        <name>Workflow_Schedule_Admin</name>
+    </customPermissions>
     <description>Permissions for Revenant Workflow Engine administration and execution.</description>
 
     <!-- fieldPermissions for Workflow_Instance__c (excluding required/master-detail fields) -->
@@ -197,4 +201,123 @@
         <object>Rate_Limit_State__c</object>
         <viewAllRecords>true</viewAllRecords>
     </objectPermissions>
+
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>true</allowDelete>
+        <allowEdit>true</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords>
+        <object>Workflow_Schedule__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>true</allowDelete>
+        <allowEdit>true</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords>
+        <object>Workflow_Log__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <!-- Workflow_Schedule__c field permissions -->
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Workflow_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Cron_Expression__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Correlation_Key_Prefix__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Input_Json__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Enabled__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Overlap_Policy__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Dedicated_Slot__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Last_Fired_Window__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Last_Outcome__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <!-- Workflow_Log__c field permissions -->
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Log__c.Fire_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Log__c.Log_Type__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Log__c.Level__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Log__c.Outcome__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Log__c.Schedule_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Log__c.Workflow_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Log__c.Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Log__c.Fire_Time__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Log__c.Workflow_Instance__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Log__c.Message__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
 </PermissionSet>

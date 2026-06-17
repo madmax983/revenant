@@ -38,6 +38,9 @@ export default class WorkflowDashboard extends LightningElement {
   loadingDoctor = false;
   doctorData = { config: {} };
 
+  // Schedules view state (renders the standalone workflowScheduleManager component)
+  viewingSchedules = false;
+
   // Version Drain state
   viewingDrain = false;
   loadingDrain = false;
@@ -618,6 +621,17 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleCloseDrain() {
     this.viewingDrain = false;
+  }
+
+  handleOpenSchedules() {
+    this.viewingSchedules = true;
+    this.viewingDoctor = false;
+    this.viewingDrain = false;
+    this.selectedInstanceId = null;
+  }
+
+  handleCloseSchedules() {
+    this.viewingSchedules = false;
   }
 
   handleDrainWorkflowChange(event) {

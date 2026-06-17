@@ -949,6 +949,16 @@ public inherited sharing class WorkflowDashboardController {
   @AuraEnabled(cacheable=true)
   public static List<String> getDefinitions() {
     checkAuthorization();
+    return getDefinitionsUnchecked();
+  }
+
+  /**
+   * WorkflowDefinition discovery WITHOUT an authorization check. Callers MUST
+   * perform their own authorization first. Exists so sibling controllers (e.g.
+   * WorkflowScheduleController, gated on a different permission) can reuse the
+   * exact discovery logic without tripping this controller's Workflow_Admin gate.
+   */
+  public static List<String> getDefinitionsUnchecked() {
     // Primary strategy: scan Apex source so we can detect *inner-class* definitions
     // (reported as "Outer.Inner"), which the platform index cannot express. This is
     // governor-bounded by the proactive guards inside getDefinitionsFromSource().

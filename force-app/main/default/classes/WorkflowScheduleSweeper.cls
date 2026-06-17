@@ -107,6 +107,39 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
+   * Fires a schedule immediately, on demand, independent of its cron cadence.
+   * Uses a distinct manual correlation key so it never collides with a cron
+   * window. Records a Started log and returns the started instance Id.
+   */
+  public static Id runNow(Id scheduleId) {
+    Workflow_Schedule__c sched = [
+      SELECT Id, Name, Workflow_Name__c, Correlation_Key_Prefix__c, Input_Json__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :scheduleId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+
+    DateTime now = DateTime.now();
+    String prefix = String.isNotBlank(sched.Correlation_Key_Prefix__c)
+      ? sched.Correlation_Key_Prefix__c
+      : sched.Name;
+    String corrKey = prefix + '_manual_' + now.formatGmt('yyyyMMddHHmmss');
+
+    WorkflowEngine.StartResult sr = WorkflowEngine.startOrGet(
+      sched.Workflow_Name__c,
+      corrKey,
+      resolveInput(sched, now)
+    );
+
+    Workflow_Log__c log = buildLog(sched, corrKey, now, 'Started', sr.instanceId, 'Manual run');
+    log.Log_Type__c = 'ScheduleManualFire';
+    upsert as system log Fire_Key__c;
+
+    return sr.instanceId;
+  }
+
+  /**
    * Aborts the dedicated CronTrigger registered for this schedule.
    */
   public static void unregisterDedicatedJob(Id scheduleId) {

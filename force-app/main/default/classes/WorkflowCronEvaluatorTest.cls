@@ -240,4 +240,89 @@ public class WorkflowCronEvaluatorTest {
     DateTime expected = DateTime.newInstanceGmt(2026, 6, 17, 14, 37, 0);
     System.assertEquals(expected, result, 'Wildcard-all: previous fire = current minute');
   }
+
+  // ── isValidCron ─────────────────────────────────────────────────────────────
+
+  @isTest
+  static void testIsValidCron() {
+    System.assertEquals(true, WorkflowCronEvaluator.isValidCron('0 2 * * *'), 'Daily valid');
+    System.assertEquals(true, WorkflowCronEvaluator.isValidCron('*/15 9-17 * * 1-5'), 'Complex valid');
+    System.assertEquals(false, WorkflowCronEvaluator.isValidCron(null), 'Null invalid');
+    System.assertEquals(false, WorkflowCronEvaluator.isValidCron(''), 'Empty invalid');
+    System.assertEquals(false, WorkflowCronEvaluator.isValidCron('* * * *'), 'Wrong field count invalid');
+    System.assertEquals(false, WorkflowCronEvaluator.isValidCron('99 * * * *'), 'Out-of-range invalid');
+    System.assertEquals(false, WorkflowCronEvaluator.isValidCron('a b c d e'), 'Non-numeric invalid');
+  }
+
+  // ── nextFireTime ────────────────────────────────────────────────────────────
+
+  @isTest
+  static void testNextFire_hourly() {
+    // "0 * * * *" → next fire from 14:37 = 15:00.
+    DateTime result = WorkflowCronEvaluator.nextFireTime('0 * * * *', REF);
+    System.assertEquals(
+      DateTime.newInstanceGmt(2026, 6, 17, 15, 0, 0),
+      result,
+      'Hourly: next fire from :37 should be next hour :00'
+    );
+  }
+
+  @isTest
+  static void testNextFire_exactlyOnFire() {
+    // When now IS a fire minute, return it (next fire ≥ now).
+    DateTime onFire = DateTime.newInstanceGmt(2026, 6, 17, 15, 0, 0);
+    DateTime result = WorkflowCronEvaluator.nextFireTime('0 * * * *', onFire);
+    System.assertEquals(onFire, result, 'On a fire instant, next fire = now');
+  }
+
+  @isTest
+  static void testNextFire_every15() {
+    // "*/15 * * * *" → next fire from 14:37 = 14:45.
+    DateTime result = WorkflowCronEvaluator.nextFireTime('*/15 * * * *', REF);
+    System.assertEquals(
+      DateTime.newInstanceGmt(2026, 6, 17, 14, 45, 0),
+      result,
+      'Every-15: next fire from :37 should be :45'
+    );
+  }
+
+  @isTest
+  static void testNextFire_dailyRollToTomorrow() {
+    // "0 2 * * *" at 14:37 → today's 02:00 already passed → tomorrow 02:00.
+    DateTime result = WorkflowCronEvaluator.nextFireTime('0 2 * * *', REF);
+    System.assertEquals(
+      DateTime.newInstanceGmt(2026, 6, 18, 2, 0, 0),
+      result,
+      'Daily 02:00: next fire from 14:37 should be tomorrow 02:00'
+    );
+  }
+
+  @isTest
+  static void testNextFire_dayOfWeek() {
+    // "0 9 * * 1" (Mondays 09:00). Jun 17 is Wed → next Monday Jun 22.
+    DateTime result = WorkflowCronEvaluator.nextFireTime('0 9 * * 1', REF);
+    System.assertEquals(
+      DateTime.newInstanceGmt(2026, 6, 22, 9, 0, 0),
+      result,
+      'Monday 09:00: next from Wed Jun 17 should be Mon Jun 22'
+    );
+  }
+
+  @isTest
+  static void testNextFire_invalidNull() {
+    System.assertEquals(null, WorkflowCronEvaluator.nextFireTime('99 * * * *', REF), 'Invalid → null');
+    System.assertEquals(null, WorkflowCronEvaluator.nextFireTime('* * * * *', null), 'Null now → null');
+    System.assertEquals(null, WorkflowCronEvaluator.nextFireTime('0 0 31 2 *', REF), 'Feb 31 never → null');
+  }
+
+  @isTest
+  static void testNextFire_monthRollover() {
+    // "0 0 1 * *" first of month midnight. From Jun 17 → Jul 1 00:00.
+    DateTime result = WorkflowCronEvaluator.nextFireTime('0 0 1 * *', REF);
+    System.assertEquals(
+      DateTime.newInstanceGmt(2026, 7, 1, 0, 0, 0),
+      result,
+      'First-of-month: next from Jun 17 should be Jul 1'
+    );
+  }
 }
