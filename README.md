@@ -201,7 +201,63 @@ Because claiming writes uncommitted DML, a parallel-branch step that makes an **
 2. A **callout step** that issues the HTTP callout from the payload it was handed. With no signal claim in its transaction, this is an ordinary callout the engine already makes safe (continuation + deferred timeout), so its only commit concern is the callout itself.
 
 This decomposition removes the claim-vs-callout conflict entirely: the signal is consumed exactly once in step 1, and the callout in step 2 carries no uncommitted signal DML. Reach for the inline `CalloutStep`+signal mode only when the callout must react to the signal *in place* — e.g. a compensating callout fired in response to a signal during unwind, where the wait and the callout cannot be pre-split — and make that callout idempotent.
-### 5. Flow Interoperability (Start, Signal, Read)
+
+### 5. Wait for a Human Approval
+
+The suspend→signal→resume pattern combined with saga rollback on rejection is the most common enterprise durable-workflow shape — and the one that native Approval Processes cannot express, because they have no durable multi-step orchestration or compensating rollback. [`ApprovalWorkflowExample`](examples/main/default/classes/ApprovalWorkflowExample.cls) is the copyable reference. Three elements work together:
+
+**1. A compensatable forward step** — any step that implements `CompensatableStep` and does real work before the approval gate. The engine pushes its name onto `Compensation_Stack__c` when it completes, so the work can be automatically rolled back if the workflow is later rejected.
+
+**2. The approval gate** — a `WorkflowStep` that reads the inbound decision signal from `StepContext` and surfaces the payload as its output, leaving routing to the DAG:
+
+```java
+public StepResult execute(StepContext ctx) {
+    StepContext.Signal decision = ctx.getSignal('Approve:PurchaseApproval');
+
+    if (!decision.isPresent()) {
+        // First run: nothing decided yet -- suspend until an approver signals the workflow.
+        // The second argument is an optional Custom Permission API name the dashboard
+        // requires an approver to hold; null leaves the gate unrestricted (pass e.g.
+        // 'Workflow_Admin' to restrict who may decide).
+        return StepResult.waitForApproval('PurchaseApproval', null);
+    }
+
+    // Resume: forward the decision payload; getNextStep() will route to approve or reject.
+    Map<String, Object> payload = (Map<String, Object>) JSON.deserializeUntyped(decision.payload);
+    return StepResult.complete(null, payload);
+}
+```
+
+**3. DAG-level approve/reject routing** in `getNextStep()`:
+
+```java
+public String getNextStep(String currentStepName, StepResult result) {
+    if (currentStepName == 'ApprovalWorkflowExample.RequestApprovalStep') {
+        Map<String, Object> decision =
+            (Map<String, Object>) JSON.deserializeUntyped(result.outputJson);
+        Boolean approved = (Boolean) decision.get('approved');
+        return approved
+            ? 'ApprovalWorkflowExample.PlaceOrderStep'
+            : 'ApprovalWorkflowExample.RejectStep';
+    }
+    ...
+}
+```
+
+**Delivering the decision.** An Admin or Flow Builder uses the **Signal Workflow** invocable action (`WorkflowSignalInvocableAction`) with:
+- *Correlation Key / Instance ID* — the workflow correlation key (or instance Id)
+- *Signal Name* — `Approve:PurchaseApproval` (i.e. `Approve:` + the approval key passed to `waitForApproval`)
+- *Payload JSON* — `{"approved":true}` or `{"approved":false,"reason":"..."}`
+
+From Apex the equivalent call is:
+
+```java
+WorkflowEngine.signal(correlationKey, 'Approve:PurchaseApproval', '{"approved":true}');
+```
+
+**Saga rollback on rejection.** The reject step throws a `WorkflowEngine.WorkflowException`. Because the prior `CompensatableStep` is on `Compensation_Stack__c`, the engine automatically calls its `compensate()` method in LIFO order — reading the original step output from `ctx.stepStateJson` to retrieve any resource identifiers — and the instance reaches `Compensated` when the rollback is done. No additional wiring is required: the stack is maintained by the engine whenever a `CompensatableStep` completes on the forward path.
+
+### 6. Flow Interoperability (Start, Signal, Read)
 
 Flow Builders interact with the engine through supported Invocable Actions (category **Revenant Workflows**) — no internal field API names required:
 
