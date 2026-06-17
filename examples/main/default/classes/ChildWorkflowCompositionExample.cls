@@ -39,9 +39,9 @@ public inherited sharing class ChildWorkflowCompositionExample
   }
 
   /**
-   * The launcher step decides the branch by embedding the next step name in its
-   * COMPLETE result, matching the ApprovalSignalWorkflowExample branching pattern.
-   * ApproveLoanStep and DeclineLoanStep are terminal — returning null ends the workflow.
+   * RequestCreditCheckStep decides the branch by embedding the next step name in
+   * its COMPLETE result (the ApprovalSignalWorkflowExample branching pattern).
+   * ApproveLoanStep and DeclineLoanStep are terminal — null ends the workflow.
    */
   public String getNextStep(String currentStepName, StepResult stepResult) {
     if (
@@ -58,21 +58,57 @@ public inherited sharing class ChildWorkflowCompositionExample
   // ---------------------------------------------------------------------------
 
   /**
-   * RED SKELETON: always issues startChild without checking the ChildCompleted
-   * signal.  This compiles and creates the child, but the parent never resumes —
-   * the green phase will add the ctx.getSignal() check and branch logic.
+   * Launcher + resume handler in one idempotent step.
+   *
+   * First run  — ChildCompleted signal is absent → issue startChild.  The engine
+   *              suspends the parent and starts the child's own Queueable chain.
+   *              This step will be re-run (not a new step) when the child completes.
+   *
+   * Resume run — ChildCompleted:<childKey> signal is present → read the child's
+   *              credit score from the payload, decide the branch, and return
+   *              COMPLETE.  The COMPLETE transition marks every Received signal of
+   *              the observed name Consumed, so at-least-once redelivered duplicates
+   *              cannot cause a second advance.
    */
   public class RequestCreditCheckStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       String childKey = 'CreditCheck_' + ctx.workflowInstanceId;
-      Map<String, Object> applicantData = (Map<String, Object>) JSON.deserializeUntyped(
-        ctx.workflowInputJson
+      StepContext.Signal done = ctx.getSignal('ChildCompleted:' + childKey);
+
+      if (!done.isPresent()) {
+        // First run: delegate credit scoring to the child workflow and suspend.
+        Map<String, Object> applicantData = (Map<String, Object>) JSON.deserializeUntyped(
+          ctx.workflowInputJson
+        );
+        return StepResult.startChild(
+          'ChildWorkflowCompositionExample.CreditCheckWorkflow',
+          childKey,
+          applicantData
+        );
+      }
+
+      // Resume: the child completed.  Its serialised output is the signal payload.
+      // For large child outputs the payload may be a blob reference; resolve it.
+      String childOutputJson = WorkflowEngine.resolvePayload(done.payload);
+      Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(
+        childOutputJson
       );
-      return StepResult.startChild(
-        'ChildWorkflowCompositionExample.CreditCheckWorkflow',
-        childKey,
-        applicantData
-      );
+      Integer creditScore = ((Decimal) childResult.get('creditScore')).intValue();
+      Boolean approved = creditScore >= APPROVE_THRESHOLD;
+
+      Map<String, Object> decision = new Map<String, Object>{
+        'approved' => approved,
+        'creditScore' => creditScore,
+        'applicant' => childResult.get('applicant')
+      };
+
+      String nextStep = approved
+        ? 'ChildWorkflowCompositionExample.ApproveLoanStep'
+        : 'ChildWorkflowCompositionExample.DeclineLoanStep';
+
+      // Returning COMPLETE lets the engine consume all same-name Received signals
+      // (engine-managed idempotency — no manual sig.Status__c='Consumed' needed).
+      return StepResult.complete(nextStep, decision);
     }
   }
 
