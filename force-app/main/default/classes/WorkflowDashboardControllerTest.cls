@@ -2199,4 +2199,170 @@ public class WorkflowDashboardControllerTest {
       }
     }
   }
+
+  // ── Unrouted-signal dashboard tests ───────────────────────────────────────
+
+  @isTest
+  static void testGetUnroutedSignals_returnsUnroutedRows() {
+    Workflow_Signal__c sig1 = new Workflow_Signal__c(
+      Correlation_Key__c = 'Unrouted-Key-1',
+      Signal_Name__c = 'PingA',
+      Status__c = 'Unrouted'
+    );
+    Workflow_Signal__c sig2 = new Workflow_Signal__c(
+      Correlation_Key__c = 'Unrouted-Key-2',
+      Signal_Name__c = 'PingB',
+      Status__c = 'Unrouted'
+    );
+    insert new List<Workflow_Signal__c>{ sig1, sig2 };
+
+    // A Received signal must NOT appear in the unrouted list.
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'Matched-Running-Key'
+    );
+    insert inst;
+    insert new Workflow_Signal__c(
+      Correlation_Key__c = 'Matched-Running-Key',
+      Workflow_Instance__c = inst.Id,
+      Signal_Name__c = 'MatchedSignal',
+      Status__c = 'Received'
+    );
+
+    Test.startTest();
+    List<Map<String, Object>> results = WorkflowDashboardController.getUnroutedSignals(
+      null, 10, 0, ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(2, results.size(), 'Only Unrouted signals must be returned');
+    Set<String> returnedKeys = new Set<String>();
+    for (Map<String, Object> row : results) {
+      returnedKeys.add((String) row.get('correlationKey'));
+      System.assertNotEquals(null, row.get('ageMinutes'), 'ageMinutes must be populated');
+      System.assertNotEquals(null, row.get('signalName'));
+    }
+    System.assert(returnedKeys.contains('Unrouted-Key-1'));
+    System.assert(returnedKeys.contains('Unrouted-Key-2'));
+  }
+
+  @isTest
+  static void testGetUnroutedSignalCount_returnsCount() {
+    insert new List<Workflow_Signal__c>{
+      new Workflow_Signal__c(
+        Correlation_Key__c = 'Count-Key-1',
+        Signal_Name__c = 'S1',
+        Status__c = 'Unrouted'
+      ),
+      new Workflow_Signal__c(
+        Correlation_Key__c = 'Count-Key-2',
+        Signal_Name__c = 'S2',
+        Status__c = 'Unrouted'
+      )
+    };
+
+    Test.startTest();
+    Map<String, Object> result = WorkflowDashboardController.getUnroutedSignalCount(null);
+    Test.stopTest();
+
+    System.assertEquals(2, (Integer) result.get('count'));
+    System.assertEquals(false, (Boolean) result.get('capped'));
+  }
+
+  @isTest
+  static void testRedeliverSignal_matchedReturnsTrue() {
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Correlation_Key__c = 'Dashboard-Redeliver-Key',
+      Signal_Name__c = 'Wake',
+      Status__c = 'Unrouted'
+    );
+    insert sig;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Dashboard-Redeliver-Key'
+    );
+    insert inst;
+
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Test.startTest();
+    Map<String, Object> result = WorkflowDashboardController.redeliverSignal(sig.Id);
+    Test.stopTest();
+
+    System.assertEquals(true, (Boolean) result.get('matched'), 'Re-deliver must return matched=true when instance found');
+
+    Workflow_Signal__c reloaded = [
+      SELECT Status__c FROM Workflow_Signal__c WHERE Id = :sig.Id
+    ];
+    System.assertEquals('Received', reloaded.Status__c, 'Re-delivered signal must transition to Received');
+  }
+
+  @isTest
+  static void testRedeliverSignal_noMatchReturnsFalse() {
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Correlation_Key__c = 'Dashboard-NoMatch-Key',
+      Signal_Name__c = 'Orphan',
+      Status__c = 'Unrouted'
+    );
+    insert sig;
+
+    Test.startTest();
+    Map<String, Object> result = WorkflowDashboardController.redeliverSignal(sig.Id);
+    Test.stopTest();
+
+    System.assertEquals(false, (Boolean) result.get('matched'), 'Re-deliver must return matched=false when no active instance');
+  }
+
+  @isTest
+  static void testUnroutedSignalMethods_authorizationEnforced() {
+    Profile p = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
+    User stdUser = new User(
+      Alias = 'unrtusr',
+      Email = 'unrouted.user@testorg.com',
+      EmailEncodingKey = 'UTF-8',
+      LastName = 'UnroutedTest',
+      LanguageLocaleKey = 'en_US',
+      LocaleSidKey = 'en_US',
+      ProfileId = p.Id,
+      TimeZoneSidKey = 'America/Los_Angeles',
+      UserName =
+        'unrouted_user_' +
+        DateTime.now().getTime() +
+        '@testorg.com'
+    );
+    insert stdUser;
+
+    System.runAs(stdUser) {
+      try {
+        WorkflowDashboardController.getUnroutedSignals(null, 10, 0, '');
+        System.assert(false, 'Expected AuraHandledException');
+      } catch (AuraHandledException e) {
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception')
+        );
+      }
+      try {
+        WorkflowDashboardController.getUnroutedSignalCount(null);
+        System.assert(false, 'Expected AuraHandledException');
+      } catch (AuraHandledException e) {
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception')
+        );
+      }
+      try {
+        WorkflowDashboardController.redeliverSignal(null);
+        System.assert(false, 'Expected AuraHandledException');
+      } catch (AuraHandledException e) {
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception')
+        );
+      }
+    }
+  }
 }

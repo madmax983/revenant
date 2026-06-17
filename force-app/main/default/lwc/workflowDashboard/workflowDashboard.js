@@ -17,6 +17,9 @@ import enqueueWatchdog from "@salesforce/apex/WorkflowDashboardController.enqueu
 import getStalledInstances from "@salesforce/apex/WorkflowDashboardController.getStalledInstances";
 import getStalledCount from "@salesforce/apex/WorkflowDashboardController.getStalledCount";
 import getVersionDrain from "@salesforce/apex/WorkflowDashboardController.getVersionDrain";
+import getUnroutedSignals from "@salesforce/apex/WorkflowDashboardController.getUnroutedSignals";
+import getUnroutedSignalCount from "@salesforce/apex/WorkflowDashboardController.getUnroutedSignalCount";
+import redeliverSignal from "@salesforce/apex/WorkflowDashboardController.redeliverSignal";
 
 export default class WorkflowDashboard extends LightningElement {
   instances = [];
@@ -43,6 +46,13 @@ export default class WorkflowDashboard extends LightningElement {
   loadingDrain = false;
   drainRows = [];
   drainWorkflow = "";
+
+  // Unrouted Signals state
+  viewingUnrouted = false;
+  loadingUnrouted = false;
+  unroutedSignals = [];
+  unroutedCountData = { count: 0, capped: false };
+  redelivering = {};
 
   // Launch Modal Fields
   launchName = "";
@@ -227,8 +237,10 @@ export default class WorkflowDashboard extends LightningElement {
       thresholdMinutes: null,
     });
 
-    return Promise.all([instancesPromise, statsPromise, stalledCountPromise])
-      .then(([result, statsResult, stalledResult]) => {
+    const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null });
+
+    return Promise.all([instancesPromise, statsPromise, stalledCountPromise, unroutedCountPromise])
+      .then(([result, statsResult, stalledResult, unroutedResult]) => {
         const formatted = result.map((inst) => this.formatInstance(inst));
 
         if (isAppend) {
@@ -249,6 +261,7 @@ export default class WorkflowDashboard extends LightningElement {
 
         this.stats = statsResult;
         this.stalledCountData = stalledResult || { count: 0, capped: false };
+        this.unroutedCountData = unroutedResult || { count: 0, capped: false };
         this.filterInstancesList();
 
         // Auto-refresh detail view if selected instance is currently loaded
@@ -308,11 +321,14 @@ export default class WorkflowDashboard extends LightningElement {
       thresholdMinutes: null,
     });
 
-    return Promise.all([instancesPromise, statsPromise, stalledCountPromise])
-      .then(([result, statsResult, stalledResult]) => {
+    const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null });
+
+    return Promise.all([instancesPromise, statsPromise, stalledCountPromise, unroutedCountPromise])
+      .then(([result, statsResult, stalledResult, unroutedResult]) => {
         this.instances = result.map((inst) => this.formatInstance(inst));
         this.stats = statsResult;
         this.stalledCountData = stalledResult || { count: 0, capped: false };
+        this.unroutedCountData = unroutedResult || { count: 0, capped: false };
         this.filterInstancesList();
 
         if (this.selectedInstanceId) {
@@ -422,6 +438,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.stopPolling();
     this.viewingDoctor = false;
     this.viewingDrain = false;
+    this.viewingUnrouted = false;
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
@@ -593,6 +610,7 @@ export default class WorkflowDashboard extends LightningElement {
   handleOpenDoctor() {
     this.viewingDoctor = true;
     this.viewingDrain = false;
+    this.viewingUnrouted = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     this.loadDoctorStatus();
@@ -605,6 +623,7 @@ export default class WorkflowDashboard extends LightningElement {
   handleOpenDrain() {
     this.viewingDrain = true;
     this.viewingDoctor = false;
+    this.viewingUnrouted = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     // Re-run the query if a workflow is already selected; the combobox value
@@ -618,6 +637,82 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleCloseDrain() {
     this.viewingDrain = false;
+  }
+
+  handleOpenUnrouted() {
+    this.viewingUnrouted = true;
+    this.viewingDrain = false;
+    this.viewingDoctor = false;
+    this.selectedInstanceId = null;
+    this.filterInstancesList();
+    this.loadUnroutedSignals();
+  }
+
+  handleCloseUnrouted() {
+    this.viewingUnrouted = false;
+  }
+
+  loadUnroutedSignals() {
+    this.loadingUnrouted = true;
+    const buster = new Date().getTime().toString();
+    Promise.all([
+      getUnroutedSignals({ searchTerm: null, limitSize: 50, offsetSize: 0, cacheBuster: buster }),
+      getUnroutedSignalCount({ searchTerm: null })
+    ])
+      .then(([signals, countResult]) => {
+        this.unroutedSignals = signals || [];
+        this.unroutedCountData = countResult || { count: 0, capped: false };
+      })
+      .catch((err) => {
+        this.dispatchEvent(
+          new ShowToastEvent({ title: "Error", message: err.body ? err.body.message : String(err), variant: "error" })
+        );
+      })
+      .finally(() => {
+        this.loadingUnrouted = false;
+      });
+  }
+
+  handleRedeliver(event) {
+    const signalId = event.currentTarget.dataset.signalId;
+    if (!signalId) return;
+    this.redelivering = { ...this.redelivering, [signalId]: true };
+    redeliverSignal({ signalId })
+      .then((result) => {
+        const matched = result && result.matched;
+        this.dispatchEvent(
+          new ShowToastEvent({
+            title: matched ? "Signal Re-delivered" : "No Match Yet",
+            message: matched
+              ? "The signal was re-delivered and the workflow was woken."
+              : "No active workflow matched — signal remains Unrouted.",
+            variant: matched ? "success" : "warning"
+          })
+        );
+        if (matched) {
+          this.loadUnroutedSignals();
+        }
+      })
+      .catch((err) => {
+        this.dispatchEvent(
+          new ShowToastEvent({ title: "Error", message: err.body ? err.body.message : String(err), variant: "error" })
+        );
+      })
+      .finally(() => {
+        const updated = { ...this.redelivering };
+        delete updated[signalId];
+        this.redelivering = updated;
+      });
+  }
+
+  get unroutedCountDisplay() {
+    if (!this.unroutedCountData) return "0";
+    const count = this.unroutedCountData.count || 0;
+    return this.unroutedCountData.capped ? `${count}+` : String(count);
+  }
+
+  get hasUnroutedSignals() {
+    return this.unroutedSignals && this.unroutedSignals.length > 0;
   }
 
   handleDrainWorkflowChange(event) {

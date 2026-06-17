@@ -3239,17 +3239,21 @@ public class WorkflowEngineTest {
     insert inst;
 
     Test.startTest();
-    // A non-cancel signal must NOT find the stalled instance.
-    Boolean rejected = false;
-    try {
-      WorkflowEngine.signal('SignalStalledKey', 'SomethingElse', null);
-    } catch (WorkflowEngine.WorkflowException ex) {
-      rejected = true;
-    }
-    System.assert(
-      rejected,
-      'A non-cancel signal to a stalled rollback must be rejected'
+    // A non-cancel signal to a stalled (CompensationFailed) instance must be
+    // captured as Unrouted rather than thrown — the rollback is not an active
+    // forward-signal target, but the signal is preserved for later re-delivery.
+    WorkflowEngine.signal('SignalStalledKey', 'SomethingElse', null);
+    List<Workflow_Signal__c> captured = [
+      SELECT Status__c, Correlation_Key__c
+      FROM Workflow_Signal__c
+      WHERE Correlation_Key__c = 'SignalStalledKey'
+    ];
+    System.assertEquals(
+      1,
+      captured.size(),
+      'Non-cancel signal to a stalled rollback must be captured as Unrouted'
     );
+    System.assertEquals('Unrouted', captured[0].Status__c);
 
     // A Cancel signal (without compensations) must reach it and force it terminal.
     WorkflowEngine.signal(
@@ -4211,5 +4215,223 @@ public class WorkflowEngineTest {
     Long outputTime = Long.valueOf(run2Final.Output__c);
     Long fieldTime = run2.Previous_Run_At__c.getTime();
     System.assertEquals(fieldTime, outputTime, 'StepContext.previousRunAt must equal Previous_Run_At__c on the instance');
+  }
+
+  // ── Unrouted-signal capture & re-delivery tests ────────────────────────────
+
+  @isTest
+  static void testUnroutedSignalCaptured_singleMethod() {
+    // Sending a signal when no active instance matches must create an Unrouted
+    // Workflow_Signal__c row instead of throwing.
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Test.startTest();
+    WorkflowEngine.signal('NoSuchKey-Single', 'WakeUp', '{"x":1}');
+    Test.stopTest();
+
+    List<Workflow_Signal__c> captured = [
+      SELECT Id, Status__c, Correlation_Key__c, Signal_Name__c, Payload__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Correlation_Key__c = 'NoSuchKey-Single'
+    ];
+    System.assertEquals(1, captured.size(), 'Unmatched signal must be captured as one row');
+    System.assertEquals('Unrouted', captured[0].Status__c, 'Captured signal must have Unrouted status');
+    System.assertEquals('WakeUp', captured[0].Signal_Name__c);
+    System.assertEquals('{"x":1}', captured[0].Payload__c);
+    System.assertEquals(null, captured[0].Workflow_Instance__c, 'Unrouted signal must have no parent instance');
+
+    List<Workflow_Step_Execution__c> steps = [
+      SELECT Id FROM Workflow_Step_Execution__c
+    ];
+    System.assertEquals(0, steps.size(), 'Signal capture must never write step-execution rows');
+  }
+
+  @isTest
+  static void testUnroutedSignalCaptured_bulkMethod() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    List<WorkflowEngine.SignalRequest> reqs = new List<WorkflowEngine.SignalRequest>{
+      new WorkflowEngine.SignalRequest('BulkKey-A', 'Ping', null),
+      new WorkflowEngine.SignalRequest('BulkKey-B', 'Pong', '{"y":2}')
+    };
+
+    Test.startTest();
+    WorkflowEngine.signal(reqs);
+    Test.stopTest();
+
+    List<Workflow_Signal__c> captured = [
+      SELECT Id, Status__c, Correlation_Key__c, Signal_Name__c
+      FROM Workflow_Signal__c
+      WHERE Correlation_Key__c IN ('BulkKey-A', 'BulkKey-B')
+      ORDER BY Correlation_Key__c ASC
+    ];
+    System.assertEquals(2, captured.size(), 'Both unmatched bulk signals must be captured');
+    System.assertEquals('Unrouted', captured[0].Status__c);
+    System.assertEquals('Unrouted', captured[1].Status__c);
+    System.assertEquals('BulkKey-A', captured[0].Correlation_Key__c);
+    System.assertEquals('BulkKey-B', captured[1].Correlation_Key__c);
+  }
+
+  @isTest
+  static void testUnroutedSignalIdempotent_sameDedupKey() {
+    // The same signal delivered N times with the same dedupKey must produce
+    // exactly one Unrouted row (at-least-once idempotency).
+    WorkflowEngine.disableQueueableInTest = true;
+
+    String dedupKey = 'idempotency-test-uuid-001';
+
+    Test.startTest();
+    WorkflowEngine.signal(
+      new List<WorkflowEngine.SignalRequest>{
+        new WorkflowEngine.SignalRequest('IdempKey', 'Arrive', '{"n":1}', dedupKey)
+      }
+    );
+    WorkflowEngine.signal(
+      new List<WorkflowEngine.SignalRequest>{
+        new WorkflowEngine.SignalRequest('IdempKey', 'Arrive', '{"n":1}', dedupKey)
+      }
+    );
+    WorkflowEngine.signal(
+      new List<WorkflowEngine.SignalRequest>{
+        new WorkflowEngine.SignalRequest('IdempKey', 'Arrive', '{"n":1}', dedupKey)
+      }
+    );
+    Test.stopTest();
+
+    List<Workflow_Signal__c> captured = [
+      SELECT Id, Signal_Key__c
+      FROM Workflow_Signal__c
+      WHERE Correlation_Key__c = 'IdempKey'
+    ];
+    System.assertEquals(
+      1,
+      captured.size(),
+      'N deliveries with the same dedupKey must produce exactly one captured row'
+    );
+    System.assertEquals(dedupKey, captured[0].Signal_Key__c);
+  }
+
+  @isTest
+  static void testRedeliverCapturedSignal_wakesInstance() {
+    // Re-delivering a captured signal to a now-waiting instance must wake it
+    // and transition the captured row to Received with the instance FK set.
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Correlation_Key__c = 'Redeliver-Key',
+      Signal_Name__c = 'WakeMe',
+      Payload__c = null,
+      Status__c = 'Unrouted'
+    );
+    insert sig;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Redeliver-Key'
+    );
+    insert inst;
+
+    Test.startTest();
+    Boolean matched = WorkflowEngine.redeliverCapturedSignal(sig.Id);
+    Test.stopTest();
+
+    System.assertEquals(true, matched, 'Re-delivery must return true when a match is found');
+
+    Workflow_Signal__c reloaded = [
+      SELECT Id, Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig.Id
+    ];
+    System.assertEquals('Received', reloaded.Status__c, 'Re-delivered signal must have Received status');
+    System.assertEquals(inst.Id, reloaded.Workflow_Instance__c, 'Re-delivered signal must be parented to the matched instance');
+
+    Workflow_Instance__c reloadedInst = [
+      SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Running', reloadedInst.Status__c, 'Suspended instance must be set to Running on re-delivery');
+  }
+
+  @isTest
+  static void testRedeliverCapturedSignal_noopWhenUnmatched() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Correlation_Key__c = 'Still-No-Match',
+      Signal_Name__c = 'Orphan',
+      Payload__c = null,
+      Status__c = 'Unrouted'
+    );
+    insert sig;
+
+    Test.startTest();
+    Boolean matched = WorkflowEngine.redeliverCapturedSignal(sig.Id);
+    Test.stopTest();
+
+    System.assertEquals(false, matched, 'Re-delivery must return false when no active instance exists');
+
+    Workflow_Signal__c reloaded = [
+      SELECT Status__c, Workflow_Instance__c FROM Workflow_Signal__c WHERE Id = :sig.Id
+    ];
+    System.assertEquals('Unrouted', reloaded.Status__c, 'Unmatched re-delivery must leave the row Unrouted');
+    System.assertEquals(null, reloaded.Workflow_Instance__c);
+  }
+
+  @isTest
+  static void testUnroutedCancelSignalStillThrows() {
+    // An unmatched Cancel signal must NOT be captured — it must still throw,
+    // since re-delivering a cancel to a future instance would be incorrect.
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Boolean threw = false;
+    Test.startTest();
+    try {
+      WorkflowEngine.signal('NonExistentCancel', 'CancelWorkflow', null);
+    } catch (WorkflowEngine.WorkflowException ex) {
+      threw = true;
+    }
+    Test.stopTest();
+
+    System.assert(threw, 'An unmatched Cancel signal must still throw, not be captured');
+
+    List<Workflow_Signal__c> captured = [
+      SELECT Id FROM Workflow_Signal__c WHERE Correlation_Key__c = 'NonExistentCancel'
+    ];
+    System.assertEquals(0, captured.size(), 'No Unrouted row must be created for an unmatched Cancel');
+  }
+
+  @isTest
+  static void testMatchedSignalBehaviorUnchanged() {
+    // Signals that DO match an active instance must still follow the existing
+    // path: Received status, parent FK set, instance woken — no regression.
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'MatchedSignalKey'
+    );
+    insert inst;
+
+    Test.startTest();
+    WorkflowEngine.signal('MatchedSignalKey', 'Resume', '{"data":"go"}');
+    Test.stopTest();
+
+    List<Workflow_Signal__c> signals = [
+      SELECT Status__c, Workflow_Instance__c, Signal_Name__c
+      FROM Workflow_Signal__c
+      WHERE Workflow_Instance__c = :inst.Id
+    ];
+    System.assertEquals(1, signals.size(), 'Matched signal must produce exactly one Workflow_Signal__c row');
+    System.assertEquals('Received', signals[0].Status__c, 'Matched signal must have Received status (not Unrouted)');
+    System.assertEquals(inst.Id, signals[0].Workflow_Instance__c);
+
+    Workflow_Instance__c reloaded = [
+      SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Running', reloaded.Status__c, 'Matched suspended instance must be woken to Running');
+
+    List<Workflow_Step_Execution__c> steps = [SELECT Id FROM Workflow_Step_Execution__c];
+    System.assertEquals(0, steps.size(), 'Signal delivery must not write step-execution rows');
   }
 }

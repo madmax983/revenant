@@ -544,11 +544,24 @@ public inherited sharing class WorkflowEngine {
     public String keyOrId;
     public String signalName;
     public String payload;
+    public String dedupKey;
 
     public SignalRequest(String keyOrId, String signalName, String payload) {
       this.keyOrId = keyOrId;
       this.signalName = signalName;
       this.payload = payload;
+    }
+
+    public SignalRequest(
+      String keyOrId,
+      String signalName,
+      String payload,
+      String dedupKey
+    ) {
+      this.keyOrId = keyOrId;
+      this.signalName = signalName;
+      this.payload = payload;
+      this.dedupKey = dedupKey;
     }
   }
 
@@ -3191,9 +3204,19 @@ public inherited sharing class WorkflowEngine {
     }
 
     if (instances.isEmpty()) {
-      throw new WorkflowException(
-        'No active workflow found with key or ID: ' + keyOrId
+      if (isCancelSignal) {
+        throw new WorkflowException(
+          'No active workflow found with key or ID: ' + keyOrId
+        );
+      }
+      // Non-cancel signal with no active match: capture as Unrouted so it is
+      // never silently lost and can be re-delivered by an operator.
+      captureUnroutedSignals(
+        new List<SignalRequest>{
+          new SignalRequest(keyOrId, signalName, payload)
+        }
       );
+      return;
     }
 
     Workflow_Instance__c instance = instances[0];
@@ -3296,7 +3319,9 @@ public inherited sharing class WorkflowEngine {
     }
     enqueuedInstanceIds.add(instanceId);
     if (Test.isRunningTest()) {
-      System.enqueueJob(new WorkflowOrchestrator(instanceId));
+      if (!disableQueueableInTest) {
+        System.enqueueJob(new WorkflowOrchestrator(instanceId));
+      }
     } else {
       try {
         if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
@@ -3381,9 +3406,10 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    // Verify that we found an active instance for every request, or throw. A stalled
-    // rollback (CompensationFailed) only qualifies for a Cancel signal; any other signal
-    // targeting it is treated as "no active workflow", preserving prior semantics.
+    // Separate requests into: matched (active instance found), unmatched
+    // non-cancel (capture as Unrouted), and unmatched cancel (throw — capturing
+    // a cancel for future replay against an unknown future instance is unsafe).
+    List<SignalRequest> unmatchedToCapture = new List<SignalRequest>();
     for (SignalRequest req : requests) {
       Workflow_Instance__c inst = instById.get(req.keyOrId);
       if (inst == null) {
@@ -3393,15 +3419,18 @@ public inherited sharing class WorkflowEngine {
         String.isNotBlank(req.signalName) &&
         (req.signalName.equalsIgnoreCase('Cancel') ||
         req.signalName.equalsIgnoreCase('CancelWorkflow'));
-      if (
-        inst == null ||
-        (inst.Status__c == 'CompensationFailed' && !isCancel)
-      ) {
-        throw new WorkflowException(
-          'No active workflow found with key or ID: ' + req.keyOrId
-        );
+      Boolean unmatched =
+        inst == null || (inst.Status__c == 'CompensationFailed' && !isCancel);
+      if (unmatched) {
+        if (isCancel) {
+          throw new WorkflowException(
+            'No active workflow found with key or ID: ' + req.keyOrId
+          );
+        }
+        unmatchedToCapture.add(req);
       }
     }
+    captureUnroutedSignals(unmatchedToCapture);
 
     List<Workflow_Signal__c> signalsToInsert = new List<Workflow_Signal__c>();
     List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
@@ -3413,7 +3442,7 @@ public inherited sharing class WorkflowEngine {
         inst = instByKey.get(req.keyOrId);
       }
 
-      if (inst != null) {
+      if (inst != null && !(inst.Status__c == 'CompensationFailed' && !(req.signalName.equalsIgnoreCase('Cancel') || req.signalName.equalsIgnoreCase('CancelWorkflow')))) {
         if (
           req.signalName.equalsIgnoreCase('Cancel') ||
           req.signalName.equalsIgnoreCase('CancelWorkflow')
@@ -5613,5 +5642,141 @@ public inherited sharing class WorkflowEngine {
         );
       }
     }
+  }
+
+  // ── Unrouted-signal capture & re-delivery ──────────────────────────────────
+
+  /**
+   * Persists unmatched (unrouted) signal requests as Workflow_Signal__c rows
+   * with Status='Unrouted'. Upserts by Signal_Key__c when the key is non-blank
+   * (idempotent under at-least-once platform-event redelivery); plain-inserts
+   * keyless rows. Never touches Workflow_Step_Execution__c.
+   */
+  @TestVisible
+  private static void captureUnroutedSignals(List<SignalRequest> unmatched) {
+    if (unmatched == null || unmatched.isEmpty()) {
+      return;
+    }
+
+    Map<String, Workflow_Signal__c> keyedRows = new Map<String, Workflow_Signal__c>();
+    List<Workflow_Signal__c> unkeyedRows = new List<Workflow_Signal__c>();
+
+    for (SignalRequest req : unmatched) {
+      Workflow_Signal__c sig = new Workflow_Signal__c(
+        Correlation_Key__c = req.keyOrId,
+        Signal_Name__c = req.signalName,
+        Payload__c = req.payload,
+        Status__c = 'Unrouted'
+      );
+      if (String.isNotBlank(req.dedupKey)) {
+        sig.Signal_Key__c = req.dedupKey;
+        if (!keyedRows.containsKey(req.dedupKey)) {
+          keyedRows.put(req.dedupKey, sig);
+        }
+      } else {
+        unkeyedRows.add(sig);
+      }
+    }
+
+    if (!keyedRows.isEmpty()) {
+      upsert as system keyedRows.values() Signal_Key__c;
+    }
+    if (!unkeyedRows.isEmpty()) {
+      insert as system unkeyedRows;
+    }
+  }
+
+  /**
+   * Re-delivers a captured (Unrouted) signal by correlating it to a now-active
+   * workflow instance. If a match is found the signal row is re-parented
+   * (Workflow_Instance__c set, Status flipped to 'Received') and the instance
+   * is woken via the normal resume handoff. Returns true if a match was found,
+   * false if the signal is still unmatched (safe no-op).
+   */
+  public static Boolean redeliverCapturedSignal(Id signalId) {
+    List<Workflow_Signal__c> rows = [
+      SELECT
+        Id,
+        Status__c,
+        Correlation_Key__c,
+        Signal_Name__c,
+        Payload__c
+      FROM Workflow_Signal__c
+      WHERE Id = :signalId AND Status__c = 'Unrouted'
+      WITH SYSTEM_MODE
+      LIMIT 1
+      FOR UPDATE
+    ];
+    if (rows.isEmpty()) {
+      return false;
+    }
+    Workflow_Signal__c sig = rows[0];
+
+    String keyOrId = sig.Correlation_Key__c;
+    if (String.isBlank(keyOrId)) {
+      return false;
+    }
+
+    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe()
+      .getKeyPrefix();
+    Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
+    Boolean isId =
+      idPattern.matcher(keyOrId).matches() &&
+      keyOrId.startsWith(wflowPrefix);
+
+    List<String> activeStatuses = new List<String>{
+      'Pending',
+      'Running',
+      'Suspended',
+      'Compensating',
+      'Cancelling'
+    };
+
+    List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
+    if (isId) {
+      instances = [
+        SELECT Id, Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :keyOrId AND Status__c IN :activeStatuses
+        WITH SYSTEM_MODE
+        LIMIT 1
+        FOR UPDATE
+      ];
+    }
+    if (instances.isEmpty()) {
+      instances = [
+        SELECT Id, Status__c
+        FROM Workflow_Instance__c
+        WHERE Correlation_Key__c = :keyOrId AND Status__c IN :activeStatuses
+        WITH SYSTEM_MODE
+        LIMIT 1
+        FOR UPDATE
+      ];
+    }
+
+    if (instances.isEmpty()) {
+      return false;
+    }
+
+    Workflow_Instance__c instance = instances[0];
+
+    sig.Workflow_Instance__c = instance.Id;
+    sig.Status__c = 'Received';
+    update as system sig;
+
+    if (
+      instance.Status__c == 'Suspended' ||
+      instance.Status__c == 'Running' ||
+      instance.Status__c == 'Compensating' ||
+      instance.Status__c == 'Cancelling'
+    ) {
+      if (instance.Status__c == 'Suspended') {
+        instance.Status__c = 'Running';
+        update as system instance;
+      }
+      enqueueResume(instance.Id);
+    }
+
+    return true;
   }
 }

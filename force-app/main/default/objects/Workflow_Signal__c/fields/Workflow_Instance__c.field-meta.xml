@@ -1,15 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Workflow_Instance__c</fullName>
-    <description>The parent workflow instance for this signal.</description>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <description>The parent workflow instance for this signal. Null for unrouted signals that have not yet been matched to an active instance.</description>
     <externalId>false</externalId>
     <label>Workflow Instance</label>
     <referenceTo>Workflow_Instance__c</referenceTo>
     <relationshipLabel>Workflow Signals</relationshipLabel>
     <relationshipName>Workflow_Signals</relationshipName>
-    <relationshipOrder>0</relationshipOrder>
-    <reparentableMasterDetail>false</reparentableMasterDetail>
+    <required>false</required>
     <trackTrending>false</trackTrending>
-    <type>MasterDetail</type>
-    <writeRequiresMasterRead>false</writeRequiresMasterRead>
+    <type>Lookup</type>
 </CustomField>

@@ -243,8 +243,19 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
         delete as system docsToDelete;
       }
 
-      // 6. Delete the instances (cascade deletes steps and signals)
+      // 6. Delete associated signal records before deleting instances.
+      //    Workflow_Signal__c.Workflow_Instance__c is now a Lookup with SetNull
+      //    (not a cascade-delete MasterDetail), so signals must be deleted explicitly.
       if (!instancesToPurge.isEmpty()) {
+        List<Workflow_Signal__c> signalsToDelete = [
+          SELECT Id
+          FROM Workflow_Signal__c
+          WHERE Workflow_Instance__c IN :instanceIdsToPurge
+          WITH SYSTEM_MODE
+        ];
+        if (!signalsToDelete.isEmpty()) {
+          delete as system signalsToDelete;
+        }
         delete as system instancesToPurge;
         state.deletedCount += instancesToPurge.size();
       }
