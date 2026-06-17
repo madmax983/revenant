@@ -40,28 +40,34 @@
 
         <!-- Summary Stats Card Row -->
         <div class="slds-grid slds-wrap slds-gutters slds-m-bottom_large">
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-4">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-5">
                 <div class="stat-card border-left-blue">
                     <div class="slds-text-title_caps slds-text-color_weak">Total Runs</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small">{stats.total}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-4">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-5">
                 <div class="stat-card border-left-orange">
                     <div class="slds-text-title_caps slds-text-color_weak">Running / Suspended</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-orange">{stats.active}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-4">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-5">
                 <div class="stat-card border-left-green">
                     <div class="slds-text-title_caps slds-text-color_weak">Completed</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-green">{stats.completed}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-4">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-5">
                 <div class="stat-card border-left-red">
                     <div class="slds-text-title_caps slds-text-color_weak">Failed</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-red">{stats.failed}</div>
+                </div>
+            </div>
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-5">
+                <div class="stat-card border-left-purple">
+                    <div class="slds-text-title_caps slds-text-color_weak">Stalled</div>
+                    <div class="slds-text-heading_large slds-m-top_xx-small text-purple">{stalledCountDisplay}</div>
                 </div>
             </div>
         </div>
@@ -106,6 +112,17 @@
                                     onchange={handleStatusFilterChange}>
                                 </lightning-combobox>
                             </div>
+                            <!-- Stalled-instance filter toggle -->
+                            <div class="slds-col slds-size_1-of-1 slds-m-top_x-small">
+                                <lightning-button
+                                    label={stalledFilterLabel}
+                                    icon-name="utility:clock"
+                                    variant={stalledFilterVariant}
+                                    title="Toggle stalled-instance view — Suspended instances with no active resume mechanism, sorted by idle age"
+                                    onclick={handleToggleStalledFilter}
+                                    class="slds-button_stretch">
+                                </lightning-button>
+                            </div>
                             <!-- Bulk Re-drive of failed instances matching the current filter -->
                             <template if:true={canRedriveMatching}>
                                 <div class="slds-col slds-size_1-of-1 slds-m-top_x-small">
@@ -137,6 +154,9 @@
                                                                                     <div class="slds-grid slds-grid_align-spread">
                                                         <span class="slds-text-title_bold text-primary">{inst.Name}</span>
                                                         <div class="slds-grid slds-grid_vertical-align-center">
+                                                            <template if:true={inst.stalled}>
+                                                                <span class={inst.stalledBadgeClass} style="margin-right: 8px;">STALLED</span>
+                                                            </template>
                                                             <template if:true={inst.waitingOn}>
                                                                 <span class={inst.waitingOnBadgeClass} style="margin-right: 8px;">{inst.waitingOn}</span>
                                                             </template>
@@ -145,7 +165,7 @@
                                                     </div>
                                                     <div class="slds-text-body_regular slds-m-top_xx-small font-bold">{inst.Workflow_Name__c}</div>
                                                     <div class="slds-text-body_small slds-text-color_weak slds-m-top_xx-small">
-                                                        Key: {inst.Correlation_Key__c} | Started: {inst.formattedDate}
+                                                        Key: {inst.Correlation_Key__c} | Started: {inst.formattedDate}<template if:true={inst.formattedIdleMinutes}> | {inst.formattedIdleMinutes}</template>
                                                     </div>
                                                 </div>
                                             </div>

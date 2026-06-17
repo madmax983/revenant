@@ -12,6 +12,11 @@ public inherited sharing class WorkflowEngine {
   // to preserve active-only dedup behavior.
   public static Integer dedupWindowMinutes = 1440;
 
+  // Minutes of inactivity after which a Suspended instance with no active resume
+  // mechanism is classified as stalled on the dashboard. Configurable via
+  // Revenant_Config__mdt.Stale_Threshold_Minutes__c; default 60 minutes.
+  public static Integer staleThresholdMinutes = 60;
+
   // Instances in these statuses are considered in-flight; a start that collides
   // with one of them always dedups to the existing instance.
   private static final Set<String> ACTIVE_STATUSES = new Set<String>{
@@ -53,7 +58,8 @@ public inherited sharing class WorkflowEngine {
           Watchdog_Delay_Minutes__c,
           Use_Dynamic_Scheduling__c,
           Publish_Lifecycle_Events__c,
-          Dedup_Window_Minutes__c
+          Dedup_Window_Minutes__c,
+          Stale_Threshold_Minutes__c
         FROM Revenant_Config__mdt
         WHERE DeveloperName = 'Default'
         WITH SYSTEM_MODE
@@ -72,6 +78,10 @@ public inherited sharing class WorkflowEngine {
         }
         if (configs[0].Dedup_Window_Minutes__c != null) {
           dedupWindowMinutes = configs[0].Dedup_Window_Minutes__c.intValue();
+        }
+        if (configs[0].Stale_Threshold_Minutes__c != null) {
+          staleThresholdMinutes = configs[0]
+            .Stale_Threshold_Minutes__c.intValue();
         }
       }
     } catch (Exception ex) {

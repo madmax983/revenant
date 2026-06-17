@@ -301,7 +301,10 @@ public class WorkflowDashboardControllerTest {
       resStatus.size(),
       'Should find 1 instance with Status Running'
     );
-    System.assertEquals('OrangeKey', (String) resStatus[0].get('Correlation_Key__c'));
+    System.assertEquals(
+      'OrangeKey',
+      (String) resStatus[0].get('Correlation_Key__c')
+    );
 
     // 3. Test filtering by Search Term on Correlation Key
     List<Map<String, Object>> resSearchKey = WorkflowDashboardController.getFilteredInstances(
@@ -317,7 +320,10 @@ public class WorkflowDashboardControllerTest {
       resSearchKey.size(),
       'Should find 1 instance matching search Banana'
     );
-    System.assertEquals('BananaKey', (String) resSearchKey[0].get('Correlation_Key__c'));
+    System.assertEquals(
+      'BananaKey',
+      (String) resSearchKey[0].get('Correlation_Key__c')
+    );
 
     // 4. Test filtering by Search Term case-insensitivity on Correlation Key
     List<Map<String, Object>> resSearchError = WorkflowDashboardController.getFilteredInstances(
@@ -787,7 +793,11 @@ public class WorkflowDashboardControllerTest {
     Map<String, Object> payloadFiles = (Map<String, Object>) details.get(
       'payloadFiles'
     );
-    System.assertNotEquals(null, payloadFiles, 'payloadFiles should be present');
+    System.assertNotEquals(
+      null,
+      payloadFiles,
+      'payloadFiles should be present'
+    );
 
     // instance.Output (cv2, 50005 chars) crossed the display limit -> has a file.
     System.assert(
@@ -883,7 +893,9 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals('Watchdog', (String) instances[0].get('waitingOn'));
 
     // Test getInstanceDetails returns details + waitingOn
-    Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(inst.Id);
+    Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(
+      inst.Id
+    );
     System.assertNotEquals(null, details);
     System.assertEquals('Watchdog', (String) details.get('waitingOn'));
 
@@ -897,7 +909,12 @@ public class WorkflowDashboardControllerTest {
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
-    System.assert(updatedInst.Status__c == 'Running' || updatedInst.Status__c == 'Completed', 'Expected Status to be Running or Completed but was: ' + updatedInst.Status__c);
+    System.assert(
+      updatedInst.Status__c == 'Running' ||
+        updatedInst.Status__c == 'Completed',
+      'Expected Status to be Running or Completed but was: ' +
+      updatedInst.Status__c
+    );
     System.assertEquals(null, updatedInst.Sleep_Until__c);
     System.assertEquals(null, updatedInst.Async_Job_Id__c);
   }
@@ -1039,8 +1056,8 @@ public class WorkflowDashboardControllerTest {
         threw = true;
         System.assert(
           e.getMessage().contains('requires') ||
-          e.getMessage().contains('Unauthorized') ||
-          e.getMessage().contains('Script-thrown exception'),
+            e.getMessage().contains('Unauthorized') ||
+            e.getMessage().contains('Script-thrown exception'),
           e.getMessage()
         );
       }
@@ -1133,8 +1150,16 @@ public class WorkflowDashboardControllerTest {
     );
     Test.stopTest();
 
-    System.assertEquals(true, outcome.get('started'), 'A re-drive should be launched');
-    System.assertEquals(2, outcome.get('eligibleCount'), 'Exact eligible count returned');
+    System.assertEquals(
+      true,
+      outcome.get('started'),
+      'A re-drive should be launched'
+    );
+    System.assertEquals(
+      2,
+      outcome.get('eligibleCount'),
+      'Exact eligible count returned'
+    );
     System.assertNotEquals(null, outcome.get('redriveInstanceId'));
 
     // A BulkRedriveWorkflow instance was created to perform the work.
@@ -1177,11 +1202,19 @@ public class WorkflowDashboardControllerTest {
     );
     Test.stopTest();
 
-    System.assertEquals(false, outcome.get('started'), 'Nothing to do, no launch');
+    System.assertEquals(
+      false,
+      outcome.get('started'),
+      'Nothing to do, no launch'
+    );
     System.assertEquals(0, outcome.get('eligibleCount'));
     System.assertEquals(
       0,
-      [SELECT COUNT() FROM Workflow_Instance__c WHERE Workflow_Name__c = 'BulkRedriveWorkflow'],
+      [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE Workflow_Name__c = 'BulkRedriveWorkflow'
+      ],
       'No re-driver workflow is created when nothing is eligible'
     );
   }
@@ -1194,13 +1227,723 @@ public class WorkflowDashboardControllerTest {
       Test.startTest();
       try {
         WorkflowDashboardController.getRedriveEligibleCount('', 'Failed', '');
-        System.assert(false, 'Expected AuraHandledException for unauthorized user');
+        System.assert(
+          false,
+          'Expected AuraHandledException for unauthorized user'
+        );
       } catch (AuraHandledException e) {
         threw = true;
       }
       Test.stopTest();
     }
-    System.assert(threw, 'Unauthorized users must be blocked from re-drive count');
+    System.assert(
+      threw,
+      'Unauthorized users must be blocked from re-drive count'
+    );
+  }
+
+  // ── RED → GREEN: Stalled-instance detection tests (issue #26) ───────────────
+
+  @isTest
+  static void testStalledInstanceFlaggedInFilteredInstances() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.ZombieWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-Zombie-Flag'
+    );
+    insert as system inst;
+
+    WorkflowEngine.staleThresholdMinutes = -1;
+
+    Test.startTest();
+    List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
+      '',
+      'Suspended',
+      '',
+      10,
+      0,
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      instances.size(),
+      'Should return the suspended instance'
+    );
+    System.assertEquals(
+      true,
+      (Boolean) instances[0].get('stalled'),
+      'Instance with no resume mechanism and exceeded threshold should be stalled'
+    );
+    Object idleMinutes = instances[0].get('idleMinutes');
+    System.assertNotEquals(
+      null,
+      idleMinutes,
+      'idleMinutes should be populated for Suspended'
+    );
+    System.assert(
+      (Long) idleMinutes >= 0,
+      'idleMinutes should be non-negative'
+    );
+  }
+
+  @isTest
+  static void testFreshSuspendedNotStalled() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.ZombieWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-Fresh-Key'
+    );
+    insert as system inst;
+
+    WorkflowEngine.staleThresholdMinutes = 60;
+
+    Test.startTest();
+    List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
+      '',
+      'Suspended',
+      '',
+      10,
+      0,
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, instances.size());
+    System.assertEquals(
+      false,
+      (Boolean) instances[0].get('stalled'),
+      'Fresh Suspended instance should not be stalled under default threshold'
+    );
+  }
+
+  @isTest
+  static void testSuspendedWithActiveTimerNotStalled() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.TimerWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-Timer-Key',
+      Sleep_Until__c = DateTime.now().addMinutes(30)
+    );
+    insert as system inst;
+
+    WorkflowEngine.staleThresholdMinutes = -1;
+
+    Test.startTest();
+    List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
+      '',
+      'Suspended',
+      '',
+      10,
+      0,
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, instances.size());
+    System.assertEquals(
+      false,
+      (Boolean) instances[0].get('stalled'),
+      'Suspended with active Sleep_Until timer should not be stalled'
+    );
+  }
+
+  @isTest
+  static void testSuspendedWithStepTimeoutNotStalled() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.TimeoutWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-Timeout-Key'
+    );
+    insert as system inst;
+
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'StallTest.SomeStep',
+      Status__c = 'Running',
+      Retry_Count__c = 0,
+      Timeout_At__c = DateTime.now().addMinutes(5)
+    );
+    insert as system step;
+
+    WorkflowEngine.staleThresholdMinutes = -1;
+
+    Test.startTest();
+    List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
+      '',
+      'Suspended',
+      '',
+      10,
+      0,
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, instances.size());
+    System.assertEquals(
+      false,
+      (Boolean) instances[0].get('stalled'),
+      'Suspended with a step execution having Timeout_At should not be stalled'
+    );
+  }
+
+  @isTest
+  static void testGetStalledInstancesReturnsAndSorts() {
+    List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>{
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'StallTest.ZombieWorkflow',
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'Stall-Sort-A'
+      ),
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'StallTest.ZombieWorkflow',
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'Stall-Sort-B'
+      )
+    };
+    insert as system insts;
+
+    Test.startTest();
+    List<Map<String, Object>> stalled = WorkflowDashboardController.getStalledInstances(
+      '',
+      '',
+      -1,
+      10,
+      0,
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      2,
+      stalled.size(),
+      'Both stalled instances should be returned'
+    );
+    DateTime t0 = (DateTime) stalled[0].get('LastModifiedDate');
+    DateTime t1 = (DateTime) stalled[1].get('LastModifiedDate');
+    System.assert(
+      t0 <= t1,
+      'Results should be sorted oldest idle first (LastModifiedDate ASC)'
+    );
+  }
+
+  @isTest
+  static void testGetStalledInstancesThresholdDefault() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.ZombieWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-DefaultThresh'
+    );
+    insert as system inst;
+
+    WorkflowEngine.staleThresholdMinutes = 60;
+
+    Test.startTest();
+    List<Map<String, Object>> stalled = WorkflowDashboardController.getStalledInstances(
+      '',
+      '',
+      null,
+      10,
+      0,
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      stalled.size(),
+      'Fresh record should not appear when null threshold falls back to default 60 min'
+    );
+  }
+
+  @isTest
+  static void testGetStalledInstancesNegativeThreshold() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.ZombieWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-NegThresh'
+    );
+    insert as system inst;
+
+    Test.startTest();
+    List<Map<String, Object>> stalled = WorkflowDashboardController.getStalledInstances(
+      '',
+      '',
+      -1,
+      10,
+      0,
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      stalled.size(),
+      'Explicit negative threshold should include fresh records'
+    );
+    System.assertEquals(
+      true,
+      (Boolean) stalled[0].get('stalled'),
+      'Returned record should be marked stalled'
+    );
+  }
+
+  @isTest
+  static void testGetStalledInstancesPaginatesAfterFiltering() {
+    // Two genuinely stalled instances, plus one that must be excluded because it
+    // has a step with a declared timeout (anti-join). With limitSize=1 the two
+    // stalled rows must page out one-per-page and the excluded one must never
+    // appear — proving pagination runs over the filtered set, not raw candidates.
+    List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>{
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'StallTest.ZombieWorkflow',
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'Stall-Page-A'
+      ),
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'StallTest.ZombieWorkflow',
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'Stall-Page-B'
+      ),
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'StallTest.ZombieWorkflow',
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'Stall-Page-Excluded'
+      )
+    };
+    insert as system insts;
+
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = insts[2].Id,
+      Step_Name__c = 'StallTest.SomeStep',
+      Status__c = 'Running',
+      Retry_Count__c = 0,
+      Timeout_At__c = DateTime.now().addMinutes(5)
+    );
+    insert as system step;
+
+    Test.startTest();
+    List<Map<String, Object>> page0 = WorkflowDashboardController.getStalledInstances(
+      '',
+      '',
+      -1,
+      1,
+      0,
+      ''
+    );
+    List<Map<String, Object>> page1 = WorkflowDashboardController.getStalledInstances(
+      '',
+      '',
+      -1,
+      1,
+      1,
+      ''
+    );
+    List<Map<String, Object>> page2 = WorkflowDashboardController.getStalledInstances(
+      '',
+      '',
+      -1,
+      1,
+      2,
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      page0.size(),
+      'First page should hold exactly one stalled row'
+    );
+    System.assertEquals(
+      1,
+      page1.size(),
+      'Second page should hold the other stalled row'
+    );
+    System.assertEquals(
+      0,
+      page2.size(),
+      'Third page should be empty — only two stalled rows exist (excluded one filtered out)'
+    );
+
+    Set<Id> returned = new Set<Id>{
+      (Id) page0[0].get('Id'),
+      (Id) page1[0].get('Id')
+    };
+    System.assert(
+      returned.contains(insts[0].Id),
+      'Stall-Page-A should be surfaced across pages'
+    );
+    System.assert(
+      returned.contains(insts[1].Id),
+      'Stall-Page-B should be surfaced across pages'
+    );
+    System.assert(
+      !returned.contains(insts[2].Id),
+      'Instance with a declared step timeout must be excluded from the stalled set'
+    );
+  }
+
+  @isTest
+  static void testGetStalledCount() {
+    List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>{
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'StallTest.ZombieWorkflow',
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'SCount-Stall-1'
+      ),
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'StallTest.ZombieWorkflow',
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'SCount-Stall-2'
+      ),
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'StallTest.ZombieWorkflow',
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'SCount-Timer-3',
+        Sleep_Until__c = DateTime.now().addMinutes(10)
+      )
+    };
+    insert as system insts;
+
+    Test.startTest();
+    Map<String, Object> result = WorkflowDashboardController.getStalledCount(
+      '',
+      '',
+      -1
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      2,
+      (Integer) result.get('count'),
+      'Only instances with no resume mechanism should be counted as stalled'
+    );
+    System.assertEquals(
+      false,
+      (Boolean) result.get('capped'),
+      'Should not be capped for small test data'
+    );
+  }
+
+  @isTest
+  static void testIdleMinutesForNonSuspendedNonTerminal() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.RunningWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'Stall-Running-Key'
+    );
+    insert as system inst;
+
+    Test.startTest();
+    List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
+      '',
+      'Running',
+      '',
+      10,
+      0,
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, instances.size());
+    Object idleMinutes = instances[0].get('idleMinutes');
+    System.assertNotEquals(
+      null,
+      idleMinutes,
+      'idleMinutes should be populated for non-terminal Running instances'
+    );
+    System.assert(
+      (Long) idleMinutes >= 0,
+      'idleMinutes should be non-negative'
+    );
+    System.assertEquals(
+      false,
+      (Boolean) instances[0].get('stalled'),
+      'Running instances should never be classified as stalled'
+    );
+  }
+
+  @isTest
+  static void testIdleMinutesNullForTerminal() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.DoneWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'Stall-Completed-Key'
+    );
+    insert as system inst;
+
+    Test.startTest();
+    List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
+      '',
+      'Completed',
+      '',
+      10,
+      0,
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, instances.size());
+    System.assertEquals(
+      null,
+      instances[0].get('idleMinutes'),
+      'idleMinutes should be null for terminal (Completed) instances'
+    );
+    System.assertEquals(
+      false,
+      (Boolean) instances[0].get('stalled'),
+      'Terminal instances should not be classified as stalled'
+    );
+  }
+
+  @isTest
+  static void testStaleThresholdConfigFallback() {
+    System.assert(
+      WorkflowEngine.staleThresholdMinutes >= 0,
+      'staleThresholdMinutes must be non-negative, got: ' +
+      WorkflowEngine.staleThresholdMinutes
+    );
+    System.assertEquals(
+      60,
+      WorkflowEngine.staleThresholdMinutes,
+      'Default stale threshold should be 60 minutes'
+    );
+  }
+
+  @isTest
+  static void testStalledReadOnlyNoSideEffects() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.ZombieWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-ReadOnly-Key'
+    );
+    insert as system inst;
+
+    Integer instanceCountBefore = [SELECT COUNT() FROM Workflow_Instance__c];
+    Integer stepCountBefore = [SELECT COUNT() FROM Workflow_Step_Execution__c];
+
+    WorkflowEngine.staleThresholdMinutes = -1;
+
+    Test.startTest();
+    WorkflowDashboardController.getFilteredInstances(
+      '',
+      'Suspended',
+      '',
+      10,
+      0,
+      ''
+    );
+    WorkflowDashboardController.getStalledInstances('', '', -1, 10, 0, '');
+    WorkflowDashboardController.getStalledCount('', '', -1);
+    Test.stopTest();
+
+    System.assertEquals(
+      instanceCountBefore,
+      [SELECT COUNT() FROM Workflow_Instance__c],
+      'No Workflow_Instance__c records should be created or deleted'
+    );
+    System.assertEquals(
+      stepCountBefore,
+      [SELECT COUNT() FROM Workflow_Step_Execution__c],
+      'No Workflow_Step_Execution__c records should be created or deleted'
+    );
+    Workflow_Instance__c unchanged = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'Suspended',
+      unchanged.Status__c,
+      'Instance status must not be modified by staleness detection'
+    );
+  }
+
+  @isTest
+  static void testGetStalledInstancesAuthorization() {
+    Profile stdProfile = [
+      SELECT Id
+      FROM Profile
+      WHERE Name = 'Standard User'
+      LIMIT 1
+    ];
+    User stdUser = new User(
+      Alias = 'stldusr',
+      Email = 'stalleduser@testorg.com',
+      EmailEncodingKey = 'UTF-8',
+      LastName = 'StalledTest',
+      LanguageLocaleKey = 'en_US',
+      LocaleSidKey = 'en_US',
+      ProfileId = stdProfile.Id,
+      TimeZoneSidKey = 'America/Los_Angeles',
+      UserName = 'stalled_dashboard_test_' +
+        DateTime.now().getTime() +
+        '@testorg.com'
+    );
+    insert stdUser;
+
+    System.runAs(stdUser) {
+      Test.startTest();
+      try {
+        WorkflowDashboardController.getStalledInstances('', '', -1, 10, 0, '');
+        System.assert(
+          false,
+          'Expected AuraHandledException for getStalledInstances'
+        );
+      } catch (AuraHandledException e) {
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception'),
+          e.getMessage()
+        );
+      }
+
+      try {
+        WorkflowDashboardController.getStalledCount('', '', -1);
+        System.assert(
+          false,
+          'Expected AuraHandledException for getStalledCount'
+        );
+      } catch (AuraHandledException e) {
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception'),
+          e.getMessage()
+        );
+      }
+      Test.stopTest();
+    }
+  }
+
+  @isTest
+  static void testStalledExcludesPendingStepWait() {
+    // A Suspended instance with a Pending step-exec (signal/approval/child wait)
+    // must NOT be flagged stalled — it has a legitimate active wait.
+    WorkflowEngine.staleThresholdMinutes = -1;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.SignalWaitWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-PendingStep-FilteredInstances'
+    );
+    insert as system inst;
+
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'StallTest.AwaitSignalStep',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+    insert as system step;
+
+    Test.startTest();
+    List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
+      '',
+      'Suspended',
+      '',
+      10,
+      0,
+      ''
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, instances.size());
+    System.assertEquals(
+      false,
+      (Boolean) instances[0].get('stalled'),
+      'Suspended instance with a Pending step (signal/approval/child wait) must not be stalled'
+    );
+  }
+
+  @isTest
+  static void testGetStalledInstancesExcludesPendingStepWait() {
+    // getStalledInstances must not surface instances that have a Pending step-exec,
+    // because those are legitimate signal/approval/child waits (engine invariant).
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.SignalWaitWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-PendingStep-StalledList'
+    );
+    insert as system inst;
+
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'StallTest.AwaitSignalStep',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+    insert as system step;
+
+    Test.startTest();
+    List<Map<String, Object>> stalled = WorkflowDashboardController.getStalledInstances(
+      '',
+      '',
+      -1,
+      10,
+      0,
+      ''
+    );
+    Test.stopTest();
+
+    for (Map<String, Object> row : stalled) {
+      System.assertNotEquals(
+        inst.Id,
+        row.get('Id'),
+        'Instance with a Pending step-exec must be excluded from stalled list'
+      );
+    }
+  }
+
+  @isTest
+  static void testGetStalledCountExcludesPendingStepWait() {
+    // getStalledCount must not count instances that have a Pending step-exec.
+    Workflow_Instance__c stalledInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.ZombieWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-PendingStep-CountA'
+    );
+    Workflow_Instance__c waitingInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'StallTest.SignalWaitWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Stall-PendingStep-CountB'
+    );
+    insert as system new List<Workflow_Instance__c>{ stalledInst, waitingInst };
+
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = waitingInst.Id,
+      Step_Name__c = 'StallTest.AwaitSignalStep',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+    insert as system step;
+
+    Test.startTest();
+    Map<String, Object> result = WorkflowDashboardController.getStalledCount(
+      '',
+      '',
+      -1
+    );
+    Test.stopTest();
+
+    Integer count = (Integer) result.get('count');
+    System.assert(count >= 1, 'At least the true zombie must be counted');
+    // Verify the waiting instance's Id is not surfaced by getStalledInstances
+    List<Map<String, Object>> stalledList = WorkflowDashboardController.getStalledInstances(
+      '',
+      '',
+      -1,
+      50,
+      0,
+      ''
+    );
+    for (Map<String, Object> row : stalledList) {
+      System.assertNotEquals(
+        waitingInst.Id,
+        row.get('Id'),
+        'Instance with Pending step must be excluded from stalled list'
+      );
+    }
   }
 
   private static User buildRestrictedUser() {
