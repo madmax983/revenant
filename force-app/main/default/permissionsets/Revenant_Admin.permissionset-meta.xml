@@ -158,22 +158,7 @@
         <readable>true</readable>
     </fieldPermissions>
 
-    <!-- Workflow_Schedule__c field permissions -->
-    <fieldPermissions>
-        <editable>true</editable>
-        <field>Workflow_Schedule__c.Workflow_Name__c</field>
-        <readable>true</readable>
-    </fieldPermissions>
-    <fieldPermissions>
-        <editable>true</editable>
-        <field>Workflow_Schedule__c.Cron_Expression__c</field>
-        <readable>true</readable>
-    </fieldPermissions>
-    <fieldPermissions>
-        <editable>true</editable>
-        <field>Workflow_Schedule__c.Correlation_Key_Prefix__c</field>
-        <readable>true</readable>
-    </fieldPermissions>
+    <!-- Workflow_Schedule__c field permissions (required fields omitted; Salesforce manages them) -->
     <fieldPermissions>
         <editable>true</editable>
         <field>Workflow_Schedule__c.Input_Json__c</field>
