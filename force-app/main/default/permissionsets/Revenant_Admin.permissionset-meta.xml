@@ -108,7 +108,17 @@
     <!-- fieldPermissions for Workflow_Signal__c (excluding required/master-detail fields) -->
     <fieldPermissions>
         <editable>true</editable>
+        <field>Workflow_Signal__c.Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
         <field>Workflow_Signal__c.Payload__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Signal__c.Signal_Key__c</field>
         <readable>true</readable>
     </fieldPermissions>
 
