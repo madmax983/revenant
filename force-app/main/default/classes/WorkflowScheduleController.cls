@@ -97,7 +97,9 @@ public with sharing class WorkflowScheduleController {
           'Last_Fired_Window__c' => s.Last_Fired_Window__c,
           'Last_Outcome__c' => s.Last_Outcome__c,
           'LastModifiedDate' => s.LastModifiedDate,
-          'dedicatedJobArmed' => armedJobNames.contains('RevenantSched_' + s.Name),
+          'dedicatedJobArmed' => armedJobNames.contains(
+            WorkflowScheduleSweeper.dedicatedJobName(s.Id)
+          ),
           'nextFireTime' => WorkflowCronEvaluator.nextFireTime(
             s.Cron_Expression__c,
             DateTime.now()
@@ -145,7 +147,7 @@ public with sharing class WorkflowScheduleController {
         Message__c,
         CreatedDate
       FROM Workflow_Log__c
-      WHERE Schedule_Name__c = :sched.Name
+      WHERE Schedule__c = :scheduleId
       WITH USER_MODE
       ORDER BY CreatedDate DESC
       LIMIT 50
@@ -244,6 +246,22 @@ public with sharing class WorkflowScheduleController {
       existingId = (Id) fields.get('Id');
     }
 
+    // Capture the prior cron so we can re-arm an already-armed dedicated job if the
+    // cadence changes (System.schedule can't be updated in place).
+    String oldCron = null;
+    if (existingId != null) {
+      List<Workflow_Schedule__c> existing = [
+        SELECT Cron_Expression__c
+        FROM Workflow_Schedule__c
+        WHERE Id = :existingId
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      if (!existing.isEmpty()) {
+        oldCron = existing[0].Cron_Expression__c;
+      }
+    }
+
     // Enforce prefix uniqueness with a friendly message (the field is also unique
     // at the database level as a backstop).
     List<Workflow_Schedule__c> dupes;
@@ -289,6 +307,28 @@ public with sharing class WorkflowScheduleController {
       upsert as user sched;
     } catch (Exception e) {
       throwAura('Could not save schedule: ' + e.getMessage());
+    }
+
+    // Re-arm an already-armed dedicated job when only the cron changed, so the
+    // live CronTrigger never keeps firing on the old cadence behind a UI that
+    // still shows the schedule as armed.
+    if (
+      existingId != null &&
+      sched.Dedicated_Slot__c &&
+      oldCron != cron &&
+      WorkflowScheduleSweeper.isDedicatedJobArmed(sched.Id)
+    ) {
+      try {
+        WorkflowScheduleSweeper.unregisterDedicatedJob(sched.Id);
+        WorkflowScheduleSweeper.registerDedicatedJob(sched.Id);
+      } catch (Exception e) {
+        throwAura(
+          'Schedule saved, but its dedicated job could not be re-armed with the ' +
+            'new cron (' +
+            e.getMessage() +
+            '). Abort and re-arm it manually.'
+        );
+      }
     }
     return sched.Id;
   }

@@ -55,7 +55,10 @@ public inherited sharing class WorkflowScheduleSweeper {
   public static void sweep() {
     DateTime now = DateTime.now();
 
-    // Least-recently-fired first so schedules beyond SWEEP_BATCH_SIZE cannot starve.
+    // Only rows that are actually due (or never fired) enter the batch, ordered
+    // least-recently-due first. Next_Fire_Window__c is a server-side cursor: a
+    // handled low-cadence schedule's next window is in the future, so it filters
+    // out and cannot pin the batch and starve higher-cadence schedules.
     List<Workflow_Schedule__c> schedules = [
       SELECT
         Id,
@@ -65,11 +68,15 @@ public inherited sharing class WorkflowScheduleSweeper {
         Input_Json__c,
         Correlation_Key_Prefix__c,
         Overlap_Policy__c,
-        Last_Fired_Window__c
+        Last_Fired_Window__c,
+        Next_Fire_Window__c
       FROM Workflow_Schedule__c
-      WHERE Enabled__c = TRUE AND Dedicated_Slot__c = FALSE
+      WHERE
+        Enabled__c = TRUE
+        AND Dedicated_Slot__c = FALSE
+        AND (Next_Fire_Window__c = NULL OR Next_Fire_Window__c <= :now)
       WITH SYSTEM_MODE
-      ORDER BY Last_Fired_Window__c ASC NULLS FIRST, Name ASC
+      ORDER BY Next_Fire_Window__c ASC NULLS FIRST, Name ASC
       LIMIT :SWEEP_BATCH_SIZE
     ];
 
@@ -95,7 +102,17 @@ public inherited sharing class WorkflowScheduleSweeper {
           sched.Last_Fired_Window__c != null &&
           sched.Last_Fired_Window__c == fireTime
         ) {
-          continue; // window already handled
+          // Window already handled. Backfill the cursor if it's missing so this row
+          // rotates out of future batches instead of being re-selected every sweep.
+          if (sched.Next_Fire_Window__c == null) {
+            toUpdate.add(
+              new Workflow_Schedule__c(
+                Id = sched.Id,
+                Next_Fire_Window__c = nextWindow(sched.Cron_Expression__c, fireTime)
+              )
+            );
+          }
+          continue;
         }
         DueItem item = new DueItem();
         item.sched = sched;
@@ -118,6 +135,10 @@ public inherited sharing class WorkflowScheduleSweeper {
     }
 
     if (dueItems.isEmpty()) {
+      // Nothing to fire, but flush any cursor backfills queued above.
+      if (!toUpdate.isEmpty()) {
+        update as system toUpdate;
+      }
       return;
     }
 
@@ -143,7 +164,11 @@ public inherited sharing class WorkflowScheduleSweeper {
           new Workflow_Schedule__c(
             Id = item.sched.Id,
             Last_Fired_Window__c = item.fireTime,
-            Last_Outcome__c = 'Skipped'
+            Last_Outcome__c = 'Skipped',
+            Next_Fire_Window__c = nextWindow(
+              item.sched.Cron_Expression__c,
+              item.fireTime
+            )
           )
         );
       } else {
@@ -183,7 +208,11 @@ public inherited sharing class WorkflowScheduleSweeper {
           new Workflow_Schedule__c(
             Id = item.sched.Id,
             Last_Fired_Window__c = item.fireTime,
-            Last_Outcome__c = outcome
+            Last_Outcome__c = outcome,
+            Next_Fire_Window__c = nextWindow(
+              item.sched.Cron_Expression__c,
+              item.fireTime
+            )
           )
         );
       }
@@ -215,8 +244,14 @@ public inherited sharing class WorkflowScheduleSweeper {
     ];
 
     String sfCron = toSalesforceCron(sched.Cron_Expression__c);
-    String jobName = 'RevenantSched_' + sched.Name;
-    System.schedule(jobName, sfCron, new WorkflowScheduleJob(sched.Id));
+    // Keyed by the immutable schedule Id (not the mutable Name) so a later rename
+    // can't orphan the CronTrigger from disable/delete/unregister/re-arm.
+    System.schedule(dedicatedJobName(sched.Id), sfCron, new WorkflowScheduleJob(sched.Id));
+  }
+
+  /** Stable CronTrigger/job name for a dedicated schedule, derived from its Id. */
+  public static String dedicatedJobName(Id scheduleId) {
+    return 'RevenantSched_' + scheduleId;
   }
 
   /**
@@ -234,10 +269,15 @@ public inherited sharing class WorkflowScheduleSweeper {
     ];
 
     DateTime now = DateTime.now();
+    // Manual runs are meant to be independent, so the key carries millisecond +
+    // random entropy: two Run Now clicks in the same second must not collapse into
+    // one instance via the engine's active-correlation-key dedup.
     String corrKey =
       effectivePrefix(sched) +
       '_manual_' +
-      now.formatGmt('yyyyMMddHHmmss');
+      String.valueOf(now.getTime()) +
+      '_' +
+      String.valueOf(Crypto.getRandomInteger()).replace('-', '');
 
     WorkflowEngine.StartResult sr = WorkflowEngine.startOrGet(
       sched.Workflow_Name__c,
@@ -263,15 +303,7 @@ public inherited sharing class WorkflowScheduleSweeper {
    * Aborts the dedicated CronTrigger registered for this schedule.
    */
   public static void unregisterDedicatedJob(Id scheduleId) {
-    Workflow_Schedule__c sched = [
-      SELECT Name
-      FROM Workflow_Schedule__c
-      WHERE Id = :scheduleId
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-
-    String jobName = 'RevenantSched_' + sched.Name;
+    String jobName = dedicatedJobName(scheduleId);
     List<CronTrigger> triggers = [
       SELECT Id
       FROM CronTrigger
@@ -281,6 +313,19 @@ public inherited sharing class WorkflowScheduleSweeper {
     for (CronTrigger ct : triggers) {
       System.abortJob(ct.Id);
     }
+  }
+
+  /** Whether a dedicated CronTrigger is currently armed for this schedule. */
+  public static Boolean isDedicatedJobArmed(Id scheduleId) {
+    String jobName = dedicatedJobName(scheduleId);
+    return ![
+        SELECT Id
+        FROM CronTrigger
+        WHERE CronJobDetail.Name = :jobName
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ]
+      .isEmpty();
   }
 
   // ── Shared helpers (also used by WorkflowScheduleJob) ───────────────────────
@@ -301,12 +346,81 @@ public inherited sharing class WorkflowScheduleSweeper {
     if (String.isBlank(sched.Input_Json__c)) {
       return null;
     }
+    // Token values are JSON-escaped before substitution so a schedule name (or
+    // any future token value) containing a quote or backslash can't produce
+    // invalid JSON and abort the sweep when JSON.deserializeUntyped runs.
     String jsonStr = sched.Input_Json__c.replace(
         '{{fireTime}}',
-        String.valueOf(fireTime)
+        jsonEscape(String.valueOf(fireTime))
       )
-      .replace('{{scheduleName}}', sched.Name);
+      .replace('{{scheduleName}}', jsonEscape(sched.Name));
     return JSON.deserializeUntyped(jsonStr);
+  }
+
+  /**
+   * Returns the JSON-escaped body of a string WITHOUT the surrounding quotes, so
+   * it can be substituted into a quoted token position ("{{scheduleName}}").
+   */
+  private static String jsonEscape(String raw) {
+    if (raw == null) {
+      return '';
+    }
+    String serialized = JSON.serialize(raw); // quoted + fully escaped
+    return serialized.substring(1, serialized.length() - 1);
+  }
+
+  /**
+   * Fires a single schedule applying its overlap policy, recording the outcome in
+   * Last_Fired_Window__c / Last_Outcome__c and a Workflow_Log__c row. Shared by the
+   * dedicated-slot WorkflowScheduleJob so dedicated fires honour Skip and keep the
+   * same state/audit trail as the 0-slot sweep.
+   */
+  public static void fireScheduled(
+    Workflow_Schedule__c sched,
+    DateTime fireTime,
+    String corrKey,
+    String logType
+  ) {
+    String overlap = String.isNotBlank(sched.Overlap_Policy__c)
+      ? sched.Overlap_Policy__c
+      : 'Skip';
+    String prefix = effectivePrefix(sched);
+
+    if (overlap == 'Skip' && hasActivePriorRun(prefix, corrKey)) {
+      Workflow_Log__c skipLog = buildLog(
+        sched,
+        corrKey,
+        fireTime,
+        'Skipped',
+        null,
+        'Prior run still active'
+      );
+      skipLog.Log_Type__c = logType;
+      upsert as system skipLog Fire_Key__c;
+      updateState(sched.Id, fireTime, 'Skipped', sched.Cron_Expression__c);
+      return;
+    }
+
+    WorkflowEngine.StartResult sr = WorkflowEngine.startOrGet(
+      sched.Workflow_Name__c,
+      corrKey,
+      resolveInput(sched, fireTime)
+    );
+    Boolean isNew = sr != null && sr.isNew;
+    String outcome = isNew ? 'Started' : 'Deduped';
+    if (isNew) {
+      Workflow_Log__c log = buildLog(
+        sched,
+        corrKey,
+        fireTime,
+        outcome,
+        sr.instanceId,
+        null
+      );
+      log.Log_Type__c = logType;
+      upsert as system log Fire_Key__c;
+    }
+    updateState(sched.Id, fireTime, outcome, sched.Cron_Expression__c);
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────
@@ -360,9 +474,13 @@ public inherited sharing class WorkflowScheduleSweeper {
       if (inst.Correlation_Key__c == null) {
         continue;
       }
+      // Prefixes/keys are case-insensitive (the prefix field is caseSensitive=false
+      // and SOQL LIKE ignores case), so compare lowercased — an admin re-casing a
+      // prefix must still recognise an in-flight prior run under Skip.
+      String lcKey = inst.Correlation_Key__c.toLowerCase();
       for (DueItem item : skipByPrefix.values()) {
         if (
-          inst.Correlation_Key__c.startsWith(item.prefix + '_') &&
+          lcKey.startsWith(item.prefix.toLowerCase() + '_') &&
           inst.Correlation_Key__c != item.corrKey
         ) {
           blocked.add(item.prefix);
@@ -370,6 +488,62 @@ public inherited sharing class WorkflowScheduleSweeper {
       }
     }
     return blocked;
+  }
+
+  /**
+   * Single-schedule overlap check (case-insensitive): is there an ACTIVE instance
+   * whose correlation key shares this prefix but is from a different window?
+   */
+  private static Boolean hasActivePriorRun(String prefix, String currentCorrKey) {
+    String likePattern = prefix + '_%';
+    List<Workflow_Instance__c> active = [
+      SELECT Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE
+        Active_Correlation_Key__c != NULL
+        AND Correlation_Key__c LIKE :likePattern
+      WITH SYSTEM_MODE
+    ];
+    String lcPrefix = prefix.toLowerCase();
+    for (Workflow_Instance__c inst : active) {
+      if (inst.Correlation_Key__c == null) {
+        continue;
+      }
+      if (
+        inst.Correlation_Key__c.toLowerCase().startsWith(lcPrefix + '_') &&
+        inst.Correlation_Key__c != currentCorrKey
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Advances a schedule's last/next window state after a fire. Single-row DML. */
+  private static void updateState(
+    Id scheduleId,
+    DateTime firedWindow,
+    String outcome,
+    String cron
+  ) {
+    update as system new Workflow_Schedule__c(
+      Id = scheduleId,
+      Last_Fired_Window__c = firedWindow,
+      Last_Outcome__c = outcome,
+      Next_Fire_Window__c = nextWindow(cron, firedWindow)
+    );
+  }
+
+  /** Next fire instant strictly after the handled window, or null if unknown. */
+  private static DateTime nextWindow(String cron, DateTime firedWindow) {
+    if (String.isBlank(cron)) {
+      return null;
+    }
+    try {
+      return WorkflowCronEvaluator.nextFireTime(cron, firedWindow);
+    } catch (Exception e) {
+      return null;
+    }
   }
 
   private static Workflow_Log__c buildLog(
@@ -385,6 +559,7 @@ public inherited sharing class WorkflowScheduleSweeper {
       Log_Type__c = LOG_TYPE,
       Level__c = LEVEL_INFO,
       Outcome__c = outcome,
+      Schedule__c = sched.Id,
       Schedule_Name__c = sched.Name,
       Workflow_Name__c = sched.Workflow_Name__c,
       Correlation_Key__c = corrKey,

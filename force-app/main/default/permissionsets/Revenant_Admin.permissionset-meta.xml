@@ -189,8 +189,18 @@
         <field>Workflow_Schedule__c.Last_Outcome__c</field>
         <readable>true</readable>
     </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Next_Fire_Window__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
 
     <!-- Workflow_Log__c field permissions -->
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Log__c.Schedule__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
     <fieldPermissions>
         <editable>true</editable>
         <field>Workflow_Log__c.Fire_Key__c</field>

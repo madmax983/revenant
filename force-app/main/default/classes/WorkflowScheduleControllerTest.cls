@@ -211,7 +211,7 @@ public class WorkflowScheduleControllerTest {
     Integer afterUnreg = [
       SELECT COUNT()
       FROM CronTrigger
-      WHERE CronJobDetail.Name = 'RevenantSched_CtrlDed'
+      WHERE CronJobDetail.Name = :WorkflowScheduleSweeper.dedicatedJobName(sched.Id)
     ];
     System.assertEquals(0, afterUnreg, 'Unregister should remove the CronTrigger');
   }
@@ -275,12 +275,13 @@ public class WorkflowScheduleControllerTest {
     sched.Dedicated_Slot__c = true;
     insert sched;
 
+    String jobName = WorkflowScheduleSweeper.dedicatedJobName(sched.Id);
     Test.startTest();
     WorkflowScheduleController.registerDedicatedJob(sched.Id);
     Integer armed = [
       SELECT COUNT()
       FROM CronTrigger
-      WHERE CronJobDetail.Name = 'RevenantSched_CtrlDisableDed'
+      WHERE CronJobDetail.Name = :jobName
     ];
     System.assertEquals(1, armed, 'Dedicated job should be armed');
 
@@ -290,9 +291,75 @@ public class WorkflowScheduleControllerTest {
     Integer afterDisable = [
       SELECT COUNT()
       FROM CronTrigger
-      WHERE CronJobDetail.Name = 'RevenantSched_CtrlDisableDed'
+      WHERE CronJobDetail.Name = :jobName
     ];
     System.assertEquals(0, afterDisable, 'Disabling a dedicated schedule should abort its CronTrigger');
+  }
+
+  @isTest
+  static void testEditCronReArmsDedicatedJob() {
+    Workflow_Schedule__c sched = makeSchedule('CtrlReArm');
+    sched.Dedicated_Slot__c = true;
+    insert sched;
+
+    Test.startTest();
+    WorkflowScheduleController.registerDedicatedJob(sched.Id);
+    CronTrigger before = [
+      SELECT Id, CronExpression
+      FROM CronTrigger
+      WHERE CronJobDetail.Name = :WorkflowScheduleSweeper.dedicatedJobName(sched.Id)
+      LIMIT 1
+    ];
+
+    // Edit only the cron of an already-armed dedicated schedule.
+    WorkflowScheduleController.saveSchedule(
+      new Map<String, Object>{
+        'Id' => sched.Id,
+        'Name' => 'CtrlReArm',
+        'Workflow_Name__c' => TEST_WF,
+        'Cron_Expression__c' => '0 5 * * *',
+        'Correlation_Key_Prefix__c' => 'CtrlReArm',
+        'Enabled__c' => true,
+        'Overlap_Policy__c' => 'Skip',
+        'Dedicated_Slot__c' => true
+      }
+    );
+    Test.stopTest();
+
+    CronTrigger after = [
+      SELECT Id, CronExpression
+      FROM CronTrigger
+      WHERE CronJobDetail.Name = :WorkflowScheduleSweeper.dedicatedJobName(sched.Id)
+      LIMIT 1
+    ];
+    System.assertNotEquals(
+      before.CronExpression,
+      after.CronExpression,
+      'Editing the cron of an armed dedicated schedule should re-arm with the new cadence'
+    );
+  }
+
+  @isTest
+  static void testLogsFollowScheduleRename() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Schedule__c sched = makeSchedule('CtrlRename');
+    insert sched;
+    // Generate a log linked by schedule Id.
+    WorkflowScheduleController.runNow(sched.Id);
+
+    // Rename the schedule — logs are keyed by Id, so they must still resolve.
+    sched.Name = 'CtrlRenamed';
+    update sched;
+
+    Test.startTest();
+    Map<String, Object> detail = WorkflowScheduleController.getScheduleDetail(sched.Id);
+    Test.stopTest();
+
+    List<Object> logs = (List<Object>) detail.get('logs');
+    System.assert(
+      logs.size() >= 1,
+      'Fire logs must remain attached to the schedule after a rename (keyed by Id)'
+    );
   }
 
   @isTest

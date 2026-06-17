@@ -13,7 +13,7 @@ The existing self-chaining `WatchdogWorkflow` (0 scheduled-job slots) already sw
 | Mode | How | Slots used | Latency |
 |---|---|---|---|
 | **0-slot (default)** | Heartbeat Sweep 3 | 0 extra | ≤ `Watchdog_Delay_Minutes__c` |
-| **Dedicated slot** | `registerDedicatedJob()` + `WorkflowScheduler` | 1 per schedule | Cron-exact |
+| **Dedicated slot** | `registerDedicatedJob()` + `WorkflowScheduleJob` | 1 per schedule | Cron-exact |
 
 For most operational schedules (hourly, nightly, weekly) the 0-slot mode is sufficient. Use a dedicated slot only when you need sub-cadence precision.
 
@@ -37,7 +37,8 @@ From the component you can:
   optional input-JSON template.
 - **Enable / disable** a schedule inline.
 - **Run now** — fire a schedule immediately, independent of its cron cadence (uses a
-  distinct `<prefix>_manual_<timestamp>` correlation key).
+  distinct `<prefix>_manual_<epochMillis>_<random>` correlation key, so repeated Run Now
+  clicks always start independent runs).
 - **View fire logs** — the recent `Workflow_Log__c` rows for a schedule
   (Started / Skipped / Deduped) with timestamps and correlation keys.
 - **Arm / abort a dedicated-slot job** for schedules flagged `Dedicated_Slot__c`.
@@ -64,6 +65,7 @@ permission sets ship:
 | Dedicated Slot | `Dedicated_Slot__c` | — | `true` = opt out of 0-slot sweep; use `registerDedicatedJob()` to arm a CronTrigger. |
 | Input JSON | `Input_Json__c` | — | JSON template passed as input. Tokens `{{fireTime}}` and `{{scheduleName}}` are substituted. |
 | Last Fired Window | `Last_Fired_Window__c` | — | **Engine-managed.** Last fire-window DateTime. Do not edit manually. |
+| Next Fire Window | `Next_Fire_Window__c` | — | **Engine-managed.** Next fire window after the last processed one. The 0-slot sweep filters on this so already-handled low-cadence schedules rotate out of the batch (no starvation). Do not edit manually. |
 | Last Outcome | `Last_Outcome__c` | — | **Engine-managed.** Last outcome: `Started`, `Skipped`, or `Deduped`. |
 
 ## Cron expression syntax (5-field)
@@ -132,7 +134,7 @@ Each run's correlation key is `prefix_yyyyMMddHHmm` (e.g. `NightlyRecon_20260617
 | `Skipped` | Overlap=Skip and a prior run is still active. No instance was started. |
 | `Deduped` | `startOrGet` resolved to an existing instance (safety net; rare). No log row is written for Deduped to avoid noise. |
 
-Log rows are upserted on `Fire_Key__c` (`corrKey:outcome`) so repeated sweeps of the same window produce at most one row per outcome.
+Log rows are upserted on `Fire_Key__c` (`corrKey:outcome`) so repeated sweeps of the same window produce at most one row per outcome. Each log is linked to its schedule by the `Schedule__c` lookup (an immutable Id), so the audit trail stays attached even if the schedule is renamed.
 
 ## Disabling / deleting a schedule
 
@@ -161,7 +163,9 @@ Id schedId = [SELECT Id FROM Workflow_Schedule__c WHERE Name = 'MyPreciseSchedul
 WorkflowScheduleSweeper.registerDedicatedJob(schedId);
 ```
 
-This arms one `CronTrigger` using the existing `WorkflowScheduler` primitive and converts the 5-field cron to Salesforce's 7-field format (`0 <min> <hour> <dom> <month> <dow> *`).
+This arms one `CronTrigger` running `WorkflowScheduleJob`, which re-reads the schedule at fire time and converts the 5-field cron to Salesforce's 7-field format (`0 <min> <hour> <dom> <month> <dow> *`). Dedicated fires go through the **same fire path as the 0-slot sweep**, so they honour `Overlap_Policy__c` (a `Skip` schedule with a prior run still in flight logs `Skipped` instead of starting a second run) and record `Last_Fired_Window__c` / `Last_Outcome__c` plus a `Workflow_Log__c` row — the manager shows identical state and audit history for dedicated and 0-slot schedules.
+
+The job is keyed by the schedule's **immutable Id**, so renaming a schedule never orphans its `CronTrigger`. Editing only the cron of an already-armed dedicated schedule via the UI automatically aborts and re-arms the trigger with the new cadence (`System.schedule` can't be updated in place).
 
 > **Note:** The `Dedicated_Slot__c` checkbox must be `true` on the record so the 0-slot sweep ignores it (preventing double-fires).
 
@@ -180,7 +184,11 @@ differently from the 0-slot evaluator in three ways:
 - **Enable/disable & input tokens:** the dedicated job re-reads the schedule at fire time,
   so disabling it stops firing on the next tick (and disabling via the UI also aborts the
   CronTrigger immediately), and `{{fireTime}}` / `{{scheduleName}}` tokens are resolved
-  just like the 0-slot path.
+  just like the 0-slot path (token values are JSON-escaped, so a name with a quote or
+  backslash can't break the input JSON).
+
+Apart from timezone and DOM+DOW handling above, dedicated mode now matches the 0-slot
+path for overlap policy, state, and fire logging.
 
 To remove it:
 

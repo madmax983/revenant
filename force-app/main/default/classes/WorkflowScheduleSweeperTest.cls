@@ -288,15 +288,180 @@ public class WorkflowScheduleSweeperTest {
     ];
     System.assertEquals(0, instances.size(), 'Dedicated-slot schedule should not be swept by 0-slot sweeper');
 
-    // Unregister.
+    // Jobs are keyed by the immutable schedule Id (not the mutable Name).
+    String dedJobName = WorkflowScheduleSweeper.dedicatedJobName(sched.Id);
+    System.assertEquals(
+      1,
+      [SELECT COUNT() FROM CronTrigger WHERE CronJobDetail.Name = :dedJobName],
+      'registerDedicatedJob should arm a CronTrigger named by schedule Id'
+    );
+    System.assert(
+      WorkflowScheduleSweeper.isDedicatedJobArmed(sched.Id),
+      'isDedicatedJobArmed should report the armed job'
+    );
+
+    // Unregister by Id removes it even though it was never named by Name.
     WorkflowScheduleSweeper.unregisterDedicatedJob(sched.Id);
-    String dedJobName = 'RevenantSched_' + PREFIX + '8';
     Integer afterAbort = [
       SELECT COUNT()
       FROM CronTrigger
       WHERE CronJobDetail.Name = :dedJobName
     ];
     System.assertEquals(0, afterAbort, 'unregisterDedicatedJob should remove the CronTrigger');
+  }
+
+  // ── Dedicated job honours Skip and records state/logs (parity with 0-slot) ─
+
+  @isTest
+  static void testDedicatedJobAppliesSkipAndRecordsState() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Schedule__c sched = makeSchedule('DedSkip', '0 2 * * *', true, 'Skip');
+    sched.Dedicated_Slot__c = true;
+    insert sched;
+
+    // A prior run for this schedule is still active (different window).
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = TEST_WF,
+      Correlation_Key__c = 'DedSkip_197001010000',
+      Status__c = 'Running'
+    );
+
+    Test.startTest();
+    new WorkflowScheduleJob(sched.Id).execute(null);
+    Test.stopTest();
+
+    // Skip → no new instance for the current minute window.
+    System.assertEquals(
+      1,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'DedSkip_%'],
+      'Dedicated Skip must not start a second concurrent run'
+    );
+    // State + a Skipped log are recorded (parity with the 0-slot path).
+    Workflow_Schedule__c after = [
+      SELECT Last_Outcome__c, Last_Fired_Window__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :sched.Id
+    ];
+    System.assertEquals('Skipped', after.Last_Outcome__c, 'Dedicated Skip should record Last_Outcome__c');
+    System.assertNotEquals(null, after.Last_Fired_Window__c, 'Dedicated fire should record Last_Fired_Window__c');
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Log__c
+        WHERE Schedule__c = :sched.Id AND Outcome__c = 'Skipped'
+      ],
+      'Dedicated Skip should write a Skipped log linked by schedule Id'
+    );
+  }
+
+  @isTest
+  static void testDedicatedJobRecordsStartedState() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Schedule__c sched = makeSchedule('DedState', '0 2 * * *', true, 'Allow');
+    sched.Dedicated_Slot__c = true;
+    insert sched;
+
+    Test.startTest();
+    new WorkflowScheduleJob(sched.Id).execute(null);
+    Test.stopTest();
+
+    Workflow_Schedule__c after = [
+      SELECT Last_Outcome__c, Last_Fired_Window__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :sched.Id
+    ];
+    System.assertEquals('Started', after.Last_Outcome__c, 'Dedicated fire should record Started');
+    System.assertNotEquals(null, after.Last_Fired_Window__c, 'Dedicated fire should set Last_Fired_Window__c');
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Log__c
+        WHERE Schedule__c = :sched.Id AND Outcome__c = 'Started'
+      ],
+      'Dedicated fire should write a Started log linked by schedule Id'
+    );
+  }
+
+  // ── Token values are JSON-escaped (a quote in the name must not break JSON) ─
+
+  @isTest
+  static void testTokenSubstitutionEscapesSpecialChars() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Schedule__c sched = new Workflow_Schedule__c(
+      Name = 'Quote " and \\ back',
+      Workflow_Name__c = TEST_WF,
+      Cron_Expression__c = EVERY_MINUTE_CRON,
+      Correlation_Key_Prefix__c = 'TokEsc',
+      Enabled__c = true,
+      Overlap_Policy__c = 'Allow',
+      Dedicated_Slot__c = false,
+      Input_Json__c = '{"src":"{{scheduleName}}"}'
+    );
+    insert sched;
+
+    Test.startTest();
+    WorkflowScheduleSweeper.sweep();
+    Test.stopTest();
+
+    // The fire must succeed (no JSON parse exception aborting the sweep).
+    System.assertEquals(
+      1,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'TokEsc_%'],
+      'A schedule name with quotes/backslashes must still produce valid JSON and fire'
+    );
+  }
+
+  // ── Manual run keys are unique even within the same second ────────────────
+
+  @isTest
+  static void testManualRunKeysUnique() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Schedule__c sched = makeSchedule('ManyManual', '0 2 * * *', true, 'Allow');
+    insert sched;
+
+    Test.startTest();
+    Id i1 = WorkflowScheduleSweeper.runNow(sched.Id);
+    Id i2 = WorkflowScheduleSweeper.runNow(sched.Id);
+    Test.stopTest();
+
+    System.assertNotEquals(i1, i2, 'Two Run Now calls must produce distinct instances');
+    System.assertEquals(
+      2,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'ManyManual_manual_%'],
+      'Two manual runs in the same second must not collapse into one instance'
+    );
+  }
+
+  // ── Overlap Skip is case-insensitive on the prefix ────────────────────────
+
+  @isTest
+  static void testOverlapSkipCaseInsensitive() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Schedule__c sched = makeSchedule('CaseJob', EVERY_MINUTE_CRON, true, 'Skip');
+    insert sched;
+
+    // Prior active run keyed with a different-case prefix (correlation keys are
+    // case-insensitive); Skip must still recognise it as the prior run.
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = TEST_WF,
+      Correlation_Key__c = 'casejob_197001010000',
+      Status__c = 'Running'
+    );
+
+    DateTime fireTime = WorkflowCronEvaluator.previousFireTime(EVERY_MINUTE_CRON, DateTime.now());
+    String currentKey = 'CaseJob_' + fireTime.formatGmt('yyyyMMddHHmm');
+
+    Test.startTest();
+    WorkflowScheduleSweeper.sweep();
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c = :currentKey],
+      'Skip must treat a different-cased prefix as the same prior run'
+    );
   }
 
   // ── Heartbeat integration: sweep runs inside processWatchdogHeartbeat ─────

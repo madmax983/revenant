@@ -23,9 +23,11 @@ public inherited sharing class WorkflowScheduleJob implements Schedulable {
         Id,
         Name,
         Workflow_Name__c,
+        Cron_Expression__c,
         Correlation_Key_Prefix__c,
         Input_Json__c,
         Enabled__c,
+        Overlap_Policy__c,
         Dedicated_Slot__c
       FROM Workflow_Schedule__c
       WHERE Id = :scheduleId
@@ -50,10 +52,14 @@ public inherited sharing class WorkflowScheduleJob implements Schedulable {
       '_' +
       now.formatGmt('yyyyMMddHHmm');
 
-    WorkflowEngine.startOrGet(
-      sched.Workflow_Name__c,
+    // Route through the shared fire path so dedicated fires honour the overlap
+    // policy and record Last_Fired_Window__c / Last_Outcome__c + a fire log,
+    // identically to the 0-slot sweep.
+    WorkflowScheduleSweeper.fireScheduled(
+      sched,
+      now,
       corrKey,
-      WorkflowScheduleSweeper.resolveInput(sched, now)
+      'ScheduleDedicatedFire'
     );
   }
 }
