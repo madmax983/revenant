@@ -16,7 +16,12 @@ public class WorkflowScheduleControllerTest {
 
   @isTest
   static void testGetSchedules() {
-    insert makeSchedule('CtrlGet');
+    // getSchedules surfaces the persisted Next_Fire_Window__c cursor as nextFireTime
+    // (no per-row cron scan), so seed the cursor to verify it passes through.
+    Workflow_Schedule__c sched = makeSchedule('CtrlGet');
+    DateTime cursor = DateTime.now().addHours(1);
+    sched.Next_Fire_Window__c = cursor;
+    insert sched;
 
     Test.startTest();
     List<Map<String, Object>> rows = WorkflowScheduleController.getSchedules('0');
@@ -25,7 +30,80 @@ public class WorkflowScheduleControllerTest {
     System.assertEquals(1, rows.size(), 'Should return the one schedule');
     System.assertEquals('CtrlGet', rows[0].get('Name'));
     System.assertEquals(false, rows[0].get('dedicatedJobArmed'), 'No dedicated job armed');
-    System.assertNotEquals(null, rows[0].get('nextFireTime'), 'nextFireTime should be computed');
+    System.assertEquals(
+      cursor,
+      rows[0].get('nextFireTime'),
+      'nextFireTime should be the persisted Next_Fire_Window__c cursor, not a per-row scan'
+    );
+  }
+
+  @isTest
+  static void testSaveCreateSeedsCursor() {
+    Test.startTest();
+    Id newId = WorkflowScheduleController.saveSchedule(
+      new Map<String, Object>{
+        'Name' => 'CtrlSeed',
+        'Workflow_Name__c' => TEST_WF,
+        'Cron_Expression__c' => '0 2 * * *',
+        'Correlation_Key_Prefix__c' => 'CtrlSeed',
+        'Enabled__c' => true,
+        'Overlap_Policy__c' => 'Skip',
+        'Dedicated_Slot__c' => false
+      }
+    );
+    Test.stopTest();
+
+    Workflow_Schedule__c saved = [
+      SELECT Next_Fire_Window__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :newId
+    ];
+    System.assertNotEquals(
+      null,
+      saved.Next_Fire_Window__c,
+      'Creating a schedule should seed the Next_Fire_Window__c cursor for the list view'
+    );
+  }
+
+  @isTest
+  static void testEditCronResetsCursor() {
+    // A monthly schedule whose cursor sits far in the future.
+    Workflow_Schedule__c sched = makeSchedule('CtrlCursor');
+    sched.Cron_Expression__c = '0 0 1 * *';
+    sched.Next_Fire_Window__c = DateTime.now().addDays(20);
+    insert sched;
+    DateTime staleCursor = sched.Next_Fire_Window__c;
+
+    Test.startTest();
+    // Edit it to fire every minute — the stale far-future cursor would keep it out
+    // of the sweep batch (which only selects cursor <= now) until next month.
+    WorkflowScheduleController.saveSchedule(
+      new Map<String, Object>{
+        'Id' => sched.Id,
+        'Name' => 'CtrlCursor',
+        'Workflow_Name__c' => TEST_WF,
+        'Cron_Expression__c' => '* * * * *',
+        'Correlation_Key_Prefix__c' => 'CtrlCursor',
+        'Enabled__c' => true,
+        'Overlap_Policy__c' => 'Skip',
+        'Dedicated_Slot__c' => false
+      }
+    );
+    Test.stopTest();
+
+    Workflow_Schedule__c after = [
+      SELECT Next_Fire_Window__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :sched.Id
+    ];
+    System.assert(
+      after.Next_Fire_Window__c < staleCursor,
+      'Changing the cron must recompute the cursor so the sweep sees the new cadence'
+    );
+    System.assert(
+      after.Next_Fire_Window__c <= DateTime.now().addMinutes(1),
+      'An every-minute cron should leave the cursor due now (not next month)'
+    );
   }
 
   @isTest

@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <!-- Apex access for the schedule manager's @AuraEnabled controller. Without this,
+         a schedule-only admin whose profile doesn't already expose the class hits an
+         insufficient-Apex-access error on every LWC call (getSchedules, saveSchedule,
+         etc.), making the advertised schedule-only UI unusable. Class-level security is
+         enforced only at the LWC entry point, so the controller's downstream classes
+         (WorkflowScheduleSweeper, WorkflowCronEvaluator, WorkflowEngine) need no entry. -->
+    <classAccesses>
+        <apexClass>WorkflowScheduleController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
     <customPermissions>
         <enabled>true</enabled>
         <name>Workflow_Schedule_Admin</name>

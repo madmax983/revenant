@@ -63,6 +63,7 @@ public with sharing class WorkflowScheduleController {
         Dedicated_Slot__c,
         Last_Fired_Window__c,
         Last_Outcome__c,
+        Next_Fire_Window__c,
         LastModifiedDate
       FROM Workflow_Schedule__c
       WITH USER_MODE
@@ -100,10 +101,13 @@ public with sharing class WorkflowScheduleController {
           'dedicatedJobArmed' => armedJobNames.contains(
             WorkflowScheduleSweeper.dedicatedJobName(s.Id)
           ),
-          'nextFireTime' => WorkflowCronEvaluator.nextFireTime(
-            s.Cron_Expression__c,
-            DateTime.now()
-          )
+          // Read the persisted, engine-managed cursor rather than recomputing the
+          // cron per row. Walking the evaluator for up to 2000 rows (each up to a
+          // ~4-year lookahead for low-frequency or impossible crons) could burn the
+          // Apex CPU limit and fail the whole list load. The cursor is populated at
+          // save time and advanced by each sweep; the detail view still computes the
+          // exact next/last fire lazily for a single schedule.
+          'nextFireTime' => s.Next_Fire_Window__c
         }
       );
     }
@@ -302,6 +306,19 @@ public with sharing class WorkflowScheduleController {
     sched.Enabled__c = toBool(fields.get('Enabled__c'));
     sched.Overlap_Policy__c = (String) fields.get('Overlap_Policy__c');
     sched.Dedicated_Slot__c = toBool(fields.get('Dedicated_Slot__c'));
+
+    // Recompute the engine-managed cursor on create or whenever the cron changes.
+    // sweep() only selects rows whose Next_Fire_Window__c is null or <= now, so a
+    // stale cursor from the prior cron (e.g. next month for a monthly schedule)
+    // would keep an edited every-minute schedule filtered out until that old date.
+    // Pointing the cursor at the new cron's next window both fixes that and gives
+    // the list view an immediate "next run" without a per-row evaluator scan.
+    if (existingId == null || oldCron != cron) {
+      sched.Next_Fire_Window__c = WorkflowCronEvaluator.nextFireTime(
+        cron,
+        DateTime.now()
+      );
+    }
 
     try {
       upsert as user sched;

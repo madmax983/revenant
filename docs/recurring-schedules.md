@@ -65,8 +65,8 @@ permission sets ship:
 | Dedicated Slot | `Dedicated_Slot__c` | — | `true` = opt out of 0-slot sweep; use `registerDedicatedJob()` to arm a CronTrigger. |
 | Input JSON | `Input_Json__c` | — | JSON template passed as input. Tokens `{{fireTime}}` and `{{scheduleName}}` are substituted. |
 | Last Fired Window | `Last_Fired_Window__c` | — | **Engine-managed.** Last fire-window DateTime. Do not edit manually. |
-| Next Fire Window | `Next_Fire_Window__c` | — | **Engine-managed.** Next fire window after the last processed one. The 0-slot sweep filters on this so already-handled low-cadence schedules rotate out of the batch (no starvation). Do not edit manually. |
-| Last Outcome | `Last_Outcome__c` | — | **Engine-managed.** Last outcome: `Started`, `Skipped`, or `Deduped`. |
+| Next Fire Window | `Next_Fire_Window__c` | — | **Engine-managed.** Next fire window after the last processed one. The 0-slot sweep filters on this so already-handled low-cadence schedules rotate out of the batch (no starvation). It is (re)computed when a schedule is saved with a new cron and advanced by each sweep, and the manager's **Next Run** column reads it directly (no per-row cron scan on list load). Do not edit manually. |
+| Last Outcome | `Last_Outcome__c` | — | **Engine-managed.** Last outcome: `Started`, `Skipped`, `Deduped`, `Error` (malformed `Input_Json__c`), or `Invalid cron` (a syntactically valid cron that never fires, e.g. `0 0 31 2 *`). Do not edit manually. |
 
 ## Cron expression syntax (5-field)
 
@@ -133,6 +133,8 @@ Each run's correlation key is `prefix_yyyyMMddHHmm` (e.g. `NightlyRecon_20260617
 | `Started` | A new workflow instance was created. `Workflow_Instance__c` is populated. |
 | `Skipped` | Overlap=Skip and a prior run is still active. No instance was started. |
 | `Deduped` | `startOrGet` resolved to an existing instance (safety net; rare). No log row is written for Deduped to avoid noise. |
+| `Error` | The schedule's `Input_Json__c` is malformed (e.g. the record was created via Setup, bypassing the manager's validation). The bad schedule is isolated and logged with `Outcome__c = 'Error'`; other due schedules in the same heartbeat are unaffected. No instance is started. |
+| `Invalid cron` | A syntactically valid cron that never resolves to a fire window (e.g. `0 0 31 2 *`). The 0-slot sweep parks the row (advances its cursor) so it cannot starve other schedules. Re-saving with a valid cron clears it. |
 
 Log rows are upserted on `Fire_Key__c` (`corrKey:outcome`) so repeated sweeps of the same window produce at most one row per outcome. Each log is linked to its schedule by the `Schedule__c` lookup (an immutable Id), so the audit trail stays attached even if the schedule is renamed.
 

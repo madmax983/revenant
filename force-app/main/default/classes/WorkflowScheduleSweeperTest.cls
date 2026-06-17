@@ -729,4 +729,126 @@ public class WorkflowScheduleSweeperTest {
       'Disabled dedicated job must be a no-op even if its CronTrigger fires'
     );
   }
+
+  // ── Impossible cron parks the row out of the batch (no starvation) ─────────
+
+  @isTest
+  static void testImpossibleCronParksRow() {
+    WorkflowEngine.disableQueueableInTest = true;
+    // "0 0 31 2 *" (Feb 31) is syntactically valid but never fires, so
+    // previousFireTime returns null after the full lookback walk.
+    Workflow_Schedule__c impossible = makeSchedule('Impossible', '0 0 31 2 *', true, 'Allow');
+    insert impossible;
+
+    Test.startTest();
+    WorkflowScheduleSweeper.sweep();
+    Test.stopTest();
+
+    // No instance is created for the impossible cron…
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'Impossible_%'],
+      'Impossible cron must not start an instance'
+    );
+    // …and its cursor is advanced + outcome flagged so it rotates out of the
+    // NULLS-FIRST batch instead of being re-selected every heartbeat.
+    Workflow_Schedule__c after = [
+      SELECT Next_Fire_Window__c, Last_Outcome__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :impossible.Id
+    ];
+    System.assertNotEquals(
+      null,
+      after.Next_Fire_Window__c,
+      'Impossible cron should get a parked (non-null) cursor so it rotates out'
+    );
+    System.assert(
+      after.Next_Fire_Window__c > DateTime.now(),
+      'Parked cursor should be in the future so the row leaves the batch'
+    );
+    System.assertEquals(
+      'Invalid cron',
+      after.Last_Outcome__c,
+      'Impossible cron should record an Invalid cron outcome'
+    );
+  }
+
+  @isTest
+  static void testImpossibleCronDoesNotStarveValidSchedule() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowScheduleSweeper.SWEEP_BATCH_SIZE = 1;
+
+    // Impossible cron sorts first (null cursor). Without parking, it would pin the
+    // batch of 1 forever and a valid schedule would never fire.
+    Workflow_Schedule__c bad = makeSchedule('AImpossible', '0 0 31 2 *', true, 'Allow');
+    Workflow_Schedule__c good = makeSchedule('BValid', EVERY_MINUTE_CRON, true, 'Allow');
+    insert new List<Workflow_Schedule__c>{ bad, good };
+
+    Test.startTest();
+    WorkflowScheduleSweeper.sweep(); // parks the impossible row
+    WorkflowScheduleSweeper.sweep(); // now the valid row gets the batch slot
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'BValid_%'],
+      'A valid schedule must not be starved behind a parked impossible cron'
+    );
+  }
+
+  // ── Bad input JSON on one schedule must not abort the whole sweep batch ────
+
+  @isTest
+  static void testBadInputJsonIsolatedFromBatch() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // A schedule with malformed Input_Json__c (as if created via Setup, bypassing
+    // saveSchedule's JSON validation).
+    Workflow_Schedule__c bad = new Workflow_Schedule__c(
+      Name = 'BadJsonSched',
+      Workflow_Name__c = TEST_WF,
+      Cron_Expression__c = EVERY_MINUTE_CRON,
+      Correlation_Key_Prefix__c = 'BadJsonSched',
+      Enabled__c = true,
+      Overlap_Policy__c = 'Allow',
+      Dedicated_Slot__c = false,
+      Input_Json__c = '{not valid json'
+    );
+    // A healthy, due schedule that must still fire on the same heartbeat.
+    Workflow_Schedule__c good = makeSchedule('GoodJsonSched', EVERY_MINUTE_CRON, true, 'Allow');
+    insert new List<Workflow_Schedule__c>{ bad, good };
+
+    Test.startTest();
+    WorkflowScheduleSweeper.sweep();
+    Test.stopTest();
+
+    // The healthy schedule fires despite the malformed sibling in the same batch.
+    System.assertEquals(
+      1,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'GoodJsonSched_%'],
+      'A malformed-JSON schedule must not abort unrelated due schedules in the batch'
+    );
+    // The bad schedule starts nothing but is recorded as an Error and advanced.
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'BadJsonSched_%'],
+      'A malformed-JSON schedule must not start an instance'
+    );
+    Workflow_Schedule__c afterBad = [
+      SELECT Last_Outcome__c, Last_Fired_Window__c, Next_Fire_Window__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :bad.Id
+    ];
+    System.assertEquals('Error', afterBad.Last_Outcome__c, 'Bad JSON schedule should record an Error outcome');
+    System.assertNotEquals(null, afterBad.Last_Fired_Window__c, 'Bad JSON schedule window should be marked handled');
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Log__c
+        WHERE Schedule__c = :bad.Id AND Outcome__c = 'Error'
+      ],
+      'Bad JSON schedule should write an Error log'
+    );
+  }
 }

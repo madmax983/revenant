@@ -96,7 +96,20 @@ public inherited sharing class WorkflowScheduleSweeper {
           now
         );
         if (fireTime == null) {
-          continue; // invalid cron or no match in lookback window
+          // Syntactically valid but impossible cron (e.g. "0 0 31 2 *") never
+          // yields a window, so previousFireTime walks the full lookback and
+          // returns null. Leaving the cursor null would re-select this row on
+          // every heartbeat (NULLS FIRST) and starve real schedules behind the
+          // batch limit. Park it a day out with an Invalid outcome so it rotates
+          // out; a later edit via saveSchedule resets the cursor to re-arm it.
+          toUpdate.add(
+            new Workflow_Schedule__c(
+              Id = sched.Id,
+              Next_Fire_Window__c = now.addDays(1),
+              Last_Outcome__c = 'Invalid cron'
+            )
+          );
+          continue;
         }
         if (
           sched.Last_Fired_Window__c != null &&
@@ -172,11 +185,42 @@ public inherited sharing class WorkflowScheduleSweeper {
           )
         );
       } else {
+        // resolveInput can throw if Input_Json__c is malformed (a schedule can be
+        // created/edited via Setup or Object Manager, bypassing saveSchedule's JSON
+        // validation). Isolate it per item so one bad schedule cannot abort the whole
+        // heartbeat batch and block unrelated due schedules from starting.
+        Object resolvedInput;
+        try {
+          resolvedInput = resolveInput(item.sched, item.fireTime);
+        } catch (Exception ex) {
+          logsToUpsert.add(
+            buildLog(
+              item.sched,
+              item.corrKey,
+              item.fireTime,
+              'Error',
+              null,
+              'Invalid input JSON: ' + ex.getMessage()
+            )
+          );
+          toUpdate.add(
+            new Workflow_Schedule__c(
+              Id = item.sched.Id,
+              Last_Fired_Window__c = item.fireTime,
+              Last_Outcome__c = 'Error',
+              Next_Fire_Window__c = nextWindow(
+                item.sched.Cron_Expression__c,
+                item.fireTime
+              )
+            )
+          );
+          continue;
+        }
         requests.add(
           new WorkflowEngine.StartRequest(
             item.sched.Workflow_Name__c,
             item.corrKey,
-            resolveInput(item.sched, item.fireTime)
+            resolvedInput
           )
         );
         starting.add(item);
