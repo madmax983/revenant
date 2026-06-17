@@ -20,6 +20,25 @@ public inherited sharing class WorkflowDashboardController {
   // filters then paginates within this bound; the count reports `capped` when hit.
   private static final Integer STALLED_CANDIDATE_CAP = 2000;
 
+  // Statuses that mean an instance still needs its definition-version code deployed.
+  // CompensationFailed is included because such instances can still be Resume-Rollback'd.
+  private static final Set<String> NON_TERMINAL_STATUSES = new Set<String>{
+    'Pending',
+    'Running',
+    'Suspended',
+    'Compensating',
+    'Cancelling',
+    'CompensationFailed'
+  };
+
+  // Terminal statuses that are nonetheless re-drivable on their original version
+  // (Retry/Re-drive replays the run on the same Definition_Version__c). Reported as
+  // a distinct count by getVersionDrain so retiring a version's code never silently
+  // breaks a still-recoverable failed run.
+  private static final Set<String> RECOVERABLE_TERMINAL_STATUSES = new Set<String>{
+    'Failed'
+  };
+
   private static void checkAuthorization() {
     if (FeatureManagement.checkPermission('Workflow_Admin')) {
       return;
@@ -1505,5 +1524,98 @@ public inherited sharing class WorkflowDashboardController {
       );
       throw new AuraHandledException(ex.getMessage());
     }
+  }
+
+  /**
+   * Returns a per-Definition_Version__c drain view for the given workflow name.
+   * Each row carries three buckets — non-terminal (still executing), failed
+   * (terminal but re-drivable on this version), and clean terminal — plus a
+   * safeToRetire flag that is true only when BOTH the non-terminal and failed
+   * counts are 0. Failed runs are surfaced separately rather than folded into
+   * either bucket: a transient failure may recover on re-drive (so the version's
+   * code is still needed), while a failure caused by the very bug a new version
+   * fixes will never recover — the engine cannot tell which, so it reports the
+   * count and leaves the retire/re-drive judgement to the operator.
+   * Only versions actually observed in Workflow_Instance__c are returned;
+   * absence from results is NOT reported as "safe".
+   */
+  @AuraEnabled
+  public static List<Map<String, Object>> getVersionDrain(String workflowName) {
+    checkAuthorization();
+
+    if (String.isBlank(workflowName)) {
+      return new List<Map<String, Object>>();
+    }
+
+    // Definition_Version__c is a Number field, and Number fields are not groupable
+    // in SOQL (isGroupable() == false) — a `GROUP BY Definition_Version__c` throws
+    // "field ... can not be grouped in a query call". So we tally per version+status
+    // in Apex instead. The inline SOQL for-loop streams rows in 200-record chunks,
+    // keeping heap flat up to the 50k query-row limit. WITH SYSTEM_MODE mirrors the
+    // dashboard's intent to aggregate across all instances regardless of sharing/FLS.
+
+    // Accumulate counts per version: key = version (may be null → use 'null' string key)
+    Map<String, Integer> nonTerminalByVersion = new Map<String, Integer>();
+    Map<String, Integer> failedByVersion = new Map<String, Integer>();
+    Map<String, Integer> terminalByVersion = new Map<String, Integer>();
+    Map<String, Integer> versionKeyToInt = new Map<String, Integer>();
+
+    for (Workflow_Instance__c inst : [
+      SELECT Definition_Version__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Workflow_Name__c = :workflowName
+      WITH SYSTEM_MODE
+    ]) {
+      // Definition_Version__c is a Number, so it materializes as Decimal on the SObject.
+      Decimal verDecimal = inst.Definition_Version__c;
+      Integer ver = verDecimal == null ? null : verDecimal.intValue();
+      String verKey = ver == null ? 'null' : String.valueOf(ver);
+      String stat = inst.Status__c;
+
+      if (!nonTerminalByVersion.containsKey(verKey)) {
+        nonTerminalByVersion.put(verKey, 0);
+        failedByVersion.put(verKey, 0);
+        terminalByVersion.put(verKey, 0);
+        versionKeyToInt.put(verKey, ver);
+      }
+
+      if (NON_TERMINAL_STATUSES.contains(stat)) {
+        nonTerminalByVersion.put(verKey, nonTerminalByVersion.get(verKey) + 1);
+      } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
+        failedByVersion.put(verKey, failedByVersion.get(verKey) + 1);
+      } else {
+        terminalByVersion.put(verKey, terminalByVersion.get(verKey) + 1);
+      }
+    }
+
+    // Sort version keys numerically (null sorts last)
+    List<String> sortedKeys = new List<String>(nonTerminalByVersion.keySet());
+    sortedKeys.sort();
+    // Move 'null' key to end if present.
+    // Apex List.remove() only accepts an Integer index, so locate-then-remove.
+    Integer nullKeyIdx = sortedKeys.indexOf('null');
+    if (nullKeyIdx != -1) {
+      sortedKeys.remove(nullKeyIdx);
+      sortedKeys.add('null');
+    }
+
+    List<Map<String, Object>> results = new List<Map<String, Object>>();
+    for (String verKey : sortedKeys) {
+      Integer nonTerminal = nonTerminalByVersion.get(verKey);
+      Integer failed = failedByVersion.get(verKey);
+      Integer terminal = terminalByVersion.get(verKey);
+      results.add(
+        new Map<String, Object>{
+          'version' => versionKeyToInt.get(verKey),
+          'nonTerminalCount' => nonTerminal,
+          'failedCount' => failed,
+          'terminalCount' => terminal,
+          'totalCount' => nonTerminal + failed + terminal,
+          'safeToRetire' => nonTerminal == 0 && failed == 0
+        }
+      );
+    }
+
+    return results;
   }
 }

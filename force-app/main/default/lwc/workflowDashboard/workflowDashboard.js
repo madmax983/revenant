@@ -16,6 +16,7 @@ import getWatchdogStatus from "@salesforce/apex/WorkflowDashboardController.getW
 import enqueueWatchdog from "@salesforce/apex/WorkflowDashboardController.enqueueWatchdog";
 import getStalledInstances from "@salesforce/apex/WorkflowDashboardController.getStalledInstances";
 import getStalledCount from "@salesforce/apex/WorkflowDashboardController.getStalledCount";
+import getVersionDrain from "@salesforce/apex/WorkflowDashboardController.getVersionDrain";
 
 export default class WorkflowDashboard extends LightningElement {
   instances = [];
@@ -36,6 +37,12 @@ export default class WorkflowDashboard extends LightningElement {
   viewingDoctor = false;
   loadingDoctor = false;
   doctorData = { config: {} };
+
+  // Version Drain state
+  viewingDrain = false;
+  loadingDrain = false;
+  drainRows = [];
+  drainWorkflow = "";
 
   // Launch Modal Fields
   launchName = "";
@@ -414,6 +421,7 @@ export default class WorkflowDashboard extends LightningElement {
   handleSelectInstance(event) {
     this.stopPolling();
     this.viewingDoctor = false;
+    this.viewingDrain = false;
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
@@ -574,6 +582,9 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   handleRefresh() {
+    if (this.viewingDrain) {
+      this.loadDrain(true);
+    }
     this.refreshInstances().then(() => {
       this.showToast("Success", "Workflow dashboard refreshed", "success");
     });
@@ -581,6 +592,7 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleOpenDoctor() {
     this.viewingDoctor = true;
+    this.viewingDrain = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     this.loadDoctorStatus();
@@ -588,6 +600,101 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleCloseDoctor() {
     this.viewingDoctor = false;
+  }
+
+  handleOpenDrain() {
+    this.viewingDrain = true;
+    this.viewingDoctor = false;
+    this.selectedInstanceId = null;
+    this.filterInstancesList();
+    // Re-run the query if a workflow is already selected; the combobox value
+    // hasn't changed, so its onchange won't fire to refresh the table itself.
+    if (this.drainWorkflow) {
+      this.loadDrain();
+    } else {
+      this.drainRows = [];
+    }
+  }
+
+  handleCloseDrain() {
+    this.viewingDrain = false;
+  }
+
+  handleDrainWorkflowChange(event) {
+    this.drainWorkflow = event.detail.value;
+    this.loadDrain();
+  }
+
+  // isRefresh = true is a silent periodic/toolbar re-fetch of the same workflow:
+  // it keeps the current rows visible (no spinner, no flicker) and swallows
+  // errors. A fresh load (workflow change / panel open) clears prior rows up front
+  // so a slow or failing request never leaves a previous definition's retirement
+  // status showing under the new selection.
+  loadDrain(isRefresh) {
+    if (!this.drainWorkflow) {
+      this.drainRows = [];
+      return;
+    }
+    // Capture the requested workflow so a slower, earlier response for a
+    // previously-selected workflow can't overwrite the current selection.
+    const requestedWorkflow = this.drainWorkflow;
+    if (!isRefresh) {
+      this.drainRows = [];
+      this.loadingDrain = true;
+    }
+    getVersionDrain({ workflowName: requestedWorkflow })
+      .then((rows) => {
+        if (this.drainWorkflow !== requestedWorkflow) {
+          return;
+        }
+        this.drainRows = rows.map((row) => {
+          let badgeClass;
+          let badgeLabel;
+          if (row.nonTerminalCount > 0) {
+            badgeClass = "badge badge-red";
+            badgeLabel = `In-flight: ${row.nonTerminalCount}`;
+          } else if (row.failedCount > 0) {
+            // Re-drivable failures: not in-flight, but retiring the version's
+            // code would break Retry/Re-drive — operator must review first.
+            badgeClass = "badge badge-orange";
+            badgeLabel = `Review failures: ${row.failedCount}`;
+          } else {
+            badgeClass = "badge badge-green";
+            badgeLabel = "Safe to retire";
+          }
+          return {
+            ...row,
+            badgeClass,
+            badgeLabel,
+            versionLabel: row.version != null ? `v${row.version}` : "(none)",
+          };
+        });
+      })
+      .catch((error) => {
+        if (this.drainWorkflow !== requestedWorkflow || isRefresh) {
+          // Silent on background refresh — keep the last good rows.
+          return;
+        }
+        this.showToast(
+          "Error",
+          "Failed to load version drain: " +
+            (error.body ? error.body.message : error.message),
+          "error",
+        );
+      })
+      .finally(() => {
+        if (this.drainWorkflow === requestedWorkflow && !isRefresh) {
+          this.loadingDrain = false;
+        }
+      });
+  }
+
+  get hasDrainRows() {
+    return this.drainRows.length > 0;
+  }
+
+  get drainWorkflowSelected() {
+    return !!this.drainWorkflow;
   }
 
   loadDoctorStatus() {
@@ -1100,6 +1207,11 @@ export default class WorkflowDashboard extends LightningElement {
   startAutoRefresh() {
     this.stopAutoRefresh();
     this.autoRefreshInterval = setInterval(() => {
+      // Keep the open Version Drain panel live so a version doesn't keep showing
+      // "Safe to retire" after new in-flight instances start under it.
+      if (this.viewingDrain) {
+        this.loadDrain(true);
+      }
       this.refreshInstances();
     }, 5000);
   }
