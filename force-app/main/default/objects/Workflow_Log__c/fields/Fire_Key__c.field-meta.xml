@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Fire_Key__c</fullName>
+    <caseSensitive>false</caseSensitive>
+    <description>Idempotent upsert anchor: correlationKey:outcome. One row per (fire window, outcome) prevents duplicate log spam across repeated sweeps.</description>
+    <externalId>true</externalId>
+    <label>Fire Key</label>
+    <length>255</length>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>true</unique>
+</CustomField>

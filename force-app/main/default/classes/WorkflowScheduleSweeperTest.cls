@@ -1,0 +1,362 @@
+@isTest
+public class WorkflowScheduleSweeperTest {
+  // Cron that always resolves to a past fire minute regardless of test run time.
+  // "* * * * *" fires every minute, so previousFireTime = truncated-now.
+  private static final String EVERY_MINUTE_CRON = '* * * * *';
+  // A workflow that actually exists in the engine test class.
+  private static final String TEST_WF = 'WorkflowEngineTest.HappyWorkflow';
+  private static final String PREFIX = 'SchedTest';
+
+  private static Workflow_Schedule__c makeSchedule(
+    String name,
+    String cron,
+    Boolean enabled,
+    String overlapPolicy
+  ) {
+    return new Workflow_Schedule__c(
+      Name = name,
+      Workflow_Name__c = TEST_WF,
+      Cron_Expression__c = cron,
+      Correlation_Key_Prefix__c = name,
+      Enabled__c = enabled,
+      Overlap_Policy__c = overlapPolicy,
+      Dedicated_Slot__c = false
+    );
+  }
+
+  // ── AC2 / AC3: due fires exactly once, second sweep is a no-op ──────────
+
+  @isTest
+  static void testDueFiresOnce() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Schedule__c sched = makeSchedule(PREFIX + '1', EVERY_MINUTE_CRON, true, 'Allow');
+    insert sched;
+
+    Test.startTest();
+    WorkflowScheduleSweeper.sweep();
+    Test.stopTest();
+
+    List<Workflow_Instance__c> instances = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c LIKE :PREFIX + '1_%'
+    ];
+    System.assertEquals(1, instances.size(), 'First sweep: exactly one instance should be created');
+
+    // Second sweep — Last_Fired_Window__c is now set → not due → no new instance.
+    WorkflowScheduleSweeper.sweep();
+    instances = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c LIKE :PREFIX + '1_%'
+    ];
+    System.assertEquals(1, instances.size(), 'Second sweep: should remain exactly one instance');
+  }
+
+  // ── AC3: not-due schedule (Last_Fired_Window__c already set) skips ───────
+
+  @isTest
+  static void testNotDueSkips() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    DateTime now = DateTime.now();
+    // Pre-set Last_Fired_Window__c to the current window so it looks already done.
+    DateTime fireTime = WorkflowCronEvaluator.previousFireTime(EVERY_MINUTE_CRON, now);
+
+    Workflow_Schedule__c sched = makeSchedule(PREFIX + '2', EVERY_MINUTE_CRON, true, 'Allow');
+    sched.Last_Fired_Window__c = fireTime;
+    insert sched;
+
+    WorkflowScheduleSweeper.sweep();
+
+    List<Workflow_Instance__c> instances = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c LIKE :PREFIX + '2_%'
+    ];
+    System.assertEquals(0, instances.size(), 'Already-fired window should not start a new instance');
+  }
+
+  @isTest
+  static void testNeverMatchCronSkips() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Feb 31 never exists → previousFireTime returns null → sweep skips.
+    Workflow_Schedule__c sched = makeSchedule(PREFIX + '3', '0 0 31 2 *', true, 'Allow');
+    insert sched;
+
+    WorkflowScheduleSweeper.sweep();
+
+    List<Workflow_Instance__c> instances = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c LIKE :PREFIX + '3_%'
+    ];
+    System.assertEquals(0, instances.size(), 'Never-match cron should not start any instance');
+  }
+
+  // ── AC4: Overlap=Skip records a Skipped log, does not start new instance ─
+
+  @isTest
+  static void testOverlapSkip() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    DateTime now = DateTime.now();
+    DateTime fireTime = WorkflowCronEvaluator.previousFireTime(EVERY_MINUTE_CRON, now);
+
+    Workflow_Schedule__c sched = makeSchedule(PREFIX + '4', EVERY_MINUTE_CRON, true, 'Skip');
+    insert sched;
+
+    // Pre-insert an OLDER active instance (different key) so it looks like last run is still going.
+    String oldKey = PREFIX + '4_197001010000';
+    Workflow_Instance__c priorRun = new Workflow_Instance__c(
+      Workflow_Name__c = TEST_WF,
+      Correlation_Key__c = oldKey,
+      Status__c = 'Running'
+    );
+    insert priorRun;
+
+    Test.startTest();
+    WorkflowScheduleSweeper.sweep();
+    Test.stopTest();
+
+    // No new instance for the new window.
+    String currentKey = PREFIX + '4_' + fireTime.formatGmt('yyyyMMddHHmm');
+    List<Workflow_Instance__c> newInstances = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c = :currentKey
+    ];
+    System.assertEquals(0, newInstances.size(), 'Overlap=Skip: should not start a new instance');
+
+    // Skipped log exists.
+    List<Workflow_Log__c> logs = [
+      SELECT Outcome__c
+      FROM Workflow_Log__c
+      WHERE Schedule_Name__c = :(PREFIX + '4') AND Outcome__c = 'Skipped'
+    ];
+    System.assertEquals(1, logs.size(), 'Overlap=Skip: a Skipped log entry should exist');
+  }
+
+  // ── AC5: Overlap=Allow starts a new instance even with prior in-flight ───
+
+  @isTest
+  static void testOverlapAllow() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    DateTime now = DateTime.now();
+    DateTime fireTime = WorkflowCronEvaluator.previousFireTime(EVERY_MINUTE_CRON, now);
+
+    Workflow_Schedule__c sched = makeSchedule(PREFIX + '5', EVERY_MINUTE_CRON, true, 'Allow');
+    insert sched;
+
+    // Older active instance still running.
+    String oldKey = PREFIX + '5_197001010000';
+    Workflow_Instance__c priorRun = new Workflow_Instance__c(
+      Workflow_Name__c = TEST_WF,
+      Correlation_Key__c = oldKey,
+      Status__c = 'Running'
+    );
+    insert priorRun;
+
+    Test.startTest();
+    WorkflowScheduleSweeper.sweep();
+    Test.stopTest();
+
+    // New instance for the current window was created.
+    String currentKey = PREFIX + '5_' + fireTime.formatGmt('yyyyMMddHHmm');
+    List<Workflow_Instance__c> newInstances = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c = :currentKey
+    ];
+    System.assertEquals(1, newInstances.size(), 'Overlap=Allow: new-window instance should be created');
+
+    // Total = 2 (old + new).
+    List<Workflow_Instance__c> all = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c LIKE :PREFIX + '5_%'
+    ];
+    System.assertEquals(2, all.size(), 'Overlap=Allow: both the prior and new instances should exist');
+  }
+
+  // ── AC1 / AC8: Disabled schedule does not fire ───────────────────────────
+
+  @isTest
+  static void testDisabledNoFire() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Schedule__c sched = makeSchedule(PREFIX + '6', EVERY_MINUTE_CRON, false, 'Allow');
+    insert sched;
+
+    WorkflowScheduleSweeper.sweep();
+
+    List<Workflow_Instance__c> instances = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c LIKE :PREFIX + '6_%'
+    ];
+    System.assertEquals(0, instances.size(), 'Disabled schedule should not fire');
+  }
+
+  // ── AC6: 0-slot invariant — enabling N schedules adds 0 CronTrigger rows ─
+
+  @isTest
+  static void testZeroSlotInvariant() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Integer beforeCount = [SELECT COUNT() FROM CronTrigger];
+
+    List<Workflow_Schedule__c> schedules = new List<Workflow_Schedule__c>();
+    for (Integer i = 0; i < 5; i++) {
+      schedules.add(makeSchedule(PREFIX + 'ZS' + i, EVERY_MINUTE_CRON, true, 'Allow'));
+    }
+    insert schedules;
+
+    WorkflowScheduleSweeper.sweep();
+
+    Integer afterCount = [SELECT COUNT() FROM CronTrigger];
+    System.assertEquals(
+      beforeCount,
+      afterCount,
+      '0-slot: enabling N schedules must add 0 CronTrigger rows'
+    );
+
+    // Also verify instances were actually created (sweep ran).
+    List<Workflow_Instance__c> instances = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c LIKE :PREFIX + 'ZS%'
+    ];
+    System.assertEquals(5, instances.size(), '0-slot: all 5 schedules should have fired');
+  }
+
+  // ── Log idempotency: repeat sweep does not duplicate Workflow_Log__c ─────
+
+  @isTest
+  static void testLogIdempotency() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Schedule__c sched = makeSchedule(PREFIX + '7', EVERY_MINUTE_CRON, true, 'Allow');
+    insert sched;
+
+    // First sweep.
+    WorkflowScheduleSweeper.sweep();
+    // Manually reset Last_Fired_Window__c so second sweep also fires.
+    sched = [SELECT Id, Last_Fired_Window__c FROM Workflow_Schedule__c WHERE Id = :sched.Id];
+    sched.Last_Fired_Window__c = null;
+    update sched;
+
+    // Second sweep (same fire key → upsert should not duplicate).
+    WorkflowScheduleSweeper.sweep();
+
+    List<Workflow_Log__c> logs = [
+      SELECT Id
+      FROM Workflow_Log__c
+      WHERE Schedule_Name__c = :(PREFIX + '7') AND Outcome__c = 'Started'
+    ];
+    System.assertEquals(1, logs.size(), 'Log upsert: same fire key should not produce duplicate log rows');
+  }
+
+  // ── Dedicated-slot helper: converts cron and registers/aborts CronTrigger ─
+
+  @isTest
+  static void testDedicatedSlotHelper() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Schedule__c sched = makeSchedule(PREFIX + '8', '0 2 * * *', true, 'Allow');
+    sched.Dedicated_Slot__c = true;
+    insert sched;
+
+    Integer before = [SELECT COUNT() FROM CronTrigger];
+
+    Test.startTest();
+    WorkflowScheduleSweeper.registerDedicatedJob(sched.Id);
+    Test.stopTest();
+
+    Integer afterRegister = [SELECT COUNT() FROM CronTrigger];
+    System.assertEquals(before + 1, afterRegister, 'registerDedicatedJob should add 1 CronTrigger');
+
+    // Dedicated schedule must NOT be swept by the 0-slot sweeper.
+    WorkflowScheduleSweeper.sweep();
+    List<Workflow_Instance__c> instances = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c LIKE :PREFIX + '8_%'
+    ];
+    System.assertEquals(0, instances.size(), 'Dedicated-slot schedule should not be swept by 0-slot sweeper');
+
+    // Unregister.
+    WorkflowScheduleSweeper.unregisterDedicatedJob(sched.Id);
+    String dedJobName = 'RevenantSched_' + PREFIX + '8';
+    Integer afterAbort = [
+      SELECT COUNT()
+      FROM CronTrigger
+      WHERE CronJobDetail.Name = :dedJobName
+    ];
+    System.assertEquals(0, afterAbort, 'unregisterDedicatedJob should remove the CronTrigger');
+  }
+
+  // ── Heartbeat integration: sweep runs inside processWatchdogHeartbeat ─────
+
+  @isTest
+  static void testHeartbeatIntegration() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Schedule__c sched = makeSchedule(PREFIX + '9', EVERY_MINUTE_CRON, true, 'Allow');
+    insert sched;
+
+    Integer cronBefore = [SELECT COUNT() FROM CronTrigger];
+
+    WorkflowEngine.processWatchdogHeartbeat();
+
+    Integer cronAfter = [SELECT COUNT() FROM CronTrigger];
+    System.assertEquals(cronBefore, cronAfter, 'Heartbeat: schedule sweep must not add CronTrigger rows');
+
+    List<Workflow_Instance__c> instances = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c LIKE :PREFIX + '9_%'
+    ];
+    System.assertEquals(1, instances.size(), 'Heartbeat: schedule should fire through processWatchdogHeartbeat');
+  }
+
+  // ── Token substitution in Input_Json__c ──────────────────────────────────
+
+  @isTest
+  static void testTokenSubstitution() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Schedule__c sched = new Workflow_Schedule__c(
+      Name = PREFIX + 'Token',
+      Workflow_Name__c = TEST_WF,
+      Cron_Expression__c = EVERY_MINUTE_CRON,
+      Correlation_Key_Prefix__c = PREFIX + 'Token',
+      Enabled__c = true,
+      Overlap_Policy__c = 'Allow',
+      Dedicated_Slot__c = false,
+      Input_Json__c = '{"scheduledAt":"{{fireTime}}","src":"{{scheduleName}}"}'
+    );
+    insert sched;
+
+    WorkflowScheduleSweeper.sweep();
+
+    List<Workflow_Instance__c> instances = [
+      SELECT Input__c
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c LIKE :PREFIX + 'Token_%'
+    ];
+    System.assertEquals(1, instances.size(), 'Token test: one instance should be created');
+    System.assertNotEquals(null, instances[0].Input__c, 'Input should not be null');
+    System.assert(
+      !instances[0].Input__c.contains('{{fireTime}}'),
+      'Token {{fireTime}} should have been substituted'
+    );
+    System.assert(
+      !instances[0].Input__c.contains('{{scheduleName}}'),
+      'Token {{scheduleName}} should have been substituted'
+    );
+  }
+}

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Workflow_Instance__c</fullName>
+    <description>The workflow instance started or referenced by this log entry. Populated for Started outcomes.</description>
+    <externalId>false</externalId>
+    <label>Workflow Instance</label>
+    <referenceTo>Workflow_Instance__c</referenceTo>
+    <relationshipLabel>Workflow Logs</relationshipLabel>
+    <relationshipName>Workflow_Logs</relationshipName>
+    <relationshipOrder>0</relationshipOrder>
+    <reparentableMasterDetail>false</reparentableMasterDetail>
+    <trackTrending>false</trackTrending>
+    <type>Lookup</type>
+</CustomField>
