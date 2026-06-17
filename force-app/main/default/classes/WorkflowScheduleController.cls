@@ -309,25 +309,35 @@ public with sharing class WorkflowScheduleController {
       throwAura('Could not save schedule: ' + e.getMessage());
     }
 
-    // Re-arm an already-armed dedicated job when only the cron changed, so the
-    // live CronTrigger never keeps firing on the old cadence behind a UI that
-    // still shows the schedule as armed.
-    if (
-      existingId != null &&
-      sched.Dedicated_Slot__c &&
-      oldCron != cron &&
-      WorkflowScheduleSweeper.isDedicatedJobArmed(sched.Id)
-    ) {
-      try {
-        WorkflowScheduleSweeper.unregisterDedicatedJob(sched.Id);
-        WorkflowScheduleSweeper.registerDedicatedJob(sched.Id);
-      } catch (Exception e) {
-        throwAura(
-          'Schedule saved, but its dedicated job could not be re-armed with the ' +
-            'new cron (' +
-            e.getMessage() +
-            '). Abort and re-arm it manually.'
-        );
+    // Keep any armed dedicated CronTrigger consistent with the saved record.
+    if (existingId != null && WorkflowScheduleSweeper.isDedicatedJobArmed(sched.Id)) {
+      if (!sched.Enabled__c || !sched.Dedicated_Slot__c) {
+        // Edit turned off Enabled or Dedicated mode → tear down the orphaned job
+        // (otherwise it keeps a scheduled-job slot and the abort action vanishes
+        // from the row once Dedicated_Slot__c is false).
+        try {
+          WorkflowScheduleSweeper.unregisterDedicatedJob(sched.Id);
+        } catch (Exception e) {
+          System.debug(
+            LoggingLevel.WARN,
+            'saveSchedule: failed to abort dedicated job: ' + e.getMessage()
+          );
+        }
+      } else if (oldCron != cron) {
+        // Still dedicated + enabled but the cadence changed → re-arm, since the
+        // live CronTrigger would otherwise keep firing on the old cron behind a
+        // UI that still shows the schedule as armed.
+        try {
+          WorkflowScheduleSweeper.unregisterDedicatedJob(sched.Id);
+          WorkflowScheduleSweeper.registerDedicatedJob(sched.Id);
+        } catch (Exception e) {
+          throwAura(
+            'Schedule saved, but its dedicated job could not be re-armed with the ' +
+              'new cron (' +
+              e.getMessage() +
+              '). Abort and re-arm it manually.'
+          );
+        }
       }
     }
     return sched.Id;

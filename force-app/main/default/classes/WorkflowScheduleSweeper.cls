@@ -534,13 +534,19 @@ public inherited sharing class WorkflowScheduleSweeper {
     );
   }
 
-  /** Next fire instant strictly after the handled window, or null if unknown. */
+  /**
+   * Next fire instant STRICTLY after the handled window, or null if unknown.
+   * WorkflowCronEvaluator.nextFireTime is inclusive (returns the window itself if
+   * it matches), so we evaluate from one minute past the handled window — cron
+   * windows are minute-granular — to guarantee the cursor advances and the row
+   * rotates out of future batches.
+   */
   private static DateTime nextWindow(String cron, DateTime firedWindow) {
-    if (String.isBlank(cron)) {
+    if (String.isBlank(cron) || firedWindow == null) {
       return null;
     }
     try {
-      return WorkflowCronEvaluator.nextFireTime(cron, firedWindow);
+      return WorkflowCronEvaluator.nextFireTime(cron, firedWindow.addMinutes(1));
     } catch (Exception e) {
       return null;
     }

@@ -434,6 +434,30 @@ public class WorkflowScheduleSweeperTest {
     );
   }
 
+  // ── Cursor advances strictly past the handled window (no re-selection) ────
+
+  @isTest
+  static void testCursorAdvancesPastHandledWindow() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Schedule__c sched = makeSchedule('CursorAdv', EVERY_MINUTE_CRON, true, 'Allow');
+    insert sched;
+
+    Test.startTest();
+    WorkflowScheduleSweeper.sweep();
+    Test.stopTest();
+
+    Workflow_Schedule__c after = [
+      SELECT Last_Fired_Window__c, Next_Fire_Window__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :sched.Id
+    ];
+    System.assertNotEquals(null, after.Next_Fire_Window__c, 'Cursor should be set after a fire');
+    System.assert(
+      after.Next_Fire_Window__c > after.Last_Fired_Window__c,
+      'Next_Fire_Window__c must be strictly after the handled window, not equal to it'
+    );
+  }
+
   // ── Overlap Skip is case-insensitive on the prefix ────────────────────────
 
   @isTest

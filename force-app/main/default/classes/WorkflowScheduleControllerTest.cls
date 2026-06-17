@@ -340,6 +340,50 @@ public class WorkflowScheduleControllerTest {
   }
 
   @isTest
+  static void testSaveTurningOffDedicatedAbortsJob() {
+    Workflow_Schedule__c sched = makeSchedule('CtrlUnded');
+    sched.Dedicated_Slot__c = true;
+    insert sched;
+
+    Test.startTest();
+    WorkflowScheduleController.registerDedicatedJob(sched.Id);
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM CronTrigger
+        WHERE CronJobDetail.Name = :WorkflowScheduleSweeper.dedicatedJobName(sched.Id)
+      ],
+      'Dedicated job should be armed before the edit'
+    );
+
+    // Edit the schedule via the modal path, unchecking Dedicated Slot.
+    WorkflowScheduleController.saveSchedule(
+      new Map<String, Object>{
+        'Id' => sched.Id,
+        'Name' => 'CtrlUnded',
+        'Workflow_Name__c' => TEST_WF,
+        'Cron_Expression__c' => '0 2 * * *',
+        'Correlation_Key_Prefix__c' => 'CtrlUnded',
+        'Enabled__c' => true,
+        'Overlap_Policy__c' => 'Skip',
+        'Dedicated_Slot__c' => false
+      }
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM CronTrigger
+        WHERE CronJobDetail.Name = :WorkflowScheduleSweeper.dedicatedJobName(sched.Id)
+      ],
+      'Turning off Dedicated Slot via save should abort the orphaned CronTrigger'
+    );
+  }
+
+  @isTest
   static void testLogsFollowScheduleRename() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = makeSchedule('CtrlRename');
