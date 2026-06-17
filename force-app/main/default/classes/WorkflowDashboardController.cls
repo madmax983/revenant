@@ -1618,4 +1618,92 @@ public inherited sharing class WorkflowDashboardController {
 
     return results;
   }
+
+  // ── Unrouted-signal dashboard methods ─────────────────────────────────────
+
+  private static final Integer UNROUTED_CANDIDATE_CAP = 2000;
+
+  @AuraEnabled(cacheable=true)
+  public static List<Map<String, Object>> getUnroutedSignals(
+    String searchTerm,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster
+  ) {
+    checkAuthorization();
+
+    Integer lim = (limitSize == null || limitSize <= 0) ? 50 : Math.min(limitSize, 100);
+    Integer off = (offsetSize == null || offsetSize < 0) ? 0 : Math.min(offsetSize, 2000);
+
+    String query =
+      'SELECT Id, Correlation_Key__c, Signal_Name__c, CreatedDate ' +
+      'FROM Workflow_Signal__c ' +
+      'WHERE Status__c = \'Unrouted\'';
+
+    if (String.isNotBlank(searchTerm)) {
+      likeTerm = '%' + String.escapeSingleQuotes(searchTerm.trim()) + '%';
+      query +=
+        ' AND (Correlation_Key__c LIKE :likeTerm OR Signal_Name__c LIKE :likeTerm)';
+    }
+
+    query += ' ORDER BY CreatedDate ASC LIMIT :lim OFFSET :off';
+
+    List<Workflow_Signal__c> rows = Database.query(
+      query,
+      AccessLevel.SYSTEM_MODE
+    );
+
+    Long nowMs = Datetime.now().getTime();
+    List<Map<String, Object>> results = new List<Map<String, Object>>();
+    for (Workflow_Signal__c sig : rows) {
+      Long ageMinutes = Math.max(
+        0L,
+        (nowMs - sig.CreatedDate.getTime()) / 60000L
+      );
+      results.add(
+        new Map<String, Object>{
+          'id' => sig.Id,
+          'correlationKey' => sig.Correlation_Key__c,
+          'signalName' => sig.Signal_Name__c,
+          'createdDate' => sig.CreatedDate,
+          'ageMinutes' => ageMinutes
+        }
+      );
+    }
+    return results;
+  }
+
+  @AuraEnabled
+  public static Map<String, Object> getUnroutedSignalCount(String searchTerm) {
+    checkAuthorization();
+
+    String query =
+      'SELECT Id FROM Workflow_Signal__c WHERE Status__c = \'Unrouted\'';
+
+    if (String.isNotBlank(searchTerm)) {
+      likeTerm = '%' + String.escapeSingleQuotes(searchTerm.trim()) + '%';
+      query +=
+        ' AND (Correlation_Key__c LIKE :likeTerm OR Signal_Name__c LIKE :likeTerm)';
+    }
+
+    query += ' LIMIT :UNROUTED_CANDIDATE_CAP';
+
+    List<Workflow_Signal__c> candidates = Database.query(
+      query,
+      AccessLevel.SYSTEM_MODE
+    );
+    Boolean capped = candidates.size() >= UNROUTED_CANDIDATE_CAP;
+
+    return new Map<String, Object>{
+      'count' => candidates.size(),
+      'capped' => capped
+    };
+  }
+
+  @AuraEnabled
+  public static Map<String, Object> redeliverSignal(Id signalId) {
+    checkAuthorization();
+    Boolean matched = WorkflowEngine.redeliverCapturedSignal(signalId);
+    return new Map<String, Object>{ 'matched' => matched };
+  }
 }

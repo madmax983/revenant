@@ -50,7 +50,8 @@ trigger WorkflowEventTrigger on Workflow_Event__e(after insert) {
           new WorkflowEngine.SignalRequest(
             event.Workflow_Instance_Id__c,
             signalName,
-            event.Payload__c
+            event.Payload__c,
+            event.EventUuid
           )
         );
       } else {
