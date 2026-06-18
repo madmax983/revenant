@@ -19,14 +19,15 @@ public inherited sharing class CaptureOnceWorkflowExample {
    * Counts how many times each producer was invoked across all executions.
    * The test asserts these are both 1, proving once() never re-invokes the
    * producer after the first capture.
+   *
+   * These live on the top-level class because Apex permits static members only
+   * on a top-level type, not on an inner class.
    */
-  public class ProducerCallCounter {
-    public static Integer refNumberCalls = 0;
-    public static Integer startedAtCalls = 0;
-    public static void reset() {
-      refNumberCalls = 0;
-      startedAtCalls = 0;
-    }
+  public static Integer refNumberCalls = 0;
+  public static Integer startedAtCalls = 0;
+  public static void resetProducerCounters() {
+    refNumberCalls = 0;
+    startedAtCalls = 0;
   }
 
   public class CaptureOnceWorkflow implements WorkflowDefinition {
@@ -87,7 +88,7 @@ public inherited sharing class CaptureOnceWorkflowExample {
       if (retryCount == 0 && resumedFromYield) {
         // Resumed after the yield: retry to prove captures survive a RETRY (which
         // increments Retry_Count__c and clears Output__c, but not Captured_Values__c).
-        return StepResult.retry(new RetryPolicy(1, 1.0, 3));
+        return StepResult.retry(new RetryPolicy(1, (Double) 1.0, 3));
       }
 
       // Resumed after the retry (Retry_Count__c >= 1): complete, echoing the
@@ -125,7 +126,7 @@ public inherited sharing class CaptureOnceWorkflowExample {
 
   private class RefNumberProducer implements CaptureProducer {
     public Object produce() {
-      ProducerCallCounter.refNumberCalls++;
+      CaptureOnceWorkflowExample.refNumberCalls++;
       Blob randomBytes = Crypto.generateAesKey(128);
       String hex = EncodingUtil.convertToHex(randomBytes)
         .substring(0, 16)
@@ -136,7 +137,7 @@ public inherited sharing class CaptureOnceWorkflowExample {
 
   private class StartedAtProducer implements CaptureProducer {
     public Object produce() {
-      ProducerCallCounter.startedAtCalls++;
+      CaptureOnceWorkflowExample.startedAtCalls++;
       return String.valueOf(Datetime.now().getTime());
     }
   }

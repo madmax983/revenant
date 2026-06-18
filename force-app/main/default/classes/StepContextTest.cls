@@ -1216,9 +1216,9 @@ public class StepContextTest {
     );
     ctx.once('k1', new StringProducer('v1'));
     ctx.once('k2', new StringProducer('v2'));
-    String json = ctx.getCapturedValuesJson();
+    String capturedJson = ctx.getCapturedValuesJson();
     Map<String, Object> parsed = (Map<String, Object>) JSON.deserializeUntyped(
-      json
+      capturedJson
     );
     System.assertEquals('v1', parsed.get('k1'));
     System.assertEquals('v2', parsed.get('k2'));

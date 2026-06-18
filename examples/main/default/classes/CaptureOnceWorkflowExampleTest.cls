@@ -13,7 +13,7 @@ public class CaptureOnceWorkflowExampleTest {
    */
   @isTest
   static void capturedValuesAreStableAcrossYieldRetryAndComplete() {
-    CaptureOnceWorkflowExample.ProducerCallCounter.reset();
+    CaptureOnceWorkflowExample.resetProducerCounters();
 
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -51,12 +51,12 @@ public class CaptureOnceWorkflowExampleTest {
     // Producer was invoked exactly once despite ≥3 executions of the step.
     System.assertEquals(
       1,
-      CaptureOnceWorkflowExample.ProducerCallCounter.refNumberCalls,
+      CaptureOnceWorkflowExample.refNumberCalls,
       'refNumber producer must be called exactly once across all re-executions'
     );
     System.assertEquals(
       1,
-      CaptureOnceWorkflowExample.ProducerCallCounter.startedAtCalls,
+      CaptureOnceWorkflowExample.startedAtCalls,
       'startedAt producer must be called exactly once across all re-executions'
     );
   }
@@ -67,7 +67,7 @@ public class CaptureOnceWorkflowExampleTest {
    */
   @isTest
   static void distinctInstancesHaveIndependentCaptures() {
-    CaptureOnceWorkflowExample.ProducerCallCounter.reset();
+    CaptureOnceWorkflowExample.resetProducerCounters();
 
     Test.startTest();
     Id id1 = WorkflowEngine.start(
