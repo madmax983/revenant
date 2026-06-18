@@ -1002,11 +1002,18 @@ public class WorkflowScheduleSweeperTest {
   @isTest
   static void testDirectInsertSkipsPreCreationWindow() {
     WorkflowEngine.disableQueueableInTest = true;
-    Workflow_Schedule__c sched = makeSchedule('PreCreate', EVERY_MINUTE_CRON, true, 'Allow');
+    // A yearly cron (Jan 1 00:00) whose most-recent window is up to ~365 days in
+    // the past — comfortably inside the evaluator's ~4-year lookback. A low-cadence
+    // cron lets us model a realistic direct insert (a record created mid-period
+    // whose previous window predates it) WITHOUT shoving CreatedDate into the
+    // future. A future CreatedDate is itself an illegal state to update: the
+    // platform stamps LastModifiedDate = now, which would precede CreatedDate and
+    // throw FIELD_INTEGRITY_EXCEPTION when sweep() flushes the cursor seed.
+    Workflow_Schedule__c sched = makeSchedule('PreCreate', '0 0 1 1 *', true, 'Allow');
     insert sched;
-    // Simulate a direct insert whose creation minute is AFTER the current cron
-    // window (null cursor on its first sweep). The window predates the record.
-    Test.setCreatedDate(sched.Id, DateTime.now().addMinutes(1));
+    // Created a minute ago: in the PAST (so the cursor-seed update is legal), yet
+    // its most-recent fire window (last Jan 1) still predates the creation minute.
+    Test.setCreatedDate(sched.Id, DateTime.now().addMinutes(-1));
 
     Test.startTest();
     WorkflowScheduleSweeper.sweep();
