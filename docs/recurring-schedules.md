@@ -141,7 +141,10 @@ Log rows are upserted on `Fire_Key__c` (`corrKey:outcome`) so repeated sweeps of
 ## Disabling / deleting a schedule
 
 - **Disable:** uncheck `Enabled__c`. The next sweep skips it. No orphaned `CronTrigger` or `AsyncApexJob` is left behind (0-slot mode never creates them).
+- **Re-enable:** re-check `Enabled__c`. The engine recomputes `Next_Fire_Window__c` to the **next future window**, so a schedule paused past one or more windows does not immediately fire a stale window on re-enable (e.g. a nightly schedule re-enabled at 10:00 waits for the next 02:00, it does not fire that day's already-elapsed 02:00).
 - **Delete:** delete the record. Identical effect.
+
+> **Direct creation note:** schedules created directly in Setup/Object Manager (rather than through the manager UI) start with an empty cursor. On their first sweep the engine seeds the cursor to the next window and does **not** fire a window that elapsed before the record's creation minute, so creating an hourly schedule at 14:37 fires the 15:00 run, not 14:00.
 
 ## Input JSON templates
 
@@ -192,8 +195,9 @@ differently from the 0-slot evaluator in three ways:
 The dedicated job derives its fire window from the cron (via `previousFireTime`), not the
 raw execution instant — so a `0 2 * * *` job that Salesforce happens to run at 02:01 still
 keys and dedups on the 02:00 window, matching the 0-slot path. If the schedule row is
-deleted outside `deleteSchedule` (e.g. via Object Manager), the job **self-aborts** its own
-`CronTrigger` on the next tick so it never lingers as an orphaned scheduled-job slot.
+deleted, disabled, or un-checked out of `Dedicated_Slot__c` **outside the controller** (e.g.
+via Object Manager or the API), the job **self-aborts** its own `CronTrigger` on the next
+tick so it never lingers as an orphaned scheduled-job slot.
 
 Apart from timezone and DOM+DOW handling above, dedicated mode now matches the 0-slot
 path for overlap policy, state, fire logging, and misconfiguration handling (unknown

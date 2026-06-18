@@ -395,14 +395,37 @@ public with sharing class WorkflowScheduleController {
   public static void setEnabled(Id scheduleId, Boolean enabled) {
     checkAuthorization();
     Workflow_Schedule__c sched = [
-      SELECT Id, Enabled__c, Dedicated_Slot__c
+      SELECT Id, Enabled__c, Dedicated_Slot__c, Cron_Expression__c
       FROM Workflow_Schedule__c
       WHERE Id = :scheduleId
       WITH USER_MODE
       LIMIT 1
     ];
+    Boolean wasEnabled = sched.Enabled__c;
     sched.Enabled__c = enabled;
     update as user sched;
+
+    // Re-enabling after a pause: recompute the cursor so the next sweep waits for
+    // the next FUTURE window instead of immediately firing a stale window that
+    // elapsed while the schedule was disabled (e.g. a nightly schedule re-enabled
+    // at 10:00 should not fire that day's 02:00 run). Written in system mode since
+    // the cursor field is read-only to admins.
+    if (enabled && !wasEnabled) {
+      try {
+        update as system new Workflow_Schedule__c(
+          Id = scheduleId,
+          Next_Fire_Window__c = WorkflowCronEvaluator.nextFireTime(
+            sched.Cron_Expression__c,
+            DateTime.now()
+          )
+        );
+      } catch (Exception e) {
+        System.debug(
+          LoggingLevel.WARN,
+          'setEnabled: failed to recompute cursor: ' + e.getMessage()
+        );
+      }
+    }
 
     // Disabling a dedicated schedule must also tear down its CronTrigger so it
     // stops firing immediately (the job re-checks Enabled__c too, but this avoids

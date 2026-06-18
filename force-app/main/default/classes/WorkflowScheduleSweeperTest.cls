@@ -974,4 +974,83 @@ public class WorkflowScheduleSweeperTest {
       'A dedicated job whose schedule row is gone must self-abort its CronTrigger'
     );
   }
+
+  @isTest
+  static void testDedicatedJobSelfAbortsWhenDisabledOutOfBand() {
+    Workflow_Schedule__c sched = makeSchedule('DedDisabledAbort', '0 2 * * *', true, 'Allow');
+    sched.Dedicated_Slot__c = true;
+    insert sched;
+    String jobName = WorkflowScheduleSweeper.dedicatedJobName(sched.Id);
+
+    Test.startTest();
+    WorkflowScheduleSweeper.registerDedicatedJob(sched.Id);
+    // Disable OUTSIDE the controller (raw update) so the CronTrigger is left armed.
+    sched.Enabled__c = false;
+    update sched;
+    // stopTest runs the job with a real context; it must self-abort when ineligible.
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM CronTrigger WHERE CronJobDetail.Name = :jobName],
+      'A dedicated job disabled out-of-band must self-abort its CronTrigger'
+    );
+  }
+
+  // ── Direct (Setup/API) inserts must not fire a pre-creation window ─────────
+
+  @isTest
+  static void testDirectInsertSkipsPreCreationWindow() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Schedule__c sched = makeSchedule('PreCreate', EVERY_MINUTE_CRON, true, 'Allow');
+    insert sched;
+    // Simulate a direct insert whose creation minute is AFTER the current cron
+    // window (null cursor on its first sweep). The window predates the record.
+    Test.setCreatedDate(sched.Id, DateTime.now().addMinutes(1));
+
+    Test.startTest();
+    WorkflowScheduleSweeper.sweep();
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'PreCreate_%'],
+      'A window before the record creation minute must not fire'
+    );
+    Workflow_Schedule__c after = [
+      SELECT Next_Fire_Window__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :sched.Id
+    ];
+    System.assertNotEquals(
+      null,
+      after.Next_Fire_Window__c,
+      'A skipped pre-creation window should seed the cursor to a future window'
+    );
+  }
+
+  // ── runNow validates the workflow definition ──────────────────────────────
+
+  @isTest
+  static void testRunNowRejectsUnknownWorkflow() {
+    Workflow_Schedule__c sched = makeSchedule('RNBad', '0 2 * * *', true, 'Allow');
+    sched.Workflow_Name__c = 'Nope.NotARealWorkflow123';
+    insert sched;
+
+    Boolean threw = false;
+    Test.startTest();
+    try {
+      WorkflowScheduleSweeper.runNow(sched.Id);
+    } catch (Exception e) {
+      threw = true;
+    }
+    Test.stopTest();
+
+    System.assert(threw, 'runNow must reject a schedule pointing at an unknown workflow definition');
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'RNBad_manual_%'],
+      'No manual instance should be created for an unknown workflow'
+    );
+  }
 }

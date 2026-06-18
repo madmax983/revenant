@@ -191,13 +191,15 @@
         <field>Workflow_Schedule__c.Dedicated_Slot__c</field>
         <readable>true</readable>
     </fieldPermissions>
+    <!-- Engine-managed idempotency cursor + outcome: readable but NOT editable
+         (written in system mode). -->
     <fieldPermissions>
-        <editable>true</editable>
+        <editable>false</editable>
         <field>Workflow_Schedule__c.Last_Fired_Window__c</field>
         <readable>true</readable>
     </fieldPermissions>
     <fieldPermissions>
-        <editable>true</editable>
+        <editable>false</editable>
         <field>Workflow_Schedule__c.Last_Outcome__c</field>
         <readable>true</readable>
     </fieldPermissions>

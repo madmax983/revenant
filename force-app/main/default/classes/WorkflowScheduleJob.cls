@@ -47,8 +47,14 @@ public inherited sharing class WorkflowScheduleJob implements Schedulable {
     Workflow_Schedule__c sched = rows[0];
 
     // Re-check state at fire time: a disabled or no-longer-dedicated schedule must
-    // not start workflows even if its CronTrigger is still armed.
+    // not start workflows even if its CronTrigger is still armed. If it was toggled
+    // off outside the controller (record page/API), self-abort so the CronTrigger
+    // doesn't linger consuming a scheduled-job slot with no UI action to remove it
+    // (the controller already aborts on its own disable/un-dedicate paths).
     if (!sched.Enabled__c || !sched.Dedicated_Slot__c) {
+      if (ctx != null) {
+        System.abortJob(ctx.getTriggerId());
+      }
       return;
     }
 

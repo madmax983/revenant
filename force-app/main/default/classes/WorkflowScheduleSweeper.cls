@@ -69,7 +69,8 @@ public inherited sharing class WorkflowScheduleSweeper {
         Correlation_Key_Prefix__c,
         Overlap_Policy__c,
         Last_Fired_Window__c,
-        Next_Fire_Window__c
+        Next_Fire_Window__c,
+        CreatedDate
       FROM Workflow_Schedule__c
       WHERE
         Enabled__c = TRUE
@@ -125,6 +126,25 @@ public inherited sharing class WorkflowScheduleSweeper {
               )
             );
           }
+          continue;
+        }
+        if (
+          sched.Last_Fired_Window__c == null &&
+          fireTime < truncateToMinute(sched.CreatedDate)
+        ) {
+          // Never-fired schedule whose most-recent window predates the record's
+          // creation MINUTE (e.g. an hourly schedule created via Setup at 14:37 — the
+          // 14:00 window is before it existed). Compared at minute granularity so an
+          // every-minute schedule created mid-minute still fires that same minute's
+          // window. UI-created schedules seed the cursor at save, so this only affects
+          // direct inserts. Don't fire a pre-creation window; just seed the cursor to
+          // the next future window and rotate out.
+          toUpdate.add(
+            new Workflow_Schedule__c(
+              Id = sched.Id,
+              Next_Fire_Window__c = nextWindow(sched.Cron_Expression__c, fireTime)
+            )
+          );
           continue;
         }
         DueItem item = new DueItem();
@@ -340,6 +360,15 @@ public inherited sharing class WorkflowScheduleSweeper {
       WITH SYSTEM_MODE
       LIMIT 1
     ];
+
+    // Same guard as scheduled fires: a typo'd or removed Workflow_Name__c would
+    // otherwise be handed to startOrGet, which builds a phantom Pending instance
+    // that this method would report as "Started".
+    if (!isValidWorkflowName(sched.Workflow_Name__c)) {
+      throw new WorkflowScheduleException(
+        'Unknown workflow definition: ' + sched.Workflow_Name__c
+      );
+    }
 
     DateTime now = DateTime.now();
     // Manual runs are meant to be independent, so the key carries millisecond +
@@ -658,6 +687,18 @@ public inherited sharing class WorkflowScheduleSweeper {
       }
     }
     return false;
+  }
+
+  /** Truncates a DateTime to the start of its minute in UTC (seconds = 0). */
+  private static DateTime truncateToMinute(DateTime dt) {
+    return DateTime.newInstanceGmt(
+      dt.yearGmt(),
+      dt.monthGmt(),
+      dt.dayGmt(),
+      dt.hourGmt(),
+      dt.minuteGmt(),
+      0
+    );
   }
 
   /** Advances a schedule's last/next window state after a fire. Single-row DML. */

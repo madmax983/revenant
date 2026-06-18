@@ -74,13 +74,16 @@
         <field>Workflow_Schedule__c.Dedicated_Slot__c</field>
         <readable>true</readable>
     </fieldPermissions>
+    <!-- Engine-managed idempotency cursor + outcome: readable but NOT editable. The
+         sweep writes them in system mode; a user-editable Last_Fired_Window__c could
+         be set to the current window to make the sweep skip a legitimate fire. -->
     <fieldPermissions>
-        <editable>true</editable>
+        <editable>false</editable>
         <field>Workflow_Schedule__c.Last_Fired_Window__c</field>
         <readable>true</readable>
     </fieldPermissions>
     <fieldPermissions>
-        <editable>true</editable>
+        <editable>false</editable>
         <field>Workflow_Schedule__c.Last_Outcome__c</field>
         <readable>true</readable>
     </fieldPermissions>

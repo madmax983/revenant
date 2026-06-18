@@ -190,6 +190,30 @@ public class WorkflowScheduleControllerTest {
   }
 
   @isTest
+  static void testReEnableRecomputesCursor() {
+    // A paused schedule whose cursor has fallen into the past while disabled.
+    Workflow_Schedule__c sched = makeSchedule('CtrlReEnable');
+    sched.Cron_Expression__c = '0 0 * * *'; // daily at midnight UTC
+    sched.Enabled__c = false;
+    sched.Next_Fire_Window__c = DateTime.now().addDays(-1);
+    insert sched;
+
+    Test.startTest();
+    WorkflowScheduleController.setEnabled(sched.Id, true);
+    Test.stopTest();
+
+    Workflow_Schedule__c after = [
+      SELECT Next_Fire_Window__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :sched.Id
+    ];
+    System.assert(
+      after.Next_Fire_Window__c > DateTime.now(),
+      'Re-enabling must move the cursor to the next future window, not leave a stale past one that fires immediately'
+    );
+  }
+
+  @isTest
   static void testSetEnabledAndDelete() {
     Workflow_Schedule__c sched = makeSchedule('CtrlToggle');
     insert sched;
