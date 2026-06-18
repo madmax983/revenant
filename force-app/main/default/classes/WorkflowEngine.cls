@@ -5332,9 +5332,20 @@ public inherited sharing class WorkflowEngine {
       enqueueOrchestrators(instanceIds);
     }
 
-    // All required heartbeat work (timed-out-step failures AND sleep resumptions)
-    // is now done, so the best-effort lifecycle publish runs last with no risk of
-    // starving a required update/enqueue of its DML budget.
+    // 3. Process due recurring schedules (0-slot: runs inside the watchdog heartbeat,
+    // so enabling N Workflow_Schedule__c records adds 0 scheduled-job slots).
+    try {
+      WorkflowScheduleSweeper.sweep();
+    } catch (Exception scheduleEx) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'WorkflowEngine: schedule sweep failed: ' + scheduleEx.getMessage()
+      );
+    }
+
+    // All required heartbeat work (timed-out-step failures, sleep resumptions,
+    // and schedule sweeps) is now done, so the best-effort lifecycle publish
+    // runs last with no risk of starving a required update/enqueue of its DML budget.
     WorkflowLifecyclePublisher.publish(watchdogTerminalInstances);
   }
 

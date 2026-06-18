@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Next_Fire_Window__c</fullName>
+    <description>Engine-managed. The next fire-window DateTime after the last processed window, computed from the cron expression. The 0-slot sweep filters on this so already-handled low-cadence schedules rotate out of the batch and cannot starve due schedules.</description>
+    <externalId>false</externalId>
+    <label>Next Fire Window</label>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>DateTime</type>
+</CustomField>

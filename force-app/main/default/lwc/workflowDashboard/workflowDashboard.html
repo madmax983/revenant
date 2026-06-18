@@ -29,6 +29,13 @@
                     class="slds-m-left_small">
                 </lightning-button>
                 <lightning-button
+                    label="Schedules"
+                    icon-name="utility:event"
+                    variant="neutral"
+                    onclick={handleOpenSchedules}
+                    class="slds-m-left_small">
+                </lightning-button>
+                <lightning-button
                     label="Unrouted Signals"
                     icon-name="utility:warning"
                     variant="neutral"
@@ -45,6 +52,20 @@
             </div>
         </div>
 
+        <!-- Schedules View (embedded standalone component) -->
+        <template if:true={viewingSchedules}>
+            <div class="slds-m-bottom_small">
+                <lightning-button
+                    label="Back to Instances"
+                    icon-name="utility:back"
+                    variant="neutral"
+                    onclick={handleCloseSchedules}>
+                </lightning-button>
+            </div>
+            <c-workflow-schedule-manager></c-workflow-schedule-manager>
+        </template>
+
+        <template if:false={viewingSchedules}>
         <!-- Summary Stats Card Row -->
         <div class="slds-grid slds-wrap slds-gutters slds-m-bottom_large">
             <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-5">
@@ -844,6 +865,7 @@
                 </div>
             </div>
         </div>
+        </template>
 
         <!-- Re-drive Confirmation Modal -->
         <template if:true={redriveModalOpen}>

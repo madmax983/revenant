@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Last_Fired_Window__c</fullName>
+    <description>Engine-managed. The most recent fire-window DateTime for which this schedule was processed (Started or Skipped). The sweeper advances this after each processed window so the same window is never retried.</description>
+    <externalId>false</externalId>
+    <label>Last Fired Window</label>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>DateTime</type>
+</CustomField>

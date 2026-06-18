@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Enabled__c</fullName>
+    <defaultValue>false</defaultValue>
+    <description>When true, the watchdog heartbeat sweeper will fire this schedule when due. Set to false to pause without deleting the record.</description>
+    <externalId>false</externalId>
+    <label>Enabled</label>
+    <trackTrending>false</trackTrending>
+    <type>Checkbox</type>
+</CustomField>

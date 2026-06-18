@@ -28,6 +28,7 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 - **Outbound Lifecycle Events**: The engine publishes a `Workflow_Lifecycle__e` platform event (outcome metadata only) each time an instance reaches a terminal state (`Completed`/`Failed`/`Compensated`/`Cancelled`), so a Flow **Pause** element or an external subscriber can react event-driven instead of polling — exactly one event per logical workflow (one per `ContinuedAsNew` chain). Fire-and-forget and operator-toggleable via `Revenant_Config__mdt.Publish_Lifecycle_Events__c`. See [docs/workflow-lifecycle-event.md](docs/workflow-lifecycle-event.md).
 - **Salesforce Flow Interoperability**: Launches or signals workflows using Invocable Actions from Salesforce Flow, or executes standard Autolaunched Flows as steps within a workflow using the generic `WorkflowFlowStep` wrapper.
 - **Custom Metadata Alerts**: Supports operator-configurable failure notification thresholds (consecutive failures, sliding rate counts) using `Workflow_Alert_Config__mdt` custom metadata records.
+- **Declarative Recurring Schedules (0-slot)**: Create a `Workflow_Schedule__c` record to run any workflow on a cron cadence — no Apex, and **zero additional scheduled-job slots** beyond the existing watchdog. See [docs/recurring-schedules.md](docs/recurring-schedules.md).
 
 ---
 

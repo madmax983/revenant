@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <!-- Apex access for the schedule manager's @AuraEnabled controller. Without this,
+         a schedule-only admin whose profile doesn't already expose the class hits an
+         insufficient-Apex-access error on every LWC call (getSchedules, saveSchedule,
+         etc.), making the advertised schedule-only UI unusable. Class-level security is
+         enforced only at the LWC entry point, so the controller's downstream classes
+         (WorkflowScheduleSweeper, WorkflowCronEvaluator, WorkflowEngine) need no entry. -->
+    <classAccesses>
+        <apexClass>WorkflowScheduleController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <customPermissions>
+        <enabled>true</enabled>
+        <name>Workflow_Schedule_Admin</name>
+    </customPermissions>
+    <description>Schedule-only administration: manage Workflow Schedules and view their fire logs without full Workflow Engine monitoring access.</description>
+    <hasActivationRequired>false</hasActivationRequired>
+    <label>Revenant Schedule Admin</label>
+
+    <!-- Workflow_Schedule__c: full CRUD -->
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>true</allowDelete>
+        <allowEdit>true</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords>
+        <object>Workflow_Schedule__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <!-- Workflow_Log__c: read (logs are engine-written) -->
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Log__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <!-- Workflow_Instance__c: READ ONLY. runNow starts workflows via system-mode
+         Apex, so schedule-only admins never need direct create access (which would
+         let them insert engine rows that bypass workflow start validation). -->
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Instance__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <!-- Workflow_Schedule__c field permissions (required fields omitted; Salesforce manages them) -->
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Input_Json__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Enabled__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Overlap_Policy__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Schedule__c.Dedicated_Slot__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <!-- Engine-managed idempotency cursor + outcome: readable but NOT editable. The
+         sweep writes them in system mode; a user-editable Last_Fired_Window__c could
+         be set to the current window to make the sweep skip a legitimate fire. -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Schedule__c.Last_Fired_Window__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Schedule__c.Last_Outcome__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <!-- Engine-managed cursor: readable but NOT editable. The sweep/controller write
+         it in system mode; a user-editable cursor could be set to a future value via
+         raw UI/API edits to silently suppress fires. -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Schedule__c.Next_Fire_Window__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <!-- Workflow_Log__c field permissions (read-only) -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Schedule__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Fire_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Log_Type__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Level__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Outcome__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Schedule_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Workflow_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Fire_Time__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Workflow_Instance__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Message__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+</PermissionSet>
