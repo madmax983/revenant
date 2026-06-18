@@ -323,6 +323,101 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals('{"final":true}', ws.output);
   }
 
+  @isTest
+  static void testGetStatusByKey_FollowsMultiGenerationChainFromIntermediateKey() {
+    // Chain: A (ContinuedAsNew) → A_run2 (ContinuedAsNew) → A_run3 (Completed).
+    // Every generation shares Root_Correlation_Key__c = 'A'.
+    Workflow_Instance__c gen1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineGetStatusTest.StubWorkflow',
+      Status__c = 'ContinuedAsNew',
+      Correlation_Key__c = 'A',
+      Root_Correlation_Key__c = 'A'
+    );
+    insert as system gen1;
+    Workflow_Instance__c gen2 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineGetStatusTest.StubWorkflow',
+      Status__c = 'ContinuedAsNew',
+      Correlation_Key__c = 'A_run2',
+      Root_Correlation_Key__c = 'A'
+    );
+    insert as system gen2;
+    Workflow_Instance__c gen3 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineGetStatusTest.StubWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'A_run3',
+      Root_Correlation_Key__c = 'A',
+      Output__c = '{"gen":3}'
+    );
+    insert as system gen3;
+
+    // Polling the *intermediate* successor key must follow the chain to the final
+    // generation, not return the stale ContinuedAsNew predecessor it names directly.
+    WorkflowEngine.WorkflowStatus mid = WorkflowEngine.getStatus('A_run2');
+    System.assertNotEquals(
+      null,
+      mid,
+      'Intermediate key should resolve via the shared root'
+    );
+    System.assertEquals(
+      gen3.Id,
+      mid.instanceId,
+      'Polling an intermediate key should follow the chain to the final generation'
+    );
+    System.assertEquals(true, mid.isTerminal);
+    System.assertEquals('{"gen":3}', mid.output);
+
+    // Polling the original root key resolves the same final generation.
+    WorkflowEngine.WorkflowStatus rootWs = WorkflowEngine.getStatus('A');
+    System.assertNotEquals(null, rootWs);
+    System.assertEquals(gen3.Id, rootWs.instanceId);
+    System.assertEquals('{"gen":3}', rootWs.output);
+  }
+
+  @isTest
+  static void testBulkGetStatusByKeys_hotKeyDoesNotStarveOthers() {
+    // Shrink the row cap so one hot key would fill a single global-LIMIT scan; the
+    // per-key resolution must still resolve the other requested key (not return
+    // null for it). The cap must leave room for one group per requested key.
+    WorkflowEngine.DEDUP_LOOKUP_ROW_CAP = 2;
+
+    // Cold key: a single, older terminal run.
+    Workflow_Instance__c cold = makeInstance(
+      'Completed',
+      'cold-key',
+      '{"c":1}',
+      null
+    );
+    cold.Terminal_At__c = System.now().addHours(-1);
+    update as system cold;
+
+    // Hot key: several newer terminal runs that would dominate an ordered scan.
+    for (Integer i = 0; i < 3; i++) {
+      Workflow_Instance__c hot = makeInstance(
+        'Completed',
+        'hot-key',
+        '{"h":' + i + '}',
+        null
+      );
+      hot.Terminal_At__c = System.now();
+      update as system hot;
+    }
+
+    List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      new List<String>{ 'hot-key', 'cold-key' }
+    );
+
+    System.assertEquals(2, results.size());
+    System.assertNotEquals(null, results[0], 'Hot key should resolve');
+    System.assertEquals('hot-key', results[0].correlationKey);
+    System.assertNotEquals(
+      null,
+      results[1],
+      'Cold key must not be crowded out by the hot key'
+    );
+    System.assertEquals('cold-key', results[1].correlationKey);
+    System.assertEquals(cold.Id, results[1].instanceId);
+  }
+
   // ─── Offload rehydration (AC3 + AC7) ─────────────────────────────────────
 
   @isTest
@@ -653,9 +748,12 @@ private class WorkflowEngineGetStatusTest {
     Integer queriesUsed = Limits.getQueries() - queriesBefore;
     Integer dmlUsed = Limits.getDmlStatements() - dmlBefore;
 
+    // The key path resolves the winner from metadata, then fetches the winner's
+    // output and rehydrates the offload: a small constant (here metadata lookup +
+    // winner fetch + ContentVersion = 3), independent of list size, zero DML.
     System.assert(
-      queriesUsed <= 2,
-      'Bulk-by-key with offloaded output should cost at most 2 SOQL: used ' +
+      queriesUsed <= 4,
+      'Bulk-by-key with offloaded output should cost a small constant SOQL: used ' +
       queriesUsed
     );
     System.assertEquals(0, dmlUsed, 'getStatus must perform zero DML');
