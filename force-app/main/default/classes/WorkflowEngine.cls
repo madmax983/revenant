@@ -3908,6 +3908,20 @@ public inherited sharing class WorkflowEngine {
       insert as system stepExec;
     }
 
+    // Operator pause gate — park the child at start if its definition is paused, so a
+    // running parent cannot bypass the pause by spawning children. The initial Pending
+    // step (above) gives resume a concrete step to drive; skip timeout scheduling and
+    // the enqueue. The child's correlation reservation still holds (the trigger keeps
+    // Active_Correlation_Key__c set for Paused).
+    if (
+      WorkflowPauseGate.anyPaused() &&
+      WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c)
+    ) {
+      instance.Status__c = 'Paused';
+      update as system instance;
+      return;
+    }
+
     // Schedule the watchdog for the child's initial step before executing it, matching
     // the start() overloads. Without this a TimeoutConfigurable first step of a child
     // workflow would never get a scheduled timeout job.
@@ -5899,11 +5913,19 @@ public inherited sharing class WorkflowEngine {
     // best-effort publish can never spend a DML statement the resume section needs.
     List<Workflow_Instance__c> watchdogTerminalInstances = new List<Workflow_Instance__c>();
 
-    // 1. Process Timed-out Steps
+    // 1. Process Timed-out Steps. Exclude steps whose parent is Paused: a parked
+    // parent is not runnable, so its step rows (e.g. parallel branch rows the SPLIT
+    // path stamped with Timeout_At__c before their RUN_STEP reached the gate, or a
+    // parked initial step) would otherwise be selected and skipped, wasting the
+    // bounded batch and delaying real timeouts in other workflows. Resume re-arms
+    // these deadlines (see reArmTimeoutsForResume).
     List<Workflow_Step_Execution__c> timedOutSteps = [
       SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Error_Details__c
       FROM Workflow_Step_Execution__c
-      WHERE Status__c IN ('Running', 'Pending') AND Timeout_At__c <= :now
+      WHERE
+        Status__c IN ('Running', 'Pending')
+        AND Timeout_At__c <= :now
+        AND Workflow_Instance__r.Status__c != 'Paused'
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
       LIMIT :WATCHDOG_TIMEOUT_BATCH_SIZE
@@ -6332,6 +6354,48 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  /**
+   * Re-establishes step timeouts for instances being resumed from a Paused park.
+   * Parking clears/omits the watchdog deadline so parked rows do not pollute the
+   * timeout batch; on resume we re-stamp a fresh Timeout_At__c on each instance's
+   * current Pending/Running step(s) (the watchdog safety net) and schedule the
+   * dynamic timeout jobs, mirroring how start() arms a fresh step. Must run before
+   * the resumed workers are enqueued so a delayed worker still has an enforced
+   * deadline.
+   */
+  public static void reArmTimeoutsForResume(
+    List<Workflow_Instance__c> instances
+  ) {
+    if (instances == null || instances.isEmpty()) {
+      return;
+    }
+    Set<Id> instanceIds = new Set<Id>();
+    for (Workflow_Instance__c inst : instances) {
+      instanceIds.add(inst.Id);
+    }
+    List<Workflow_Step_Execution__c> steps = [
+      SELECT Id, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c IN :instanceIds
+        AND Status__c IN ('Pending', 'Running')
+      WITH SYSTEM_MODE
+    ];
+    List<Workflow_Step_Execution__c> toUpdate = new List<Workflow_Step_Execution__c>();
+    for (Workflow_Step_Execution__c step : steps) {
+      Integer timeout = getStepTimeoutSeconds(step.Step_Name__c);
+      if (timeout != null && timeout > 0) {
+        step.Timeout_At__c = DateTime.now().addSeconds(timeout);
+        toUpdate.add(step);
+      }
+    }
+    if (!toUpdate.isEmpty()) {
+      update as system toUpdate;
+    }
+    // Schedule the dynamic timeout jobs (Schedulable/Queueable) for these instances.
+    scheduleTimeoutJobsForInstances(instances);
+  }
+
   public static void scheduleTimeoutJobForInstance(Id instanceId) {
     List<Workflow_Instance__c> instances = [
       SELECT Status__c, Current_Step__c, Compensation_Stack__c
@@ -6637,7 +6701,8 @@ public inherited sharing class WorkflowEngine {
       'Running',
       'Suspended',
       'Compensating',
-      'Cancelling'
+      'Cancelling',
+      'Paused'
     };
 
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();

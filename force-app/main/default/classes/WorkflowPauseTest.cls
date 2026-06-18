@@ -109,6 +109,30 @@ public class WorkflowPauseTest {
     }
   }
 
+  // Parent workflow whose first step spawns a child (used to exercise the pause
+  // gate on the START_CHILD path). The child correlation key is read from a static
+  // so the test can locate the spawned child.
+  public static String spawnChildKey;
+
+  public class ChildSpawningWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'WorkflowPauseTest.SpawnChildStep';
+    }
+    public String getNextStep(String current, StepResult result) {
+      return null;
+    }
+  }
+
+  public class SpawnChildStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.startChild(
+        'WorkflowPauseTest.TwoStepWorkflow',
+        spawnChildKey,
+        null
+      );
+    }
+  }
+
   // ============================================================
   // 1. PAUSE GATE API — basic pause / isPaused / resume
   // ============================================================
@@ -1162,6 +1186,244 @@ public class WorkflowPauseTest {
       afterChild.Status__c == 'Cancelling',
       'Paused child should be Cancelled/Cancelling, was: ' +
       afterChild.Status__c
+    );
+  }
+
+  // ============================================================
+  // 15. PR #78 ROUND 2 REGRESSIONS
+  // ============================================================
+
+  // A running parent spawning a child whose definition is paused must park the
+  // child (START_CHILD path was bypassing the pause gate).
+  @isTest
+  static void testChildStartParksWhenChildDefPaused() {
+    WorkflowEngine.disableQueueableInTest = true;
+    spawnChildKey = 'PausedChild-' + Datetime.now().getTime();
+
+    // Pause the CHILD definition (the parent is not paused).
+    WorkflowPauseGate.pauseDefinition(
+      'WorkflowPauseTest.TwoStepWorkflow',
+      'child paused'
+    );
+
+    Workflow_Instance__c parent = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.ChildSpawningWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowPauseTest.SpawnChildStep',
+      Correlation_Key__c = 'Parent-' + Datetime.now().getTime()
+    );
+    insert parent;
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = parent.Id,
+      Step_Name__c = 'WorkflowPauseTest.SpawnChildStep',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+
+    Test.startTest();
+    WorkflowEngine.runStep(parent.Id, 'WorkflowPauseTest.SpawnChildStep');
+    Test.stopTest();
+
+    List<Workflow_Instance__c> children = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c = :spawnChildKey
+    ];
+    System.assertEquals(1, children.size(), 'Child instance should exist');
+    System.assertEquals(
+      'Paused',
+      children[0].Status__c,
+      'Child of a paused definition must be parked, not executed'
+    );
+  }
+
+  // The dashboard Redeliver action must attach a captured (Unrouted) signal to a
+  // matching Paused instance as Received (held), without waking it.
+  @isTest
+  static void testRedeliverSignalToPausedInstance() {
+    WorkflowEngine.disableQueueableInTest = true;
+    String corrKey = 'RedeliverPaused-' + Datetime.now().getTime();
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.SuspendingWorkflow',
+      Status__c = 'Paused',
+      Current_Step__c = 'WorkflowPauseTest.SuspendStep',
+      Correlation_Key__c = corrKey
+    );
+    insert inst;
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Signal_Name__c = 'WaitSignal',
+      Correlation_Key__c = corrKey,
+      Status__c = 'Unrouted'
+    );
+    insert sig;
+
+    Test.startTest();
+    Boolean matched = WorkflowEngine.redeliverCapturedSignal(sig.Id);
+    Test.stopTest();
+
+    System.assertEquals(
+      true,
+      matched,
+      'Redeliver should match the paused instance'
+    );
+    Workflow_Signal__c after = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig.Id
+    ];
+    System.assertEquals(
+      'Received',
+      after.Status__c,
+      'Redelivered signal should be held (Received)'
+    );
+    System.assertEquals(
+      inst.Id,
+      after.Workflow_Instance__c,
+      'Signal should be linked to the paused instance'
+    );
+    Workflow_Instance__c instAfter = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'Paused',
+      instAfter.Status__c,
+      'Paused instance must NOT be woken by redelivery'
+    );
+  }
+
+  // Version drain must count Paused instances as non-terminal so a version with
+  // parked work is not reported as safe to retire.
+  @isTest
+  static void testVersionDrainTreatsPausedAsNonTerminal() {
+    String wf = 'WorkflowPauseTest.TwoStepWorkflow';
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = wf,
+      Status__c = 'Paused',
+      Definition_Version__c = 1,
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = 'VersionDrain-' + Datetime.now().getTime()
+    );
+    insert inst;
+
+    Test.startTest();
+    List<Map<String, Object>> drain = WorkflowDashboardController.getVersionDrain(
+      wf
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, drain.size(), 'One version expected');
+    System.assertEquals(
+      1,
+      (Integer) drain[0].get('nonTerminalCount'),
+      'Paused instance must count as non-terminal'
+    );
+    System.assertEquals(
+      false,
+      drain[0].get('safeToRetire'),
+      'A version with parked instances must NOT be safe to retire'
+    );
+  }
+
+  // The watchdog timeout batch must skip overdue steps whose parent is Paused, so
+  // parked rows neither time out spuriously nor starve the bounded batch.
+  @isTest
+  static void testWatchdogTimeoutSkipsPausedParentStep() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Paused',
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = 'PausedTimeout-' + Datetime.now().getTime()
+    );
+    insert inst;
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowPauseTest.StepB',
+      Status__c = 'Pending',
+      Retry_Count__c = 0,
+      Timeout_At__c = DateTime.now().addSeconds(-60)
+    );
+    insert step;
+    WorkflowPauseGate.pauseDefinition(
+      'WorkflowPauseTest.TwoStepWorkflow',
+      'paused'
+    );
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    Workflow_Step_Execution__c after = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :step.Id
+    ];
+    System.assertEquals(
+      'Pending',
+      after.Status__c,
+      'A paused parent\'s overdue step must NOT be timed out by the watchdog'
+    );
+  }
+
+  // Pause matching is case-insensitive (Workflow_Name__c is a case-insensitive
+  // external id), so a pause stored in one case is honored when checked in another.
+  @isTest
+  static void testPauseNameMatchingIsCaseInsensitive() {
+    Test.startTest();
+    WorkflowPauseGate.pauseDefinition(
+      'workflowpausetest.twostepworkflow',
+      'lower'
+    );
+    Boolean paused = WorkflowPauseGate.isDefinitionPaused(
+      'WorkflowPauseTest.TwoStepWorkflow'
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      true,
+      paused,
+      'isDefinitionPaused must match regardless of name casing'
+    );
+  }
+
+  // Smoke test for the resume re-arm path: resuming a parked instance flips it to
+  // Running and runs reArmTimeoutsForResume without error.
+  @isTest
+  static void testResumeReArmsTimeoutsWithoutError() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Paused',
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = 'ResumeReArm-' + Datetime.now().getTime()
+    );
+    insert inst;
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowPauseTest.StepB',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+    WorkflowPauseGate.pauseDefinition(
+      'WorkflowPauseTest.TwoStepWorkflow',
+      'rearm'
+    );
+
+    Test.startTest();
+    WorkflowPauseGate.resumeDefinition('WorkflowPauseTest.TwoStepWorkflow');
+    Test.stopTest();
+
+    Workflow_Instance__c after = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'Running',
+      after.Status__c,
+      'Resumed instance should be Running after re-arm'
     );
   }
 }

@@ -28,7 +28,8 @@ public inherited sharing class WorkflowDashboardController {
     'Suspended',
     'Compensating',
     'Cancelling',
-    'CompensationFailed'
+    'CompensationFailed',
+    'Paused'
   };
 
   // Terminal statuses that are nonetheless re-drivable on their original version

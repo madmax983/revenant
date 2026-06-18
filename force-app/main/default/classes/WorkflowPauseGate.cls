@@ -61,7 +61,10 @@ public inherited sharing class WorkflowPauseGate {
     if (cachedPausedNames == null) {
       loadCache();
     }
-    return cachedPausedNames.contains(workflowName) ||
+    // Workflow_Name__c is a case-insensitive unique external id, so the in-memory
+    // cache is normalized to lower case and the lookup key is too — otherwise a
+    // pause stored as 'foo' would be missed when the engine checks 'Foo'.
+    return cachedPausedNames.contains(normalize(workflowName)) ||
       cachedPausedNames.contains('*');
   }
 
@@ -180,7 +183,7 @@ public inherited sharing class WorkflowPauseGate {
     List<Workflow_Instance__c> parked;
     if (workflowName == '*') {
       parked = [
-        SELECT Id, Current_Step__c, Status__c
+        SELECT Id, Current_Step__c, Status__c, Compensation_Stack__c
         FROM Workflow_Instance__c
         WHERE Status__c = 'Paused'
         WITH SYSTEM_MODE
@@ -189,7 +192,7 @@ public inherited sharing class WorkflowPauseGate {
       ];
     } else {
       parked = [
-        SELECT Id, Current_Step__c, Status__c
+        SELECT Id, Current_Step__c, Status__c, Compensation_Stack__c
         FROM Workflow_Instance__c
         WHERE Status__c = 'Paused' AND Workflow_Name__c = :workflowName
         WITH SYSTEM_MODE
@@ -220,6 +223,10 @@ public inherited sharing class WorkflowPauseGate {
       }
     }
     update as system toUpdate;
+
+    // Re-arm step timeouts BEFORE enqueueing the resumed workers, so a delayed worker
+    // (or a step that defers its pre-exec DML) still has an enforced watchdog deadline.
+    WorkflowEngine.reArmTimeoutsForResume(toUpdate);
 
     if (!serialIds.isEmpty()) {
       WorkflowEngine.enqueueOrchestrators(serialIds);
@@ -254,8 +261,22 @@ public inherited sharing class WorkflowPauseGate {
   // INTERNAL HELPERS
   // ──────────────────────────────────────────────────────────────────────────
 
+  // Lower-cases a name for case-insensitive matching ('*' is unchanged). Mirrors the
+  // case-insensitive external id on Workflow_Pause_State__c.Workflow_Name__c.
+  private static String normalize(String workflowName) {
+    return workflowName == null ? null : workflowName.toLowerCase();
+  }
+
+  // Case-insensitive so a reserved engine workflow is never pausable regardless of the
+  // casing the caller supplies.
   private static Boolean isReserved(String workflowName) {
-    return RESERVED_NAMES.contains(workflowName);
+    String lower = normalize(workflowName);
+    for (String reserved : RESERVED_NAMES) {
+      if (reserved.toLowerCase() == lower) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static void loadCache() {
@@ -266,7 +287,9 @@ public inherited sharing class WorkflowPauseGate {
     ];
     cachedPausedNames = new Set<String>();
     for (Workflow_Pause_State__c r : records) {
-      cachedPausedNames.add(r.Workflow_Name__c);
+      // Normalize for case-insensitive membership checks (the record keeps its
+      // original-case Workflow_Name__c for display).
+      cachedPausedNames.add(normalize(r.Workflow_Name__c));
     }
     cachedAnyPaused = !cachedPausedNames.isEmpty();
   }
