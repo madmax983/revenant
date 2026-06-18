@@ -16,7 +16,8 @@ trigger WorkflowInstanceTrigger on Workflow_Instance__c(
       instance.Status__c == 'Suspended' ||
       instance.Status__c == 'Compensating' ||
       instance.Status__c == 'Cancelling' ||
-      instance.Status__c == 'CompensationFailed'
+      instance.Status__c == 'CompensationFailed' ||
+      instance.Status__c == 'Paused'
     ) {
       // A stalled rollback (CompensationFailed) is non-terminal: it still has
       // un-reversed side effects and can be resumed, so it must keep reserving its

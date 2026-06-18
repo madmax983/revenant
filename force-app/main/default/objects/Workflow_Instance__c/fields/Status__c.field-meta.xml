@@ -66,6 +66,11 @@
                 <default>false</default>
                 <label>ContinuedAsNew</label>
             </value>
+            <value>
+                <fullName>Paused</fullName>
+                <default>false</default>
+                <label>Paused</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

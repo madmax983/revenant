@@ -986,6 +986,19 @@ public inherited sharing class WorkflowEngine {
       insert as system stepExec;
     }
 
+    // Operator pause gate — park at start if the definition is currently paused.
+    // The initial Workflow_Step_Execution__c (Pending) is already inserted above
+    // so the resume path has a concrete step to drive. Skip timeout scheduling
+    // and the first enqueue; the watchdog will re-drive held timeouts on resume.
+    if (
+      WorkflowPauseGate.anyPaused() &&
+      WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c)
+    ) {
+      instance.Status__c = 'Paused';
+      update as system instance;
+      return new StartResult(instance.Id, true);
+    }
+
     // Schedule watchdog for the initial step before executing it
     scheduleTimeoutJobForInstance(instance.Id);
 
@@ -1887,6 +1900,19 @@ public inherited sharing class WorkflowEngine {
         // detection re-routes on the next drive.
       }
       runCompensationStep(instance, reassertedStatus);
+      return;
+    }
+
+    // 2a. Operator pause gate — park at the chain handoff instead of proceeding.
+    //     Compensating/Cancelling instances bypass this (already returned above) so
+    //     cancel + rollback always proceed on a paused definition.
+    if (
+      WorkflowPauseGate.anyPaused() &&
+      WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c) &&
+      instance.Status__c != 'Paused'
+    ) {
+      instance.Status__c = 'Paused';
+      update as system instance;
       return;
     }
 
@@ -4131,7 +4157,8 @@ public inherited sharing class WorkflowEngine {
           'Suspended',
           'Compensating',
           'Cancelling',
-          'CompensationFailed'
+          'CompensationFailed',
+          'Paused'
         )
       WITH SYSTEM_MODE
       FOR UPDATE
@@ -4229,6 +4256,8 @@ public inherited sharing class WorkflowEngine {
         // may depend on this signal, so wake it too rather than rejecting it. The
         // compensation status is left untouched (only Suspended flips to Running);
         // runStep re-detects the rollback from the trailing '_Compensate' step.
+        // A Paused instance keeps its status — the held signal (Received) is
+        // observed when resume re-drives the wait step; do not wake it here.
         if (
           inst.Status__c == 'Suspended' ||
           inst.Status__c == 'Running' ||
@@ -6074,7 +6103,8 @@ public inherited sharing class WorkflowEngine {
     // 2. Process Sleep Resumptions (bounded per heartbeat; backlog drains on subsequent
     // heartbeats so an unbounded suspended-instance backlog cannot blow row/heap limits).
     List<Workflow_Instance__c> readyToResume = [
-      SELECT Id, Status__c, Sleep_Until__c, Async_Job_Id__c, Error_Message__c
+      SELECT Id, Status__c, Sleep_Until__c, Async_Job_Id__c, Error_Message__c,
+             Workflow_Name__c
       FROM Workflow_Instance__c
       WHERE Status__c = 'Suspended' AND Sleep_Until__c <= :now
       WITH SYSTEM_MODE
@@ -6104,7 +6134,16 @@ public inherited sharing class WorkflowEngine {
       }
 
       List<Id> instanceIds = new List<Id>();
+      List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
       for (Workflow_Instance__c inst : readyToResume) {
+        // Hold, not drop: if the definition is paused, leave the instance Suspended
+        // with Sleep_Until__c intact so it re-fires on the next heartbeat after resume.
+        if (
+          WorkflowPauseGate.anyPaused() &&
+          WorkflowPauseGate.isDefinitionPaused(inst.Workflow_Name__c)
+        ) {
+          continue;
+        }
         Workflow_Step_Execution__c latestStep = latestStepByInstId.get(inst.Id);
         if (
           latestStep != null &&
@@ -6125,8 +6164,11 @@ public inherited sharing class WorkflowEngine {
         inst.Sleep_Until__c = null;
         inst.Async_Job_Id__c = null;
         instanceIds.add(inst.Id);
+        instancesToUpdate.add(inst);
       }
-      update as system readyToResume;
+      if (!instancesToUpdate.isEmpty()) {
+        update as system instancesToUpdate;
+      }
       enqueueOrchestrators(instanceIds);
     }
 

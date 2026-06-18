@@ -272,8 +272,30 @@
         <readable>true</readable>
     </fieldPermissions>
 
+    <!-- fieldPermissions for Workflow_Pause_State__c -->
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Pause_State__c.Reason__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Pause_State__c.Workflow_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
     <hasActivationRequired>false</hasActivationRequired>
     <label>Revenant Admin</label>
+
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>true</allowDelete>
+        <allowEdit>true</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords>
+        <object>Workflow_Pause_State__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
 
     <objectPermissions>
         <allowCreate>true</allowCreate>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Workflow_Name__c</fullName>
+    <caseSensitive>false</caseSensitive>
+    <description>Workflow definition class name to pause, or * to pause all user-defined workflows org-wide. Must not be a reserved engine workflow name (WatchdogWorkflow, etc.).</description>
+    <externalId>true</externalId>
+    <label>Workflow Name</label>
+    <length>255</length>
+    <required>true</required>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>true</unique>
+</CustomField>
