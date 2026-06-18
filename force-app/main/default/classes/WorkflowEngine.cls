@@ -381,6 +381,9 @@ public inherited sharing class WorkflowEngine {
       return winnerByKey;
     }
 
+    // Follow the chain forward via its shared root. (Same root-reuse limitation as
+    // resolveWinnersByRoot: if the root key was reused for an independent live run,
+    // this can resolve to that run — see README.)
     String rootKey = String.isNotBlank(winner.Root_Correlation_Key__c)
       ? normalizeKey(winner.Root_Correlation_Key__c)
       : null;
@@ -552,6 +555,15 @@ public inherited sharing class WorkflowEngine {
    * most-recent non-hand-off terminal generation, else the most-recent row of any
    * status. Used to follow a ContinuedAsNew chain forward from a hand-off winner.
    * Per-root bounded so a reused root cannot exhaust the SOQL row governor.
+   *
+   * Known limitation (by design — see README): the root key is shared by every
+   * generation of a chain AND by any independent run that reuses the same
+   * correlation key, so following a hand-off by root cannot distinguish the chain's
+   * own successor from an unrelated run reusing that key. If a correlation key is
+   * reused for a separate run while a continue-as-new chain on that key is still
+   * live, polling an intermediate hand-off key may resolve to the reused run.
+   * Precisely disambiguating would require walking Previous_Instance__c, which is
+   * deliberately out of scope to keep this path's bounded, constant-SOQL guarantee.
    */
   private static Map<String, Workflow_Instance__c> resolveWinnersByRoot(
     Set<String> roots
