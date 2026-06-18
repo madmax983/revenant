@@ -471,7 +471,13 @@ public inherited sharing class WorkflowEngine {
         if (mc == null) {
           continue;
         }
-        maxByKey.put(normalizeKey((String) ar.get('ck')), mc);
+        // Guard the put: a case-insensitive GROUP BY can yield separate groups for
+        // case variants that normalize to the same key, so keep the latest.
+        String nk = normalizeKey((String) ar.get('ck'));
+        Datetime existing = maxByKey.get(nk);
+        if (existing == null || mc > existing) {
+          maxByKey.put(nk, mc);
+        }
         maxTimes.add(mc);
       }
       if (!maxTimes.isEmpty()) {
@@ -487,6 +493,7 @@ public inherited sharing class WorkflowEngine {
           WHERE Correlation_Key__c IN :remaining AND CreatedDate IN :maxTimes
           WITH SYSTEM_MODE
           ORDER BY CreatedDate DESC
+          LIMIT :DEDUP_LOOKUP_ROW_CAP
         ]) {
           if (
             inst.CreatedDate ==
@@ -507,11 +514,14 @@ public inherited sharing class WorkflowEngine {
     Set<String> expandRoots = new Set<String>();
     for (String reqKey : bestByKey.keySet()) {
       Workflow_Instance__c w = bestByKey.get(reqKey);
-      if (
-        w.Status__c == 'ContinuedAsNew' &&
-        String.isNotBlank(w.Root_Correlation_Key__c)
-      ) {
-        String root = normalizeKey(w.Root_Correlation_Key__c);
+      if (w.Status__c == 'ContinuedAsNew') {
+        // A continueAsNew successor inherits the predecessor's root, falling back to
+        // the predecessor's own correlation key when the predecessor predates the
+        // root default (blank root). Mirror that fallback so a rootless legacy
+        // hand-off still expands to its successor (here reqKey == predecessor key).
+        String root = String.isNotBlank(w.Root_Correlation_Key__c)
+          ? normalizeKey(w.Root_Correlation_Key__c)
+          : reqKey;
         rootByKey.put(reqKey, root);
         expandRoots.add(root);
       }
@@ -587,7 +597,11 @@ public inherited sharing class WorkflowEngine {
         if (mc == null) {
           continue;
         }
-        maxByRoot.put(normalizeKey((String) ar.get('root')), mc);
+        String nr = normalizeKey((String) ar.get('root'));
+        Datetime existing = maxByRoot.get(nr);
+        if (existing == null || mc > existing) {
+          maxByRoot.put(nr, mc);
+        }
         maxTimes.add(mc);
       }
       if (!maxTimes.isEmpty()) {
@@ -606,6 +620,7 @@ public inherited sharing class WorkflowEngine {
             AND CreatedDate IN :maxTimes
           WITH SYSTEM_MODE
           ORDER BY CreatedDate DESC
+          LIMIT :DEDUP_LOOKUP_ROW_CAP
         ]) {
           String r = normalizeKey(inst.Root_Correlation_Key__c);
           if (inst.CreatedDate == maxByRoot.get(r)) {

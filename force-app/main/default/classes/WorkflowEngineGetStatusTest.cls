@@ -534,6 +534,43 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(null, results[1], 'Unrelated key has no instance');
   }
 
+  @isTest
+  static void testBulkGetStatusByKeys_expandsRootlessLegacyHandoff() {
+    // Legacy predecessor: blank root (pre-default), already handed off.
+    Workflow_Instance__c legacy = makeInstance(
+      'ContinuedAsNew',
+      'legacy-chain',
+      null,
+      null
+    );
+    legacy.Root_Correlation_Key__c = null;
+    update as system legacy;
+
+    // Successor inserted post-upgrade: continueAsNew sets its root to the
+    // predecessor's own correlation key (the line 2995 fallback).
+    Workflow_Instance__c successor = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineGetStatusTest.StubWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'legacy-chain_run2',
+      Root_Correlation_Key__c = 'legacy-chain',
+      Output__c = '{"legacyFinal":true}'
+    );
+    insert as system successor;
+
+    List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      new List<String>{ 'legacy-chain', 'no-such-key' }
+    );
+
+    System.assertEquals(2, results.size());
+    System.assertEquals(
+      successor.Id,
+      results[0].instanceId,
+      'A blank-root hand-off must still expand to its successor in bulk'
+    );
+    System.assertEquals(true, results[0].isTerminal);
+    System.assertEquals('{"legacyFinal":true}', results[0].output);
+  }
+
   // ─── Offload rehydration (AC3 + AC7) ─────────────────────────────────────
 
   @isTest
