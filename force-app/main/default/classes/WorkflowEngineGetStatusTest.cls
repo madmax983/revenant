@@ -418,6 +418,122 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(cold.Id, results[1].instanceId);
   }
 
+  @isTest
+  static void testBulkGetStatusByKeys_followsChainWhenPollingRootKey() {
+    // gen1 hands off (ContinuedAsNew); the successor carries a different
+    // correlation key but the shared root. The bulk path matches the polled root
+    // by correlation key first (finding only the hand-off), so it must still expand
+    // via the root to reach the live/final successor.
+    Workflow_Instance__c gen1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineGetStatusTest.StubWorkflow',
+      Status__c = 'ContinuedAsNew',
+      Correlation_Key__c = 'BulkRoot',
+      Root_Correlation_Key__c = 'BulkRoot'
+    );
+    insert as system gen1;
+    Workflow_Instance__c successor = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineGetStatusTest.StubWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'BulkRoot_run2',
+      Root_Correlation_Key__c = 'BulkRoot',
+      Output__c = '{"final":true}'
+    );
+    insert as system successor;
+
+    List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      new List<String>{ 'BulkRoot', 'unrelated-key' }
+    );
+
+    System.assertEquals(2, results.size());
+    System.assertNotEquals(null, results[0], 'Root key should resolve');
+    System.assertEquals(
+      successor.Id,
+      results[0].instanceId,
+      'Bulk polling the root key must follow the chain to the live successor'
+    );
+    System.assertEquals('{"final":true}', results[0].output);
+    System.assertEquals(null, results[1], 'Unrelated key has no instance');
+  }
+
+  @isTest
+  static void testBulkGetStatusByKeys_resolvesRootlessLegacyInstance() {
+    // Simulate a legacy row created before the Root_Correlation_Key__c default: the
+    // trigger only defaults on insert, so null it out via a follow-up update.
+    Workflow_Instance__c legacy = makeInstance(
+      'Completed',
+      'legacy-rootless',
+      '{"legacy":true}',
+      null
+    );
+    legacy.Root_Correlation_Key__c = null;
+    update as system legacy;
+
+    Workflow_Instance__c other = makeInstance(
+      'Running',
+      'other-key',
+      null,
+      null
+    );
+
+    List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      new List<String>{ 'legacy-rootless', 'other-key' }
+    );
+
+    System.assertEquals(2, results.size());
+    System.assertNotEquals(
+      null,
+      results[0],
+      'A rootless legacy row must resolve via its correlation key in bulk'
+    );
+    System.assertEquals(legacy.Id, results[0].instanceId);
+    System.assertEquals('{"legacy":true}', results[0].output);
+    System.assertEquals(other.Id, results[1].instanceId);
+  }
+
+  @isTest
+  static void testBulkGetStatusByKeys_doesNotConflateReusedRoot() {
+    // Chain: K (ContinuedAsNew) → K_run2 (Completed). Both share root 'K'.
+    Workflow_Instance__c gen1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineGetStatusTest.StubWorkflow',
+      Status__c = 'ContinuedAsNew',
+      Correlation_Key__c = 'K',
+      Root_Correlation_Key__c = 'K'
+    );
+    insert as system gen1;
+    Workflow_Instance__c kRun2 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineGetStatusTest.StubWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'K_run2',
+      Root_Correlation_Key__c = 'K',
+      Output__c = '{"run2":true}'
+    );
+    insert as system kRun2;
+
+    // A later, independent run reuses correlation key 'K' (root defaults to 'K'),
+    // so it shares the chain root but is unrelated to K_run2.
+    Workflow_Instance__c independentK = makeInstance(
+      'Running',
+      'K',
+      null,
+      null
+    );
+
+    // Two keys force the bulk path (a single-element list takes the single-key
+    // fast path), which is where root-keyed conflation would occur.
+    List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      new List<String>{ 'K_run2', 'no-such-key' }
+    );
+
+    System.assertEquals(2, results.size());
+    System.assertEquals(
+      kRun2.Id,
+      results[0].instanceId,
+      'Polling K_run2 must return its own run, not the unrelated reused-K run'
+    );
+    System.assertEquals('{"run2":true}', results[0].output);
+    System.assertEquals(null, results[1], 'Unrelated key has no instance');
+  }
+
   // ─── Offload rehydration (AC3 + AC7) ─────────────────────────────────────
 
   @isTest

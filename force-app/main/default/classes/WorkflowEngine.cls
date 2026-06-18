@@ -419,60 +419,20 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Bulk path: resolve each requested key independently (mirroring the start-path
-   * findExistingByKey machinery) so no single hot key can crowd out another. Maps
-   * each requested key to its chain root(s), then finds the winner per root: an
-   * active run if any, else the most-recent non-hand-off terminal generation, else
-   * the most-recent row of any status (so an all-hand-off chain still resolves).
+   * Bulk path. Each requested key is resolved by its OWN correlation/active key
+   * (never by root), mirroring the start-path findExistingByKey machinery: an active
+   * run if any, else the most-recent row by correlation key (an aggregate, so a hot
+   * key reused across many terminal runs collapses to one group and cannot crowd out
+   * other keys). Matching on the key itself — not on Root_Correlation_Key__c — means
+   * a rootless legacy row is still found, and independent runs that merely share a
+   * chain root are never conflated. The chain is then followed via the shared root
+   * only for keys whose direct winner is a ContinuedAsNew hand-off, exactly as the
+   * single-key fast path does, so bulk and single resolution stay consistent.
    */
   private static Map<String, Id> resolveBulkKeyWinners(Set<String> keys) {
-    // 1) Map each requested key to its chain root(s). Grouping collapses a key
-    //    reused across many terminal runs to a handful of rows, so this stays
-    //    bounded regardless of how many historical runs a key has.
-    Map<String, Set<String>> rootsByKey = new Map<String, Set<String>>();
-    Set<String> allRoots = new Set<String>();
-    for (AggregateResult ar : [
-      SELECT
-        Root_Correlation_Key__c root,
-        Correlation_Key__c ck,
-        Active_Correlation_Key__c ak
-      FROM Workflow_Instance__c
-      WHERE
-        Active_Correlation_Key__c IN :keys
-        OR Correlation_Key__c IN :keys
-        OR Root_Correlation_Key__c IN :keys
-      WITH SYSTEM_MODE
-      GROUP BY
-        Root_Correlation_Key__c,
-        Correlation_Key__c,
-        Active_Correlation_Key__c
-      LIMIT :DEDUP_LOOKUP_ROW_CAP
-    ]) {
-      String root = normalizeKey((String) ar.get('root'));
-      String ck = normalizeKey((String) ar.get('ck'));
-      String ak = normalizeKey((String) ar.get('ak'));
-      // The chain root is the row's root key (always populated by the trigger), or
-      // the requested key itself for any legacy row created before that default.
-      for (String reqKey : new Set<String>{ ck, ak, root }) {
-        if (reqKey == null || !keys.contains(reqKey)) {
-          continue;
-        }
-        String effectiveRoot = root != null ? root : reqKey;
-        if (!rootsByKey.containsKey(reqKey)) {
-          rootsByKey.put(reqKey, new Set<String>());
-        }
-        rootsByKey.get(reqKey).add(effectiveRoot);
-        allRoots.add(effectiveRoot);
-      }
-    }
-    if (allRoots.isEmpty()) {
-      return new Map<String, Id>();
-    }
+    Map<String, Workflow_Instance__c> bestByKey = new Map<String, Workflow_Instance__c>();
 
-    // 2) Find the winner per chain root.
-    Map<String, Workflow_Instance__c> winnerByRoot = new Map<String, Workflow_Instance__c>();
-
-    // 2a) Active runs — the unique active-key index bounds this to ~one per chain.
+    // 1a) Active runs — the unique active-key index bounds this to ~one per key.
     for (Workflow_Instance__c inst : [
       SELECT
         Id,
@@ -483,8 +443,122 @@ public inherited sharing class WorkflowEngine {
         Root_Correlation_Key__c
       FROM Workflow_Instance__c
       WHERE
-        Root_Correlation_Key__c IN :allRoots
+        (Active_Correlation_Key__c IN :keys
+        OR Correlation_Key__c IN :keys)
         AND Status__c IN :ACTIVE_STATUSES
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+    ]) {
+      bucketByOwnKey(inst, keys, bestByKey);
+    }
+
+    // 1b) Keys with no active run → most-recent row by correlation key (any status,
+    //     so a ContinuedAsNew hand-off is detected for the chain expansion below). An
+    //     aggregate yields one MAX(CreatedDate) per key (a hot key collapses to a
+    //     single group), then a bounded fetch resolves the Id(s) at those timestamps.
+    Set<String> remaining = unresolved(keys, bestByKey);
+    if (!remaining.isEmpty()) {
+      Map<String, Datetime> maxByKey = new Map<String, Datetime>();
+      Set<Datetime> maxTimes = new Set<Datetime>();
+      for (AggregateResult ar : [
+        SELECT Correlation_Key__c ck, MAX(CreatedDate) mc
+        FROM Workflow_Instance__c
+        WHERE Correlation_Key__c IN :remaining
+        WITH SYSTEM_MODE
+        GROUP BY Correlation_Key__c
+      ]) {
+        Datetime mc = (Datetime) ar.get('mc');
+        if (mc == null) {
+          continue;
+        }
+        maxByKey.put(normalizeKey((String) ar.get('ck')), mc);
+        maxTimes.add(mc);
+      }
+      if (!maxTimes.isEmpty()) {
+        for (Workflow_Instance__c inst : [
+          SELECT
+            Id,
+            Status__c,
+            CreatedDate,
+            Active_Correlation_Key__c,
+            Correlation_Key__c,
+            Root_Correlation_Key__c
+          FROM Workflow_Instance__c
+          WHERE Correlation_Key__c IN :remaining AND CreatedDate IN :maxTimes
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate DESC
+        ]) {
+          if (
+            inst.CreatedDate ==
+            maxByKey.get(normalizeKey(inst.Correlation_Key__c))
+          ) {
+            bucketByOwnKey(inst, keys, bestByKey);
+          }
+        }
+      }
+    }
+
+    // 2) For keys whose direct winner is a ContinuedAsNew hand-off, the chain has
+    //    moved on — follow it to the live/final successor via the shared root key.
+    //    (Phase 1 matched on the key itself, not on root, so the successors — which
+    //    carry a different correlation key — were not seen yet, even when the polled
+    //    key is the chain root.)
+    Map<String, String> rootByKey = new Map<String, String>();
+    Set<String> expandRoots = new Set<String>();
+    for (String reqKey : bestByKey.keySet()) {
+      Workflow_Instance__c w = bestByKey.get(reqKey);
+      if (
+        w.Status__c == 'ContinuedAsNew' &&
+        String.isNotBlank(w.Root_Correlation_Key__c)
+      ) {
+        String root = normalizeKey(w.Root_Correlation_Key__c);
+        rootByKey.put(reqKey, root);
+        expandRoots.add(root);
+      }
+    }
+    if (!expandRoots.isEmpty()) {
+      Map<String, Workflow_Instance__c> winnerByRoot = resolveWinnersByRoot(
+        expandRoots
+      );
+      for (String reqKey : rootByKey.keySet()) {
+        Workflow_Instance__c cand = winnerByRoot.get(rootByKey.get(reqKey));
+        if (
+          cand != null && isPreferredForGetStatus(cand, bestByKey.get(reqKey))
+        ) {
+          bestByKey.put(reqKey, cand);
+        }
+      }
+    }
+
+    Map<String, Id> winnerByKey = new Map<String, Id>();
+    for (String reqKey : bestByKey.keySet()) {
+      winnerByKey.put(reqKey, bestByKey.get(reqKey).Id);
+    }
+    return winnerByKey;
+  }
+
+  /**
+   * Resolves the winning instance per chain root: an active run if any, else the
+   * most-recent non-hand-off terminal generation, else the most-recent row of any
+   * status. Used to follow a ContinuedAsNew chain forward from a hand-off winner.
+   * Per-root bounded so a reused root cannot exhaust the SOQL row governor.
+   */
+  private static Map<String, Workflow_Instance__c> resolveWinnersByRoot(
+    Set<String> roots
+  ) {
+    Map<String, Workflow_Instance__c> winnerByRoot = new Map<String, Workflow_Instance__c>();
+
+    // Active runs — bounded to ~one per chain by the unique active-key index.
+    for (Workflow_Instance__c inst : [
+      SELECT
+        Id,
+        Status__c,
+        CreatedDate,
+        Active_Correlation_Key__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Root_Correlation_Key__c IN :roots AND Status__c IN :ACTIVE_STATUSES
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC
     ]) {
@@ -495,11 +569,8 @@ public inherited sharing class WorkflowEngine {
       );
     }
 
-    // 2b) Roots with no active run → most-recent non-hand-off terminal generation.
-    //     An aggregate yields one MAX(CreatedDate) per root (each group is a single
-    //     row toward the governor, so a hot key cannot exhaust it), then a bounded
-    //     fetch resolves the Id(s) at those timestamps.
-    Set<String> remainingRoots = rootsWithout(allRoots, winnerByRoot);
+    // Roots with no active run → most-recent non-hand-off terminal generation.
+    Set<String> remainingRoots = unresolved(roots, winnerByRoot);
     if (!remainingRoots.isEmpty()) {
       Map<String, Datetime> maxByRoot = new Map<String, Datetime>();
       Set<Datetime> maxTimes = new Set<Datetime>();
@@ -544,10 +615,9 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    // 2c) Fallback for a chain with neither an active run nor a terminal outcome
-    //     (e.g. an all-hand-off chain): keep the most-recent matched row so the
-    //     caller still sees the latest generation rather than null.
-    Set<String> stuckRoots = rootsWithout(allRoots, winnerByRoot);
+    // Fallback for an all-hand-off chain: keep the most-recent matched row so the
+    // caller still sees the latest generation rather than null.
+    Set<String> stuckRoots = unresolved(roots, winnerByRoot);
     if (!stuckRoots.isEmpty()) {
       for (Workflow_Instance__c inst : [
         SELECT
@@ -570,24 +640,34 @@ public inherited sharing class WorkflowEngine {
         );
       }
     }
+    return winnerByRoot;
+  }
 
-    // 3) Map each requested key to the best winner across its root(s).
-    Map<String, Id> winnerByKey = new Map<String, Id>();
-    for (String reqKey : rootsByKey.keySet()) {
-      Workflow_Instance__c best = null;
-      for (String r : rootsByKey.get(reqKey)) {
-        Workflow_Instance__c cand = winnerByRoot.get(r);
-        if (
-          cand != null && (best == null || isPreferredForGetStatus(cand, best))
-        ) {
-          best = cand;
-        }
+  // Buckets a candidate under each requested key it carries via its own correlation
+  // or active key (not its root), keeping the best per key via the getStatus
+  // preference. Matching on the instance's own key avoids conflating independent
+  // runs that share a chain root and still resolves rootless legacy rows.
+  private static void bucketByOwnKey(
+    Workflow_Instance__c inst,
+    Set<String> keys,
+    Map<String, Workflow_Instance__c> bestByKey
+  ) {
+    Set<String> own = new Set<String>();
+    if (String.isNotBlank(inst.Correlation_Key__c)) {
+      own.add(normalizeKey(inst.Correlation_Key__c));
+    }
+    if (String.isNotBlank(inst.Active_Correlation_Key__c)) {
+      own.add(normalizeKey(inst.Active_Correlation_Key__c));
+    }
+    for (String k : own) {
+      if (!keys.contains(k)) {
+        continue;
       }
-      if (best != null) {
-        winnerByKey.put(reqKey, best.Id);
+      Workflow_Instance__c existing = bestByKey.get(k);
+      if (existing == null || isPreferredForGetStatus(inst, existing)) {
+        bestByKey.put(k, inst);
       }
     }
-    return winnerByKey;
   }
 
   // Picks the single best instance from a candidate list via the getStatus
@@ -619,15 +699,15 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
-  // Roots from allRoots not yet resolved to a winner.
-  private static Set<String> rootsWithout(
-    Set<String> allRoots,
-    Map<String, Workflow_Instance__c> winnerByRoot
+  // Members of allKeys not yet resolved to a winner in the given map.
+  private static Set<String> unresolved(
+    Set<String> allKeys,
+    Map<String, Workflow_Instance__c> resolved
   ) {
     Set<String> remaining = new Set<String>();
-    for (String r : allRoots) {
-      if (!winnerByRoot.containsKey(r)) {
-        remaining.add(r);
+    for (String k : allKeys) {
+      if (!resolved.containsKey(k)) {
+        remaining.add(k);
       }
     }
     return remaining;
