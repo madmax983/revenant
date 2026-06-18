@@ -36,7 +36,13 @@ public inherited sharing class WorkflowScheduleJob implements Schedulable {
     ];
 
     if (rows.isEmpty()) {
-      return; // schedule was deleted
+      // The schedule was deleted outside deleteSchedule (e.g. Object Manager or the
+      // API), so no row remains for the UI to abort. Self-abort this CronTrigger so
+      // it stops consuming one of the org's scheduled-job slots forever.
+      if (ctx != null) {
+        System.abortJob(ctx.getTriggerId());
+      }
+      return;
     }
     Workflow_Schedule__c sched = rows[0];
 
@@ -46,18 +52,29 @@ public inherited sharing class WorkflowScheduleJob implements Schedulable {
       return;
     }
 
+    // Use the scheduled cron window, not the raw execution time: Salesforce may run
+    // a "0 2 * * *" job at 02:01, but the fire-window key/state must read 02:00 to
+    // match the 0-slot path and dedup correctly. Fall back to now only if the cron
+    // yields no window (impossible cron — the CronTrigger shouldn't have fired).
     DateTime now = DateTime.now();
+    DateTime fireTime = WorkflowCronEvaluator.previousFireTime(
+      sched.Cron_Expression__c,
+      now
+    );
+    if (fireTime == null) {
+      fireTime = now;
+    }
     String corrKey =
       WorkflowScheduleSweeper.effectivePrefix(sched) +
       '_' +
-      now.formatGmt('yyyyMMddHHmm');
+      fireTime.formatGmt('yyyyMMddHHmm');
 
     // Route through the shared fire path so dedicated fires honour the overlap
     // policy and record Last_Fired_Window__c / Last_Outcome__c + a fire log,
     // identically to the 0-slot sweep.
     WorkflowScheduleSweeper.fireScheduled(
       sched,
-      now,
+      fireTime,
       corrKey,
       'ScheduleDedicatedFire'
     );

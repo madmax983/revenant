@@ -851,4 +851,127 @@ public class WorkflowScheduleSweeperTest {
       'Bad JSON schedule should write an Error log'
     );
   }
+
+  // ── Unknown workflow name records Error instead of a phantom Started ───────
+
+  @isTest
+  static void testUnknownWorkflowRecordsError() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Schedule__c bad = makeSchedule('BadWf', EVERY_MINUTE_CRON, true, 'Allow');
+    bad.Workflow_Name__c = 'Nope.NotARealWorkflow123';
+    insert bad;
+
+    Test.startTest();
+    WorkflowScheduleSweeper.sweep();
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'BadWf_%'],
+      'A typo\'d workflow name must not create a phantom Started instance'
+    );
+    Workflow_Schedule__c after = [
+      SELECT Last_Outcome__c, Last_Fired_Window__c, Next_Fire_Window__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :bad.Id
+    ];
+    System.assertEquals('Error', after.Last_Outcome__c, 'Unknown workflow should record an Error outcome');
+    System.assertNotEquals(null, after.Last_Fired_Window__c, 'Window should be marked handled');
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Log__c
+        WHERE Schedule__c = :bad.Id AND Outcome__c = 'Error'
+      ],
+      'Unknown workflow should write an Error log'
+    );
+  }
+
+  // ── Dedicated job: fire window comes from the cron, not the execution minute ─
+
+  @isTest
+  static void testDedicatedJobUsesCronWindow() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Schedule__c sched = makeSchedule('DedWindow', '0 2 * * *', true, 'Allow');
+    sched.Dedicated_Slot__c = true;
+    insert sched;
+
+    // The fire key must reflect the scheduled 02:00 window, regardless of when the
+    // test (or Salesforce) actually runs the job.
+    DateTime expected = WorkflowCronEvaluator.previousFireTime('0 2 * * *', DateTime.now());
+    String expectedKey = 'DedWindow_' + expected.formatGmt('yyyyMMddHHmm');
+
+    Test.startTest();
+    new WorkflowScheduleJob(sched.Id).execute(null);
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c = :expectedKey],
+      'Dedicated fire must key on the cron window, not the raw execution minute'
+    );
+  }
+
+  // ── Dedicated job: bad input JSON records Error instead of failing every tick ─
+
+  @isTest
+  static void testDedicatedJobBadJsonRecordsError() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Schedule__c sched = new Workflow_Schedule__c(
+      Name = 'DedBadJson',
+      Workflow_Name__c = TEST_WF,
+      Cron_Expression__c = '0 2 * * *',
+      Correlation_Key_Prefix__c = 'DedBadJson',
+      Enabled__c = true,
+      Overlap_Policy__c = 'Allow',
+      Dedicated_Slot__c = true,
+      Input_Json__c = '{not valid json'
+    );
+    insert sched;
+
+    Test.startTest();
+    new WorkflowScheduleJob(sched.Id).execute(null);
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Correlation_Key__c LIKE 'DedBadJson_%'],
+      'Dedicated malformed JSON must not start an instance'
+    );
+    Workflow_Schedule__c after = [
+      SELECT Last_Outcome__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :sched.Id
+    ];
+    System.assertEquals(
+      'Error',
+      after.Last_Outcome__c,
+      'Dedicated malformed JSON should record an Error outcome (not throw and leave stale state)'
+    );
+  }
+
+  // ── Dedicated job self-aborts when its schedule row is gone ────────────────
+
+  @isTest
+  static void testDedicatedJobSelfAbortsWhenScheduleDeleted() {
+    Workflow_Schedule__c sched = makeSchedule('DedGone', '0 2 * * *', true, 'Allow');
+    sched.Dedicated_Slot__c = true;
+    insert sched;
+    String jobName = WorkflowScheduleSweeper.dedicatedJobName(sched.Id);
+
+    Test.startTest();
+    WorkflowScheduleSweeper.registerDedicatedJob(sched.Id);
+    // Delete the row OUTSIDE deleteSchedule, leaving the CronTrigger orphaned.
+    delete sched;
+    // stopTest runs the scheduled job with a real SchedulableContext; with no row
+    // left it must self-abort.
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM CronTrigger WHERE CronJobDetail.Name = :jobName],
+      'A dedicated job whose schedule row is gone must self-abort its CronTrigger'
+    );
+  }
 }

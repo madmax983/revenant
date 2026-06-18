@@ -84,8 +84,11 @@
         <field>Workflow_Schedule__c.Last_Outcome__c</field>
         <readable>true</readable>
     </fieldPermissions>
+    <!-- Engine-managed cursor: readable but NOT editable. The sweep/controller write
+         it in system mode; a user-editable cursor could be set to a future value via
+         raw UI/API edits to silently suppress fires. -->
     <fieldPermissions>
-        <editable>true</editable>
+        <editable>false</editable>
         <field>Workflow_Schedule__c.Next_Fire_Window__c</field>
         <readable>true</readable>
     </fieldPermissions>

@@ -307,23 +307,35 @@ public with sharing class WorkflowScheduleController {
     sched.Overlap_Policy__c = (String) fields.get('Overlap_Policy__c');
     sched.Dedicated_Slot__c = toBool(fields.get('Dedicated_Slot__c'));
 
+    try {
+      upsert as user sched;
+    } catch (Exception e) {
+      throwAura('Could not save schedule: ' + e.getMessage());
+    }
+
     // Recompute the engine-managed cursor on create or whenever the cron changes.
     // sweep() only selects rows whose Next_Fire_Window__c is null or <= now, so a
     // stale cursor from the prior cron (e.g. next month for a monthly schedule)
     // would keep an edited every-minute schedule filtered out until that old date.
     // Pointing the cursor at the new cron's next window both fixes that and gives
     // the list view an immediate "next run" without a per-row evaluator scan.
+    // Written in SYSTEM mode: the field is read-only to admins (so it can't be
+    // tampered with via raw record edits to silently suppress fires).
     if (existingId == null || oldCron != cron) {
-      sched.Next_Fire_Window__c = WorkflowCronEvaluator.nextFireTime(
-        cron,
-        DateTime.now()
-      );
-    }
-
-    try {
-      upsert as user sched;
-    } catch (Exception e) {
-      throwAura('Could not save schedule: ' + e.getMessage());
+      try {
+        update as system new Workflow_Schedule__c(
+          Id = sched.Id,
+          Next_Fire_Window__c = WorkflowCronEvaluator.nextFireTime(
+            cron,
+            DateTime.now()
+          )
+        );
+      } catch (Exception e) {
+        System.debug(
+          LoggingLevel.WARN,
+          'saveSchedule: failed to seed cursor: ' + e.getMessage()
+        );
+      }
     }
 
     // Keep any armed dedicated CronTrigger consistent with the saved record.

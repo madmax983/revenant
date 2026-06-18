@@ -201,8 +201,9 @@
         <field>Workflow_Schedule__c.Last_Outcome__c</field>
         <readable>true</readable>
     </fieldPermissions>
+    <!-- Engine-managed cursor: readable but NOT editable (written in system mode). -->
     <fieldPermissions>
-        <editable>true</editable>
+        <editable>false</editable>
         <field>Workflow_Schedule__c.Next_Fire_Window__c</field>
         <readable>true</readable>
     </fieldPermissions>

@@ -185,6 +185,35 @@ public inherited sharing class WorkflowScheduleSweeper {
           )
         );
       } else {
+        // Validate the workflow definition resolves before starting. A schedule
+        // created outside the manager with a typo in Workflow_Name__c would
+        // otherwise be handed to startOrGet, which builds a Pending instance even
+        // when Type.forName can't resolve a class — recording a phantom "Started"
+        // that only fails asynchronously. Record an Error and rotate the row out.
+        if (!isValidWorkflowName(item.sched.Workflow_Name__c)) {
+          logsToUpsert.add(
+            buildLog(
+              item.sched,
+              item.corrKey,
+              item.fireTime,
+              'Error',
+              null,
+              'Unknown workflow definition: ' + item.sched.Workflow_Name__c
+            )
+          );
+          toUpdate.add(
+            new Workflow_Schedule__c(
+              Id = item.sched.Id,
+              Last_Fired_Window__c = item.fireTime,
+              Last_Outcome__c = 'Error',
+              Next_Fire_Window__c = nextWindow(
+                item.sched.Cron_Expression__c,
+                item.fireTime
+              )
+            )
+          );
+          continue;
+        }
         // resolveInput can throw if Input_Json__c is malformed (a schedule can be
         // created/edited via Setup or Object Manager, bypassing saveSchedule's JSON
         // validation). Isolate it per item so one bad schedule cannot abort the whole
@@ -445,10 +474,37 @@ public inherited sharing class WorkflowScheduleSweeper {
       return;
     }
 
+    // Same guards as the 0-slot sweep: a dedicated schedule whose Workflow_Name__c
+    // or Input_Json__c was set outside the manager could otherwise fail on every
+    // tick with stale UI state. Record an Error and advance instead of throwing.
+    if (!isValidWorkflowName(sched.Workflow_Name__c)) {
+      recordError(
+        sched,
+        corrKey,
+        fireTime,
+        logType,
+        'Unknown workflow definition: ' + sched.Workflow_Name__c
+      );
+      return;
+    }
+    Object resolvedInput;
+    try {
+      resolvedInput = resolveInput(sched, fireTime);
+    } catch (Exception ex) {
+      recordError(
+        sched,
+        corrKey,
+        fireTime,
+        logType,
+        'Invalid input JSON: ' + ex.getMessage()
+      );
+      return;
+    }
+
     WorkflowEngine.StartResult sr = WorkflowEngine.startOrGet(
       sched.Workflow_Name__c,
       corrKey,
-      resolveInput(sched, fireTime)
+      resolvedInput
     );
     Boolean isNew = sr != null && sr.isNew;
     String outcome = isNew ? 'Started' : 'Deduped';
@@ -467,7 +523,48 @@ public inherited sharing class WorkflowScheduleSweeper {
     updateState(sched.Id, fireTime, outcome, sched.Cron_Expression__c);
   }
 
+  /**
+   * True when workflowName resolves to a class that implements WorkflowDefinition.
+   * Used to reject schedules pointing at a missing/typo'd definition before they
+   * reach startOrGet (which would otherwise create a phantom Pending instance).
+   */
+  public static Boolean isValidWorkflowName(String workflowName) {
+    if (String.isBlank(workflowName)) {
+      return false;
+    }
+    Type wflowType = Type.forName(workflowName);
+    if (wflowType == null) {
+      return false;
+    }
+    try {
+      return wflowType.newInstance() instanceof WorkflowDefinition;
+    } catch (Exception e) {
+      return false;
+    }
+  }
+
   // ── Private helpers ────────────────────────────────────────────────────────
+
+  /** Records an Error outcome (single log + state advance) for a failed fire. */
+  private static void recordError(
+    Workflow_Schedule__c sched,
+    String corrKey,
+    DateTime fireTime,
+    String logType,
+    String message
+  ) {
+    Workflow_Log__c errLog = buildLog(
+      sched,
+      corrKey,
+      fireTime,
+      'Error',
+      null,
+      message
+    );
+    errLog.Log_Type__c = logType;
+    upsert as system errLog Fire_Key__c;
+    updateState(sched.Id, fireTime, 'Error', sched.Cron_Expression__c);
+  }
 
   /**
    * For all Skip-policy due items, returns the set of prefixes that currently have

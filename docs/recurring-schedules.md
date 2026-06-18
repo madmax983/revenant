@@ -133,7 +133,7 @@ Each run's correlation key is `prefix_yyyyMMddHHmm` (e.g. `NightlyRecon_20260617
 | `Started` | A new workflow instance was created. `Workflow_Instance__c` is populated. |
 | `Skipped` | Overlap=Skip and a prior run is still active. No instance was started. |
 | `Deduped` | `startOrGet` resolved to an existing instance (safety net; rare). No log row is written for Deduped to avoid noise. |
-| `Error` | The schedule's `Input_Json__c` is malformed (e.g. the record was created via Setup, bypassing the manager's validation). The bad schedule is isolated and logged with `Outcome__c = 'Error'`; other due schedules in the same heartbeat are unaffected. No instance is started. |
+| `Error` | The schedule is misconfigured — malformed `Input_Json__c`, or a `Workflow_Name__c` that does not resolve to a `WorkflowDefinition` (e.g. the record was created via Setup, bypassing the manager's validation). The bad schedule is isolated and logged with `Outcome__c = 'Error'` (in both the 0-slot and dedicated paths); other due schedules in the same heartbeat are unaffected, and the cursor advances so it does not retry every tick. No instance is started. |
 | `Invalid cron` | A syntactically valid cron that never resolves to a fire window (e.g. `0 0 31 2 *`). The 0-slot sweep parks the row (advances its cursor) so it cannot starve other schedules. Re-saving with a valid cron clears it. |
 
 Log rows are upserted on `Fire_Key__c` (`corrKey:outcome`) so repeated sweeps of the same window produce at most one row per outcome. Each log is linked to its schedule by the `Schedule__c` lookup (an immutable Id), so the audit trail stays attached even if the schedule is renamed.
@@ -189,8 +189,15 @@ differently from the 0-slot evaluator in three ways:
   just like the 0-slot path (token values are JSON-escaped, so a name with a quote or
   backslash can't break the input JSON).
 
+The dedicated job derives its fire window from the cron (via `previousFireTime`), not the
+raw execution instant — so a `0 2 * * *` job that Salesforce happens to run at 02:01 still
+keys and dedups on the 02:00 window, matching the 0-slot path. If the schedule row is
+deleted outside `deleteSchedule` (e.g. via Object Manager), the job **self-aborts** its own
+`CronTrigger` on the next tick so it never lingers as an orphaned scheduled-job slot.
+
 Apart from timezone and DOM+DOW handling above, dedicated mode now matches the 0-slot
-path for overlap policy, state, and fire logging.
+path for overlap policy, state, fire logging, and misconfiguration handling (unknown
+workflow / malformed input JSON record an `Error` outcome instead of failing every tick).
 
 To remove it:
 
