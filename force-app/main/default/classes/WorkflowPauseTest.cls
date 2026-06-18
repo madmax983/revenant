@@ -60,10 +60,12 @@ public class WorkflowPauseTest {
     }
   }
 
-  // Step that suspends waiting for a named signal
+  // Step that suspends waiting for a signal. The signal name is not a suspend
+  // argument — a resumed step matches signals via ctx.getPendingSignals(name);
+  // suspend() just yields the SUSPEND action.
   public class SuspendStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      return StepResult.suspend('WaitSignal', 'Waiting for WaitSignal');
+      return StepResult.suspend();
     }
   }
 
@@ -646,6 +648,106 @@ public class WorkflowPauseTest {
       null,
       bAfter.Timeout_At__c,
       'Active branch should have a fresh Timeout_At__c after re-arm'
+    );
+  }
+
+  // Regression: a paused run keeps its correlation key reserved, so startOrGet
+  // dedup (ACTIVE_STATUSES) must resolve to the live paused instance rather than a
+  // stale recently-terminal run for the same key within the dedup window.
+  @isTest
+  static void testPausedInstanceWinsDedupOverTerminalRow() {
+    WorkflowEngine.disableQueueableInTest = true;
+    String key = 'PausedDedup-' + Datetime.now().getTime();
+
+    // A recent terminal run for the key (within the default dedup window). The
+    // trigger clears its Active_Correlation_Key__c and stamps Terminal_At__c.
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = key
+    );
+    // The live parked run for the same key (reserves the active key).
+    Workflow_Instance__c parked = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Paused',
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = key
+    );
+    insert parked;
+
+    Test.startTest();
+    WorkflowEngine.StartResult res = WorkflowEngine.startOrGet(
+      'WorkflowPauseTest.TwoStepWorkflow',
+      key,
+      null
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      parked.Id,
+      res.instanceId,
+      'Dedup must resolve to the live paused instance, not the stale terminal row'
+    );
+    System.assertEquals(
+      false,
+      res.isNew,
+      'startOrGet must return an existing instance, not start a new one'
+    );
+  }
+
+  // Regression: a timeout job armed by a pre-pause handoff must NOT fail a step
+  // while its definition is paused. The parked step is held and re-armed on resume;
+  // failing it here would corrupt an in-flight run "before starting".
+  @isTest
+  static void testTimeoutJobSkipsPausedDefinition() {
+    String key = 'PausedTimeoutJob-' + Datetime.now().getTime();
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = key
+    );
+    insert inst;
+    // A pending next step with an already-overdue watchdog deadline (as a
+    // pre-pause handoff would leave it).
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowPauseTest.StepB',
+      Status__c = 'Pending',
+      Timeout_At__c = Datetime.now().addSeconds(-60),
+      Retry_Count__c = 0
+    );
+    WorkflowPauseGate.pauseDefinition(
+      'WorkflowPauseTest.TwoStepWorkflow',
+      'timeoutjob'
+    );
+
+    Test.startTest();
+    new WorkflowTimeoutJob(inst.Id, 'WorkflowPauseTest.StepB')
+      .executeInternal();
+    Test.stopTest();
+
+    Workflow_Instance__c after = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'Running',
+      after.Status__c,
+      'Timeout job must not fail an instance whose definition is paused'
+    );
+    Workflow_Step_Execution__c stepAfter = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowPauseTest.StepB'
+    ];
+    System.assertEquals(
+      'Pending',
+      stepAfter.Status__c,
+      'Paused step must remain Pending, not be timed out to Failed'
     );
   }
 

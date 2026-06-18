@@ -28,7 +28,11 @@ public inherited sharing class WorkflowEngine {
     // A stalled rollback is non-terminal: it still has un-reversed side effects and
     // can be resumed, so it must keep reserving its correlation key to prevent a
     // duplicate active workflow from starting with the same key while half-undone.
-    'CompensationFailed'
+    'CompensationFailed',
+    // A parked (operator-paused) run is in-flight and resumes later, so it keeps
+    // reserving its correlation key — mirroring the trigger's reservation — so dedup
+    // returns the live paused instance rather than a stale terminal row in the window.
+    'Paused'
   };
 
   // Upper bound (~100 years) applied to the dedup window before it is subtracted

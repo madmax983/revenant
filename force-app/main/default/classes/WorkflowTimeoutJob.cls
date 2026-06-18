@@ -21,7 +21,7 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
   public void executeInternal() {
     // Parent-first locking: query and lock the parent instance first
     List<Workflow_Instance__c> instances = [
-      SELECT Status__c, Current_Step__c, Compensation_Stack__c
+      SELECT Status__c, Current_Step__c, Compensation_Stack__c, Workflow_Name__c
       FROM Workflow_Instance__c
       WHERE Id = :this.instanceId
       WITH SYSTEM_MODE
@@ -38,6 +38,20 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
       instance.Status__c != 'Running' &&
       instance.Status__c != 'Compensating' &&
       instance.Status__c != 'Cancelling'
+    ) {
+      return;
+    }
+
+    // Operator pause gate: if the definition is paused, this instance is parked
+    // (or about to be, once its pending RUN_STEP reaches the gate). A timeout job
+    // armed by the pre-pause handoff must NOT fail the step during that window —
+    // the step is held and re-armed on resume via reArmTimeoutsForResume.
+    // Compensating/Cancelling bypass the pause gate elsewhere, so let those time
+    // out normally rather than stalling an in-progress rollback.
+    if (
+      (instance.Status__c == 'Pending' || instance.Status__c == 'Running') &&
+      WorkflowPauseGate.anyPaused() &&
+      WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c)
     ) {
       return;
     }
