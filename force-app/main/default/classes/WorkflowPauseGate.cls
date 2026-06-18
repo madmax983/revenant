@@ -33,6 +33,12 @@ public inherited sharing class WorkflowPauseGate {
   private static Boolean cachedAnyPaused = null;
   private static Set<String> cachedPausedNames = null;
 
+  // Max parked instances flipped back to Running per transaction on resume; the
+  // remainder is drained by a chained Queueable. @TestVisible so tests can lower
+  // it to exercise the chunk boundary without inserting hundreds of rows.
+  @TestVisible
+  private static Integer RESUME_CHUNK_SIZE = 200;
+
   // ──────────────────────────────────────────────────────────────────────────
   // FAST-PATH: any pause record exists at all?
   // Called on every runStep invocation; a false result short-circuits everything.
@@ -57,6 +63,27 @@ public inherited sharing class WorkflowPauseGate {
     }
     return cachedPausedNames.contains(workflowName) ||
       cachedPausedNames.contains('*');
+  }
+
+  // True when an org-wide '*' pause is in effect (every non-reserved definition
+  // is paused). Callers that batch-select instances use this to short-circuit.
+  public static Boolean wildcardPaused() {
+    if (cachedPausedNames == null) {
+      loadCache();
+    }
+    return cachedPausedNames.contains('*');
+  }
+
+  // The set of explicitly paused definition names (excludes the '*' sentinel).
+  // Used to exclude paused definitions from batch queries (e.g. the watchdog
+  // resume batch) so they cannot starve resumable rows under a LIMIT.
+  public static Set<String> pausedNames() {
+    if (cachedPausedNames == null) {
+      loadCache();
+    }
+    Set<String> names = new Set<String>(cachedPausedNames);
+    names.remove('*');
+    return names;
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -105,10 +132,14 @@ public inherited sharing class WorkflowPauseGate {
         WITH SYSTEM_MODE
       ];
     } else {
+      // Resume only the named definition. A wildcard ('*') pause is org-wide
+      // maintenance mode and must NOT be lifted by a single-definition resume —
+      // doing so would un-pause every other definition and strand their parked
+      // instances with no remaining pause record to explain or release them.
       toDelete = [
         SELECT Id
         FROM Workflow_Pause_State__c
-        WHERE Workflow_Name__c = :workflowName OR Workflow_Name__c = '*'
+        WHERE Workflow_Name__c = :workflowName
         WITH SYSTEM_MODE
       ];
     }
@@ -117,7 +148,35 @@ public inherited sharing class WorkflowPauseGate {
     }
     invalidateCache();
 
-    // Find all Paused instances for the resumed scope
+    // If an org-wide '*' pause is still in effect, a single-definition resume
+    // cannot truly un-pause this definition — the wildcard still gates it, so any
+    // instance flipped to Running would immediately re-park at the next handoff.
+    // Leave its instances parked; they resume when the wildcard pause is lifted.
+    if (workflowName != '*' && isDefinitionPaused(workflowName)) {
+      WorkflowWatchdog.bootstrap();
+      return;
+    }
+
+    // Drain parked instances in bounded chunks. A long-lived or org-wide pause
+    // can park more than the 10k-row DML limit; flipping every row in one
+    // transaction would fail and re-queue nothing. The first chunk runs
+    // synchronously for a responsive operator action and any remainder is drained
+    // by a chained Queueable (off the synchronous path, governor-safe).
+    Boolean moreRemain = resumeParkedChunk(workflowName);
+    if (moreRemain && !Test.isRunningTest()) {
+      System.enqueueJob(new ResumeChunkQueueable(workflowName));
+    }
+
+    // Re-drive held sleeps/timeouts via watchdog
+    WorkflowWatchdog.bootstrap();
+  }
+
+  // Flips up to RESUME_CHUNK_SIZE parked instances for the scope back to Running
+  // and re-enqueues them (serial via bulk publish, parallel via branch fan-out).
+  // Returns true if a full chunk was processed, meaning more may remain to drain.
+  // Each call re-queries only still-Paused rows, so already-resumed instances
+  // (now Running) are naturally excluded — no offset paging needed.
+  private static Boolean resumeParkedChunk(String workflowName) {
     List<Workflow_Instance__c> parked;
     if (workflowName == '*') {
       parked = [
@@ -125,6 +184,7 @@ public inherited sharing class WorkflowPauseGate {
         FROM Workflow_Instance__c
         WHERE Status__c = 'Paused'
         WITH SYSTEM_MODE
+        LIMIT :RESUME_CHUNK_SIZE
         FOR UPDATE
       ];
     } else {
@@ -133,16 +193,15 @@ public inherited sharing class WorkflowPauseGate {
         FROM Workflow_Instance__c
         WHERE Status__c = 'Paused' AND Workflow_Name__c = :workflowName
         WITH SYSTEM_MODE
+        LIMIT :RESUME_CHUNK_SIZE
         FOR UPDATE
       ];
     }
 
     if (parked.isEmpty()) {
-      WorkflowWatchdog.bootstrap();
-      return;
+      return false;
     }
 
-    // Transition all parked instances back to Running
     List<Workflow_Instance__c> toUpdate = new List<Workflow_Instance__c>();
     List<Id> serialIds = new List<Id>();
     List<Workflow_Instance__c> parallelInsts = new List<Workflow_Instance__c>();
@@ -162,7 +221,6 @@ public inherited sharing class WorkflowPauseGate {
     }
     update as system toUpdate;
 
-    // Re-enqueue: serial instances via bulk publish, parallel via branch fan-out
     if (!serialIds.isEmpty()) {
       WorkflowEngine.enqueueOrchestrators(serialIds);
     }
@@ -170,8 +228,26 @@ public inherited sharing class WorkflowPauseGate {
       enqueueResumeBulkParallel(parallelInsts);
     }
 
-    // Re-drive held sleeps/timeouts via watchdog
-    WorkflowWatchdog.bootstrap();
+    return parked.size() == RESUME_CHUNK_SIZE;
+  }
+
+  // Drains the remaining parked-instance backlog for a resumed scope in chunks,
+  // re-chaining until none remain. Kept off the synchronous resume path so a
+  // large backlog cannot exceed governor limits in a single transaction.
+  public class ResumeChunkQueueable implements Queueable {
+    private final String workflowName;
+    public ResumeChunkQueueable(String workflowName) {
+      this.workflowName = workflowName;
+    }
+    public void execute(QueueableContext ctx) {
+      Boolean moreRemain = resumeParkedChunk(this.workflowName);
+      if (
+        moreRemain &&
+        Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()
+      ) {
+        System.enqueueJob(new ResumeChunkQueueable(this.workflowName));
+      }
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -236,7 +312,20 @@ public inherited sharing class WorkflowPauseGate {
       }
     }
     if (!events.isEmpty()) {
-      EventBus.publish(events);
+      List<Database.SaveResult> results = EventBus.publish(events);
+      for (Database.SaveResult sr : results) {
+        if (!sr.isSuccess()) {
+          // A rejected branch event would leave that branch Running with no worker
+          // to drive it. Surface the failure so the resume transaction rolls back
+          // rather than silently stranding parked branches.
+          String msg = (sr.getErrors() != null && !sr.getErrors().isEmpty())
+            ? sr.getErrors()[0].getMessage()
+            : 'unknown error';
+          throw new PauseException(
+            'Failed to publish resume event for a parallel branch: ' + msg
+          );
+        }
+      }
     }
   }
 }

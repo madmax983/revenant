@@ -115,12 +115,12 @@ export default class WorkflowDashboard extends LightningElement {
     { label: "Compensating", value: "Compensating" },
     { label: "Compensated", value: "Compensated" },
     { label: "Rollback Incomplete", value: "CompensationFailed" },
-    { label: "Paused", value: "Paused" },
     { label: "Completed", value: "Completed" },
     { label: "Failed", value: "Failed" },
     { label: "Cancelling", value: "Cancelling" },
     { label: "Cancelled", value: "Cancelled" },
     { label: "ContinuedAsNew", value: "ContinuedAsNew" },
+    { label: "Paused", value: "Paused" },
   ];
 
   connectedCallback() {
@@ -254,12 +254,7 @@ export default class WorkflowDashboard extends LightningElement {
 
     const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null });
 
-    return Promise.all([
-      instancesPromise,
-      statsPromise,
-      stalledCountPromise,
-      unroutedCountPromise,
-    ])
+    return Promise.all([instancesPromise, statsPromise, stalledCountPromise, unroutedCountPromise])
       .then(([result, statsResult, stalledResult, unroutedResult]) => {
         const formatted = result.map((inst) => this.formatInstance(inst));
 
@@ -343,12 +338,7 @@ export default class WorkflowDashboard extends LightningElement {
 
     const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null });
 
-    return Promise.all([
-      instancesPromise,
-      statsPromise,
-      stalledCountPromise,
-      unroutedCountPromise,
-    ])
+    return Promise.all([instancesPromise, statsPromise, stalledCountPromise, unroutedCountPromise])
       .then(([result, statsResult, stalledResult, unroutedResult]) => {
         this.instances = result.map((inst) => this.formatInstance(inst));
         this.stats = statsResult;
@@ -694,13 +684,8 @@ export default class WorkflowDashboard extends LightningElement {
     this.loadingUnrouted = true;
     const buster = new Date().getTime().toString();
     Promise.all([
-      getUnroutedSignals({
-        searchTerm: null,
-        limitSize: 50,
-        offsetSize: 0,
-        cacheBuster: buster,
-      }),
-      getUnroutedSignalCount({ searchTerm: null }),
+      getUnroutedSignals({ searchTerm: null, limitSize: 50, offsetSize: 0, cacheBuster: buster }),
+      getUnroutedSignalCount({ searchTerm: null })
     ])
       .then(([signals, countResult]) => {
         this.unroutedSignals = signals || [];
@@ -708,11 +693,7 @@ export default class WorkflowDashboard extends LightningElement {
       })
       .catch((err) => {
         this.dispatchEvent(
-          new ShowToastEvent({
-            title: "Error",
-            message: err.body ? err.body.message : String(err),
-            variant: "error",
-          }),
+          new ShowToastEvent({ title: "Error", message: err.body ? err.body.message : String(err), variant: "error" })
         );
       })
       .finally(() => {
@@ -733,8 +714,8 @@ export default class WorkflowDashboard extends LightningElement {
             message: matched
               ? "The signal was re-delivered and the workflow was woken."
               : "No active workflow matched — signal remains Unrouted.",
-            variant: matched ? "success" : "warning",
-          }),
+            variant: matched ? "success" : "warning"
+          })
         );
         if (matched) {
           this.loadUnroutedSignals();
@@ -742,11 +723,7 @@ export default class WorkflowDashboard extends LightningElement {
       })
       .catch((err) => {
         this.dispatchEvent(
-          new ShowToastEvent({
-            title: "Error",
-            message: err.body ? err.body.message : String(err),
-            variant: "error",
-          }),
+          new ShowToastEvent({ title: "Error", message: err.body ? err.body.message : String(err), variant: "error" })
         );
       })
       .finally(() => {
@@ -1008,10 +985,7 @@ export default class WorkflowDashboard extends LightningElement {
   // Suspended, not Failed; showing the button there would re-drive hidden failures).
   get canRedriveMatching() {
     return (
-      this.stats &&
-      this.stats.failed > 0 &&
-      !this.redriving &&
-      !this.showingStalled
+      this.stats && this.stats.failed > 0 && !this.redriving && !this.showingStalled
     );
   }
 
@@ -1414,7 +1388,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.showToast(
             "Resumed",
             "Resumed " + label + ". Parked instances are re-queued.",
-            "success",
+            "success"
           );
           this.loadDoctorStatus();
           this.refreshInstances();
@@ -1424,7 +1398,7 @@ export default class WorkflowDashboard extends LightningElement {
             "Error",
             "Resume failed: " +
               (error.body ? error.body.message : error.message),
-            "error",
+            "error"
           );
         })
         .finally(() => {
@@ -1433,7 +1407,7 @@ export default class WorkflowDashboard extends LightningElement {
     } else {
       pauseDefinition({
         workflowName: this.pauseModalTarget,
-        reason: this.pauseModalReason,
+        reason: this.pauseModalReason
       })
         .then(() => {
           const label =
@@ -1443,7 +1417,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.showToast(
             "Paused",
             "Paused " + label + ". New steps will park at the chain handoff.",
-            "success",
+            "success"
           );
           this.loadDoctorStatus();
           this.refreshInstances();
@@ -1451,9 +1425,8 @@ export default class WorkflowDashboard extends LightningElement {
         .catch((error) => {
           this.showToast(
             "Error",
-            "Pause failed: " +
-              (error.body ? error.body.message : error.message),
-            "error",
+            "Pause failed: " + (error.body ? error.body.message : error.message),
+            "error"
           );
         })
         .finally(() => {

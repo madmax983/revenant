@@ -1825,7 +1825,9 @@ public inherited sharing class WorkflowDashboardController {
       Integer totalParked = 0;
       for (AggregateResult ar : counts) {
         String name = (String) ar.get('Workflow_Name__c');
-        Integer cnt = ((Decimal) ar.get('cnt')).intValue();
+        // Grouped COUNT(Id) is returned as Integer in this org (see getWorkflowStats);
+        // a Decimal cast throws TypeException as soon as a definition has parked rows.
+        Integer cnt = (Integer) ar.get('cnt');
         countByDef.put(name, cnt);
         totalParked += cnt;
       }

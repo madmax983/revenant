@@ -927,4 +927,241 @@ public class WorkflowPauseTest {
       'getWatchdogStatus should include pausedDefinitions key'
     );
   }
+
+  // ============================================================
+  // 14. PR #78 REVIEW REGRESSIONS
+  // ============================================================
+
+  // A duplicate/stale RUN_STEP arriving for an instance that is ALREADY Paused
+  // must NOT fall through and execute the step (the gate's prior status guard let
+  // it through). It must return without executing.
+  @isTest
+  static void testDuplicateRunStepWhileAlreadyPausedDoesNotExecute() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Paused',
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = 'DupRunStep-' + Datetime.now().getTime()
+    );
+    insert inst;
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowPauseTest.StepB',
+      Status__c = 'Pending',
+      Input__c = '"OutputA"',
+      Retry_Count__c = 0
+    );
+    WorkflowPauseGate.pauseDefinition(
+      'WorkflowPauseTest.TwoStepWorkflow',
+      'dup'
+    );
+
+    Test.startTest();
+    WorkflowEngine.runStep(inst.Id, 'WorkflowPauseTest.StepB');
+    Test.stopTest();
+
+    Workflow_Instance__c after = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Paused', after.Status__c, 'Should remain Paused');
+    List<Workflow_Step_Execution__c> ran = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Status__c IN ('Running', 'Completed')
+    ];
+    System.assertEquals(
+      0,
+      ran.size(),
+      'A duplicate RUN_STEP must NOT execute the step while paused'
+    );
+  }
+
+  // Resuming a single definition while an org-wide '*' pause is in effect must NOT
+  // delete the wildcard record (which would lift maintenance mode for every other
+  // definition and strand their parked instances).
+  @isTest
+  static void testSingleResumePreservesWildcardPause() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c instA = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Paused',
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = 'WResumeA-' + Datetime.now().getTime()
+    );
+    Workflow_Instance__c instB = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.SuspendingWorkflow',
+      Status__c = 'Paused',
+      Current_Step__c = 'WorkflowPauseTest.SuspendStep',
+      Correlation_Key__c = 'WResumeB-' + Datetime.now().getTime()
+    );
+    insert new List<Workflow_Instance__c>{ instA, instB };
+
+    WorkflowPauseGate.pauseDefinition('*', 'Org-wide');
+
+    Test.startTest();
+    WorkflowPauseGate.resumeDefinition('WorkflowPauseTest.TwoStepWorkflow');
+    Test.stopTest();
+
+    List<Workflow_Pause_State__c> wildcard = [
+      SELECT Id
+      FROM Workflow_Pause_State__c
+      WHERE Workflow_Name__c = '*'
+    ];
+    System.assertEquals(
+      1,
+      wildcard.size(),
+      'Single-definition resume must NOT delete the org-wide * pause'
+    );
+
+    // While '*' is still active both defs stay parked (the wildcard still gates
+    // them; flipping to Running would only re-park at the next handoff).
+    Workflow_Instance__c afterA = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instA.Id
+    ];
+    Workflow_Instance__c afterB = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instB.Id
+    ];
+    System.assertEquals(
+      'Paused',
+      afterA.Status__c,
+      'Named def stays parked while wildcard pause remains in effect'
+    );
+    System.assertEquals(
+      'Paused',
+      afterB.Status__c,
+      'Other definitions must stay parked while * is active'
+    );
+  }
+
+  // The bulk start path (used by scheduled jobs / the Flow invocable) must apply
+  // the pause gate, not just the scalar start.
+  @isTest
+  static void testBulkStartParksDuringPause() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowPauseGate.pauseDefinition(
+      'WorkflowPauseTest.TwoStepWorkflow',
+      'bulk'
+    );
+
+    Test.startTest();
+    List<WorkflowEngine.StartResult> results = WorkflowEngine.startOrGet(
+      new List<WorkflowEngine.StartRequest>{
+        new WorkflowEngine.StartRequest(
+          'WorkflowPauseTest.TwoStepWorkflow',
+          'BulkPark-' + Datetime.now().getTime(),
+          null
+        )
+      }
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, results.size(), 'One result expected');
+    Workflow_Instance__c inst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :results[0].instanceId
+    ];
+    System.assertEquals(
+      'Paused',
+      inst.Status__c,
+      'Bulk start during a pause must park the instance'
+    );
+    List<Workflow_Step_Execution__c> steps = [
+      SELECT Status__c, Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :results[0].instanceId
+    ];
+    System.assertEquals(1, steps.size(), 'Initial Pending step should exist');
+    System.assertEquals('Pending', steps[0].Status__c, 'Step stays Pending');
+    System.assertEquals(
+      null,
+      steps[0].Timeout_At__c,
+      'Parked step must not start the timeout clock'
+    );
+  }
+
+  // A Cancel signal sent via the scalar signal() overload must reach and cancel a
+  // Paused instance (Paused was missing from that overload's lookup statuses).
+  @isTest
+  static void testScalarCancelSignalReachesPausedInstance() {
+    WorkflowEngine.disableQueueableInTest = true;
+    String corrKey = 'ScalarCancel-' + Datetime.now().getTime();
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Paused',
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = corrKey
+    );
+    insert inst;
+
+    Test.startTest();
+    WorkflowEngine.signal(corrKey, 'Cancel', '{"runCompensations":false}');
+    Test.stopTest();
+
+    Workflow_Instance__c after = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'Cancelled',
+      after.Status__c,
+      'A Cancel signal must reach and cancel a paused instance'
+    );
+  }
+
+  // Cancelling a parent must include Paused descendants in the traversal, or a
+  // parked child is orphaned (still holding an active correlation reservation).
+  @isTest
+  static void testCancelParentCancelsPausedChild() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c parent = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowPauseTest.StepA',
+      Correlation_Key__c = 'CancelParent-' + Datetime.now().getTime()
+    );
+    insert parent;
+    Workflow_Instance__c child = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.SuspendingWorkflow',
+      Status__c = 'Paused',
+      Current_Step__c = 'WorkflowPauseTest.SuspendStep',
+      Parent_Instance__c = parent.Id,
+      Correlation_Key__c = 'CancelChild-' + Datetime.now().getTime()
+    );
+    insert child;
+
+    Test.startTest();
+    WorkflowEngine.cancel(parent.Id, false);
+    Test.stopTest();
+
+    Workflow_Instance__c afterChild = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :child.Id
+    ];
+    System.assertNotEquals(
+      'Paused',
+      afterChild.Status__c,
+      'A paused child must be included in the parent cancellation traversal'
+    );
+    System.assert(
+      afterChild.Status__c == 'Cancelled' ||
+      afterChild.Status__c == 'Cancelling',
+      'Paused child should be Cancelled/Cancelling, was: ' +
+      afterChild.Status__c
+    );
+  }
 }
