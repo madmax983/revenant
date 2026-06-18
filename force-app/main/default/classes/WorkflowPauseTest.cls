@@ -109,6 +109,27 @@ public class WorkflowPauseTest {
     }
   }
 
+  // Timeout-configured parallel branches used to assert that the resume re-arm
+  // path schedules a dynamic timeout job only for branches with an active step
+  // row — never for a Completed branch still lingering in Current_Step__c.
+  public class TimeoutBranchA implements WorkflowStep, TimeoutConfigurable {
+    public Integer getTimeoutSeconds() {
+      return 120;
+    }
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'BranchAOut');
+    }
+  }
+
+  public class TimeoutBranchB implements WorkflowStep, TimeoutConfigurable {
+    public Integer getTimeoutSeconds() {
+      return 120;
+    }
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'BranchBOut');
+    }
+  }
+
   // Parent workflow whose first step spawns a child (used to exercise the pause
   // gate on the START_CHILD path). The child correlation key is read from a static
   // so the test can locate the spawned child.
@@ -546,6 +567,85 @@ public class WorkflowPauseTest {
       'Completed',
       branchAExecs[0].Status__c,
       'BranchA should remain Completed'
+    );
+  }
+
+  // Regression: on resume of a mid-parallel instance, a Completed branch still
+  // present in Current_Step__c must NOT get a timeout job scheduled. If it did,
+  // that job would later find no active step row, match the lingering branch name
+  // in Current_Step__c, and wrongly fail the whole instance "before starting".
+  // Only the still-active (Pending/Running) branch should be re-armed.
+  @isTest
+  static void testResumeReArmSkipsCompletedParallelBranch() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.ParallelWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowPauseTest.TimeoutBranchA,WorkflowPauseTest.TimeoutBranchB',
+      Correlation_Key__c = 'ResumeParTimeout-' + Datetime.now().getTime()
+    );
+    insert inst;
+
+    // TimeoutBranchA already Completed (no active step row).
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowPauseTest.TimeoutBranchA',
+      Status__c = 'Completed',
+      Retry_Count__c = 0
+    );
+    // TimeoutBranchB still Pending (active).
+    Workflow_Step_Execution__c branchB = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowPauseTest.TimeoutBranchB',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+    insert branchB;
+
+    Test.startTest();
+    // Exercise the re-arm path directly so only its scheduling/re-stamp runs.
+    WorkflowEngine.reArmTimeoutsForResume(
+      new List<Workflow_Instance__c>{ inst }
+    );
+
+    String aJob =
+      'Timeout_' + inst.Id + '_WorkflowPauseTest_TimeoutBranchA';
+    String bJob =
+      'Timeout_' + inst.Id + '_WorkflowPauseTest_TimeoutBranchB';
+    Integer aTriggers = [
+      SELECT COUNT()
+      FROM CronTrigger
+      WHERE CronJobDetail.Name = :aJob
+    ];
+    Integer bTriggers = [
+      SELECT COUNT()
+      FROM CronTrigger
+      WHERE CronJobDetail.Name = :bJob
+    ];
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      aTriggers,
+      'Completed branch must NOT get a timeout job scheduled on resume'
+    );
+    System.assertEquals(
+      1,
+      bTriggers,
+      'Active (Pending) branch must get its timeout re-armed on resume'
+    );
+
+    // Only the active branch's watchdog deadline is (re)stamped.
+    Workflow_Step_Execution__c bAfter = [
+      SELECT Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :branchB.Id
+    ];
+    System.assertNotEquals(
+      null,
+      bAfter.Timeout_At__c,
+      'Active branch should have a fresh Timeout_At__c after re-arm'
     );
   }
 

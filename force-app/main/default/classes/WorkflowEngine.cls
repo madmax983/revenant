@@ -6374,7 +6374,7 @@ public inherited sharing class WorkflowEngine {
       instanceIds.add(inst.Id);
     }
     List<Workflow_Step_Execution__c> steps = [
-      SELECT Id, Step_Name__c
+      SELECT Id, Workflow_Instance__c, Step_Name__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c IN :instanceIds
@@ -6392,8 +6392,15 @@ public inherited sharing class WorkflowEngine {
     if (!toUpdate.isEmpty()) {
       update as system toUpdate;
     }
-    // Schedule the dynamic timeout jobs (Schedulable/Queueable) for these instances.
-    scheduleTimeoutJobsForInstances(instances);
+    // Schedule the dynamic timeout jobs (Schedulable/Queueable) for the genuinely
+    // active step rows only. A parallel instance keeps every branch name in
+    // Current_Step__c until the join, so a completed branch lingers there; driving
+    // off the queried Pending/Running rows (instead of parsing Current_Step__c)
+    // avoids scheduling a timeout for a completed branch that would later find no
+    // active step row and wrongly fail the whole instance "before starting".
+    for (Workflow_Step_Execution__c step : steps) {
+      scheduleTimeoutJobIfNeeded(step.Workflow_Instance__c, step.Step_Name__c);
+    }
   }
 
   public static void scheduleTimeoutJobForInstance(Id instanceId) {

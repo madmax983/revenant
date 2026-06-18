@@ -165,10 +165,9 @@ public inherited sharing class WorkflowPauseGate {
     // transaction would fail and re-queue nothing. The first chunk runs
     // synchronously for a responsive operator action and any remainder is drained
     // by a chained Queueable (off the synchronous path, governor-safe).
-    Boolean moreRemain = resumeParkedChunk(workflowName);
-    if (moreRemain && !Test.isRunningTest()) {
-      System.enqueueJob(new ResumeChunkQueueable(workflowName));
-    }
+    // resumeParkedChunk enqueues its own continuation (with a reserved queueable
+    // slot) when more chunks remain, so no enqueue is needed here.
+    resumeParkedChunk(workflowName);
 
     // Re-drive held sleeps/timeouts via watchdog
     WorkflowWatchdog.bootstrap();
@@ -224,6 +223,22 @@ public inherited sharing class WorkflowPauseGate {
     }
     update as system toUpdate;
 
+    // Reserve the queueable slot for the next drain chunk BEFORE re-arming timeouts.
+    // reArmTimeoutsForResume enqueues best-effort timeout queueables that can consume
+    // every available slot; the drain is load-bearing (skipping it strands the parked
+    // backlog), so it must claim its slot first. The timeout jobs that follow fall back
+    // to System.schedule when no slot remains and retain their watchdog Timeout_At__c
+    // safety net. Both callers (resumeDefinition and ResumeChunkQueueable) route the
+    // continuation through here so the reservation is applied uniformly and guarded.
+    Boolean moreRemain = parked.size() == RESUME_CHUNK_SIZE;
+    if (
+      moreRemain &&
+      !Test.isRunningTest() &&
+      Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()
+    ) {
+      System.enqueueJob(new ResumeChunkQueueable(workflowName));
+    }
+
     // Re-arm step timeouts BEFORE enqueueing the resumed workers, so a delayed worker
     // (or a step that defers its pre-exec DML) still has an enforced watchdog deadline.
     WorkflowEngine.reArmTimeoutsForResume(toUpdate);
@@ -235,7 +250,7 @@ public inherited sharing class WorkflowPauseGate {
       enqueueResumeBulkParallel(parallelInsts);
     }
 
-    return parked.size() == RESUME_CHUNK_SIZE;
+    return moreRemain;
   }
 
   // Drains the remaining parked-instance backlog for a resumed scope in chunks,
@@ -247,13 +262,10 @@ public inherited sharing class WorkflowPauseGate {
       this.workflowName = workflowName;
     }
     public void execute(QueueableContext ctx) {
-      Boolean moreRemain = resumeParkedChunk(this.workflowName);
-      if (
-        moreRemain &&
-        Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()
-      ) {
-        System.enqueueJob(new ResumeChunkQueueable(this.workflowName));
-      }
+      // resumeParkedChunk chains the next continuation itself (reserving the single
+      // queueable slot allowed in this context for the drain ahead of best-effort
+      // timeout jobs), so no re-chain is needed here.
+      resumeParkedChunk(this.workflowName);
     }
   }
 
