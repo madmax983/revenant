@@ -1958,7 +1958,14 @@ public inherited sharing class WorkflowEngine {
     // Load all executions for this step so we can derive the visit count in
     // Apex without an extra COUNT() SOQL query.
     List<Workflow_Step_Execution__c> stepExecs = [
-      SELECT Id, Step_Name__c, Status__c, Input__c, Output__c, Retry_Count__c
+      SELECT
+        Id,
+        Step_Name__c,
+        Status__c,
+        Input__c,
+        Output__c,
+        Retry_Count__c,
+        Captured_Values__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :instanceId
@@ -1976,7 +1983,14 @@ public inherited sharing class WorkflowEngine {
 
     if (!stepExecs.isEmpty()) {
       stepExecs = [
-        SELECT Id, Step_Name__c, Status__c, Input__c, Output__c, Retry_Count__c
+        SELECT
+          Id,
+          Step_Name__c,
+          Status__c,
+          Input__c,
+          Output__c,
+          Retry_Count__c,
+          Captured_Values__c
         FROM Workflow_Step_Execution__c
         WHERE Id = :stepExecs[0].Id
         WITH SYSTEM_MODE
@@ -2118,7 +2132,7 @@ public inherited sharing class WorkflowEngine {
     // stepVisit: number of already-completed runs of this step in this instance.
     // Computed above from the stepExecs list (before FOR UPDATE re-assigns it)
     // to avoid a separate COUNT() SOQL query.
-    StepContext context = new StepContext(
+    StepContext context = StepContext.withCapturedValues(
       instanceId,
       instance.Workflow_Name__c,
       activeStepName,
@@ -2131,7 +2145,8 @@ public inherited sharing class WorkflowEngine {
         : 1,
       stepVisit,
       signalSrc,
-      instance.Previous_Run_At__c
+      instance.Previous_Run_At__c,
+      resolvePayload(stepExec.Captured_Values__c)
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts.
@@ -2933,6 +2948,22 @@ public inherited sharing class WorkflowEngine {
     Boolean isParallel =
       String.isNotBlank(instance.Current_Step__c) &&
       instance.Current_Step__c.contains(',');
+
+    // Persist capture-once values produced during this execution. This runs once
+    // before the action dispatch so every outcome (COMPLETE, YIELD, SLEEP,
+    // SUSPEND, RETRY, etc.) durably records captures. Critically, RETRY only
+    // nulls Output__c — it never touches Captured_Values__c — so captures
+    // survive retries and are replayed byte-identically on the next attempt.
+    // Only writes when new captures were added; re-executions that only read
+    // prior captures produce no new DML here.
+    if (context.hasNewCaptures()) {
+      String capturedJson = context.getCapturedValuesJson();
+      stepExec.Captured_Values__c = savePayloadIfNeeded(
+        instance.Id,
+        capturedJson,
+        'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+      );
+    }
 
     if (result.action == StepResult.ActionType.COMPLETE) {
       // Step is complete. Store output.
@@ -4709,7 +4740,14 @@ public inherited sharing class WorkflowEngine {
     // extra COUNT() SOQL query.
     String compensationStepLogName = activeStepName + '_Compensate';
     List<Workflow_Step_Execution__c> stepExecs = [
-      SELECT Id, Status__c, Input__c, Output__c, Retry_Count__c, Step_Name__c
+      SELECT
+        Id,
+        Status__c,
+        Input__c,
+        Output__c,
+        Retry_Count__c,
+        Step_Name__c,
+        Captured_Values__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :instance.Id
@@ -4727,7 +4765,14 @@ public inherited sharing class WorkflowEngine {
 
     if (!stepExecs.isEmpty()) {
       stepExecs = [
-        SELECT Id, Status__c, Input__c, Output__c, Retry_Count__c, Step_Name__c
+        SELECT
+          Id,
+          Status__c,
+          Input__c,
+          Output__c,
+          Retry_Count__c,
+          Step_Name__c,
+          Captured_Values__c
         FROM Workflow_Step_Execution__c
         WHERE Id = :stepExecs[0].Id
         WITH SYSTEM_MODE
@@ -4900,7 +4945,7 @@ public inherited sharing class WorkflowEngine {
     // correct compensate() reverses exactly what the forward step did, using the
     // recorded step Input__c/Output__c above -- never a fresh "scan since
     // previousRunAt", which can drift to records the forward run never touched.
-    StepContext context = new StepContext(
+    StepContext context = StepContext.withCapturedValues(
       instance.Id,
       instance.Workflow_Name__c,
       compensationStepLogName,
@@ -4913,7 +4958,8 @@ public inherited sharing class WorkflowEngine {
         : 1,
       compensateVisit,
       new PendingSignalSource(instance.Id),
-      instance.Previous_Run_At__c
+      instance.Previous_Run_At__c,
+      resolvePayload(stepExec.Captured_Values__c)
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts.
@@ -5000,6 +5046,16 @@ public inherited sharing class WorkflowEngine {
     ) {
       throw new WorkflowException(
         'Workflow execution was terminated or cancelled.'
+      );
+    }
+
+    // Persist capture-once values produced during this compensation execution.
+    if (context.hasNewCaptures()) {
+      String capturedJson = context.getCapturedValuesJson();
+      stepExec.Captured_Values__c = savePayloadIfNeeded(
+        instance.Id,
+        capturedJson,
+        'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
       );
     }
 

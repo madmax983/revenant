@@ -85,6 +85,13 @@ public inherited sharing class StepContext {
   @TestVisible
   private static Double mockAsyncExecutionsFraction = null;
 
+  // Capture-once state. capturedValues is loaded from Captured_Values__c on
+  // hydration and extended in-memory as once() is called. newCaptureKeys tracks
+  // which keys were added THIS execution so the engine can persist only when
+  // there is something new to write (avoids a no-op DML on every re-execution).
+  private Map<String, Object> capturedValues = new Map<String, Object>();
+  private Set<String> newCaptureKeys = new Set<String>();
+
   /**
    * Read-only view of an inbound signal that targets this workflow instance.
    * Carries the author-interpreted name and payload string; the internal record
@@ -410,7 +417,8 @@ public inherited sharing class StepContext {
         : null;
       // Remember whether this full read was truncated, so named lookups don't
       // treat the partial page as the authoritative pending set.
-      this.allReadCapped = (signalSource != null) && signalSource.readWasCapped();
+      this.allReadCapped =
+        (signalSource != null) && signalSource.readWasCapped();
       List<Signal> all = (loaded != null) ? loaded : new List<Signal>();
       // A parallel-branch source claims rows it returns (Received -> Processing),
       // so a row already claimed by an earlier named accessor is no longer in the
@@ -806,6 +814,112 @@ public inherited sharing class StepContext {
       return true;
     }
     return false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Capture-once API (issue #44)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Records a value the first time it is produced and returns that same value
+   * on every subsequent re-execution of this logical step, without calling the
+   * producer again.
+   *
+   * Use this to stabilize any locally generated non-deterministic value —
+   * Datetime.now(), Crypto-random tokens, generated reference numbers, random
+   * branch decisions — so that retries, yield/resume cycles, at-least-once event
+   * resumes, and operator re-drives all observe the identical value.
+   *
+   * Scoping mirrors idempotencyKey: distinct keys within one step are
+   * independent; the same key in a different step, a different instance, or a
+   * different parallel branch is a distinct capture.
+   *
+   * Values are JSON round-tripped for durability: the in-memory value returned
+   * by once() is always the JSON-deserialized form so it is byte-identical
+   * whether it originated from a live produce() call or from rehydrating a
+   * prior-run Captured_Values__c payload.
+   *
+   * @param key      Caller-supplied name, unique within this step execution.
+   * @param producer Invoked at most once: only on the first call for this key.
+   * @return The originally produced value (or its JSON-round-trip equivalent).
+   */
+  public Object once(String key, CaptureProducer producer) {
+    if (capturedValues.containsKey(key)) {
+      return capturedValues.get(key);
+    }
+    Object raw = producer.produce();
+    // JSON round-trip ensures the in-memory value is byte-identical to what
+    // would be returned after serialize → store → deserialize on a later run.
+    Object normalized = JSON.deserializeUntyped(JSON.serialize(raw));
+    capturedValues.put(key, normalized);
+    newCaptureKeys.add(key);
+    return normalized;
+  }
+
+  /**
+   * Returns a JSON serialization of all captured values accumulated during this
+   * execution, or null if nothing was captured. Used by the engine to persist
+   * captures to Workflow_Step_Execution__c.Captured_Values__c.
+   */
+  public String getCapturedValuesJson() {
+    if (capturedValues.isEmpty()) {
+      return null;
+    }
+    return JSON.serialize(capturedValues);
+  }
+
+  /**
+   * True when at least one new capture was added during this execution (i.e.
+   * the engine needs to persist Captured_Values__c). False when the step only
+   * read back prior captures without adding any new ones.
+   */
+  public Boolean hasNewCaptures() {
+    return !newCaptureKeys.isEmpty();
+  }
+
+  /**
+   * Factory used by the engine to build a context pre-seeded with the durably
+   * stored captures from a prior execution of this step. Authors never call this
+   * directly; the engine passes the resolved Captured_Values__c payload here so
+   * once() can replay prior values without invoking producers.
+   *
+   * Also exposed as @TestVisible for unit tests that need to simulate a
+   * re-execution context with prior captures in place.
+   */
+  @TestVisible
+  public static StepContext withCapturedValues(
+    Id workflowInstanceId,
+    String workflowName,
+    String stepName,
+    String inputJson,
+    String previousStepOutput,
+    String stepStateJson,
+    String workflowInputJson,
+    Integer workflowVersion,
+    Integer stepVisit,
+    SignalSource signalSource,
+    Datetime previousRunAt,
+    String capturedValuesJson
+  ) {
+    StepContext ctx = new StepContext(
+      workflowInstanceId,
+      workflowName,
+      stepName,
+      inputJson,
+      previousStepOutput,
+      stepStateJson,
+      workflowInputJson,
+      workflowVersion,
+      stepVisit,
+      signalSource,
+      previousRunAt
+    );
+    if (String.isNotBlank(capturedValuesJson)) {
+      ctx.capturedValues = (Map<String, Object>) JSON.deserializeUntyped(
+        capturedValuesJson
+      );
+    }
+    return ctx;
   }
 
   /**
