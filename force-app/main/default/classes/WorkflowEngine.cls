@@ -117,6 +117,291 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  // ─── Read API ──────────────────────────────────────────────────────────────
+  //
+  // Terminal statuses for the read API. ContinuedAsNew is deliberately excluded
+  // (it is a hand-off, not an outcome) and CompensationFailed is excluded
+  // (it is non-terminal — the rollback can still be resumed/retried).
+  private static final Set<String> TERMINAL_GETSTATUS_STATUSES = new Set<String>{
+    'Completed',
+    'Failed',
+    'Compensated',
+    'Cancelled'
+  };
+
+  /**
+   * Stable read-only DTO returned by WorkflowEngine.getStatus. All fields are
+   * read-only to callers; the engine populates them via the private constructor.
+   */
+  public class WorkflowStatus {
+    public Id instanceId { get; private set; }
+    public String definitionName { get; private set; }
+    public String correlationKey { get; private set; }
+    public String status { get; private set; }
+    public Boolean isTerminal { get; private set; }
+    public String errorMessage { get; private set; }
+    // Fully rehydrated output for terminal instances; null for in-flight instances.
+    public String output { get; private set; }
+
+    private WorkflowStatus(
+      Id instanceId,
+      String definitionName,
+      String correlationKey,
+      String status,
+      Boolean isTerminal,
+      String errorMessage,
+      String output
+    ) {
+      this.instanceId = instanceId;
+      this.definitionName = definitionName;
+      this.correlationKey = correlationKey;
+      this.status = status;
+      this.isTerminal = isTerminal;
+      this.errorMessage = errorMessage;
+      this.output = output;
+    }
+  }
+
+  /**
+   * Returns the current status and rehydrated output for a workflow instance by Id,
+   * or null if no instance with that Id exists.
+   * Costs at most 2 SOQL queries and zero DML.
+   */
+  public static WorkflowStatus getStatus(Id instanceId) {
+    List<WorkflowStatus> results = getStatus(new List<Id>{ instanceId });
+    return results[0];
+  }
+
+  /**
+   * Returns the current status and rehydrated output for a workflow instance by
+   * correlation key (prefers a live/active run when a key has been reused), or null
+   * if no matching instance exists. Blank/null key returns null.
+   * Costs at most 2 SOQL queries and zero DML.
+   */
+  public static WorkflowStatus getStatus(String correlationKey) {
+    List<WorkflowStatus> results = getStatus(
+      new List<String>{ correlationKey }
+    );
+    return results[0];
+  }
+
+  /**
+   * Bulk variant — accepts a list of instance Ids and returns a correspondingly
+   * ordered list of WorkflowStatus DTOs (null where an Id was not found).
+   * Costs at most 2 SOQL queries total regardless of list size, and zero DML.
+   */
+  public static List<WorkflowStatus> getStatus(List<Id> instanceIds) {
+    List<WorkflowStatus> out = new List<WorkflowStatus>();
+    if (instanceIds == null || instanceIds.isEmpty()) {
+      return out;
+    }
+
+    Set<Id> lookupIds = new Set<Id>(instanceIds);
+    Map<Id, Workflow_Instance__c> instById = new Map<Id, Workflow_Instance__c>();
+    for (Workflow_Instance__c inst : [
+      SELECT
+        Id,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Status__c,
+        Error_Message__c,
+        Output__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :lookupIds
+      WITH SYSTEM_MODE
+    ]) {
+      instById.put(inst.Id, inst);
+    }
+
+    // Bulk-resolve all offloaded outputs in a single ContentVersion query.
+    Map<Id, String> resolvedOutputByDocId = bulkResolveOffloadedOutputs(
+      instById.values()
+    );
+
+    for (Id reqId : instanceIds) {
+      Workflow_Instance__c inst = instById.get(reqId);
+      out.add(inst == null ? null : buildStatus(inst, resolvedOutputByDocId));
+    }
+    return out;
+  }
+
+  /**
+   * Bulk variant — accepts a list of correlation keys and returns a correspondingly
+   * ordered list of WorkflowStatus DTOs (null where no instance was found or the
+   * key entry is blank). Active instances are preferred over terminal ones when a
+   * key maps to several rows; among same-activeness, the most recently created wins.
+   * Costs at most 2 SOQL queries total regardless of list size, and zero DML.
+   */
+  public static List<WorkflowStatus> getStatus(List<String> correlationKeys) {
+    List<WorkflowStatus> out = new List<WorkflowStatus>();
+    if (correlationKeys == null || correlationKeys.isEmpty()) {
+      return out;
+    }
+
+    Set<String> nonBlankKeys = new Set<String>();
+    for (String k : correlationKeys) {
+      if (String.isNotBlank(k)) {
+        nonBlankKeys.add(k);
+      }
+    }
+
+    Map<String, Workflow_Instance__c> bestByKey = new Map<String, Workflow_Instance__c>();
+    if (!nonBlankKeys.isEmpty()) {
+      for (Workflow_Instance__c inst : [
+        SELECT
+          Id,
+          Workflow_Name__c,
+          Correlation_Key__c,
+          Active_Correlation_Key__c,
+          Status__c,
+          Error_Message__c,
+          Output__c,
+          CreatedDate
+        FROM Workflow_Instance__c
+        WHERE
+          Active_Correlation_Key__c IN :nonBlankKeys
+          OR Correlation_Key__c IN :nonBlankKeys
+        WITH SYSTEM_MODE
+        ORDER BY
+          Active_Correlation_Key__c NULLS LAST,
+          Terminal_At__c DESC NULLS FIRST,
+          CreatedDate DESC
+      ]) {
+        // An instance may match via Active_Correlation_Key__c (active run, non-null)
+        // or Correlation_Key__c (terminal run, Active_Correlation_Key__c cleared).
+        // Collect the best candidate per key: active > most-recent-terminal.
+        Set<String> matchedKeys = new Set<String>();
+        if (String.isNotBlank(inst.Active_Correlation_Key__c)) {
+          matchedKeys.add(inst.Active_Correlation_Key__c);
+        }
+        if (String.isNotBlank(inst.Correlation_Key__c)) {
+          matchedKeys.add(inst.Correlation_Key__c);
+        }
+        for (String k : matchedKeys) {
+          if (!nonBlankKeys.contains(k)) {
+            continue;
+          }
+          Workflow_Instance__c existing = bestByKey.get(k);
+          if (existing == null || isPreferredForGetStatus(inst, existing)) {
+            bestByKey.put(k, inst);
+          }
+        }
+      }
+    }
+
+    Map<Id, String> resolvedOutputByDocId = bulkResolveOffloadedOutputs(
+      bestByKey.values()
+    );
+
+    for (String k : correlationKeys) {
+      if (String.isBlank(k)) {
+        out.add(null);
+        continue;
+      }
+      Workflow_Instance__c inst = bestByKey.get(k);
+      out.add(inst == null ? null : buildStatus(inst, resolvedOutputByDocId));
+    }
+    return out;
+  }
+
+  // Returns true if candidate should replace existing for the same correlation key.
+  // Active run beats terminal; among equals, more recently created wins.
+  private static Boolean isPreferredForGetStatus(
+    Workflow_Instance__c candidate,
+    Workflow_Instance__c existing
+  ) {
+    Boolean candidateActive = ACTIVE_STATUSES.contains(candidate.Status__c);
+    Boolean existingActive = ACTIVE_STATUSES.contains(existing.Status__c);
+    if (candidateActive != existingActive) {
+      return candidateActive;
+    }
+    return candidate.CreatedDate > existing.CreatedDate;
+  }
+
+  // Builds a WorkflowStatus DTO from a queried instance, using the pre-fetched
+  // offloaded-output map so no additional SOQL is issued per row.
+  private static WorkflowStatus buildStatus(
+    Workflow_Instance__c inst,
+    Map<Id, String> resolvedOutputByDocId
+  ) {
+    Boolean terminal = TERMINAL_GETSTATUS_STATUSES.contains(inst.Status__c);
+    String output = null;
+    if (terminal) {
+      output = rehydrateFromMap(inst.Output__c, resolvedOutputByDocId);
+    }
+    return new WorkflowStatus(
+      inst.Id,
+      inst.Workflow_Name__c,
+      inst.Correlation_Key__c,
+      inst.Status__c,
+      terminal,
+      inst.Error_Message__c,
+      output
+    );
+  }
+
+  // Resolves all offload markers found in a collection of instances in one
+  // ContentVersion SOQL query. Returns a map from ContentDocumentId → resolved text.
+  private static Map<Id, String> bulkResolveOffloadedOutputs(
+    List<Workflow_Instance__c> instances
+  ) {
+    Set<Id> docIds = new Set<Id>();
+    for (Workflow_Instance__c inst : instances) {
+      Id docId = getOffloadDocId(inst.Output__c);
+      if (docId != null) {
+        docIds.add(docId);
+      }
+    }
+    Map<Id, String> resolved = new Map<Id, String>();
+    if (!docIds.isEmpty()) {
+      for (ContentVersion cv : [
+        SELECT ContentDocumentId, VersionData
+        FROM ContentVersion
+        WHERE ContentDocumentId IN :docIds AND IsLatest = TRUE
+        WITH SYSTEM_MODE
+      ]) {
+        if (cv.VersionData != null) {
+          resolved.put(cv.ContentDocumentId, cv.VersionData.toString());
+        }
+      }
+    }
+    return resolved;
+  }
+
+  // Extracts the ContentDocumentId from an offload marker, or null if not a marker.
+  private static Id getOffloadDocId(String textValue) {
+    if (
+      String.isNotBlank(textValue) && textValue.startsWith('{"$attachmentId":')
+    ) {
+      try {
+        Map<String, Object> marker = (Map<String, Object>) JSON.deserializeUntyped(
+          textValue
+        );
+        return (Id) marker.get('$attachmentId');
+      } catch (Exception ex) {
+        System.debug(
+          LoggingLevel.FINE,
+          'getStatus: offload marker parse fallback: ' + ex.getMessage()
+        );
+      }
+    }
+    return null;
+  }
+
+  // Rehydrates a single output string using the pre-fetched resolved map.
+  private static String rehydrateFromMap(
+    String textValue,
+    Map<Id, String> resolvedOutputByDocId
+  ) {
+    Id docId = getOffloadDocId(textValue);
+    if (docId != null && resolvedOutputByDocId.containsKey(docId)) {
+      return resolvedOutputByDocId.get(docId);
+    }
+    return textValue;
+  }
+
+  // ─── End Read API ──────────────────────────────────────────────────────────
+
   /**
    * Starts a new durable workflow instance (get-or-start). If an instance with
    * the same correlation key already exists within the dedup scope, returns
@@ -1106,10 +1391,7 @@ public inherited sharing class WorkflowEngine {
     // is still compensating and must route to runCompensationStep, not the
     // forward path -- otherwise a signal-driven compensation is skipped and the
     // instance stays stuck Running with the compensation step pending.
-    if (
-      instance.Status__c == 'Suspended' ||
-      instance.Status__c == 'Running'
-    ) {
+    if (instance.Status__c == 'Suspended' || instance.Status__c == 'Running') {
       // Only treat a trailing-'_Compensate' latest step as a live compensation
       // when the instance's compensation stack actually holds the matching base
       // step. A normal forward step that happens to be named '<x>_Compensate'
@@ -1119,9 +1401,7 @@ public inherited sharing class WorkflowEngine {
       // resuming it. The forward execution of compensatable steps grows the
       // stack too, so a non-empty stack alone is not enough; require the base
       // name to be on it.
-      List<String> compStack = String.isNotBlank(
-          instance.Compensation_Stack__c
-        )
+      List<String> compStack = String.isNotBlank(instance.Compensation_Stack__c)
         ? (List<String>) JSON.deserialize(
             instance.Compensation_Stack__c,
             List<String>.class
@@ -1801,7 +2081,9 @@ public inherited sharing class WorkflowEngine {
       // the page must not be reported absent (which could strand it), so re-page
       // (claimed rows are now Processing and drop out of the Received view) up to
       // a bounded number of times.
-      for (Integer attempt = 0; attempt <= PARALLEL_CLAIM_PAGE_RETRIES; attempt++) {
+      for (
+        Integer attempt = 0; attempt <= PARALLEL_CLAIM_PAGE_RETRIES; attempt++
+      ) {
         // Fetch recent candidates newest-first.
         List<Workflow_Signal__c> candidates = [
           SELECT Id, Signal_Name__c, Payload__c, CreatedDate
@@ -1823,11 +2105,7 @@ public inherited sharing class WorkflowEngine {
         // if the signal never arrived would never be re-woken (its wake event
         // already fired on insert) and would strand. No claim is issued (no
         // budget), so mark capped to skip same-name cleanup at consume.
-        if (
-          claimBudget <= 0 ||
-          claimStatementBudget <= 0 ||
-          nearSoqlLimit()
-        ) {
+        if (claimBudget <= 0 || claimStatementBudget <= 0 || nearSoqlLimit()) {
           capped = true;
           Workflow_Signal__c c = candidates[0];
           return new StepContext.Signal(
@@ -1926,7 +2204,8 @@ public inherited sharing class WorkflowEngine {
     String signalName,
     Integer rowLimit
   ) {
-    Integer effectiveLimit = (rowLimit != null && rowLimit > 0)
+    Integer effectiveLimit = (rowLimit != null &&
+      rowLimit > 0)
       ? rowLimit
       : SERIAL_SIGNAL_ROW_CAP;
     List<Workflow_Signal__c> records;
@@ -2473,7 +2752,7 @@ public inherited sharing class WorkflowEngine {
             instance.Id,
             result.stepStateJson,
             'State_Suspend_' +
-              stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+            stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
           )
         : null;
       saveStepExec(stepExec);
@@ -3028,7 +3307,12 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Instance__c
         WHERE
           Correlation_Key__c = :correlationKey
-          AND Status__c IN ('Pending', 'Running', 'Suspended', 'CompensationFailed')
+          AND Status__c IN (
+            'Pending',
+            'Running',
+            'Suspended',
+            'CompensationFailed'
+          )
         WITH SYSTEM_MODE
         LIMIT 1
       ];
@@ -3298,7 +3582,8 @@ public inherited sharing class WorkflowEngine {
     // the forward phase. Only forward parallel instances fan out per branch.
     Boolean isCompensatingInst =
       !rows.isEmpty() &&
-      (rows[0].Status__c == 'Compensating' || rows[0].Status__c == 'Cancelling');
+      (rows[0].Status__c == 'Compensating' ||
+      rows[0].Status__c == 'Cancelling');
 
     if (
       !isCompensatingInst &&
@@ -3442,7 +3727,12 @@ public inherited sharing class WorkflowEngine {
         inst = instByKey.get(req.keyOrId);
       }
 
-      if (inst != null && !(inst.Status__c == 'CompensationFailed' && !(req.signalName.equalsIgnoreCase('Cancel') || req.signalName.equalsIgnoreCase('CancelWorkflow')))) {
+      if (
+        inst != null &&
+        !(inst.Status__c == 'CompensationFailed' &&
+        !(req.signalName.equalsIgnoreCase('Cancel') ||
+        req.signalName.equalsIgnoreCase('CancelWorkflow')))
+      ) {
         if (
           req.signalName.equalsIgnoreCase('Cancel') ||
           req.signalName.equalsIgnoreCase('CancelWorkflow')
@@ -3511,7 +3801,8 @@ public inherited sharing class WorkflowEngine {
       // from the forward phase. Otherwise one compensation signal would publish a
       // RUN_STEP per stale branch and pile up duplicate rollback workers.
       Boolean isCompensatingInst =
-        inst.Status__c == 'Compensating' || inst.Status__c == 'Cancelling';
+        inst.Status__c == 'Compensating' ||
+        inst.Status__c == 'Cancelling';
       // Parallel (forward) instances must wake each branch by name; collect them
       // for a single bulk resume rather than a per-instance query each (which would
       // exhaust the SOQL limit when many parallel workflows are signaled at once).
@@ -4049,7 +4340,8 @@ public inherited sharing class WorkflowEngine {
     // terminal/failed value is left intact so the guard can early-exit on it.
     if (
       reassertedStatus != null &&
-      (instance.Status__c == 'Suspended' || instance.Status__c == 'Running')
+      (instance.Status__c == 'Suspended' ||
+      instance.Status__c == 'Running')
     ) {
       instance.Status__c = reassertedStatus;
       instance.Async_Job_Id__c = null;
@@ -4343,7 +4635,7 @@ public inherited sharing class WorkflowEngine {
             instance.Id,
             result.stepStateJson,
             'State_Suspend_' +
-              stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+            stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
           )
         : null;
       saveStepExec(stepExec);
@@ -4563,7 +4855,13 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Instance__c
         WHERE
           Parent_Instance__c IN :frontier
-          AND Status__c IN ('Pending', 'Running', 'Suspended', 'Cancelling', 'CompensationFailed')
+          AND Status__c IN (
+            'Pending',
+            'Running',
+            'Suspended',
+            'Cancelling',
+            'CompensationFailed'
+          )
         WITH SYSTEM_MODE
       ];
       List<Id> nextFrontier = new List<Id>();
@@ -4936,7 +5234,11 @@ public inherited sharing class WorkflowEngine {
           markerDocByIndex.put(i, docId);
           docIds.add(docId);
         } catch (Exception ex) {
-          System.debug(LoggingLevel.WARN, 'Failed to parse offload marker, using raw value: ' + ex.getMessage());
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to parse offload marker, using raw value: ' +
+            ex.getMessage()
+          );
         }
       }
     }
@@ -5706,12 +6008,7 @@ public inherited sharing class WorkflowEngine {
    */
   public static Boolean redeliverCapturedSignal(Id signalId) {
     List<Workflow_Signal__c> rows = [
-      SELECT
-        Id,
-        Status__c,
-        Correlation_Key__c,
-        Signal_Name__c,
-        Payload__c
+      SELECT Id, Status__c, Correlation_Key__c, Signal_Name__c, Payload__c
       FROM Workflow_Signal__c
       WHERE Id = :signalId AND Status__c = 'Unrouted'
       WITH SYSTEM_MODE
@@ -5732,8 +6029,7 @@ public inherited sharing class WorkflowEngine {
       .getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
     Boolean isId =
-      idPattern.matcher(keyOrId).matches() &&
-      keyOrId.startsWith(wflowPrefix);
+      idPattern.matcher(keyOrId).matches() && keyOrId.startsWith(wflowPrefix);
 
     List<String> activeStatuses = new List<String>{
       'Pending',

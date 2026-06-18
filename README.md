@@ -348,6 +348,40 @@ The action is **strictly read-only** (no transition, enqueue, signal, schedule, 
 
 The autolaunched Flow `Revenant_Read_Workflow_Status_Example` (`examples/main/default/flows/`) implements step 2–3 verbatim.
 
+### 8. Read a Workflow's Result (Apex)
+
+For Apex callers — ISVs, trigger handlers, batch jobs, invocable wrappers — `WorkflowEngine.getStatus` is the **supported read contract**. Do not query `Workflow_Instance__c` fields directly: the field names are internal, and `Output__c` silently holds a storage pointer (not the real value) when the output exceeds 100k characters.
+
+```java
+// By instance Id (precise handle — does not follow ContinuedAsNew chains)
+WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(instanceId);
+
+// By correlation key (preferred for polling — picks the live/latest run)
+WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(correlationKey);
+
+// Bulk variants (≤ 2 SOQL total, regardless of list size)
+List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(idList);
+List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(keyList);
+```
+
+**`WorkflowStatus` fields:**
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `instanceId` | `Id` | The `Workflow_Instance__c` record Id. |
+| `definitionName` | `String` | The workflow class name (`Workflow_Name__c`). |
+| `correlationKey` | `String` | The correlation key the instance was started with. |
+| `status` | `String` | Raw `Status__c` value (e.g. `Running`, `Completed`, `Failed`). |
+| `isTerminal` | `Boolean` | `true` when the workflow has reached a final state (`Completed`, `Failed`, `Compensated`, or `Cancelled`). |
+| `errorMessage` | `String` | Failure detail from `Error_Message__c`; `null` unless the instance failed. |
+| `output` | `String` | The **fully rehydrated** output string for terminal instances — transparently resolved from ContentVersion when the output was offloaded (>100k chars). `null` for non-terminal instances; blank string (`""`) for a terminal instance that produced no output. |
+
+**Key semantics:**
+
+- `output` is `null` for in-flight instances. `isTerminal = true` with `output = ""` means the workflow completed successfully with no output — this is distinct from a still-running instance.
+- Both single-record and bulk overloads cost **at most 2 SOQL queries** (one for the instance(s), at most one more for ContentVersion rehydration) and **zero DML**, making them safe to call from any Apex context.
+- By correlation key, the active/live run is preferred over a recently-terminal one when a key has been reused. `null` is returned (not an exception) when nothing matches.
+
 ---
 
 ## Operations & Alerting Configuration
