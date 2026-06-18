@@ -102,6 +102,11 @@
     <!-- fieldPermissions for Workflow_Step_Execution__c (excluding required/master-detail fields) -->
     <fieldPermissions>
         <editable>true</editable>
+        <field>Workflow_Step_Execution__c.Captured_Values__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
         <field>Workflow_Step_Execution__c.Error_Details__c</field>
         <readable>true</readable>
     </fieldPermissions>

@@ -432,8 +432,18 @@ public class StepContextTest {
     // Oldest partial page for 'Evt' (budget-truncated); the true most-recent
     // 'Evt' row is NOT in this page.
     List<StepContext.Signal> oldestPage = new List<StepContext.Signal>{
-      new StepContext.Signal(null, 'Evt', '{"seq":1}', DateTime.now().addMinutes(-5)),
-      new StepContext.Signal(null, 'Evt', '{"seq":2}', DateTime.now().addMinutes(-4))
+      new StepContext.Signal(
+        null,
+        'Evt',
+        '{"seq":1}',
+        DateTime.now().addMinutes(-5)
+      ),
+      new StepContext.Signal(
+        null,
+        'Evt',
+        '{"seq":2}',
+        DateTime.now().addMinutes(-4)
+      )
     };
     StepContext.Signal trueLatest = new StepContext.Signal(
       null,
@@ -450,7 +460,11 @@ public class StepContextTest {
       null,
       null,
       1,
-      (StepContext.SignalSource) new FakeNameSource(oldestPage, trueLatest, true)
+      (StepContext.SignalSource) new FakeNameSource(
+        oldestPage,
+        trueLatest,
+        true
+      )
     );
 
     // Read the (capped) list first; this populates the partial per-name cache.
@@ -475,8 +489,20 @@ public class StepContextTest {
     // returns null. The branch still owns the rows, so getSignal must not report
     // a false absence (which would strand a suspend-on-absent branch).
     List<StepContext.Signal> claimedPage = new List<StepContext.Signal>{
-      new StepContext.Signal(null, 'Foo', '{"seq":1}', DateTime.now().addMinutes(-2), true),
-      new StepContext.Signal(null, 'Foo', '{"seq":2}', DateTime.now().addMinutes(-1), true)
+      new StepContext.Signal(
+        null,
+        'Foo',
+        '{"seq":1}',
+        DateTime.now().addMinutes(-2),
+        true
+      ),
+      new StepContext.Signal(
+        null,
+        'Foo',
+        '{"seq":2}',
+        DateTime.now().addMinutes(-1),
+        true
+      )
     };
     StepContext ctx = new StepContext(
       dummyInstanceId,
@@ -511,8 +537,18 @@ public class StepContextTest {
     // A complete (uncapped) list: its last element IS the true latest, so the
     // cached list is trusted and getLatestSignal must NOT override it.
     List<StepContext.Signal> fullList = new List<StepContext.Signal>{
-      new StepContext.Signal(null, 'Evt', '{"seq":1}', DateTime.now().addMinutes(-2)),
-      new StepContext.Signal(null, 'Evt', '{"seq":2}', DateTime.now().addMinutes(-1))
+      new StepContext.Signal(
+        null,
+        'Evt',
+        '{"seq":1}',
+        DateTime.now().addMinutes(-2)
+      ),
+      new StepContext.Signal(
+        null,
+        'Evt',
+        '{"seq":2}',
+        DateTime.now().addMinutes(-1)
+      )
     };
     // trueLatest differs so a regression that always consults the source fails.
     StepContext.Signal sentinel = new StepContext.Signal(
@@ -549,8 +585,18 @@ public class StepContextTest {
     // that does NOT contain 'Important', while the source can still resolve the
     // true latest 'Important' row.
     List<StepContext.Signal> partialAll = new List<StepContext.Signal>{
-      new StepContext.Signal(null, 'Noise', '{"n":1}', DateTime.now().addMinutes(-3)),
-      new StepContext.Signal(null, 'Noise', '{"n":2}', DateTime.now().addMinutes(-2))
+      new StepContext.Signal(
+        null,
+        'Noise',
+        '{"n":1}',
+        DateTime.now().addMinutes(-3)
+      ),
+      new StepContext.Signal(
+        null,
+        'Noise',
+        '{"n":2}',
+        DateTime.now().addMinutes(-2)
+      )
     };
     StepContext.Signal important = new StepContext.Signal(
       null,
@@ -588,7 +634,12 @@ public class StepContextTest {
   static void testCachedNamedLookupIsCaseInsensitive() {
     Id dummyInstanceId = '00D000000000001EAA';
     List<StepContext.Signal> pending = new List<StepContext.Signal>{
-      new StepContext.Signal(null, 'Approve:Order', '{"ok":true}', DateTime.now())
+      new StepContext.Signal(
+        null,
+        'Approve:Order',
+        '{"ok":true}',
+        DateTime.now()
+      )
     };
     StepContext ctx = new StepContext(
       dummyInstanceId,
@@ -612,10 +663,7 @@ public class StepContextTest {
       ctx.hasSignal('approve:order'),
       'Cached named lookup must match case-insensitively'
     );
-    System.assertEquals(
-      '{"ok":true}',
-      ctx.getSignal('APPROVE:ORDER').payload
-    );
+    System.assertEquals('{"ok":true}', ctx.getSignal('APPROVE:ORDER').payload);
     System.assertEquals(1, ctx.getSignals('approve:ORDER').size());
   }
 
@@ -666,8 +714,18 @@ public class StepContextTest {
     Id dummyInstanceId = '00D000000000001EAA';
     String prefix = Workflow_Signal__c.SObjectType.getDescribe().getKeyPrefix();
     List<StepContext.Signal> allRows = new List<StepContext.Signal>{
-      new StepContext.Signal(prefix + '000000000001', 'Foo', '{"f":1}', DateTime.now().addMinutes(-2)),
-      new StepContext.Signal(prefix + '000000000002', 'Bar', '{"b":1}', DateTime.now().addMinutes(-1))
+      new StepContext.Signal(
+        prefix + '000000000001',
+        'Foo',
+        '{"f":1}',
+        DateTime.now().addMinutes(-2)
+      ),
+      new StepContext.Signal(
+        prefix + '000000000002',
+        'Bar',
+        '{"b":1}',
+        DateTime.now().addMinutes(-1)
+      )
     };
     StepContext ctx = new StepContext(
       dummyInstanceId,
@@ -704,7 +762,13 @@ public class StepContextTest {
     // Capped page row (claimed) shares the timestamp with the source's latest
     // but has a LOWER id, so the source row is the true latest (Id DESC).
     List<StepContext.Signal> page = new List<StepContext.Signal>{
-      new StepContext.Signal(prefix + '000000000002', 'Foo', '{"seq":2}', ts, true)
+      new StepContext.Signal(
+        prefix + '000000000002',
+        'Foo',
+        '{"seq":2}',
+        ts,
+        true
+      )
     };
     StepContext.Signal sourceLatest = new StepContext.Signal(
       prefix + '000000000003',
@@ -982,7 +1046,11 @@ public class StepContextTest {
       1
     );
     System.assertNotEquals(null, ctx, 'Context should be constructed');
-    System.assertEquals(null, ctx.previousRunAt, 'Non-continuation context must have null previousRunAt');
+    System.assertEquals(
+      null,
+      ctx.previousRunAt,
+      'Non-continuation context must have null previousRunAt'
+    );
   }
 
   @isTest
@@ -1001,6 +1069,222 @@ public class StepContextTest {
       null,
       ts
     );
-    System.assertEquals(ts, ctx.previousRunAt, 'previousRunAt should match the value passed to the full constructor');
+    System.assertEquals(
+      ts,
+      ctx.previousRunAt,
+      'previousRunAt should match the value passed to the full constructor'
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // capture-once / once() (issue #44)
+  // ---------------------------------------------------------------------------
+
+  private class StringProducer implements CaptureProducer {
+    public String value;
+    public Integer callCount = 0;
+    public StringProducer(String value) {
+      this.value = value;
+    }
+    public Object produce() {
+      callCount++;
+      return value;
+    }
+  }
+
+  @isTest
+  static void testOnceFirstCallInvokesProducerAndReturnsValue() {
+    Id instanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null
+    );
+    StringProducer p = new StringProducer('hello');
+    Object result = ctx.once('myKey', p);
+    System.assertEquals(
+      'hello',
+      result,
+      'once() must return the produced value on first call'
+    );
+    System.assertEquals(
+      1,
+      p.callCount,
+      'Producer must be called exactly once on first access'
+    );
+  }
+
+  @isTest
+  static void testOnceSecondCallReturnsSameValueWithoutCallingProducer() {
+    Id instanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null
+    );
+    StringProducer p = new StringProducer('stable');
+    ctx.once('k', p);
+    Object second = ctx.once('k', p);
+    System.assertEquals(
+      'stable',
+      second,
+      'once() must return the same value on subsequent calls'
+    );
+    System.assertEquals(
+      1,
+      p.callCount,
+      'Producer must NOT be called again after the first capture'
+    );
+  }
+
+  @isTest
+  static void testOnceDistinctKeysAreIndependent() {
+    Id instanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null
+    );
+    StringProducer pA = new StringProducer('alpha');
+    StringProducer pB = new StringProducer('beta');
+    Object a = ctx.once('keyA', pA);
+    Object b = ctx.once('keyB', pB);
+    System.assertEquals('alpha', a);
+    System.assertEquals('beta', b);
+    System.assertEquals(1, pA.callCount);
+    System.assertEquals(1, pB.callCount);
+  }
+
+  @isTest
+  static void testOnceWithPriorCapturesSkipsProducer() {
+    Id instanceId = '00D000000000001EAA';
+    // Seed a prior-capture JSON as if loaded from Workflow_Step_Execution__c.Captured_Values__c
+    String priorJson = JSON.serialize(
+      new Map<String, Object>{ 'refNumber' => 'REF-001' }
+    );
+    StepContext ctx = StepContext.withCapturedValues(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null,
+      1,
+      0,
+      null,
+      null,
+      priorJson
+    );
+    StringProducer p = new StringProducer('SHOULD-NOT-BE-CALLED');
+    Object result = ctx.once('refNumber', p);
+    System.assertEquals(
+      'REF-001',
+      result,
+      'once() must return the durably stored value, not a new one'
+    );
+    System.assertEquals(
+      0,
+      p.callCount,
+      'Producer must NOT be called when the key was already captured'
+    );
+  }
+
+  @isTest
+  static void testGetCapturedValuesJsonRoundTrips() {
+    Id instanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null
+    );
+    ctx.once('k1', new StringProducer('v1'));
+    ctx.once('k2', new StringProducer('v2'));
+    String capturedJson = ctx.getCapturedValuesJson();
+    Map<String, Object> parsed = (Map<String, Object>) JSON.deserializeUntyped(
+      capturedJson
+    );
+    System.assertEquals('v1', parsed.get('k1'));
+    System.assertEquals('v2', parsed.get('k2'));
+  }
+
+  @isTest
+  static void testGetCapturedValuesJsonNullWhenNoCaptures() {
+    Id instanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null
+    );
+    System.assertEquals(
+      null,
+      ctx.getCapturedValuesJson(),
+      'getCapturedValuesJson() must return null when nothing was captured'
+    );
+  }
+
+  @isTest
+  static void testOnceValuesAreJsonRoundTripped() {
+    // Numbers and booleans JSON-round-trip to a consistent type so values are
+    // byte-identical regardless of whether they come from in-memory or rehydrated.
+    Id instanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null
+    );
+    ctx.once('num', new StringProducer('42'));
+    String captured = ctx.getCapturedValuesJson();
+    // Rehydrate into a new context
+    StepContext ctx2 = StepContext.withCapturedValues(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null,
+      1,
+      0,
+      null,
+      null,
+      captured
+    );
+    StringProducer p2 = new StringProducer('different');
+    Object v = ctx2.once('num', p2);
+    System.assertEquals(
+      '42',
+      v,
+      'Rehydrated value must match the originally captured value'
+    );
+    System.assertEquals(
+      0,
+      p2.callCount,
+      'Producer must not be called on rehydration'
+    );
   }
 }
