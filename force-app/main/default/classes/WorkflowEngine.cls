@@ -750,6 +750,14 @@ public inherited sharing class WorkflowEngine {
     String output = null;
     if (terminal) {
       output = rehydrateFromMap(inst.Output__c, resolvedOutputByDocId);
+      // A terminal instance has definitively produced its output, so surface an
+      // empty result as '' rather than null. (Salesforce coerces an empty text
+      // field to null on insert.) This keeps output == null meaning exactly "not
+      // terminal yet", so callers can distinguish "completed with no output" from
+      // "still running" by output alone, per the documented contract.
+      if (output == null) {
+        output = '';
+      }
     }
     return new WorkflowStatus(
       inst.Id,
