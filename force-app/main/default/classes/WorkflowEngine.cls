@@ -40,7 +40,9 @@ public inherited sharing class WorkflowEngine {
   // Upper bound on rows read by a single dedup lookup, so a hot correlation key
   // with many historical terminal runs cannot exhaust the SOQL row governor.
   // Single-key lookups (the common start path) read only the top row.
-  private static final Integer DEDUP_LOOKUP_ROW_CAP = 10000;
+  // @TestVisible (non-final) so tests can shrink it to exercise the cap cheaply.
+  @TestVisible
+  private static Integer DEDUP_LOOKUP_ROW_CAP = 10000;
 
   // Max number of timed-out steps a single watchdog heartbeat will fail. Each failure
   // triggers failWorkflowInstance() (its own SOQL/DML + optional alert queries), so this
@@ -116,6 +118,719 @@ public inherited sharing class WorkflowEngine {
       this.isNew = isNew;
     }
   }
+
+  // ─── Read API ──────────────────────────────────────────────────────────────
+  //
+  // Terminal statuses for the read API. ContinuedAsNew is deliberately excluded
+  // (it is a hand-off, not an outcome) and CompensationFailed is excluded
+  // (it is non-terminal — the rollback can still be resumed/retried).
+  private static final Set<String> TERMINAL_GETSTATUS_STATUSES = new Set<String>{
+    'Completed',
+    'Failed',
+    'Compensated',
+    'Cancelled'
+  };
+
+  /**
+   * Stable read-only DTO returned by WorkflowEngine.getStatus. All fields are
+   * read-only to callers; the engine populates them via the private constructor.
+   */
+  public class WorkflowStatus {
+    public Id instanceId { get; private set; }
+    public String definitionName { get; private set; }
+    public String correlationKey { get; private set; }
+    public String status { get; private set; }
+    public Boolean isTerminal { get; private set; }
+    public String errorMessage { get; private set; }
+    // Fully rehydrated output for terminal instances; null for in-flight instances.
+    public String output { get; private set; }
+
+    private WorkflowStatus(
+      Id instanceId,
+      String definitionName,
+      String correlationKey,
+      String status,
+      Boolean isTerminal,
+      String errorMessage,
+      String output
+    ) {
+      this.instanceId = instanceId;
+      this.definitionName = definitionName;
+      this.correlationKey = correlationKey;
+      this.status = status;
+      this.isTerminal = isTerminal;
+      this.errorMessage = errorMessage;
+      this.output = output;
+    }
+  }
+
+  /**
+   * Returns the current status and rehydrated output for a workflow instance by Id,
+   * or null if no instance with that Id exists.
+   * Costs at most 2 SOQL queries and zero DML.
+   */
+  public static WorkflowStatus getStatus(Id instanceId) {
+    List<WorkflowStatus> results = getStatus(new List<Id>{ instanceId });
+    return results[0];
+  }
+
+  /**
+   * Returns the current status and rehydrated output for a workflow instance by
+   * correlation key (prefers a live/active run, and follows a continue-as-new chain
+   * via its shared root key), or null if no matching instance exists. Blank/null key
+   * returns null. Costs a small constant number of SOQL queries and zero DML.
+   */
+  public static WorkflowStatus getStatus(String correlationKey) {
+    List<WorkflowStatus> results = getStatus(
+      new List<String>{ correlationKey }
+    );
+    return results[0];
+  }
+
+  /**
+   * Bulk variant — accepts a list of instance Ids and returns a correspondingly
+   * ordered list of WorkflowStatus DTOs (null where an Id was not found).
+   * Costs at most 2 SOQL queries total regardless of list size, and zero DML.
+   */
+  public static List<WorkflowStatus> getStatus(List<Id> instanceIds) {
+    List<WorkflowStatus> out = new List<WorkflowStatus>();
+    if (instanceIds == null || instanceIds.isEmpty()) {
+      return out;
+    }
+
+    Set<Id> lookupIds = new Set<Id>(instanceIds);
+    Map<Id, Workflow_Instance__c> instById = new Map<Id, Workflow_Instance__c>();
+    for (Workflow_Instance__c inst : [
+      SELECT
+        Id,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Status__c,
+        Error_Message__c,
+        Output__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :lookupIds
+      WITH SYSTEM_MODE
+    ]) {
+      instById.put(inst.Id, inst);
+    }
+
+    // Bulk-resolve all offloaded outputs in a single ContentVersion query.
+    Map<Id, String> resolvedOutputByDocId = bulkResolveOffloadedOutputs(
+      instById.values()
+    );
+
+    for (Id reqId : instanceIds) {
+      Workflow_Instance__c inst = instById.get(reqId);
+      out.add(inst == null ? null : buildStatus(inst, resolvedOutputByDocId));
+    }
+    return out;
+  }
+
+  /**
+   * Bulk variant — accepts a list of correlation keys and returns a correspondingly
+   * ordered list of WorkflowStatus DTOs (null where no instance was found or the
+   * key entry is blank). A live/active run is preferred over a terminal one when a
+   * key maps to several rows; a ContinuedAsNew hand-off always loses to a real
+   * generation of its chain. Lookup follows a continue-as-new chain via the shared
+   * Root_Correlation_Key__c, so polling the original key — or any intermediate
+   * successor key — resolves to the live/final generation.
+   *
+   * Winners are resolved from metadata only (Output__c is fetched solely for the
+   * winners), per key (no single hot key can crowd out others or exhaust the heap).
+   * Costs a small constant number of SOQL queries regardless of list size, and zero
+   * DML. (The Id-based overloads remain bounded at <= 2 SOQL.)
+   */
+  public static List<WorkflowStatus> getStatus(List<String> correlationKeys) {
+    List<WorkflowStatus> out = new List<WorkflowStatus>();
+    if (correlationKeys == null || correlationKeys.isEmpty()) {
+      return out;
+    }
+
+    // Correlation key fields are case-insensitive in SOQL but Apex Set/Map lookups
+    // are case-sensitive, so all bucketing is done on the normalized (lower-cased)
+    // key to keep in-memory matching consistent with what the query returns.
+    Set<String> normalizedKeys = new Set<String>();
+    for (String k : correlationKeys) {
+      if (String.isNotBlank(k)) {
+        normalizedKeys.add(normalizeKey(k));
+      }
+    }
+
+    // Resolve the winning instance Id per requested key using metadata only (no
+    // Output__c), so a hot key's many candidate rows can never load enough inline
+    // payloads to exhaust the heap. Resolution is per-key bounded (no single key can
+    // crowd out others) and follows ContinuedAsNew chains via the shared root key.
+    Map<String, Id> winnerIdByKey = resolveWinnerIdByKey(normalizedKeys);
+
+    // Fetch Output__c (and the remaining DTO fields) only for the winners, then
+    // rehydrate any offloaded outputs in one ContentVersion query — the same bounded
+    // tail used by the Id-based overload.
+    Set<Id> winnerIds = new Set<Id>(winnerIdByKey.values());
+    Map<Id, Workflow_Instance__c> instById = new Map<Id, Workflow_Instance__c>();
+    if (!winnerIds.isEmpty()) {
+      for (Workflow_Instance__c inst : [
+        SELECT
+          Id,
+          Workflow_Name__c,
+          Correlation_Key__c,
+          Status__c,
+          Error_Message__c,
+          Output__c
+        FROM Workflow_Instance__c
+        WHERE Id IN :winnerIds
+        WITH SYSTEM_MODE
+      ]) {
+        instById.put(inst.Id, inst);
+      }
+    }
+
+    Map<Id, String> resolvedOutputByDocId = bulkResolveOffloadedOutputs(
+      instById.values()
+    );
+
+    for (String k : correlationKeys) {
+      if (String.isBlank(k)) {
+        out.add(null);
+        continue;
+      }
+      Id winnerId = winnerIdByKey.get(normalizeKey(k));
+      Workflow_Instance__c inst = winnerId == null
+        ? null
+        : instById.get(winnerId);
+      out.add(inst == null ? null : buildStatus(inst, resolvedOutputByDocId));
+    }
+    return out;
+  }
+
+  // Returns true if candidate should replace existing for the same correlation key.
+  // A ContinuedAsNew row is a superseded hand-off, so any non-hand-off generation of
+  // the chain wins over it (independent of timestamps); otherwise an active run beats
+  // a terminal one, and among equals the more recently created wins.
+  private static Boolean isPreferredForGetStatus(
+    Workflow_Instance__c candidate,
+    Workflow_Instance__c existing
+  ) {
+    Boolean candidateHandoff = candidate.Status__c == 'ContinuedAsNew';
+    Boolean existingHandoff = existing.Status__c == 'ContinuedAsNew';
+    if (candidateHandoff != existingHandoff) {
+      return !candidateHandoff;
+    }
+    Boolean candidateActive = ACTIVE_STATUSES.contains(candidate.Status__c);
+    Boolean existingActive = ACTIVE_STATUSES.contains(existing.Status__c);
+    if (candidateActive != existingActive) {
+      return candidateActive;
+    }
+    return candidate.CreatedDate > existing.CreatedDate;
+  }
+
+  /**
+   * Resolves the single winning Workflow_Instance__c Id for each requested
+   * (normalized) correlation key, keyed by that normalized key. Loads only metadata
+   * (never Output__c). Follows ContinuedAsNew chains via the shared
+   * Root_Correlation_Key__c — which a before-insert trigger defaults to the
+   * instance's own correlation key, so every row carries its chain root — letting a
+   * lookup by the original key, or any intermediate successor key, resolve to the
+   * live/final generation. Bounded per key so no single hot key (a correlation key
+   * reused across many terminal runs) can crowd out other requested keys or exceed
+   * the SOQL row governor.
+   */
+  private static Map<String, Id> resolveWinnerIdByKey(
+    Set<String> normalizedKeys
+  ) {
+    if (normalizedKeys == null || normalizedKeys.isEmpty()) {
+      return new Map<String, Id>();
+    }
+    return normalizedKeys.size() == 1
+      ? resolveSingleKeyWinner(new List<String>(normalizedKeys)[0])
+      : resolveBulkKeyWinners(normalizedKeys);
+  }
+
+  /**
+   * Fast path for a single requested key. One metadata query picks the winner; a
+   * second runs only when that winner is a ContinuedAsNew hand-off reached via a
+   * non-root key (i.e. the requested key is an intermediate generation), in which
+   * case the live/final successor lives under the shared root key.
+   */
+  private static Map<String, Id> resolveSingleKeyWinner(String key) {
+    Map<String, Id> winnerByKey = new Map<String, Id>();
+    Set<String> single = new Set<String>{ key };
+    Workflow_Instance__c winner = pickWinner(
+      [
+        SELECT
+          Id,
+          Status__c,
+          CreatedDate,
+          Active_Correlation_Key__c,
+          Correlation_Key__c,
+          Root_Correlation_Key__c
+        FROM Workflow_Instance__c
+        WHERE
+          Active_Correlation_Key__c IN :single
+          OR Correlation_Key__c IN :single
+          OR Root_Correlation_Key__c IN :single
+        WITH SYSTEM_MODE
+        ORDER BY
+          Active_Correlation_Key__c NULLS LAST,
+          Terminal_At__c DESC NULLS FIRST,
+          CreatedDate DESC
+        LIMIT :DEDUP_LOOKUP_ROW_CAP
+      ]
+    );
+    if (winner == null) {
+      return winnerByKey;
+    }
+
+    // Follow the chain forward via its shared root. (Same root-reuse limitation as
+    // resolveWinnersByRoot: if the root key was reused for an independent live run,
+    // this can resolve to that run — see README.)
+    String rootKey = String.isNotBlank(winner.Root_Correlation_Key__c)
+      ? normalizeKey(winner.Root_Correlation_Key__c)
+      : null;
+    if (
+      winner.Status__c == 'ContinuedAsNew' &&
+      rootKey != null &&
+      rootKey != key
+    ) {
+      Set<String> roots = new Set<String>{ rootKey };
+      Workflow_Instance__c chainWinner = pickWinner(
+        [
+          SELECT
+            Id,
+            Status__c,
+            CreatedDate,
+            Active_Correlation_Key__c,
+            Correlation_Key__c,
+            Root_Correlation_Key__c
+          FROM Workflow_Instance__c
+          WHERE Root_Correlation_Key__c IN :roots
+          WITH SYSTEM_MODE
+          ORDER BY
+            Active_Correlation_Key__c NULLS LAST,
+            Terminal_At__c DESC NULLS FIRST,
+            CreatedDate DESC
+          LIMIT :DEDUP_LOOKUP_ROW_CAP
+        ]
+      );
+      if (chainWinner != null && isPreferredForGetStatus(chainWinner, winner)) {
+        winner = chainWinner;
+      }
+    }
+
+    winnerByKey.put(key, winner.Id);
+    return winnerByKey;
+  }
+
+  /**
+   * Bulk path. Each requested key is resolved by its OWN correlation/active key
+   * (never by root), mirroring the start-path findExistingByKey machinery: an active
+   * run if any, else the most-recent row by correlation key (an aggregate, so a hot
+   * key reused across many terminal runs collapses to one group and cannot crowd out
+   * other keys). Matching on the key itself — not on Root_Correlation_Key__c — means
+   * a rootless legacy row is still found, and independent runs that merely share a
+   * chain root are never conflated. The chain is then followed via the shared root
+   * only for keys whose direct winner is a ContinuedAsNew hand-off, exactly as the
+   * single-key fast path does, so bulk and single resolution stay consistent.
+   */
+  private static Map<String, Id> resolveBulkKeyWinners(Set<String> keys) {
+    Map<String, Workflow_Instance__c> bestByKey = new Map<String, Workflow_Instance__c>();
+
+    // 1a) Active runs — the unique active-key index bounds this to ~one per key.
+    for (Workflow_Instance__c inst : [
+      SELECT
+        Id,
+        Status__c,
+        CreatedDate,
+        Active_Correlation_Key__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE
+        (Active_Correlation_Key__c IN :keys
+        OR Correlation_Key__c IN :keys)
+        AND Status__c IN :ACTIVE_STATUSES
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+    ]) {
+      bucketByOwnKey(inst, keys, bestByKey);
+    }
+
+    // 1b) Keys with no active run → most-recent row by correlation key (any status,
+    //     so a ContinuedAsNew hand-off is detected for the chain expansion below). An
+    //     aggregate yields one MAX(CreatedDate) per key (a hot key collapses to a
+    //     single group), then a bounded fetch resolves the Id(s) at those timestamps.
+    Set<String> remaining = unresolved(keys, bestByKey);
+    if (!remaining.isEmpty()) {
+      Map<String, Datetime> maxByKey = new Map<String, Datetime>();
+      Set<Datetime> maxTimes = new Set<Datetime>();
+      for (AggregateResult ar : [
+        SELECT Correlation_Key__c ck, MAX(CreatedDate) mc
+        FROM Workflow_Instance__c
+        WHERE Correlation_Key__c IN :remaining
+        WITH SYSTEM_MODE
+        GROUP BY Correlation_Key__c
+      ]) {
+        Datetime mc = (Datetime) ar.get('mc');
+        if (mc == null) {
+          continue;
+        }
+        // Guard the put: a case-insensitive GROUP BY can yield separate groups for
+        // case variants that normalize to the same key, so keep the latest.
+        String nk = normalizeKey((String) ar.get('ck'));
+        Datetime existing = maxByKey.get(nk);
+        if (existing == null || mc > existing) {
+          maxByKey.put(nk, mc);
+        }
+        maxTimes.add(mc);
+      }
+      if (!maxTimes.isEmpty()) {
+        for (Workflow_Instance__c inst : [
+          SELECT
+            Id,
+            Status__c,
+            CreatedDate,
+            Active_Correlation_Key__c,
+            Correlation_Key__c,
+            Root_Correlation_Key__c
+          FROM Workflow_Instance__c
+          WHERE Correlation_Key__c IN :remaining AND CreatedDate IN :maxTimes
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate DESC
+          LIMIT :DEDUP_LOOKUP_ROW_CAP
+        ]) {
+          if (
+            inst.CreatedDate ==
+            maxByKey.get(normalizeKey(inst.Correlation_Key__c))
+          ) {
+            bucketByOwnKey(inst, keys, bestByKey);
+          }
+        }
+      }
+    }
+
+    // 2) For keys whose direct winner is a ContinuedAsNew hand-off, the chain has
+    //    moved on — follow it to the live/final successor via the shared root key.
+    //    (Phase 1 matched on the key itself, not on root, so the successors — which
+    //    carry a different correlation key — were not seen yet, even when the polled
+    //    key is the chain root.)
+    Map<String, String> rootByKey = new Map<String, String>();
+    Set<String> expandRoots = new Set<String>();
+    for (String reqKey : bestByKey.keySet()) {
+      Workflow_Instance__c w = bestByKey.get(reqKey);
+      if (w.Status__c == 'ContinuedAsNew') {
+        // A continueAsNew successor inherits the predecessor's root, falling back to
+        // the predecessor's own correlation key when the predecessor predates the
+        // root default (blank root). Mirror that fallback so a rootless legacy
+        // hand-off still expands to its successor (here reqKey == predecessor key).
+        String root = String.isNotBlank(w.Root_Correlation_Key__c)
+          ? normalizeKey(w.Root_Correlation_Key__c)
+          : reqKey;
+        rootByKey.put(reqKey, root);
+        expandRoots.add(root);
+      }
+    }
+    if (!expandRoots.isEmpty()) {
+      Map<String, Workflow_Instance__c> winnerByRoot = resolveWinnersByRoot(
+        expandRoots
+      );
+      for (String reqKey : rootByKey.keySet()) {
+        Workflow_Instance__c cand = winnerByRoot.get(rootByKey.get(reqKey));
+        if (
+          cand != null && isPreferredForGetStatus(cand, bestByKey.get(reqKey))
+        ) {
+          bestByKey.put(reqKey, cand);
+        }
+      }
+    }
+
+    Map<String, Id> winnerByKey = new Map<String, Id>();
+    for (String reqKey : bestByKey.keySet()) {
+      winnerByKey.put(reqKey, bestByKey.get(reqKey).Id);
+    }
+    return winnerByKey;
+  }
+
+  /**
+   * Resolves the winning instance per chain root: an active run if any, else the
+   * most-recent non-hand-off terminal generation, else the most-recent row of any
+   * status. Used to follow a ContinuedAsNew chain forward from a hand-off winner.
+   * Per-root bounded so a reused root cannot exhaust the SOQL row governor.
+   *
+   * Known limitation (by design — see README): the root key is shared by every
+   * generation of a chain AND by any independent run that reuses the same
+   * correlation key, so following a hand-off by root cannot distinguish the chain's
+   * own successor from an unrelated run reusing that key. If a correlation key is
+   * reused for a separate run while a continue-as-new chain on that key is still
+   * live, polling an intermediate hand-off key may resolve to the reused run.
+   * Precisely disambiguating would require walking Previous_Instance__c, which is
+   * deliberately out of scope to keep this path's bounded, constant-SOQL guarantee.
+   */
+  private static Map<String, Workflow_Instance__c> resolveWinnersByRoot(
+    Set<String> roots
+  ) {
+    Map<String, Workflow_Instance__c> winnerByRoot = new Map<String, Workflow_Instance__c>();
+
+    // Active runs — bounded to ~one per chain by the unique active-key index.
+    for (Workflow_Instance__c inst : [
+      SELECT
+        Id,
+        Status__c,
+        CreatedDate,
+        Active_Correlation_Key__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Root_Correlation_Key__c IN :roots AND Status__c IN :ACTIVE_STATUSES
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+    ]) {
+      putBestByRoot(
+        winnerByRoot,
+        normalizeKey(inst.Root_Correlation_Key__c),
+        inst
+      );
+    }
+
+    // Roots with no active run → most-recent non-hand-off terminal generation.
+    Set<String> remainingRoots = unresolved(roots, winnerByRoot);
+    if (!remainingRoots.isEmpty()) {
+      Map<String, Datetime> maxByRoot = new Map<String, Datetime>();
+      Set<Datetime> maxTimes = new Set<Datetime>();
+      for (AggregateResult ar : [
+        SELECT Root_Correlation_Key__c root, MAX(CreatedDate) mc
+        FROM Workflow_Instance__c
+        WHERE
+          Root_Correlation_Key__c IN :remainingRoots
+          AND Status__c IN :TERMINAL_GETSTATUS_STATUSES
+        WITH SYSTEM_MODE
+        GROUP BY Root_Correlation_Key__c
+      ]) {
+        Datetime mc = (Datetime) ar.get('mc');
+        if (mc == null) {
+          continue;
+        }
+        String nr = normalizeKey((String) ar.get('root'));
+        Datetime existing = maxByRoot.get(nr);
+        if (existing == null || mc > existing) {
+          maxByRoot.put(nr, mc);
+        }
+        maxTimes.add(mc);
+      }
+      if (!maxTimes.isEmpty()) {
+        for (Workflow_Instance__c inst : [
+          SELECT
+            Id,
+            Status__c,
+            CreatedDate,
+            Active_Correlation_Key__c,
+            Correlation_Key__c,
+            Root_Correlation_Key__c
+          FROM Workflow_Instance__c
+          WHERE
+            Root_Correlation_Key__c IN :remainingRoots
+            AND Status__c IN :TERMINAL_GETSTATUS_STATUSES
+            AND CreatedDate IN :maxTimes
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate DESC
+          LIMIT :DEDUP_LOOKUP_ROW_CAP
+        ]) {
+          String r = normalizeKey(inst.Root_Correlation_Key__c);
+          if (inst.CreatedDate == maxByRoot.get(r)) {
+            putBestByRoot(winnerByRoot, r, inst);
+          }
+        }
+      }
+    }
+
+    // Fallback for an all-hand-off chain: keep the most-recent matched row so the
+    // caller still sees the latest generation rather than null.
+    Set<String> stuckRoots = unresolved(roots, winnerByRoot);
+    if (!stuckRoots.isEmpty()) {
+      for (Workflow_Instance__c inst : [
+        SELECT
+          Id,
+          Status__c,
+          CreatedDate,
+          Active_Correlation_Key__c,
+          Correlation_Key__c,
+          Root_Correlation_Key__c
+        FROM Workflow_Instance__c
+        WHERE Root_Correlation_Key__c IN :stuckRoots
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC
+        LIMIT :DEDUP_LOOKUP_ROW_CAP
+      ]) {
+        putBestByRoot(
+          winnerByRoot,
+          normalizeKey(inst.Root_Correlation_Key__c),
+          inst
+        );
+      }
+    }
+    return winnerByRoot;
+  }
+
+  // Buckets a candidate under each requested key it carries via its own correlation
+  // or active key (not its root), keeping the best per key via the getStatus
+  // preference. Matching on the instance's own key avoids conflating independent
+  // runs that share a chain root and still resolves rootless legacy rows.
+  private static void bucketByOwnKey(
+    Workflow_Instance__c inst,
+    Set<String> keys,
+    Map<String, Workflow_Instance__c> bestByKey
+  ) {
+    Set<String> own = new Set<String>();
+    if (String.isNotBlank(inst.Correlation_Key__c)) {
+      own.add(normalizeKey(inst.Correlation_Key__c));
+    }
+    if (String.isNotBlank(inst.Active_Correlation_Key__c)) {
+      own.add(normalizeKey(inst.Active_Correlation_Key__c));
+    }
+    for (String k : own) {
+      if (!keys.contains(k)) {
+        continue;
+      }
+      Workflow_Instance__c existing = bestByKey.get(k);
+      if (existing == null || isPreferredForGetStatus(inst, existing)) {
+        bestByKey.put(k, inst);
+      }
+    }
+  }
+
+  // Picks the single best instance from a candidate list via the getStatus
+  // preference (non-hand-off > active > most-recently created).
+  private static Workflow_Instance__c pickWinner(
+    List<Workflow_Instance__c> candidates
+  ) {
+    Workflow_Instance__c winner = null;
+    for (Workflow_Instance__c inst : candidates) {
+      if (winner == null || isPreferredForGetStatus(inst, winner)) {
+        winner = inst;
+      }
+    }
+    return winner;
+  }
+
+  // Keeps the best candidate per chain root using the getStatus preference.
+  private static void putBestByRoot(
+    Map<String, Workflow_Instance__c> winnerByRoot,
+    String root,
+    Workflow_Instance__c inst
+  ) {
+    if (root == null) {
+      return;
+    }
+    Workflow_Instance__c existing = winnerByRoot.get(root);
+    if (existing == null || isPreferredForGetStatus(inst, existing)) {
+      winnerByRoot.put(root, inst);
+    }
+  }
+
+  // Members of allKeys not yet resolved to a winner in the given map.
+  private static Set<String> unresolved(
+    Set<String> allKeys,
+    Map<String, Workflow_Instance__c> resolved
+  ) {
+    Set<String> remaining = new Set<String>();
+    for (String k : allKeys) {
+      if (!resolved.containsKey(k)) {
+        remaining.add(k);
+      }
+    }
+    return remaining;
+  }
+
+  // Builds a WorkflowStatus DTO from a queried instance, using the pre-fetched
+  // offloaded-output map so no additional SOQL is issued per row.
+  private static WorkflowStatus buildStatus(
+    Workflow_Instance__c inst,
+    Map<Id, String> resolvedOutputByDocId
+  ) {
+    Boolean terminal = TERMINAL_GETSTATUS_STATUSES.contains(inst.Status__c);
+    String output = null;
+    if (terminal) {
+      output = rehydrateFromMap(inst.Output__c, resolvedOutputByDocId);
+      // A terminal instance has definitively produced its output, so surface an
+      // empty result as '' rather than null. (Salesforce coerces an empty text
+      // field to null on insert.) This keeps output == null meaning exactly "not
+      // terminal yet", so callers can distinguish "completed with no output" from
+      // "still running" by output alone, per the documented contract.
+      if (output == null) {
+        output = '';
+      }
+    }
+    return new WorkflowStatus(
+      inst.Id,
+      inst.Workflow_Name__c,
+      inst.Correlation_Key__c,
+      inst.Status__c,
+      terminal,
+      inst.Error_Message__c,
+      output
+    );
+  }
+
+  // Resolves all offload markers found in a collection of instances in one
+  // ContentVersion SOQL query. Returns a map from ContentDocumentId → resolved text.
+  private static Map<Id, String> bulkResolveOffloadedOutputs(
+    List<Workflow_Instance__c> instances
+  ) {
+    Set<Id> docIds = new Set<Id>();
+    for (Workflow_Instance__c inst : instances) {
+      Id docId = getOffloadDocId(inst.Output__c);
+      if (docId != null) {
+        docIds.add(docId);
+      }
+    }
+    Map<Id, String> resolved = new Map<Id, String>();
+    if (!docIds.isEmpty()) {
+      for (ContentVersion cv : [
+        SELECT ContentDocumentId, VersionData
+        FROM ContentVersion
+        WHERE ContentDocumentId IN :docIds AND IsLatest = TRUE
+        WITH SYSTEM_MODE
+      ]) {
+        if (cv.VersionData != null) {
+          resolved.put(cv.ContentDocumentId, cv.VersionData.toString());
+        }
+      }
+    }
+    return resolved;
+  }
+
+  // Extracts the ContentDocumentId from an offload marker, or null if not a marker.
+  private static Id getOffloadDocId(String textValue) {
+    if (
+      String.isNotBlank(textValue) && textValue.startsWith('{"$attachmentId":')
+    ) {
+      try {
+        Map<String, Object> marker = (Map<String, Object>) JSON.deserializeUntyped(
+          textValue
+        );
+        return (Id) marker.get('$attachmentId');
+      } catch (Exception ex) {
+        System.debug(
+          LoggingLevel.FINE,
+          'getStatus: offload marker parse fallback: ' + ex.getMessage()
+        );
+      }
+    }
+    return null;
+  }
+
+  // Rehydrates a single output string using the pre-fetched resolved map.
+  private static String rehydrateFromMap(
+    String textValue,
+    Map<Id, String> resolvedOutputByDocId
+  ) {
+    Id docId = getOffloadDocId(textValue);
+    if (docId != null && resolvedOutputByDocId.containsKey(docId)) {
+      return resolvedOutputByDocId.get(docId);
+    }
+    return textValue;
+  }
+
+  // ─── End Read API ──────────────────────────────────────────────────────────
 
   /**
    * Starts a new durable workflow instance (get-or-start). If an instance with
@@ -1106,10 +1821,7 @@ public inherited sharing class WorkflowEngine {
     // is still compensating and must route to runCompensationStep, not the
     // forward path -- otherwise a signal-driven compensation is skipped and the
     // instance stays stuck Running with the compensation step pending.
-    if (
-      instance.Status__c == 'Suspended' ||
-      instance.Status__c == 'Running'
-    ) {
+    if (instance.Status__c == 'Suspended' || instance.Status__c == 'Running') {
       // Only treat a trailing-'_Compensate' latest step as a live compensation
       // when the instance's compensation stack actually holds the matching base
       // step. A normal forward step that happens to be named '<x>_Compensate'
@@ -1119,9 +1831,7 @@ public inherited sharing class WorkflowEngine {
       // resuming it. The forward execution of compensatable steps grows the
       // stack too, so a non-empty stack alone is not enough; require the base
       // name to be on it.
-      List<String> compStack = String.isNotBlank(
-          instance.Compensation_Stack__c
-        )
+      List<String> compStack = String.isNotBlank(instance.Compensation_Stack__c)
         ? (List<String>) JSON.deserialize(
             instance.Compensation_Stack__c,
             List<String>.class
@@ -1801,7 +2511,9 @@ public inherited sharing class WorkflowEngine {
       // the page must not be reported absent (which could strand it), so re-page
       // (claimed rows are now Processing and drop out of the Received view) up to
       // a bounded number of times.
-      for (Integer attempt = 0; attempt <= PARALLEL_CLAIM_PAGE_RETRIES; attempt++) {
+      for (
+        Integer attempt = 0; attempt <= PARALLEL_CLAIM_PAGE_RETRIES; attempt++
+      ) {
         // Fetch recent candidates newest-first.
         List<Workflow_Signal__c> candidates = [
           SELECT Id, Signal_Name__c, Payload__c, CreatedDate
@@ -1823,11 +2535,7 @@ public inherited sharing class WorkflowEngine {
         // if the signal never arrived would never be re-woken (its wake event
         // already fired on insert) and would strand. No claim is issued (no
         // budget), so mark capped to skip same-name cleanup at consume.
-        if (
-          claimBudget <= 0 ||
-          claimStatementBudget <= 0 ||
-          nearSoqlLimit()
-        ) {
+        if (claimBudget <= 0 || claimStatementBudget <= 0 || nearSoqlLimit()) {
           capped = true;
           Workflow_Signal__c c = candidates[0];
           return new StepContext.Signal(
@@ -1926,7 +2634,8 @@ public inherited sharing class WorkflowEngine {
     String signalName,
     Integer rowLimit
   ) {
-    Integer effectiveLimit = (rowLimit != null && rowLimit > 0)
+    Integer effectiveLimit = (rowLimit != null &&
+      rowLimit > 0)
       ? rowLimit
       : SERIAL_SIGNAL_ROW_CAP;
     List<Workflow_Signal__c> records;
@@ -2473,7 +3182,7 @@ public inherited sharing class WorkflowEngine {
             instance.Id,
             result.stepStateJson,
             'State_Suspend_' +
-              stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+            stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
           )
         : null;
       saveStepExec(stepExec);
@@ -3028,7 +3737,12 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Instance__c
         WHERE
           Correlation_Key__c = :correlationKey
-          AND Status__c IN ('Pending', 'Running', 'Suspended', 'CompensationFailed')
+          AND Status__c IN (
+            'Pending',
+            'Running',
+            'Suspended',
+            'CompensationFailed'
+          )
         WITH SYSTEM_MODE
         LIMIT 1
       ];
@@ -3298,7 +4012,8 @@ public inherited sharing class WorkflowEngine {
     // the forward phase. Only forward parallel instances fan out per branch.
     Boolean isCompensatingInst =
       !rows.isEmpty() &&
-      (rows[0].Status__c == 'Compensating' || rows[0].Status__c == 'Cancelling');
+      (rows[0].Status__c == 'Compensating' ||
+      rows[0].Status__c == 'Cancelling');
 
     if (
       !isCompensatingInst &&
@@ -3442,7 +4157,12 @@ public inherited sharing class WorkflowEngine {
         inst = instByKey.get(req.keyOrId);
       }
 
-      if (inst != null && !(inst.Status__c == 'CompensationFailed' && !(req.signalName.equalsIgnoreCase('Cancel') || req.signalName.equalsIgnoreCase('CancelWorkflow')))) {
+      if (
+        inst != null &&
+        !(inst.Status__c == 'CompensationFailed' &&
+        !(req.signalName.equalsIgnoreCase('Cancel') ||
+        req.signalName.equalsIgnoreCase('CancelWorkflow')))
+      ) {
         if (
           req.signalName.equalsIgnoreCase('Cancel') ||
           req.signalName.equalsIgnoreCase('CancelWorkflow')
@@ -3511,7 +4231,8 @@ public inherited sharing class WorkflowEngine {
       // from the forward phase. Otherwise one compensation signal would publish a
       // RUN_STEP per stale branch and pile up duplicate rollback workers.
       Boolean isCompensatingInst =
-        inst.Status__c == 'Compensating' || inst.Status__c == 'Cancelling';
+        inst.Status__c == 'Compensating' ||
+        inst.Status__c == 'Cancelling';
       // Parallel (forward) instances must wake each branch by name; collect them
       // for a single bulk resume rather than a per-instance query each (which would
       // exhaust the SOQL limit when many parallel workflows are signaled at once).
@@ -4049,7 +4770,8 @@ public inherited sharing class WorkflowEngine {
     // terminal/failed value is left intact so the guard can early-exit on it.
     if (
       reassertedStatus != null &&
-      (instance.Status__c == 'Suspended' || instance.Status__c == 'Running')
+      (instance.Status__c == 'Suspended' ||
+      instance.Status__c == 'Running')
     ) {
       instance.Status__c = reassertedStatus;
       instance.Async_Job_Id__c = null;
@@ -4343,7 +5065,7 @@ public inherited sharing class WorkflowEngine {
             instance.Id,
             result.stepStateJson,
             'State_Suspend_' +
-              stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+            stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
           )
         : null;
       saveStepExec(stepExec);
@@ -4563,7 +5285,13 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Instance__c
         WHERE
           Parent_Instance__c IN :frontier
-          AND Status__c IN ('Pending', 'Running', 'Suspended', 'Cancelling', 'CompensationFailed')
+          AND Status__c IN (
+            'Pending',
+            'Running',
+            'Suspended',
+            'Cancelling',
+            'CompensationFailed'
+          )
         WITH SYSTEM_MODE
       ];
       List<Id> nextFrontier = new List<Id>();
@@ -4936,7 +5664,11 @@ public inherited sharing class WorkflowEngine {
           markerDocByIndex.put(i, docId);
           docIds.add(docId);
         } catch (Exception ex) {
-          System.debug(LoggingLevel.WARN, 'Failed to parse offload marker, using raw value: ' + ex.getMessage());
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to parse offload marker, using raw value: ' +
+            ex.getMessage()
+          );
         }
       }
     }
@@ -5706,12 +6438,7 @@ public inherited sharing class WorkflowEngine {
    */
   public static Boolean redeliverCapturedSignal(Id signalId) {
     List<Workflow_Signal__c> rows = [
-      SELECT
-        Id,
-        Status__c,
-        Correlation_Key__c,
-        Signal_Name__c,
-        Payload__c
+      SELECT Id, Status__c, Correlation_Key__c, Signal_Name__c, Payload__c
       FROM Workflow_Signal__c
       WHERE Id = :signalId AND Status__c = 'Unrouted'
       WITH SYSTEM_MODE
@@ -5732,8 +6459,7 @@ public inherited sharing class WorkflowEngine {
       .getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
     Boolean isId =
-      idPattern.matcher(keyOrId).matches() &&
-      keyOrId.startsWith(wflowPrefix);
+      idPattern.matcher(keyOrId).matches() && keyOrId.startsWith(wflowPrefix);
 
     List<String> activeStatuses = new List<String>{
       'Pending',

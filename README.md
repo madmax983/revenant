@@ -179,14 +179,14 @@ public StepResult execute(StepContext ctx) {
 
 Accessors available inside `execute()` and `compensate()`:
 
-| Accessor | Returns |
-| --- | --- |
-| `ctx.getSignals()` | All pending signals, in arrival order (never null). |
-| `ctx.getSignals(name)` | Pending signals matching `name`, in arrival order. |
-| `ctx.getSignal(name)` | The most recent pending signal of `name`, or a clean empty result (`isPresent() == false`, `payload == null`) when none is pending — never null. |
-| `ctx.hasSignal(name)` | `true` if any pending signal matches `name`. |
+| Accessor               | Returns                                                                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ctx.getSignals()`     | All pending signals, in arrival order (never null).                                                                                              |
+| `ctx.getSignals(name)` | Pending signals matching `name`, in arrival order.                                                                                               |
+| `ctx.getSignal(name)`  | The most recent pending signal of `name`, or a clean empty result (`isPresent() == false`, `payload == null`) when none is pending — never null. |
+| `ctx.hasSignal(name)`  | `true` if any pending signal matches `name`.                                                                                                     |
 
-Consumption is engine-managed and tied to the step's successful `COMPLETE` (or `SPLIT`) transition: signals the step observes are marked consumed only once the step completes, so a step that yields or retries before completing re-observes the same pending signal, and an at-least-once redelivered duplicate cannot be reprocessed by a later step. Transitions that suspend and **re-run the same step** — `SUSPEND`, `WAIT_FOR_APPROVAL`, `SLEEP`, and `START_CHILD` — intentionally do *not* consume, so the signal that resumes the step survives to be read. A `START_CHILD` step that also reads a kickoff signal should therefore check its child-completion signal before re-acting on the kickoff (or stash what it needs in step state). `Cancel` / `CancelWorkflow` control signals remain engine-handled and are never surfaced as readable payloads. See [`ApprovalSignalWorkflowExample`](examples/main/default/classes/ApprovalSignalWorkflowExample.cls) for a complete approve/reject example with a redelivery test.
+Consumption is engine-managed and tied to the step's successful `COMPLETE` (or `SPLIT`) transition: signals the step observes are marked consumed only once the step completes, so a step that yields or retries before completing re-observes the same pending signal, and an at-least-once redelivered duplicate cannot be reprocessed by a later step. Transitions that suspend and **re-run the same step** — `SUSPEND`, `WAIT_FOR_APPROVAL`, `SLEEP`, and `START_CHILD` — intentionally do _not_ consume, so the signal that resumes the step survives to be read. A `START_CHILD` step that also reads a kickoff signal should therefore check its child-completion signal before re-acting on the kickoff (or stash what it needs in step state). `Cancel` / `CancelWorkflow` control signals remain engine-handled and are never surfaced as readable payloads. See [`ApprovalSignalWorkflowExample`](examples/main/default/classes/ApprovalSignalWorkflowExample.cls) for a complete approve/reject example with a redelivery test.
 
 #### Reading signals inside parallel branches
 
@@ -194,14 +194,14 @@ When a step reads a signal while running as one branch of a parallel (scatter-ga
 
 Claims are bounded for governor safety. A branch that needs to inspect **many distinct signal names** should call `ctx.getSignals()` once and filter in memory rather than issuing a separate `ctx.getSignal(name)` / `ctx.hasSignal(name)` lookup per name: each named claim is its own DML statement and lock query, so beyond an internal claim budget the overflow reads degrade to **at-least-once** (read without claiming) instead of failing. `getSignals()` claims a whole page in one statement and stays exactly-once.
 
-Because claiming writes uncommitted DML, a parallel-branch step that makes an **HTTP callout whose endpoint or body comes from the signal payload** must implement the [`CalloutStep`](force-app/main/default/classes/CalloutStep.cls) marker. Such a step reads signals *without* claiming (at-least-once delivery instead of exactly-once), so the callout is legal; use distinct signal names per branch or idempotent callouts when relying on this mode. A `CalloutStep` may also be `TimeoutConfigurable`: the engine defers its pre-execution timeout write past `execute()` (and past `compensate()` for a `CalloutStep` that is also a `CompensatableStep`) so the synchronous callout is not blocked by uncommitted work (the step's timeout was already armed when it was queued, so the watchdog stays in effect).
+Because claiming writes uncommitted DML, a parallel-branch step that makes an **HTTP callout whose endpoint or body comes from the signal payload** must implement the [`CalloutStep`](force-app/main/default/classes/CalloutStep.cls) marker. Such a step reads signals _without_ claiming (at-least-once delivery instead of exactly-once), so the callout is legal; use distinct signal names per branch or idempotent callouts when relying on this mode. A `CalloutStep` may also be `TimeoutConfigurable`: the engine defers its pre-execution timeout write past `execute()` (and past `compensate()` for a `CalloutStep` that is also a `CompensatableStep`) so the synchronous callout is not blocked by uncommitted work (the step's timeout was already armed when it was queued, so the watchdog stays in effect).
 
-**Recommended pattern — keep exactly-once *and* the callout by splitting them into two steps.** The at-least-once `CalloutStep` mode above exists because a single step cannot atomically own two un-rollback-able concerns: a signal *claim* is transactional DML, but an HTTP callout is not, and the two cannot be made to commit or roll back together. Rather than dropping the signal claim to at-least-once, give each concern its own step:
+**Recommended pattern — keep exactly-once _and_ the callout by splitting them into two steps.** The at-least-once `CalloutStep` mode above exists because a single step cannot atomically own two un-rollback-able concerns: a signal _claim_ is transactional DML, but an HTTP callout is not, and the two cannot be made to commit or roll back together. Rather than dropping the signal claim to at-least-once, give each concern its own step:
 
 1. A **signal-wait step** reads the signal the normal (claiming) way — pure transactional DML, so consumption stays **exactly-once** — and on receipt transitions (`StepResult.complete('DoCallout', payload)`) to
 2. A **callout step** that issues the HTTP callout from the payload it was handed. With no signal claim in its transaction, this is an ordinary callout the engine already makes safe (continuation + deferred timeout), so its only commit concern is the callout itself.
 
-This decomposition removes the claim-vs-callout conflict entirely: the signal is consumed exactly once in step 1, and the callout in step 2 carries no uncommitted signal DML. Reach for the inline `CalloutStep`+signal mode only when the callout must react to the signal *in place* — e.g. a compensating callout fired in response to a signal during unwind, where the wait and the callout cannot be pre-split — and make that callout idempotent.
+This decomposition removes the claim-vs-callout conflict entirely: the signal is consumed exactly once in step 1, and the callout in step 2 carries no uncommitted signal DML. Reach for the inline `CalloutStep`+signal mode only when the callout must react to the signal _in place_ — e.g. a compensating callout fired in response to a signal during unwind, where the wait and the callout cannot be pre-split — and make that callout idempotent.
 
 ### 5. Wait for a Human Approval
 
@@ -246,9 +246,10 @@ public String getNextStep(String currentStepName, StepResult result) {
 ```
 
 **Delivering the decision.** An Admin or Flow Builder uses the **Signal Workflow** invocable action (`WorkflowSignalInvocableAction`) with:
-- *Correlation Key / Instance ID* — the workflow correlation key (or instance Id)
-- *Signal Name* — `Approve:PurchaseApproval` (i.e. `Approve:` + the approval key passed to `waitForApproval`)
-- *Payload JSON* — `{"approved":true}` or `{"approved":false,"reason":"..."}`
+
+- _Correlation Key / Instance ID_ — the workflow correlation key (or instance Id)
+- _Signal Name_ — `Approve:PurchaseApproval` (i.e. `Approve:` + the approval key passed to `waitForApproval`)
+- _Payload JSON_ — `{"approved":true}` or `{"approved":false,"reason":"..."}`
 
 From Apex the equivalent call is:
 
@@ -264,18 +265,18 @@ The engine ships full parent→child orchestration: `StepResult.startChild()` su
 
 **Contract that authors must get exactly right**
 
-| Concern | Rule |
-| --- | --- |
-| **Suspend** | Return `StepResult.startChild(childWorkflowName, childKey, input)` from the step that launches the child. The engine suspends the parent automatically — do **not** also return `StepResult.suspend()`. |
-| **Child output** | The child's final output arrives as the payload of the `ChildCompleted:<childKey>` signal. Read it with `ctx.getSignal("ChildCompleted:" + childKey).payload` — no hand-rolled SOQL against `Workflow_Signal__c`. |
-| **Idempotent resume** | The step that launched the child also handles the resume: check for the completion signal first, then act on it. Return `StepResult.complete()` (not `suspend()`) on the resume path — returning COMPLETE triggers engine-managed signal consumption, so an at-least-once redelivered duplicate `ChildCompleted` event cannot double-advance the parent. |
+| Concern               | Rule                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Suspend**           | Return `StepResult.startChild(childWorkflowName, childKey, input)` from the step that launches the child. The engine suspends the parent automatically — do **not** also return `StepResult.suspend()`.                                                                                                                                                                                                                |
+| **Child output**      | The child's final output arrives as the payload of the `ChildCompleted:<childKey>` signal. Read it with `ctx.getSignal("ChildCompleted:" + childKey).payload` — no hand-rolled SOQL against `Workflow_Signal__c`.                                                                                                                                                                                                      |
+| **Idempotent resume** | The step that launched the child also handles the resume: check for the completion signal first, then act on it. Return `StepResult.complete()` (not `suspend()`) on the resume path — returning COMPLETE triggers engine-managed signal consumption, so an at-least-once redelivered duplicate `ChildCompleted` event cannot double-advance the parent.                                                               |
 | **Idempotent launch** | The engine re-runs the current step on stray orchestrator hops / watchdog re-checks while the parent is `Suspended`. Before calling `startChild()` again, check whether the child already exists (query `Workflow_Instance__c` by `Parent_Instance__c` + `Correlation_Key__c`) and re-suspend if so — a second `startChild()` with the same key hits the engine's duplicate-active-key guard and **fails** the parent. |
-| **Cancellation** | `WorkflowEngine.cancel(parentId, false)` cancels the parent and all of its active descendants (root-first traversal over `Parent_Instance__c`), so explicitly cancelling a parent reaps its in-flight children. |
+| **Cancellation**      | `WorkflowEngine.cancel(parentId, false)` cancels the parent and all of its active descendants (root-first traversal over `Parent_Instance__c`), so explicitly cancelling a parent reaps its in-flight children.                                                                                                                                                                                                        |
 
-**Caveats (failure paths are not auto-handled).** This contract covers the *successful* child path. Two failure modes need explicit handling in a production composite:
+**Caveats (failure paths are not auto-handled).** This contract covers the _successful_ child path. Two failure modes need explicit handling in a production composite:
 
 - **A child that fails or times out never publishes `ChildCompleted`** (`notifyParentCompletion()` runs only on the child's Completed transition), so the parent stays `Suspended` indefinitely. Add your own child-failure/timeout signal — or a watchdog timeout on the launcher step — if you must react to a failed child.
-- **A parent that *fails* does not cascade to its children.** `failWorkflowInstance()` does not traverse `Parent_Instance__c`; only explicit `WorkflowEngine.cancel()` reaps descendants. A failing parent leaves its in-flight children running unless you cancel them.
+- **A parent that _fails_ does not cascade to its children.** `failWorkflowInstance()` does not traverse `Parent_Instance__c`; only explicit `WorkflowEngine.cancel()` reaps descendants. A failing parent leaves its in-flight children running unless you cancel them.
 
 **Minimal launcher + resume step**
 
@@ -318,13 +319,13 @@ The correlation key format `'<prefix>_' + ctx.workflowInstanceId` guarantees uni
 
 Flow Builders interact with the engine through supported Invocable Actions (category **Revenant Workflows**) — no internal field API names required:
 
-| Action | Apex Class | Purpose |
-| --- | --- | --- |
-| **Start Workflow** | `WorkflowStartInvocableAction` | Launch a durable workflow, returning its Instance Id. |
-| **Signal Workflow** | `WorkflowSignalInvocableAction` | Send a signal (approve, cancel, resume) to a running instance. |
-| **Get Workflow Status** | `WorkflowStatusInvocableAction` | Read an instance's outcome back into Flow (read-only). |
+| Action                  | Apex Class                      | Purpose                                                        |
+| ----------------------- | ------------------------------- | -------------------------------------------------------------- |
+| **Start Workflow**      | `WorkflowStartInvocableAction`  | Launch a durable workflow, returning its Instance Id.          |
+| **Signal Workflow**     | `WorkflowSignalInvocableAction` | Send a signal (approve, cancel, resume) to a running instance. |
+| **Get Workflow Status** | `WorkflowStatusInvocableAction` | Read an instance's outcome back into Flow (read-only).         |
 
-**Reading a workflow's outcome.** *Get Workflow Status* accepts **either** a `Workflow_Instance__c` Id **or** a Correlation Key and returns typed outputs a Decision element can branch on:
+**Reading a workflow's outcome.** _Get Workflow Status_ accepts **either** a `Workflow_Instance__c` Id **or** a Correlation Key and returns typed outputs a Decision element can branch on:
 
 - `found` — `false` (instead of a fault) when nothing matches the key/Id.
 - `status` — the raw `Status__c` value (e.g. `Running`, `Completed`, `Failed`).
@@ -336,9 +337,9 @@ Flow Builders interact with the engine through supported Invocable Actions (cate
 The action is **strictly read-only** (no transition, enqueue, signal, schedule, or DML) and bulk-safe across Flow batch sizes. Lookup behavior differs by identifier, which matters for workflows that use `ContinueAsNew`:
 
 - **By Correlation Key** — automatically follows the **`ContinuedAsNew`** chain and reports the live/terminal successor rather than a stale predecessor. **Use the correlation key for outcome polling whenever a workflow may continue-as-new.**
-- **By Instance Id** — reads *that exact instance* and deliberately does **not** follow the chain (an Id is a precise handle). The Id returned by *Start Workflow* points at the original generation, so polling that saved Id on a continue-as-new workflow would keep reading the predecessor and miss the successor's outcome.
+- **By Instance Id** — reads _that exact instance_ and deliberately does **not** follow the chain (an Id is a precise handle). The Id returned by _Start Workflow_ points at the original generation, so polling that saved Id on a continue-as-new workflow would keep reading the predecessor and miss the successor's outcome.
 
-> Note: a single read returns the full rehydrated `outputJson` even for offloaded (>100k) payloads. A Flow batch that polls *many* instances whose outputs are *all* large/offloaded materializes them all at once and can approach the Apex heap limit; use smaller batch sizes for that case.
+> Note: a single read returns the full rehydrated `outputJson` even for offloaded (>100k) payloads. A Flow batch that polls _many_ instances whose outputs are _all_ large/offloaded materializes them all at once and can approach the Apex heap limit; use smaller batch sizes for that case.
 
 **Reference recipe** — start a workflow, then later branch on its outcome:
 
@@ -347,6 +348,41 @@ The action is **strictly read-only** (no transition, enqueue, signal, schedule, 
 3. A **Decision** element branches: `found = false` → not found; `isSuccess = true` → success path; `status = Failed` → surface `errorMessage`; `isTerminal = false` → keep waiting; default → ended without success (e.g. Cancelled/Compensated).
 
 The autolaunched Flow `Revenant_Read_Workflow_Status_Example` (`examples/main/default/flows/`) implements step 2–3 verbatim.
+
+### 8. Read a Workflow's Result (Apex)
+
+For Apex callers — ISVs, trigger handlers, batch jobs, invocable wrappers — `WorkflowEngine.getStatus` is the **supported read contract**. Do not query `Workflow_Instance__c` fields directly: the field names are internal, and `Output__c` silently holds a storage pointer (not the real value) when the output exceeds 100k characters.
+
+```java
+// By instance Id (precise handle — does not follow ContinuedAsNew chains)
+WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(instanceId);
+
+// By correlation key (preferred for polling — picks the live/latest run)
+WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(correlationKey);
+
+// Bulk variants (constant SOQL, regardless of list size)
+List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(idList);
+List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(keyList);
+```
+
+**`WorkflowStatus` fields:**
+
+| Field            | Type      | Description                                                                                                                                                                                                                                                     |
+| ---------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instanceId`     | `Id`      | The `Workflow_Instance__c` record Id.                                                                                                                                                                                                                           |
+| `definitionName` | `String`  | The workflow class name (`Workflow_Name__c`).                                                                                                                                                                                                                   |
+| `correlationKey` | `String`  | The correlation key the instance was started with.                                                                                                                                                                                                              |
+| `status`         | `String`  | Raw `Status__c` value (e.g. `Running`, `Completed`, `Failed`).                                                                                                                                                                                                  |
+| `isTerminal`     | `Boolean` | `true` when the workflow has reached a final state (`Completed`, `Failed`, `Compensated`, or `Cancelled`).                                                                                                                                                      |
+| `errorMessage`   | `String`  | Failure detail from `Error_Message__c`; `null` unless the instance failed.                                                                                                                                                                                      |
+| `output`         | `String`  | The **fully rehydrated** output string for terminal instances — transparently resolved from ContentVersion when the output was offloaded (>100k chars). `null` for non-terminal instances; blank string (`""`) for a terminal instance that produced no output. |
+
+**Key semantics:**
+
+- `output` is `null` for in-flight instances. `isTerminal = true` with `output = ""` means the workflow completed successfully with no output — this is distinct from a still-running instance.
+- The **Id** overloads cost **at most 2 SOQL queries** (one for the instance(s), at most one more for ContentVersion rehydration) and **zero DML**. The **correlation-key** overloads resolve each key's winning instance from metadata first and fetch outputs only for the winners, costing a **small constant number of SOQL queries regardless of list size** (and **zero DML**) — bounded per key, so a single hot key reused across many terminal runs can neither crowd out other requested keys nor exhaust the heap. All overloads are safe to call from any Apex context.
+- By correlation key, the active/live run is preferred over a recently-terminal one when a key has been reused. Lookup is case-insensitive (matching the correlation-key fields) and follows `ContinuedAsNew` chains via the shared root key, so polling the original key — **or any intermediate successor key** — returns the live/final successor, not a stale predecessor. `null` is returned (not an exception) when nothing matches.
+- **Known limitation — don't reuse a chain's correlation key for an unrelated run while that chain is live.** Chain following matches on the shared `Root_Correlation_Key__c`, which a continue-as-new chain shares with _any_ independent run that reuses the same key. If you start a separate workflow with a correlation key that is also the root of a still-live continue-as-new chain, polling an intermediate successor key of that chain may resolve to the unrelated reused run. Use distinct correlation keys per logical workflow (the normal case) to avoid this; precise disambiguation would require walking the `Previous_Instance__c` lineage, which is intentionally out of scope to keep `getStatus` bounded and constant-SOQL.
 
 ---
 
@@ -401,6 +437,7 @@ For AI and Agentforce integration — `aiplatform.ModelsAPI`, multi-turn agent c
 ## Watchdog Poller Scheduling (Hybrid Model)
 
 Revenant implements a **Hybrid Watchdog Model** for high-precision, fail-safe step timeouts, sleeps, and retries:
+
 1. **Dynamic High-Precision Scheduling**: When a step sleeps, retries, or registers a timeout, the engine dynamically schedules a seconds-level Apex job (`WorkflowSleepJob`, `WorkflowRetryJob`, or `WorkflowTimeoutJob`) to run immediately.
 2. **Delayed Queueable Optimization**: For delays that fall between 1 and 10 minutes (multiples of 60 seconds), the engine automatically routes scheduling through **Delayed Queueables** (`System.enqueueJob(job, delayMinutes)`) instead of standard scheduled Apex. This consumes **0 scheduled job slots** while still executing precisely.
 3. **Graceful Degradation (Overflow Protection)**: If the system has reached Salesforce's limit of 100 concurrent scheduled jobs, any failed `System.schedule` call falls back gracefully to tracking the timeout/sleep deadlines in the database (`Sleep_Until__c` and `Timeout_At__c`).
@@ -422,17 +459,17 @@ Revenant settings can be configured without code modifications by editing the **
    - **`0`** (minimum) preserves active-only behavior: only in-flight instances are deduped, and a redelivery after completion starts a fresh instance.
    - Active instances are always deduped regardless of this value. A blank correlation key is never deduped (a key is required to start).
    - Use `WorkflowEngine.startOrGet(...)` (or the **Start Workflow** Invocable's `Is New` output) to observe whether a call started a new instance or returned an existing one, without a re-query.
-   - **Concurrency note:** the unique `Active_Correlation_Key__c` index is the hard backstop for two simultaneous *active* starts (the loser receives the winner's Id). Terminal-window dedup is **best-effort under concurrent redelivery**: if a sibling run both starts and reaches a terminal state in the narrow window between a redelivery's lookup and its insert, a duplicate of the just-finished (in-window) run can still be created, because the unique index no longer applies once the original is terminal. Active redelivery and sequential post-completion redelivery are fully covered; closing the concurrent terminal race would require an extra per-start query and is intentionally not done to keep the start path to a single indexed SOQL.
+   - **Concurrency note:** the unique `Active_Correlation_Key__c` index is the hard backstop for two simultaneous _active_ starts (the loser receives the winner's Id). Terminal-window dedup is **best-effort under concurrent redelivery**: if a sibling run both starts and reaches a terminal state in the narrow window between a redelivery's lookup and its insert, a duplicate of the just-finished (in-window) run can still be created, because the unique index no longer applies once the original is terminal. Active redelivery and sequential post-completion redelivery are fully covered; closing the concurrent terminal race would require an extra per-start query and is intentionally not done to keep the start path to a single indexed SOQL.
 
 ### Architectural Trade-offs
 
-| Metric / Aspect | Dynamic Precise Scheduling (Default) | Watchdog-Only (`Use_Dynamic_Scheduling__c = false`) |
-| :--- | :--- | :--- |
-| **Precision** | High-precision (down to the second). | Delayed by up to the watchdog delay (e.g., 10 minutes). |
-| **Latency** | Low-latency (runs immediately at target time). | Coarse-grained polling latency. |
-| **Scheduled Job Slots** | Consumes 1 slot per active sleep/retry/timeout job (max 100 concurrent). | Consumes **0** scheduled job slots. |
-| **Limit Vulnerability** | Vulnerable to hitting the 100 scheduled jobs limit in high-volume orgs. | Completely immune to the 100 scheduled jobs limit. |
-| **Use Case** | Low-volume, time-sensitive or interactive workflows. | High-volume, non-interactive batch or transactional processing workflows. |
+| Metric / Aspect         | Dynamic Precise Scheduling (Default)                                     | Watchdog-Only (`Use_Dynamic_Scheduling__c = false`)                       |
+| :---------------------- | :----------------------------------------------------------------------- | :------------------------------------------------------------------------ |
+| **Precision**           | High-precision (down to the second).                                     | Delayed by up to the watchdog delay (e.g., 10 minutes).                   |
+| **Latency**             | Low-latency (runs immediately at target time).                           | Coarse-grained polling latency.                                           |
+| **Scheduled Job Slots** | Consumes 1 slot per active sleep/retry/timeout job (max 100 concurrent). | Consumes **0** scheduled job slots.                                       |
+| **Limit Vulnerability** | Vulnerable to hitting the 100 scheduled jobs limit in high-volume orgs.  | Completely immune to the 100 scheduled jobs limit.                        |
+| **Use Case**            | Low-volume, time-sensitive or interactive workflows.                     | High-volume, non-interactive batch or transactional processing workflows. |
 
 ---
 
@@ -440,9 +477,9 @@ Revenant settings can be configured without code modifications by editing the **
 
 The Workflow Dashboard includes a **System Doctor** tab to monitor limits, check configuration settings, and audit watchdog health:
 
-* **Watchdog Health**: Indicates whether the self-chaining watchdog Queueable chain is active (`Running`) or has stalled (`Stopped`).
-* **Bootstrap Action**: Includes an **Enqueue Watchdog** button to manually trigger and restart the Queueable chain if it ever halts (e.g., during major platform maintenance windows).
-* **Limits Auditing**: Displays active `CronTrigger` utilization (against the 100-job limit) and pending database sweeps (sleeping instances and step timeouts).
+- **Watchdog Health**: Indicates whether the self-chaining watchdog Queueable chain is active (`Running`) or has stalled (`Stopped`).
+- **Bootstrap Action**: Includes an **Enqueue Watchdog** button to manually trigger and restart the Queueable chain if it ever halts (e.g., during major platform maintenance windows).
+- **Limits Auditing**: Displays active `CronTrigger` utilization (against the 100-job limit) and pending database sweeps (sleeping instances and step timeouts).
 
 ---
 
@@ -454,7 +491,7 @@ By default, Salesforce Platform Event triggers (like `WorkflowEventTrigger`) exe
 
 1. **Parallel Subscriptions (Partitioning)**
    - **`NumPartitions`**: Scale throughput by setting this between `1` and `10` to process events concurrently in parallel execution streams.
-   - **`PartitionKey`**: Set this to `Workflow_Instance_Id__c`. The platform hashes this key to distribute events across partitions, ensuring events for the *same* workflow instance are processed sequentially (in-order) to prevent race conditions, while different instances run concurrently.
+   - **`PartitionKey`**: Set this to `Workflow_Instance_Id__c`. The platform hashes this key to distribute events across partitions, ensuring events for the _same_ workflow instance are processed sequentially (in-order) to prevent race conditions, while different instances run concurrently.
 
 2. **Batch Size Tuning**
    - **`batchSize`**: Set a smaller chunk size (e.g., `50` or `100`) instead of the default `2,000`. This reduces the risk of hitting CPU time, heap, or SOQL limits within a single trigger execution block.
