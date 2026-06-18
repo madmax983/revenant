@@ -1957,15 +1957,13 @@ public inherited sharing class WorkflowEngine {
     // 3. Retrieve or create Step Execution log with FOR UPDATE lock.
     // Load all executions for this step so we can derive the visit count in
     // Apex without an extra COUNT() SOQL query.
+    // Captured_Values__c is intentionally NOT selected here: this bulk read loads
+    // every prior execution of the step only to count completed visits and pick
+    // the latest row, so pulling each historical capture payload (up to ~100 KB
+    // inline) would waste heap on a looping step. It is selected on the single-row
+    // FOR UPDATE requery below, where only the latest row's captures are needed.
     List<Workflow_Step_Execution__c> stepExecs = [
-      SELECT
-        Id,
-        Step_Name__c,
-        Status__c,
-        Input__c,
-        Output__c,
-        Retry_Count__c,
-        Captured_Values__c
+      SELECT Id, Step_Name__c, Status__c, Input__c, Output__c, Retry_Count__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :instanceId
@@ -4638,7 +4636,7 @@ public inherited sharing class WorkflowEngine {
     String compensationStepLogName = activeStepName + '_Compensate';
 
     List<Workflow_Step_Execution__c> existing = [
-      SELECT Id, Status__c, Input__c, Output__c
+      SELECT Id, Status__c, Input__c, Output__c, Captured_Values__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :instance.Id
@@ -4691,12 +4689,23 @@ public inherited sharing class WorkflowEngine {
       ? existing[0].Output__c
       : forwardOutput;
 
+    // Carry the failed attempt's capture-once values onto the appended retry so a
+    // resumed compensation replays the same once() values instead of re-invoking
+    // its producers (which would drift generated undo reference numbers/timestamps
+    // across operator resumes). Append-only: the prior captures are copied, never
+    // mutated.
+    String priorCaptures = (!existing.isEmpty() &&
+      String.isNotBlank(existing[0].Captured_Values__c))
+      ? existing[0].Captured_Values__c
+      : null;
+
     Workflow_Step_Execution__c compStepExec = new Workflow_Step_Execution__c();
     compStepExec.Workflow_Instance__c = instance.Id;
     compStepExec.Step_Name__c = compensationStepLogName;
     compStepExec.Status__c = 'Pending';
     compStepExec.Input__c = priorInput;
     compStepExec.Output__c = checkpointOutput;
+    compStepExec.Captured_Values__c = priorCaptures;
     compStepExec.Retry_Count__c = 0;
     insert as system compStepExec;
   }
@@ -4739,15 +4748,11 @@ public inherited sharing class WorkflowEngine {
     // Load all executions so compensateVisit can be derived in Apex without an
     // extra COUNT() SOQL query.
     String compensationStepLogName = activeStepName + '_Compensate';
+    // Captured_Values__c is selected only on the single-row FOR UPDATE requery
+    // below, not on this all-rows visit-count read, to avoid loading every
+    // historical capture payload into heap (see the forward runStep path).
     List<Workflow_Step_Execution__c> stepExecs = [
-      SELECT
-        Id,
-        Status__c,
-        Input__c,
-        Output__c,
-        Retry_Count__c,
-        Step_Name__c,
-        Captured_Values__c
+      SELECT Id, Status__c, Input__c, Output__c, Retry_Count__c, Step_Name__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :instance.Id

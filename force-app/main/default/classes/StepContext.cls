@@ -825,23 +825,38 @@ public inherited sharing class StepContext {
    * on every subsequent re-execution of this logical step, without calling the
    * producer again.
    *
-   * Use this to stabilize any locally generated non-deterministic value —
-   * Datetime.now(), Crypto-random tokens, generated reference numbers, random
-   * branch decisions — so that retries, yield/resume cycles, at-least-once event
+   * Use this to stabilize any locally generated non-deterministic value — a
+   * generated reference number, a Crypto-random token, a random branch decision,
+   * or a timestamp — so that retries, yield/resume cycles, at-least-once event
    * resumes, and operator re-drives all observe the identical value.
    *
    * Scoping mirrors idempotencyKey: distinct keys within one step are
    * independent; the same key in a different step, a different instance, or a
    * different parallel branch is a distinct capture.
    *
-   * Values are JSON round-tripped for durability: the in-memory value returned
-   * by once() is always the JSON-deserialized form so it is byte-identical
-   * whether it originated from a live produce() call or from rehydrating a
-   * prior-run Captured_Values__c payload.
+   * Return type — captures are JSON round-tripped for durability, so the value
+   * returned is always the JSON-normalized form (the same whether freshly
+   * produced or rehydrated from a prior run). Producers should therefore return
+   * JSON-native values: String, Integer/Long/Decimal/Double, Boolean, or
+   * Map/List of those. A native Date/Datetime/Blob comes back as its JSON String
+   * form, NOT as the original type — capture a serialized representation instead
+   * (e.g. `Datetime.now().getTime()` for an epoch-millis Long, or
+   * `Datetime.now().formatGmt('yyyy-MM-dd\'T\'HH:mm:ss\'Z\'')` for an ISO string)
+   * and rebuild the Datetime from it after the cast.
+   *
+   * Durability boundary — a capture becomes durable when the step next reaches a
+   * checkpoint that commits its execution row (complete, yield, sleep, suspend,
+   * or a graceful StepResult.retry). If execute() throws BEFORE returning a
+   * StepResult, the transaction rolls back and any captures made in that attempt
+   * are discarded, so the crash-driven re-run will re-produce them. This matches
+   * the checkpoint-based model (cf. Temporal SideEffect, whose result is durable
+   * only once the next command is recorded). To stabilize a value across a
+   * throwing path, capture it and reach a checkpoint before the code that can
+   * throw.
    *
    * @param key      Caller-supplied name, unique within this step execution.
    * @param producer Invoked at most once: only on the first call for this key.
-   * @return The originally produced value (or its JSON-round-trip equivalent).
+   * @return The originally produced value in its JSON-normalized form.
    */
   public Object once(String key, CaptureProducer producer) {
     if (capturedValues.containsKey(key)) {
