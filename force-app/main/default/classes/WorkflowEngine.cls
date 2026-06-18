@@ -4635,6 +4635,10 @@ public inherited sharing class WorkflowEngine {
     String activeStepName = stack[stack.size() - 1];
     String compensationStepLogName = activeStepName + '_Compensate';
 
+    // Only the latest attempt is read (existing[0]) for idempotency and to seed
+    // the next retry, so LIMIT 1 avoids loading every historical attempt's inline
+    // Captured_Values__c payload into heap on a repeatedly operator-resumed
+    // compensation.
     List<Workflow_Step_Execution__c> existing = [
       SELECT Id, Status__c, Input__c, Output__c, Captured_Values__c
       FROM Workflow_Step_Execution__c
@@ -4643,6 +4647,7 @@ public inherited sharing class WorkflowEngine {
         AND Step_Name__c = :compensationStepLogName
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
     ];
 
     // If an attempt is already in flight, do not stack a duplicate (idempotency).

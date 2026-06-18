@@ -860,7 +860,7 @@ public inherited sharing class StepContext {
    */
   public Object once(String key, CaptureProducer producer) {
     if (capturedValues.containsKey(key)) {
-      return capturedValues.get(key);
+      return defensiveCopy(capturedValues.get(key));
     }
     Object raw = producer.produce();
     // JSON round-trip ensures the in-memory value is byte-identical to what
@@ -868,7 +868,20 @@ public inherited sharing class StepContext {
     Object normalized = JSON.deserializeUntyped(JSON.serialize(raw));
     capturedValues.put(key, normalized);
     newCaptureKeys.add(key);
-    return normalized;
+    return defensiveCopy(normalized);
+  }
+
+  /**
+   * Returns a defensive copy of a captured value so caller-local mutations of a
+   * returned Map/List cannot reach the canonical instance held in
+   * capturedValues (which getCapturedValuesJson() serializes). Primitives are
+   * immutable, so they are returned as-is to avoid needless allocation.
+   */
+  private Object defensiveCopy(Object value) {
+    if (value instanceof Map<String, Object> || value instanceof List<Object>) {
+      return JSON.deserializeUntyped(JSON.serialize(value));
+    }
+    return value;
   }
 
   /**

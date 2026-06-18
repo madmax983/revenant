@@ -137,6 +137,7 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
         'State_',
         'Resume_',
         'ContinueInput_',
+        'Captures_',
         'VerificationPayload'
       };
 
