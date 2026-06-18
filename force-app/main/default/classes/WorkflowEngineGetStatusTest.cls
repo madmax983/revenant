@@ -165,8 +165,8 @@ private class WorkflowEngineGetStatusTest {
   static void testGetStatusById_NotFound_returnsNull() {
     // Use a well-formed but non-existent Id (same key prefix as Workflow_Instance__c)
     WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
-      (Id) Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix() +
-      '000000000001'
+      (Id) (Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix() +
+      '000000000001')
     );
 
     System.assertEquals(null, ws, 'Should return null for an unknown Id');
@@ -265,6 +265,62 @@ private class WorkflowEngineGetStatusTest {
   static void testGetStatusByKey_Blank_returnsNull() {
     System.assertEquals(null, WorkflowEngine.getStatus(''));
     System.assertEquals(null, WorkflowEngine.getStatus((String) null));
+  }
+
+  @isTest
+  static void testGetStatusByKey_CaseInsensitive() {
+    // Correlation key fields are case-insensitive; a differently-cased lookup must
+    // still resolve the stored instance.
+    Workflow_Instance__c inst = makeInstance(
+      'Completed',
+      'Order-123',
+      '{"ci":true}',
+      null
+    );
+
+    WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus('order-123');
+
+    System.assertNotEquals(
+      null,
+      ws,
+      'Differently-cased key should resolve the instance'
+    );
+    System.assertEquals(inst.Id, ws.instanceId);
+    System.assertEquals('{"ci":true}', ws.output);
+  }
+
+  @isTest
+  static void testGetStatusByKey_FollowsContinueAsNewViaRoot() {
+    // Predecessor handed off via ContinuedAsNew (terminal-ish, no active key).
+    Workflow_Instance__c predecessor = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineGetStatusTest.StubWorkflow',
+      Status__c = 'ContinuedAsNew',
+      Correlation_Key__c = 'PollerKey',
+      Root_Correlation_Key__c = 'PollerKey'
+    );
+    insert as system predecessor;
+
+    // Live/final successor: default continue-as-new key scheme renames to _run2 and
+    // preserves the original as Root_Correlation_Key__c.
+    Workflow_Instance__c successor = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineGetStatusTest.StubWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'PollerKey_run2',
+      Root_Correlation_Key__c = 'PollerKey',
+      Output__c = '{"final":true}'
+    );
+    insert as system successor;
+
+    WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus('PollerKey');
+
+    System.assertNotEquals(null, ws);
+    System.assertEquals(
+      successor.Id,
+      ws.instanceId,
+      'Polling the original key should resolve to the live/final successor'
+    );
+    System.assertEquals(true, ws.isTerminal);
+    System.assertEquals('{"final":true}', ws.output);
   }
 
   // ─── Offload rehydration (AC3 + AC7) ─────────────────────────────────────
@@ -414,9 +470,8 @@ private class WorkflowEngineGetStatusTest {
       'out',
       null
     );
-    Id unknownId =
-      (Id) Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix() +
-      '000000000099';
+    Id unknownId = (Id) (Workflow_Instance__c.SObjectType.getDescribe()
+      .getKeyPrefix() + '000000000099');
 
     List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
       new List<Id>{ inst.Id, unknownId }
@@ -591,17 +646,19 @@ private class WorkflowEngineGetStatusTest {
     update as system inst;
 
     Integer queriesBefore = Limits.getQueries();
+    Integer dmlBefore = Limits.getDmlStatements();
     List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
       new List<String>{ 'key-bulk-str-gov' }
     );
     Integer queriesUsed = Limits.getQueries() - queriesBefore;
+    Integer dmlUsed = Limits.getDmlStatements() - dmlBefore;
 
     System.assert(
       queriesUsed <= 2,
       'Bulk-by-key with offloaded output should cost at most 2 SOQL: used ' +
       queriesUsed
     );
-    System.assertEquals(0, Limits.getDmlStatements(), 'Must be zero DML');
+    System.assertEquals(0, dmlUsed, 'getStatus must perform zero DML');
     System.assertEquals(big, results[0].output);
   }
 

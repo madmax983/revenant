@@ -238,47 +238,63 @@ public inherited sharing class WorkflowEngine {
       return out;
     }
 
-    Set<String> nonBlankKeys = new Set<String>();
+    // Correlation key fields are case-insensitive in SOQL but Apex Set/Map lookups
+    // are case-sensitive, so all bucketing is done on the normalized (lower-cased)
+    // key to keep in-memory matching consistent with what the query returns.
+    Set<String> normalizedKeys = new Set<String>();
     for (String k : correlationKeys) {
       if (String.isNotBlank(k)) {
-        nonBlankKeys.add(k);
+        normalizedKeys.add(normalizeKey(k));
       }
     }
 
     Map<String, Workflow_Instance__c> bestByKey = new Map<String, Workflow_Instance__c>();
-    if (!nonBlankKeys.isEmpty()) {
+    if (!normalizedKeys.isEmpty()) {
+      // Root_Correlation_Key__c is matched so a lookup by the original key follows a
+      // ContinuedAsNew chain: every generation shares the same root key, and the
+      // active/most-recent preference below selects the live/final successor rather
+      // than a stale predecessor. The row cap (DEDUP_LOOKUP_ROW_CAP) bounds the scan
+      // so a correlation key reused across many terminal runs cannot exceed the SOQL
+      // row governor; the ORDER BY floats each key's active/most-recent winner to the
+      // top, so the cap never drops a row we would have chosen.
       for (Workflow_Instance__c inst : [
         SELECT
           Id,
           Workflow_Name__c,
           Correlation_Key__c,
           Active_Correlation_Key__c,
+          Root_Correlation_Key__c,
           Status__c,
           Error_Message__c,
           Output__c,
           CreatedDate
         FROM Workflow_Instance__c
         WHERE
-          Active_Correlation_Key__c IN :nonBlankKeys
-          OR Correlation_Key__c IN :nonBlankKeys
+          Active_Correlation_Key__c IN :normalizedKeys
+          OR Correlation_Key__c IN :normalizedKeys
+          OR Root_Correlation_Key__c IN :normalizedKeys
         WITH SYSTEM_MODE
         ORDER BY
           Active_Correlation_Key__c NULLS LAST,
           Terminal_At__c DESC NULLS FIRST,
           CreatedDate DESC
+        LIMIT :DEDUP_LOOKUP_ROW_CAP
       ]) {
-        // An instance may match via Active_Correlation_Key__c (active run, non-null)
-        // or Correlation_Key__c (terminal run, Active_Correlation_Key__c cleared).
-        // Collect the best candidate per key: active > most-recent-terminal.
+        // An instance may match a requested key via its active key, its correlation
+        // key, or its root key (ContinuedAsNew chain). Bucket it under every matching
+        // normalized key, keeping the best candidate per key: active > most-recent.
         Set<String> matchedKeys = new Set<String>();
         if (String.isNotBlank(inst.Active_Correlation_Key__c)) {
-          matchedKeys.add(inst.Active_Correlation_Key__c);
+          matchedKeys.add(normalizeKey(inst.Active_Correlation_Key__c));
         }
         if (String.isNotBlank(inst.Correlation_Key__c)) {
-          matchedKeys.add(inst.Correlation_Key__c);
+          matchedKeys.add(normalizeKey(inst.Correlation_Key__c));
+        }
+        if (String.isNotBlank(inst.Root_Correlation_Key__c)) {
+          matchedKeys.add(normalizeKey(inst.Root_Correlation_Key__c));
         }
         for (String k : matchedKeys) {
-          if (!nonBlankKeys.contains(k)) {
+          if (!normalizedKeys.contains(k)) {
             continue;
           }
           Workflow_Instance__c existing = bestByKey.get(k);
@@ -298,18 +314,25 @@ public inherited sharing class WorkflowEngine {
         out.add(null);
         continue;
       }
-      Workflow_Instance__c inst = bestByKey.get(k);
+      Workflow_Instance__c inst = bestByKey.get(normalizeKey(k));
       out.add(inst == null ? null : buildStatus(inst, resolvedOutputByDocId));
     }
     return out;
   }
 
   // Returns true if candidate should replace existing for the same correlation key.
-  // Active run beats terminal; among equals, more recently created wins.
+  // A ContinuedAsNew row is a superseded hand-off, so any non-hand-off generation of
+  // the chain wins over it (independent of timestamps); otherwise an active run beats
+  // a terminal one, and among equals the more recently created wins.
   private static Boolean isPreferredForGetStatus(
     Workflow_Instance__c candidate,
     Workflow_Instance__c existing
   ) {
+    Boolean candidateHandoff = candidate.Status__c == 'ContinuedAsNew';
+    Boolean existingHandoff = existing.Status__c == 'ContinuedAsNew';
+    if (candidateHandoff != existingHandoff) {
+      return !candidateHandoff;
+    }
     Boolean candidateActive = ACTIVE_STATUSES.contains(candidate.Status__c);
     Boolean existingActive = ACTIVE_STATUSES.contains(existing.Status__c);
     if (candidateActive != existingActive) {

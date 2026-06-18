@@ -380,7 +380,7 @@ List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(keyList);
 
 - `output` is `null` for in-flight instances. `isTerminal = true` with `output = ""` means the workflow completed successfully with no output — this is distinct from a still-running instance.
 - Both single-record and bulk overloads cost **at most 2 SOQL queries** (one for the instance(s), at most one more for ContentVersion rehydration) and **zero DML**, making them safe to call from any Apex context.
-- By correlation key, the active/live run is preferred over a recently-terminal one when a key has been reused. `null` is returned (not an exception) when nothing matches.
+- By correlation key, the active/live run is preferred over a recently-terminal one when a key has been reused. Lookup is case-insensitive (matching the correlation-key fields) and follows `ContinuedAsNew` chains via the shared root key, so polling the original key returns the live/final successor — not a stale predecessor. `null` is returned (not an exception) when nothing matches.
 
 ---
 
