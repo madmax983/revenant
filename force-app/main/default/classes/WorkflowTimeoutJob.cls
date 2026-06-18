@@ -53,6 +53,25 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
       WorkflowPauseGate.anyPaused() &&
       WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c)
     ) {
+      // Clear the stale deadline so a post-resume heartbeat cannot fire it
+      // instantly if the operator resumes before the delayed RUN_STEP parks the
+      // instance. The deadline re-attaches when the step parks (reArmTimeouts
+      // ForResume) or re-runs.
+      List<Workflow_Step_Execution__c> pausedStep = [
+        SELECT Id
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :this.instanceId
+          AND Step_Name__c = :this.stepName
+          AND Status__c IN ('Running', 'Pending')
+          AND Timeout_At__c != NULL
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ];
+      if (!pausedStep.isEmpty()) {
+        pausedStep[0].Timeout_At__c = null;
+        update as system pausedStep[0];
+      }
       return;
     }
 

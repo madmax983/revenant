@@ -320,10 +320,42 @@ public inherited sharing class WorkflowPauseGate {
     List<Workflow_Event__e> events = new List<Workflow_Event__e>();
     Set<String> branchKeys = new Set<String>();
 
+    // Current_Step__c retains every branch name until the join, including ones
+    // whose step row is already Completed. Resolve the latest status per
+    // (instance, branch) so completed branches are skipped — driving a no-op
+    // worker per finished branch would waste the resume publish/DML budget and
+    // could roll back the resume (mirrors WorkflowEngine.enqueueResumeBulk).
+    Set<Id> instanceIds = new Set<Id>();
+    Set<String> branchNames = new Set<String>();
+    for (Workflow_Instance__c inst : instances) {
+      instanceIds.add(inst.Id);
+      for (String branch : inst.Current_Step__c.split(',')) {
+        branchNames.add(branch.trim());
+      }
+    }
+    Map<String, String> latestStatusByKey = new Map<String, String>();
+    for (Workflow_Step_Execution__c se : [
+      SELECT Workflow_Instance__c, Step_Name__c, Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c IN :instanceIds
+        AND Step_Name__c IN :branchNames
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ]) {
+      String statusKey = se.Workflow_Instance__c + '|' + se.Step_Name__c;
+      if (!latestStatusByKey.containsKey(statusKey)) {
+        latestStatusByKey.put(statusKey, se.Status__c);
+      }
+    }
+
     for (Workflow_Instance__c inst : instances) {
       List<String> branches = inst.Current_Step__c.split(',');
       for (String branch : branches) {
         String key = inst.Id + '|' + branch.trim();
+        if (latestStatusByKey.get(key) == 'Completed') {
+          continue; // branch already finished — no worker needed
+        }
         if (!branchKeys.contains(key)) {
           branchKeys.add(key);
           if (!Test.isRunningTest()) {

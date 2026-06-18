@@ -1952,14 +1952,18 @@ public inherited sharing class WorkflowEngine {
     // 2a. Operator pause gate — park at the chain handoff instead of proceeding.
     //     Compensating/Cancelling instances bypass this (already returned above) so
     //     cancel + rollback always proceed on a paused definition.
-    if (
+    Boolean definitionPaused =
       WorkflowPauseGate.anyPaused() &&
-      WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c)
-    ) {
-      // Always return for a paused definition. A duplicate/stale RUN_STEP for an
-      // already-Paused instance must NOT fall through and execute the step; only
-      // write the status transition when not already parked.
-      if (instance.Status__c != 'Paused') {
+      WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c);
+    // A still-Paused row must NOT execute even once its definition has been
+    // resumed: chunked resume deletes the pause record before every Paused row is
+    // flipped to Running, so a stale RUN_STEP delivered in that window would
+    // otherwise run the step before the drain re-arms its timeout / flips it. Let
+    // the resume drain own the Paused -> Running transition.
+    if (definitionPaused || instance.Status__c == 'Paused') {
+      // Park a not-yet-parked instance whose definition is paused; an
+      // already-Paused row is just a no-op until the drain flips it to Running.
+      if (definitionPaused && instance.Status__c != 'Paused') {
         instance.Status__c = 'Paused';
         update as system instance;
       }
@@ -6010,6 +6014,22 @@ public inherited sharing class WorkflowEngine {
           lockedStep.Status__c != 'Running' &&
           lockedStep.Status__c != 'Pending'
         ) {
+          continue;
+        }
+
+        // Operator pause gate (mirrors WorkflowTimeoutJob): if the definition is
+        // paused while the parent is still Pending/Running (handoff armed the
+        // deadline before the delayed RUN_STEP reached the gate), do NOT fail the
+        // step. Clear its stale deadline so a post-resume heartbeat cannot fire it
+        // instantly; the step is re-armed when it parks/re-runs. Compensating/
+        // Cancelling bypass the pause gate, so they still time out normally.
+        if (
+          (parent.Status__c == 'Pending' || parent.Status__c == 'Running') &&
+          WorkflowPauseGate.anyPaused() &&
+          WorkflowPauseGate.isDefinitionPaused(parent.Workflow_Name__c)
+        ) {
+          lockedStep.Timeout_At__c = null;
+          stepsToUpdate.add(lockedStep);
           continue;
         }
 

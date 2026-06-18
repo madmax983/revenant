@@ -751,6 +751,167 @@ public class WorkflowPauseTest {
     );
   }
 
+  // Regression: the watchdog timeout heartbeat must not fail a step whose
+  // definition is paused while the parent is still Pending/Running (handoff armed
+  // the deadline before the delayed RUN_STEP parked it). It clears the stale
+  // deadline instead, so a post-resume heartbeat cannot fire it instantly.
+  @isTest
+  static void testHeartbeatSkipsAndClearsPausedDefinitionTimeout() {
+    String key = 'PausedHeartbeat-' + Datetime.now().getTime();
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = key
+    );
+    insert inst;
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowPauseTest.StepB',
+      Status__c = 'Pending',
+      Timeout_At__c = Datetime.now().addSeconds(-60),
+      Retry_Count__c = 0
+    );
+    insert step;
+    WorkflowPauseGate.pauseDefinition(
+      'WorkflowPauseTest.TwoStepWorkflow',
+      'heartbeat'
+    );
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    Workflow_Instance__c after = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'Running',
+      after.Status__c,
+      'Heartbeat must not fail an instance whose definition is paused'
+    );
+    Workflow_Step_Execution__c stepAfter = [
+      SELECT Status__c, Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :step.Id
+    ];
+    System.assertEquals(
+      'Pending',
+      stepAfter.Status__c,
+      'Paused-definition step must remain Pending, not be timed out'
+    );
+    System.assertEquals(
+      null,
+      stepAfter.Timeout_At__c,
+      'Stale deadline must be cleared so a post-resume heartbeat cannot fire it'
+    );
+  }
+
+  // Regression: a stale RUN_STEP for a row still in Status='Paused' must be a
+  // no-op even after the definition's pause record is lifted (the chunked resume
+  // drain owns the Paused -> Running flip + re-arm).
+  @isTest
+  static void testStalePausedRunStepIsNoOpAfterResume() {
+    WorkflowEngine.disableQueueableInTest = true;
+    String key = 'StalePaused-' + Datetime.now().getTime();
+    // Row is Paused, but no pause record exists (definition already resumed) —
+    // this row simply has not been drained yet.
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Paused',
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = key
+    );
+    insert inst;
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowPauseTest.StepB',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+
+    Test.startTest();
+    new WorkflowOrchestrator(inst.Id, 'WorkflowPauseTest.StepB').execute(null);
+    Test.stopTest();
+
+    Workflow_Instance__c after = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'Paused',
+      after.Status__c,
+      'A still-Paused row must not be advanced by a stale RUN_STEP'
+    );
+    Workflow_Step_Execution__c stepAfter = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowPauseTest.StepB'
+    ];
+    System.assertEquals(
+      'Pending',
+      stepAfter.Status__c,
+      'The step must not execute while the row is still Paused'
+    );
+  }
+
+  // Regression: resuming a parallel instance must drive a worker only for the
+  // still-active branch(es); a Completed branch lingering in Current_Step__c must
+  // be skipped rather than spending the resume publish/DML budget on a no-op.
+  @isTest
+  static void testParallelResumeSkipsCompletedBranch() {
+    WorkflowEngine.disableQueueableInTest = true;
+    String key = 'ParResumeSkip-' + Datetime.now().getTime();
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.ParallelWorkflow',
+      Status__c = 'Paused',
+      Current_Step__c = 'WorkflowPauseTest.BranchA,WorkflowPauseTest.BranchB',
+      Correlation_Key__c = key
+    );
+    insert inst;
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowPauseTest.BranchA',
+      Status__c = 'Completed',
+      Retry_Count__c = 0
+    );
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowPauseTest.BranchB',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+    );
+    WorkflowPauseGate.pauseDefinition(
+      'WorkflowPauseTest.ParallelWorkflow',
+      'parresume'
+    );
+
+    Test.startTest();
+    WorkflowPauseGate.resumeDefinition('WorkflowPauseTest.ParallelWorkflow');
+    Test.stopTest();
+
+    // Only the pending branch should have been driven: BranchA stays a single
+    // Completed row (no re-execution), BranchB advances past Pending.
+    List<Workflow_Step_Execution__c> branchA = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowPauseTest.BranchA'
+    ];
+    System.assertEquals(
+      1,
+      branchA.size(),
+      'Completed branch must not be re-driven on resume'
+    );
+    System.assertEquals('Completed', branchA[0].Status__c, 'BranchA stays done');
+  }
+
   // ============================================================
   // 7. SIGNAL HELD WHILE PAUSED (Defect B regression)
   // ============================================================
