@@ -1084,12 +1084,19 @@ public inherited sharing class WorkflowEngine {
    * key collapses duplicate keyed captures of the same logical event into one
    * Unrouted row while keeping distinct correlation keys (different targets)
    * separate. The 'C:' prefix avoids collision with routed 'I:' keys.
+   *
+   * The correlation key is lower-cased before hashing because Salesforce SOQL
+   * matches Correlation_Key__c case-insensitively, so 'Order-1' and 'order-1'
+   * resolve to the same instance and must therefore dedup to the same key.
    */
   private static String deriveUnroutedDedupKey(
     String correlationKey,
     String idempotencyKey
   ) {
-    return hashDedupBasis('C:' + correlationKey + '::' + idempotencyKey);
+    String normalizedKey = correlationKey == null
+      ? ''
+      : correlationKey.toLowerCase();
+    return hashDedupBasis('C:' + normalizedKey + '::' + idempotencyKey);
   }
 
   private static String hashDedupBasis(String basis) {
@@ -4171,15 +4178,6 @@ public inherited sharing class WorkflowEngine {
       signalName.equalsIgnoreCase('Cancel') ||
       signalName.equalsIgnoreCase('CancelWorkflow')
     ) {
-      // A keyed cancel is deduped via a Consumed tombstone so an at-least-once
-      // redelivery runs cancellation at most once. A duplicate (DUPLICATE_VALUE
-      // on the per-instance hash) is a silent no-op.
-      if (
-        String.isNotBlank(idempotencyKey) &&
-        !claimKeyedCancel(instance.Id, signalName, idempotencyKey)
-      ) {
-        return;
-      }
       Boolean runCompensations = true;
       if (String.isNotBlank(payload)) {
         try {
@@ -4196,6 +4194,25 @@ public inherited sharing class WorkflowEngine {
             e.getMessage()
           );
         }
+      }
+      // A keyed cancel is deduped via a Consumed tombstone so an at-least-once
+      // redelivery runs cancellation at most once. The claim and the cancellation
+      // share one savepoint: if cancel() fails the tombstone is rolled back so a
+      // retry of the same key re-attempts cancellation rather than no-op'ing on a
+      // claim for a cancel that never completed. A duplicate (DUPLICATE_VALUE on
+      // the per-instance hash) is a silent no-op.
+      if (String.isNotBlank(idempotencyKey)) {
+        Savepoint sp = Database.setSavepoint();
+        if (!claimKeyedCancel(instance.Id, signalName, idempotencyKey)) {
+          return;
+        }
+        try {
+          cancel(instance.Id, runCompensations);
+        } catch (Exception e) {
+          Database.rollback(sp);
+          throw e;
+        }
+        return;
       }
       cancel(instance.Id, runCompensations);
       return;
@@ -4436,14 +4453,6 @@ public inherited sharing class WorkflowEngine {
           req.signalName.equalsIgnoreCase('Cancel') ||
           req.signalName.equalsIgnoreCase('CancelWorkflow')
         ) {
-          // A keyed cancel is deduped via a Consumed tombstone so an
-          // at-least-once redelivery runs cancellation at most once.
-          if (
-            String.isNotBlank(req.idempotencyKey) &&
-            !claimKeyedCancel(inst.Id, req.signalName, req.idempotencyKey)
-          ) {
-            continue; // duplicate keyed cancel: idempotent no-op
-          }
           Boolean runCompensations = true;
           if (String.isNotBlank(req.payload)) {
             try {
@@ -4459,6 +4468,24 @@ public inherited sharing class WorkflowEngine {
                 'Failed to deserialize signal cancel payload: ' + e.getMessage()
               );
             }
+          }
+          // A keyed cancel is deduped via a Consumed tombstone so an
+          // at-least-once redelivery runs cancellation at most once. The claim
+          // and the cancellation share one savepoint so a failed cancel() rolls
+          // back the tombstone and a retry re-attempts cancellation. A duplicate
+          // (DUPLICATE_VALUE on the per-instance hash) is a silent no-op.
+          if (String.isNotBlank(req.idempotencyKey)) {
+            Savepoint sp = Database.setSavepoint();
+            if (!claimKeyedCancel(inst.Id, req.signalName, req.idempotencyKey)) {
+              continue;
+            }
+            try {
+              cancel(inst.Id, runCompensations);
+            } catch (Exception e) {
+              Database.rollback(sp);
+              throw e;
+            }
+            continue;
           }
           cancel(inst.Id, runCompensations);
           continue;

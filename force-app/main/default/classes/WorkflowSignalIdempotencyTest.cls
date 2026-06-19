@@ -583,4 +583,40 @@ public class WorkflowSignalIdempotencyTest {
       'Unrouted dedup is scoped per correlation key (B captured)'
     );
   }
+
+  // ── Unrouted dedup is case-insensitive (matches SOQL correlation matching) ───
+
+  @isTest
+  static void testUnroutedKeyedDedupIsCaseInsensitive() {
+    // Correlation_Key__c matches case-insensitively in SOQL, so 'Order-1' and
+    // 'order-1' resolve to the same instance and must collapse to one Unrouted
+    // row when published with the same idempotency key.
+    EventBus.publish(
+      new List<Workflow_Event__e>{
+        new Workflow_Event__e(
+          Event_Type__c = 'SIGNAL:Approve',
+          Workflow_Instance_Id__c = 'Order-1',
+          Payload__c = '{"v":1}',
+          Idempotency_Key__c = 'case-key'
+        ),
+        new Workflow_Event__e(
+          Event_Type__c = 'SIGNAL:Approve',
+          Workflow_Instance_Id__c = 'order-1',
+          Payload__c = '{"v":2}',
+          Idempotency_Key__c = 'case-key'
+        )
+      }
+    );
+    Test.getEventBus().deliver();
+
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE Correlation_Key__c LIKE 'order-1' AND Status__c = 'Unrouted'
+      ],
+      'Same key + case-variant correlation keys must collapse to one Unrouted row'
+    );
+  }
 }
