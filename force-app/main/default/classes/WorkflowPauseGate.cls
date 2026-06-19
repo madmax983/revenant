@@ -243,7 +243,13 @@ public inherited sharing class WorkflowPauseGate {
     // (or a step that defers its pre-exec DML) still has an enforced watchdog deadline.
     WorkflowEngine.reArmTimeoutsForResume(toUpdate);
 
-    if (!serialIds.isEmpty()) {
+    // Honor the engine's test opt-out so a suite asserting only the
+    // Paused -> Running resume transition is not carried to completion by a
+    // worker draining at Test.stopTest() (mirrors the watchdog enqueue guards).
+    if (
+      !serialIds.isEmpty() &&
+      !(Test.isRunningTest() && WorkflowEngine.disableQueueableInTest)
+    ) {
       WorkflowEngine.enqueueOrchestrators(serialIds);
     }
     if (!parallelInsts.isEmpty()) {

@@ -6284,7 +6284,12 @@ public inherited sharing class WorkflowEngine {
       if (!instancesToUpdate.isEmpty()) {
         update as system instancesToUpdate;
       }
-      enqueueOrchestrators(instanceIds);
+      // Honor the test opt-out (mirrors the timed-out-step enqueue above) so a
+      // suite asserting only the Suspended -> Running wake transition is not
+      // carried to completion by a worker draining at Test.stopTest().
+      if (!(Test.isRunningTest() && disableQueueableInTest)) {
+        enqueueOrchestrators(instanceIds);
+      }
     }
 
     // 3. Process due recurring schedules (0-slot: runs inside the watchdog heartbeat,
