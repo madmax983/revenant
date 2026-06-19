@@ -1159,13 +1159,13 @@ public inherited sharing class WorkflowEngine {
     String key = idempotencyKey == null ? '' : idempotencyKey;
     return hashDedupBasis(
       'C:' +
-      normalizedKey.length() +
-      ':' +
-      normalizedKey +
-      ':' +
-      key.length() +
-      ':' +
-      key
+        normalizedKey.length() +
+        ':' +
+        normalizedKey +
+        ':' +
+        key.length() +
+        ':' +
+        key
     );
   }
 
@@ -3173,6 +3173,46 @@ public inherited sharing class WorkflowEngine {
     ];
   }
 
+  /**
+   * Publishes the union of the events a step buffered via ctx.emit() and those
+   * handed to StepResult.complete(next, output, events), coupled to the step's
+   * COMPLETE/SPLIT transition commit (issue #64). Called only from the COMPLETE
+   * and SPLIT paths, in the same transaction as the Completed record write, so
+   * a non-completing transition (retry/yield/suspend/rollback) publishes
+   * nothing. Delegates the actual publish (with DML-budget guard and
+   * fire-and-forget failure isolation) to WorkflowOutboundEventPublisher.
+   */
+  private static void publishOutboundEvents(
+    StepResult result,
+    StepContext context
+  ) {
+    List<SObject> events = new List<SObject>();
+    // Filter null entries from both sources: a null SObject in the EventBus
+    // publish list throws before any per-row SaveResult, which the publisher then
+    // swallows (fire-and-forget) — silently dropping every valid event in the
+    // same batch. ctx.emit(null) is already ignored at the buffer; do the same
+    // for the complete(..., events) overload, where an author may have built the
+    // list conditionally.
+    if (context != null && context.getPendingEmits() != null) {
+      for (SObject e : context.getPendingEmits()) {
+        if (e != null) {
+          events.add(e);
+        }
+      }
+    }
+    if (result != null && result.outboundEvents != null) {
+      for (SObject e : result.outboundEvents) {
+        if (e != null) {
+          events.add(e);
+        }
+      }
+    }
+    if (events.isEmpty()) {
+      return;
+    }
+    WorkflowOutboundEventPublisher.publish(events);
+  }
+
   private static void handleStepResult(
     Workflow_Instance__c instance,
     Workflow_Step_Execution__c stepExec,
@@ -3262,6 +3302,13 @@ public inherited sharing class WorkflowEngine {
       // reprocessed by a later step. A parallel branch consumes only its own
       // claimed ids so it cannot strip a sibling branch's signal.
       markSignalsConsumed(instance.Id, context, isParallel);
+
+      // Effectively-once outbound emit (issue #64): the step's buffered domain
+      // events publish here, in the same transaction that just wrote the
+      // Completed record and before the next step's RUN_STEP event is enqueued.
+      // Anything buffered on a yield/retry/suspend re-execution was discarded
+      // with that context, so a re-run before this commit publishes nothing.
+      publishOutboundEvents(result, context);
 
       // Update compensation stack if step is CompensatableStep
       Type stepType = Type.forName(stepExec.Step_Name__c);
@@ -3626,6 +3673,15 @@ public inherited sharing class WorkflowEngine {
       for (String ps : result.parallelStepNames) {
         enqueueOrchestrator(instance.Id, ps);
       }
+
+      // Effectively-once outbound emit (issue #64): publish AFTER the SPLIT's
+      // required durable DML — the instance update, the branch-execution inserts,
+      // and the per-branch enqueueOrchestrator hand-offs (which scale with the
+      // fan-out). Publishing here means the best-effort emit can never consume the
+      // DML budget those writes need and roll back the SPLIT commit. The events
+      // still ride this same transaction, so a rollback anywhere above publishes
+      // nothing, and they remain part of the SPLIT commit that gates the branches.
+      publishOutboundEvents(result, context);
     } else if (result.action == StepResult.ActionType.RETRY) {
       // Step requested retry
       if (isParallel) {
@@ -4711,7 +4767,10 @@ public inherited sharing class WorkflowEngine {
         if (String.isNotBlank(req.idempotencyKey)) {
           // Keyed signal: compute per-instance hash for unique-constraint dedup.
           // In-batch dedup skips later duplicates with the same composite key.
-          String compositeKey = deriveSignalDedupKey(inst.Id, req.idempotencyKey);
+          String compositeKey = deriveSignalDedupKey(
+            inst.Id,
+            req.idempotencyKey
+          );
           if (!seenCompositeKeys.contains(compositeKey)) {
             seenCompositeKeys.add(compositeKey);
             sig.Signal_Key__c = compositeKey;
@@ -5671,6 +5730,13 @@ public inherited sharing class WorkflowEngine {
       // does not claim, so it consumes still-Received rows plus same-name cleanup.
       markSignalsConsumed(instance.Id, context, false);
 
+      // Effectively-once outbound emit from compensation (issue #64): a
+      // CompensatableStep.compensate() that calls ctx.emit() or the
+      // complete(..., events) overload publishes here, coupled to the durable
+      // Compensated transition — the same commit-coupling as the forward path,
+      // so the public emit API does not silently drop events in rollback flows.
+      publishOutboundEvents(result, context);
+
       stack.remove(stack.size() - 1);
       instance.Compensation_Stack__c = JSON.serialize(stack);
 
@@ -6512,7 +6578,8 @@ public inherited sharing class WorkflowEngine {
         // deadline here would leave them permanently unenforceable.
         // Compensating/Cancelling bypass the pause gate normally.
         if (
-          (parent.Status__c == 'Pending' || parent.Status__c == 'Running') &&
+          (parent.Status__c == 'Pending' ||
+          parent.Status__c == 'Running') &&
           WorkflowPauseGate.anyPaused() &&
           WorkflowPauseGate.isDefinitionPaused(parent.Workflow_Name__c)
         ) {
@@ -6699,8 +6766,13 @@ public inherited sharing class WorkflowEngine {
     if (!WorkflowPauseGate.wildcardPaused()) {
       Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
       readyToResume = [
-        SELECT Id, Status__c, Sleep_Until__c, Async_Job_Id__c, Error_Message__c,
-               Workflow_Name__c
+        SELECT
+          Id,
+          Status__c,
+          Sleep_Until__c,
+          Async_Job_Id__c,
+          Error_Message__c,
+          Workflow_Name__c
         FROM Workflow_Instance__c
         WHERE
           Status__c = 'Suspended'

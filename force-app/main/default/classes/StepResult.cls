@@ -28,11 +28,42 @@ public inherited sharing class StepResult {
   public String nextInputJson { get; set; }
   public String newCorrelationKey { get; set; }
 
+  /**
+   * Author-owned Platform Event records the engine publishes effectively-once,
+   * coupled to this step's COMPLETE (or SPLIT) transition commit (issue #64).
+   * Populated by the complete(next, output, events) overload, or merged with
+   * anything the step buffered via StepContext.emit(). Null when the step emits
+   * no events. The emitted __e should use publishBehavior=PublishAfterCommit so
+   * a rolled-back/retried/yielded transition publishes nothing.
+   */
+  public List<SObject> outboundEvents { get; set; }
+
   public static StepResult complete(String nextStepName, Object output) {
     StepResult r = new StepResult();
     r.action = ActionType.COMPLETE;
     r.nextStepName = nextStepName;
     r.outputJson = (output != null) ? JSON.serialize(output) : null;
+    return r;
+  }
+
+  /**
+   * Completes the step and hands the engine one or more domain Platform Events
+   * to publish effectively-once when this COMPLETE transition commits (issue
+   * #64). Retries, yields, suspends, re-drives, and at-least-once resumes that
+   * re-run execute() before that commit publish nothing; a step already durably
+   * Completed never re-executes and so never re-emits.
+   *
+   * Authors choose their own __e type; the engine imposes no envelope. Delivery
+   * to subscribers remains at-least-once — the guarantee is effectively-once
+   * publication at the producer, so subscribers must stay idempotent.
+   */
+  public static StepResult complete(
+    String nextStepName,
+    Object output,
+    List<SObject> events
+  ) {
+    StepResult r = complete(nextStepName, output);
+    r.outboundEvents = events;
     return r;
   }
 
@@ -128,7 +159,10 @@ public inherited sharing class StepResult {
         JSON.deserializeUntyped(strInput);
         r.parallelInputJson = strInput;
       } catch (Exception e) {
-        System.debug(LoggingLevel.FINE, 'Parallel input is not a JSON string, serializing: ' + e.getMessage());
+        System.debug(
+          LoggingLevel.FINE,
+          'Parallel input is not a JSON string, serializing: ' + e.getMessage()
+        );
         r.parallelInputJson = JSON.serialize(strInput);
       }
       return r;
