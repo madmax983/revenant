@@ -46,20 +46,21 @@ trigger WorkflowEventTrigger on Workflow_Event__e(after insert) {
       if (processedResumeSignals < maxResumeSignals) {
         processedResumeSignals++;
         String signalName = event.Event_Type__c.substringAfter('SIGNAL:');
-        signalRequests.add(
-          new WorkflowEngine.SignalRequest(
-            event.Workflow_Instance_Id__c,
-            signalName,
-            event.Payload__c,
-            event.EventUuid
-          )
+        WorkflowEngine.SignalRequest sigReq = new WorkflowEngine.SignalRequest(
+          event.Workflow_Instance_Id__c,
+          signalName,
+          event.Payload__c,
+          event.EventUuid
         );
+        sigReq.idempotencyKey = event.Idempotency_Key__c;
+        signalRequests.add(sigReq);
       } else {
         throttledEvents.add(
           new Workflow_Event__e(
             Workflow_Instance_Id__c = event.Workflow_Instance_Id__c,
             Event_Type__c = event.Event_Type__c,
-            Payload__c = event.Payload__c
+            Payload__c = event.Payload__c,
+            Idempotency_Key__c = event.Idempotency_Key__c
           )
         );
       }

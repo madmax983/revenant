@@ -8,6 +8,9 @@ public inherited sharing class WorkflowSignalInvocableAction {
 
     @InvocableVariable(label='Payload JSON')
     public String payloadJson;
+
+    @InvocableVariable(label='Idempotency Key')
+    public String idempotencyKey;
   }
 
   @InvocableMethod(
@@ -22,13 +25,13 @@ public inherited sharing class WorkflowSignalInvocableAction {
 
     List<WorkflowEngine.SignalRequest> engineRequests = new List<WorkflowEngine.SignalRequest>();
     for (SignalRequest req : requests) {
-      engineRequests.add(
-        new WorkflowEngine.SignalRequest(
-          req.targetKey,
-          req.signalName,
-          req.payloadJson
-        )
+      WorkflowEngine.SignalRequest engineReq = new WorkflowEngine.SignalRequest(
+        req.targetKey,
+        req.signalName,
+        req.payloadJson
       );
+      engineReq.idempotencyKey = req.idempotencyKey;
+      engineRequests.add(engineReq);
     }
     WorkflowEngine.signal(engineRequests);
   }

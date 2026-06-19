@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Idempotency_Key__c</fullName>
+    <description>Raw caller-supplied idempotency key, retained on pre-arrival (Unrouted) captures so redeliverCapturedSignal can rewrite Signal_Key__c from the correlation-scoped capture hash to the instance-scoped routed hash once a matching instance becomes active. This closes the at-most-once gap across the pre-arrival-to-active boundary. Not unique (the dedup constraint lives on Signal_Key__c).</description>
+    <externalId>false</externalId>
+    <label>Idempotency Key</label>
+    <length>255</length>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>
