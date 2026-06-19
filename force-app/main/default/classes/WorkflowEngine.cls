@@ -6019,18 +6019,24 @@ public inherited sharing class WorkflowEngine {
 
         // Operator pause gate (mirrors WorkflowTimeoutJob): if the definition is
         // paused while the parent is still Pending/Running (handoff armed the
-        // deadline before the delayed RUN_STEP reached the gate), do NOT fail the
-        // step. Clear its stale deadline so a post-resume heartbeat cannot fire it
-        // instantly; the step is re-armed when it parks/re-runs. Compensating/
-        // Cancelling bypass the pause gate, so they still time out normally.
+        // deadline before the delayed RUN_STEP reached the gate), only hold
+        // pre-start Pending steps — clear their deadline so a post-resume
+        // heartbeat cannot fire instantly; re-armed on park/re-run.
+        // Running (stuck) steps are NOT held: the instance stays Running so
+        // reArmTimeoutsForResume will not re-arm them on resume; clearing their
+        // deadline here would leave them permanently unenforceable.
+        // Compensating/Cancelling bypass the pause gate normally.
         if (
           (parent.Status__c == 'Pending' || parent.Status__c == 'Running') &&
           WorkflowPauseGate.anyPaused() &&
           WorkflowPauseGate.isDefinitionPaused(parent.Workflow_Name__c)
         ) {
-          lockedStep.Timeout_At__c = null;
-          stepsToUpdate.add(lockedStep);
-          continue;
+          if (lockedStep.Status__c == 'Pending') {
+            lockedStep.Timeout_At__c = null;
+            stepsToUpdate.add(lockedStep);
+            continue;
+          }
+          // Running step — fall through to enforce the timeout normally
         }
 
         String errorMsg = (lockedStep.Status__c == 'Running')

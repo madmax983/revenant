@@ -735,7 +735,8 @@ public inherited sharing class WorkflowDashboardController {
         stat == 'Running' ||
         stat == 'Suspended' ||
         stat == 'Compensating' ||
-        stat == 'Cancelling'
+        stat == 'Cancelling' ||
+        stat == 'Paused'
       ) {
         results.put('active', results.get('active') + count);
       } else if (stat == 'Completed' || stat == 'ContinuedAsNew') {

@@ -1789,4 +1789,161 @@ public class WorkflowPauseTest {
       'Resumed instance should be Running after re-arm'
     );
   }
+
+  // ============================================================
+  // 16. PR #78 ROUND 7 REGRESSIONS
+  // ============================================================
+
+  // A Running (stuck) step must time out even when its definition is paused.
+  // The pause gate only holds Pending (pre-start) steps; Running steps that are
+  // stuck in a dead queueable stay Running (not parked), so reArmTimeoutsForResume
+  // will not re-arm them on resume — clearing their deadline leaves them
+  // permanently unenforceable.
+  @isTest
+  static void testTimeoutJobTimesOutRunningStepDuringPause() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = 'R7-Running-' + Datetime.now().getTime()
+    );
+    insert inst;
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowPauseTest.StepB',
+      Status__c = 'Running',
+      Retry_Count__c = 0,
+      Timeout_At__c = DateTime.now().addSeconds(-60)
+    );
+    insert step;
+    WorkflowPauseGate.pauseDefinition(
+      'WorkflowPauseTest.TwoStepWorkflow',
+      'R7 running-step test'
+    );
+
+    Test.startTest();
+    new WorkflowTimeoutJob(inst.Id, 'WorkflowPauseTest.StepB').executeInternal();
+    Test.stopTest();
+
+    Workflow_Step_Execution__c after = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :step.Id
+    ];
+    System.assertEquals(
+      'Failed',
+      after.Status__c,
+      'Running step must time out even during a pause (not be left hanging)'
+    );
+  }
+
+  // The watchdog heartbeat must also enforce timeouts on Running stuck steps
+  // during a pause — symmetric with the WorkflowTimeoutJob fix.
+  @isTest
+  static void testWatchdogTimesOutRunningStepDuringPause() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = 'R7-HBRun-' + Datetime.now().getTime()
+    );
+    insert inst;
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowPauseTest.StepB',
+      Status__c = 'Running',
+      Retry_Count__c = 0,
+      Timeout_At__c = DateTime.now().addSeconds(-60)
+    );
+    insert step;
+    WorkflowPauseGate.pauseDefinition(
+      'WorkflowPauseTest.TwoStepWorkflow',
+      'R7 heartbeat-running test'
+    );
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    Workflow_Step_Execution__c after = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :step.Id
+    ];
+    System.assertEquals(
+      'Failed',
+      after.Status__c,
+      'Watchdog must time out a Running stuck step even during a pause'
+    );
+  }
+
+  // A stale QueueableTimeoutJob that fires after a pause/resume re-arm must NOT
+  // fail a step whose Timeout_At__c is still in the future (re-armed deadline).
+  @isTest
+  static void testStaleTimeoutJobSkipsStepWithFutureDeadline() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = 'R7-Stale-' + Datetime.now().getTime()
+    );
+    insert inst;
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowPauseTest.StepB',
+      Status__c = 'Pending',
+      Retry_Count__c = 0,
+      Timeout_At__c = DateTime.now().addSeconds(600)
+    );
+    insert step;
+
+    Test.startTest();
+    new WorkflowTimeoutJob(inst.Id, 'WorkflowPauseTest.StepB').executeInternal();
+    Test.stopTest();
+
+    Workflow_Step_Execution__c after = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :step.Id
+    ];
+    System.assertEquals(
+      'Pending',
+      after.Status__c,
+      'Stale timeout job must not fail a step whose deadline is still in the future'
+    );
+  }
+
+  // Paused instances must appear in the active bucket of getWorkflowStats(),
+  // not silently disappear from all three counters.
+  @isTest
+  static void testGetWorkflowStatsCountsPausedAsActive() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
+      Status__c = 'Paused',
+      Current_Step__c = 'WorkflowPauseTest.StepB',
+      Correlation_Key__c = 'R7-Stats-' + Datetime.now().getTime()
+    );
+    insert inst;
+
+    Test.startTest();
+    Map<String, Integer> stats = WorkflowDashboardController.getWorkflowStats(
+      'WorkflowPauseTest.TwoStepWorkflow',
+      null,
+      null
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, stats.get('total'), 'One total instance expected');
+    System.assertEquals(
+      1,
+      stats.get('active'),
+      'Paused instance must count as active in getWorkflowStats'
+    );
+    System.assertEquals(0, stats.get('completed'), 'No completed');
+    System.assertEquals(0, stats.get('failed'), 'No failed');
+  }
 }
