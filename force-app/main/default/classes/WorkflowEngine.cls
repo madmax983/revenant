@@ -4112,6 +4112,11 @@ public inherited sharing class WorkflowEngine {
 
     Workflow_Instance__c instance = instances[0];
 
+    // NOTE: the idempotency key is intentionally NOT applied to Cancel /
+    // CancelWorkflow. Cancel is a control signal handled inline (it persists no
+    // Workflow_Signal__c row to dedup against) and already has its own
+    // terminal-state semantics, so at-most-once dedup covers forward/data
+    // signals only. See issue #48 scope and the Idempotency_Key__c field doc.
     if (
       signalName.equalsIgnoreCase('Cancel') ||
       signalName.equalsIgnoreCase('CancelWorkflow')
@@ -6830,6 +6835,15 @@ public inherited sharing class WorkflowEngine {
    * with Status='Unrouted'. Upserts by Signal_Key__c when the key is non-blank
    * (idempotent under at-least-once platform-event redelivery); plain-inserts
    * keyless rows. Never touches Workflow_Step_Execution__c.
+   *
+   * NOTE: the caller-supplied idempotency key (req.idempotencyKey) is NOT
+   * applied here. The per-instance dedup hash requires a routed instance, which
+   * by definition does not exist for a pre-arrival/unrouted signal. Unrouted
+   * dedup therefore stays scoped to the platform-event EventUuid (req.dedupKey),
+   * which only collapses replays of the *same* publish — two publishes of the
+   * same logical key while no instance is active are captured separately and
+   * may all redeliver. This matches issue #48's "Out of Scope: retroactive
+   * dedup of already-persisted signals"; see the Idempotency_Key__c field doc.
    */
   @TestVisible
   private static void captureUnroutedSignals(List<SignalRequest> unmatched) {

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Idempotency_Key__c</fullName>
-    <description>Caller-supplied logical idempotency key for this signal. When set, at-most-once signal delivery is enforced per (instance, key) pair via a unique constraint on Workflow_Signal__c.Signal_Key__c. Omit for at-least-once behavior (existing default).</description>
+    <description>Caller-supplied logical idempotency key for this signal. When set, at-most-once signal delivery is enforced per (instance, key) pair via a unique constraint on Workflow_Signal__c.Signal_Key__c. Omit for at-least-once behavior (existing default). Limitations: applies to forward/data signals only — Cancel/CancelWorkflow control signals are not deduped by this key; and it has no effect on pre-arrival (unrouted) signals captured before any matching instance is active.</description>
     <externalId>false</externalId>
     <label>Idempotency Key</label>
     <length>255</length>
