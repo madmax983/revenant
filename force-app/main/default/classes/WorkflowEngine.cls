@@ -7189,6 +7189,17 @@ public inherited sharing class WorkflowEngine {
         // Retain the raw caller key so redeliverCapturedSignal can rewrite the
         // correlation-scoped capture key to the instance-scoped routed key once
         // a matching instance becomes active (closes the pre-arrival boundary).
+        //
+        // Known limitation (issue #48, "Out of Scope: retroactive dedup of
+        // already-persisted signals"): if a keyed signal was already routed to an
+        // instance that has since gone terminal, an at-least-once redelivery finds
+        // no active match and is captured here under a correlation-scoped C: key.
+        // That cannot collide with the original I:<instanceId> routed row, so the
+        // duplicate persists as Unrouted and could be redelivered to a later
+        // successor instance sharing the correlation key. Retiring such
+        // post-terminal duplicates would require a dedup-window lookup of the
+        // terminal instance plus a routed-row existence check on every keyed
+        // capture; that retroactive dedup is intentionally deferred.
         sig.Idempotency_Key__c = req.idempotencyKey;
         dedupVal = deriveUnroutedDedupKey(req.keyOrId, req.idempotencyKey);
       } else {
