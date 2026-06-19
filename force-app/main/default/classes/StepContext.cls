@@ -92,6 +92,13 @@ public inherited sharing class StepContext {
   private Map<String, Object> capturedValues = new Map<String, Object>();
   private Set<String> newCaptureKeys = new Set<String>();
 
+  // Outbound domain events buffered via emit() during this execution (issue
+  // #64). The engine publishes them effectively-once, coupled to the step's
+  // COMPLETE/SPLIT transition commit; they are discarded (never published) on a
+  // yield/retry/suspend/rollback because the buffer lives only on this in-memory
+  // context, which is rebuilt fresh on every re-execution.
+  private List<SObject> pendingEmits = new List<SObject>();
+
   /**
    * Read-only view of an inbound signal that targets this workflow instance.
    * Carries the author-interpreted name and payload string; the internal record
@@ -903,6 +910,42 @@ public inherited sharing class StepContext {
    */
   public Boolean hasNewCaptures() {
     return !newCaptureKeys.isEmpty();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Outbound emit API (issue #64)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Hands the engine an author-owned Platform Event to publish effectively-once,
+   * coupled to this step's COMPLETE (or SPLIT) transition commit. The event is
+   * buffered in heap now and published in the SAME transaction that writes the
+   * step's durable Completed record — so retries, yields, suspends, re-drives,
+   * and at-least-once resumes that re-run execute() before that commit publish
+   * nothing, and a step already Completed never re-executes and so never
+   * re-emits. Call it as many times as needed; events publish in arrival order
+   * once the step completes.
+   *
+   * The author chooses the __e type and its fields; the engine imposes no
+   * envelope. The emitted __e should use publishBehavior=PublishAfterCommit so a
+   * rolled-back transition fires nothing. Delivery to subscribers stays
+   * at-least-once — the guarantee is effectively-once publication at the
+   * producer, so subscribers must remain idempotent. A null event is ignored.
+   */
+  public void emit(SObject event) {
+    if (event != null) {
+      this.pendingEmits.add(event);
+    }
+  }
+
+  /**
+   * The outbound events buffered via emit() during this execution, in arrival
+   * order. Never null. The engine reads this at the step's COMPLETE/SPLIT
+   * transition and publishes the union of these and any events passed to
+   * StepResult.complete(next, output, events).
+   */
+  public List<SObject> getPendingEmits() {
+    return this.pendingEmits;
   }
 
   /**

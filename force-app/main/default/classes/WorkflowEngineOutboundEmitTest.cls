@@ -174,7 +174,7 @@ public class WorkflowEngineOutboundEmitTest {
       1,
       WorkflowOutboundEventPublisher.publishedEvents.size(),
       'Producer-side effectively-once: exactly one publish across yield -> ' +
-        'retry -> complete (>=3 re-executions), each of which called emit()'
+      'retry -> complete (>=3 re-executions), each of which called emit()'
     );
   }
 
@@ -229,7 +229,7 @@ public class WorkflowEngineOutboundEmitTest {
       1,
       WorkflowOutboundEventPublisher.publishedEvents.size(),
       'Events handed to StepResult.complete(next, output, events) publish ' +
-        'once on COMPLETE'
+      'once on COMPLETE'
     );
   }
 
@@ -252,7 +252,7 @@ public class WorkflowEngineOutboundEmitTest {
       1,
       WorkflowOutboundEventPublisher.publishedEvents.size(),
       'A step that emits then SPLITs publishes its events once on the SPLIT ' +
-        'commit; the fan-out branches emit nothing and add no publishes'
+      'commit; the fan-out branches emit nothing and add no publishes'
     );
   }
 }

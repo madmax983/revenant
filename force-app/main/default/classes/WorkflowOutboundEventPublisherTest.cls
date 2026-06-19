@@ -97,7 +97,7 @@ private class WorkflowOutboundEventPublisherTest {
       0,
       WorkflowOutboundEventPublisher.publishedEvents.size(),
       'When the DML budget is exhausted the publish must be skipped, never ' +
-        'spend the transaction last statement and risk rolling back the commit'
+      'spend the transaction last statement and risk rolling back the commit'
     );
   }
 }

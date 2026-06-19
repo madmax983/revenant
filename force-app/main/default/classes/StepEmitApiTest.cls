@@ -42,15 +42,7 @@ private class StepEmitApiTest {
 
   @isTest
   static void emitBuffersEventsInOrder() {
-    StepContext ctx = new StepContext(
-      null,
-      'W',
-      'S',
-      null,
-      null,
-      null,
-      null
-    );
+    StepContext ctx = new StepContext(null, 'W', 'S', null, null, null, null);
 
     System.assertNotEquals(
       null,
@@ -59,7 +51,9 @@ private class StepEmitApiTest {
     );
     System.assertEquals(0, ctx.getPendingEmits().size());
 
-    Workflow_Lifecycle__e e1 = new Workflow_Lifecycle__e(Status__c = 'Completed');
+    Workflow_Lifecycle__e e1 = new Workflow_Lifecycle__e(
+      Status__c = 'Completed'
+    );
     Workflow_Lifecycle__e e2 = new Workflow_Lifecycle__e(Status__c = 'Failed');
     ctx.emit(e1);
     ctx.emit(e2);
