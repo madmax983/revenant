@@ -10,8 +10,20 @@
  *
  * Design contract (mirrors WorkflowLifecyclePublisher, issue #14):
  *  - Authors own the __e type; the engine imposes no envelope and adds no
- *    required fields. The emitted __e should use publishBehavior=PublishAfterCommit
- *    so a rolled-back transition produces no event at all.
+ *    required fields. The emitted __e MUST use publishBehavior=PublishAfterCommit
+ *    so a rolled-back/retried/yielded transition produces no event at all — that
+ *    metadata is what makes the publish commit-coupled. A `Publish Immediately`
+ *    event would deliver at the publish call regardless of commit, so a later
+ *    rollback (and the re-driven step's re-emit) could double-fire it, voiding
+ *    the effectively-once guarantee. The engine cannot enforce this at runtime:
+ *    Apex's Schema.describe does not expose an SObject's publish behavior (it is
+ *    only knowable via the Metadata/Tooling API, which cannot be called mid-
+ *    transaction with pending DML), so PublishAfterCommit is a documented
+ *    contract here exactly as it is for the engine's own Workflow_Lifecycle__e /
+ *    Workflow_Event__e. With PublishAfterCommit the publish ordering within the
+ *    transaction is moot (nothing is delivered unless the transaction commits);
+ *    the SPLIT publish is additionally placed after the fan-out DML so it cannot
+ *    starve that DML's governor budget.
  *  - Fire-and-forget: a failed publish is logged and swallowed, never thrown, so
  *    it can never roll back the terminal/Completed write or break the RUN_STEP
  *    Queueable chain. (A genuinely undeliverable event is the platform's
