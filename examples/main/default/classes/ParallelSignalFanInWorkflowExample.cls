@@ -18,6 +18,20 @@
  * the pattern.
  */
 public inherited sharing class ParallelSignalFanInWorkflowExample implements WorkflowDefinition {
+  /**
+   * The distinct ack names the collector branch gathers (one per upstream
+   * worker/region) -- the point is there can be many. Stored lower-cased so the
+   * in-memory membership test matches the engine's case-insensitive signal-name
+   * matching (StepContext.matchesFor), so an 'ack:US'-cased delivery is not
+   * silently dropped. Declared on the outer class because Apex does not allow
+   * static members on inner classes.
+   */
+  static final Set<String> EXPECTED_ACK_NAMES = new Set<String>{
+    'ack:us',
+    'ack:eu',
+    'ack:apac'
+  };
+
   public String getInitialStep() {
     return 'ParallelSignalFanInWorkflowExample.GatherSpawnStep';
   }
@@ -62,20 +76,21 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
    * page) and filters the result in memory.
    */
   public class CollectorBranch implements WorkflowStep {
-    // The distinct names this branch gathers. In a real workflow these might be
-    // generated, one per upstream worker; the point is there can be many.
-    static final Set<String> EXPECTED = new Set<String>{
-      'Ack:US',
-      'Ack:EU',
-      'Ack:APAC'
-    };
-
     public StepResult execute(StepContext ctx) {
       // RECOMMENDED PRIMITIVE: one getSignals() call claims the whole pending
       // page in a single statement and stays exactly-once.
+      //
+      // CAVEAT: an unscoped getSignals() marks EVERY pending signal observed, so
+      // the COMPLETE transition consumes all of them -- including any not in
+      // EXPECTED_ACK_NAMES. Use this full-list-and-filter pattern only when this
+      // branch owns the instance's signal namespace (here the sibling branch
+      // consumes no signals); otherwise a row meant for a sibling would be
+      // consumed here and never delivered. When branches share a namespace,
+      // scope the read per name instead.
       Map<String, Object> received = new Map<String, Object>();
       for (StepContext.Signal s : ctx.getSignals()) {
-        if (EXPECTED.contains(s.name)) {
+        String name = (s.name == null) ? null : s.name.toLowerCase();
+        if (EXPECTED_ACK_NAMES.contains(name)) {
           received.put(s.name, s.payload);
         }
       }
