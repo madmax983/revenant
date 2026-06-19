@@ -1067,16 +1067,64 @@ public inherited sharing class WorkflowEngine {
    * Derives a per-instance-scoped dedup key for a routed signal with a
    * caller-supplied idempotency key. Hashing scopes uniqueness to the
    * instance so the same logical key on different instances never collides
-   * on the global Workflow_Signal__c.Signal_Key__c unique index.
+   * on the global Workflow_Signal__c.Signal_Key__c unique index. The 'I:'
+   * namespace prefix keeps routed (instance-scoped) keys distinct from the
+   * 'C:' correlation-scoped keys used for pre-arrival/unrouted captures.
    */
   private static String deriveSignalDedupKey(
     Id instanceId,
     String idempotencyKey
   ) {
-    String basis =
-      String.valueOf(instanceId) + '::' + idempotencyKey;
+    return hashDedupBasis('I:' + instanceId + '::' + idempotencyKey);
+  }
+
+  /**
+   * Derives a correlation-key-scoped dedup key for a pre-arrival (unrouted)
+   * signal whose target instance does not exist yet. Scoping by correlation
+   * key collapses duplicate keyed captures of the same logical event into one
+   * Unrouted row while keeping distinct correlation keys (different targets)
+   * separate. The 'C:' prefix avoids collision with routed 'I:' keys.
+   */
+  private static String deriveUnroutedDedupKey(
+    String correlationKey,
+    String idempotencyKey
+  ) {
+    return hashDedupBasis('C:' + correlationKey + '::' + idempotencyKey);
+  }
+
+  private static String hashDedupBasis(String basis) {
     Blob digest = Crypto.generateDigest('SHA-256', Blob.valueOf(basis));
     return EncodingUtil.convertToHex(digest);
+  }
+
+  /**
+   * Claims a keyed Cancel/CancelWorkflow delivery by persisting a dedup
+   * tombstone (Status='Consumed', so it is never surfaced as a pending signal)
+   * keyed by the per-instance hash. Returns true for the first delivery (caller
+   * should proceed to cancel()); false if a duplicate with the same key was
+   * already delivered (idempotent no-op). Mirrors the forward-signal dedup so
+   * an at-least-once redelivered cancel runs cancellation at most once.
+   */
+  private static Boolean claimKeyedCancel(
+    Id instanceId,
+    String signalName,
+    String idempotencyKey
+  ) {
+    Workflow_Signal__c marker = new Workflow_Signal__c(
+      Workflow_Instance__c = instanceId,
+      Signal_Name__c = signalName,
+      Status__c = 'Consumed',
+      Signal_Key__c = deriveSignalDedupKey(instanceId, idempotencyKey)
+    );
+    try {
+      insert as system marker;
+      return true;
+    } catch (DmlException ex) {
+      if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
+        return false;
+      }
+      throw ex;
+    }
   }
 
   /**
@@ -4096,6 +4144,13 @@ public inherited sharing class WorkflowEngine {
 
     if (instances.isEmpty()) {
       if (isCancelSignal) {
+        // A keyed cancel with no active match is an idempotent no-op: either the
+        // first delivery already drove the instance terminal (and a duplicate is
+        // now arriving) or there is nothing to cancel. Swallow rather than throw
+        // so an at-least-once redelivered keyed cancel never faults the publisher.
+        if (String.isNotBlank(idempotencyKey)) {
+          return;
+        }
         throw new WorkflowException(
           'No active workflow found with key or ID: ' + keyOrId
         );
@@ -4104,7 +4159,7 @@ public inherited sharing class WorkflowEngine {
       // never silently lost and can be re-delivered by an operator.
       captureUnroutedSignals(
         new List<SignalRequest>{
-          new SignalRequest(keyOrId, signalName, payload)
+          new SignalRequest(keyOrId, signalName, payload, null, idempotencyKey)
         }
       );
       return;
@@ -4112,15 +4167,19 @@ public inherited sharing class WorkflowEngine {
 
     Workflow_Instance__c instance = instances[0];
 
-    // NOTE: the idempotency key is intentionally NOT applied to Cancel /
-    // CancelWorkflow. Cancel is a control signal handled inline (it persists no
-    // Workflow_Signal__c row to dedup against) and already has its own
-    // terminal-state semantics, so at-most-once dedup covers forward/data
-    // signals only. See issue #48 scope and the Idempotency_Key__c field doc.
     if (
       signalName.equalsIgnoreCase('Cancel') ||
       signalName.equalsIgnoreCase('CancelWorkflow')
     ) {
+      // A keyed cancel is deduped via a Consumed tombstone so an at-least-once
+      // redelivery runs cancellation at most once. A duplicate (DUPLICATE_VALUE
+      // on the per-instance hash) is a silent no-op.
+      if (
+        String.isNotBlank(idempotencyKey) &&
+        !claimKeyedCancel(instance.Id, signalName, idempotencyKey)
+      ) {
+        return;
+      }
       Boolean runCompensations = true;
       if (String.isNotBlank(payload)) {
         try {
@@ -4320,8 +4379,11 @@ public inherited sharing class WorkflowEngine {
     }
 
     // Separate requests into: matched (active instance found), unmatched
-    // non-cancel (capture as Unrouted), and unmatched cancel (throw — capturing
-    // a cancel for future replay against an unknown future instance is unsafe).
+    // non-cancel (capture as Unrouted), and unmatched cancel. An unkeyed cancel
+    // throws (capturing a cancel for future replay against an unknown future
+    // instance is unsafe); a *keyed* cancel is an idempotent no-op (the first
+    // delivery already drove the instance terminal, or there is nothing to
+    // cancel), so it is swallowed rather than faulting the publisher.
     List<SignalRequest> unmatchedToCapture = new List<SignalRequest>();
     for (SignalRequest req : requests) {
       Workflow_Instance__c inst = instById.get(req.keyOrId);
@@ -4336,6 +4398,9 @@ public inherited sharing class WorkflowEngine {
         inst == null || (inst.Status__c == 'CompensationFailed' && !isCancel);
       if (unmatched) {
         if (isCancel) {
+          if (String.isNotBlank(req.idempotencyKey)) {
+            continue; // keyed cancel, no active match: idempotent no-op
+          }
           throw new WorkflowException(
             'No active workflow found with key or ID: ' + req.keyOrId
           );
@@ -4371,6 +4436,14 @@ public inherited sharing class WorkflowEngine {
           req.signalName.equalsIgnoreCase('Cancel') ||
           req.signalName.equalsIgnoreCase('CancelWorkflow')
         ) {
+          // A keyed cancel is deduped via a Consumed tombstone so an
+          // at-least-once redelivery runs cancellation at most once.
+          if (
+            String.isNotBlank(req.idempotencyKey) &&
+            !claimKeyedCancel(inst.Id, req.signalName, req.idempotencyKey)
+          ) {
+            continue; // duplicate keyed cancel: idempotent no-op
+          }
           Boolean runCompensations = true;
           if (String.isNotBlank(req.payload)) {
             try {
@@ -6832,18 +6905,17 @@ public inherited sharing class WorkflowEngine {
 
   /**
    * Persists unmatched (unrouted) signal requests as Workflow_Signal__c rows
-   * with Status='Unrouted'. Upserts by Signal_Key__c when the key is non-blank
-   * (idempotent under at-least-once platform-event redelivery); plain-inserts
-   * keyless rows. Never touches Workflow_Step_Execution__c.
+   * with Status='Unrouted'. Upserts by Signal_Key__c when a dedup key is
+   * present (idempotent under at-least-once redelivery); plain-inserts keyless
+   * rows. Never touches Workflow_Step_Execution__c.
    *
-   * NOTE: the caller-supplied idempotency key (req.idempotencyKey) is NOT
-   * applied here. The per-instance dedup hash requires a routed instance, which
-   * by definition does not exist for a pre-arrival/unrouted signal. Unrouted
-   * dedup therefore stays scoped to the platform-event EventUuid (req.dedupKey),
-   * which only collapses replays of the *same* publish — two publishes of the
-   * same logical key while no instance is active are captured separately and
-   * may all redeliver. This matches issue #48's "Out of Scope: retroactive
-   * dedup of already-persisted signals"; see the Idempotency_Key__c field doc.
+   * Dedup key selection for a pre-arrival/unrouted signal (no instance yet):
+   *  - a caller-supplied idempotency key wins, scoped to the correlation key
+   *    (deriveUnroutedDedupKey) so N publishes of the same logical event while
+   *    no instance is active collapse to a single Unrouted row and redeliver
+   *    once; distinct correlation keys stay separate.
+   *  - otherwise the platform-event EventUuid (req.dedupKey) is used, which
+   *    only collapses replays of the *same* publish.
    */
   @TestVisible
   private static void captureUnroutedSignals(List<SignalRequest> unmatched) {
@@ -6861,10 +6933,13 @@ public inherited sharing class WorkflowEngine {
         Payload__c = req.payload,
         Status__c = 'Unrouted'
       );
-      if (String.isNotBlank(req.dedupKey)) {
-        sig.Signal_Key__c = req.dedupKey;
-        if (!keyedRows.containsKey(req.dedupKey)) {
-          keyedRows.put(req.dedupKey, sig);
+      String dedupVal = String.isNotBlank(req.idempotencyKey)
+        ? deriveUnroutedDedupKey(req.keyOrId, req.idempotencyKey)
+        : req.dedupKey;
+      if (String.isNotBlank(dedupVal)) {
+        sig.Signal_Key__c = dedupVal;
+        if (!keyedRows.containsKey(dedupVal)) {
+          keyedRows.put(dedupVal, sig);
         }
       } else {
         unkeyedRows.add(sig);

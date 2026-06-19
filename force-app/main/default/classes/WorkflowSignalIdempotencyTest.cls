@@ -409,4 +409,178 @@ public class WorkflowSignalIdempotencyTest {
       'A genuine row error must roll back the successfully-inserted sibling (all-or-none)'
     );
   }
+
+  // ── Keyed Cancel: dedup + no-throw on redelivery after terminal ──────────────
+
+  @isTest
+  static void testKeyedCancelDeduplicatesAndNoThrowAfterTerminal() {
+    Id instanceId = startAndSuspend('idem-cancel-1');
+
+    // First keyed cancel (no compensations) drives the instance terminal.
+    WorkflowEngine.signal(
+      'idem-cancel-1',
+      'Cancel',
+      '{"runCompensations":false}',
+      'cancel-key-1'
+    );
+
+    System.assertEquals(
+      'Cancelled',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId]
+      .Status__c,
+      'First keyed cancel must cancel the workflow'
+    );
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE Workflow_Instance__c = :instanceId AND Signal_Name__c = 'Cancel'
+      ],
+      'A keyed cancel persists exactly one dedup tombstone'
+    );
+
+    // Redelivered keyed cancel after terminal: silent no-op, must NOT throw.
+    Boolean threw = false;
+    try {
+      WorkflowEngine.signal(
+        'idem-cancel-1',
+        'Cancel',
+        '{"runCompensations":false}',
+        'cancel-key-1'
+      );
+    } catch (Exception ex) {
+      threw = true;
+    }
+    System.assert(
+      !threw,
+      'A redelivered keyed cancel after terminal must be a no-op, not a throw'
+    );
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE Workflow_Instance__c = :instanceId AND Signal_Name__c = 'Cancel'
+      ],
+      'Duplicate keyed cancel must not add a second tombstone'
+    );
+  }
+
+  // ── Keyed Cancel: duplicates in one bulk batch run cancellation once ─────────
+
+  @isTest
+  static void testBulkDuplicateKeyedCancelRunsOnce() {
+    Id instanceId = startAndSuspend('idem-cancel-2');
+
+    List<WorkflowEngine.SignalRequest> reqs = new List<WorkflowEngine.SignalRequest>{
+      new WorkflowEngine.SignalRequest(
+        'idem-cancel-2',
+        'Cancel',
+        '{"runCompensations":false}',
+        null,
+        'cancel-key-2'
+      ),
+      new WorkflowEngine.SignalRequest(
+        'idem-cancel-2',
+        'Cancel',
+        '{"runCompensations":false}',
+        null,
+        'cancel-key-2'
+      )
+    };
+    WorkflowEngine.signal(reqs);
+
+    System.assertEquals(
+      'Cancelled',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId]
+      .Status__c,
+      'Bulk keyed cancel must cancel the workflow'
+    );
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE Workflow_Instance__c = :instanceId AND Signal_Name__c = 'Cancel'
+      ],
+      'A duplicate keyed cancel in the same batch must claim the tombstone once'
+    );
+  }
+
+  // ── Unrouted (pre-arrival) keyed signals dedup by correlation key ────────────
+
+  @isTest
+  static void testUnroutedKeyedSignalsDeduplicate() {
+    // No instance exists for this correlation key, so the signals are captured
+    // as Unrouted. N publishes with the same Idempotency_Key__c (distinct
+    // EventUuids) must collapse to a single Unrouted row.
+    List<Workflow_Event__e> events = new List<Workflow_Event__e>();
+    for (Integer i = 0; i < 3; i++) {
+      events.add(
+        new Workflow_Event__e(
+          Event_Type__c = 'SIGNAL:Approve',
+          Workflow_Instance_Id__c = 'no-such-instance-key',
+          Payload__c = '{"v":' + i + '}',
+          Idempotency_Key__c = 'unrouted-key-1'
+        )
+      );
+    }
+    EventBus.publish(events);
+    Test.getEventBus().deliver();
+
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Correlation_Key__c = 'no-such-instance-key'
+          AND Status__c = 'Unrouted'
+      ],
+      'N unrouted keyed publishes with the same key must collapse to 1 row'
+    );
+  }
+
+  // ── Unrouted: same key, different correlation keys both captured ─────────────
+
+  @isTest
+  static void testUnroutedSameKeyDifferentCorrelationBothCaptured() {
+    EventBus.publish(
+      new List<Workflow_Event__e>{
+        new Workflow_Event__e(
+          Event_Type__c = 'SIGNAL:Approve',
+          Workflow_Instance_Id__c = 'unrouted-corr-A',
+          Payload__c = '{"v":1}',
+          Idempotency_Key__c = 'shared-unrouted-key'
+        ),
+        new Workflow_Event__e(
+          Event_Type__c = 'SIGNAL:Approve',
+          Workflow_Instance_Id__c = 'unrouted-corr-B',
+          Payload__c = '{"v":2}',
+          Idempotency_Key__c = 'shared-unrouted-key'
+        )
+      }
+    );
+    Test.getEventBus().deliver();
+
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE Correlation_Key__c = 'unrouted-corr-A' AND Status__c = 'Unrouted'
+      ],
+      'Unrouted dedup is scoped per correlation key (A captured)'
+    );
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE Correlation_Key__c = 'unrouted-corr-B' AND Status__c = 'Unrouted'
+      ],
+      'Unrouted dedup is scoped per correlation key (B captured)'
+    );
+  }
 }
