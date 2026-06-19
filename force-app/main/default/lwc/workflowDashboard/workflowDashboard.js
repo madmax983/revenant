@@ -67,6 +67,10 @@ export default class WorkflowDashboard extends LightningElement {
   pauseModalIsResume = false; // true when confirming a resume
   loadingPause = false;
 
+  get pauseModalTitle() {
+    return this.pauseModalIsResume ? "Resume Definition" : "Pause Definition";
+  }
+
   // Launch Modal Fields
   launchName = "";
   launchKey = "";

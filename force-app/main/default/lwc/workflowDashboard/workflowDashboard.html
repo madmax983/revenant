@@ -1004,12 +1004,7 @@
                         <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse" title="Close" onclick={handleClosePauseModal}>
                             <lightning-icon icon-name="utility:close" size="small" alternative-text="Close" variant="inverse"></lightning-icon>
                         </button>
-                        <template if:true={pauseModalIsResume}>
-                            <h2 id="pause-modal-title" class="slds-modal__title slds-hyphenate font-outfit">Resume Definition</h2>
-                        </template>
-                        <template if:false={pauseModalIsResume}>
-                            <h2 id="pause-modal-title" class="slds-modal__title slds-hyphenate font-outfit">Pause Definition</h2>
-                        </template>
+                        <h2 id="pause-modal-title" class="slds-modal__title slds-hyphenate font-outfit">{pauseModalTitle}</h2>
                     </header>
                     <div class="slds-modal__content slds-p-around_medium">
                         <template if:true={pauseModalIsResume}>
