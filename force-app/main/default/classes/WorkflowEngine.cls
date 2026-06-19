@@ -3642,11 +3642,6 @@ public inherited sharing class WorkflowEngine {
       // duplicate cleanup.
       markSignalsConsumed(instance.Id, context, false);
 
-      // Effectively-once outbound emit (issue #64): a step that emits then SPLITs
-      // publishes its buffered events here, coupled to the SPLIT commit, before
-      // any branch begins observable work.
-      publishOutboundEvents(result, context);
-
       String parallelStepsStr = String.join(result.parallelStepNames, ',');
       instance.Current_Step__c = parallelStepsStr;
       instance.Status__c = 'Running';
@@ -3678,6 +3673,15 @@ public inherited sharing class WorkflowEngine {
       for (String ps : result.parallelStepNames) {
         enqueueOrchestrator(instance.Id, ps);
       }
+
+      // Effectively-once outbound emit (issue #64): publish AFTER the SPLIT's
+      // required durable DML — the instance update, the branch-execution inserts,
+      // and the per-branch enqueueOrchestrator hand-offs (which scale with the
+      // fan-out). Publishing here means the best-effort emit can never consume the
+      // DML budget those writes need and roll back the SPLIT commit. The events
+      // still ride this same transaction, so a rollback anywhere above publishes
+      // nothing, and they remain part of the SPLIT commit that gates the branches.
+      publishOutboundEvents(result, context);
     } else if (result.action == StepResult.ActionType.RETRY) {
       // Step requested retry
       if (isParallel) {
