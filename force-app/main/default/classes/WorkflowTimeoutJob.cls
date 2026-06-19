@@ -21,7 +21,7 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
   public void executeInternal() {
     // Parent-first locking: query and lock the parent instance first
     List<Workflow_Instance__c> instances = [
-      SELECT Status__c, Current_Step__c, Compensation_Stack__c
+      SELECT Status__c, Current_Step__c, Compensation_Stack__c, Workflow_Name__c
       FROM Workflow_Instance__c
       WHERE Id = :this.instanceId
       WITH SYSTEM_MODE
@@ -42,6 +42,45 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
       return;
     }
 
+    // Operator pause gate: if the definition is paused, this instance is parked
+    // (or about to be, once its pending RUN_STEP reaches the gate). A timeout job
+    // armed by the pre-pause handoff must NOT fail the step during that window —
+    // the step is held and re-armed on resume via reArmTimeoutsForResume.
+    // Compensating/Cancelling bypass the pause gate elsewhere, so let those time
+    // out normally rather than stalling an in-progress rollback.
+    if (
+      (instance.Status__c == 'Pending' || instance.Status__c == 'Running') &&
+      WorkflowPauseGate.anyPaused() &&
+      WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c)
+    ) {
+      // Only hold pre-start (Pending) steps: a Running step that is stuck in a
+      // dead queueable stays Running (not parked), so reArmTimeoutsForResume
+      // will not re-arm it on resume. Clearing its deadline here would leave
+      // the stuck step permanently unenforceable. Pending steps are cleared so
+      // a post-resume heartbeat cannot fire instantly; the deadline re-attaches
+      // when the step parks (reArmTimeoutsForResume) or re-runs.
+      List<Workflow_Step_Execution__c> pausedStep = [
+        SELECT Id, Status__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :this.instanceId
+          AND Step_Name__c = :this.stepName
+          AND Status__c IN ('Running', 'Pending')
+          AND Timeout_At__c != NULL
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ];
+      if (!pausedStep.isEmpty() && pausedStep[0].Status__c == 'Pending') {
+        pausedStep[0].Timeout_At__c = null;
+        update as system pausedStep[0];
+        return;
+      }
+      if (pausedStep.isEmpty()) {
+        return; // no active step with a deadline — hold without clearing
+      }
+      // Step is Running (stuck) — fall through to enforce the timeout normally
+    }
+
     // Query the step execution record with FOR UPDATE
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Status__c, Error_Details__c
@@ -57,7 +96,7 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
 
     if (!stepExecs.isEmpty()) {
       Workflow_Step_Execution__c stepExec = [
-        SELECT Status__c, Error_Details__c
+        SELECT Status__c, Error_Details__c, Timeout_At__c
         FROM Workflow_Step_Execution__c
         WHERE Id = :stepExecs[0].Id
         WITH SYSTEM_MODE
@@ -66,6 +105,13 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
 
       // Re-validate status after lock
       if (stepExec.Status__c != 'Running' && stepExec.Status__c != 'Pending') {
+        return;
+      }
+      // Stale-job guard: a pause/resume cycle re-arms the step with a fresh
+      // future deadline and schedules a new job; a delayed QueueableTimeoutJob
+      // from before the re-arm may fire early. Skip it — the re-armed job
+      // enforces the new (correct) deadline.
+      if (stepExec.Timeout_At__c != null && stepExec.Timeout_At__c > DateTime.now()) {
         return;
       }
 

@@ -380,6 +380,16 @@ private class WorkflowEngineGetStatusTest {
     // null for it). The cap must leave room for one group per requested key.
     WorkflowEngine.DEDUP_LOOKUP_ROW_CAP = 2;
 
+    // Anchor every age off one base so the CreatedDate values are exact and
+    // distinct. Phase 1b of the bulk resolver keys on CreatedDate (not
+    // Terminal_At__c), and all rows inserted in a single test transaction
+    // otherwise share one CreatedDate — which collapses maxTimes to a single
+    // value, makes every row match the bounded fetch, and lets the hot key's
+    // extra rows crowd out the cold key under the LIMIT. Giving the hot key's
+    // rows distinct CreatedDates means the GROUP BY keeps only its newest in
+    // maxTimes, leaving a cap slot for the cold key (the property under test).
+    Datetime base = System.now();
+
     // Cold key: a single, older terminal run.
     Workflow_Instance__c cold = makeInstance(
       'Completed',
@@ -387,10 +397,12 @@ private class WorkflowEngineGetStatusTest {
       '{"c":1}',
       null
     );
-    cold.Terminal_At__c = System.now().addHours(-1);
+    cold.Terminal_At__c = base.addHours(-1);
     update as system cold;
+    Test.setCreatedDate(cold.Id, base.addHours(-1));
 
     // Hot key: several newer terminal runs that would dominate an ordered scan.
+    // Distinct CreatedDates (-3, -2, -1 min) so only the newest is the group max.
     for (Integer i = 0; i < 3; i++) {
       Workflow_Instance__c hot = makeInstance(
         'Completed',
@@ -398,8 +410,9 @@ private class WorkflowEngineGetStatusTest {
         '{"h":' + i + '}',
         null
       );
-      hot.Terminal_At__c = System.now();
+      hot.Terminal_At__c = base;
       update as system hot;
+      Test.setCreatedDate(hot.Id, base.addMinutes(-(3 - i)));
     }
 
     List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(

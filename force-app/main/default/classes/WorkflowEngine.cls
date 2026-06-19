@@ -28,7 +28,11 @@ public inherited sharing class WorkflowEngine {
     // A stalled rollback is non-terminal: it still has un-reversed side effects and
     // can be resumed, so it must keep reserving its correlation key to prevent a
     // duplicate active workflow from starting with the same key while half-undone.
-    'CompensationFailed'
+    'CompensationFailed',
+    // A parked (operator-paused) run is in-flight and resumes later, so it keeps
+    // reserving its correlation key — mirroring the trigger's reservation — so dedup
+    // returns the live paused instance rather than a stale terminal row in the window.
+    'Paused'
   };
 
   // Upper bound (~100 years) applied to the dedup window before it is subtracted
@@ -972,6 +976,12 @@ public inherited sharing class WorkflowEngine {
     );
     update as system instance;
 
+    // Operator pause gate — decide up front whether to park this start, so the
+    // initial step's timeout clock is never started while parked.
+    Boolean parkAtStart =
+      WorkflowPauseGate.anyPaused() &&
+      WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c);
+
     if (String.isNotBlank(instance.Current_Step__c)) {
       Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
       stepExec.Workflow_Instance__c = instance.Id;
@@ -979,11 +989,26 @@ public inherited sharing class WorkflowEngine {
       stepExec.Status__c = 'Pending';
       stepExec.Input__c = instance.Input__c;
       stepExec.Retry_Count__c = 0;
-      Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
-      if (timeout != null && timeout > 0) {
-        stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+      // Do not start the timeout clock while parked — a paused step's Timeout_At__c
+      // would otherwise pollute the watchdog timeout batch (selected, then skipped
+      // because the parent is not runnable). Resume re-establishes the timeout.
+      if (!parkAtStart) {
+        Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
+        if (timeout != null && timeout > 0) {
+          stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+        }
       }
       insert as system stepExec;
+    }
+
+    // Park at start if the definition is currently paused. The initial Pending
+    // Workflow_Step_Execution__c (inserted above, with no timeout clock) gives the
+    // resume path a concrete step to drive. Skip timeout scheduling and the first
+    // enqueue; the watchdog re-drives held work on resume.
+    if (parkAtStart) {
+      instance.Status__c = 'Paused';
+      update as system instance;
+      return new StartResult(instance.Id, true);
     }
 
     // Schedule watchdog for the initial step before executing it
@@ -1470,6 +1495,23 @@ public inherited sharing class WorkflowEngine {
       update as system insertedInstances;
     }
 
+    // Operator pause gate (bulk path — used by scheduled jobs and the Flow
+    // invocable): instances whose definition is paused are parked at start. They
+    // get a Pending initial step with NO timeout clock and are excluded from
+    // timeout scheduling and the initial enqueue, mirroring the scalar doStart.
+    Boolean anyPaused = WorkflowPauseGate.anyPaused();
+    Set<Id> parkedIds = new Set<Id>();
+    List<Workflow_Instance__c> instancesToPark = new List<Workflow_Instance__c>();
+    if (anyPaused) {
+      for (Workflow_Instance__c instance : insertedInstances) {
+        if (WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c)) {
+          instance.Status__c = 'Paused';
+          parkedIds.add(instance.Id);
+          instancesToPark.add(instance);
+        }
+      }
+    }
+
     // 7. Construct initial Step Execution logs for inserted instances only
     List<Workflow_Step_Execution__c> stepExecs = new List<Workflow_Step_Execution__c>();
     for (Workflow_Instance__c instance : insertedInstances) {
@@ -1480,9 +1522,13 @@ public inherited sharing class WorkflowEngine {
         stepExec.Status__c = 'Pending';
         stepExec.Input__c = instance.Input__c;
         stepExec.Retry_Count__c = 0;
-        Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
-        if (timeout != null && timeout > 0) {
-          stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+        // No timeout clock for a parked step (see doStart) — it would otherwise
+        // pollute the watchdog timeout batch. Resume re-establishes the timeout.
+        if (!parkedIds.contains(instance.Id)) {
+          Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
+          if (timeout != null && timeout > 0) {
+            stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+          }
         }
         stepExecs.add(stepExec);
       }
@@ -1491,14 +1537,27 @@ public inherited sharing class WorkflowEngine {
       insert as system stepExecs;
     }
 
-    // 8. Schedule timeout jobs and enqueue orchestrators for inserted instances
-    scheduleTimeoutJobsForInstances(insertedInstances);
+    // Persist the parked status transition; parked instances are neither scheduled
+    // nor enqueued — the resume path drives them when the definition is resumed.
+    if (!instancesToPark.isEmpty()) {
+      update as system instancesToPark;
+    }
 
+    // 8. Schedule timeout jobs and enqueue orchestrators for non-parked instances
+    List<Workflow_Instance__c> instancesToDrive = new List<Workflow_Instance__c>();
     List<Id> instanceIds = new List<Id>();
     for (Workflow_Instance__c instance : insertedInstances) {
-      instanceIds.add(instance.Id);
+      if (!parkedIds.contains(instance.Id)) {
+        instancesToDrive.add(instance);
+        instanceIds.add(instance.Id);
+      }
     }
-    enqueueOrchestrators(instanceIds);
+    if (!instancesToDrive.isEmpty()) {
+      scheduleTimeoutJobsForInstances(instancesToDrive);
+    }
+    if (!instanceIds.isEmpty()) {
+      enqueueOrchestrators(instanceIds);
+    }
 
     return results;
   }
@@ -1887,6 +1946,27 @@ public inherited sharing class WorkflowEngine {
         // detection re-routes on the next drive.
       }
       runCompensationStep(instance, reassertedStatus);
+      return;
+    }
+
+    // 2a. Operator pause gate — park at the chain handoff instead of proceeding.
+    //     Compensating/Cancelling instances bypass this (already returned above) so
+    //     cancel + rollback always proceed on a paused definition.
+    Boolean definitionPaused =
+      WorkflowPauseGate.anyPaused() &&
+      WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c);
+    // A still-Paused row must NOT execute even once its definition has been
+    // resumed: chunked resume deletes the pause record before every Paused row is
+    // flipped to Running, so a stale RUN_STEP delivered in that window would
+    // otherwise run the step before the drain re-arms its timeout / flips it. Let
+    // the resume drain own the Paused -> Running transition.
+    if (definitionPaused || instance.Status__c == 'Paused') {
+      // Park a not-yet-parked instance whose definition is paused; an
+      // already-Paused row is just a no-op until the drain flips it to Running.
+      if (definitionPaused && instance.Status__c != 'Paused') {
+        instance.Status__c = 'Paused';
+        update as system instance;
+      }
       return;
     }
 
@@ -3836,6 +3916,20 @@ public inherited sharing class WorkflowEngine {
       insert as system stepExec;
     }
 
+    // Operator pause gate — park the child at start if its definition is paused, so a
+    // running parent cannot bypass the pause by spawning children. The initial Pending
+    // step (above) gives resume a concrete step to drive; skip timeout scheduling and
+    // the enqueue. The child's correlation reservation still holds (the trigger keeps
+    // Active_Correlation_Key__c set for Paused).
+    if (
+      WorkflowPauseGate.anyPaused() &&
+      WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c)
+    ) {
+      instance.Status__c = 'Paused';
+      update as system instance;
+      return;
+    }
+
     // Schedule the watchdog for the child's initial step before executing it, matching
     // the start() overloads. Without this a TimeoutConfigurable first step of a child
     // workflow would never get a scheduled timeout job.
@@ -3907,19 +4001,24 @@ public inherited sharing class WorkflowEngine {
       String.isNotBlank(signalName) &&
       (signalName.equalsIgnoreCase('Cancel') ||
       signalName.equalsIgnoreCase('CancelWorkflow'));
+    // 'Paused' is included in both branches so a signal reaches a parked instance:
+    // a forward signal is held (Received) and re-observed on resume, and a Cancel
+    // signal can still cancel a paused instance (matching the bulk signal path).
     List<String> lookupStatuses = isCancelSignal
       ? new List<String>{
           'Pending',
           'Running',
           'Suspended',
-          'CompensationFailed'
+          'CompensationFailed',
+          'Paused'
         }
       : new List<String>{
           'Pending',
           'Running',
           'Suspended',
           'Compensating',
-          'Cancelling'
+          'Cancelling',
+          'Paused'
         };
 
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
@@ -4131,7 +4230,8 @@ public inherited sharing class WorkflowEngine {
           'Suspended',
           'Compensating',
           'Cancelling',
-          'CompensationFailed'
+          'CompensationFailed',
+          'Paused'
         )
       WITH SYSTEM_MODE
       FOR UPDATE
@@ -4229,6 +4329,8 @@ public inherited sharing class WorkflowEngine {
         // may depend on this signal, so wake it too rather than rejecting it. The
         // compensation status is left untouched (only Suspended flips to Running);
         // runStep re-detects the rollback from the trailing '_Compensate' step.
+        // A Paused instance keeps its status — the held signal (Received) is
+        // observed when resume re-drives the wait step; do not wake it here.
         if (
           inst.Status__c == 'Suspended' ||
           inst.Status__c == 'Running' ||
@@ -5356,7 +5458,8 @@ public inherited sharing class WorkflowEngine {
             'Running',
             'Suspended',
             'Cancelling',
-            'CompensationFailed'
+            'CompensationFailed',
+            'Paused'
           )
         WITH SYSTEM_MODE
       ];
@@ -5818,11 +5921,19 @@ public inherited sharing class WorkflowEngine {
     // best-effort publish can never spend a DML statement the resume section needs.
     List<Workflow_Instance__c> watchdogTerminalInstances = new List<Workflow_Instance__c>();
 
-    // 1. Process Timed-out Steps
+    // 1. Process Timed-out Steps. Exclude steps whose parent is Paused: a parked
+    // parent is not runnable, so its step rows (e.g. parallel branch rows the SPLIT
+    // path stamped with Timeout_At__c before their RUN_STEP reached the gate, or a
+    // parked initial step) would otherwise be selected and skipped, wasting the
+    // bounded batch and delaying real timeouts in other workflows. Resume re-arms
+    // these deadlines (see reArmTimeoutsForResume).
     List<Workflow_Step_Execution__c> timedOutSteps = [
       SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Error_Details__c
       FROM Workflow_Step_Execution__c
-      WHERE Status__c IN ('Running', 'Pending') AND Timeout_At__c <= :now
+      WHERE
+        Status__c IN ('Running', 'Pending')
+        AND Timeout_At__c <= :now
+        AND Workflow_Instance__r.Status__c != 'Paused'
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
       LIMIT :WATCHDOG_TIMEOUT_BATCH_SIZE
@@ -5904,6 +6015,28 @@ public inherited sharing class WorkflowEngine {
           lockedStep.Status__c != 'Pending'
         ) {
           continue;
+        }
+
+        // Operator pause gate (mirrors WorkflowTimeoutJob): if the definition is
+        // paused while the parent is still Pending/Running (handoff armed the
+        // deadline before the delayed RUN_STEP reached the gate), only hold
+        // pre-start Pending steps — clear their deadline so a post-resume
+        // heartbeat cannot fire instantly; re-armed on park/re-run.
+        // Running (stuck) steps are NOT held: the instance stays Running so
+        // reArmTimeoutsForResume will not re-arm them on resume; clearing their
+        // deadline here would leave them permanently unenforceable.
+        // Compensating/Cancelling bypass the pause gate normally.
+        if (
+          (parent.Status__c == 'Pending' || parent.Status__c == 'Running') &&
+          WorkflowPauseGate.anyPaused() &&
+          WorkflowPauseGate.isDefinitionPaused(parent.Workflow_Name__c)
+        ) {
+          if (lockedStep.Status__c == 'Pending') {
+            lockedStep.Timeout_At__c = null;
+            stepsToUpdate.add(lockedStep);
+            continue;
+          }
+          // Running step — fall through to enforce the timeout normally
         }
 
         String errorMsg = (lockedStep.Status__c == 'Running')
@@ -6073,14 +6206,26 @@ public inherited sharing class WorkflowEngine {
 
     // 2. Process Sleep Resumptions (bounded per heartbeat; backlog drains on subsequent
     // heartbeats so an unbounded suspended-instance backlog cannot blow row/heap limits).
-    List<Workflow_Instance__c> readyToResume = [
-      SELECT Id, Status__c, Sleep_Until__c, Async_Job_Id__c, Error_Message__c
-      FROM Workflow_Instance__c
-      WHERE Status__c = 'Suspended' AND Sleep_Until__c <= :now
-      WITH SYSTEM_MODE
-      LIMIT :WATCHDOG_RESUME_BATCH_SIZE
-      FOR UPDATE
-    ];
+    // Paused definitions are excluded at the SOQL level so paused sleepers cannot fill
+    // the bounded batch and starve resumable rows from other workflows (they would be
+    // re-selected and skipped every heartbeat). An org-wide '*' pause means nothing is
+    // resumable, so the phase is skipped entirely.
+    List<Workflow_Instance__c> readyToResume = new List<Workflow_Instance__c>();
+    if (!WorkflowPauseGate.wildcardPaused()) {
+      Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
+      readyToResume = [
+        SELECT Id, Status__c, Sleep_Until__c, Async_Job_Id__c, Error_Message__c,
+               Workflow_Name__c
+        FROM Workflow_Instance__c
+        WHERE
+          Status__c = 'Suspended'
+          AND Sleep_Until__c <= :now
+          AND Workflow_Name__c NOT IN :pausedDefNames
+        WITH SYSTEM_MODE
+        LIMIT :WATCHDOG_RESUME_BATCH_SIZE
+        FOR UPDATE
+      ];
+    }
 
     if (!readyToResume.isEmpty()) {
       Set<Id> resumeIds = new Set<Id>();
@@ -6104,7 +6249,16 @@ public inherited sharing class WorkflowEngine {
       }
 
       List<Id> instanceIds = new List<Id>();
+      List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
       for (Workflow_Instance__c inst : readyToResume) {
+        // Hold, not drop: if the definition is paused, leave the instance Suspended
+        // with Sleep_Until__c intact so it re-fires on the next heartbeat after resume.
+        if (
+          WorkflowPauseGate.anyPaused() &&
+          WorkflowPauseGate.isDefinitionPaused(inst.Workflow_Name__c)
+        ) {
+          continue;
+        }
         Workflow_Step_Execution__c latestStep = latestStepByInstId.get(inst.Id);
         if (
           latestStep != null &&
@@ -6125,9 +6279,17 @@ public inherited sharing class WorkflowEngine {
         inst.Sleep_Until__c = null;
         inst.Async_Job_Id__c = null;
         instanceIds.add(inst.Id);
+        instancesToUpdate.add(inst);
       }
-      update as system readyToResume;
-      enqueueOrchestrators(instanceIds);
+      if (!instancesToUpdate.isEmpty()) {
+        update as system instancesToUpdate;
+      }
+      // Honor the test opt-out (mirrors the timed-out-step enqueue above) so a
+      // suite asserting only the Suspended -> Running wake transition is not
+      // carried to completion by a worker draining at Test.stopTest().
+      if (!(Test.isRunningTest() && disableQueueableInTest)) {
+        enqueueOrchestrators(instanceIds);
+      }
     }
 
     // 3. Process due recurring schedules (0-slot: runs inside the watchdog heartbeat,
@@ -6224,6 +6386,55 @@ public inherited sharing class WorkflowEngine {
           scheduleTimeoutJobIfNeeded(instance.Id, instance.Current_Step__c);
         }
       }
+    }
+  }
+
+  /**
+   * Re-establishes step timeouts for instances being resumed from a Paused park.
+   * Parking clears/omits the watchdog deadline so parked rows do not pollute the
+   * timeout batch; on resume we re-stamp a fresh Timeout_At__c on each instance's
+   * current Pending/Running step(s) (the watchdog safety net) and schedule the
+   * dynamic timeout jobs, mirroring how start() arms a fresh step. Must run before
+   * the resumed workers are enqueued so a delayed worker still has an enforced
+   * deadline.
+   */
+  public static void reArmTimeoutsForResume(
+    List<Workflow_Instance__c> instances
+  ) {
+    if (instances == null || instances.isEmpty()) {
+      return;
+    }
+    Set<Id> instanceIds = new Set<Id>();
+    for (Workflow_Instance__c inst : instances) {
+      instanceIds.add(inst.Id);
+    }
+    List<Workflow_Step_Execution__c> steps = [
+      SELECT Id, Workflow_Instance__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c IN :instanceIds
+        AND Status__c IN ('Pending', 'Running')
+      WITH SYSTEM_MODE
+    ];
+    List<Workflow_Step_Execution__c> toUpdate = new List<Workflow_Step_Execution__c>();
+    for (Workflow_Step_Execution__c step : steps) {
+      Integer timeout = getStepTimeoutSeconds(step.Step_Name__c);
+      if (timeout != null && timeout > 0) {
+        step.Timeout_At__c = DateTime.now().addSeconds(timeout);
+        toUpdate.add(step);
+      }
+    }
+    if (!toUpdate.isEmpty()) {
+      update as system toUpdate;
+    }
+    // Schedule the dynamic timeout jobs (Schedulable/Queueable) for the genuinely
+    // active step rows only. A parallel instance keeps every branch name in
+    // Current_Step__c until the join, so a completed branch lingers there; driving
+    // off the queried Pending/Running rows (instead of parsing Current_Step__c)
+    // avoids scheduling a timeout for a completed branch that would later find no
+    // active step row and wrongly fail the whole instance "before starting".
+    for (Workflow_Step_Execution__c step : steps) {
+      scheduleTimeoutJobIfNeeded(step.Workflow_Instance__c, step.Step_Name__c);
     }
   }
 
@@ -6532,7 +6743,8 @@ public inherited sharing class WorkflowEngine {
       'Running',
       'Suspended',
       'Compensating',
-      'Cancelling'
+      'Cancelling',
+      'Paused'
     };
 
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();

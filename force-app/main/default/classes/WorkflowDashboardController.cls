@@ -28,7 +28,8 @@ public inherited sharing class WorkflowDashboardController {
     'Suspended',
     'Compensating',
     'Cancelling',
-    'CompensationFailed'
+    'CompensationFailed',
+    'Paused'
   };
 
   // Terminal statuses that are nonetheless re-drivable on their original version
@@ -734,7 +735,8 @@ public inherited sharing class WorkflowDashboardController {
         stat == 'Running' ||
         stat == 'Suspended' ||
         stat == 'Compensating' ||
-        stat == 'Cancelling'
+        stat == 'Cancelling' ||
+        stat == 'Paused'
       ) {
         results.put('active', results.get('active') + count);
       } else if (stat == 'Completed' || stat == 'ContinuedAsNew') {
@@ -1493,6 +1495,17 @@ public inherited sharing class WorkflowDashboardController {
         'Watchdog_Delay_Minutes__c' => WorkflowEngine.watchdogDelayMinutes
       };
 
+      List<Map<String, Object>> pausedDefs = new List<Map<String, Object>>();
+      try {
+        pausedDefs = getPausedDefinitions();
+      } catch (Exception ex) {
+        System.debug(
+          LoggingLevel.WARN,
+          'getWatchdogStatus: failed to load pausedDefinitions: ' +
+          ex.getMessage()
+        );
+      }
+
       return new Map<String, Object>{
         'isRunning' => isRunning,
         'latestJob' => latestWatchdog,
@@ -1505,7 +1518,8 @@ public inherited sharing class WorkflowDashboardController {
         'dailyAsyncLimit' => dailyAsyncLimit,
         'hasElasticLimit' => hasElasticLimit,
         'elasticAsyncValue' => elasticAsyncValue,
-        'elasticAsyncLimit' => elasticAsyncLimit
+        'elasticAsyncLimit' => elasticAsyncLimit,
+        'pausedDefinitions' => pausedDefs
       };
     } catch (Exception ex) {
       System.debug(
@@ -1715,5 +1729,146 @@ public inherited sharing class WorkflowDashboardController {
     checkAuthorization();
     Boolean matched = WorkflowEngine.redeliverCapturedSignal(signalId);
     return new Map<String, Object>{ 'matched' => matched };
+  }
+
+  /**
+   * Pause a workflow definition (or * for org-wide maintenance mode).
+   * After calling this, new starts for the definition are parked (Paused) and
+   * the chain handoff gate parks in-flight instances instead of executing the
+   * next step.
+   */
+  @AuraEnabled
+  public static void pauseDefinition(String workflowName, String reason) {
+    checkAuthorization();
+    try {
+      WorkflowPauseGate.pauseDefinition(workflowName, reason);
+    } catch (Exception ex) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura pauseDefinition failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  /**
+   * Resume a paused workflow definition (or * for all). All instances currently
+   * in Paused status are transitioned back to Running and re-enqueued.
+   */
+  @AuraEnabled
+  public static void resumeDefinition(String workflowName) {
+    checkAuthorization();
+    try {
+      WorkflowPauseGate.resumeDefinition(workflowName);
+    } catch (Exception ex) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura resumeDefinition failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  /**
+   * Returns a list of currently paused definitions with parked-instance counts.
+   * Each entry: { workflowName, reason, pausedAt (CreatedDate), parkedCount }.
+   */
+  @AuraEnabled
+  public static List<Map<String, Object>> getPausedDefinitions() {
+    checkAuthorization();
+    try {
+      List<Workflow_Pause_State__c> pauseRecords = [
+        SELECT Workflow_Name__c, Reason__c, CreatedById, CreatedDate
+        FROM Workflow_Pause_State__c
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate ASC
+      ];
+
+      if (pauseRecords.isEmpty()) {
+        return new List<Map<String, Object>>();
+      }
+
+      // Collect all paused def names (including * which covers everything)
+      Set<String> pausedNames = new Set<String>();
+      Boolean wildcardPaused = false;
+      for (Workflow_Pause_State__c r : pauseRecords) {
+        pausedNames.add(r.Workflow_Name__c);
+        if (r.Workflow_Name__c == '*') {
+          wildcardPaused = true;
+        }
+      }
+
+      // Count parked instances per definition (or all if wildcard)
+      List<AggregateResult> counts;
+      if (wildcardPaused) {
+        counts = [
+          SELECT Workflow_Name__c, COUNT(Id) cnt
+          FROM Workflow_Instance__c
+          WHERE Status__c = 'Paused'
+          WITH SYSTEM_MODE
+          GROUP BY Workflow_Name__c
+        ];
+      } else {
+        counts = [
+          SELECT Workflow_Name__c, COUNT(Id) cnt
+          FROM Workflow_Instance__c
+          WHERE Status__c = 'Paused' AND Workflow_Name__c IN :pausedNames
+          WITH SYSTEM_MODE
+          GROUP BY Workflow_Name__c
+        ];
+      }
+      Map<String, Integer> countByDef = new Map<String, Integer>();
+      Integer totalParked = 0;
+      for (AggregateResult ar : counts) {
+        String name = (String) ar.get('Workflow_Name__c');
+        // Grouped COUNT(Id) is returned as Integer in this org (see getWorkflowStats);
+        // a Decimal cast throws TypeException as soon as a definition has parked rows.
+        Integer cnt = (Integer) ar.get('cnt');
+        // Workflow_Name__c is a case-insensitive external id, so the SOQL filter
+        // above matches a pause record against instances of any casing, but an
+        // Apex Map key is case-sensitive. Normalize the key (and the lookup
+        // below) to lower case so a pause record created with different casing
+        // than its instances still resolves its parked count instead of 0.
+        countByDef.put(name == null ? null : name.toLowerCase(), cnt);
+        totalParked += cnt;
+      }
+
+      List<Map<String, Object>> result = new List<Map<String, Object>>();
+      for (Workflow_Pause_State__c r : pauseRecords) {
+        Integer parked;
+        if (r.Workflow_Name__c == '*') {
+          parked = totalParked;
+        } else {
+          String key = r.Workflow_Name__c == null
+            ? null
+            : r.Workflow_Name__c.toLowerCase();
+          parked = countByDef.containsKey(key) ? countByDef.get(key) : 0;
+        }
+        result.add(
+          new Map<String, Object>{
+            'workflowName' => r.Workflow_Name__c,
+            'reason' => r.Reason__c,
+            'pausedAt' => r.CreatedDate,
+            'parkedCount' => parked
+          }
+        );
+      }
+      return result;
+    } catch (Exception ex) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura getPausedDefinitions failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
+      throw new AuraHandledException(ex.getMessage());
+    }
   }
 }
