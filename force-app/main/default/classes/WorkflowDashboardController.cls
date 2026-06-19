@@ -1830,7 +1830,12 @@ public inherited sharing class WorkflowDashboardController {
         // Grouped COUNT(Id) is returned as Integer in this org (see getWorkflowStats);
         // a Decimal cast throws TypeException as soon as a definition has parked rows.
         Integer cnt = (Integer) ar.get('cnt');
-        countByDef.put(name, cnt);
+        // Workflow_Name__c is a case-insensitive external id, so the SOQL filter
+        // above matches a pause record against instances of any casing, but an
+        // Apex Map key is case-sensitive. Normalize the key (and the lookup
+        // below) to lower case so a pause record created with different casing
+        // than its instances still resolves its parked count instead of 0.
+        countByDef.put(name == null ? null : name.toLowerCase(), cnt);
         totalParked += cnt;
       }
 
@@ -1840,9 +1845,10 @@ public inherited sharing class WorkflowDashboardController {
         if (r.Workflow_Name__c == '*') {
           parked = totalParked;
         } else {
-          parked = countByDef.containsKey(r.Workflow_Name__c)
-            ? countByDef.get(r.Workflow_Name__c)
-            : 0;
+          String key = r.Workflow_Name__c == null
+            ? null
+            : r.Workflow_Name__c.toLowerCase();
+          parked = countByDef.containsKey(key) ? countByDef.get(key) : 0;
         }
         result.add(
           new Map<String, Object>{
