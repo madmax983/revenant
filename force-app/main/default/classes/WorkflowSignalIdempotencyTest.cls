@@ -794,4 +794,46 @@ public class WorkflowSignalIdempotencyTest {
       'a forward signal for a cancelled instance must not be delivered'
     );
   }
+
+  // ── Bulk keyed cancel addressed by a different-cased correlation key ─────────
+
+  @isTest
+  static void testBulkKeyedCancelMatchesCorrelationKeyCaseInsensitively() {
+    // Stored correlation key is mixed-case; the cancel request addresses it in
+    // lower case. Correlation-key matching is case-insensitive, so the keyed
+    // cancel must reach the instance rather than be skipped as unmatched.
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowSignalIdempotencyTest.WaitForGoWorkflow',
+      'Order-CI-1',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+    System.assertEquals(
+      'Suspended',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId]
+        .Status__c,
+      'precondition: instance must be Suspended'
+    );
+
+    Test.startTest();
+    WorkflowEngine.signal(
+      new List<WorkflowEngine.SignalRequest>{
+        new WorkflowEngine.SignalRequest(
+          'order-ci-1',
+          'Cancel',
+          null,
+          null,
+          'ci-cancel-key'
+        )
+      }
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      'Cancelled',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId]
+        .Status__c,
+      'keyed cancel addressed by a case-variant correlation key must still cancel'
+    );
+  }
 }

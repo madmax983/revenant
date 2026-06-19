@@ -1064,6 +1064,61 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * The set of statuses for which an inbound signal can still wake an instance:
+   * a forward signal resumes Suspended/Running, and a compensation step may
+   * await a signal while Compensating/Cancelling. Terminal statuses are not
+   * signalable.
+   */
+  private static Boolean isWakeableStatus(String status) {
+    return status == 'Suspended' ||
+      status == 'Running' ||
+      status == 'Compensating' ||
+      status == 'Cancelling';
+  }
+
+  /**
+   * Refreshes the cached SObject's status from a freshly-queried copy. The bulk
+   * signal() path holds the same instance under several map keys (18-/15-char
+   * Id and correlation key), but they all reference one SObject, so a single
+   * field assignment updates every view of it.
+   */
+  private static void refreshCachedStatus(
+    Map<String, Workflow_Instance__c> instById,
+    Workflow_Instance__c refreshed
+  ) {
+    Workflow_Instance__c cached = instById.get(refreshed.Id);
+    if (cached != null) {
+      cached.Status__c = refreshed.Status__c;
+    }
+  }
+
+  /**
+   * Removes the given instances (and their parallel branch keys) from the static
+   * enqueue guards. Called after a wake-up failure is rolled back so a caller
+   * that catches the exception and retries in the same transaction can re-enqueue
+   * the resume — otherwise the guard would suppress the retry's wake and leave
+   * the workflow unwoken despite the re-inserted signal.
+   */
+  private static void clearEnqueueGuards(Set<Id> instanceIds) {
+    if (instanceIds == null || instanceIds.isEmpty()) {
+      return;
+    }
+    enqueuedInstanceIds.removeAll(instanceIds);
+    if (!enqueuedBranchKeys.isEmpty()) {
+      Set<String> toRemove = new Set<String>();
+      for (String branchKey : enqueuedBranchKeys) {
+        for (Id instanceId : instanceIds) {
+          if (branchKey.startsWith(instanceId + '::')) {
+            toRemove.add(branchKey);
+            break;
+          }
+        }
+      }
+      enqueuedBranchKeys.removeAll(toRemove);
+    }
+  }
+
+  /**
    * Derives a per-instance-scoped dedup key for a routed signal with a
    * caller-supplied idempotency key. Hashing scopes uniqueness to the
    * instance so the same logical key on different instances never collides
@@ -1088,6 +1143,11 @@ public inherited sharing class WorkflowEngine {
    * The correlation key is lower-cased before hashing because Salesforce SOQL
    * matches Correlation_Key__c case-insensitively, so 'Order-1' and 'order-1'
    * resolve to the same instance and must therefore dedup to the same key.
+   *
+   * Components are length-prefixed before hashing so the variable-length
+   * correlation and idempotency keys can never form an ambiguous basis: without
+   * it, correlation 'a::b' + key 'c' and correlation 'a' + key 'b::c' would hash
+   * identically and silently swallow the second capture as a duplicate.
    */
   private static String deriveUnroutedDedupKey(
     String correlationKey,
@@ -1096,7 +1156,17 @@ public inherited sharing class WorkflowEngine {
     String normalizedKey = correlationKey == null
       ? ''
       : correlationKey.toLowerCase();
-    return hashDedupBasis('C:' + normalizedKey + '::' + idempotencyKey);
+    String key = idempotencyKey == null ? '' : idempotencyKey;
+    return hashDedupBasis(
+      'C:' +
+      normalizedKey.length() +
+      ':' +
+      normalizedKey +
+      ':' +
+      key.length() +
+      ':' +
+      key
+    );
   }
 
   private static String hashDedupBasis(String basis) {
@@ -4278,6 +4348,7 @@ public inherited sharing class WorkflowEngine {
         wakeInstanceForSignal(instance);
       } catch (Exception e) {
         Database.rollback(sp);
+        clearEnqueueGuards(new Set<Id>{ instance.Id });
         throw e;
       }
       return;
@@ -4416,7 +4487,11 @@ public inherited sharing class WorkflowEngine {
         instById.put(idStr.substring(0, 15), inst);
       }
       if (String.isNotBlank(inst.Correlation_Key__c)) {
-        instByKey.put(inst.Correlation_Key__c, inst);
+        // Key by the normalized (lower-cased) correlation key: SOQL matched the
+        // instance case-insensitively, so a request addressed as 'order-1' must
+        // resolve the instance stored as 'Order-1' rather than miss the map and
+        // be treated as unmatched (which would skip a keyed cancel entirely).
+        instByKey.put(normalizeKey(inst.Correlation_Key__c), inst);
       }
     }
 
@@ -4430,7 +4505,7 @@ public inherited sharing class WorkflowEngine {
     for (SignalRequest req : requests) {
       Workflow_Instance__c inst = instById.get(req.keyOrId);
       if (inst == null) {
-        inst = instByKey.get(req.keyOrId);
+        inst = instByKey.get(normalizeKey(req.keyOrId));
       }
       Boolean isCancel =
         String.isNotBlank(req.signalName) &&
@@ -4463,12 +4538,13 @@ public inherited sharing class WorkflowEngine {
     List<Id> cancelClaimInstIds = new List<Id>();
     List<Boolean> cancelClaimRunComp = new List<Boolean>();
     Set<String> seenCancelKeys = new Set<String>();
-    // Instances driven terminal by a cancel in this batch. The instById/instByKey
-    // SObjects are still in their pre-cancel (active) state, so the forward-signal
-    // loop below must skip any sibling signal for these instances — otherwise it
-    // would accept the signal against the stale status and, for a Suspended
-    // instance, write that SObject back as Running, resurrecting a workflow the
-    // cancel just drove to Cancelled.
+    // Instances driven to a terminal (no-compensation) Cancelled state by a
+    // cancel in this batch. The forward-signal loop below must skip any sibling
+    // signal for these — otherwise it would act on the stale pre-cancel status
+    // and, for a Suspended instance, write that SObject back as Running,
+    // resurrecting a workflow the cancel just drove to Cancelled. A cancel that
+    // starts compensations leaves the instance Cancelling (still signalable), so
+    // it is NOT added here; its cached status is refreshed instead.
     Set<Id> cancelledInstanceIds = new Set<Id>();
     for (SignalRequest req : requests) {
       if (
@@ -4481,7 +4557,7 @@ public inherited sharing class WorkflowEngine {
       }
       Workflow_Instance__c inst = instById.get(req.keyOrId);
       if (inst == null) {
-        inst = instByKey.get(req.keyOrId);
+        inst = instByKey.get(normalizeKey(req.keyOrId));
       }
       if (inst == null) {
         continue; // unmatched keyed cancel already no-op'd above
@@ -4532,14 +4608,33 @@ public inherited sharing class WorkflowEngine {
         Database.rollback(cancelSp);
         throw new WorkflowException('Failed to claim cancel: ' + claimError);
       }
+      Set<Id> attemptedCancelIds = new Set<Id>();
       try {
         for (Integer i : freshClaims) {
           cancel(cancelClaimInstIds[i], cancelClaimRunComp[i]);
-          cancelledInstanceIds.add(cancelClaimInstIds[i]);
+          attemptedCancelIds.add(cancelClaimInstIds[i]);
         }
       } catch (Exception e) {
         Database.rollback(cancelSp);
         throw e;
+      }
+      // Refresh post-cancel statuses in one query for the whole sub-batch. A
+      // no-compensation cancel is terminal (Cancelled) and its sibling signals
+      // must be skipped; a compensating cancel leaves the instance Cancelling
+      // (still signalable), so refresh the cached SObject so the forward loop
+      // wakes it as a compensating instance rather than resurrecting it.
+      if (!attemptedCancelIds.isEmpty()) {
+        for (Workflow_Instance__c refreshed : [
+          SELECT Id, Status__c
+          FROM Workflow_Instance__c
+          WHERE Id IN :attemptedCancelIds
+          WITH SYSTEM_MODE
+        ]) {
+          refreshCachedStatus(instById, refreshed);
+          if (!isWakeableStatus(refreshed.Status__c)) {
+            cancelledInstanceIds.add(refreshed.Id);
+          }
+        }
       }
     }
 
@@ -4556,7 +4651,7 @@ public inherited sharing class WorkflowEngine {
     for (SignalRequest req : requests) {
       Workflow_Instance__c inst = instById.get(req.keyOrId);
       if (inst == null) {
-        inst = instByKey.get(req.keyOrId);
+        inst = instByKey.get(normalizeKey(req.keyOrId));
       }
 
       // A cancel earlier in this batch already drove this instance terminal; the
@@ -4580,9 +4675,23 @@ public inherited sharing class WorkflowEngine {
             continue; // keyed cancel handled in the bulk-claim pre-pass above
           }
           cancel(inst.Id, parseRunCompensations(req.payload));
-          // Record so a later sibling signal for this instance is skipped rather
-          // than waking the now-stale SObject back to Running.
-          cancelledInstanceIds.add(inst.Id);
+          // Refresh the cached status so later sibling signals see the post-cancel
+          // state: a terminal (no-compensation) cancel must skip them (otherwise
+          // the stale SObject is woken back to Running), while a compensating
+          // cancel stays signalable and is left for the wake logic. cancel()
+          // already spends per-instance SOQL, so this targeted refresh keeps the
+          // unkeyed path's cost in the same class.
+          for (Workflow_Instance__c refreshed : [
+            SELECT Id, Status__c
+            FROM Workflow_Instance__c
+            WHERE Id = :inst.Id
+            WITH SYSTEM_MODE
+          ]) {
+            refreshCachedStatus(instById, refreshed);
+            if (!isWakeableStatus(refreshed.Status__c)) {
+              cancelledInstanceIds.add(inst.Id);
+            }
+          }
           continue;
         }
 
@@ -4755,6 +4864,7 @@ public inherited sharing class WorkflowEngine {
       if (sp != null) {
         Database.rollback(sp);
       }
+      clearEnqueueGuards(activeInstById.keySet());
       throw e;
     }
   }
@@ -7094,6 +7204,18 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
+    // A savepoint restores all-or-none semantics: the keyed insert uses
+    // allOrNone=false so a concurrent-duplicate loser is swallowed as a no-op,
+    // but a genuine (non-duplicate) row error — or a failure of the unkeyed
+    // insert below — must roll back the already-captured rows before the method
+    // throws. Otherwise a caller that catches the exception and retries the same
+    // batch would treat the committed captures as duplicates while the rest of
+    // the request never ran.
+    if (keyedRows.isEmpty() && unkeyedRows.isEmpty()) {
+      return;
+    }
+    Savepoint sp = Database.setSavepoint();
+
     // First-wins: insert (allOrNone=false) and swallow per-row DUPLICATE_VALUE so
     // a duplicate capture (same key, possibly different payload/name) is a no-op
     // against the already-captured row — matching the routed keyed path — rather
@@ -7121,13 +7243,19 @@ public inherited sharing class WorkflowEngine {
         }
       }
       if (genuineError != null) {
+        Database.rollback(sp);
         throw new WorkflowException(
           'Failed to capture unrouted signal: ' + genuineError
         );
       }
     }
     if (!unkeyedRows.isEmpty()) {
-      insert as system unkeyedRows;
+      try {
+        insert as system unkeyedRows;
+      } catch (Exception e) {
+        Database.rollback(sp);
+        throw e;
+      }
     }
   }
 
@@ -7247,6 +7375,7 @@ public inherited sharing class WorkflowEngine {
       wakeInstanceForSignal(instance);
     } catch (Exception e) {
       Database.rollback(sp);
+      clearEnqueueGuards(new Set<Id>{ instance.Id });
       throw e;
     }
 
