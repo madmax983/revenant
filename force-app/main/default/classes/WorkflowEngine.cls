@@ -4463,6 +4463,13 @@ public inherited sharing class WorkflowEngine {
     List<Id> cancelClaimInstIds = new List<Id>();
     List<Boolean> cancelClaimRunComp = new List<Boolean>();
     Set<String> seenCancelKeys = new Set<String>();
+    // Instances driven terminal by a cancel in this batch. The instById/instByKey
+    // SObjects are still in their pre-cancel (active) state, so the forward-signal
+    // loop below must skip any sibling signal for these instances — otherwise it
+    // would accept the signal against the stale status and, for a Suspended
+    // instance, write that SObject back as Running, resurrecting a workflow the
+    // cancel just drove to Cancelled.
+    Set<Id> cancelledInstanceIds = new Set<Id>();
     for (SignalRequest req : requests) {
       if (
         String.isBlank(req.idempotencyKey) ||
@@ -4528,6 +4535,7 @@ public inherited sharing class WorkflowEngine {
       try {
         for (Integer i : freshClaims) {
           cancel(cancelClaimInstIds[i], cancelClaimRunComp[i]);
+          cancelledInstanceIds.add(cancelClaimInstIds[i]);
         }
       } catch (Exception e) {
         Database.rollback(cancelSp);
@@ -4551,6 +4559,13 @@ public inherited sharing class WorkflowEngine {
         inst = instByKey.get(req.keyOrId);
       }
 
+      // A cancel earlier in this batch already drove this instance terminal; the
+      // cached SObject is stale, so skip every sibling signal for it rather than
+      // acting on the pre-cancel status and resurrecting a Cancelled workflow.
+      if (inst != null && cancelledInstanceIds.contains(inst.Id)) {
+        continue;
+      }
+
       if (
         inst != null &&
         !(inst.Status__c == 'CompensationFailed' &&
@@ -4565,6 +4580,9 @@ public inherited sharing class WorkflowEngine {
             continue; // keyed cancel handled in the bulk-claim pre-pass above
           }
           cancel(inst.Id, parseRunCompensations(req.payload));
+          // Record so a later sibling signal for this instance is skipped rather
+          // than waking the now-stale SObject back to Running.
+          cancelledInstanceIds.add(inst.Id);
           continue;
         }
 
@@ -4615,8 +4633,9 @@ public inherited sharing class WorkflowEngine {
     // otherwise be left with a stranded Received signal and a consumed
     // idempotency key, so retrying the same batch would silently no-op.
     Set<Id> instancesWithFreshKeyedSignal = new Set<Id>();
+    System.Savepoint sp = null;
     if (!unkeyedSignals.isEmpty() || !keyedSignals.isEmpty()) {
-      System.Savepoint sp = Database.setSavepoint();
+      sp = Database.setSavepoint();
 
       // Insert unkeyed signals (plain insert, unchanged at-least-once behavior).
       if (!unkeyedSignals.isEmpty()) {
@@ -4659,70 +4678,85 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    // Only wake an instance if it received at least one fresh signal this call:
-    // unkeyed signals always qualify; keyed signals only if the insert won the race.
-    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
-    List<Workflow_Instance__c> activeInstances = new List<Workflow_Instance__c>();
-    // Deduplicate: only process each active instance once.
-    Set<Id> processedActiveIds = new Set<Id>();
-    for (Workflow_Instance__c inst : activeInstById.values()) {
-      if (processedActiveIds.contains(inst.Id)) {
-        continue;
+    // The signal inserts and the wake-up share the savepoint above so the bulk
+    // call is all-or-none: the status flip (update), enqueueOrchestrators, and
+    // enqueueResumeBulk can still throw after the rows are committed (e.g. a
+    // validation rule on a Suspended instance or an EventBus publish failure),
+    // so on any such failure we roll the inserted rows back before rethrowing.
+    // Otherwise a caller that catches the exception would be left with stranded
+    // Received rows and consumed idempotency keys, so retrying the same batch
+    // would silently no-op and never wake the still-Suspended instances.
+    try {
+      // Only wake an instance if it received at least one fresh signal this call:
+      // unkeyed signals always qualify; keyed signals only if the insert won the race.
+      List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+      List<Workflow_Instance__c> activeInstances = new List<Workflow_Instance__c>();
+      // Deduplicate: only process each active instance once.
+      Set<Id> processedActiveIds = new Set<Id>();
+      for (Workflow_Instance__c inst : activeInstById.values()) {
+        if (processedActiveIds.contains(inst.Id)) {
+          continue;
+        }
+        Boolean freshSignalLanded =
+          instancesWithUnkeyedSignal.contains(inst.Id) ||
+          instancesWithFreshKeyedSignal.contains(inst.Id);
+        if (!freshSignalLanded) {
+          continue;
+        }
+        processedActiveIds.add(inst.Id);
+        // If the workflow is suspended or running, resume/orchestrate it. A
+        // Compensating/Cancelling instance is mid-rollback: a compensation step
+        // may depend on this signal, so wake it too rather than rejecting it. The
+        // compensation status is left untouched (only Suspended flips to Running);
+        // runStep re-detects the rollback from the trailing '_Compensate' step.
+        // A Paused instance keeps its status — the held signal (Received) is
+        // observed when resume re-drives the wait step; do not wake it here.
+        if (inst.Status__c == 'Suspended') {
+          inst.Status__c = 'Running';
+          instancesToUpdate.add(inst);
+        }
+        activeInstances.add(inst);
       }
-      Boolean freshSignalLanded =
-        instancesWithUnkeyedSignal.contains(inst.Id) ||
-        instancesWithFreshKeyedSignal.contains(inst.Id);
-      if (!freshSignalLanded) {
-        continue;
-      }
-      processedActiveIds.add(inst.Id);
-      // If the workflow is suspended or running, resume/orchestrate it. A
-      // Compensating/Cancelling instance is mid-rollback: a compensation step
-      // may depend on this signal, so wake it too rather than rejecting it. The
-      // compensation status is left untouched (only Suspended flips to Running);
-      // runStep re-detects the rollback from the trailing '_Compensate' step.
-      // A Paused instance keeps its status — the held signal (Received) is
-      // observed when resume re-drives the wait step; do not wake it here.
-      if (inst.Status__c == 'Suspended') {
-        inst.Status__c = 'Running';
-        instancesToUpdate.add(inst);
-      }
-      activeInstances.add(inst);
-    }
 
-    if (!instancesToUpdate.isEmpty()) {
-      update as system instancesToUpdate;
-    }
+      if (!instancesToUpdate.isEmpty()) {
+        update as system instancesToUpdate;
+      }
 
-    List<Id> instanceIdsToEnqueue = new List<Id>();
-    List<Workflow_Instance__c> parallelInstances = new List<Workflow_Instance__c>();
-    for (Workflow_Instance__c inst : activeInstances) {
-      // A Compensating/Cancelling instance rolls back serially off the LIFO stack,
-      // so it needs exactly one compensation wake -- never per-branch fan-out, even
-      // if Current_Step__c still holds a stale comma-separated parallel branch list
-      // from the forward phase. Otherwise one compensation signal would publish a
-      // RUN_STEP per stale branch and pile up duplicate rollback workers.
-      Boolean isCompensatingInst =
-        inst.Status__c == 'Compensating' ||
-        inst.Status__c == 'Cancelling';
-      // Parallel (forward) instances must wake each branch by name; collect them
-      // for a single bulk resume rather than a per-instance query each (which would
-      // exhaust the SOQL limit when many parallel workflows are signaled at once).
-      if (
-        !isCompensatingInst &&
-        String.isNotBlank(inst.Current_Step__c) &&
-        inst.Current_Step__c.contains(',')
-      ) {
-        parallelInstances.add(inst);
-        continue;
+      List<Id> instanceIdsToEnqueue = new List<Id>();
+      List<Workflow_Instance__c> parallelInstances = new List<Workflow_Instance__c>();
+      for (Workflow_Instance__c inst : activeInstances) {
+        // A Compensating/Cancelling instance rolls back serially off the LIFO stack,
+        // so it needs exactly one compensation wake -- never per-branch fan-out, even
+        // if Current_Step__c still holds a stale comma-separated parallel branch list
+        // from the forward phase. Otherwise one compensation signal would publish a
+        // RUN_STEP per stale branch and pile up duplicate rollback workers.
+        Boolean isCompensatingInst =
+          inst.Status__c == 'Compensating' ||
+          inst.Status__c == 'Cancelling';
+        // Parallel (forward) instances must wake each branch by name; collect them
+        // for a single bulk resume rather than a per-instance query each (which would
+        // exhaust the SOQL limit when many parallel workflows are signaled at once).
+        if (
+          !isCompensatingInst &&
+          String.isNotBlank(inst.Current_Step__c) &&
+          inst.Current_Step__c.contains(',')
+        ) {
+          parallelInstances.add(inst);
+          continue;
+        }
+        if (!enqueuedInstanceIds.contains(inst.Id)) {
+          enqueuedInstanceIds.add(inst.Id);
+          instanceIdsToEnqueue.add(inst.Id);
+        }
       }
-      if (!enqueuedInstanceIds.contains(inst.Id)) {
-        enqueuedInstanceIds.add(inst.Id);
-        instanceIdsToEnqueue.add(inst.Id);
+      enqueueOrchestrators(instanceIdsToEnqueue);
+      enqueueResumeBulk(parallelInstances);
+    } catch (Exception e) {
+      if (sp != null) {
+        Database.rollback(sp);
       }
+      throw e;
     }
-    enqueueOrchestrators(instanceIdsToEnqueue);
-    enqueueResumeBulk(parallelInstances);
   }
 
   /**
@@ -7184,6 +7218,14 @@ public inherited sharing class WorkflowEngine {
         sig.Idempotency_Key__c
       );
     }
+    // The re-parent update and the wake-up share one savepoint so the
+    // redelivery is all-or-none. The update flips the row to Received and
+    // rewrites Signal_Key__c to the instance-scoped routed hash; if the wake
+    // then fails, the row is rolled back to its Unrouted/capture-key state so
+    // redelivery can be retried. Otherwise a stranded Received row with the
+    // rewritten unique key would cause a later routed duplicate of the same
+    // idempotency key to no-op, leaving the workflow unwoken.
+    Savepoint sp = Database.setSavepoint();
     try {
       update as system sig;
     } catch (DmlException ex) {
@@ -7201,7 +7243,12 @@ public inherited sharing class WorkflowEngine {
       throw ex;
     }
 
-    wakeInstanceForSignal(instance);
+    try {
+      wakeInstanceForSignal(instance);
+    } catch (Exception e) {
+      Database.rollback(sp);
+      throw e;
+    }
 
     return true;
   }

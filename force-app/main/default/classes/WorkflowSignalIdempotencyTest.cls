@@ -736,4 +736,62 @@ public class WorkflowSignalIdempotencyTest {
       'Pre-arrival capture + post-arrival routed duplicate of the same key must collapse to one row'
     );
   }
+
+  // ── Bulk: a keyed cancel must not be resurrected by a sibling forward signal ─
+
+  @isTest
+  static void testBulkKeyedCancelSkipsSiblingForwardSignal() {
+    // Instance suspends waiting for 'Go' (a different signal leaves it active).
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowSignalIdempotencyTest.WaitForGoWorkflow',
+      'resurrect-1',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+    System.assertEquals(
+      'Suspended',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId]
+        .Status__c,
+      'precondition: instance must be Suspended waiting for Go'
+    );
+
+    // One bulk call pairs a forward 'Go' (listed first) with a keyed 'Cancel'
+    // for the same instance. The keyed-cancel pre-pass drives the instance
+    // Cancelled before the forward loop; the sibling 'Go' must be skipped, not
+    // accepted against the stale Suspended SObject (which would flip it back to
+    // Running and resurrect a Cancelled workflow).
+    Test.startTest();
+    WorkflowEngine.signal(
+      new List<WorkflowEngine.SignalRequest>{
+        new WorkflowEngine.SignalRequest('resurrect-1', 'Go', null),
+        new WorkflowEngine.SignalRequest(
+          'resurrect-1',
+          'Cancel',
+          null,
+          null,
+          'cancel-key'
+        )
+      }
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      'Cancelled',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instanceId]
+        .Status__c,
+      'keyed cancel must win; sibling Go must not resurrect the workflow'
+    );
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c = 'Go'
+          AND Status__c = 'Received'
+      ],
+      'a forward signal for a cancelled instance must not be delivered'
+    );
+  }
 }
