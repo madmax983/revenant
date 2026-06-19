@@ -4424,41 +4424,56 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    // Insert unkeyed signals (plain insert, unchanged behavior).
-    if (!unkeyedSignals.isEmpty()) {
-      insert as system unkeyedSignals;
-    }
-
-    // Insert keyed signals with allOrNone=false; swallow per-row DUPLICATE_VALUE
-    // (another transaction won the race) — that delivery is still a success no-op.
-    // Genuine non-duplicate errors are surfaced.
+    // Insert signals. A savepoint restores all-or-none semantics on a genuine
+    // (non-duplicate) row failure: keyed inserts use allOrNone=false so a
+    // concurrent-duplicate loser is swallowed as a no-op, but a real error
+    // (e.g. an overlong Signal_Name__c from a direct Apex/Flow caller) must not
+    // leave the already-inserted unkeyed rows and sibling keyed rows committed
+    // when the method throws — a caller that catches the exception would
+    // otherwise be left with a stranded Received signal and a consumed
+    // idempotency key, so retrying the same batch would silently no-op.
     Set<Id> instancesWithFreshKeyedSignal = new Set<Id>();
-    if (!keyedSignals.isEmpty()) {
-      Database.SaveResult[] srs = Database.insert(
-        keyedSignals,
-        false,
-        AccessLevel.SYSTEM_MODE
-      );
-      String genuineError = null;
-      for (Integer i = 0; i < srs.size(); i++) {
-        Database.SaveResult sr = srs[i];
-        if (sr.isSuccess()) {
-          instancesWithFreshKeyedSignal.add(keyedSignalInstIds[i]);
-        } else {
-          Boolean isDup = false;
-          for (Database.Error err : sr.getErrors()) {
-            if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
-              isDup = true;
-              break;
+    if (!unkeyedSignals.isEmpty() || !keyedSignals.isEmpty()) {
+      System.Savepoint sp = Database.setSavepoint();
+
+      // Insert unkeyed signals (plain insert, unchanged at-least-once behavior).
+      if (!unkeyedSignals.isEmpty()) {
+        insert as system unkeyedSignals;
+      }
+
+      // Insert keyed signals with allOrNone=false; swallow per-row
+      // DUPLICATE_VALUE (another transaction won the race) — that delivery is
+      // still a success no-op. Genuine non-duplicate errors roll back and surface.
+      if (!keyedSignals.isEmpty()) {
+        Database.SaveResult[] srs = Database.insert(
+          keyedSignals,
+          false,
+          AccessLevel.SYSTEM_MODE
+        );
+        String genuineError = null;
+        for (Integer i = 0; i < srs.size(); i++) {
+          Database.SaveResult sr = srs[i];
+          if (sr.isSuccess()) {
+            instancesWithFreshKeyedSignal.add(keyedSignalInstIds[i]);
+          } else {
+            Boolean isDup = false;
+            for (Database.Error err : sr.getErrors()) {
+              if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+                isDup = true;
+                break;
+              }
+            }
+            if (!isDup && genuineError == null) {
+              genuineError = sr.getErrors()[0].getMessage();
             }
           }
-          if (!isDup && genuineError == null) {
-            genuineError = sr.getErrors()[0].getMessage();
-          }
         }
-      }
-      if (genuineError != null) {
-        throw new WorkflowException('Failed to insert signal: ' + genuineError);
+        if (genuineError != null) {
+          Database.rollback(sp);
+          throw new WorkflowException(
+            'Failed to insert signal: ' + genuineError
+          );
+        }
       }
     }
 

@@ -361,4 +361,52 @@ public class WorkflowSignalIdempotencyTest {
       'Second identical Flow invocable keyed signal must not produce a second row'
     );
   }
+
+  // ── Bulk keyed insert: genuine row error rolls back all-or-none ──────────────
+  // Regression for PR #79 review: a mixed bulk request where one keyed signal is
+  // valid and another fails for a non-duplicate reason must NOT leave the valid
+  // row committed (which would strand a Received signal and consume its key).
+
+  @isTest
+  static void testBulkKeyedInsertGenuineErrorRollsBackAllOrNone() {
+    Id instanceId = startAndSuspend('idem-test-8');
+
+    // Signal_Name__c is Text(255); 500 chars forces a non-duplicate DML error.
+    String tooLongName = 'X'.repeat(500);
+
+    List<WorkflowEngine.SignalRequest> reqs = new List<WorkflowEngine.SignalRequest>{
+      new WorkflowEngine.SignalRequest(
+        'idem-test-8',
+        'Approve',
+        '{"v":1}',
+        null,
+        'good-key'
+      ),
+      new WorkflowEngine.SignalRequest(
+        'idem-test-8',
+        tooLongName,
+        '{"v":2}',
+        null,
+        'bad-key'
+      )
+    };
+
+    Boolean threw = false;
+    try {
+      WorkflowEngine.signal(reqs);
+    } catch (Exception ex) {
+      threw = true;
+    }
+
+    System.assert(threw, 'A genuine (non-duplicate) row error must surface');
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE Workflow_Instance__c = :instanceId
+      ],
+      'A genuine row error must roll back the successfully-inserted sibling (all-or-none)'
+    );
+  }
 }
