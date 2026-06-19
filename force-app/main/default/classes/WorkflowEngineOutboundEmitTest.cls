@@ -149,6 +149,81 @@ public class WorkflowEngineOutboundEmitTest {
     }
   }
 
+  // ----- Workflow whose result events list contains a null entry.
+
+  public class NullEventWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'WorkflowEngineOutboundEmitTest.NullEventStep';
+    }
+    public String getNextStep(String currentStep, StepResult result) {
+      return null;
+    }
+  }
+
+  public class NullEventStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      // A conditionally-built list that ends up with a null alongside a valid
+      // event. The engine must filter the null, not forward it to
+      // EventBus.publish (which would throw and drop the whole batch).
+      List<SObject> events = new List<SObject>{
+        new Workflow_Lifecycle__e(
+          Workflow_Instance_Id__c = ctx.workflowInstanceId,
+          Status__c = 'Completed'
+        ),
+        null
+      };
+      return StepResult.complete(null, 'done', events);
+    }
+  }
+
+  // ----- Saga whose compensation step emits on rollback.
+
+  public class CompensationEmitWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'WorkflowEngineOutboundEmitTest.RefundableChargeStep';
+    }
+    public String getNextStep(String currentStep, StepResult result) {
+      if (
+        currentStep == 'WorkflowEngineOutboundEmitTest.RefundableChargeStep'
+      ) {
+        return 'WorkflowEngineOutboundEmitTest.FailingStep';
+      }
+      return null;
+    }
+  }
+
+  public class RefundableChargeStep implements CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{ 'chargeId' => 'ch_1' }
+      );
+    }
+
+    public StepResult compensate(StepContext ctx) {
+      // Emit on rollback — must publish, coupled to the Compensated commit.
+      ctx.emit(
+        new Workflow_Lifecycle__e(
+          Workflow_Instance_Id__c = ctx.workflowInstanceId,
+          Status__c = 'Compensated'
+        )
+      );
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{ 'refunded' => true }
+      );
+    }
+  }
+
+  public class FailingStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      // Force a failure so the saga rolls back into RefundableChargeStep.compensate().
+      throw new WorkflowEngine.WorkflowException(
+        'forced failure to trigger compensation'
+      );
+    }
+  }
+
   // ===========================================================================
 
   @isTest
@@ -253,6 +328,55 @@ public class WorkflowEngineOutboundEmitTest {
       WorkflowOutboundEventPublisher.publishedEvents.size(),
       'A step that emits then SPLITs publishes its events once on the SPLIT ' +
       'commit; the fan-out branches emit nothing and add no publishes'
+    );
+  }
+
+  @isTest
+  static void nullEntriesInResultEventsAreFilteredNotDropped() {
+    WorkflowOutboundEventPublisher.publishedEvents.clear();
+
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineOutboundEmitTest.NullEventWorkflow',
+      'null-event-1',
+      null
+    );
+    WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
+      .drive();
+    Test.stopTest();
+
+    System.assertEquals('Completed', result.status);
+    System.assertEquals(
+      1,
+      WorkflowOutboundEventPublisher.publishedEvents.size(),
+      'A null entry in the result events is filtered; the valid event still ' +
+      'publishes (a null would otherwise throw and drop the whole batch)'
+    );
+  }
+
+  @isTest
+  static void compensationEmitPublishesOnCompensatedCommit() {
+    WorkflowOutboundEventPublisher.publishedEvents.clear();
+
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineOutboundEmitTest.CompensationEmitWorkflow',
+      'comp-emit-1',
+      null
+    );
+    WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
+      .drive();
+    Test.stopTest();
+
+    System.assertEquals(
+      'Compensated',
+      result.status,
+      'Saga must roll back so the compensation runs'
+    );
+    System.assertEquals(
+      1,
+      WorkflowOutboundEventPublisher.publishedEvents.size(),
+      'A compensate() emit publishes once, coupled to the Compensated commit'
     );
   }
 }

@@ -40,6 +40,24 @@ public inherited sharing class WorkflowOutboundEventPublisher {
   @TestVisible
   private static Boolean forceDmlBudgetExhausted = false;
 
+  // Headroom the guard keeps free, on top of the publish's own cost, for the
+  // engine's REQUIRED transition DML that runs AFTER this publish in the same
+  // transaction (the COMPLETE/SPLIT/compensation paths still update the
+  // instance, insert the next-step / parallel-branch execution rows, and
+  // publish the orchestrator hand-off events). Unlike the terminal
+  // Workflow_Lifecycle__e publish — which is the last DML in its transaction and
+  // so needs no reserve — letting an emit consume the penultimate statement/rows
+  // here would make that later durable DML trip the governor and roll back the
+  // very Completed/SPLIT commit this publish is meant to ride. Being
+  // fire-and-forget, dropping the emit near the limit is the correct
+  // conservative choice. Sized for the handful of writes plus a small parallel
+  // fan-out; extreme fan-out at the very edge of the limit may still drop emits
+  // rather than risk the commit.
+  @TestVisible
+  private static Integer DML_STATEMENT_RESERVE = 10;
+  @TestVisible
+  private static Integer DML_ROW_RESERVE = 20;
+
   /**
    * Publishes the given outbound events. Safe to call with null/empty (no-op).
    * Any failure is logged and swallowed so it cannot disrupt the workflow
@@ -57,8 +75,10 @@ public inherited sharing class WorkflowOutboundEventPublisher {
       // roll back the Completed write. Drop the best-effort publish instead.
       if (
         forceDmlBudgetExhausted ||
-        Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
-        Limits.getDmlRows() + events.size() > Limits.getLimitDmlRows()
+        Limits.getDmlStatements() + 1 + DML_STATEMENT_RESERVE >
+        Limits.getLimitDmlStatements() ||
+        Limits.getDmlRows() + events.size() + DML_ROW_RESERVE >
+        Limits.getLimitDmlRows()
       ) {
         System.debug(
           LoggingLevel.WARN,

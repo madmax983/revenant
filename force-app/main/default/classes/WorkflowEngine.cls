@@ -3187,11 +3187,25 @@ public inherited sharing class WorkflowEngine {
     StepContext context
   ) {
     List<SObject> events = new List<SObject>();
+    // Filter null entries from both sources: a null SObject in the EventBus
+    // publish list throws before any per-row SaveResult, which the publisher then
+    // swallows (fire-and-forget) — silently dropping every valid event in the
+    // same batch. ctx.emit(null) is already ignored at the buffer; do the same
+    // for the complete(..., events) overload, where an author may have built the
+    // list conditionally.
     if (context != null && context.getPendingEmits() != null) {
-      events.addAll(context.getPendingEmits());
+      for (SObject e : context.getPendingEmits()) {
+        if (e != null) {
+          events.add(e);
+        }
+      }
     }
     if (result != null && result.outboundEvents != null) {
-      events.addAll(result.outboundEvents);
+      for (SObject e : result.outboundEvents) {
+        if (e != null) {
+          events.add(e);
+        }
+      }
     }
     if (events.isEmpty()) {
       return;
@@ -5711,6 +5725,13 @@ public inherited sharing class WorkflowEngine {
       // step does not re-observe them. Compensation runs serially (LIFO) and
       // does not claim, so it consumes still-Received rows plus same-name cleanup.
       markSignalsConsumed(instance.Id, context, false);
+
+      // Effectively-once outbound emit from compensation (issue #64): a
+      // CompensatableStep.compensate() that calls ctx.emit() or the
+      // complete(..., events) overload publishes here, coupled to the durable
+      // Compensated transition — the same commit-coupling as the forward path,
+      // so the public emit API does not silently drop events in rollback flows.
+      publishOutboundEvents(result, context);
 
       stack.remove(stack.size() - 1);
       instance.Compensation_Stack__c = JSON.serialize(stack);

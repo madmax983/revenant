@@ -36,13 +36,25 @@ public inherited sharing class OrderChoreographyWorkflowExample {
    * asked to start B more than once per shipment.
    */
   public static void onOrderShipped(List<Order_Shipped__e> events) {
+    // Bulk-safe: a platform-event trigger can deliver many events in one
+    // transaction, and each WorkflowEngine.start() does SOQL + workflow-row DML
+    // + an enqueue. Starting one-by-one in a loop would blow the per-transaction
+    // governor limits on a normal bulk delivery and roll back the whole
+    // subscriber. Build one batch of StartRequests and use the bulk start path
+    // (get-or-start), which runs the whole delivery in a single set of DML.
+    List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
     for (Order_Shipped__e evt : events) {
       refundStartCount++;
-      WorkflowEngine.start(
-        'OrderChoreographyWorkflowExample.RefundWorkflow',
-        'refund-' + evt.Correlation_Key__c,
-        new Map<String, Object>{ 'orderId' => evt.Order_Id__c }
+      requests.add(
+        new WorkflowEngine.StartRequest(
+          'OrderChoreographyWorkflowExample.RefundWorkflow',
+          'refund-' + evt.Correlation_Key__c,
+          new Map<String, Object>{ 'orderId' => evt.Order_Id__c }
+        )
       );
+    }
+    if (!requests.isEmpty()) {
+      WorkflowEngine.start(requests);
     }
   }
 
