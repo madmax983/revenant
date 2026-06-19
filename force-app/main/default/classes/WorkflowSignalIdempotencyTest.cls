@@ -28,6 +28,28 @@ public class WorkflowSignalIdempotencyTest {
     }
   }
 
+  // ── Inline workflow: suspends until a 'Go' signal (ignores 'Approve') ───────
+  // Stays active after an 'Approve' lands, so the pre-arrival-to-active dedup
+  // boundary can be exercised without the instance completing first.
+
+  public class WaitForGoWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'WorkflowSignalIdempotencyTest.WaitForGoStep';
+    }
+    public String getNextStep(String currentStep, StepResult result) {
+      return null;
+    }
+  }
+
+  public class WaitForGoStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (ctx.getSignal('Go').isPresent()) {
+        return StepResult.complete(null, null);
+      }
+      return StepResult.suspend();
+    }
+  }
+
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
   private static Id startAndSuspend(String corrKey) {
@@ -617,6 +639,101 @@ public class WorkflowSignalIdempotencyTest {
         WHERE Correlation_Key__c LIKE 'order-1' AND Status__c = 'Unrouted'
       ],
       'Same key + case-variant correlation keys must collapse to one Unrouted row'
+    );
+  }
+
+  // ── Unrouted keyed capture is first-wins (does not overwrite on duplicate) ───
+
+  @isTest
+  static void testUnroutedKeyedCaptureIsFirstWins() {
+    // First capture (transaction 1).
+    EventBus.publish(
+      new List<Workflow_Event__e>{
+        new Workflow_Event__e(
+          Event_Type__c = 'SIGNAL:Approve',
+          Workflow_Instance_Id__c = 'first-wins-corr',
+          Payload__c = '{"v":"first"}',
+          Idempotency_Key__c = 'first-wins-key'
+        )
+      }
+    );
+    Test.getEventBus().deliver();
+
+    // Duplicate capture, same key, different payload (transaction 2).
+    EventBus.publish(
+      new List<Workflow_Event__e>{
+        new Workflow_Event__e(
+          Event_Type__c = 'SIGNAL:Approve',
+          Workflow_Instance_Id__c = 'first-wins-corr',
+          Payload__c = '{"v":"second"}',
+          Idempotency_Key__c = 'first-wins-key'
+        )
+      }
+    );
+    Test.getEventBus().deliver();
+
+    List<Workflow_Signal__c> rows = [
+      SELECT Payload__c
+      FROM Workflow_Signal__c
+      WHERE Correlation_Key__c = 'first-wins-corr' AND Status__c = 'Unrouted'
+    ];
+    System.assertEquals(1, rows.size(), 'Duplicate capture must not add a row');
+    System.assertEquals(
+      '{"v":"first"}',
+      rows[0].Payload__c,
+      'First capture wins; a duplicate must not overwrite the payload'
+    );
+  }
+
+  // ── Pre-arrival keyed capture dedups across the active boundary (issue P2) ───
+
+  @isTest
+  static void testPreArrivalKeyedDedupsAcrossActiveBoundary() {
+    // 1. Capture a keyed 'Approve' before any instance exists.
+    EventBus.publish(
+      new List<Workflow_Event__e>{
+        new Workflow_Event__e(
+          Event_Type__c = 'SIGNAL:Approve',
+          Workflow_Instance_Id__c = 'boundary-1',
+          Payload__c = '{"v":1}',
+          Idempotency_Key__c = 'boundary-key'
+        )
+      }
+    );
+    Test.getEventBus().deliver();
+    Workflow_Signal__c captured = [
+      SELECT Id
+      FROM Workflow_Signal__c
+      WHERE Correlation_Key__c = 'boundary-1' AND Status__c = 'Unrouted'
+      LIMIT 1
+    ];
+
+    // 2. Start an instance with that correlation key; it suspends waiting for
+    //    'Go', so an 'Approve' leaves it active.
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowSignalIdempotencyTest.WaitForGoWorkflow',
+      'boundary-1',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 3. Redeliver the captured signal: it reparents and rewrites its dedup key
+    //    from the correlation-scoped hash to the instance-scoped routed hash.
+    WorkflowEngine.redeliverCapturedSignal(captured.Id);
+
+    // 4. A routed duplicate of the same idempotency key must be deduped.
+    WorkflowEngine.signal('boundary-1', 'Approve', '{"v":2}', 'boundary-key');
+
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c = 'Approve'
+      ],
+      'Pre-arrival capture + post-arrival routed duplicate of the same key must collapse to one row'
     );
   }
 }

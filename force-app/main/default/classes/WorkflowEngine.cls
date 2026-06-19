@@ -1135,6 +1135,53 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Parses the optional {"runCompensations": <bool>} flag from a cancel signal
+   * payload, defaulting to true when absent or unparseable.
+   */
+  private static Boolean parseRunCompensations(String payload) {
+    if (String.isBlank(payload)) {
+      return true;
+    }
+    try {
+      Map<String, Object> params = (Map<String, Object>) JSON.deserializeUntyped(
+        payload
+      );
+      if (params.containsKey('runCompensations')) {
+        return (Boolean) params.get('runCompensations');
+      }
+    } catch (Exception e) {
+      System.debug(
+        LoggingLevel.WARN,
+        'Failed to parse cancel payload, using default runCompensations: ' +
+        e.getMessage()
+      );
+    }
+    return true;
+  }
+
+  /**
+   * Wakes an instance after a routed signal lands. A Suspended instance flips to
+   * Running; a Running/Compensating/Cancelling instance is re-driven in place (a
+   * compensation step can depend on inbound signals, so it is woken rather than
+   * rejected). A Paused instance keeps its status — the held signal is observed
+   * when resume re-drives the wait step.
+   */
+  private static void wakeInstanceForSignal(Workflow_Instance__c instance) {
+    if (
+      instance.Status__c == 'Suspended' ||
+      instance.Status__c == 'Running' ||
+      instance.Status__c == 'Compensating' ||
+      instance.Status__c == 'Cancelling'
+    ) {
+      if (instance.Status__c == 'Suspended') {
+        instance.Status__c = 'Running';
+        update as system instance;
+      }
+      enqueueResume(instance.Id);
+    }
+  }
+
+  /**
    * Resolves the dedup-winner instance for each correlation key: an active
    * instance if one exists, otherwise (when includeTerminal is true) the most
    * recent terminal instance that became terminal within the configured dedup
@@ -4178,23 +4225,7 @@ public inherited sharing class WorkflowEngine {
       signalName.equalsIgnoreCase('Cancel') ||
       signalName.equalsIgnoreCase('CancelWorkflow')
     ) {
-      Boolean runCompensations = true;
-      if (String.isNotBlank(payload)) {
-        try {
-          Map<String, Object> params = (Map<String, Object>) JSON.deserializeUntyped(
-            payload
-          );
-          if (params.containsKey('runCompensations')) {
-            runCompensations = (Boolean) params.get('runCompensations');
-          }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to parse cancel payload, using default runCompensations: ' +
-            e.getMessage()
-          );
-        }
-      }
+      Boolean runCompensations = parseRunCompensations(payload);
       // A keyed cancel is deduped via a Consumed tombstone so an at-least-once
       // redelivery runs cancellation at most once. The claim and the cancellation
       // share one savepoint: if cancel() fails the tombstone is rolled back so a
@@ -4228,7 +4259,13 @@ public inherited sharing class WorkflowEngine {
     sig.Status__c = 'Received';
 
     if (String.isNotBlank(idempotencyKey)) {
+      // Keyed delivery: the row insert and the wake-up share one savepoint. The
+      // unique Signal_Key__c makes a duplicate insert a silent no-op; if the
+      // wake-up then fails, the row is rolled back so a retry of the same key
+      // re-inserts and re-wakes rather than no-op'ing on a Received signal left
+      // stranded on a still-Suspended instance.
       sig.Signal_Key__c = deriveSignalDedupKey(instance.Id, idempotencyKey);
+      Savepoint sp = Database.setSavepoint();
       try {
         insert as system sig;
       } catch (DmlException ex) {
@@ -4237,29 +4274,17 @@ public inherited sharing class WorkflowEngine {
         }
         throw ex;
       }
-    } else {
-      insert as system sig;
+      try {
+        wakeInstanceForSignal(instance);
+      } catch (Exception e) {
+        Database.rollback(sp);
+        throw e;
+      }
+      return;
     }
 
-    // If the workflow is suspended or running, resume/orchestrate it. A parallel
-    // instance must wake each incomplete branch by name (see enqueueResume). A
-    // Compensating/Cancelling instance is mid-rollback: a compensation step can
-    // depend on inbound signals, so wake it too rather than rejecting the signal
-    // as "no active workflow". The compensation status is left untouched (only a
-    // Suspended instance flips to Running); runStep re-detects the compensation
-    // from the trailing '_Compensate' step and routes to runCompensationStep.
-    if (
-      instance.Status__c == 'Suspended' ||
-      instance.Status__c == 'Running' ||
-      instance.Status__c == 'Compensating' ||
-      instance.Status__c == 'Cancelling'
-    ) {
-      if (instance.Status__c == 'Suspended') {
-        instance.Status__c = 'Running';
-        update as system instance;
-      }
-      enqueueResume(instance.Id);
-    }
+    insert as system sig;
+    wakeInstanceForSignal(instance);
   }
 
   /**
@@ -4427,6 +4452,89 @@ public inherited sharing class WorkflowEngine {
     }
     captureUnroutedSignals(unmatchedToCapture);
 
+    // Keyed cancels: claim in bulk, then cancel. One savepoint plus one bulk
+    // marker insert guards the whole keyed-cancel sub-batch — rather than a
+    // savepoint and a marker insert per row, which would burn ~2 DML statements
+    // each and abort large batches against the 150-statement limit. In-batch
+    // duplicates collapse via seenCancelKeys; cross-transaction duplicates lose
+    // the unique-constraint race (DUPLICATE_VALUE) and are skipped. A failed
+    // cancel() rolls the batch's claims back so the same keys can be retried.
+    List<Workflow_Signal__c> cancelClaims = new List<Workflow_Signal__c>();
+    List<Id> cancelClaimInstIds = new List<Id>();
+    List<Boolean> cancelClaimRunComp = new List<Boolean>();
+    Set<String> seenCancelKeys = new Set<String>();
+    for (SignalRequest req : requests) {
+      if (
+        String.isBlank(req.idempotencyKey) ||
+        String.isBlank(req.signalName) ||
+        !(req.signalName.equalsIgnoreCase('Cancel') ||
+        req.signalName.equalsIgnoreCase('CancelWorkflow'))
+      ) {
+        continue;
+      }
+      Workflow_Instance__c inst = instById.get(req.keyOrId);
+      if (inst == null) {
+        inst = instByKey.get(req.keyOrId);
+      }
+      if (inst == null) {
+        continue; // unmatched keyed cancel already no-op'd above
+      }
+      String claimKey = deriveSignalDedupKey(inst.Id, req.idempotencyKey);
+      if (seenCancelKeys.contains(claimKey)) {
+        continue; // in-batch duplicate keyed cancel
+      }
+      seenCancelKeys.add(claimKey);
+      cancelClaims.add(
+        new Workflow_Signal__c(
+          Workflow_Instance__c = inst.Id,
+          Signal_Name__c = req.signalName,
+          Status__c = 'Consumed',
+          Signal_Key__c = claimKey
+        )
+      );
+      cancelClaimInstIds.add(inst.Id);
+      cancelClaimRunComp.add(parseRunCompensations(req.payload));
+    }
+    if (!cancelClaims.isEmpty()) {
+      Savepoint cancelSp = Database.setSavepoint();
+      Database.SaveResult[] claimResults = Database.insert(
+        cancelClaims,
+        false,
+        AccessLevel.SYSTEM_MODE
+      );
+      List<Integer> freshClaims = new List<Integer>();
+      String claimError = null;
+      for (Integer i = 0; i < claimResults.size(); i++) {
+        Database.SaveResult sr = claimResults[i];
+        if (sr.isSuccess()) {
+          freshClaims.add(i);
+        } else {
+          Boolean isDup = false;
+          for (Database.Error err : sr.getErrors()) {
+            if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+              isDup = true;
+              break;
+            }
+          }
+          if (!isDup && claimError == null) {
+            claimError = sr.getErrors()[0].getMessage();
+          }
+        }
+      }
+      if (claimError != null) {
+        Database.rollback(cancelSp);
+        throw new WorkflowException('Failed to claim cancel: ' + claimError);
+      }
+      try {
+        for (Integer i : freshClaims) {
+          cancel(cancelClaimInstIds[i], cancelClaimRunComp[i]);
+        }
+      } catch (Exception e) {
+        Database.rollback(cancelSp);
+        throw e;
+      }
+    }
+
     // Separate into unkeyed (at-least-once, unchanged) and keyed (dedup by unique constraint).
     // For keyed signals, in-batch dedup prevents multiple rows for the same (instance, key)
     // within a single bulk call; the unique constraint handles concurrent transactions.
@@ -4453,41 +4561,10 @@ public inherited sharing class WorkflowEngine {
           req.signalName.equalsIgnoreCase('Cancel') ||
           req.signalName.equalsIgnoreCase('CancelWorkflow')
         ) {
-          Boolean runCompensations = true;
-          if (String.isNotBlank(req.payload)) {
-            try {
-              Map<String, Object> params = (Map<String, Object>) JSON.deserializeUntyped(
-                req.payload
-              );
-              if (params.containsKey('runCompensations')) {
-                runCompensations = (Boolean) params.get('runCompensations');
-              }
-            } catch (Exception e) {
-              System.debug(
-                LoggingLevel.WARN,
-                'Failed to deserialize signal cancel payload: ' + e.getMessage()
-              );
-            }
-          }
-          // A keyed cancel is deduped via a Consumed tombstone so an
-          // at-least-once redelivery runs cancellation at most once. The claim
-          // and the cancellation share one savepoint so a failed cancel() rolls
-          // back the tombstone and a retry re-attempts cancellation. A duplicate
-          // (DUPLICATE_VALUE on the per-instance hash) is a silent no-op.
           if (String.isNotBlank(req.idempotencyKey)) {
-            Savepoint sp = Database.setSavepoint();
-            if (!claimKeyedCancel(inst.Id, req.signalName, req.idempotencyKey)) {
-              continue;
-            }
-            try {
-              cancel(inst.Id, runCompensations);
-            } catch (Exception e) {
-              Database.rollback(sp);
-              throw e;
-            }
-            continue;
+            continue; // keyed cancel handled in the bulk-claim pre-pass above
           }
-          cancel(inst.Id, runCompensations);
+          cancel(inst.Id, parseRunCompensations(req.payload));
           continue;
         }
 
@@ -6932,15 +7009,18 @@ public inherited sharing class WorkflowEngine {
 
   /**
    * Persists unmatched (unrouted) signal requests as Workflow_Signal__c rows
-   * with Status='Unrouted'. Upserts by Signal_Key__c when a dedup key is
-   * present (idempotent under at-least-once redelivery); plain-inserts keyless
-   * rows. Never touches Workflow_Step_Execution__c.
+   * with Status='Unrouted'. Keyed rows are inserted first-wins (allOrNone=false,
+   * swallowing per-row DUPLICATE_VALUE) so a duplicate capture is a no-op against
+   * the already-captured row rather than overwriting it; keyless rows are
+   * plain-inserted. Never touches Workflow_Step_Execution__c.
    *
    * Dedup key selection for a pre-arrival/unrouted signal (no instance yet):
    *  - a caller-supplied idempotency key wins, scoped to the correlation key
    *    (deriveUnroutedDedupKey) so N publishes of the same logical event while
    *    no instance is active collapse to a single Unrouted row and redeliver
-   *    once; distinct correlation keys stay separate.
+   *    once; distinct correlation keys stay separate. The raw key is retained on
+   *    Idempotency_Key__c so redeliverCapturedSignal can rewrite the dedup key to
+   *    the instance-scoped routed hash once an instance becomes active.
    *  - otherwise the platform-event EventUuid (req.dedupKey) is used, which
    *    only collapses replays of the *same* publish.
    */
@@ -6960,9 +7040,16 @@ public inherited sharing class WorkflowEngine {
         Payload__c = req.payload,
         Status__c = 'Unrouted'
       );
-      String dedupVal = String.isNotBlank(req.idempotencyKey)
-        ? deriveUnroutedDedupKey(req.keyOrId, req.idempotencyKey)
-        : req.dedupKey;
+      String dedupVal;
+      if (String.isNotBlank(req.idempotencyKey)) {
+        // Retain the raw caller key so redeliverCapturedSignal can rewrite the
+        // correlation-scoped capture key to the instance-scoped routed key once
+        // a matching instance becomes active (closes the pre-arrival boundary).
+        sig.Idempotency_Key__c = req.idempotencyKey;
+        dedupVal = deriveUnroutedDedupKey(req.keyOrId, req.idempotencyKey);
+      } else {
+        dedupVal = req.dedupKey;
+      }
       if (String.isNotBlank(dedupVal)) {
         sig.Signal_Key__c = dedupVal;
         if (!keyedRows.containsKey(dedupVal)) {
@@ -6973,8 +7060,37 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
+    // First-wins: insert (allOrNone=false) and swallow per-row DUPLICATE_VALUE so
+    // a duplicate capture (same key, possibly different payload/name) is a no-op
+    // against the already-captured row — matching the routed keyed path — rather
+    // than overwriting it the way an upsert would. Genuine errors surface.
     if (!keyedRows.isEmpty()) {
-      upsert as system keyedRows.values() Signal_Key__c;
+      Database.SaveResult[] srs = Database.insert(
+        keyedRows.values(),
+        false,
+        AccessLevel.SYSTEM_MODE
+      );
+      String genuineError = null;
+      for (Database.SaveResult sr : srs) {
+        if (sr.isSuccess()) {
+          continue;
+        }
+        Boolean isDup = false;
+        for (Database.Error err : sr.getErrors()) {
+          if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+            isDup = true;
+            break;
+          }
+        }
+        if (!isDup && genuineError == null) {
+          genuineError = sr.getErrors()[0].getMessage();
+        }
+      }
+      if (genuineError != null) {
+        throw new WorkflowException(
+          'Failed to capture unrouted signal: ' + genuineError
+        );
+      }
     }
     if (!unkeyedRows.isEmpty()) {
       insert as system unkeyedRows;
@@ -6990,7 +7106,14 @@ public inherited sharing class WorkflowEngine {
    */
   public static Boolean redeliverCapturedSignal(Id signalId) {
     List<Workflow_Signal__c> rows = [
-      SELECT Id, Status__c, Correlation_Key__c, Signal_Name__c, Payload__c
+      SELECT
+        Id,
+        Status__c,
+        Correlation_Key__c,
+        Signal_Name__c,
+        Payload__c,
+        Signal_Key__c,
+        Idempotency_Key__c
       FROM Workflow_Signal__c
       WHERE Id = :signalId AND Status__c = 'Unrouted'
       WITH SYSTEM_MODE
@@ -7052,20 +7175,33 @@ public inherited sharing class WorkflowEngine {
 
     sig.Workflow_Instance__c = instance.Id;
     sig.Status__c = 'Received';
-    update as system sig;
-
-    if (
-      instance.Status__c == 'Suspended' ||
-      instance.Status__c == 'Running' ||
-      instance.Status__c == 'Compensating' ||
-      instance.Status__c == 'Cancelling'
-    ) {
-      if (instance.Status__c == 'Suspended') {
-        instance.Status__c = 'Running';
-        update as system instance;
-      }
-      enqueueResume(instance.Id);
+    if (String.isNotBlank(sig.Idempotency_Key__c)) {
+      // Rewrite the correlation-scoped capture key to the instance-scoped routed
+      // key so a later routed delivery of the same idempotency key dedups against
+      // this row instead of inserting a second Received signal.
+      sig.Signal_Key__c = deriveSignalDedupKey(
+        instance.Id,
+        sig.Idempotency_Key__c
+      );
     }
+    try {
+      update as system sig;
+    } catch (DmlException ex) {
+      if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
+        // A routed delivery already claimed this instance+key, so the canonical
+        // Received row exists and was (or will be) woken. This captured row is a
+        // duplicate: retire it as a keyless Consumed tombstone (releasing the
+        // key it could not take) rather than delivering a second copy.
+        sig.Workflow_Instance__c = null;
+        sig.Signal_Key__c = null;
+        sig.Status__c = 'Consumed';
+        update as system sig;
+        return true;
+      }
+      throw ex;
+    }
+
+    wakeInstanceForSignal(instance);
 
     return true;
   }
