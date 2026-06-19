@@ -2,7 +2,7 @@
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Signal_Key__c</fullName>
     <caseSensitive>false</caseSensitive>
-    <description>Stable signal-identity key for idempotent capture under at-least-once delivery. Populated from the platform-event EventUuid when arriving via WorkflowEventTrigger. Null for direct API callers. Multiple nulls are permitted (Salesforce unique fields allow multiple nulls).</description>
+    <description>Stable signal-identity key enforcing at-most-once delivery per (instance, key) pair. For routed signals with a caller-supplied idempotency key this holds SHA-256-hex(instanceId + '::' + callerKey), scoping dedup to the instance. For unrouted signals arriving via WorkflowEventTrigger it holds the platform-event EventUuid. Null for keyless signals (at-least-once). Multiple nulls are permitted (Salesforce unique fields allow multiple nulls).</description>
     <externalId>true</externalId>
     <label>Signal Key</label>
     <length>255</length>

@@ -1064,6 +1064,22 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Derives a per-instance-scoped dedup key for a routed signal with a
+   * caller-supplied idempotency key. Hashing scopes uniqueness to the
+   * instance so the same logical key on different instances never collides
+   * on the global Workflow_Signal__c.Signal_Key__c unique index.
+   */
+  private static String deriveSignalDedupKey(
+    Id instanceId,
+    String idempotencyKey
+  ) {
+    String basis =
+      String.valueOf(instanceId) + '::' + idempotencyKey;
+    Blob digest = Crypto.generateDigest('SHA-256', Blob.valueOf(basis));
+    return EncodingUtil.convertToHex(digest);
+  }
+
+  /**
    * Resolves the dedup-winner instance for each correlation key: an active
    * instance if one exists, otherwise (when includeTerminal is true) the most
    * recent terminal instance that became terminal within the configured dedup
@@ -1285,6 +1301,7 @@ public inherited sharing class WorkflowEngine {
     public String signalName;
     public String payload;
     public String dedupKey;
+    public String idempotencyKey;
 
     public SignalRequest(String keyOrId, String signalName, String payload) {
       this.keyOrId = keyOrId;
@@ -1302,6 +1319,20 @@ public inherited sharing class WorkflowEngine {
       this.signalName = signalName;
       this.payload = payload;
       this.dedupKey = dedupKey;
+    }
+
+    public SignalRequest(
+      String keyOrId,
+      String signalName,
+      String payload,
+      String dedupKey,
+      String idempotencyKey
+    ) {
+      this.keyOrId = keyOrId;
+      this.signalName = signalName;
+      this.payload = payload;
+      this.dedupKey = dedupKey;
+      this.idempotencyKey = idempotencyKey;
     }
   }
 
@@ -3985,6 +4016,24 @@ public inherited sharing class WorkflowEngine {
    * Sends an external signal to a workflow instance by correlation key or instance ID.
    */
   public static void signal(String keyOrId, String signalName, String payload) {
+    signal(keyOrId, signalName, payload, null);
+  }
+
+  /**
+   * Sends an external signal with an optional caller-supplied idempotency key.
+   * When idempotencyKey is non-blank, at-most-once delivery is enforced per
+   * (instance, key) pair: a duplicate with the same key is swallowed as a
+   * successful no-op — no error is returned and no second wake-up fires. Dedup
+   * is constraint-based (unique Signal_Key__c per instance hash) so it holds
+   * across concurrent transactions without adding SOQL to the hot path.
+   * Passing null preserves the existing at-least-once behavior.
+   */
+  public static void signal(
+    String keyOrId,
+    String signalName,
+    String payload,
+    String idempotencyKey
+  ) {
     String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe()
       .getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
@@ -4088,13 +4137,28 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    // Insert the signal record
+    // Insert the signal record. When a caller-supplied idempotency key is present,
+    // store a per-instance-scoped hash on Signal_Key__c and catch DUPLICATE_VALUE
+    // to treat a repeat delivery as an idempotent no-op (no row, no wake-up).
     Workflow_Signal__c sig = new Workflow_Signal__c();
     sig.Workflow_Instance__c = instance.Id;
     sig.Signal_Name__c = signalName;
     sig.Payload__c = payload;
     sig.Status__c = 'Received';
-    insert as system sig;
+
+    if (String.isNotBlank(idempotencyKey)) {
+      sig.Signal_Key__c = deriveSignalDedupKey(instance.Id, idempotencyKey);
+      try {
+        insert as system sig;
+      } catch (DmlException ex) {
+        if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
+          return; // idempotent no-op: duplicate key already delivered
+        }
+        throw ex;
+      }
+    } else {
+      insert as system sig;
+    }
 
     // If the workflow is suspended or running, resume/orchestrate it. A parallel
     // instance must wake each incomplete branch by name (see enqueueResume). A
@@ -4276,9 +4340,15 @@ public inherited sharing class WorkflowEngine {
     }
     captureUnroutedSignals(unmatchedToCapture);
 
-    List<Workflow_Signal__c> signalsToInsert = new List<Workflow_Signal__c>();
-    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
-    List<Workflow_Instance__c> activeInstances = new List<Workflow_Instance__c>();
+    // Separate into unkeyed (at-least-once, unchanged) and keyed (dedup by unique constraint).
+    // For keyed signals, in-batch dedup prevents multiple rows for the same (instance, key)
+    // within a single bulk call; the unique constraint handles concurrent transactions.
+    List<Workflow_Signal__c> unkeyedSignals = new List<Workflow_Signal__c>();
+    Set<String> seenCompositeKeys = new Set<String>();
+    List<Workflow_Signal__c> keyedSignals = new List<Workflow_Signal__c>();
+    List<Id> keyedSignalInstIds = new List<Id>(); // parallel: instance for each keyed signal
+    Map<Id, Workflow_Instance__c> activeInstById = new Map<Id, Workflow_Instance__c>();
+    Set<Id> instancesWithUnkeyedSignal = new Set<Id>();
 
     for (SignalRequest req : requests) {
       Workflow_Instance__c inst = instById.get(req.keyOrId);
@@ -4316,39 +4386,113 @@ public inherited sharing class WorkflowEngine {
           continue;
         }
 
-        // Insert the signal record
-        Workflow_Signal__c sig = new Workflow_Signal__c();
-        sig.Workflow_Instance__c = inst.Id;
-        sig.Signal_Name__c = req.signalName;
-        sig.Payload__c = req.payload;
-        sig.Status__c = 'Received';
-        signalsToInsert.add(sig);
+        Workflow_Signal__c sig = new Workflow_Signal__c(
+          Workflow_Instance__c = inst.Id,
+          Signal_Name__c = req.signalName,
+          Payload__c = req.payload,
+          Status__c = 'Received'
+        );
 
-        // If the workflow is suspended or running, resume/orchestrate it. A
-        // Compensating/Cancelling instance is mid-rollback: a compensation step
-        // may depend on this signal, so wake it too rather than rejecting it. The
-        // compensation status is left untouched (only Suspended flips to Running);
-        // runStep re-detects the rollback from the trailing '_Compensate' step.
-        // A Paused instance keeps its status — the held signal (Received) is
-        // observed when resume re-drives the wait step; do not wake it here.
-        if (
+        Boolean isWakeable =
           inst.Status__c == 'Suspended' ||
           inst.Status__c == 'Running' ||
           inst.Status__c == 'Compensating' ||
-          inst.Status__c == 'Cancelling'
-        ) {
-          if (inst.Status__c == 'Suspended') {
-            inst.Status__c = 'Running';
-            instancesToUpdate.add(inst);
+          inst.Status__c == 'Cancelling';
+
+        if (String.isNotBlank(req.idempotencyKey)) {
+          // Keyed signal: compute per-instance hash for unique-constraint dedup.
+          // In-batch dedup skips later duplicates with the same composite key.
+          String compositeKey = deriveSignalDedupKey(inst.Id, req.idempotencyKey);
+          if (!seenCompositeKeys.contains(compositeKey)) {
+            seenCompositeKeys.add(compositeKey);
+            sig.Signal_Key__c = compositeKey;
+            keyedSignals.add(sig);
+            keyedSignalInstIds.add(inst.Id);
+            if (isWakeable) {
+              activeInstById.put(inst.Id, inst);
+            }
           }
-          activeInstances.add(inst);
+          // else: in-batch duplicate — skip entirely (no row, no wake-up)
+        } else {
+          // Unkeyed signal: at-least-once behavior unchanged.
+          unkeyedSignals.add(sig);
+          if (isWakeable) {
+            activeInstById.put(inst.Id, inst);
+            instancesWithUnkeyedSignal.add(inst.Id);
+          }
         }
       }
     }
 
-    if (!signalsToInsert.isEmpty()) {
-      insert as system signalsToInsert;
+    // Insert unkeyed signals (plain insert, unchanged behavior).
+    if (!unkeyedSignals.isEmpty()) {
+      insert as system unkeyedSignals;
     }
+
+    // Insert keyed signals with allOrNone=false; swallow per-row DUPLICATE_VALUE
+    // (another transaction won the race) — that delivery is still a success no-op.
+    // Genuine non-duplicate errors are surfaced.
+    Set<Id> instancesWithFreshKeyedSignal = new Set<Id>();
+    if (!keyedSignals.isEmpty()) {
+      Database.SaveResult[] srs = Database.insert(
+        keyedSignals,
+        false,
+        AccessLevel.SYSTEM_MODE
+      );
+      String genuineError = null;
+      for (Integer i = 0; i < srs.size(); i++) {
+        Database.SaveResult sr = srs[i];
+        if (sr.isSuccess()) {
+          instancesWithFreshKeyedSignal.add(keyedSignalInstIds[i]);
+        } else {
+          Boolean isDup = false;
+          for (Database.Error err : sr.getErrors()) {
+            if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+              isDup = true;
+              break;
+            }
+          }
+          if (!isDup && genuineError == null) {
+            genuineError = sr.getErrors()[0].getMessage();
+          }
+        }
+      }
+      if (genuineError != null) {
+        throw new WorkflowException('Failed to insert signal: ' + genuineError);
+      }
+    }
+
+    // Only wake an instance if it received at least one fresh signal this call:
+    // unkeyed signals always qualify; keyed signals only if the insert won the race.
+    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+    List<Workflow_Instance__c> activeInstances = new List<Workflow_Instance__c>();
+    // Deduplicate: only process each active instance once.
+    Set<Id> processedActiveIds = new Set<Id>();
+    for (Workflow_Instance__c inst : activeInstById.values()) {
+      if (processedActiveIds.contains(inst.Id)) {
+        continue;
+      }
+      Boolean freshSignalLanded =
+        instancesWithUnkeyedSignal.contains(inst.Id) ||
+        instancesWithFreshKeyedSignal.contains(inst.Id);
+      if (!freshSignalLanded) {
+        continue;
+      }
+      processedActiveIds.add(inst.Id);
+      // If the workflow is suspended or running, resume/orchestrate it. A
+      // Compensating/Cancelling instance is mid-rollback: a compensation step
+      // may depend on this signal, so wake it too rather than rejecting it. The
+      // compensation status is left untouched (only Suspended flips to Running);
+      // runStep re-detects the rollback from the trailing '_Compensate' step.
+      // A Paused instance keeps its status — the held signal (Received) is
+      // observed when resume re-drives the wait step; do not wake it here.
+      if (inst.Status__c == 'Suspended') {
+        inst.Status__c = 'Running';
+        instancesToUpdate.add(inst);
+      }
+      activeInstances.add(inst);
+    }
+
     if (!instancesToUpdate.isEmpty()) {
       update as system instancesToUpdate;
     }
