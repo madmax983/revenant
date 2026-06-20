@@ -2203,7 +2203,7 @@ public inherited sharing class WorkflowEngine {
         // double-consuming a slot (ceiling > 1) or parking over the just-admitted
         // row (ceiling = 1).
         Workflow_Instance__c locked = [
-          SELECT Concurrency_Slot_Held__c
+          SELECT Concurrency_Slot_Held__c, Status__c
           FROM Workflow_Instance__c
           WHERE Id = :instance.Id
           WITH SYSTEM_MODE
@@ -2214,26 +2214,50 @@ public inherited sharing class WorkflowEngine {
           // the step. This delivery is a safe no-op.
           return;
         }
+        // A concurrent cancel/terminal transition may have landed between the
+        // unlocked instance query above and this locked re-read. Acquiring a slot
+        // and writing Status__c = 'Running' off the stale forward state would
+        // resurrect a finished/cancelled instance, so bail unless it is still
+        // forward-runnable. (Compensating/Cancelling/Paused are driven by their own
+        // paths, never the admission gate.)
+        if (
+          locked.Status__c != 'Pending' &&
+          locked.Status__c != 'Running' &&
+          locked.Status__c != 'Suspended'
+        ) {
+          return;
+        }
+
+        // Resolve the initial step for a fresh start BEFORE consuming a slot, so an
+        // unresolvable workflow class fails cleanly here (the same WorkflowException
+        // the validation below would throw) instead of holding a slot that
+        // reconciliation would count forever. Throwing before tryAcquire takes no
+        // slot; throwing after would roll back the uncommitted increment anyway.
+        String resolvedStep = instance.Current_Step__c;
+        if (String.isBlank(resolvedStep)) {
+          Type wfType = Type.forName(instance.Workflow_Name__c);
+          if (wfType == null) {
+            throw new WorkflowException(
+              'Could not resolve workflow definition class: ' +
+              instance.Workflow_Name__c
+            );
+          }
+          resolvedStep = ((WorkflowDefinition) wfType.newInstance())
+            .getInitialStep();
+        }
 
         ConcurrencyGate.AdmissionResult admission = ConcurrencyGate.tryAcquire(
           instance.Workflow_Name__c
         );
         if (admission.admitted) {
           // Slot acquired: commit the acquire + flag, then re-drive in a fresh
-          // transaction. Resolve a blank initial step so the re-driven hop has a
-          // concrete step. Clear the admission-retry sleep markers and restamp the
+          // transaction. Clear the admission-retry sleep markers and restamp the
           // step's watchdog deadline (cleared on park) durably via
           // reArmTimeoutsForResume, so a re-admitted step keeps its timeout safety
           // net even when dynamic scheduling is off or at the job limit.
           instance.Concurrency_Slot_Held__c = true;
           instance.Concurrency_Parked__c = false;
-          if (String.isBlank(instance.Current_Step__c)) {
-            Type wfType = Type.forName(instance.Workflow_Name__c);
-            if (wfType != null) {
-              instance.Current_Step__c = ((WorkflowDefinition) wfType.newInstance())
-                .getInitialStep();
-            }
-          }
+          instance.Current_Step__c = resolvedStep;
           instance.Status__c = 'Running';
           instance.Sleep_Until__c = null;
           instance.Async_Job_Id__c = null;

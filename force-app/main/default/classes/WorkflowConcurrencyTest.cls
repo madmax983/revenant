@@ -243,6 +243,56 @@ public class WorkflowConcurrencyTest {
     );
   }
 
+  // A bounded workflow whose class no longer resolves must fail cleanly without
+  // holding a slot (which reconciliation would otherwise count forever).
+  @isTest
+  static void testUnresolvableWorkflowClassFailsWithoutHoldingSlot() {
+    WorkflowEngine.disableQueueableInTest = true;
+    ConcurrencyGate.mockConfigs.put(
+      'NoSuchClass_Workflow',
+      (Concurrency_Config__mdt) JSON.deserialize(
+        '{"DeveloperName":"NoSuchClass_Workflow","Max_Concurrent_Instances__c":3}',
+        Concurrency_Config__mdt.class
+      )
+    );
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'NoSuchClass.Workflow',
+      Status__c = 'Pending',
+      Correlation_Key__c = 'unresolvable-1'
+      // Current_Step__c intentionally blank — class can't resolve an initial step.
+    );
+    insert inst;
+
+    Test.startTest();
+    Boolean threw = false;
+    try {
+      WorkflowEngine.runStep(inst.Id, null);
+    } catch (Exception e) {
+      threw = true;
+      System.assert(
+        e.getMessage().contains('Could not resolve workflow definition class'),
+        'Expected an unresolved-class failure, got: ' + e.getMessage()
+      );
+    }
+    Test.stopTest();
+
+    System.assert(threw, 'Admission must fail for an unresolvable workflow class');
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Concurrency_State__c
+        WHERE Workflow_Definition__c = 'NoSuchClass.Workflow'
+      ],
+      'No slot should be consumed for an unresolvable workflow class'
+    );
+    System.assert(
+      ![SELECT Concurrency_Slot_Held__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
+        .Concurrency_Slot_Held__c,
+      'Instance must not hold a slot after a failed admission'
+    );
+  }
+
   // ── AC6: no config -> unbounded, behaves exactly as today ──────────────────
   @isTest
   static void testUnconfiguredIsUnbounded() {
