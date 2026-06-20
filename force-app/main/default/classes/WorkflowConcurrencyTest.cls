@@ -598,6 +598,35 @@ public class WorkflowConcurrencyTest {
     );
   }
 
+  // A signal addressed to a concurrency-parked instance must not wake it to Running
+  // before it owns a slot — that would leave a Running row with no slot (violating the
+  // no-running-without-slot invariant) and hide it from the parked count. The signal
+  // is captured (Received) and observed once admission drives the step.
+  @isTest
+  static void testSignalDoesNotWakeParkedRow() {
+    WorkflowEngine.disableQueueableInTest = true;
+    ConcurrencyGate.mockConfigs.put('WorkflowConcurrencyTest_WaitWorkflow', cfg(1));
+
+    Id i1 = newPendingInstance('sig-1');
+    Id i2 = newPendingInstance('sig-2');
+    WorkflowEngine.runStep(i1, null); // admits, holds the only slot
+    WorkflowEngine.runStep(i2, null); // ceiling full -> parks
+    System.assert(reload(i2).Concurrency_Parked__c, 'i2 parked');
+
+    Test.startTest();
+    WorkflowEngine.signal('sig-2', 'go', null);
+    Test.stopTest();
+
+    Workflow_Instance__c r2 = reload(i2);
+    System.assertEquals(
+      'Suspended',
+      r2.Status__c,
+      'A concurrency-parked row must not be woken to Running by a signal pre-admission'
+    );
+    System.assert(r2.Concurrency_Parked__c, 'Parked flag preserved');
+    System.assert(!r2.Concurrency_Slot_Held__c, 'Still holds no slot');
+  }
+
   // ── AC6: no config -> unbounded, behaves exactly as today ──────────────────
   @isTest
   static void testUnconfiguredIsUnbounded() {

@@ -189,6 +189,23 @@ public inherited sharing class ConcurrencyGate {
       return;
     }
     Set<String> keys = countsByWorkflow.keySet();
+    // Workflow_Definition__c is a case-insensitive unique field, so the SOQL below
+    // matches a state row regardless of the casing the terminal instance was started
+    // with. Apex Map lookups are case-sensitive, though, so a differently-cased key
+    // would miss the count and silently skip the decrement (leaking a slot). Fold the
+    // requested counts into a case-normalized map and look up by the same normalization.
+    Map<String, Integer> normalizedCounts = new Map<String, Integer>();
+    for (String key : keys) {
+      Integer c = countsByWorkflow.get(key);
+      if (c == null) {
+        continue;
+      }
+      String nk = key.toLowerCase();
+      normalizedCounts.put(
+        nk,
+        (normalizedCounts.containsKey(nk) ? normalizedCounts.get(nk) : 0) + c
+      );
+    }
     List<Concurrency_State__c> states = [
       SELECT Workflow_Definition__c, In_Flight_Count__c
       FROM Concurrency_State__c
@@ -201,7 +218,7 @@ public inherited sharing class ConcurrencyGate {
       Integer current = (state.In_Flight_Count__c == null)
         ? 0
         : (Integer) state.In_Flight_Count__c;
-      Integer dec = countsByWorkflow.get(state.Workflow_Definition__c);
+      Integer dec = normalizedCounts.get(state.Workflow_Definition__c.toLowerCase());
       Integer next = current - (dec == null ? 0 : dec);
       state.In_Flight_Count__c = next < 0 ? 0 : next;
       toUpdate.add(state);
@@ -251,6 +268,10 @@ public inherited sharing class ConcurrencyGate {
     }
 
     // One aggregate yields the true non-terminal slot-holder count per workflow.
+    // Key the counts case-insensitively: Workflow_Definition__c is a case-insensitive
+    // unique field, so instances started with differing casing all map to one state
+    // row, but a case-sensitive Apex lookup would miss them and wrongly reset the
+    // counter to 0. Fold each group into a normalized (lower-cased) key, summing.
     Map<String, Integer> trueCounts = new Map<String, Integer>();
     for (AggregateResult ar : [
       SELECT Workflow_Name__c wf, COUNT(Id) cnt
@@ -262,13 +283,19 @@ public inherited sharing class ConcurrencyGate {
       WITH SYSTEM_MODE
       GROUP BY Workflow_Name__c
     ]) {
-      trueCounts.put((String) ar.get('wf'), (Integer) ar.get('cnt'));
+      String nk = ((String) ar.get('wf')).toLowerCase();
+      Integer cnt = (Integer) ar.get('cnt');
+      trueCounts.put(
+        nk,
+        (trueCounts.containsKey(nk) ? trueCounts.get(nk) : 0) + cnt
+      );
     }
 
     List<Concurrency_State__c> toUpdate = new List<Concurrency_State__c>();
     for (Concurrency_State__c state : states) {
-      Integer truth = trueCounts.containsKey(state.Workflow_Definition__c)
-        ? trueCounts.get(state.Workflow_Definition__c)
+      String stateKey = state.Workflow_Definition__c.toLowerCase();
+      Integer truth = trueCounts.containsKey(stateKey)
+        ? trueCounts.get(stateKey)
         : 0;
       if (
         state.In_Flight_Count__c == null ||

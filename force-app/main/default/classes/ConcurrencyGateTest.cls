@@ -212,6 +212,63 @@ public class ConcurrencyGateTest {
     System.assertEquals(0, byKey.get('CapB'), 'CapB released by 1');
   }
 
+  // Workflow_Definition__c is a case-insensitive unique field, so a terminal
+  // transition for an instance started with differing casing matches the same
+  // counter row in SOQL. The Apex decrement lookup must normalize too, or the slot
+  // leaks (matched row, but a case-sensitive map miss skips the decrement).
+  @isTest
+  static void testReleaseNormalizesWorkflowKeyCase() {
+    ConcurrencyGate.mockConfigs.put('CaseWf', mockConfig('CaseWf', 5));
+    ConcurrencyGate.tryAcquire('CaseWf'); // provisions the row as 'CaseWf', count = 1
+
+    Test.startTest();
+    ConcurrencyGate.release('casewf', 1); // differently-cased terminal release
+    Test.stopTest();
+
+    Concurrency_State__c state = [
+      SELECT In_Flight_Count__c
+      FROM Concurrency_State__c
+      WHERE Workflow_Definition__c = 'CaseWf'
+    ];
+    System.assertEquals(
+      0,
+      state.In_Flight_Count__c,
+      'Release must decrement the counter even when the workflow key casing differs'
+    );
+  }
+
+  // Reconciliation must likewise count differently-cased slot holders against the
+  // single (case-insensitive unique) counter row, rather than treating a casing
+  // mismatch as zero live holders and wrongly resetting the counter.
+  @isTest
+  static void testReconcileNormalizesWorkflowKeyCase() {
+    insert new Concurrency_State__c(
+      Workflow_Definition__c = 'ReconCaseWf',
+      In_Flight_Count__c = 5
+    );
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = 'reconcasewf',
+      Status__c = 'Running',
+      Concurrency_Slot_Held__c = true,
+      Correlation_Key__c = 'recon-case-1'
+    );
+
+    Test.startTest();
+    ConcurrencyGate.reconcileAll();
+    Test.stopTest();
+
+    Concurrency_State__c state = [
+      SELECT In_Flight_Count__c
+      FROM Concurrency_State__c
+      WHERE Workflow_Definition__c = 'ReconCaseWf'
+    ];
+    System.assertEquals(
+      1,
+      state.In_Flight_Count__c,
+      'Reconcile must count a differently-cased slot holder against the same row'
+    );
+  }
+
   // ── AC5: reconciliation reclaims leaked slots ──────────────────────────────
   @isTest
   static void testReconcileReclaimsLeakedSlots() {

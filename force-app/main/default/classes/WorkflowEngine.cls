@@ -4682,7 +4682,9 @@ public inherited sharing class WorkflowEngine {
         Status__c,
         Correlation_Key__c,
         Current_Step__c,
-        Compensation_Stack__c
+        Compensation_Stack__c,
+        Concurrency_Parked__c,
+        Concurrency_Slot_Held__c
       FROM Workflow_Instance__c
       WHERE
         (Id IN :ids
@@ -5046,6 +5048,17 @@ public inherited sharing class WorkflowEngine {
         // A Paused instance keeps its status — the held signal (Received) is
         // observed when resume re-drives the wait step; do not wake it here.
         if (inst.Status__c == 'Suspended') {
+          // A concurrency-parked row has not won a slot. Waking it to Running would
+          // leave a Running instance holding no slot (violating the no-running-without-
+          // slot invariant) and hide it from the parked count. Like Paused, leave it
+          // alone: the signal is already captured (Received) and is observed once
+          // admission drives the step. Skip the wake and the enqueue entirely.
+          if (
+            inst.Concurrency_Parked__c == true &&
+            inst.Concurrency_Slot_Held__c != true
+          ) {
+            continue;
+          }
           inst.Status__c = 'Running';
           instancesToUpdate.add(inst);
         }
@@ -7223,7 +7236,12 @@ public inherited sharing class WorkflowEngine {
 
   public static void scheduleTimeoutJobForInstance(Id instanceId) {
     List<Workflow_Instance__c> instances = [
-      SELECT Status__c, Current_Step__c, Compensation_Stack__c
+      SELECT
+        Status__c,
+        Current_Step__c,
+        Compensation_Stack__c,
+        Concurrency_Parked__c,
+        Concurrency_Slot_Held__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -7233,6 +7251,14 @@ public inherited sharing class WorkflowEngine {
       return;
     }
     Workflow_Instance__c instance = instances[0];
+    // A concurrency-parked instance that has not won a slot has a null step deadline;
+    // scheduling a timeout job now would only wake and return, while occupying one of
+    // the org's scarce scheduled-job slots — a large parked backlog could crowd out
+    // real sleep/admission/timeout jobs. Admission re-arms the timeout once a slot is
+    // won (the generic WorkflowSleepJob admission-retry path routes through here).
+    if (instance.Concurrency_Parked__c && !instance.Concurrency_Slot_Held__c) {
+      return;
+    }
     scheduleTimeoutJobsForInstances(new List<Workflow_Instance__c>{ instance });
   }
 
