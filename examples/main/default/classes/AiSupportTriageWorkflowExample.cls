@@ -26,6 +26,15 @@ public with sharing class AiSupportTriageWorkflowExample {
   // ── Workflow definition ────────────────────────────────────────────────────
 
   public class TriageWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'AiSupportTriageWorkflowExample.AiClassifyStep',
+        'AiSupportTriageWorkflowExample.AutoResolveBillingStep',
+        'AiSupportTriageWorkflowExample.CreateCaseStep',
+        'AiSupportTriageWorkflowExample.EscalateStep'
+      };
+    }
+
     public String getInitialStep() {
       return 'AiSupportTriageWorkflowExample.AiClassifyStep';
     }

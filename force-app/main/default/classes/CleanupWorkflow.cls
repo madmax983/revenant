@@ -1,4 +1,8 @@
 public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
+  public List<String> getSteps() {
+    return new List<String>{ 'CleanupWorkflow.PurgeOldInstancesStep' };
+  }
+
   public String getInitialStep() {
     return 'CleanupWorkflow.PurgeOldInstancesStep';
   }

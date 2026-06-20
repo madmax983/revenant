@@ -39,6 +39,15 @@ public with sharing class AgentConversationWorkflowExample {
   // ── Workflow definition ────────────────────────────────────────────────────
 
   public class AgentConversationWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'AgentConversationWorkflowExample.InitialTurnStep',
+        'AgentConversationWorkflowExample.AwaitFollowUpStep',
+        'AgentConversationWorkflowExample.ContinuationTurnStep',
+        'AgentConversationWorkflowExample.ConversationCompleteStep'
+      };
+    }
+
     public String getInitialStep() {
       return 'AgentConversationWorkflowExample.InitialTurnStep';
     }

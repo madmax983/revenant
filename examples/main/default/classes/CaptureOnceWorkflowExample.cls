@@ -31,6 +31,9 @@ public inherited sharing class CaptureOnceWorkflowExample {
   }
 
   public class CaptureOnceWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'CaptureOnceWorkflowExample.CaptureOnceStep' };
+    }
     public String getInitialStep() {
       return 'CaptureOnceWorkflowExample.CaptureOnceStep';
     }

@@ -32,6 +32,15 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
     'ack:apac'
   };
 
+  public List<String> getSteps() {
+    return new List<String>{
+      'ParallelSignalFanInWorkflowExample.GatherSpawnStep',
+      'ParallelSignalFanInWorkflowExample.CollectorBranch',
+      'ParallelSignalFanInWorkflowExample.SiblingBranch',
+      'ParallelSignalFanInWorkflowExample.JoinStep'
+    };
+  }
+
   public String getInitialStep() {
     return 'ParallelSignalFanInWorkflowExample.GatherSpawnStep';
   }

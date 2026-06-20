@@ -39,6 +39,14 @@ public inherited sharing class ChildWorkflowCompositionExample
   // PARENT WORKFLOW DEFINITION
   // ---------------------------------------------------------------------------
 
+  public List<String> getSteps() {
+    return new List<String>{
+      'ChildWorkflowCompositionExample.RequestCreditCheckStep',
+      'ChildWorkflowCompositionExample.ApproveLoanStep',
+      'ChildWorkflowCompositionExample.DeclineLoanStep'
+    };
+  }
+
   public String getInitialStep() {
     return 'ChildWorkflowCompositionExample.RequestCreditCheckStep';
   }
@@ -178,6 +186,12 @@ public inherited sharing class ChildWorkflowCompositionExample
   // ---------------------------------------------------------------------------
 
   public class CreditCheckWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'ChildWorkflowCompositionExample.ComputeCreditScoreStep'
+      };
+    }
+
     public String getInitialStep() {
       return 'ChildWorkflowCompositionExample.ComputeCreditScoreStep';
     }

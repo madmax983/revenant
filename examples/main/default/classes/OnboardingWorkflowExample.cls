@@ -1,4 +1,17 @@
 public inherited sharing class OnboardingWorkflowExample implements WorkflowDefinition {
+  public List<String> getSteps() {
+    return new List<String>{
+      'OnboardingWorkflowExample.VerifyOrderStep',
+      'OnboardingWorkflowExample.SplitOnboardingStep',
+      'OnboardingWorkflowExample.ProvisionSandboxStep',
+      'OnboardingWorkflowExample.CreateBillingAccountStep',
+      'OnboardingWorkflowExample.JoinOnboardingStep',
+      'OnboardingWorkflowExample.VIPApprovalStep',
+      'OnboardingWorkflowExample.WelcomeWorkflowLauncherStep',
+      'OnboardingWorkflowExample.CompleteOnboardingStep'
+    };
+  }
+
   public String getInitialStep() {
     return 'OnboardingWorkflowExample.VerifyOrderStep';
   }
@@ -194,6 +207,12 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
   // --- WELCOME EMAIL CHILD WORKFLOW ---
 
   public class WelcomeEmailWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'OnboardingWorkflowExample.DelayEmailStep',
+        'OnboardingWorkflowExample.SendEmailStep'
+      };
+    }
     public String getInitialStep() {
       return 'OnboardingWorkflowExample.DelayEmailStep';
     }
