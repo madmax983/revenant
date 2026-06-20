@@ -208,6 +208,41 @@ public class WorkflowConcurrencyTest {
     );
   }
 
+  // A parked instance carries an admission-retry Sleep_Until__c; admission must
+  // clear it so a later SUSPEND/approval wait is not re-driven by the watchdog as a
+  // due sleeper without its signal.
+  @isTest
+  static void testAdmissionClearsSleepDeadline() {
+    WorkflowEngine.disableQueueableInTest = true;
+    ConcurrencyGate.mockConfigs.put(
+      'WorkflowConcurrencyTest_WaitWorkflow',
+      cfg(1)
+    );
+    Id i1 = newPendingInstance('sleep-1');
+    Id i2 = newPendingInstance('sleep-2');
+
+    WorkflowEngine.runStep(i1, null); // acquire the only slot
+    WorkflowEngine.runStep(i2, null); // park -> Sleep_Until__c set
+    System.assertNotEquals(
+      null,
+      reload(i2).Sleep_Until__c,
+      'Parked instance has a retry deadline'
+    );
+
+    Test.startTest();
+    update new Workflow_Instance__c(Id = i1, Status__c = 'Completed'); // free the slot
+    WorkflowEngine.runStep(i2, null); // re-attempt admission -> admitted
+    Test.stopTest();
+
+    Workflow_Instance__c r2 = reload(i2);
+    System.assert(r2.Concurrency_Slot_Held__c, 'i2 admitted');
+    System.assertEquals(
+      null,
+      r2.Sleep_Until__c,
+      'Admission must clear the stale admission-retry sleep deadline'
+    );
+  }
+
   // ── AC6: no config -> unbounded, behaves exactly as today ──────────────────
   @isTest
   static void testUnconfiguredIsUnbounded() {

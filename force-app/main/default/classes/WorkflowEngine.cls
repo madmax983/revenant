@@ -2192,31 +2192,58 @@ public inherited sharing class WorkflowEngine {
     //     Compensating/Cancelling instances already returned to runCompensationStep
     //     above; they keep the slot acquired on the forward path and are never re-gated.
     if (!instance.Concurrency_Slot_Held__c) {
-      ConcurrencyGate.AdmissionResult admission = ConcurrencyGate.tryAcquire(
-        instance.Workflow_Name__c
-      );
-      if (admission.slotConsumed) {
-        // Slot acquired: commit the acquire + flag, then re-drive in a fresh
-        // transaction. Resolve a blank initial step so the re-driven hop has a
-        // concrete step, and re-arm its watchdog timeout (cleared on park).
-        instance.Concurrency_Slot_Held__c = true;
-        instance.Concurrency_Parked__c = false;
-        if (String.isBlank(instance.Current_Step__c)) {
-          Type wfType = Type.forName(instance.Workflow_Name__c);
-          if (wfType != null) {
-            instance.Current_Step__c = ((WorkflowDefinition) wfType.newInstance())
-              .getInitialStep();
+      // Only bounded workflows are gated; resolving the ceiling first (a
+      // governor-free CMDT read) keeps unbounded workflows on the exact path they
+      // take today, with no instance lock.
+      if (ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
+        // Serialize concurrent RUN_STEP deliveries for the SAME instance: both may
+        // have read Concurrency_Slot_Held__c = false from the unlocked instance
+        // query above. Re-read the authoritative flag under a row lock so the loser
+        // observes the winner's committed acquire and no-ops, instead of either
+        // double-consuming a slot (ceiling > 1) or parking over the just-admitted
+        // row (ceiling = 1).
+        Workflow_Instance__c locked = [
+          SELECT Concurrency_Slot_Held__c
+          FROM Workflow_Instance__c
+          WHERE Id = :instance.Id
+          WITH SYSTEM_MODE
+          FOR UPDATE
+        ];
+        if (locked.Concurrency_Slot_Held__c) {
+          // A concurrent delivery already admitted this instance; its re-hop drives
+          // the step. This delivery is a safe no-op.
+          return;
+        }
+
+        ConcurrencyGate.AdmissionResult admission = ConcurrencyGate.tryAcquire(
+          instance.Workflow_Name__c
+        );
+        if (admission.admitted) {
+          // Slot acquired: commit the acquire + flag, then re-drive in a fresh
+          // transaction. Resolve a blank initial step so the re-driven hop has a
+          // concrete step. Clear the admission-retry sleep markers and restamp the
+          // step's watchdog deadline (cleared on park) durably via
+          // reArmTimeoutsForResume, so a re-admitted step keeps its timeout safety
+          // net even when dynamic scheduling is off or at the job limit.
+          instance.Concurrency_Slot_Held__c = true;
+          instance.Concurrency_Parked__c = false;
+          if (String.isBlank(instance.Current_Step__c)) {
+            Type wfType = Type.forName(instance.Workflow_Name__c);
+            if (wfType != null) {
+              instance.Current_Step__c = ((WorkflowDefinition) wfType.newInstance())
+                .getInitialStep();
+            }
           }
+          instance.Status__c = 'Running';
+          instance.Sleep_Until__c = null;
+          instance.Async_Job_Id__c = null;
+          update as system instance;
+          reArmTimeoutsForResume(new List<Workflow_Instance__c>{ instance });
+          if (!(Test.isRunningTest() && disableQueueableInTest)) {
+            enqueueResume(instance.Id);
+          }
+          return;
         }
-        instance.Status__c = 'Running';
-        instance.Async_Job_Id__c = null;
-        update as system instance;
-        scheduleTimeoutJobForInstance(instance.Id);
-        if (!(Test.isRunningTest() && disableQueueableInTest)) {
-          enqueueResume(instance.Id);
-        }
-        return;
-      } else if (!admission.admitted) {
         // Ceiling full: park and re-attempt admission automatically through the
         // existing sleep/watchdog resume plumbing.
         parkForConcurrency(instance);

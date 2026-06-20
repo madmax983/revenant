@@ -82,6 +82,22 @@ public inherited sharing class ConcurrencyGate {
         config.Max_Concurrent_Instances__c != null)
       ? (Integer) config.Max_Concurrent_Instances__c
       : null;
+    // Fail open on a misconfigured ceiling. The CMDT field is a plain required
+    // number with no positive-minimum enforcement; a 0 or negative value would make
+    // `inFlight < ceiling` never true and park every instance forever. Treat any
+    // non-positive ceiling as unbounded (with a warning) rather than silently
+    // starving admissions — intentional blocking is what the pause feature is for.
+    if (ceiling != null && ceiling < 1) {
+      System.debug(
+        LoggingLevel.WARN,
+        'ConcurrencyGate: ignoring non-positive Max_Concurrent_Instances__c (' +
+          ceiling +
+          ') for ' +
+          workflowName +
+          '; treating as unbounded.'
+      );
+      ceiling = null;
+    }
     ceilingCache.put(workflowName, ceiling);
     return ceiling;
   }

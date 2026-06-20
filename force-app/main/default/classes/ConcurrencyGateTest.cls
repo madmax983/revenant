@@ -80,6 +80,34 @@ public class ConcurrencyGateTest {
   }
 
   @isTest
+  static void testNonPositiveCeilingTreatedAsUnbounded() {
+    // A misconfigured 0 (or negative) ceiling must fail open to unbounded rather
+    // than parking every instance forever.
+    ConcurrencyGate.mockConfigs.put('ZeroWf', mockConfig('ZeroWf', 0));
+    ConcurrencyGate.mockConfigs.put('NegWf', mockConfig('NegWf', -3));
+    Test.startTest();
+    System.assertEquals(
+      null,
+      ConcurrencyGate.getCeiling('ZeroWf'),
+      'A ceiling of 0 should be treated as unbounded'
+    );
+    System.assertEquals(
+      null,
+      ConcurrencyGate.getCeiling('NegWf'),
+      'A negative ceiling should be treated as unbounded'
+    );
+    ConcurrencyGate.AdmissionResult a = ConcurrencyGate.tryAcquire('ZeroWf');
+    Test.stopTest();
+    System.assert(a.admitted, 'Non-positive ceiling admits (unbounded)');
+    System.assert(!a.slotConsumed, 'Non-positive ceiling consumes no slot');
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM Concurrency_State__c WHERE Workflow_Definition__c = 'ZeroWf'],
+      'No counter row created for a non-positive (unbounded) ceiling'
+    );
+  }
+
+  @isTest
   static void testEngineWorkflowsAreExempt() {
     // A Default config must never throttle the engine's perpetual watchdog.
     ConcurrencyGate.mockConfigs.put('Default', mockConfig('Default', 1));
