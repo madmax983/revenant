@@ -948,6 +948,16 @@ public inherited sharing class WorkflowDashboardController {
   @TestVisible
   private static Boolean forceDefinitionFallback = false;
 
+  // Strips Apex line ('// ...') and block ('/* ... */') comments so the definition
+  // scan never reads documentation prose as code. DOTALL (?s) lets a block comment
+  // span lines; the line-comment branch stops at the newline. Note: this does not
+  // protect '//' or '/*' sequences that live inside string literals, but that is
+  // harmless here — a real 'class X implements WorkflowDefinition' is never inside
+  // a literal, so stripping can only remove noise, never a genuine definition.
+  private static final Pattern COMMENT_PATTERN = Pattern.compile(
+    '(?s)/\\*.*?\\*/|//[^\\n]*'
+  );
+
   @AuraEnabled(cacheable=true)
   public static List<String> getDefinitions() {
     checkAuthorization();
@@ -1026,15 +1036,20 @@ public inherited sharing class WorkflowDashboardController {
       if (ac.Body == null) {
         continue;
       }
-      // Skip @isTest classes (any class whose body carries the annotation) and
-      // system-only workflows that must not be launched from the dashboard.
+      // Skip test classes (by convention their name ends in 'Test' — same rule
+      // the ApexTypeImplementor fallback applies) and system-only workflows that
+      // must not be launched from the dashboard. We exclude by NAME, not by an
+      // '@istest' body-substring: the latter also catches production classes that
+      // merely mention @isTest in a comment (e.g. the AI examples).
       if (
-        ac.Body.toLowerCase().contains('@istest') ||
+        ac.Name.toLowerCase().endsWith('test') ||
         ac.Name.equalsIgnoreCase('BulkRedriveWorkflow')
       ) {
         continue;
       }
-      Matcher pm = classPattern.matcher(ac.Body);
+      // Match against comment-stripped source so doc-comment prose like
+      // "...a class that implements WorkflowDefinition" is never read as a definition.
+      Matcher pm = classPattern.matcher(COMMENT_PATTERN.matcher(ac.Body).replaceAll(''));
       while (pm.find()) {
         String className = pm.group(1);
         // Outer class match returns the bare name; inner class is qualified.
