@@ -329,6 +329,13 @@ public with sharing class WorkflowValidator {
    * getSteps(). Author exceptions thrown from getNextStep are swallowed because
    * the probe feeds it synthetic results it may not expect.
    *
+   * The probe uses only COMPLETE-action results, because that is the sole
+   * transition through which WorkflowEngine asks the definition for a successor.
+   * Other actions (SUSPEND, YIELD, SLEEP, RETRY, WAIT_FOR_APPROVAL, START_CHILD,
+   * CONTINUE_AS_NEW) re-run or park the same step without calling getNextStep, so
+   * probing them could flag a dangling successor on a path the engine never
+   * routes — a false positive against routers that branch on result.action.
+   *
    * For a VersionedWorkflow the engine starts instances at getLatestVersion()
    * and routes via the three-argument getNextStep(current, result, version), so
    * the probe additionally drives that overload for every version in
@@ -344,8 +351,7 @@ public with sharing class WorkflowValidator {
   ) {
     List<StepResult> probes = new List<StepResult>{
       StepResult.complete(null, null),
-      StepResult.complete(null, new Map<String, Object>()),
-      StepResult.suspend()
+      StepResult.complete(null, new Map<String, Object>())
     };
 
     Set<String> flagged = new Set<String>();
@@ -371,7 +377,20 @@ public with sharing class WorkflowValidator {
       try {
         latest = vdef.getLatestVersion();
       } catch (Exception e) {
+        // The engine calls getLatestVersion() before starting an instance, so a
+        // throw here means the workflow cannot start — report it rather than
+        // silently skipping the versioned probe.
         latest = null;
+        result.add(
+          CONTRACT_METHOD_THREW,
+          result.workflowName,
+          'Workflow "' +
+          result.workflowName +
+          '" getLatestVersion() threw ' +
+          e.getTypeName() +
+          ': ' +
+          e.getMessage()
+        );
       }
       if (latest != null && latest >= 1) {
         for (Integer version = 1; version <= latest; version++) {

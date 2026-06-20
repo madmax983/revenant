@@ -250,6 +250,30 @@ public class WorkflowValidatorTest {
     }
   }
 
+  // Versioned workflow whose getLatestVersion() throws (malformed config). The
+  // engine calls getLatestVersion() before starting, so this must be flagged.
+  public class ThrowingVersionWorkflow implements VersionedWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowValidatorTest.GoodStepA' };
+    }
+    public String getInitialStep() {
+      return 'WorkflowValidatorTest.GoodStepA';
+    }
+    public Integer getLatestVersion() {
+      throw new TestValidatorException('bad version config');
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      return null;
+    }
+    public String getNextStep(
+      String currentStepName,
+      StepResult result,
+      Integer version
+    ) {
+      return null;
+    }
+  }
+
   // ==========================================
   // TESTS
   // ==========================================
@@ -489,6 +513,23 @@ public class WorkflowValidatorTest {
       result.getMessages()
     );
     assertMessageNames(result, 'WorkflowValidatorTest.V2OnlyStepTypo');
+  }
+
+  @isTest
+  static void versionedGetLatestVersionThrowIsFlagged() {
+    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+      'WorkflowValidatorTest.ThrowingVersionWorkflow'
+    );
+    System.assertEquals(
+      false,
+      result.isValid(),
+      'A versioned workflow whose getLatestVersion() throws must be flagged'
+    );
+    System.assert(
+      result.hasDefect(WorkflowValidator.CONTRACT_METHOD_THREW),
+      'Expected CONTRACT_METHOD_THREW from getLatestVersion(): ' +
+      result.getMessages()
+    );
   }
 
   // Asserts that at least one defect message embeds the given step name.
