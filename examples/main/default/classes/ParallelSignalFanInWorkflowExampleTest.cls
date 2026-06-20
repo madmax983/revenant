@@ -125,4 +125,107 @@ private class ParallelSignalFanInWorkflowExampleTest {
       'No ack may be left unclaimed (Received) or stuck claimed (Processing)'
     );
   }
+
+  /**
+   * Fan-in gating: when the collector branch is re-driven before every expected
+   * ack has arrived, it must NOT complete on the partial set. It suspends, and
+   * the engine rolls its partial claims back to Received (Processing -> Received
+   * on any non-COMPLETE outcome) so nothing is consumed or lost. When the
+   * remaining acks arrive and re-drive the branch, getSignals() re-reads the
+   * full set and consumes every distinct ack exactly once at COMPLETE.
+   */
+  @isTest
+  static void testCollectorWaitsForAllAcksAndRollsBackPartialClaims() {
+    Id instanceId = WorkflowEngine.start(
+      'ParallelSignalFanInWorkflowExample',
+      'FanInPartialKey',
+      null
+    );
+
+    // Suspend on Kick, then fan out with only ONE of the three acks present.
+    new WorkflowOrchestrator(instanceId).execute(null);
+    WorkflowEngine.signal('FanInPartialKey', 'Kick', '{}');
+    WorkflowEngine.signal('FanInPartialKey', 'Ack:US', '{"ok":true}');
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // First branch run sees a partial set (1 < 3) -> suspends, claims rolled back.
+    new WorkflowOrchestrator(
+        instanceId,
+        'ParallelSignalFanInWorkflowExample.CollectorBranch'
+      )
+      .execute(null);
+
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = 'ParallelSignalFanInWorkflowExample.CollectorBranch'
+          AND Status__c = 'Completed'
+      ],
+      'Collector must not complete on a partial ack set'
+    );
+    System.assertEquals(
+      'Received',
+      [
+        SELECT Status__c
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c = 'Ack:US'
+        LIMIT 1
+      ]
+      .Status__c,
+      'The partial ack claim must roll back to Received on suspend -- not stay Processing or be Consumed'
+    );
+
+    // The remaining acks arrive and re-drive the branch; now the set is complete.
+    WorkflowEngine.signal('FanInPartialKey', 'Ack:EU', '{"ok":true}');
+    WorkflowEngine.signal('FanInPartialKey', 'Ack:APAC', '{"ok":true}');
+    new WorkflowOrchestrator(
+        instanceId,
+        'ParallelSignalFanInWorkflowExample.CollectorBranch'
+      )
+      .execute(null);
+
+    Workflow_Step_Execution__c branchExec = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'ParallelSignalFanInWorkflowExample.CollectorBranch'
+        AND Status__c = 'Completed'
+    ];
+    System.assert(
+      branchExec.Output__c.contains('"count":3'),
+      'Collector must complete with all 3 acks once they all arrive, got: ' +
+      branchExec.Output__c
+    );
+    System.assertEquals(
+      3,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c LIKE 'Ack:%'
+          AND Status__c = 'Consumed'
+      ],
+      'All three acks must be consumed exactly once after the gated completion'
+    );
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c LIKE 'Ack:%'
+          AND Status__c IN ('Received', 'Processing')
+      ],
+      'No ack may be left unclaimed or stuck claimed after the gated completion'
+    );
+  }
 }

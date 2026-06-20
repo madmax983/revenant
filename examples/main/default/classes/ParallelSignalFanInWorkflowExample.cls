@@ -74,6 +74,10 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
    * each its own claim statement that can spill past the per-branch budget into
    * at-least-once -- it calls ctx.getSignals() ONCE (a single exactly-once claim
    * page) and filters the result in memory.
+   *
+   * It also waits for the WHOLE expected set: if only a subset of acks has been
+   * buffered it suspends (without consuming the partial set) rather than joining
+   * with an incomplete result, and resumes when a later ack re-drives it.
    */
   public class CollectorBranch implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
@@ -93,6 +97,18 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
         if (EXPECTED_ACK_NAMES.contains(name)) {
           received.put(s.name, s.payload);
         }
+      }
+
+      // FAN-IN GATING: only COMPLETE once every expected ack is present. If just
+      // a subset has arrived (the branch was re-driven before the rest were
+      // buffered), suspend instead of completing on a partial set. The engine
+      // rolls this branch's claims back from Processing to Received on any
+      // non-COMPLETE outcome (WorkflowEngine.rollbackClaimedSignals), so the
+      // partial acks are neither consumed nor lost; when a later ack re-drives
+      // this branch, getSignals() re-reads the full set and consumes it exactly
+      // once at COMPLETE.
+      if (received.size() < EXPECTED_ACK_NAMES.size()) {
+        return StepResult.suspend();
       }
 
       List<String> presentNames = new List<String>(received.keySet());
