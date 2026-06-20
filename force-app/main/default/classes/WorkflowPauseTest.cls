@@ -25,6 +25,12 @@ public class WorkflowPauseTest {
   // ============================================================
 
   public class TwoStepWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowPauseTest.StepA',
+        'WorkflowPauseTest.StepB'
+      };
+    }
     public String getInitialStep() {
       return 'WorkflowPauseTest.StepA';
     }
@@ -49,6 +55,12 @@ public class WorkflowPauseTest {
   }
 
   public class SuspendingWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowPauseTest.SuspendStep',
+        'WorkflowPauseTest.StepB'
+      };
+    }
     public String getInitialStep() {
       return 'WorkflowPauseTest.SuspendStep';
     }
@@ -70,6 +82,14 @@ public class WorkflowPauseTest {
   }
 
   public class ParallelWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowPauseTest.SplitStep',
+        'WorkflowPauseTest.BranchA',
+        'WorkflowPauseTest.BranchB',
+        'WorkflowPauseTest.JoinStep'
+      };
+    }
     public String getInitialStep() {
       return 'WorkflowPauseTest.SplitStep';
     }
@@ -138,6 +158,9 @@ public class WorkflowPauseTest {
   public static String spawnChildKey;
 
   public class ChildSpawningWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowPauseTest.SpawnChildStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowPauseTest.SpawnChildStep';
     }

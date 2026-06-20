@@ -8,6 +8,9 @@ public class StepContextSignalEngineTest {
   // --- Re-observation safety (AC4a) ---------------------------------------
 
   public class ReObserveWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'StepContextSignalEngineTest.ReObserveStep' };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.ReObserveStep';
     }
@@ -84,6 +87,9 @@ public class StepContextSignalEngineTest {
   // --- Cancel control signals are never surfaced (AC5) --------------------
 
   public class PlainWaitWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'StepContextSignalEngineTest.PlainWaitStep' };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.PlainWaitStep';
     }
@@ -147,6 +153,9 @@ public class StepContextSignalEngineTest {
   // --- In-flight duplicate consumed by observed-name re-query (AC4b) -------
 
   public class InFlightDupWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'StepContextSignalEngineTest.InFlightDupStep' };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.InFlightDupStep';
     }
@@ -214,6 +223,14 @@ public class StepContextSignalEngineTest {
   // --- SPLIT consumes the spawning step's observed signals (AC4) ----------
 
   public class SplitSignalWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'StepContextSignalEngineTest.SignalThenSplitStep',
+        'StepContextSignalEngineTest.SplitJoinStep',
+        'StepContextSignalEngineTest.BranchAStep',
+        'StepContextSignalEngineTest.BranchBStep'
+      };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.SignalThenSplitStep';
     }
@@ -314,6 +331,9 @@ public class StepContextSignalEngineTest {
   // --- A name probed absent must not consume a later arrival (AC4b nuance) -
 
   public class ProbeAbsentWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'StepContextSignalEngineTest.ProbeAbsentStep' };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.ProbeAbsentStep';
     }
@@ -388,6 +408,14 @@ public class StepContextSignalEngineTest {
   // --- Atomic claim-at-read for parallel branches (AC6) --------------------
 
   public class ClaimRaceWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'StepContextSignalEngineTest.ClaimRaceSpawnStep',
+        'StepContextSignalEngineTest.ClaimRaceJoinStep',
+        'StepContextSignalEngineTest.ClaimBranchAlpha',
+        'StepContextSignalEngineTest.ClaimBranchBeta'
+      };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.ClaimRaceSpawnStep';
     }
@@ -598,6 +626,14 @@ public class StepContextSignalEngineTest {
   // --- Guard-then-read returns the claimed payload (StepContext cache merge) --
 
   public class GuardReadWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'StepContextSignalEngineTest.GuardReadSpawnStep',
+        'StepContextSignalEngineTest.GuardReadJoinStep',
+        'StepContextSignalEngineTest.GuardReadBranch',
+        'StepContextSignalEngineTest.GuardReadOtherBranch'
+      };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.GuardReadSpawnStep';
     }
@@ -704,6 +740,14 @@ public class StepContextSignalEngineTest {
   // --- A parallel branch suspended on a signal is woken by name (D) ---------
 
   public class WakeWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'StepContextSignalEngineTest.WakeSpawnStep',
+        'StepContextSignalEngineTest.WakeJoinStep',
+        'StepContextSignalEngineTest.WakeWaitBranch',
+        'StepContextSignalEngineTest.WakeOtherBranch'
+      };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.WakeSpawnStep';
     }
@@ -789,6 +833,14 @@ public class StepContextSignalEngineTest {
   // --- CalloutStep branches read without claiming (C) -----------------------
 
   public class ProbeWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'StepContextSignalEngineTest.ProbeSpawnStep',
+        'StepContextSignalEngineTest.ProbeJoinStep',
+        'StepContextSignalEngineTest.ProbeClaimBranch',
+        'StepContextSignalEngineTest.ProbeCalloutBranch'
+      };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.ProbeSpawnStep';
     }
@@ -918,6 +970,12 @@ public class StepContextSignalEngineTest {
   // uncommitted-work exception. ----------------------------------------------
 
   public class CalloutTimeoutWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'StepContextSignalEngineTest.CTSpawnStep',
+        'StepContextSignalEngineTest.CTCalloutTimeoutBranch'
+      };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.CTSpawnStep';
     }
@@ -1026,6 +1084,14 @@ public class StepContextSignalEngineTest {
   // --- Unscoped getSignals() preserves arrival order after a claim (B) ------
 
   public class OrderWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'StepContextSignalEngineTest.OrderSpawnStep',
+        'StepContextSignalEngineTest.OrderJoinStep',
+        'StepContextSignalEngineTest.OrderBranch',
+        'StepContextSignalEngineTest.OrderOtherBranch'
+      };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.OrderSpawnStep';
     }
@@ -1120,6 +1186,14 @@ public class StepContextSignalEngineTest {
   // --- getSignal falls back to an older signal when the newest is taken (E) -
 
   public class FallbackWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'StepContextSignalEngineTest.FallbackSpawnStep',
+        'StepContextSignalEngineTest.FallbackJoinStep',
+        'StepContextSignalEngineTest.FallbackBranch',
+        'StepContextSignalEngineTest.FallbackOtherBranch'
+      };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.FallbackSpawnStep';
     }
@@ -1224,6 +1298,14 @@ public class StepContextSignalEngineTest {
   // --- A CalloutStep branch must not consume a sibling's later claim (find 3) -
 
   public class CalloutSiblingWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'StepContextSignalEngineTest.CalloutSiblingSpawnStep',
+        'StepContextSignalEngineTest.CalloutSiblingJoinStep',
+        'StepContextSignalEngineTest.CalloutSiblingBranch',
+        'StepContextSignalEngineTest.CalloutSiblingOtherBranch'
+      };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.CalloutSiblingSpawnStep';
     }
@@ -1379,6 +1461,14 @@ public class StepContextSignalEngineTest {
   // --- Rollback must not release a sibling's claim on an observed row (find 1) -
 
   public class CalloutRollbackWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'StepContextSignalEngineTest.CalloutRollbackSpawnStep',
+        'StepContextSignalEngineTest.CalloutRollbackJoinStep',
+        'StepContextSignalEngineTest.CalloutRollbackBranch',
+        'StepContextSignalEngineTest.CalloutRollbackOtherBranch'
+      };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.CalloutRollbackSpawnStep';
     }
@@ -1478,6 +1568,9 @@ public class StepContextSignalEngineTest {
   // spent (a step that suspends as if absent would strand). ------------------
 
   public class BudgetWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'StepContextSignalEngineTest.BudgetReadStep' };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.BudgetReadStep';
     }
@@ -1571,6 +1664,9 @@ public class StepContextSignalEngineTest {
   // --- Offloaded signal payloads resolve (in bulk) for list accessors --------
 
   public class OffloadWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'StepContextSignalEngineTest.OffloadReadStep' };
+    }
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.OffloadReadStep';
     }

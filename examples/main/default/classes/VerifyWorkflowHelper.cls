@@ -1,5 +1,8 @@
 public inherited sharing class VerifyWorkflowHelper {
   public class TimeoutContinueWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'VerifyWorkflowHelper.TimeoutContinueStep' };
+    }
     public String getInitialStep() {
       return 'VerifyWorkflowHelper.TimeoutContinueStep';
     }

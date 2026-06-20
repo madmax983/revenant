@@ -23,6 +23,9 @@ public class WorkflowEngineOutboundEmitTest {
   // ----- Workflow A: a single step that emits then yields -> retries -> completes.
 
   public class EmitWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineOutboundEmitTest.EmitOnceStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineOutboundEmitTest.EmitOnceStep';
     }
@@ -80,6 +83,9 @@ public class WorkflowEngineOutboundEmitTest {
   // ----- Workflow using the StepResult.complete(next, output, events) overload.
 
   public class ResultEmitWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineOutboundEmitTest.ResultEmitStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineOutboundEmitTest.ResultEmitStep';
     }
@@ -103,6 +109,14 @@ public class WorkflowEngineOutboundEmitTest {
   // ----- Workflow B: a split step that emits, fanning out to two branches.
 
   public class SplitEmitWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineOutboundEmitTest.SplitEmitStep',
+        'WorkflowEngineOutboundEmitTest.BranchAStep',
+        'WorkflowEngineOutboundEmitTest.BranchBStep',
+        'WorkflowEngineOutboundEmitTest.JoinStep'
+      };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineOutboundEmitTest.SplitEmitStep';
     }
@@ -152,6 +166,9 @@ public class WorkflowEngineOutboundEmitTest {
   // ----- Workflow whose result events list contains a null entry.
 
   public class NullEventWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineOutboundEmitTest.NullEventStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineOutboundEmitTest.NullEventStep';
     }
@@ -179,6 +196,12 @@ public class WorkflowEngineOutboundEmitTest {
   // ----- Saga whose compensation step emits on rollback.
 
   public class CompensationEmitWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineOutboundEmitTest.RefundableChargeStep',
+        'WorkflowEngineOutboundEmitTest.FailingStep'
+      };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineOutboundEmitTest.RefundableChargeStep';
     }

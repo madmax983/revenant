@@ -61,6 +61,11 @@ public inherited sharing class OrderChoreographyWorkflowExample {
   // ----- Workflow A: ship the order, emit Order_Shipped__e on COMPLETE. -------
 
   public class ShipmentWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'OrderChoreographyWorkflowExample.ShipOrderStep'
+      };
+    }
     public String getInitialStep() {
       return 'OrderChoreographyWorkflowExample.ShipOrderStep';
     }
@@ -134,6 +139,11 @@ public inherited sharing class OrderChoreographyWorkflowExample {
   // ----- Workflow B: started by the Order_Shipped__e subscriber. --------------
 
   public class RefundWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'OrderChoreographyWorkflowExample.IssueRefundStep'
+      };
+    }
     public String getInitialStep() {
       return 'OrderChoreographyWorkflowExample.IssueRefundStep';
     }

@@ -11,6 +11,9 @@ public class WorkflowSignalIdempotencyTest {
   // ── Inline workflow: suspends until 'Approve' signal, then completes ────────
 
   public class WaitWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowSignalIdempotencyTest.WaitStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowSignalIdempotencyTest.WaitStep';
     }
@@ -33,6 +36,9 @@ public class WorkflowSignalIdempotencyTest {
   // boundary can be exercised without the instance completing first.
 
   public class WaitForGoWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowSignalIdempotencyTest.WaitForGoStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowSignalIdempotencyTest.WaitForGoStep';
     }

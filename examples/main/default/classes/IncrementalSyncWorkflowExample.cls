@@ -24,6 +24,14 @@ public inherited sharing class IncrementalSyncWorkflowExample {
   private static Integer SLEEP_INTERVAL_SECONDS = 300;
 
   public class SyncPollerWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'IncrementalSyncWorkflowExample.SyncChangedAccountsStep',
+        'IncrementalSyncWorkflowExample.SleepStep',
+        'IncrementalSyncWorkflowExample.ContinueStep'
+      };
+    }
+
     public String getInitialStep() {
       return 'IncrementalSyncWorkflowExample.SyncChangedAccountsStep';
     }
