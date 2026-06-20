@@ -23,17 +23,32 @@ if (ceiling == null) {
     ' — deploy a config record (or Default) first, or the burst will be unbounded.');
 }
 
+// Use the bulk startOrGet(List<StartRequest>) API, not the scalar start() in a loop.
+// The scalar path costs several DML statements per call (instance insert/update, step
+// insert, orchestrator publish), so 200 iterations would blow the 150-DML governor
+// before the burst is seeded. startOrGet bulkifies its DML, so a chunk of starts costs
+// a fixed handful of statements regardless of chunk size. Chunk the burst so this scales
+// toward larger sizes (each chunk is its own bounded set of DML statements).
+Integer CHUNK_SIZE = 200;
+Long batchStamp = System.now().getTime();
 Integer started = 0;
-for (Integer i = 0; i < BURST_SIZE; i++) {
-  try {
-    WorkflowEngine.start(
-      WORKFLOW_NAME,
-      'ConcBurst_' + System.now().getTime() + '_' + i,
-      null
+for (Integer offset = 0; offset < BURST_SIZE; offset += CHUNK_SIZE) {
+  List<WorkflowEngine.StartRequest> reqs = new List<WorkflowEngine.StartRequest>();
+  Integer chunkEnd = Math.min(offset + CHUNK_SIZE, BURST_SIZE);
+  for (Integer i = offset; i < chunkEnd; i++) {
+    reqs.add(
+      new WorkflowEngine.StartRequest(
+        WORKFLOW_NAME,
+        'ConcBurst_' + batchStamp + '_' + i,
+        null
+      )
     );
-    started++;
+  }
+  try {
+    WorkflowEngine.startOrGet(reqs);
+    started += reqs.size();
   } catch (Exception e) {
-    System.debug(LoggingLevel.WARN, 'start ' + i + ' failed: ' + e.getMessage());
+    System.debug(LoggingLevel.WARN, 'chunk at offset ' + offset + ' failed: ' + e.getMessage());
   }
 }
 System.debug('Requested ' + started + ' starts against ceiling=' + ceiling +
