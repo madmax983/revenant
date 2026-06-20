@@ -5,7 +5,7 @@
  * validation writes nothing.
  */
 @isTest
-private class WorkflowValidatorTest {
+public class WorkflowValidatorTest {
   // ==========================================
   // FIXTURE STEPS
   // ==========================================
@@ -170,6 +170,83 @@ private class WorkflowValidatorTest {
   public class NotAWorkflow {
     public String hello() {
       return 'hi';
+    }
+  }
+
+  // A definition whose contract methods throw (e.g. reading malformed config).
+  public class ThrowingContractWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      throw new TestValidatorException('boom from getSteps');
+    }
+    public String getInitialStep() {
+      throw new TestValidatorException('boom from getInitialStep');
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      return null;
+    }
+  }
+
+  public class TestValidatorException extends Exception {
+  }
+
+  // Well-formed versioned workflow: every successor across versions is declared.
+  public class GoodVersionedWorkflow implements VersionedWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowValidatorTest.GoodStepA',
+        'WorkflowValidatorTest.GoodStepB'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowValidatorTest.GoodStepA';
+    }
+    public Integer getLatestVersion() {
+      return 2;
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      return getNextStep(currentStepName, result, 1);
+    }
+    public String getNextStep(
+      String currentStepName,
+      StepResult result,
+      Integer version
+    ) {
+      if (currentStepName == 'WorkflowValidatorTest.GoodStepA') {
+        return 'WorkflowValidatorTest.GoodStepB';
+      }
+      return null;
+    }
+  }
+
+  // Versioned workflow whose v2 routing reaches a successor NOT in getSteps().
+  // The two-argument fallback (v1) routes only to declared steps, so this dangle
+  // is detectable only by probing the version-aware overload.
+  public class VersionedDanglingWorkflow implements VersionedWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowValidatorTest.GoodStepA' };
+    }
+    public String getInitialStep() {
+      return 'WorkflowValidatorTest.GoodStepA';
+    }
+    public Integer getLatestVersion() {
+      return 2;
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      // v1 fallback: terminate (no dangling successor on the 2-arg path).
+      return null;
+    }
+    public String getNextStep(
+      String currentStepName,
+      StepResult result,
+      Integer version
+    ) {
+      if (
+        version >= 2 &&
+        currentStepName == 'WorkflowValidatorTest.GoodStepA'
+      ) {
+        return 'WorkflowValidatorTest.V2OnlyStepTypo'; // undeclared
+      }
+      return null;
     }
   }
 
@@ -354,6 +431,64 @@ private class WorkflowValidatorTest {
       [SELECT COUNT() FROM Workflow_Step_Execution__c],
       'Validation must create no Workflow_Step_Execution__c'
     );
+  }
+
+  @isTest
+  static void contractMethodThrowIsReportedNotPropagated() {
+    // getInitialStep()/getSteps() throwing must surface as defects, not abort.
+    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+      'WorkflowValidatorTest.ThrowingContractWorkflow'
+    );
+    System.assertEquals(
+      false,
+      result.isValid(),
+      'A throwing definition must be reported as invalid'
+    );
+    System.assert(
+      result.hasDefect(WorkflowValidator.CONTRACT_METHOD_THREW),
+      'Expected CONTRACT_METHOD_THREW: ' + result.getMessages()
+    );
+    // Both contract methods threw; both should be surfaced.
+    Integer threwCount = 0;
+    for (WorkflowValidator.Defect d : result.defects) {
+      if (d.code == WorkflowValidator.CONTRACT_METHOD_THREW) {
+        threwCount++;
+      }
+    }
+    System.assertEquals(
+      2,
+      threwCount,
+      'Both getInitialStep() and getSteps() throws should be reported: ' +
+      result.getMessages()
+    );
+  }
+
+  @isTest
+  static void wellFormedVersionedWorkflowPassesClean() {
+    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+      'WorkflowValidatorTest.GoodVersionedWorkflow'
+    );
+    System.assertEquals(
+      true,
+      result.isValid(),
+      'Well-formed versioned workflow should pass: ' + result.getMessages()
+    );
+  }
+
+  @isTest
+  static void versionedDanglingSuccessorIsFlagged() {
+    // The dangling successor is reachable only via the version-aware
+    // getNextStep(..., version) overload, so this proves the versioned probe.
+    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+      'WorkflowValidatorTest.VersionedDanglingWorkflow'
+    );
+    System.assertEquals(false, result.isValid());
+    System.assert(
+      result.hasDefect(WorkflowValidator.DANGLING_SUCCESSOR),
+      'Expected DANGLING_SUCCESSOR from versioned probe: ' +
+      result.getMessages()
+    );
+    assertMessageNames(result, 'WorkflowValidatorTest.V2OnlyStepTypo');
   }
 
   // Asserts that at least one defect message embeds the given step name.

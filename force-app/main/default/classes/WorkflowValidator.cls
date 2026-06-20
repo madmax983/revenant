@@ -13,6 +13,17 @@
  * writes no Workflow_Step_Execution__c, touches no compensation state, publishes
  * no platform events, and enqueues no jobs.
  *
+ * Constructor side effects: to check interface conformance, validation
+ * instantiates each declared step (and the definition) via
+ * Type.forName().newInstance() — exactly as WorkflowEngine does when it resolves
+ * a step at runtime. Apex exposes no way to test `instanceof WorkflowStep`
+ * without instantiating. Authors must therefore keep workflow/step zero-arg
+ * constructors side-effect-free (no DML, no platform events, no enqueues) — the
+ * same implicit requirement the engine already imposes, since it newInstance()s
+ * the same classes. Put real work in execute()/compensate(), never the
+ * constructor; otherwise that work would also run on every engine step
+ * resolution, not just during validation.
+ *
  * See issue #23.
  */
 public with sharing class WorkflowValidator {
@@ -25,6 +36,7 @@ public with sharing class WorkflowValidator {
   public static final String STEP_UNRESOLVABLE = 'STEP_UNRESOLVABLE';
   public static final String STEP_NOT_WORKFLOWSTEP = 'STEP_NOT_WORKFLOWSTEP';
   public static final String DANGLING_SUCCESSOR = 'DANGLING_SUCCESSOR';
+  public static final String CONTRACT_METHOD_THREW = 'CONTRACT_METHOD_THREW';
 
   /**
    * A single structural defect. stepName is the offending step (or the
@@ -96,12 +108,48 @@ public with sharing class WorkflowValidator {
       return result;
     }
 
-    // (b) The entry point must be present and declared.
-    String initialStep = def.getInitialStep();
-    List<String> declaredSteps = safeGetSteps(def);
+    // (b) The entry point must be present and declared. Author contract
+    // methods may throw (e.g. reading malformed configuration); surface that as
+    // a defect rather than letting it abort the whole validation run.
+    Boolean initialStepThrew = false;
+    String initialStep;
+    try {
+      initialStep = def.getInitialStep();
+    } catch (Exception e) {
+      initialStepThrew = true;
+      result.add(
+        CONTRACT_METHOD_THREW,
+        workflowName,
+        'Workflow "' +
+        workflowName +
+        '" getInitialStep() threw ' +
+        e.getTypeName() +
+        ': ' +
+        e.getMessage()
+      );
+    }
+
+    List<String> declaredSteps;
+    try {
+      declaredSteps = safeGetSteps(def);
+    } catch (Exception e) {
+      declaredSteps = new List<String>();
+      result.add(
+        CONTRACT_METHOD_THREW,
+        workflowName,
+        'Workflow "' +
+        workflowName +
+        '" getSteps() threw ' +
+        e.getTypeName() +
+        ': ' +
+        e.getMessage()
+      );
+    }
     Set<String> declaredSet = new Set<String>(declaredSteps);
 
-    if (String.isBlank(initialStep)) {
+    if (initialStepThrew) {
+      // Cannot evaluate the entry point further; already reported above.
+    } else if (String.isBlank(initialStep)) {
       result.add(
         INITIAL_STEP_BLANK,
         workflowName,
@@ -280,6 +328,13 @@ public with sharing class WorkflowValidator {
    * step and flags any returned successor name that is not itself declared in
    * getSteps(). Author exceptions thrown from getNextStep are swallowed because
    * the probe feeds it synthetic results it may not expect.
+   *
+   * For a VersionedWorkflow the engine starts instances at getLatestVersion()
+   * and routes via the three-argument getNextStep(current, result, version), so
+   * the probe additionally drives that overload for every version in
+   * 1..getLatestVersion(). This catches a successor used only by a newer version
+   * that was omitted from getSteps() — which the two-argument fallback alone can
+   * miss, letting it fail lazily at runtime after prior steps have committed.
    */
   private static void probeTransitions(
     WorkflowDefinition def,
@@ -294,6 +349,8 @@ public with sharing class WorkflowValidator {
     };
 
     Set<String> flagged = new Set<String>();
+
+    // Two-argument (default) routing for every declared step.
     for (String stepName : declaredSteps) {
       for (StepResult probe : probes) {
         String successor;
@@ -303,22 +360,62 @@ public with sharing class WorkflowValidator {
           // Data-dependent author logic; ignore for a best-effort probe.
           continue;
         }
-        if (String.isBlank(successor)) {
-          continue;
-        }
-        if (!declaredSet.contains(successor) && !flagged.contains(successor)) {
-          result.add(
-            DANGLING_SUCCESSOR,
-            successor,
-            'Step "' +
-            stepName +
-            '" can transition to "' +
-            successor +
-            '", which is not contained in getSteps() (best-effort probe).'
-          );
-          flagged.add(successor);
+        flagIfDangling(stepName, successor, declaredSet, flagged, result);
+      }
+    }
+
+    // Version-aware routing for VersionedWorkflow definitions.
+    if (def instanceof VersionedWorkflow) {
+      VersionedWorkflow vdef = (VersionedWorkflow) def;
+      Integer latest;
+      try {
+        latest = vdef.getLatestVersion();
+      } catch (Exception e) {
+        latest = null;
+      }
+      if (latest != null && latest >= 1) {
+        for (Integer version = 1; version <= latest; version++) {
+          for (String stepName : declaredSteps) {
+            for (StepResult probe : probes) {
+              String successor;
+              try {
+                successor = vdef.getNextStep(stepName, probe, version);
+              } catch (Exception e) {
+                continue;
+              }
+              flagIfDangling(stepName, successor, declaredSet, flagged, result);
+            }
+          }
         }
       }
+    }
+  }
+
+  /**
+   * Records a DANGLING_SUCCESSOR defect when a probed successor is non-blank and
+   * not declared in getSteps(), de-duplicating by successor name.
+   */
+  private static void flagIfDangling(
+    String stepName,
+    String successor,
+    Set<String> declaredSet,
+    Set<String> flagged,
+    ValidationResult result
+  ) {
+    if (String.isBlank(successor)) {
+      return;
+    }
+    if (!declaredSet.contains(successor) && !flagged.contains(successor)) {
+      result.add(
+        DANGLING_SUCCESSOR,
+        successor,
+        'Step "' +
+        stepName +
+        '" can transition to "' +
+        successor +
+        '", which is not contained in getSteps() (best-effort probe).'
+      );
+      flagged.add(successor);
     }
   }
 }
