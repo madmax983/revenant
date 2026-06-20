@@ -59,6 +59,18 @@ The dashboard's **System Doctor** tab shows a **Concurrency Limits** panel: per 
 workflow, the current in-flight count vs. its ceiling and the number of parked/throttled
 instances.
 
+## Known limitation — enabling a ceiling on already-running work
+
+The slot counter is built up as instances are **admitted through the gate**. If you add
+a ceiling (or a `Default` record starts applying) to a workflow that *already* has
+in-flight instances started before the gate existed, those pre-existing instances do not
+hold slots (`Concurrency_Slot_Held__c = false`), so the counter starts from the newly
+admitted work only. Until that older work drains, the effective number of concurrent
+instances can briefly exceed the configured ceiling. This matches how most engines apply
+a concurrency limit to *new* work; the ceiling becomes exact once the pre-gate instances
+reach a terminal state. To enforce the ceiling immediately on a busy workflow, enable the
+config during a quiet window (or let the existing instances finish first).
+
 ## Scope
 
 This slice is a per-workflow-definition ceiling only. Per-step/per-branch concurrency and

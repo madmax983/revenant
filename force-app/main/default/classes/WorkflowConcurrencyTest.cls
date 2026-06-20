@@ -34,6 +34,26 @@ public class WorkflowConcurrencyTest {
     }
   }
 
+  // A bounded workflow whose initial step declares a timeout — used to prove the
+  // initial step's deadline is deferred until admission for configured workflows.
+  public class TimeoutWaitWorkflow implements WorkflowDefinition {
+    public String getInitialStep() {
+      return 'WorkflowConcurrencyTest.TimeoutWaitStep';
+    }
+    public String getNextStep(String current, StepResult result) {
+      return null;
+    }
+  }
+
+  public class TimeoutWaitStep implements WorkflowStep, TimeoutConfigurable {
+    public Integer getTimeoutSeconds() {
+      return 300;
+    }
+    public StepResult execute(StepContext ctx) {
+      return StepResult.suspend();
+    }
+  }
+
   private static Concurrency_Config__mdt cfg(Integer ceiling) {
     return (Concurrency_Config__mdt) JSON.deserialize(
       '{"DeveloperName":"WorkflowConcurrencyTest_WaitWorkflow","Max_Concurrent_Instances__c":' +
@@ -290,6 +310,44 @@ public class WorkflowConcurrencyTest {
       ![SELECT Concurrency_Slot_Held__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
         .Concurrency_Slot_Held__c,
       'Instance must not hold a slot after a failed admission'
+    );
+  }
+
+  // A bounded start must NOT arm the initial step's watchdog deadline until a slot
+  // is won, so an overflow start sitting Pending in the backlog during a burst can't
+  // be failed by the timeout sweep before it ever parks.
+  @isTest
+  static void testBoundedStartDefersInitialTimeout() {
+    WorkflowEngine.disableQueueableInTest = true;
+    ConcurrencyGate.mockConfigs.put(
+      'WorkflowConcurrencyTest_TimeoutWaitWorkflow',
+      (Concurrency_Config__mdt) JSON.deserialize(
+        '{"DeveloperName":"WorkflowConcurrencyTest_TimeoutWaitWorkflow","Max_Concurrent_Instances__c":5}',
+        Concurrency_Config__mdt.class
+      )
+    );
+
+    Test.startTest();
+    Id id = WorkflowEngine.start(
+      'WorkflowConcurrencyTest.TimeoutWaitWorkflow',
+      'defer-1',
+      null
+    );
+    // Before the first RUN_STEP/admission runs, the initial step must carry no
+    // timeout deadline even though TimeoutWaitStep declares one.
+    Workflow_Step_Execution__c step = [
+      SELECT Status__c, Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :id
+      LIMIT 1
+    ];
+    Test.stopTest();
+
+    System.assertEquals('Pending', step.Status__c, 'Initial step is Pending pre-admission');
+    System.assertEquals(
+      null,
+      step.Timeout_At__c,
+      'Bounded start must defer the initial step timeout until admission'
     );
   }
 

@@ -989,6 +989,15 @@ public inherited sharing class WorkflowEngine {
       WorkflowPauseGate.anyPaused() &&
       WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c);
 
+    // A concurrency-bounded workflow may park on its first RUN_STEP before executing
+    // a step. Defer arming the initial step's timeout until admission succeeds (the
+    // admission path re-arms it via reArmTimeoutsForResume). Otherwise a still-Pending
+    // step sitting in the event/queue backlog during a burst could be failed by the
+    // timeout sweep before it ever reaches the gate to park.
+    Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(
+      instance.Workflow_Name__c
+    );
+
     if (String.isNotBlank(instance.Current_Step__c)) {
       Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
       stepExec.Workflow_Instance__c = instance.Id;
@@ -996,10 +1005,11 @@ public inherited sharing class WorkflowEngine {
       stepExec.Status__c = 'Pending';
       stepExec.Input__c = instance.Input__c;
       stepExec.Retry_Count__c = 0;
-      // Do not start the timeout clock while parked — a paused step's Timeout_At__c
-      // would otherwise pollute the watchdog timeout batch (selected, then skipped
-      // because the parent is not runnable). Resume re-establishes the timeout.
-      if (!parkAtStart) {
+      // Do not start the timeout clock while parked — a paused/throttled step's
+      // Timeout_At__c would otherwise pollute the watchdog timeout batch (selected,
+      // then skipped because the parent is not runnable) or, for a still-Pending
+      // bounded start, fail it before admission. Resume/admission re-establishes it.
+      if (!parkAtStart && !deferTimeoutForConcurrency) {
         Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
         if (timeout != null && timeout > 0) {
           stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
@@ -1018,8 +1028,11 @@ public inherited sharing class WorkflowEngine {
       return new StartResult(instance.Id, true);
     }
 
-    // Schedule watchdog for the initial step before executing it
-    scheduleTimeoutJobForInstance(instance.Id);
+    // Schedule watchdog for the initial step before executing it — unless this is a
+    // bounded workflow, where the admission gate arms the timeout once a slot is won.
+    if (!deferTimeoutForConcurrency) {
+      scheduleTimeoutJobForInstance(instance.Id);
+    }
 
     // Enqueue the first step execution
     if (Test.isRunningTest()) {
@@ -7262,17 +7275,23 @@ public inherited sharing class WorkflowEngine {
    * step is never failed by the timeout sweep; admission re-arms it.
    */
   private static void parkForConcurrency(Workflow_Instance__c instance) {
+    // Reset the current step's pre-execution state so a re-park is always clean: an
+    // external resume() can have flipped the not-yet-executed step to Running and
+    // stamped a deadline before this delivery reached the gate. Put it back to
+    // Pending and clear Timeout_At__c (the watchdog/timeout job already skips a
+    // Suspended parent, but this keeps the step row consistent and re-armable).
     List<Workflow_Step_Execution__c> pending = [
-      SELECT Id
+      SELECT Id, Status__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :instance.Id
-        AND Status__c = 'Pending'
+        AND Status__c IN ('Pending', 'Running')
         AND Timeout_At__c != NULL
       WITH SYSTEM_MODE
     ];
     if (!pending.isEmpty()) {
       for (Workflow_Step_Execution__c step : pending) {
+        step.Status__c = 'Pending';
         step.Timeout_At__c = null;
       }
       update as system pending;
