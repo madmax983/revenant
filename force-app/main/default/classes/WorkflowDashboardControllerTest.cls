@@ -867,6 +867,39 @@ public class WorkflowDashboardControllerTest {
   }
 
   @isTest
+  static void testConcurrencyStatus() {
+    // A governed workflow with a durable counter and a parked instance.
+    ConcurrencyGate.mockConfigs.put(
+      'DashConcWf',
+      (Concurrency_Config__mdt) JSON.deserialize(
+        '{"DeveloperName":"DashConcWf","Max_Concurrent_Instances__c":5}',
+        Concurrency_Config__mdt.class
+      )
+    );
+    insert new Concurrency_State__c(
+      Workflow_Definition__c = 'DashConcWf',
+      In_Flight_Count__c = 5
+    );
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = 'DashConcWf',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'dash-parked-1',
+      Concurrency_Parked__c = true
+    );
+
+    Test.startTest();
+    List<Map<String, Object>> rows = WorkflowDashboardController.getConcurrencyStatus();
+    Test.stopTest();
+
+    System.assertEquals(1, rows.size(), 'One governed workflow row expected');
+    Map<String, Object> row = rows[0];
+    System.assertEquals('DashConcWf', row.get('workflowName'));
+    System.assertEquals(5, row.get('ceiling'), 'Ceiling surfaced from config');
+    System.assertEquals(5, row.get('inFlight'), 'In-flight surfaced from counter');
+    System.assertEquals(1, row.get('parked'), 'Parked count surfaced');
+  }
+
+  @isTest
   static void testResumeWorkflowAndWaitingOn() {
     // Create a mock suspended instance
     Workflow_Instance__c inst = new Workflow_Instance__c(

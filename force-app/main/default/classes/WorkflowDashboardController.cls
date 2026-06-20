@@ -1871,4 +1871,74 @@ public inherited sharing class WorkflowDashboardController {
       throw new AuraHandledException(ex.getMessage());
     }
   }
+
+  /**
+   * Returns the concurrency-limit picture for each governed workflow (issue #28):
+   * current in-flight count vs. its configured ceiling, and the number of
+   * parked/throttled instances awaiting admission. One row per durable counter
+   * (Concurrency_State__c) — i.e. every workflow that is, or has been, governed.
+   * Each entry: { workflowName, ceiling, inFlight, parked }.
+   */
+  @AuraEnabled
+  public static List<Map<String, Object>> getConcurrencyStatus() {
+    checkAuthorization();
+    try {
+      List<Concurrency_State__c> states = [
+        SELECT Workflow_Definition__c, In_Flight_Count__c
+        FROM Concurrency_State__c
+        WITH SYSTEM_MODE
+        ORDER BY Workflow_Definition__c ASC
+      ];
+      if (states.isEmpty()) {
+        return new List<Map<String, Object>>();
+      }
+
+      Set<String> workflowNames = new Set<String>();
+      for (Concurrency_State__c s : states) {
+        workflowNames.add(s.Workflow_Definition__c);
+      }
+
+      // Parked = Suspended specifically awaiting a concurrency slot (distinct from
+      // ordinary sleep/signal waits), grouped per definition.
+      Map<String, Integer> parkedByDef = new Map<String, Integer>();
+      for (AggregateResult ar : [
+        SELECT Workflow_Name__c wf, COUNT(Id) cnt
+        FROM Workflow_Instance__c
+        WHERE
+          Workflow_Name__c IN :workflowNames
+          AND Status__c = 'Suspended'
+          AND Concurrency_Parked__c = true
+        WITH SYSTEM_MODE
+        GROUP BY Workflow_Name__c
+      ]) {
+        parkedByDef.put((String) ar.get('wf'), (Integer) ar.get('cnt'));
+      }
+
+      List<Map<String, Object>> result = new List<Map<String, Object>>();
+      for (Concurrency_State__c s : states) {
+        result.add(
+          new Map<String, Object>{
+            'workflowName' => s.Workflow_Definition__c,
+            'ceiling' => ConcurrencyGate.getCeiling(s.Workflow_Definition__c),
+            'inFlight' => s.In_Flight_Count__c == null
+              ? 0
+              : (Integer) s.In_Flight_Count__c,
+            'parked' => parkedByDef.containsKey(s.Workflow_Definition__c)
+              ? parkedByDef.get(s.Workflow_Definition__c)
+              : 0
+          }
+        );
+      }
+      return result;
+    } catch (Exception ex) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura getConcurrencyStatus failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
 }

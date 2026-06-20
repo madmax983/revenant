@@ -17,6 +17,13 @@ public inherited sharing class WorkflowEngine {
   // Revenant_Config__mdt.Stale_Threshold_Minutes__c; default 60 minutes.
   public static Integer staleThresholdMinutes = 60;
 
+  // Base + jitter (seconds) before a concurrency-parked instance re-attempts
+  // admission. Precise scheduling drives it promptly when slots free; under a large
+  // burst the scheduling degrades to the watchdog batch-resume (the scalable path).
+  @TestVisible
+  private static Integer concurrencyAdmissionRetrySeconds = 30;
+  private static final Integer CONCURRENCY_ADMISSION_RETRY_JITTER_SECONDS = 15;
+
   // Instances in these statuses are considered in-flight; a start that collides
   // with one of them always dedups to the existing instance.
   private static final Set<String> ACTIVE_STATUSES = new Set<String>{
@@ -2052,6 +2059,8 @@ public inherited sharing class WorkflowEngine {
         Definition_Version__c,
         Error_Message__c,
         Previous_Run_At__c,
+        Concurrency_Slot_Held__c,
+        Concurrency_Parked__c,
         CreatedDate
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
@@ -2171,6 +2180,49 @@ public inherited sharing class WorkflowEngine {
         update as system instance;
       }
       return;
+    }
+
+    // 2b. Concurrency admission gate. An instance that does not yet hold a slot must
+    //     acquire one before executing any step of a definition with a configured
+    //     ceiling. Acquisition commits the guarded counter increment in THIS
+    //     transaction and re-drives the step in a fresh transaction, so execute()
+    //     never runs while the counter DML is uncommitted (which would make a
+    //     CalloutStep — the primary use case for this feature — illegal). A held slot
+    //     is released only on a terminal transition (WorkflowInstanceTrigger).
+    //     Compensating/Cancelling instances already returned to runCompensationStep
+    //     above; they keep the slot acquired on the forward path and are never re-gated.
+    if (!instance.Concurrency_Slot_Held__c) {
+      ConcurrencyGate.AdmissionResult admission = ConcurrencyGate.tryAcquire(
+        instance.Workflow_Name__c
+      );
+      if (admission.slotConsumed) {
+        // Slot acquired: commit the acquire + flag, then re-drive in a fresh
+        // transaction. Resolve a blank initial step so the re-driven hop has a
+        // concrete step, and re-arm its watchdog timeout (cleared on park).
+        instance.Concurrency_Slot_Held__c = true;
+        instance.Concurrency_Parked__c = false;
+        if (String.isBlank(instance.Current_Step__c)) {
+          Type wfType = Type.forName(instance.Workflow_Name__c);
+          if (wfType != null) {
+            instance.Current_Step__c = ((WorkflowDefinition) wfType.newInstance())
+              .getInitialStep();
+          }
+        }
+        instance.Status__c = 'Running';
+        instance.Async_Job_Id__c = null;
+        update as system instance;
+        scheduleTimeoutJobForInstance(instance.Id);
+        if (!(Test.isRunningTest() && disableQueueableInTest)) {
+          enqueueResume(instance.Id);
+        }
+        return;
+      } else if (!admission.admitted) {
+        // Ceiling full: park and re-attempt admission automatically through the
+        // existing sleep/watchdog resume plumbing.
+        parkForConcurrency(instance);
+        return;
+      }
+      // Otherwise unbounded (no ceiling): fall through and run exactly as today.
     }
 
     // 2. Initialize initial step in memory if this is the start (DML deferred to outcome handler)
@@ -2295,6 +2347,8 @@ public inherited sharing class WorkflowEngine {
         Definition_Version__c,
         Error_Message__c,
         Previous_Run_At__c,
+        Concurrency_Slot_Held__c,
+        Concurrency_Parked__c,
         CreatedDate
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
@@ -6860,6 +6914,19 @@ public inherited sharing class WorkflowEngine {
       );
     }
 
+    // 4. Reconcile concurrency slot counters. Recomputes each configured workflow's
+    // in-flight count from the true number of non-terminal slot-holding instances,
+    // reclaiming any slot leaked by an instance that died without releasing (crash,
+    // killed transaction) so a parked instance is never starved indefinitely.
+    try {
+      ConcurrencyGate.reconcileAll();
+    } catch (Exception concEx) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'WorkflowEngine: concurrency reconcile failed: ' + concEx.getMessage()
+      );
+    }
+
     // All required heartbeat work (timed-out-step failures, sleep resumptions,
     // and schedule sweeps) is now done, so the best-effort lifecycle publish
     // runs last with no risk of starving a required update/enqueue of its DML budget.
@@ -7134,6 +7201,43 @@ public inherited sharing class WorkflowEngine {
       );
       return null;
     }
+  }
+
+  /**
+   * Parks an instance that could not acquire a concurrency slot. It suspends with a
+   * short admission-retry wake time and re-enters admission through the SAME sleep/
+   * watchdog resume path used by SLEEP — no busy spin, no dropped Queueable chain. The
+   * current Pending step's watchdog deadline is cleared so a parked (not-yet-executed)
+   * step is never failed by the timeout sweep; admission re-arms it.
+   */
+  private static void parkForConcurrency(Workflow_Instance__c instance) {
+    List<Workflow_Step_Execution__c> pending = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instance.Id
+        AND Status__c = 'Pending'
+        AND Timeout_At__c != NULL
+      WITH SYSTEM_MODE
+    ];
+    if (!pending.isEmpty()) {
+      for (Workflow_Step_Execution__c step : pending) {
+        step.Timeout_At__c = null;
+      }
+      update as system pending;
+    }
+
+    Integer retrySeconds =
+      concurrencyAdmissionRetrySeconds +
+      (Integer) Math.floor(
+        Math.random() * CONCURRENCY_ADMISSION_RETRY_JITTER_SECONDS
+      );
+    instance.Status__c = 'Suspended';
+    instance.Concurrency_Parked__c = true;
+    instance.Concurrency_Slot_Held__c = false;
+    instance.Sleep_Until__c = DateTime.now().addSeconds(retrySeconds);
+    instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, retrySeconds);
+    update as system instance;
   }
 
   private static String scheduleSleepResume(

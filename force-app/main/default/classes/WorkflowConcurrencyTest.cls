@@ -160,6 +160,7 @@ public class WorkflowConcurrencyTest {
 
   @isTest
   static void testEachTerminalTypeReleasesSlot() {
+    WorkflowEngine.disableQueueableInTest = true;
     ConcurrencyGate.mockConfigs.put(
       'WorkflowConcurrencyTest_WaitWorkflow',
       cfg(10)
@@ -189,6 +190,7 @@ public class WorkflowConcurrencyTest {
   // CompensationFailed is non-terminal (recoverable) and must keep its slot.
   @isTest
   static void testCompensationFailedKeepsSlot() {
+    WorkflowEngine.disableQueueableInTest = true;
     ConcurrencyGate.mockConfigs.put(
       'WorkflowConcurrencyTest_WaitWorkflow',
       cfg(10)
