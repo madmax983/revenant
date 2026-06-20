@@ -404,6 +404,200 @@ public class WorkflowConcurrencyTest {
     }
   }
 
+  // A stray scheduled timeout job must never fail a step whose deadline is null —
+  // that is the state of a deferred bounded start (or a parked step) awaiting an
+  // admission slot. The watchdog sweep already excludes null deadlines; the per-step
+  // job must mirror that instead of failing it "before starting".
+  @isTest
+  static void testTimeoutJobSkipsNullDeadlineStep() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = WF,
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowConcurrencyTest.WaitStep',
+      Correlation_Key__c = 'nulldl-1'
+    );
+    insert inst;
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowConcurrencyTest.WaitStep',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+      // Timeout_At__c intentionally left null (deferred/cleared).
+    );
+
+    Test.startTest();
+    new WorkflowTimeoutJob(inst.Id, 'WorkflowConcurrencyTest.WaitStep')
+      .executeInternal();
+    Test.stopTest();
+
+    Workflow_Step_Execution__c step = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :inst.Id
+      LIMIT 1
+    ];
+    System.assertEquals(
+      'Pending',
+      step.Status__c,
+      'A null-deadline step must not be failed by a stray timeout job'
+    );
+    System.assertNotEquals(
+      'Failed',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
+        .Status__c,
+      'Instance must not be failed when its step had no armed deadline'
+    );
+  }
+
+  // The watchdog wake path must not flip a concurrency-parked sleeper to Running: it
+  // has not won a slot, so flipping it would leave a Running row holding no slot and
+  // hide it from the parked count. It is re-driven through the admission gate while
+  // staying Suspended/parked.
+  @isTest
+  static void testWatchdogWakeKeepsParkedSuspended() {
+    WorkflowEngine.disableQueueableInTest = true;
+    ConcurrencyGate.mockConfigs.put('WorkflowConcurrencyTest_WaitWorkflow', cfg(1));
+
+    Id i1 = newPendingInstance('wake-1');
+    Id i2 = newPendingInstance('wake-2');
+    WorkflowEngine.runStep(i1, null); // admits, holds the only slot
+    WorkflowEngine.runStep(i2, null); // ceiling full -> parks
+    System.assert(reload(i2).Concurrency_Parked__c, 'i2 parked');
+
+    // Make the admission retry due so the watchdog wake path selects it.
+    update new Workflow_Instance__c(
+      Id = i2,
+      Sleep_Until__c = DateTime.now().addSeconds(-60)
+    );
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    Workflow_Instance__c r2 = reload(i2);
+    System.assertEquals(
+      'Suspended',
+      r2.Status__c,
+      'A concurrency-parked sleeper stays Suspended until admission, not Running'
+    );
+    System.assert(
+      r2.Concurrency_Parked__c,
+      'Parked flag preserved through the watchdog wake'
+    );
+    System.assert(!r2.Concurrency_Slot_Held__c, 'Still holds no slot');
+  }
+
+  // When an admin removes/disables a ceiling while an instance is parked under it, the
+  // unbounded fallthrough must clear the stale admission-retry markers so a leftover
+  // due Sleep_Until__c cannot make the watchdog re-run a later real SUSPEND.
+  @isTest
+  static void testUnboundedFallthroughClearsStaleParkMarkers() {
+    WorkflowEngine.disableQueueableInTest = true;
+    // No mockConfig for WF => isConfigured is false (ceiling removed/disabled).
+    Id id = newPendingInstance('stale-1');
+    // Simulate the row as it looked while parked under a since-removed ceiling.
+    update new Workflow_Instance__c(
+      Id = id,
+      Status__c = 'Suspended',
+      Concurrency_Parked__c = true,
+      Sleep_Until__c = DateTime.now().addSeconds(-60),
+      Async_Job_Id__c = 'STALEJOB123'
+    );
+
+    Test.startTest();
+    WorkflowEngine.runStep(id, null); // unbounded now -> runs, clearing stale markers
+    Test.stopTest();
+
+    Workflow_Instance__c r = [
+      SELECT Concurrency_Parked__c, Sleep_Until__c, Async_Job_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :id
+    ];
+    System.assert(
+      !r.Concurrency_Parked__c,
+      'Stale parked flag cleared once the workflow is unbounded'
+    );
+    System.assertEquals(
+      null,
+      r.Sleep_Until__c,
+      'Stale admission-retry wake time cleared'
+    );
+    System.assertEquals(null, r.Async_Job_Id__c, 'Stale retry job id cleared');
+  }
+
+  // reArmTimeoutsForResume (paused-resume and admission-re-drive) must defer the
+  // deadline for a bounded instance that has NOT yet won a slot, while still arming
+  // one for a slot-holder (the admission path calls it after acquiring).
+  @isTest
+  static void testReArmDefersTimeoutForBoundedUnadmitted() {
+    ConcurrencyGate.mockConfigs.put(
+      'WorkflowConcurrencyTest_TimeoutWaitWorkflow',
+      (Concurrency_Config__mdt) JSON.deserialize(
+        '{"DeveloperName":"WorkflowConcurrencyTest_TimeoutWaitWorkflow","Max_Concurrent_Instances__c":1}',
+        Concurrency_Config__mdt.class
+      )
+    );
+
+    Workflow_Instance__c unadmitted = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowConcurrencyTest.TimeoutWaitWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowConcurrencyTest.TimeoutWaitStep',
+      Correlation_Key__c = 'rearm-defer',
+      Concurrency_Slot_Held__c = false
+    );
+    Workflow_Instance__c admitted = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowConcurrencyTest.TimeoutWaitWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowConcurrencyTest.TimeoutWaitStep',
+      Correlation_Key__c = 'rearm-arm',
+      Concurrency_Slot_Held__c = true
+    );
+    insert new List<Workflow_Instance__c>{ unadmitted, admitted };
+    insert new List<Workflow_Step_Execution__c>{
+      new Workflow_Step_Execution__c(
+        Workflow_Instance__c = unadmitted.Id,
+        Step_Name__c = 'WorkflowConcurrencyTest.TimeoutWaitStep',
+        Status__c = 'Pending',
+        Retry_Count__c = 0
+      ),
+      new Workflow_Step_Execution__c(
+        Workflow_Instance__c = admitted.Id,
+        Step_Name__c = 'WorkflowConcurrencyTest.TimeoutWaitStep',
+        Status__c = 'Pending',
+        Retry_Count__c = 0
+      )
+    };
+
+    Test.startTest();
+    WorkflowEngine.reArmTimeoutsForResume(
+      new List<Workflow_Instance__c>{ unadmitted, admitted }
+    );
+    Test.stopTest();
+
+    Workflow_Step_Execution__c deferStep = [
+      SELECT Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :unadmitted.Id
+      LIMIT 1
+    ];
+    Workflow_Step_Execution__c armStep = [
+      SELECT Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :admitted.Id
+      LIMIT 1
+    ];
+    System.assertEquals(
+      null,
+      deferStep.Timeout_At__c,
+      'An unadmitted bounded instance defers its deadline until admission'
+    );
+    System.assertNotEquals(
+      null,
+      armStep.Timeout_At__c,
+      'A slot-holding bounded instance is re-armed normally'
+    );
+  }
+
   // ── AC6: no config -> unbounded, behaves exactly as today ──────────────────
   @isTest
   static void testUnconfiguredIsUnbounded() {

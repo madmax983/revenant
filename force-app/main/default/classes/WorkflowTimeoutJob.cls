@@ -110,8 +110,15 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
       // Stale-job guard: a pause/resume cycle re-arms the step with a fresh
       // future deadline and schedules a new job; a delayed QueueableTimeoutJob
       // from before the re-arm may fire early. Skip it — the re-armed job
-      // enforces the new (correct) deadline.
-      if (stepExec.Timeout_At__c != null && stepExec.Timeout_At__c > DateTime.now()) {
+      // enforces the new (correct) deadline. A NULL deadline likewise means no
+      // timeout is currently armed: it was deferred (a concurrency-bounded start
+      // awaiting an admission slot) or cleared (parked/paused), so a stray job must
+      // not fail an unarmed step "before starting". The watchdog sweep already
+      // excludes null deadlines (Timeout_At__c <= now); mirror that here.
+      if (
+        stepExec.Timeout_At__c == null ||
+        stepExec.Timeout_At__c > DateTime.now()
+      ) {
         return;
       }
 
