@@ -640,6 +640,16 @@ public inherited sharing class StepContext {
    * Returns the pending (unconsumed) signals targeting this instance, in
    * deterministic arrival order. Never null. Reading the full list marks every
    * pending signal observed, so the engine consumes them when the step completes.
+   *
+   * Recommended primitive for inspecting MANY DISTINCT signal names inside a
+   * parallel (scatter-gather) branch: call this once and filter the result in
+   * memory. In a parallel branch each read atomically claims the signals it sees
+   * (for exactly-once delivery across siblings); getSignals() claims the whole
+   * pending page in a single DML statement and stays exactly-once, whereas a
+   * per-name getSignal(name) / hasSignal(name) lookup for each name spends one
+   * claim statement (and a FOR UPDATE lock query) apiece and, past the engine's
+   * internal per-branch claim budget, degrades to at-least-once. See issue #38
+   * and ParallelSignalFanInWorkflowExample.
    */
   public List<Signal> getSignals() {
     List<Signal> all = loadAll();
@@ -665,6 +675,13 @@ public inherited sharing class StepContext {
    * Returns the most recent (last-arriving) pending signal matching the given
    * name, or a clean empty result (isPresent() == false, payload == null) when
    * none is pending. Never returns null. Marks the name observed.
+   *
+   * Inside a parallel branch this claims the matching signal for exactly-once
+   * delivery, costing one claim DML statement (and a FOR UPDATE lock query). To
+   * inspect MANY distinct names in one branch, prefer a single getSignals() and
+   * filter in memory rather than a getSignal() per name (see issue #38): beyond
+   * the engine's per-branch claim budget, overflow per-name reads degrade to
+   * at-least-once.
    */
   public Signal getSignal(String signalName) {
     Signal latest = latestFor(signalName);
@@ -675,7 +692,12 @@ public inherited sharing class StepContext {
     return latest;
   }
 
-  /** True when at least one pending signal matches the given name. Marks observed. */
+  /**
+   * True when at least one pending signal matches the given name. Marks observed.
+   * Inside a parallel branch this claims the matching signal (one claim DML
+   * statement); to probe MANY distinct names prefer a single getSignals() and
+   * filter in memory rather than a hasSignal() per name (see issue #38).
+   */
   public Boolean hasSignal(String signalName) {
     Signal latest = latestFor(signalName);
     if (latest == null) {
