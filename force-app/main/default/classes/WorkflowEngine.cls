@@ -1735,6 +1735,19 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
+    // Concurrency-bounded workflows defer the initial timeout clock until the
+    // admission gate wins a slot (mirrors doStart). A bounded first step is enqueued
+    // so its RUN_STEP reaches the gate, but a still-Pending overflow item sitting in
+    // the event/queue backlog during a burst would be failed by the timeout sweep
+    // before it ever reaches the gate to park. Admission re-arms the timeout via
+    // reArmTimeoutsForResume. isConfigured is memoized per name, so this is bulk-safe.
+    Set<Id> deferTimeoutIds = new Set<Id>();
+    for (Workflow_Instance__c instance : insertedInstances) {
+      if (ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
+        deferTimeoutIds.add(instance.Id);
+      }
+    }
+
     // 7. Construct initial Step Execution logs for inserted instances only
     List<Workflow_Step_Execution__c> stepExecs = new List<Workflow_Step_Execution__c>();
     for (Workflow_Instance__c instance : insertedInstances) {
@@ -1745,9 +1758,13 @@ public inherited sharing class WorkflowEngine {
         stepExec.Status__c = 'Pending';
         stepExec.Input__c = instance.Input__c;
         stepExec.Retry_Count__c = 0;
-        // No timeout clock for a parked step (see doStart) — it would otherwise
-        // pollute the watchdog timeout batch. Resume re-establishes the timeout.
-        if (!parkedIds.contains(instance.Id)) {
+        // No timeout clock for a parked step (see doStart) or a bounded start awaiting
+        // admission — either would otherwise pollute the watchdog timeout batch or fail
+        // a still-Pending bounded start before admission. Resume/admission re-establishes it.
+        if (
+          !parkedIds.contains(instance.Id) &&
+          !deferTimeoutIds.contains(instance.Id)
+        ) {
           Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
           if (timeout != null && timeout > 0) {
             stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
@@ -1766,17 +1783,23 @@ public inherited sharing class WorkflowEngine {
       update as system instancesToPark;
     }
 
-    // 8. Schedule timeout jobs and enqueue orchestrators for non-parked instances
-    List<Workflow_Instance__c> instancesToDrive = new List<Workflow_Instance__c>();
+    // 8. Schedule timeout jobs for non-parked, non-deferred instances and enqueue
+    // orchestrators for all non-parked instances. Concurrency-bounded instances are
+    // still enqueued so their first RUN_STEP reaches the admission gate, but their
+    // timeout job is deferred until the gate arms it on admission (see deferTimeoutIds).
+    List<Workflow_Instance__c> instancesToSchedule = new List<Workflow_Instance__c>();
     List<Id> instanceIds = new List<Id>();
     for (Workflow_Instance__c instance : insertedInstances) {
-      if (!parkedIds.contains(instance.Id)) {
-        instancesToDrive.add(instance);
-        instanceIds.add(instance.Id);
+      if (parkedIds.contains(instance.Id)) {
+        continue;
+      }
+      instanceIds.add(instance.Id);
+      if (!deferTimeoutIds.contains(instance.Id)) {
+        instancesToSchedule.add(instance);
       }
     }
-    if (!instancesToDrive.isEmpty()) {
-      scheduleTimeoutJobsForInstances(instancesToDrive);
+    if (!instancesToSchedule.isEmpty()) {
+      scheduleTimeoutJobsForInstances(instancesToSchedule);
     }
     if (!instanceIds.isEmpty()) {
       enqueueOrchestrators(instanceIds);

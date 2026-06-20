@@ -351,6 +351,59 @@ public class WorkflowConcurrencyTest {
     );
   }
 
+  // The bulk startOrGet path (Flow/scheduled bulk starts) must mirror doStart: a
+  // bounded start gets no initial watchdog deadline until a slot is won, so an
+  // overflow item sitting Pending in the backlog during a burst can't be failed by
+  // the timeout sweep before it ever reaches the admission gate to park.
+  @isTest
+  static void testBoundedBulkStartDefersInitialTimeout() {
+    WorkflowEngine.disableQueueableInTest = true;
+    ConcurrencyGate.mockConfigs.put(
+      'WorkflowConcurrencyTest_TimeoutWaitWorkflow',
+      (Concurrency_Config__mdt) JSON.deserialize(
+        '{"DeveloperName":"WorkflowConcurrencyTest_TimeoutWaitWorkflow","Max_Concurrent_Instances__c":5}',
+        Concurrency_Config__mdt.class
+      )
+    );
+
+    List<WorkflowEngine.StartRequest> reqs = new List<WorkflowEngine.StartRequest>{
+      new WorkflowEngine.StartRequest(
+        'WorkflowConcurrencyTest.TimeoutWaitWorkflow',
+        'bulk-defer-1',
+        null
+      ),
+      new WorkflowEngine.StartRequest(
+        'WorkflowConcurrencyTest.TimeoutWaitWorkflow',
+        'bulk-defer-2',
+        null
+      )
+    };
+
+    Test.startTest();
+    List<WorkflowEngine.StartResult> results = WorkflowEngine.startOrGet(reqs);
+    Test.stopTest();
+
+    System.assertEquals(2, results.size(), 'Both bulk starts return a result');
+    for (WorkflowEngine.StartResult res : results) {
+      Workflow_Step_Execution__c step = [
+        SELECT Status__c, Timeout_At__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c = :res.instanceId
+        LIMIT 1
+      ];
+      System.assertEquals(
+        'Pending',
+        step.Status__c,
+        'Bulk-started bounded step is Pending pre-admission'
+      );
+      System.assertEquals(
+        null,
+        step.Timeout_At__c,
+        'Bounded bulk start must defer the initial step timeout until admission'
+      );
+    }
+  }
+
   // ── AC6: no config -> unbounded, behaves exactly as today ──────────────────
   @isTest
   static void testUnconfiguredIsUnbounded() {
