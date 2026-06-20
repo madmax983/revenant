@@ -77,7 +77,11 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
    *
    * It also waits for the WHOLE expected set: if only a subset of acks has been
    * buffered it suspends (without consuming the partial set) rather than joining
-   * with an incomplete result, and resumes when a later ack re-drives it.
+   * with an incomplete result, and resumes when a later ack re-drives it. If the
+   * single getSignals() page was truncated by the governor cap (a pathological
+   * same-name backlog hiding the still-missing names beyond the page), it falls
+   * back to a name-scoped getSignal() per missing name before suspending, so the
+   * branch cannot livelock re-reading the same capped page.
    */
   public class CollectorBranch implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
@@ -91,11 +95,17 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
       // consumes no signals); otherwise a row meant for a sibling would be
       // consumed here and never delivered. When branches share a namespace,
       // scope the read per name instead.
-      Map<String, Object> received = new Map<String, Object>();
+      Map<String, String> received = new Map<String, String>();
       for (StepContext.Signal s : ctx.getSignals()) {
         String name = (s.name == null) ? null : s.name.toLowerCase();
         if (EXPECTED_ACK_NAMES.contains(name)) {
-          received.put(s.name, s.payload);
+          // Key by the CANONICAL (lower-cased) name -- the same form used for the
+          // membership test -- so a case-variant redelivery ('Ack:US' then
+          // 'ack:us') collapses to one entry instead of two. Keying by the raw
+          // s.name would let those count as two distinct acks and push
+          // received.size() to the gate while a real expected name is still
+          // missing. The original-case name is kept as the value for display.
+          received.put(name, s.name);
         }
       }
 
@@ -108,10 +118,36 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
       // this branch, getSignals() re-reads the full set and consumes it exactly
       // once at COMPLETE.
       if (received.size() < EXPECTED_ACK_NAMES.size()) {
-        return StepResult.suspend();
+        // CAPPED-PAGE FALLBACK: the unscoped getSignals() page is bounded by the
+        // engine's governor-safety cap (PARALLEL_CLAIM_ROW_CAP). At pathological
+        // scale -- thousands of unconsumed same-name rows (e.g. redelivered
+        // 'Ack:US') older than the still-missing names -- those rows fill the
+        // whole oldest-first page, so an unscoped read never reaches 'Ack:EU' /
+        // 'Ack:APAC'. Plain suspend would roll the claims back and re-read the
+        // SAME oldest page on every re-drive, stranding the branch forever.
+        // ctx.signalReadWasCapped() detects exactly this truncation. When it
+        // fires, fall back to a NAME-SCOPED read per missing name: a per-name
+        // query filters on Signal_Name__c, so it is not starved by a different
+        // name's backlog and reaches the buried acks directly. This stays
+        // exactly-once while the per-branch claim budget lasts and degrades to
+        // the engine's documented at-least-once once it is spent.
+        if (ctx.signalReadWasCapped()) {
+          for (String expected : EXPECTED_ACK_NAMES) {
+            if (received.containsKey(expected)) {
+              continue;
+            }
+            StepContext.Signal scoped = ctx.getSignal(expected);
+            if (scoped.isPresent()) {
+              received.put(expected, scoped.name);
+            }
+          }
+        }
+        if (received.size() < EXPECTED_ACK_NAMES.size()) {
+          return StepResult.suspend();
+        }
       }
 
-      List<String> presentNames = new List<String>(received.keySet());
+      List<String> presentNames = new List<String>(received.values());
       presentNames.sort();
 
       return StepResult.complete(

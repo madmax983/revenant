@@ -228,4 +228,96 @@ private class ParallelSignalFanInWorkflowExampleTest {
       'No ack may be left unclaimed or stuck claimed after the gated completion'
     );
   }
+
+  /**
+   * Fan-in gating must count distinct acks by their CANONICAL (case-folded) name.
+   * A case-variant redelivery ('Ack:US' then 'ack:us') is the SAME logical ack,
+   * so it must not inflate the gate: with two canonical names present the branch
+   * must still suspend, not complete with a third expected name ('Ack:APAC')
+   * missing. Once the final distinct name arrives the branch completes, reporting
+   * three distinct names even though more physical rows were consumed.
+   */
+  @isTest
+  static void testCollectorCountsAcksByCanonicalName() {
+    Id instanceId = WorkflowEngine.start(
+      'ParallelSignalFanInWorkflowExample',
+      'FanInCaseKey',
+      null
+    );
+
+    // Suspend on Kick, then fan out. Deliver TWO physical rows for one canonical
+    // ack (different casing) plus one other ack: three rows, two canonical names.
+    new WorkflowOrchestrator(instanceId).execute(null);
+    WorkflowEngine.signal('FanInCaseKey', 'Kick', '{}');
+    WorkflowEngine.signal('FanInCaseKey', 'Ack:US', '{"ok":true}');
+    WorkflowEngine.signal('FanInCaseKey', 'ack:us', '{"ok":true}');
+    WorkflowEngine.signal('FanInCaseKey', 'Ack:EU', '{"ok":true}');
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Two canonical names (2 < 3) must NOT satisfy the gate, even though three
+    // physical rows are present -- the case-variant must collapse to one entry.
+    new WorkflowOrchestrator(
+        instanceId,
+        'ParallelSignalFanInWorkflowExample.CollectorBranch'
+      )
+      .execute(null);
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = 'ParallelSignalFanInWorkflowExample.CollectorBranch'
+          AND Status__c = 'Completed'
+      ],
+      'A case-variant duplicate must not inflate the gate to a false complete'
+    );
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c LIKE 'Ack:%'
+          AND Status__c = 'Consumed'
+      ],
+      'No ack may be consumed while the canonical set is still incomplete'
+    );
+
+    // The final distinct ack arrives and re-drives the branch -> now complete.
+    WorkflowEngine.signal('FanInCaseKey', 'Ack:APAC', '{"ok":true}');
+    new WorkflowOrchestrator(
+        instanceId,
+        'ParallelSignalFanInWorkflowExample.CollectorBranch'
+      )
+      .execute(null);
+
+    Workflow_Step_Execution__c branchExec = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'ParallelSignalFanInWorkflowExample.CollectorBranch'
+        AND Status__c = 'Completed'
+    ];
+    System.assert(
+      branchExec.Output__c.contains('"count":3'),
+      'Collector must report THREE distinct canonical acks, not four physical rows, got: ' +
+      branchExec.Output__c
+    );
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c LIKE 'Ack:%'
+          AND Status__c IN ('Received', 'Processing')
+      ],
+      'Every ack row (including the case-variant duplicate) is consumed at the gated completion'
+    );
+  }
 }
