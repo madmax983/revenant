@@ -24,6 +24,16 @@ public inherited sharing class WorkflowEngine {
   private static Integer concurrencyAdmissionRetrySeconds = 30;
   private static final Integer CONCURRENCY_ADMISSION_RETRY_JITTER_SECONDS = 15;
 
+  // Bounds for re-driving a step after a TRANSIENT row-lock error (UNABLE_TO_LOCK_ROW)
+  // — e.g. a fan-in where many child-completion signals lock the shared parent row at
+  // once. These are CONSECUTIVE retries (reset on the next successful drive), so the
+  // cap need only outlast a contention burst, not the whole fan-in.
+  @TestVisible
+  private static Integer maxTransientLockRetries = 12;
+  private static final Integer TRANSIENT_LOCK_BASE_DELAY_SECONDS = 5;
+  private static final Integer TRANSIENT_LOCK_MAX_DELAY_SECONDS = 60;
+  private static final Integer TRANSIENT_LOCK_JITTER_SECONDS = 5;
+
   // Instances in these statuses are considered in-flight; a start that collides
   // with one of them always dedups to the existing instance.
   private static final Set<String> ACTIVE_STATUSES = new Set<String>{
@@ -2442,6 +2452,7 @@ public inherited sharing class WorkflowEngine {
           Input__c,
           Output__c,
           Retry_Count__c,
+          Transient_Retry_Count__c,
           Captured_Values__c
         FROM Workflow_Step_Execution__c
         WHERE Id = :stepExecs[0].Id
@@ -3441,6 +3452,28 @@ public inherited sharing class WorkflowEngine {
       freshInstance.Status__c = 'Running';
     }
     instance = freshInstance;
+
+    // Reaching here means this drive acquired the instance lock that the crash path
+    // re-drives on (the parent FOR UPDATE above) — i.e. any transient row-lock
+    // contention on this step has cleared. Reset the CONSECUTIVE transient-retry
+    // counter so a later, unrelated contention burst on this same long-lived
+    // suspend/join step gets the full budget again instead of inheriting a stale
+    // near-exhausted count from an earlier wake.
+    if (
+      stepExec != null &&
+      stepExec.Id != null &&
+      stepExec.Transient_Retry_Count__c != null &&
+      stepExec.Transient_Retry_Count__c > 0
+    ) {
+      // Targeted single-field update so this early reset never persists any other
+      // in-memory staging the outcome branches below have yet to commit.
+      update as system new Workflow_Step_Execution__c(
+        Id = stepExec.Id,
+        Transient_Retry_Count__c = 0
+      );
+      stepExec.Transient_Retry_Count__c = 0;
+    }
+
     Boolean isParallel =
       String.isNotBlank(instance.Current_Step__c) &&
       instance.Current_Step__c.contains(',');
@@ -4096,6 +4129,20 @@ public inherited sharing class WorkflowEngine {
       targetStepName = instance.Current_Step__c;
     }
 
+    // Transient row-lock contention (UNABLE_TO_LOCK_ROW) is retryable, not a crash:
+    // it arises when many transactions touch the same row at once — e.g. a fan-in
+    // where every child-completion signal locks the shared parent row — and clears on
+    // its own once the competing transactions commit. Re-drive the step after a short
+    // backoff instead of failing/compensating the whole workflow. Bounded by the
+    // step's consecutive Transient_Retry_Count__c so a genuinely stuck row still fails.
+    if (
+      isTransientLockError(ex) &&
+      String.isNotBlank(targetStepName) &&
+      scheduleTransientLockRetry(instance, targetStepName)
+    ) {
+      return;
+    }
+
     // Mark step failed first
     if (String.isNotBlank(targetStepName)) {
       List<Workflow_Step_Execution__c> stepExecs = [
@@ -4169,6 +4216,109 @@ public inherited sharing class WorkflowEngine {
       'Transaction crashed: ' +
       (ex != null ? ex.getMessage() : 'Unknown governor limit');
     failWorkflowInstance(instanceId, targetStepName, errorMsg);
+  }
+
+  /**
+   * True when the exception is a transient row-lock contention error
+   * (UNABLE_TO_LOCK_ROW / "record currently unavailable") rather than a genuine
+   * crash. These resolve on their own once the competing transaction commits, so
+   * the crash handler re-drives the step instead of failing the workflow.
+   */
+  @TestVisible
+  private static Boolean isTransientLockError(Exception ex) {
+    if (ex == null) {
+      return false;
+    }
+    if (ex instanceof DmlException) {
+      DmlException de = (DmlException) ex;
+      for (Integer i = 0; i < de.getNumDml(); i++) {
+        if (de.getDmlType(i) == StatusCode.UNABLE_TO_LOCK_ROW) {
+          return true;
+        }
+      }
+    }
+    String msg = ex.getMessage();
+    if (String.isBlank(msg)) {
+      return false;
+    }
+    String lower = msg.toLowerCase();
+    return lower.contains('unable_to_lock_row') ||
+      lower.contains('unable to lock row') ||
+      lower.contains('unable to obtain exclusive access') ||
+      lower.contains('record currently unavailable') ||
+      lower.contains('currently being modified by another');
+  }
+
+  /**
+   * Re-drives a step after a transient row-lock error, bounded by the step's
+   * CONSECUTIVE Transient_Retry_Count__c (reset to 0 on the next successful drive in
+   * handleStepResult). Returns true when a retry was scheduled — the caller then
+   * skips the fail path; returns false when the budget is spent or there is no step
+   * row to retry against, so the caller fails the workflow as usual. Mirrors the
+   * RETRY action's suspend + scheduleRetry handoff so the watchdog/sleep plumbing
+   * re-drives even when dynamic scheduling is off.
+   */
+  private static Boolean scheduleTransientLockRetry(
+    Workflow_Instance__c instance,
+    String stepName
+  ) {
+    // Never resurrect an already-terminal instance: a stray late crash must fall
+    // through to the (idempotent) fail path, not flip a finished run back to Suspended.
+    if (
+      instance.Status__c == 'Completed' ||
+      instance.Status__c == 'Failed' ||
+      instance.Status__c == 'Compensated' ||
+      instance.Status__c == 'Cancelled' ||
+      instance.Status__c == 'ContinuedAsNew'
+    ) {
+      return false;
+    }
+
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Id, Status__c, Transient_Retry_Count__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instance.Id
+        AND Step_Name__c = :stepName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    if (stepExecs.isEmpty()) {
+      return false;
+    }
+    Workflow_Step_Execution__c stepExec = stepExecs[0];
+    Integer attempts = (stepExec.Transient_Retry_Count__c == null)
+      ? 0
+      : (Integer) stepExec.Transient_Retry_Count__c;
+    if (attempts >= maxTransientLockRetries) {
+      return false; // budget spent -> caller fails the workflow
+    }
+
+    // The crash rolled back any in-flight status change, so keep the step
+    // re-runnable and record the consecutive transient attempt without touching the
+    // business Retry_Count__c budget.
+    stepExec.Transient_Retry_Count__c = attempts + 1;
+    if (stepExec.Status__c == 'Failed') {
+      stepExec.Status__c = 'Pending';
+    }
+    update as system stepExec;
+
+    // Exponential backoff (capped) with jitter so the contention wave drains before
+    // the re-drive and a fan-in of re-drives does not re-synchronize into a new storm.
+    Integer delay =
+      TRANSIENT_LOCK_BASE_DELAY_SECONDS *
+      (Integer) Math.pow(2.0, (Double) Math.min(attempts, 4));
+    delay = Math.min(delay, TRANSIENT_LOCK_MAX_DELAY_SECONDS);
+    delay += (Integer) Math.floor(
+      Math.random() * TRANSIENT_LOCK_JITTER_SECONDS
+    );
+
+    instance.Status__c = 'Suspended';
+    instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
+    instance.Async_Job_Id__c = scheduleRetry(instance.Id, stepName, delay);
+    update as system instance;
+    return true;
   }
 
   /**

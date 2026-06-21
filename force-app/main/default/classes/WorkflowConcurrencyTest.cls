@@ -762,4 +762,168 @@ public class WorkflowConcurrencyTest {
       'Slot accounting must not touch the compensation stack'
     );
   }
+
+  // ── Transient row-lock retry (fan-in lock storm) ───────────────────────────
+  // A concurrency cap clusters child completions into release waves, so a burst of
+  // ChildCompleted signals (each FOR UPDATE-ing the shared parent row) plus the
+  // parent's own join can collide as UNABLE_TO_LOCK_ROW. That is retryable, not a
+  // crash: the engine must re-drive the step rather than fail the whole parent.
+  @isTest
+  static void testIsTransientLockErrorClassification() {
+    System.assert(
+      WorkflowEngine.isTransientLockError(
+        new WorkflowEngine.WorkflowException(
+          'UNABLE_TO_LOCK_ROW, unable to obtain exclusive access to this record'
+        )
+      ),
+      'UNABLE_TO_LOCK_ROW must be classified transient'
+    );
+    System.assert(
+      WorkflowEngine.isTransientLockError(
+        new WorkflowEngine.WorkflowException(
+          'Record Currently Unavailable: the record you are attempting to edit ' +
+            'is currently being modified by another user. Please try again.'
+        )
+      ),
+      'Record-currently-unavailable must be classified transient'
+    );
+    System.assert(
+      !WorkflowEngine.isTransientLockError(
+        new WorkflowEngine.WorkflowException('FIELD_CUSTOM_VALIDATION_EXCEPTION')
+      ),
+      'A genuine business error must NOT be classified transient'
+    );
+    System.assert(
+      !WorkflowEngine.isTransientLockError(null),
+      'Null must not be classified transient'
+    );
+  }
+
+  @isTest
+  static void testTransientLockCrashRetriesInsteadOfFailing() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = WF,
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowConcurrencyTest.WaitStep',
+      Correlation_Key__c = 'lock-retry-1'
+    );
+    insert inst;
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowConcurrencyTest.WaitStep',
+      Status__c = 'Running',
+      Retry_Count__c = 0
+    );
+
+    Test.startTest();
+    WorkflowEngine.handleCrash(
+      inst.Id,
+      'WorkflowConcurrencyTest.WaitStep',
+      new WorkflowEngine.WorkflowException(
+        'UNABLE_TO_LOCK_ROW, unable to obtain exclusive access to this record'
+      )
+    );
+
+    // handleCrash runs synchronously; assert the parked-for-retry state before the
+    // scheduled retry job fires at stopTest.
+    Workflow_Instance__c r = [
+      SELECT Status__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(
+      'Suspended',
+      r.Status__c,
+      'A transient lock crash suspends for retry rather than failing'
+    );
+    System.assertNotEquals(
+      null,
+      r.Sleep_Until__c,
+      'A retry wake time is scheduled'
+    );
+    Workflow_Step_Execution__c s = [
+      SELECT Status__c, Transient_Retry_Count__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :inst.Id
+      LIMIT 1
+    ];
+    System.assertNotEquals(
+      'Failed',
+      s.Status__c,
+      'The step must not be failed on a transient lock error'
+    );
+    System.assertEquals(
+      1,
+      s.Transient_Retry_Count__c,
+      'The consecutive transient-retry counter is incremented'
+    );
+    Test.stopTest();
+  }
+
+  @isTest
+  static void testTransientLockRetryBudgetExhaustionFails() {
+    WorkflowEngine.maxTransientLockRetries = 2;
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = WF,
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowConcurrencyTest.WaitStep',
+      Correlation_Key__c = 'lock-exhaust-1'
+    );
+    insert inst;
+    // Already at the (shrunk) budget, so the next transient crash must fail.
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowConcurrencyTest.WaitStep',
+      Status__c = 'Running',
+      Retry_Count__c = 0,
+      Transient_Retry_Count__c = 2
+    );
+
+    Test.startTest();
+    WorkflowEngine.handleCrash(
+      inst.Id,
+      'WorkflowConcurrencyTest.WaitStep',
+      new WorkflowEngine.WorkflowException(
+        'UNABLE_TO_LOCK_ROW, unable to obtain exclusive access to this record'
+      )
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      'Failed',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id].Status__c,
+      'Once the transient-retry budget is spent the workflow fails as a real crash'
+    );
+  }
+
+  @isTest
+  static void testSuccessfulDriveResetsTransientRetryCount() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Id i = newPendingInstance('lock-reset-1');
+    Workflow_Step_Execution__c s = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :i
+      LIMIT 1
+    ];
+    update new Workflow_Step_Execution__c(
+      Id = s.Id,
+      Transient_Retry_Count__c = 3
+    );
+
+    Test.startTest();
+    WorkflowEngine.runStep(i, null); // drives WaitStep -> suspend (a successful drive)
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      [
+        SELECT Transient_Retry_Count__c
+        FROM Workflow_Step_Execution__c
+        WHERE Id = :s.Id
+      ]
+      .Transient_Retry_Count__c,
+      'A successful drive resets the consecutive transient-retry counter'
+    );
+  }
 }
