@@ -4313,9 +4313,10 @@ public inherited sharing class WorkflowEngine {
 
     // Exponential backoff (capped) with jitter so the contention wave drains before
     // the re-drive and a fan-in of re-drives does not re-synchronize into a new storm.
+    Double exponent = Math.min(attempts, 4); // widen Integer -> Double for Math.pow
     Integer delay =
       TRANSIENT_LOCK_BASE_DELAY_SECONDS *
-      (Integer) Math.pow(2.0, (Double) Math.min(attempts, 4));
+      (Integer) Math.pow(2, exponent);
     delay = Math.min(delay, TRANSIENT_LOCK_MAX_DELAY_SECONDS);
     delay += (Integer) Math.floor(
       Math.random() * TRANSIENT_LOCK_JITTER_SECONDS
