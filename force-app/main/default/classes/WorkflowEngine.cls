@@ -1257,6 +1257,19 @@ public inherited sharing class WorkflowEngine {
    * when resume re-drives the wait step.
    */
   private static void wakeInstanceForSignal(Workflow_Instance__c instance) {
+    // A concurrency-parked row is stored as an ordinary Suspended instance but has
+    // not yet won an admission slot. Waking it to Running would leave a Running
+    // instance holding no slot (violating the no-running-without-slot invariant) and
+    // hide it from the parked count. The signal is already captured (Received) and is
+    // observed once admission drives the step, so skip the wake and the enqueue
+    // entirely — mirroring the guard in the bulk signal(List<SignalRequest>) path.
+    if (
+      instance.Status__c == 'Suspended' &&
+      instance.Concurrency_Parked__c == true &&
+      instance.Concurrency_Slot_Held__c != true
+    ) {
+      return;
+    }
     if (
       instance.Status__c == 'Suspended' ||
       instance.Status__c == 'Running' ||
@@ -4468,7 +4481,7 @@ public inherited sharing class WorkflowEngine {
     if (isId) {
       // Query by ID first to prevent matching a correlation key that equals this ID string
       instances = [
-        SELECT Id, Status__c
+        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
         FROM Workflow_Instance__c
         WHERE Id = :targetId AND Status__c IN :lookupStatuses
         WITH SYSTEM_MODE
@@ -4479,7 +4492,7 @@ public inherited sharing class WorkflowEngine {
 
     if (instances.isEmpty()) {
       instances = [
-        SELECT Id, Status__c
+        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
         FROM Workflow_Instance__c
         WHERE Correlation_Key__c = :keyOrId AND Status__c IN :lookupStatuses
         WITH SYSTEM_MODE
@@ -7697,7 +7710,7 @@ public inherited sharing class WorkflowEngine {
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
     if (isId) {
       instances = [
-        SELECT Id, Status__c
+        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
         FROM Workflow_Instance__c
         WHERE Id = :keyOrId AND Status__c IN :activeStatuses
         WITH SYSTEM_MODE
@@ -7707,7 +7720,7 @@ public inherited sharing class WorkflowEngine {
     }
     if (instances.isEmpty()) {
       instances = [
-        SELECT Id, Status__c
+        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
         FROM Workflow_Instance__c
         WHERE Correlation_Key__c = :keyOrId AND Status__c IN :activeStatuses
         WITH SYSTEM_MODE
