@@ -3545,7 +3545,11 @@ public inherited sharing class WorkflowEngine {
         nextStepExec.Retry_Count__c = 0;
         insert as system nextStepExec;
 
-        scheduleTimeoutJobForInstance(instance.Id);
+        // Pass the in-memory instance (Current_Step__c just advanced to nextStepName,
+        // committed above) so the per-advance watchdog scheduling does not re-query the
+        // instance on every step — that re-read is what exhausts the SOQL limit on a
+        // long synchronous drive.
+        scheduleTimeoutJobForInstance(instance);
         enqueueOrchestrator(instance.Id, null);
         return;
       }
@@ -7272,7 +7276,21 @@ public inherited sharing class WorkflowEngine {
     if (instances.isEmpty()) {
       return;
     }
-    Workflow_Instance__c instance = instances[0];
+    scheduleTimeoutJobForInstance(instances[0]);
+  }
+
+  // Overload for callers that already hold the instance with the fields this needs
+  // (Status__c, Current_Step__c, Compensation_Stack__c, and the two concurrency
+  // flags). Skipping the re-query matters on the per-step drive: handleStepResult
+  // schedules the next step's watchdog on every advance, so re-reading the instance
+  // each time can exhaust the 100-SOQL limit on a long synchronous drive (e.g. the
+  // test harness driving many steps in one transaction).
+  public static void scheduleTimeoutJobForInstance(
+    Workflow_Instance__c instance
+  ) {
+    if (instance == null) {
+      return;
+    }
     // A concurrency-parked instance that has not won a slot has a null step deadline;
     // scheduling a timeout job now would only wake and return, while occupying one of
     // the org's scarce scheduled-job slots — a large parked backlog could crowd out
