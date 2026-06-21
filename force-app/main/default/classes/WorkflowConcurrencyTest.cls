@@ -926,4 +926,127 @@ public class WorkflowConcurrencyTest {
       'A successful drive resets the consecutive transient-retry counter'
     );
   }
+
+  @isTest
+  static void testTransientLockRetryClearsStaleTimeout() {
+    // A timeout-configured step that crashes on a transient lock keeps its pre-crash
+    // (now stale) Timeout_At__c. If left in place, once the backoff sleep flips the
+    // parent back to Running the watchdog timeout batch could fail the step before the
+    // retry worker re-drives it. The retry must clear that deadline.
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = WF,
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowConcurrencyTest.WaitStep',
+      Correlation_Key__c = 'lock-timeout-1'
+    );
+    insert inst;
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowConcurrencyTest.WaitStep',
+      Status__c = 'Running',
+      Retry_Count__c = 0,
+      Timeout_At__c = DateTime.now().addMinutes(-5) // already past
+    );
+
+    Test.startTest();
+    WorkflowEngine.handleCrash(
+      inst.Id,
+      'WorkflowConcurrencyTest.WaitStep',
+      new WorkflowEngine.WorkflowException(
+        'UNABLE_TO_LOCK_ROW, unable to obtain exclusive access to this record'
+      )
+    );
+
+    Workflow_Step_Execution__c s = [
+      SELECT Status__c, Timeout_At__c, Transient_Retry_Count__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :inst.Id
+      LIMIT 1
+    ];
+    System.assertEquals(
+      null,
+      s.Timeout_At__c,
+      'The stale deadline is cleared so the watchdog cannot fail the step mid-backoff'
+    );
+    System.assertNotEquals(
+      'Failed',
+      s.Status__c,
+      'The step must not be failed on a transient lock error'
+    );
+    System.assertEquals(
+      1,
+      s.Transient_Retry_Count__c,
+      'The consecutive transient-retry counter is incremented'
+    );
+    Test.stopTest();
+  }
+
+  @isTest
+  static void testTransientLockRetryParallelBranchWithoutDynamicScheduling() {
+    // With dynamic scheduling off, scheduleRetry returns null and the watchdog
+    // sleep-resume re-drives with a blank-stepName orchestrator, which runStep ignores
+    // for a parallel (comma-separated) Current_Step__c. The retry must still preserve
+    // the specific branch for re-drive instead of stranding it Suspended forever.
+    Boolean priorDynamic = WorkflowEngine.useDynamicScheduling;
+    WorkflowEngine.useDynamicScheduling = false;
+    try {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = WF,
+        Status__c = 'Running',
+        Current_Step__c = 'WorkflowConcurrencyTest.WaitStep,WorkflowConcurrencyTest.OtherBranch',
+        Correlation_Key__c = 'lock-parallel-1'
+      );
+      insert inst;
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = 'WorkflowConcurrencyTest.WaitStep',
+        Status__c = 'Running',
+        Retry_Count__c = 0
+      );
+
+      Test.startTest();
+      WorkflowEngine.handleCrash(
+        inst.Id,
+        'WorkflowConcurrencyTest.WaitStep',
+        new WorkflowEngine.WorkflowException(
+          'UNABLE_TO_LOCK_ROW, unable to obtain exclusive access to this record'
+        )
+      );
+      Test.stopTest();
+
+      Workflow_Instance__c r = [
+        SELECT Status__c, Async_Job_Id__c
+        FROM Workflow_Instance__c
+        WHERE Id = :inst.Id
+      ];
+      System.assertEquals(
+        'Suspended',
+        r.Status__c,
+        'A parallel-branch transient crash suspends for retry rather than failing'
+      );
+      System.assertEquals(
+        null,
+        r.Async_Job_Id__c,
+        'No delayed job is scheduled when dynamic scheduling is off'
+      );
+      Workflow_Step_Execution__c s = [
+        SELECT Status__c, Transient_Retry_Count__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c = :inst.Id
+        LIMIT 1
+      ];
+      System.assertNotEquals(
+        'Failed',
+        s.Status__c,
+        'The branch step is preserved for direct re-drive, not failed'
+      );
+      System.assertEquals(
+        1,
+        s.Transient_Retry_Count__c,
+        'The branch consecutive transient-retry counter is incremented'
+      );
+    } finally {
+      WorkflowEngine.useDynamicScheduling = priorDynamic;
+    }
+  }
 }

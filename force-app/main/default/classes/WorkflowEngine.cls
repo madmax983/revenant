@@ -4302,6 +4302,13 @@ public inherited sharing class WorkflowEngine {
     if (stepExec.Status__c == 'Failed') {
       stepExec.Status__c = 'Pending';
     }
+    // Clear the step's watchdog deadline for the duration of the backoff. The crash
+    // left the row Running/Pending carrying its pre-crash Timeout_At__c; once the
+    // sleep flips the parent back to Running, a now-stale (already-past) deadline
+    // would let the watchdog timeout batch fail the step before the retry worker
+    // re-drives it. runStep re-stamps a fresh deadline before execute() on the
+    // re-drive, mirroring how the RETRY action parks its step out of the timeout batch.
+    stepExec.Timeout_At__c = null;
     update as system stepExec;
 
     // Exponential backoff (capped) with jitter so the contention wave drains before
@@ -4314,10 +4321,26 @@ public inherited sharing class WorkflowEngine {
       Math.random() * TRANSIENT_LOCK_JITTER_SECONDS
     );
 
+    String jobId = scheduleRetry(instance.Id, stepName, delay);
     instance.Status__c = 'Suspended';
     instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
-    instance.Async_Job_Id__c = scheduleRetry(instance.Id, stepName, delay);
+    instance.Async_Job_Id__c = jobId;
     update as system instance;
+
+    // The watchdog sleep-resume re-drives with a blank-stepName orchestrator, which
+    // runStep ignores for a parallel instance (comma-separated Current_Step__c). So
+    // when no delayed job carries the branch name forward — dynamic scheduling is off,
+    // or scheduleRetry hit the org job limit and returned null — re-drive the specific
+    // branch directly via its RUN_STEP event rather than stranding it Suspended
+    // forever. Single-step instances are resolved fine by the blank resume, so only
+    // the parallel case needs this fallback.
+    if (
+      jobId == null &&
+      String.isNotBlank(instance.Current_Step__c) &&
+      instance.Current_Step__c.contains(',')
+    ) {
+      enqueueOrchestrator(instance.Id, stepName);
+    }
     return true;
   }
 
