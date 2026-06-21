@@ -6433,6 +6433,15 @@ public inherited sharing class WorkflowEngine {
   public static void enqueueOrchestrators(List<Id> instanceIds) {
     WorkflowWatchdog.bootstrap();
     if (Test.isRunningTest()) {
+      // Honor the manual-drive switch: a test that sets disableQueueableInTest is
+      // driving steps itself and must observe the pre-execution state (e.g. a
+      // bounded bulk start whose initial timeout is deferred until admission).
+      // The scalar enqueueOrchestrator already returns early in tests; without
+      // this, the bulk path's auto-run at Test.stopTest() would admit/advance the
+      // very instances the test froze, defeating the assertion.
+      if (disableQueueableInTest) {
+        return;
+      }
       for (Id instId : instanceIds) {
         try {
           if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {

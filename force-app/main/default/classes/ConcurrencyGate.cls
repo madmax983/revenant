@@ -117,25 +117,23 @@ public inherited sharing class ConcurrencyGate {
       return mockConfigs.get('Default');
     }
 
-    List<Concurrency_Config__mdt> configs = [
-      SELECT Max_Concurrent_Instances__c
-      FROM Concurrency_Config__mdt
-      WHERE DeveloperName = :devName OR DeveloperName = :truncatedDevName
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    if (!configs.isEmpty()) {
-      return configs[0];
+    // Governor-free CMDT read: getAll() consumes NO SOQL query, unlike a SELECT on
+    // the type. The admission gate resolves the ceiling on every RUN_STEP, and a
+    // workflow driven through many steps within a single Apex transaction (e.g. the
+    // test harness, or a synchronous re-drive chain) would otherwise let these
+    // reads accumulate toward the 100-query limit. getAll() returns every record
+    // keyed by DeveloperName; it omits long-text fields, but the only field we read
+    // (Max_Concurrent_Instances__c, a Number) is included. Exact name wins over the
+    // 40-char-truncated form, with the Default record as the final fallback.
+    Map<String, Concurrency_Config__mdt> all = Concurrency_Config__mdt.getAll();
+    Concurrency_Config__mdt config = all.get(devName);
+    if (config == null) {
+      config = all.get(truncatedDevName);
     }
-
-    configs = [
-      SELECT Max_Concurrent_Instances__c
-      FROM Concurrency_Config__mdt
-      WHERE DeveloperName = 'Default'
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    return configs.isEmpty() ? null : configs[0];
+    if (config == null) {
+      config = all.get('Default');
+    }
+    return config;
   }
 
   /** True when the workflow has a concurrency ceiling configured. */
