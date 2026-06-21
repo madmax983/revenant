@@ -3407,6 +3407,8 @@ public inherited sharing class WorkflowEngine {
         Input__c,
         Definition_Version__c,
         Previous_Run_At__c,
+        Concurrency_Parked__c,
+        Concurrency_Slot_Held__c,
         CreatedDate
       FROM Workflow_Instance__c
       WHERE Id = :instance.Id
