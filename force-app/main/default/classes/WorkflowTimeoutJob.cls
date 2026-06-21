@@ -21,7 +21,12 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
   public void executeInternal() {
     // Parent-first locking: query and lock the parent instance first
     List<Workflow_Instance__c> instances = [
-      SELECT Status__c, Current_Step__c, Compensation_Stack__c, Workflow_Name__c
+      SELECT
+        Status__c,
+        Current_Step__c,
+        Compensation_Stack__c,
+        Workflow_Name__c,
+        Concurrency_Slot_Held__c
       FROM Workflow_Instance__c
       WHERE Id = :this.instanceId
       WITH SYSTEM_MODE
@@ -110,15 +115,23 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
       // Stale-job guard: a pause/resume cycle re-arms the step with a fresh
       // future deadline and schedules a new job; a delayed QueueableTimeoutJob
       // from before the re-arm may fire early. Skip it — the re-armed job
-      // enforces the new (correct) deadline. A NULL deadline likewise means no
-      // timeout is currently armed: it was deferred (a concurrency-bounded start
-      // awaiting an admission slot) or cleared (parked/paused), so a stray job must
-      // not fail an unarmed step "before starting". The watchdog sweep already
-      // excludes null deadlines (Timeout_At__c <= now); mirror that here.
-      if (
-        stepExec.Timeout_At__c == null ||
-        stepExec.Timeout_At__c > DateTime.now()
+      // enforces the new (correct) deadline.
+      if (stepExec.Timeout_At__c != null) {
+        if (stepExec.Timeout_At__c > DateTime.now()) {
+          return;
+        }
+      } else if (
+        instance.Concurrency_Slot_Held__c != true &&
+        ConcurrencyGate.isConfigured(instance.Workflow_Name__c)
       ) {
+        // A NULL deadline on a concurrency-gated instance that has not yet won an
+        // admission slot means the timeout was deferred until admission (a bounded
+        // start/child awaiting capacity): a stray job must not fail a step that is
+        // only waiting for a slot. For any OTHER instance a null deadline on an
+        // existing Pending/Running row is the pre-start watchdog — e.g. an unbounded
+        // child or continueAsNew successor whose worker was lost before the step
+        // armed its own deadline — which must still fail "before starting", so it is
+        // deliberately NOT skipped here.
         return;
       }
 

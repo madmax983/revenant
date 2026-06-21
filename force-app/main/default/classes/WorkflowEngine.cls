@@ -2332,6 +2332,15 @@ public inherited sharing class WorkflowEngine {
         instance.Sleep_Until__c = null;
         instance.Async_Job_Id__c = null;
         update as system instance;
+        // Re-drive in a fresh transaction instead of executing the step now: the
+        // marker-clear DML above is uncommitted, and a CalloutStep cannot run while
+        // uncommitted DML is pending (Salesforce forbids it) — the same reason the
+        // admission-acquire path above re-hops. A fresh RUN_STEP re-reads this row
+        // (now unparked) and runs the step cleanly.
+        if (!(Test.isRunningTest() && disableQueueableInTest)) {
+          enqueueResume(instance.Id);
+        }
+        return;
       }
     }
 

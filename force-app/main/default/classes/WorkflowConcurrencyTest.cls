@@ -404,12 +404,15 @@ public class WorkflowConcurrencyTest {
     }
   }
 
-  // A stray scheduled timeout job must never fail a step whose deadline is null —
-  // that is the state of a deferred bounded start (or a parked step) awaiting an
-  // admission slot. The watchdog sweep already excludes null deadlines; the per-step
-  // job must mirror that instead of failing it "before starting".
+  // A stray scheduled timeout job must never fail a step whose deadline is null when
+  // the instance is concurrency-gated and has not yet won an admission slot — that is
+  // the state of a deferred bounded start (or a parked step) awaiting capacity. The
+  // skip is scoped to that case: an unbounded null-deadline step is the pre-start
+  // watchdog and must still fail (see testTimeoutJobFailsNullDeadlinePreStartWatchdog).
   @isTest
   static void testTimeoutJobSkipsNullDeadlineStep() {
+    // Bounded + slot not held => the null deadline is a deferred-admission state.
+    ConcurrencyGate.mockConfigs.put('WorkflowConcurrencyTest_WaitWorkflow', cfg(1));
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = WF,
       Status__c = 'Running',
@@ -446,6 +449,48 @@ public class WorkflowConcurrencyTest {
       [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
         .Status__c,
       'Instance must not be failed when its step had no armed deadline'
+    );
+  }
+
+  // The mirror of the above: for an UNBOUNDED instance (no ceiling, no slot), a null
+  // deadline on an existing Pending step is the pre-start watchdog — e.g. a child or
+  // continueAsNew successor whose initial step was precreated with no deadline and a
+  // scheduled timeout job, whose worker was then lost before the step armed its own
+  // deadline. The timeout job MUST fail it "before starting" rather than skip it.
+  @isTest
+  static void testTimeoutJobFailsNullDeadlinePreStartWatchdog() {
+    // No mockConfig => isConfigured(WF) is false => this is NOT a deferred-admission
+    // state, so the null-deadline step is the pre-start watchdog and must fail.
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = WF,
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowConcurrencyTest.WaitStep',
+      Correlation_Key__c = 'prestart-1'
+    );
+    insert inst;
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowConcurrencyTest.WaitStep',
+      Status__c = 'Pending',
+      Retry_Count__c = 0
+      // Timeout_At__c null: precreated handoff step awaiting its first execution.
+    );
+
+    Test.startTest();
+    new WorkflowTimeoutJob(inst.Id, 'WorkflowConcurrencyTest.WaitStep')
+      .executeInternal();
+    Test.stopTest();
+
+    System.assertEquals(
+      'Failed',
+      [SELECT Status__c FROM Workflow_Step_Execution__c WHERE Workflow_Instance__c = :inst.Id LIMIT 1]
+        .Status__c,
+      'An unbounded null-deadline pre-start step must be failed by its watchdog'
+    );
+    System.assertEquals(
+      'Failed',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id].Status__c,
+      'The instance fails when its lost pre-start step times out'
     );
   }
 
