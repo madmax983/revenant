@@ -33,12 +33,10 @@ export default class WorkflowDashboard extends LightningElement {
 
   // UI state
   selectedInstanceId;
-  selectedInst = {};
-  steps = [];
-  childInstances = [];
+  // Raw getInstanceDetails payload handed straight to <c-workflow-instance-detail>,
+  // which owns all detail view-model shaping and rendering.
+  rawDetail;
   loadingDetails = false;
-  successor = null;
-  approvalComments = "";
   modalOpen = false;
   searchTerm = "";
   viewingDoctor = false;
@@ -159,57 +157,9 @@ export default class WorkflowDashboard extends LightningElement {
     return this.filteredInstances.length > 0;
   }
 
-  get hasSteps() {
-    return this.steps.length > 0;
-  }
-
-  get hasChildren() {
-    return this.childInstances && this.childInstances.length > 0;
-  }
-
-  get isFailed() {
-    return this.selectedInst && this.selectedInst.Status__c === "Failed";
-  }
-
-  get isRollbackIncomplete() {
-    return (
-      this.selectedInst && this.selectedInst.Status__c === "CompensationFailed"
-    );
-  }
-
-  get pendingCompensationCount() {
-    return this.selectedInst ? this.selectedInst.pendingCompensationCount : 0;
-  }
-
-  get pendingCompensations() {
-    const names =
-      this.selectedInst && this.selectedInst.pendingCompensations
-        ? this.selectedInst.pendingCompensations
-        : [];
-    // The compensation stack can legitimately contain the same step name more
-    // than once (a workflow that loops or reuses a compensatable step class), so
-    // the step name alone is not a unique list key. Pair it with the stack index
-    // to give LWC a stable, unique key per entry and keep list diffing correct.
-    return names.map((name, index) => ({
-      key: `${index}_${name}`,
-      name,
-    }));
-  }
-
-  get isCancelable() {
-    if (!this.selectedInst) return false;
-    const status = this.selectedInst.Status__c;
-    // CompensationFailed is included so operators can force-cancel a stalled rollback:
-    // the cancel dialog's "without compensations" choice drives it terminal and releases
-    // its key when the remaining compensation keeps failing.
-    return (
-      status === "Pending" ||
-      status === "Running" ||
-      status === "Suspended" ||
-      status === "Paused" ||
-      status === "CompensationFailed"
-    );
-  }
+  // The instance-detail view-model (steps, children, badges, cancelability,
+  // compensation stack, etc.) now lives in <c-workflow-instance-detail>, which is
+  // fed the raw getInstanceDetails payload via the rawDetail property below.
 
   fetchInstances(isAppend) {
     if (!isAppend) {
@@ -260,7 +210,12 @@ export default class WorkflowDashboard extends LightningElement {
 
     const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null });
 
-    return Promise.all([instancesPromise, statsPromise, stalledCountPromise, unroutedCountPromise])
+    return Promise.all([
+      instancesPromise,
+      statsPromise,
+      stalledCountPromise,
+      unroutedCountPromise,
+    ])
       .then(([result, statsResult, stalledResult, unroutedResult]) => {
         const formatted = result.map((inst) => this.formatInstance(inst));
 
@@ -344,7 +299,12 @@ export default class WorkflowDashboard extends LightningElement {
 
     const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null });
 
-    return Promise.all([instancesPromise, statsPromise, stalledCountPromise, unroutedCountPromise])
+    return Promise.all([
+      instancesPromise,
+      statsPromise,
+      stalledCountPromise,
+      unroutedCountPromise,
+    ])
       .then(([result, statsResult, stalledResult, unroutedResult]) => {
         this.instances = result.map((inst) => this.formatInstance(inst));
         this.stats = statsResult;
@@ -466,9 +426,15 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   handleSelectRelatedInstance(event) {
+    // Fired by <c-workflow-instance-detail> as a 'selectrelated' CustomEvent
+    // carrying the related instance Id in event.detail.id.
+    const relatedId = event.detail ? event.detail.id : null;
+    if (!relatedId) {
+      return;
+    }
     this.stopPolling();
     this.viewingDoctor = false;
-    this.selectedInstanceId = event.currentTarget.dataset.id;
+    this.selectedInstanceId = relatedId;
     this.filterInstancesList();
     this.loadDetails(true);
   }
@@ -476,119 +442,34 @@ export default class WorkflowDashboard extends LightningElement {
   loadDetails(showSpinner) {
     if (showSpinner) {
       this.loadingDetails = true;
+      this.rawDetail = undefined;
     }
     const currentInstanceId = this.selectedInstanceId;
-    if (showSpinner) {
-      this.successor = null;
-    }
     getInstanceDetails({ instanceId: currentInstanceId })
       .then((result) => {
         if (currentInstanceId !== this.selectedInstanceId) {
           return;
         }
-        const inst = result.instance;
-        const payloadFiles = result.payloadFiles || {};
-        this.successor = result.successor;
-        this.selectedInst = {
-          ...inst,
-          formattedDate: this.formatDateTime(inst.CreatedDate),
-          statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
-          Input__c: this.formatJson(inst.Input__c),
-          Output__c: this.formatJson(inst.Output__c),
-          inputFile: this.buildPayloadFile(payloadFiles["instance.Input"]),
-          outputFile: this.buildPayloadFile(payloadFiles["instance.Output"]),
-          waitingOn: result.waitingOn,
-          isWatchdogWaiting: result.waitingOn === "Watchdog",
-          waitingOnBadgeClass:
-            result.waitingOn === "Watchdog"
-              ? "badge badge-purple"
-              : result.waitingOn === "Delayed Queueable"
-                ? "badge badge-indigo"
-                : "badge badge-blue",
-          pendingCompensationCount: result.pendingCompensationCount || 0,
-          pendingCompensations: result.pendingCompensations || [],
-        };
+        // <c-workflow-instance-detail> shapes its own view-model from the raw
+        // payload; the dashboard just hands it over and keeps the poll-stop logic.
+        this.rawDetail = result;
 
-        // Map children
-        this.childInstances = (result.children || []).map((child) => {
-          return {
-            ...child,
-            formattedDate: this.formatDateTime(child.CreatedDate),
-            statusBadgeClass: this.getStatusBadgeClass(child.Status__c),
-          };
-        });
-
-        // Preserve showDetails toggle state if steps were already loaded
-        const showDetailsMap = new Map();
-        this.steps.forEach((s) => showDetailsMap.set(s.Id, s.showDetails));
-
-        this.steps = result.steps.map((step) => {
-          let approvalInfo = null;
-          let childWorkflowLink = null;
-          if (step.Output__c) {
-            try {
-              const parsed = JSON.parse(step.Output__c);
-              if (parsed.waitingForApproval) {
-                approvalInfo = {
-                  key: parsed.approvalKey,
-                  role: parsed.approvalRole,
-                };
-              }
-              if (parsed.childWorkflowName && parsed.childCorrelationKey) {
-                const matchingChild = this.childInstances.find(
-                  (child) =>
-                    child.Correlation_Key__c === parsed.childCorrelationKey &&
-                    child.Workflow_Name__c === parsed.childWorkflowName,
-                );
-                if (matchingChild) {
-                  childWorkflowLink = {
-                    id: matchingChild.Id,
-                    name: matchingChild.Name,
-                  };
-                }
-              }
-            } catch (e) {
-              // ignore non-json
-            }
+        const steps = result.steps || [];
+        const isStillWaitingForApproval = steps.some((step) => {
+          if (!step.Output__c) {
+            return false;
           }
-
-          return {
-            ...step,
-            formattedDate: this.formatDateTime(step.CreatedDate),
-            statusBadgeClass: approvalInfo
-              ? "badge badge-orange pulse-glow"
-              : this.getStatusBadgeClass(step.Status__c),
-            markerClass: approvalInfo
-              ? "timeline-marker bg-yellow pulse-glow"
-              : this.getTimelineMarkerClass(step.Status__c),
-            showDetails:
-              showDetailsMap.get(step.Id) || (approvalInfo ? true : false),
-            isWaitingForApproval: !!approvalInfo,
-            approvalKey: approvalInfo ? approvalInfo.key : null,
-            approvalRole: approvalInfo ? approvalInfo.role : null,
-            childInstanceId: childWorkflowLink ? childWorkflowLink.id : null,
-            childInstanceName: childWorkflowLink
-              ? childWorkflowLink.name
-              : null,
-            Input__c: this.formatJson(step.Input__c),
-            Output__c: this.formatJson(step.Output__c),
-            inputFile: this.buildPayloadFile(
-              payloadFiles["step." + step.Id + ".Input"],
-            ),
-            outputFile: this.buildPayloadFile(
-              payloadFiles["step." + step.Id + ".Output"],
-            ),
-          };
+          try {
+            return !!JSON.parse(step.Output__c).waitingForApproval;
+          } catch (e) {
+            return false;
+          }
         });
-
-        // Check if we can stop polling early
-        const isStillWaitingForApproval = this.steps.some(
-          (step) => step.isWaitingForApproval,
-        );
+        const status = result.instance ? result.instance.Status__c : null;
         const isTransitioning =
-          inst.Status__c === "Running" ||
-          inst.Status__c === "Compensating" ||
-          inst.Status__c === "Cancelling";
+          status === "Running" ||
+          status === "Compensating" ||
+          status === "Cancelling";
         if (!isStillWaitingForApproval && !isTransitioning) {
           this.stopPolling();
         }
@@ -607,16 +488,6 @@ export default class WorkflowDashboard extends LightningElement {
           this.loadingDetails = false;
         }
       });
-  }
-
-  toggleStepDetails(event) {
-    const stepId = event.currentTarget.dataset.stepId;
-    this.steps = this.steps.map((step) => {
-      if (step.Id === stepId) {
-        return { ...step, showDetails: !step.showDetails };
-      }
-      return step;
-    });
   }
 
   handleRefresh() {
@@ -690,8 +561,13 @@ export default class WorkflowDashboard extends LightningElement {
     this.loadingUnrouted = true;
     const buster = new Date().getTime().toString();
     Promise.all([
-      getUnroutedSignals({ searchTerm: null, limitSize: 50, offsetSize: 0, cacheBuster: buster }),
-      getUnroutedSignalCount({ searchTerm: null })
+      getUnroutedSignals({
+        searchTerm: null,
+        limitSize: 50,
+        offsetSize: 0,
+        cacheBuster: buster,
+      }),
+      getUnroutedSignalCount({ searchTerm: null }),
     ])
       .then(([signals, countResult]) => {
         this.unroutedSignals = signals || [];
@@ -699,7 +575,11 @@ export default class WorkflowDashboard extends LightningElement {
       })
       .catch((err) => {
         this.dispatchEvent(
-          new ShowToastEvent({ title: "Error", message: err.body ? err.body.message : String(err), variant: "error" })
+          new ShowToastEvent({
+            title: "Error",
+            message: err.body ? err.body.message : String(err),
+            variant: "error",
+          }),
         );
       })
       .finally(() => {
@@ -720,8 +600,8 @@ export default class WorkflowDashboard extends LightningElement {
             message: matched
               ? "The signal was re-delivered and the workflow was woken."
               : "No active workflow matched — signal remains Unrouted.",
-            variant: matched ? "success" : "warning"
-          })
+            variant: matched ? "success" : "warning",
+          }),
         );
         if (matched) {
           this.loadUnroutedSignals();
@@ -729,7 +609,11 @@ export default class WorkflowDashboard extends LightningElement {
       })
       .catch((err) => {
         this.dispatchEvent(
-          new ShowToastEvent({ title: "Error", message: err.body ? err.body.message : String(err), variant: "error" })
+          new ShowToastEvent({
+            title: "Error",
+            message: err.body ? err.body.message : String(err),
+            variant: "error",
+          }),
         );
       })
       .finally(() => {
@@ -863,9 +747,8 @@ export default class WorkflowDashboard extends LightningElement {
       .then((rows) => {
         this.concurrencyRows = (rows || []).map((r) => ({
           ...r,
-          ceilingLabel: r.ceiling === null || r.ceiling === undefined
-            ? "—"
-            : r.ceiling,
+          ceilingLabel:
+            r.ceiling === null || r.ceiling === undefined ? "—" : r.ceiling,
           atCapacity:
             r.ceiling !== null &&
             r.ceiling !== undefined &&
@@ -1013,7 +896,10 @@ export default class WorkflowDashboard extends LightningElement {
   // Suspended, not Failed; showing the button there would re-drive hidden failures).
   get canRedriveMatching() {
     return (
-      this.stats && this.stats.failed > 0 && !this.redriving && !this.showingStalled
+      this.stats &&
+      this.stats.failed > 0 &&
+      !this.redriving &&
+      !this.showingStalled
     );
   }
 
@@ -1145,20 +1031,17 @@ export default class WorkflowDashboard extends LightningElement {
       });
   }
 
-  handleCommentsChange(event) {
-    this.approvalComments = event.target.value;
-  }
-
   handleApprovalSubmit(event) {
-    const approvalKey = event.target.dataset.key;
-    const approved = event.target.dataset.approved === "true";
+    // Fired by <c-workflow-instance-detail> as an 'approvalsubmit' CustomEvent
+    // carrying { approvalKey, approved, comments } in event.detail.
+    const { approvalKey, approved, comments } = event.detail || {};
 
     this.loadingDetails = true;
     submitApproval({
       instanceId: this.selectedInstanceId,
       approvalKey: approvalKey,
       approved: approved,
-      comments: this.approvalComments,
+      comments: comments,
     })
       .then(() => {
         this.showToast(
@@ -1166,7 +1049,6 @@ export default class WorkflowDashboard extends LightningElement {
           `Approval decision (${approved ? "Approve" : "Reject"}) submitted successfully.`,
           "success",
         );
-        this.approvalComments = "";
         this.refreshInstances();
         this.loadDetails(true);
         this.startPolling();
@@ -1241,31 +1123,6 @@ export default class WorkflowDashboard extends LightningElement {
     return d.toLocaleString();
   }
 
-  formatJson(str) {
-    if (!str) return "";
-    try {
-      const obj = JSON.parse(str);
-      return JSON.stringify(obj, null, 2);
-    } catch (ex) {
-      return str; // Return raw string if not json
-    }
-  }
-
-  // Turns a server payloadFiles descriptor into a render-ready download link, or null.
-  // Present only for attachment-backed payloads whose full content was truncated above.
-  buildPayloadFile(file) {
-    if (!file || !file.downloadUrl) {
-      return null;
-    }
-    const chars = file.fullLength || 0;
-    const sizeLabel =
-      chars >= 1024 ? Math.ceil(chars / 1024) + " KB" : chars + " chars";
-    return {
-      url: file.downloadUrl,
-      label: "Download full payload (" + sizeLabel + ")",
-    };
-  }
-
   getStatusBadgeClass(status) {
     switch (status) {
       case "Completed":
@@ -1296,35 +1153,6 @@ export default class WorkflowDashboard extends LightningElement {
         return "badge badge-orange";
       default:
         return "badge";
-    }
-  }
-
-  getTimelineMarkerClass(status) {
-    switch (status) {
-      case "Completed":
-        return "timeline-marker bg-green";
-      case "ContinuedAsNew":
-        return "timeline-marker bg-blue";
-      case "Failed":
-        return "timeline-marker bg-red";
-      case "Retrying":
-        return "timeline-marker bg-yellow";
-      case "Running":
-        return "timeline-marker bg-blue";
-      case "Pending":
-        return "timeline-marker bg-grey";
-      case "Compensating":
-        return "timeline-marker bg-yellow";
-      case "Compensated":
-        return "timeline-marker bg-orange";
-      case "CompensationFailed":
-        return "timeline-marker bg-red";
-      case "Cancelling":
-        return "timeline-marker bg-yellow";
-      case "Cancelled":
-        return "timeline-marker bg-grey";
-      default:
-        return "timeline-marker";
     }
   }
 
@@ -1381,7 +1209,14 @@ export default class WorkflowDashboard extends LightningElement {
   // ────────────────────────────────────────────────────────────────────────
 
   handleOpenPauseModal(event) {
-    const target = event.currentTarget.dataset.target || "";
+    // Triggered both by list/stalled buttons (dataset.target) and by the detail
+    // child's 'pausedefinition' CustomEvent (event.detail.target).
+    const target =
+      (event.detail && event.detail.target) ||
+      (event.currentTarget &&
+        event.currentTarget.dataset &&
+        event.currentTarget.dataset.target) ||
+      "";
     this.pauseModalTarget = target;
     this.pauseModalReason = "";
     this.pauseModalIsResume = false;
@@ -1416,7 +1251,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.showToast(
             "Resumed",
             "Resumed " + label + ". Parked instances are re-queued.",
-            "success"
+            "success",
           );
           this.loadDoctorStatus();
           this.refreshInstances();
@@ -1426,7 +1261,7 @@ export default class WorkflowDashboard extends LightningElement {
             "Error",
             "Resume failed: " +
               (error.body ? error.body.message : error.message),
-            "error"
+            "error",
           );
         })
         .finally(() => {
@@ -1435,7 +1270,7 @@ export default class WorkflowDashboard extends LightningElement {
     } else {
       pauseDefinition({
         workflowName: this.pauseModalTarget,
-        reason: this.pauseModalReason
+        reason: this.pauseModalReason,
       })
         .then(() => {
           const label =
@@ -1445,7 +1280,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.showToast(
             "Paused",
             "Paused " + label + ". New steps will park at the chain handoff.",
-            "success"
+            "success",
           );
           this.loadDoctorStatus();
           this.refreshInstances();
@@ -1453,8 +1288,9 @@ export default class WorkflowDashboard extends LightningElement {
         .catch((error) => {
           this.showToast(
             "Error",
-            "Pause failed: " + (error.body ? error.body.message : error.message),
-            "error"
+            "Pause failed: " +
+              (error.body ? error.body.message : error.message),
+            "error",
           );
         })
         .finally(() => {

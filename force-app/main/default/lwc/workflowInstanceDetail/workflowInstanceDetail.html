@@ -1,0 +1,431 @@
+<template>
+  <template if:true={selectedInst}>
+    <div class="slds-p-around_medium">
+      <!-- Instance Title Bar -->
+      <div
+        class="slds-grid slds-grid_align-spread slds-m-bottom_medium border-bottom slds-p-bottom_small"
+      >
+        <div>
+          <h2 class="slds-text-heading_medium font-outfit">
+            {selectedInst.Name} Details
+          </h2>
+          <p class="slds-text-title slds-text-color_weak">
+            {selectedInst.Workflow_Name__c}
+          </p>
+        </div>
+        <div class="slds-grid slds-grid_vertical-align-center">
+          <template if:true={showActions}>
+            <template if:true={selectedInst.isWatchdogWaiting}>
+              <lightning-button
+                label="Resume Now"
+                icon-name="utility:play"
+                variant="brand"
+                data-action="resume"
+                onclick={handleResume}
+                class="slds-m-right_small brand-button"
+              ></lightning-button>
+            </template>
+            <template if:true={isFailed}>
+              <lightning-button
+                label="Retry / Replay"
+                icon-name="utility:refresh"
+                variant="neutral"
+                data-action="retry"
+                onclick={handleRetry}
+                class="slds-m-right_small"
+              ></lightning-button>
+            </template>
+            <template if:true={isRollbackIncomplete}>
+              <lightning-button
+                label="Resume Rollback"
+                icon-name="utility:undo"
+                variant="brand"
+                data-action="resumerollback"
+                onclick={handleResumeRollback}
+                class="slds-m-right_small brand-button"
+              ></lightning-button>
+            </template>
+            <lightning-button
+              label="Pause Definition"
+              icon-name="utility:pause"
+              variant="destructive-text"
+              data-action="pause"
+              data-target={selectedInst.Workflow_Name__c}
+              onclick={handlePause}
+              class="slds-m-right_small"
+              title="Park all new and in-flight executions of this workflow definition"
+            ></lightning-button>
+            <template if:true={isCancelable}>
+              <lightning-button
+                label="Cancel Workflow"
+                icon-name="utility:close"
+                variant="destructive"
+                data-action="cancel"
+                onclick={handleCancel}
+                class="slds-m-right_small"
+              ></lightning-button>
+            </template>
+          </template>
+          <template if:true={selectedInst.waitingOn}>
+            <span
+              class={selectedInst.waitingOnBadgeClass}
+              style="margin-right: 8px"
+              >Waiting On: {selectedInst.waitingOn}</span
+            >
+          </template>
+          <span class={selectedInst.statusBadgeClass}
+            >{selectedInst.Status__c}</span
+          >
+        </div>
+      </div>
+
+      <!-- Instance Meta Fields Grid -->
+      <div class="slds-grid slds-wrap slds-m-bottom_large detail-fields-grid">
+        <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+          <div class="slds-text-title slds-text-color_weak">Correlation Key</div>
+          <div class="slds-text-body_regular">
+            {selectedInst.Correlation_Key__c}
+          </div>
+        </div>
+        <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+          <div class="slds-text-title slds-text-color_weak">Started Date</div>
+          <div class="slds-text-body_regular">{selectedInst.formattedDate}</div>
+        </div>
+        <template if:true={selectedInst.Parent_Instance__c}>
+          <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+            <div class="slds-text-title slds-text-color_weak">
+              Parent Workflow
+            </div>
+            <div class="slds-text-body_regular">
+              <a
+                href="javascript:void(0);"
+                data-id={selectedInst.Parent_Instance__c}
+                onclick={handleSelectRelated}
+                class="slds-text-link wf-related"
+                >{selectedInst.Parent_Instance__r.Name}</a
+              >
+            </div>
+          </div>
+        </template>
+        <template if:true={selectedInst.Previous_Instance__c}>
+          <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+            <div class="slds-text-title slds-text-color_weak">Previous Run</div>
+            <div class="slds-text-body_regular">
+              <a
+                href="javascript:void(0);"
+                data-id={selectedInst.Previous_Instance__c}
+                onclick={handleSelectRelated}
+                class="slds-text-link wf-related"
+                >{selectedInst.Previous_Instance__r.Name}</a
+              >
+            </div>
+          </div>
+        </template>
+        <template if:true={successor}>
+          <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+            <div class="slds-text-title slds-text-color_weak">Next Run</div>
+            <div class="slds-text-body_regular">
+              <a
+                href="javascript:void(0);"
+                data-id={successor.Id}
+                onclick={handleSelectRelated}
+                class="slds-text-link wf-related"
+                >{successor.Name}</a
+              >
+            </div>
+          </div>
+        </template>
+        <template if:true={selectedInst.Input__c}>
+          <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
+            <div class="slds-text-title slds-text-color_weak">
+              Workflow Input
+            </div>
+            <pre class="code-block">{selectedInst.Input__c}</pre>
+            <template if:true={selectedInst.inputFile}>
+              <a
+                href={selectedInst.inputFile.url}
+                target="_blank"
+                rel="noopener"
+                class="slds-text-body_small"
+                >{selectedInst.inputFile.label}</a
+              >
+            </template>
+          </div>
+        </template>
+        <template if:true={selectedInst.Output__c}>
+          <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
+            <div class="slds-text-title slds-text-color_weak">
+              Workflow Output
+            </div>
+            <pre class="code-block">{selectedInst.Output__c}</pre>
+            <template if:true={selectedInst.outputFile}>
+              <a
+                href={selectedInst.outputFile.url}
+                target="_blank"
+                rel="noopener"
+                class="slds-text-body_small"
+                >{selectedInst.outputFile.label}</a
+              >
+            </template>
+          </div>
+        </template>
+        <template if:true={isRollbackIncomplete}>
+          <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
+            <div class="slds-text-title text-red">Rollback Incomplete</div>
+            <div class="slds-text-body_regular slds-m-bottom_x-small">
+              This saga's rollback stalled on a failed compensation.
+              <strong>{pendingCompensationCount}</strong> forward step(s) still
+              have un-reversed side effects. Use
+              <strong>Resume Rollback</strong> to finish compensating them in
+              LIFO order.
+            </div>
+            <ul class="slds-list_dotted">
+              <template for:each={pendingCompensations} for:item="comp">
+                <li key={comp.key} class="slds-text-body_small">{comp.name}</li>
+              </template>
+            </ul>
+          </div>
+        </template>
+        <template if:true={selectedInst.Error_Message__c}>
+          <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
+            <div class="slds-text-title text-red">Workflow Failure Message</div>
+            <pre class="code-block error-block">{selectedInst.Error_Message__c}</pre>
+          </div>
+        </template>
+      </div>
+
+      <!-- Child Workflows Section -->
+      <template if:true={hasChildren}>
+        <div class="slds-m-bottom_large">
+          <h3 class="slds-text-heading_small slds-m-bottom_small font-outfit">
+            Sub-Workflows
+          </h3>
+          <div class="panel-card">
+            <div class="slds-scrollable_y" style="max-height: 200px">
+              <ul class="slds-has-dividers_bottom-space">
+                <template for:each={childInstances} for:item="child">
+                  <li
+                    key={child.Id}
+                    class="slds-p-around_small list-item clickable wf-related"
+                    data-id={child.Id}
+                    onclick={handleSelectRelated}
+                  >
+                    <div
+                      class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center"
+                    >
+                      <div>
+                        <div class="slds-text-title_bold text-primary">
+                          {child.Name}
+                        </div>
+                        <div class="slds-text-body_small slds-text-color_weak">
+                          {child.Workflow_Name__c} | Key:
+                          {child.Correlation_Key__c}
+                        </div>
+                      </div>
+                      <span class={child.statusBadgeClass}
+                        >{child.Status__c}</span
+                      >
+                    </div>
+                  </li>
+                </template>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- Step Timeline/DAG Execution History -->
+      <div>
+        <h3 class="slds-text-heading_small slds-m-bottom_medium font-outfit">
+          DAG Execution Path
+        </h3>
+
+        <template if:true={hasSteps}>
+          <div class="slds-m-left_small timeline-container">
+            <template for:each={steps} for:item="step">
+              <div key={step.Id} class="timeline-item">
+                <div class="slds-grid slds-wrap">
+                  <div class="slds-col slds-grow-none timeline-marker-col">
+                    <div class={step.markerClass}></div>
+                    <div class="timeline-line"></div>
+                  </div>
+                  <div
+                    class="slds-col slds-grow timeline-content-col slds-p-bottom_medium"
+                  >
+                    <div class="step-card">
+                      <div
+                        class="clickable-header"
+                        onclick={toggleStepDetails}
+                        data-step-id={step.Id}
+                      >
+                        <div
+                          class="slds-grid slds-grid_align-spread slds-m-bottom_x-small"
+                        >
+                          <span
+                            class="slds-text-title_bold text-secondary font-outfit"
+                            >{step.Step_Name__c}</span
+                          >
+                          <span class={step.statusBadgeClass}
+                            >{step.Status__c}</span
+                          >
+                        </div>
+                        <div class="slds-text-body_small slds-text-color_weak">
+                          Attempted: {step.formattedDate} | Retries:
+                          {step.Retry_Count__c}
+                        </div>
+                      </div>
+
+                      <template if:true={step.childInstanceId}>
+                        <div
+                          class="slds-m-top_x-small slds-grid slds-grid_vertical-align-center"
+                        >
+                          <lightning-icon
+                            icon-name="utility:link"
+                            size="xx-small"
+                            class="slds-m-right_xx-small"
+                          ></lightning-icon>
+                          <span class="slds-text-body_small">
+                            Sub-Workflow:
+                            <a
+                              href="javascript:void(0);"
+                              data-id={step.childInstanceId}
+                              onclick={handleSelectRelated}
+                              class="slds-text-link slds-m-left_xx-small wf-related"
+                              >{step.childInstanceName}</a
+                            >
+                          </span>
+                        </div>
+                      </template>
+
+                      <div class="slds-m-top_small">
+                        <lightning-button-stateful
+                          label-off="Show Logs / Data"
+                          label-on="Hide Logs / Data"
+                          state={step.showDetails}
+                          data-step-id={step.Id}
+                          onclick={toggleStepDetails}
+                          variant="text"
+                          icon-name-off="utility:chevrondown"
+                          icon-name-on="utility:chevronup"
+                          class="text-button"
+                        ></lightning-button-stateful>
+
+                        <template if:true={step.showDetails}>
+                          <div
+                            class="slds-m-top_small slds-p-top_small border-top"
+                          >
+                            <template if:true={step.Input__c}>
+                              <div
+                                class="slds-text-title slds-text-color_weak slds-m-bottom_xx-small"
+                              >
+                                Step Input
+                              </div>
+                              <pre class="code-block slds-m-bottom_small">{step.Input__c}</pre>
+                              <template if:true={step.inputFile}>
+                                <a
+                                  href={step.inputFile.url}
+                                  target="_blank"
+                                  rel="noopener"
+                                  class="slds-text-body_small slds-m-bottom_small slds-d-block"
+                                  >{step.inputFile.label}</a
+                                >
+                              </template>
+                            </template>
+                            <template if:true={step.Output__c}>
+                              <div
+                                class="slds-text-title slds-text-color_weak slds-m-bottom_xx-small"
+                              >
+                                Step State / Output
+                              </div>
+                              <pre class="code-block slds-m-bottom_small">{step.Output__c}</pre>
+                              <template if:true={step.outputFile}>
+                                <a
+                                  href={step.outputFile.url}
+                                  target="_blank"
+                                  rel="noopener"
+                                  class="slds-text-body_small slds-m-bottom_small slds-d-block"
+                                  >{step.outputFile.label}</a
+                                >
+                              </template>
+                            </template>
+                            <template if:true={step.Error_Details__c}>
+                              <div
+                                class="slds-text-title text-red slds-m-bottom_xx-small"
+                              >
+                                Step Error Details
+                              </div>
+                              <pre class="code-block error-block">{step.Error_Details__c}</pre>
+                            </template>
+                          </div>
+                        </template>
+                      </div>
+
+                      <template if:true={step.isWaitingForApproval}>
+                        <div
+                          class="slds-m-top_medium slds-p-around_small border-top approval-panel"
+                        >
+                          <div
+                            class="slds-grid slds-grid_vertical-align-center slds-m-bottom_small"
+                          >
+                            <lightning-icon
+                              icon-name="utility:user"
+                              size="x-small"
+                              class="slds-m-right_x-small"
+                            ></lightning-icon>
+                            <span class="slds-text-title_bold text-secondary">
+                              Requires Approval: {step.approvalRole} (Key:
+                              {step.approvalKey})
+                            </span>
+                          </div>
+                          <template if:true={showActions}>
+                            <lightning-textarea
+                              label="Comments"
+                              value={approvalComments}
+                              placeholder="Explain the approval/rejection decision..."
+                              onchange={handleCommentsChange}
+                              class="slds-m-bottom_small"
+                              variant="label-hidden"
+                            ></lightning-textarea>
+                            <div class="slds-grid slds-grid_align-end">
+                              <lightning-button
+                                label="Reject"
+                                variant="destructive"
+                                icon-name="utility:close"
+                                data-action="reject"
+                                data-key={step.approvalKey}
+                                data-approved="false"
+                                onclick={handleApprovalSubmit}
+                                class="slds-m-right_small"
+                              ></lightning-button>
+                              <lightning-button
+                                label="Approve"
+                                variant="success"
+                                icon-name="utility:check"
+                                data-action="approve"
+                                data-key={step.approvalKey}
+                                data-approved="true"
+                                onclick={handleApprovalSubmit}
+                                class="brand-button"
+                              ></lightning-button>
+                            </div>
+                          </template>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+        <template if:false={hasSteps}>
+          <div
+            class="slds-text-color_weak slds-p-around_medium border-dashed slds-align_absolute-center"
+          >
+            No step execution history recorded yet.
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+</template>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LightningComponentBundle xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>67.0</apiVersion>
+    <isExposed>false</isExposed>
+    <masterLabel>Workflow Instance Detail</masterLabel>
+    <description>Read-only/presentational view of a single Revenant workflow instance: status, meta, sub-workflows, and the DAG step timeline. Reused by the ops dashboard and the record-page component.</description>
+</LightningComponentBundle>

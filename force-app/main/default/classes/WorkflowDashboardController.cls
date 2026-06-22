@@ -352,6 +352,80 @@ public inherited sharing class WorkflowDashboardController {
     return results;
   }
 
+  // Most-recent-N bound for the record-page list (getInstancesForRecord). Keeps a
+  // record with thousands of correlated runs from blowing the query/heap budget
+  // while comfortably covering the success-metric target of 50 correlated runs.
+  private static final Integer RECORD_INSTANCE_LIMIT = 50;
+
+  /**
+   * Record-page surface (Issue #46): read-only list of the workflow instances
+   * correlated to a single record, newest first. `Correlation_Key__c` already
+   * carries the related record Id by convention, so this is a pure bounded SELECT
+   * against data that already cooperates — no writes, no Platform Events, no
+   * Queueables. Reuses the dashboard's authorization gate and waitingOn derivation.
+   *
+   * A blank/null recordId (or an object whose Ids are never used as a correlation
+   * key) yields an empty list so the component renders its empty state, never an error.
+   */
+  @AuraEnabled(cacheable=true)
+  public static List<Map<String, Object>> getInstancesForRecord(Id recordId) {
+    checkAuthorization();
+
+    List<Map<String, Object>> results = new List<Map<String, Object>>();
+    if (recordId == null) {
+      return results;
+    }
+
+    String correlationKey = String.valueOf(recordId);
+    List<Workflow_Instance__c> instances = [
+      SELECT
+        Id,
+        Name,
+        Workflow_Name__c,
+        Status__c,
+        Current_Step__c,
+        Correlation_Key__c,
+        CreatedDate,
+        LastModifiedDate,
+        Error_Message__c,
+        Async_Job_Id__c,
+        Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c = :correlationKey
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+      LIMIT :RECORD_INSTANCE_LIMIT
+    ];
+
+    Set<Id> cronIds = new Set<Id>();
+    Set<Id> asyncIds = new Set<Id>();
+    for (Workflow_Instance__c inst : instances) {
+      collectJobId(inst.Async_Job_Id__c, cronIds, asyncIds);
+    }
+    Set<Id> activeCronIds = queryActiveCronIds(cronIds);
+    Set<Id> activeAsyncIds = queryActiveAsyncIds(asyncIds);
+
+    for (Workflow_Instance__c inst : instances) {
+      String waitingOn = computeWaitingOn(inst, activeCronIds, activeAsyncIds);
+      results.add(
+        new Map<String, Object>{
+          'Id' => inst.Id,
+          'Name' => inst.Name,
+          'Workflow_Name__c' => inst.Workflow_Name__c,
+          'Status__c' => inst.Status__c,
+          'Current_Step__c' => inst.Current_Step__c,
+          'Correlation_Key__c' => inst.Correlation_Key__c,
+          'CreatedDate' => inst.CreatedDate,
+          'Error_Message__c' => inst.Error_Message__c,
+          'Async_Job_Id__c' => inst.Async_Job_Id__c,
+          'Sleep_Until__c' => inst.Sleep_Until__c,
+          'waitingOn' => waitingOn
+        }
+      );
+    }
+    return results;
+  }
+
   // cacheBuster is unused in Apex; it only varies the client-side cache key so a
   // dashboard refresh re-queries instead of serving a stale cached list (mirrors
   // getFilteredInstances).

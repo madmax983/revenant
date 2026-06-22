@@ -1,0 +1,119 @@
+<template>
+  <lightning-card
+    title="Durable Workflows"
+    icon-name="standard:flow"
+    class="font-outfit"
+  >
+    <div class="slds-p-horizontal_small slds-p-bottom_small">
+      <!-- Loading -->
+      <template if:true={isLoading}>
+        <div class="slds-align_absolute-center slds-p-around_large">
+          <lightning-spinner
+            alternative-text="Loading workflows..."
+            size="small"
+          ></lightning-spinner>
+        </div>
+      </template>
+
+      <!-- Error -->
+      <template if:true={hasError}>
+        <div
+          class="wf-error slds-p-around_medium slds-text-color_error slds-text-align_center"
+        >
+          <lightning-icon
+            icon-name="utility:error"
+            variant="error"
+            size="small"
+            class="slds-m-bottom_x-small"
+          ></lightning-icon>
+          <p>{errorMessage}</p>
+        </div>
+      </template>
+
+      <!-- Detail drill-down (read-only) -->
+      <template if:true={showDetail}>
+        <div class="slds-m-bottom_small">
+          <lightning-button
+            label="Back to list"
+            icon-name="utility:back"
+            variant="base"
+            onclick={handleBackToList}
+          ></lightning-button>
+        </div>
+        <template if:true={loadingDetail}>
+          <div class="slds-align_absolute-center slds-p-around_large">
+            <lightning-spinner
+              alternative-text="Loading details..."
+              size="small"
+            ></lightning-spinner>
+          </div>
+        </template>
+        <c-workflow-instance-detail
+          detail={selectedDetail}
+          read-only
+          onselectrelated={handleSelectRelated}
+        ></c-workflow-instance-detail>
+      </template>
+
+      <!-- List -->
+      <template if:false={showDetail}>
+        <template if:true={hasInstances}>
+          <ul class="slds-has-dividers_bottom-space">
+            <template for:each={instances} for:item="inst">
+              <li
+                key={inst.Id}
+                class={inst.rowClass}
+                data-rowid={inst.Id}
+                onclick={handleRowClick}
+              >
+                <div
+                  class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-p-around_x-small"
+                >
+                  <div class="wf-row-main">
+                    <div class="slds-text-title_bold text-primary">
+                      {inst.Workflow_Name__c}
+                    </div>
+                    <div class="slds-text-body_small slds-text-color_weak">
+                      <template if:true={inst.Current_Step__c}>
+                        Step: {inst.Current_Step__c} &middot;
+                      </template>
+                      Started {inst.formattedDate}
+                    </div>
+                  </div>
+                  <div
+                    class="slds-grid slds-grid_vertical-align-center wf-row-badges"
+                  >
+                    <template if:true={inst.showWaiting}>
+                      <span
+                        class={inst.waitingBadgeClass}
+                        style="margin-right: 8px"
+                        >{inst.waitingOn}</span
+                      >
+                    </template>
+                    <span class={inst.statusBadgeClass}>{inst.Status__c}</span>
+                  </div>
+                </div>
+              </li>
+            </template>
+          </ul>
+        </template>
+
+        <!-- Empty state -->
+        <template if:true={isEmpty}>
+          <div
+            class="wf-empty slds-p-around_large slds-text-align_center slds-text-color_weak"
+          >
+            <lightning-icon
+              icon-name="utility:routing_offline"
+              size="small"
+              class="slds-m-bottom_x-small"
+            ></lightning-icon>
+            <p class="slds-text-body_regular">
+              No Revenant workflows are correlated to this record.
+            </p>
+          </div>
+        </template>
+      </template>
+    </div>
+  </lightning-card>
+</template>

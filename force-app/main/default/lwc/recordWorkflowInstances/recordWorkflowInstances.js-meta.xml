@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LightningComponentBundle xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>67.0</apiVersion>
+    <isExposed>true</isExposed>
+    <masterLabel>Record Workflow Instances</masterLabel>
+    <description>Record-aware, read-only list of the Revenant durable workflow instances correlated to the current record (by Correlation_Key__c), with one-click drill-down into the instance timeline. Drop on any record page; shows an empty state where no workflows are correlated.</description>
+    <targets>
+        <target>lightning__RecordPage</target>
+    </targets>
+</LightningComponentBundle>

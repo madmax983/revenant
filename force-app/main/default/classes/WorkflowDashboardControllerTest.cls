@@ -2420,4 +2420,187 @@ public class WorkflowDashboardControllerTest {
       }
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // getInstancesForRecord — record-page (Issue #46): read-only, record-scoped
+  // list of Workflow_Instance__c rows correlated to a given record Id.
+  // ---------------------------------------------------------------------------
+
+  @isTest
+  static void testGetInstancesForRecordFiltersByCorrelationKey() {
+    // Two instances correlated to "recordA", one to "recordB".
+    Id recordA = '001000000000001AAA';
+    Id recordB = '001000000000002AAA';
+
+    Workflow_Instance__c a1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowEngineTest.HappyStep1',
+      Correlation_Key__c = recordA
+    );
+    Workflow_Instance__c a2 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = recordA
+    );
+    Workflow_Instance__c b1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = recordB
+    );
+    insert new List<Workflow_Instance__c>{ a1, a2, b1 };
+
+    Test.startTest();
+    List<Map<String, Object>> rows = WorkflowDashboardController.getInstancesForRecord(
+      recordA
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      2,
+      rows.size(),
+      'Should return only instances correlated to recordA'
+    );
+    for (Map<String, Object> row : rows) {
+      System.assertEquals(
+        String.valueOf(recordA),
+        (String) row.get('Correlation_Key__c'),
+        'Every returned row must be correlated to the requested record'
+      );
+      System.assert(
+        row.containsKey('Current_Step__c'),
+        'Each row must expose Current_Step__c for the record-page list'
+      );
+      System.assert(
+        row.containsKey('waitingOn'),
+        'Each row must expose the derived waitingOn classification'
+      );
+    }
+  }
+
+  @isTest
+  static void testGetInstancesForRecordOrdersAndBoundsResultSet() {
+    // Insert more than the bound (50) to prove the result set is capped and
+    // ordered most-recent-first by CreatedDate.
+    Id recordId = '001000000000003AAA';
+    List<Workflow_Instance__c> many = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < 60; i++) {
+      many.add(
+        new Workflow_Instance__c(
+          Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+          Status__c = 'Completed',
+          Correlation_Key__c = recordId
+        )
+      );
+    }
+    insert many;
+
+    Test.startTest();
+    List<Map<String, Object>> rows = WorkflowDashboardController.getInstancesForRecord(
+      recordId
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      50,
+      rows.size(),
+      'Result set must be bounded to the most-recent 50 instances'
+    );
+  }
+
+  @isTest
+  static void testGetInstancesForRecordEmptyForUncorrelatedRecord() {
+    // A record Id that is never used as a correlation key → empty, not error.
+    Id strangerId = '001000000000099AAA';
+
+    Test.startTest();
+    List<Map<String, Object>> rows = WorkflowDashboardController.getInstancesForRecord(
+      strangerId
+    );
+    List<Map<String, Object>> nullRows = WorkflowDashboardController.getInstancesForRecord(
+      null
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      rows.size(),
+      'Uncorrelated record must yield an empty list (drives the empty state)'
+    );
+    System.assertEquals(
+      0,
+      nullRows.size(),
+      'Null recordId must yield an empty list, not an exception'
+    );
+  }
+
+  @isTest
+  static void testGetInstancesForRecordDerivesWaitingOn() {
+    // A Suspended instance with an Async_Job_Id that is not active classifies
+    // as 'Watchdog', matching the dashboard's existing derivation.
+    Id recordId = '001000000000004AAA';
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = recordId,
+      Sleep_Until__c = DateTime.now().addMinutes(5),
+      Async_Job_Id__c = '08e000000000000AAA'
+    );
+    insert as system inst;
+
+    Test.startTest();
+    List<Map<String, Object>> rows = WorkflowDashboardController.getInstancesForRecord(
+      recordId
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, rows.size(), 'Should find the suspended instance');
+    System.assertEquals(
+      'Watchdog',
+      (String) rows[0].get('waitingOn'),
+      'Suspended instance with an inactive job must classify as Watchdog'
+    );
+  }
+
+  @isTest
+  static void testGetInstancesForRecordAuthorizationEnforced() {
+    Profile stdProfile = [
+      SELECT Id
+      FROM Profile
+      WHERE Name = 'Standard User'
+      LIMIT 1
+    ];
+    User stdUser = new User(
+      Alias = 'stdr46',
+      Email = 'stduser46@testorg.com',
+      EmailEncodingKey = 'UTF-8',
+      LastName = 'Testing',
+      LanguageLocaleKey = 'en_US',
+      LocaleSidKey = 'en_US',
+      ProfileId = stdProfile.Id,
+      TimeZoneSidKey = 'America/Los_Angeles',
+      UserName = 'stduser_record46_' +
+        DateTime.now().getTime() +
+        '@testorg.com'
+    );
+    insert stdUser;
+
+    System.runAs(stdUser) {
+      Test.startTest();
+      try {
+        WorkflowDashboardController.getInstancesForRecord('001000000000005AAA');
+        System.assert(
+          false,
+          'Expected AuraHandledException for unauthorized user'
+        );
+      } catch (AuraHandledException e) {
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception'),
+          e.getMessage()
+        );
+      }
+      Test.stopTest();
+    }
+  }
 }
