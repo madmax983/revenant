@@ -1085,6 +1085,13 @@ public inherited sharing class WorkflowEngine {
         instance.Current_Step__c = ((WorkflowDefinition) defObj)
           .getInitialStep();
       }
+      if (defObj instanceof ExecutionTimeoutConfigurable) {
+        Integer timeoutSecs = ((ExecutionTimeoutConfigurable) defObj)
+          .getExecutionTimeoutSeconds();
+        if (timeoutSecs != null) {
+          instance.Deadline_At__c = DateTime.now().addSeconds(timeoutSecs);
+        }
+      }
     } else {
       instance.Definition_Version__c = 1;
     }
