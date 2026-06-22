@@ -458,6 +458,287 @@ public class WorkflowDashboardControllerTest {
     Test.stopTest();
   }
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // getDefinitionTrends — per-definition success-rate & throughput (Issue #33)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** Returns the row Map for the given workflow name from a getDefinitionTrends result. */
+  private static Map<String, Object> findTrendRow(
+    Map<String, Object> trends,
+    String workflowName
+  ) {
+    List<Object> rows = (List<Object>) trends.get('rows');
+    for (Object o : rows) {
+      Map<String, Object> row = (Map<String, Object>) o;
+      if (workflowName.equals((String) row.get('workflowName'))) {
+        return row;
+      }
+    }
+    return null;
+  }
+
+  @isTest
+  static void testGetDefinitionTrends() {
+    Datetime now = Datetime.now();
+    List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>();
+    // OnboardingWorkflow: 4 success (Completed), 1 failure (Failed) → 80% over 5 terminal
+    for (Integer i = 0; i < 4; i++) {
+      insts.add(
+        new Workflow_Instance__c(
+          Workflow_Name__c = 'OnboardingWorkflow',
+          Status__c = 'Completed',
+          Terminal_At__c = now
+        )
+      );
+    }
+    insts.add(
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'OnboardingWorkflow',
+        Status__c = 'Failed',
+        Terminal_At__c = now
+      )
+    );
+    // BillingWorkflow: 1 success (Completed), 2 failure (Failed) → 33.3% over 3 terminal
+    insts.add(
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'BillingWorkflow',
+        Status__c = 'Completed',
+        Terminal_At__c = now
+      )
+    );
+    for (Integer i = 0; i < 2; i++) {
+      insts.add(
+        new Workflow_Instance__c(
+          Workflow_Name__c = 'BillingWorkflow',
+          Status__c = 'Failed',
+          Terminal_At__c = now
+        )
+      );
+    }
+    // SagaWorkflow: exercises the full bucketing convention.
+    // success = ContinuedAsNew; failure = Compensated / Cancelled / CompensationFailed
+    insts.add(
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'SagaWorkflow',
+        Status__c = 'ContinuedAsNew',
+        Terminal_At__c = now
+      )
+    );
+    insts.add(
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'SagaWorkflow',
+        Status__c = 'Compensated',
+        Terminal_At__c = now
+      )
+    );
+    insts.add(
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'SagaWorkflow',
+        Status__c = 'Cancelled',
+        Terminal_At__c = now
+      )
+    );
+    insts.add(
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'SagaWorkflow',
+        Status__c = 'CompensationFailed',
+        Terminal_At__c = now
+      )
+    );
+    insert insts;
+
+    Test.startTest();
+    Map<String, Object> trends = WorkflowDashboardController.getDefinitionTrends(
+      '24h'
+    );
+    Test.stopTest();
+
+    System.assertEquals(24, trends.get('windowHours'), 'windowHours should be 24');
+    List<Object> rows = (List<Object>) trends.get('rows');
+    System.assertEquals(3, rows.size(), 'Should have one row per definition');
+
+    // Rows are worst-first (highest failure count). Saga(3) > Billing(2) > Onboarding(1).
+    Map<String, Object> first = (Map<String, Object>) rows[0];
+    System.assertEquals(
+      'SagaWorkflow',
+      first.get('workflowName'),
+      'Highest-failure definition should sort first'
+    );
+
+    Map<String, Object> onboarding = findTrendRow(trends, 'OnboardingWorkflow');
+    System.assertEquals(5, onboarding.get('terminalCount'));
+    System.assertEquals(4, onboarding.get('successCount'));
+    System.assertEquals(1, onboarding.get('failureCount'));
+    System.assertEquals(
+      80.0,
+      (Decimal) onboarding.get('successRate'),
+      'Success rate should be success/terminal as a percent'
+    );
+    System.assertEquals(
+      5,
+      onboarding.get('throughputPerWindow'),
+      'Throughput per window equals terminal count'
+    );
+    System.assertEquals(
+      0.21,
+      (Decimal) onboarding.get('throughputPerHour'),
+      'Throughput per hour = 5 terminal / 24h, rounded to 2dp'
+    );
+
+    Map<String, Object> billing = findTrendRow(trends, 'BillingWorkflow');
+    System.assertEquals(3, billing.get('terminalCount'));
+    System.assertEquals(1, billing.get('successCount'));
+    System.assertEquals(2, billing.get('failureCount'));
+    System.assertEquals(33.3, (Decimal) billing.get('successRate'));
+
+    Map<String, Object> saga = findTrendRow(trends, 'SagaWorkflow');
+    System.assertEquals(4, saga.get('terminalCount'));
+    System.assertEquals(1, saga.get('successCount'), 'ContinuedAsNew is success');
+    System.assertEquals(
+      3,
+      saga.get('failureCount'),
+      'Compensated/Cancelled/CompensationFailed are failures'
+    );
+    System.assertEquals(25.0, (Decimal) saga.get('successRate'));
+  }
+
+  @isTest
+  static void testGetDefinitionTrendsWindowFiltersByTerminalTime() {
+    Datetime now = Datetime.now();
+    insert new List<Workflow_Instance__c>{
+      // Terminal inside the 24h window
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'WindowDef',
+        Status__c = 'Completed',
+        Terminal_At__c = now.addHours(-1)
+      ),
+      // Terminal 3 days ago: inside 7d but outside 24h
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'WindowDef',
+        Status__c = 'Completed',
+        Terminal_At__c = now.addDays(-3)
+      ),
+      // Active instance: no Terminal_At__c, must never be counted in any window
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'WindowDef',
+        Status__c = 'Running'
+      )
+    };
+
+    Test.startTest();
+    Map<String, Object> last24h = WorkflowDashboardController.getDefinitionTrends(
+      '24h'
+    );
+    Map<String, Object> last7d = WorkflowDashboardController.getDefinitionTrends(
+      '7d'
+    );
+    Test.stopTest();
+
+    Map<String, Object> row24 = findTrendRow(last24h, 'WindowDef');
+    System.assertEquals(
+      1,
+      row24.get('terminalCount'),
+      'Only the instance terminal within 24h counts; active (null Terminal_At__c) excluded'
+    );
+
+    System.assertEquals(168, last7d.get('windowHours'), '7d window is 168 hours');
+    Map<String, Object> row7 = findTrendRow(last7d, 'WindowDef');
+    System.assertEquals(
+      2,
+      row7.get('terminalCount'),
+      'Both terminal instances fall within 7d; active still excluded'
+    );
+  }
+
+  @isTest
+  static void testGetDefinitionTrendsEmptyRendersCleanly() {
+    // Only an active instance exists — nothing terminal in the window.
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = 'QuietDef',
+      Status__c = 'Running'
+    );
+
+    Test.startTest();
+    Map<String, Object> trends = WorkflowDashboardController.getDefinitionTrends(
+      '24h'
+    );
+    Test.stopTest();
+
+    List<Object> rows = (List<Object>) trends.get('rows');
+    System.assertEquals(
+      0,
+      rows.size(),
+      'No terminal activity in window yields an empty (not null) rows list, no divide-by-zero'
+    );
+  }
+
+  @isTest
+  static void testGetDefinitionTrendsWindowKeyMapping() {
+    Test.startTest();
+    System.assertEquals(
+      1,
+      WorkflowDashboardController.getDefinitionTrends('1h').get('windowHours')
+    );
+    System.assertEquals(
+      24,
+      WorkflowDashboardController.getDefinitionTrends('24h').get('windowHours')
+    );
+    System.assertEquals(
+      168,
+      WorkflowDashboardController.getDefinitionTrends('7d').get('windowHours')
+    );
+    // Blank / unrecognized defaults to 24h.
+    System.assertEquals(
+      24,
+      WorkflowDashboardController.getDefinitionTrends(null).get('windowHours')
+    );
+    System.assertEquals(
+      24,
+      WorkflowDashboardController.getDefinitionTrends('bogus').get('windowHours')
+    );
+    Test.stopTest();
+  }
+
+  @isTest
+  static void testGetDefinitionTrendsAuthorization() {
+    Profile stdProfile = [
+      SELECT Id
+      FROM Profile
+      WHERE Name = 'Standard User'
+      LIMIT 1
+    ];
+    User stdUser = new User(
+      Alias = 'stdusr',
+      Email = 'stduser@testorg.com',
+      EmailEncodingKey = 'UTF-8',
+      LastName = 'Testing',
+      LanguageLocaleKey = 'en_US',
+      LocaleSidKey = 'en_US',
+      ProfileId = stdProfile.Id,
+      TimeZoneSidKey = 'America/Los_Angeles',
+      UserName = 'stduser_trends_test_' +
+        DateTime.now().getTime() +
+        '@testorg.com'
+    );
+    insert stdUser;
+
+    System.runAs(stdUser) {
+      try {
+        WorkflowDashboardController.getDefinitionTrends('24h');
+        System.assert(
+          false,
+          'Expected AuraHandledException for getDefinitionTrends'
+        );
+      } catch (AuraHandledException e) {
+        System.assert(
+          e.getMessage().contains('Unauthorized') ||
+          e.getMessage().contains('Script-thrown exception'),
+          e.getMessage()
+        );
+      }
+    }
+  }
+
   @isTest
   static void testAuthorizationFailures() {
     // Create standard user who does not have the custom permission or System Administrator profile
