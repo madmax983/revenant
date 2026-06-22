@@ -913,6 +913,12 @@
                                         <div class="slds-text-title slds-text-color_weak">Started Date</div>
                                         <div class="slds-text-body_regular">{selectedInst.formattedDate}</div>
                                     </div>
+                                    <template if:true={selectedInst.formattedDeadline}>
+                                        <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                            <div class="slds-text-title slds-text-color_weak">Execution Deadline</div>
+                                            <div class="slds-text-body_regular">{selectedInst.formattedDeadline}</div>
+                                        </div>
+                                    </template>
                                     <template if:true={selectedInst.Parent_Instance__c}>
                                         <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
                                             <div class="slds-text-title slds-text-color_weak">Parent Workflow</div>

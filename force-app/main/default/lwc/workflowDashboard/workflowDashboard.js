@@ -535,6 +535,7 @@ export default class WorkflowDashboard extends LightningElement {
     return {
       ...inst,
       formattedDate: this.formatDateTime(inst.CreatedDate),
+      formattedDeadline: inst.Deadline_At__c ? this.formatDateTime(inst.Deadline_At__c) : null,
       listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? "item-selected" : ""}`,
       statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
       isWatchdogWaiting: inst.waitingOn === "Watchdog",
@@ -617,6 +618,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.selectedInst = {
           ...inst,
           formattedDate: this.formatDateTime(inst.CreatedDate),
+          formattedDeadline: inst.Deadline_At__c ? this.formatDateTime(inst.Deadline_At__c) : null,
           statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
           Input__c: this.formatJson(inst.Input__c),
           Output__c: this.formatJson(inst.Output__c),
