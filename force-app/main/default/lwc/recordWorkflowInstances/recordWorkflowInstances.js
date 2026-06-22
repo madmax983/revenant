@@ -1,6 +1,11 @@
 import { LightningElement, api, wire } from "lwc";
 import getInstancesForRecord from "@salesforce/apex/WorkflowDashboardController.getInstancesForRecord";
 import getInstanceDetails from "@salesforce/apex/WorkflowDashboardController.getInstanceDetails";
+import {
+  formatDateTime,
+  getStatusBadgeClass,
+  getWaitingBadgeClass,
+} from "c/workflowFormat";
 
 /**
  * Record-page surface (Issue #46): a focused, read-only list of the Revenant
@@ -42,10 +47,12 @@ export default class RecordWorkflowInstances extends LightningElement {
       const isSuspended = row.Status__c === "Suspended";
       return {
         ...row,
-        formattedDate: this.formatDateTime(row.CreatedDate),
-        statusBadgeClass: this.getStatusBadgeClass(row.Status__c),
+        formattedDate: formatDateTime(row.CreatedDate),
+        statusBadgeClass: getStatusBadgeClass(row.Status__c),
         showWaiting: isSuspended && !!row.waitingOn,
-        waitingBadgeClass: this.getWaitingBadgeClass(row.waitingOn),
+        // Keep the wf-waiting-badge hook class the record-page list relies on.
+        waitingBadgeClass:
+          getWaitingBadgeClass(row.waitingOn) + " wf-waiting-badge",
         rowClass:
           this.selectedInstanceId === row.Id
             ? "wf-row wf-row-selected"
@@ -121,53 +128,5 @@ export default class RecordWorkflowInstances extends LightningElement {
     this.showDetail = false;
     this.selectedDetail = undefined;
     this.selectedInstanceId = undefined;
-  }
-
-  formatDateTime(dateStr) {
-    if (!dateStr) return "";
-    return new Date(dateStr).toLocaleString();
-  }
-
-  getWaitingBadgeClass(waitingOn) {
-    if (waitingOn === "Watchdog") {
-      return "badge badge-purple wf-waiting-badge";
-    }
-    if (waitingOn === "Delayed Queueable") {
-      return "badge badge-indigo wf-waiting-badge";
-    }
-    return "badge badge-blue wf-waiting-badge";
-  }
-
-  getStatusBadgeClass(status) {
-    switch (status) {
-      case "Completed":
-        return "badge badge-green";
-      case "ContinuedAsNew":
-        return "badge badge-blue";
-      case "Failed":
-        return "badge badge-red";
-      case "Suspended":
-        return "badge badge-orange";
-      case "Running":
-        return "badge badge-blue pulse-glow";
-      case "Pending":
-        return "badge badge-grey";
-      case "Retrying":
-        return "badge badge-yellow pulse-glow";
-      case "Compensating":
-        return "badge badge-yellow pulse-glow";
-      case "Compensated":
-        return "badge badge-orange";
-      case "CompensationFailed":
-        return "badge badge-red pulse-glow";
-      case "Cancelling":
-        return "badge badge-yellow pulse-glow";
-      case "Cancelled":
-        return "badge badge-grey";
-      case "Paused":
-        return "badge badge-orange";
-      default:
-        return "badge";
-    }
   }
 }

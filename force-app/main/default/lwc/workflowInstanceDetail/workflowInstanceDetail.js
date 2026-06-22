@@ -1,4 +1,12 @@
 import { LightningElement, api } from "lwc";
+import {
+  formatDateTime,
+  formatJson,
+  buildPayloadFile,
+  getStatusBadgeClass,
+  getTimelineMarkerClass,
+  getWaitingBadgeClass,
+} from "c/workflowFormat";
 
 /**
  * Presentational, self-contained view of a single Workflow_Instance__c detail
@@ -48,20 +56,15 @@ export default class WorkflowInstanceDetail extends LightningElement {
     this.successor = result.successor;
     this.selectedInst = {
       ...inst,
-      formattedDate: this.formatDateTime(inst.CreatedDate),
-      statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
-      Input__c: this.formatJson(inst.Input__c),
-      Output__c: this.formatJson(inst.Output__c),
-      inputFile: this.buildPayloadFile(payloadFiles["instance.Input"]),
-      outputFile: this.buildPayloadFile(payloadFiles["instance.Output"]),
+      formattedDate: formatDateTime(inst.CreatedDate),
+      statusBadgeClass: getStatusBadgeClass(inst.Status__c),
+      Input__c: formatJson(inst.Input__c),
+      Output__c: formatJson(inst.Output__c),
+      inputFile: buildPayloadFile(payloadFiles["instance.Input"]),
+      outputFile: buildPayloadFile(payloadFiles["instance.Output"]),
       waitingOn: result.waitingOn,
       isWatchdogWaiting: result.waitingOn === "Watchdog",
-      waitingOnBadgeClass:
-        result.waitingOn === "Watchdog"
-          ? "badge badge-purple"
-          : result.waitingOn === "Delayed Queueable"
-            ? "badge badge-indigo"
-            : "badge badge-blue",
+      waitingOnBadgeClass: getWaitingBadgeClass(result.waitingOn),
       pendingCompensationCount: result.pendingCompensationCount || 0,
       pendingCompensations: result.pendingCompensations || [],
     };
@@ -69,8 +72,8 @@ export default class WorkflowInstanceDetail extends LightningElement {
     this.childInstances = (result.children || []).map((child) => {
       return {
         ...child,
-        formattedDate: this.formatDateTime(child.CreatedDate),
-        statusBadgeClass: this.getStatusBadgeClass(child.Status__c),
+        formattedDate: formatDateTime(child.CreatedDate),
+        statusBadgeClass: getStatusBadgeClass(child.Status__c),
       };
     });
 
@@ -111,13 +114,13 @@ export default class WorkflowInstanceDetail extends LightningElement {
 
       return {
         ...step,
-        formattedDate: this.formatDateTime(step.CreatedDate),
+        formattedDate: formatDateTime(step.CreatedDate),
         statusBadgeClass: approvalInfo
           ? "badge badge-orange pulse-glow"
-          : this.getStatusBadgeClass(step.Status__c),
+          : getStatusBadgeClass(step.Status__c),
         markerClass: approvalInfo
           ? "timeline-marker bg-yellow pulse-glow"
-          : this.getTimelineMarkerClass(step.Status__c),
+          : getTimelineMarkerClass(step.Status__c),
         showDetails:
           showDetailsMap.get(step.Id) || (approvalInfo ? true : false),
         isWaitingForApproval: !!approvalInfo,
@@ -125,12 +128,10 @@ export default class WorkflowInstanceDetail extends LightningElement {
         approvalRole: approvalInfo ? approvalInfo.role : null,
         childInstanceId: childWorkflowLink ? childWorkflowLink.id : null,
         childInstanceName: childWorkflowLink ? childWorkflowLink.name : null,
-        Input__c: this.formatJson(step.Input__c),
-        Output__c: this.formatJson(step.Output__c),
-        inputFile: this.buildPayloadFile(
-          payloadFiles["step." + step.Id + ".Input"],
-        ),
-        outputFile: this.buildPayloadFile(
+        Input__c: formatJson(step.Input__c),
+        Output__c: formatJson(step.Output__c),
+        inputFile: buildPayloadFile(payloadFiles["step." + step.Id + ".Input"]),
+        outputFile: buildPayloadFile(
           payloadFiles["step." + step.Id + ".Output"],
         ),
       };
@@ -247,97 +248,5 @@ export default class WorkflowInstanceDetail extends LightningElement {
   handleSelectRelated(event) {
     const id = event.currentTarget.dataset.id;
     this.dispatchEvent(new CustomEvent("selectrelated", { detail: { id } }));
-  }
-
-  // ---- formatting helpers (ported from workflowDashboard) ----
-  formatDateTime(dateStr) {
-    if (!dateStr) return "";
-    const d = new Date(dateStr);
-    return d.toLocaleString();
-  }
-
-  formatJson(str) {
-    if (!str) return "";
-    try {
-      const obj = JSON.parse(str);
-      return JSON.stringify(obj, null, 2);
-    } catch (ex) {
-      return str;
-    }
-  }
-
-  buildPayloadFile(file) {
-    if (!file || !file.downloadUrl) {
-      return null;
-    }
-    const chars = file.fullLength || 0;
-    const sizeLabel =
-      chars >= 1024 ? Math.ceil(chars / 1024) + " KB" : chars + " chars";
-    return {
-      url: file.downloadUrl,
-      label: "Download full payload (" + sizeLabel + ")",
-    };
-  }
-
-  getStatusBadgeClass(status) {
-    switch (status) {
-      case "Completed":
-        return "badge badge-green";
-      case "ContinuedAsNew":
-        return "badge badge-blue";
-      case "Failed":
-        return "badge badge-red";
-      case "Suspended":
-        return "badge badge-orange";
-      case "Running":
-        return "badge badge-blue pulse-glow";
-      case "Pending":
-        return "badge badge-grey";
-      case "Retrying":
-        return "badge badge-yellow pulse-glow";
-      case "Compensating":
-        return "badge badge-yellow pulse-glow";
-      case "Compensated":
-        return "badge badge-orange";
-      case "CompensationFailed":
-        return "badge badge-red pulse-glow";
-      case "Cancelling":
-        return "badge badge-yellow pulse-glow";
-      case "Cancelled":
-        return "badge badge-grey";
-      case "Paused":
-        return "badge badge-orange";
-      default:
-        return "badge";
-    }
-  }
-
-  getTimelineMarkerClass(status) {
-    switch (status) {
-      case "Completed":
-        return "timeline-marker bg-green";
-      case "ContinuedAsNew":
-        return "timeline-marker bg-blue";
-      case "Failed":
-        return "timeline-marker bg-red";
-      case "Retrying":
-        return "timeline-marker bg-yellow";
-      case "Running":
-        return "timeline-marker bg-blue";
-      case "Pending":
-        return "timeline-marker bg-grey";
-      case "Compensating":
-        return "timeline-marker bg-yellow";
-      case "Compensated":
-        return "timeline-marker bg-orange";
-      case "CompensationFailed":
-        return "timeline-marker bg-red";
-      case "Cancelling":
-        return "timeline-marker bg-yellow";
-      case "Cancelled":
-        return "timeline-marker bg-grey";
-      default:
-        return "timeline-marker";
-    }
   }
 }

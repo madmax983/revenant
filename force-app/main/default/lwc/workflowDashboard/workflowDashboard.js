@@ -1,5 +1,6 @@
 ﻿import { LightningElement, wire } from "lwc";
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
+import { formatDateTime, getStatusBadgeClass } from "c/workflowFormat";
 import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
 import getInstanceDetails from "@salesforce/apex/WorkflowDashboardController.getInstanceDetails";
@@ -373,9 +374,9 @@ export default class WorkflowDashboard extends LightningElement {
       inst.idleMinutes != null ? `${inst.idleMinutes}m idle` : null;
     return {
       ...inst,
-      formattedDate: this.formatDateTime(inst.CreatedDate),
+      formattedDate: formatDateTime(inst.CreatedDate),
       listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? "item-selected" : ""}`,
-      statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
+      statusBadgeClass: getStatusBadgeClass(inst.Status__c),
       isWatchdogWaiting: inst.waitingOn === "Watchdog",
       waitingOnBadgeClass:
         inst.waitingOn === "Watchdog"
@@ -478,7 +479,8 @@ export default class WorkflowDashboard extends LightningElement {
         if (currentInstanceId === this.selectedInstanceId) {
           this.showToast(
             "Error",
-            "Failed to retrieve details: " + error.body.message,
+            "Failed to retrieve details: " +
+              (error.body ? error.body.message : error.message),
             "error",
           );
         }
@@ -718,16 +720,14 @@ export default class WorkflowDashboard extends LightningElement {
         if (result.latestJob) {
           latestJobVal = {
             ...result.latestJob,
-            statusBadgeClass: this.getStatusBadgeClass(
-              result.latestJob.Status__c,
-            ),
+            statusBadgeClass: getStatusBadgeClass(result.latestJob.Status__c),
           };
         }
         this.doctorData = {
           ...result,
           latestJob: latestJobVal,
           latestJobCreatedDate: result.latestJob
-            ? this.formatDateTime(result.latestJob.CreatedDate)
+            ? formatDateTime(result.latestJob.CreatedDate)
             : null,
         };
       })
@@ -1114,46 +1114,6 @@ export default class WorkflowDashboard extends LightningElement {
       .finally(() => {
         this.loadingDetails = false;
       });
-  }
-
-  // UTILITIES
-  formatDateTime(dateStr) {
-    if (!dateStr) return "";
-    const d = new Date(dateStr);
-    return d.toLocaleString();
-  }
-
-  getStatusBadgeClass(status) {
-    switch (status) {
-      case "Completed":
-        return "badge badge-green";
-      case "ContinuedAsNew":
-        return "badge badge-blue";
-      case "Failed":
-        return "badge badge-red";
-      case "Suspended":
-        return "badge badge-orange";
-      case "Running":
-        return "badge badge-blue pulse-glow";
-      case "Pending":
-        return "badge badge-grey";
-      case "Retrying":
-        return "badge badge-yellow pulse-glow";
-      case "Compensating":
-        return "badge badge-yellow pulse-glow";
-      case "Compensated":
-        return "badge badge-orange";
-      case "CompensationFailed":
-        return "badge badge-red pulse-glow";
-      case "Cancelling":
-        return "badge badge-yellow pulse-glow";
-      case "Cancelled":
-        return "badge badge-grey";
-      case "Paused":
-        return "badge badge-orange";
-      default:
-        return "badge";
-    }
   }
 
   showToast(title, message, variant) {
