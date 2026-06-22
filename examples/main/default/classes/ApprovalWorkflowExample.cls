@@ -23,6 +23,15 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
    */
   public static final String DECISION_SIGNAL = 'Approve:' + APPROVAL_KEY;
 
+  public List<String> getSteps() {
+    return new List<String>{
+      'ApprovalWorkflowExample.ReserveBudgetStep',
+      'ApprovalWorkflowExample.RequestApprovalStep',
+      'ApprovalWorkflowExample.PlaceOrderStep',
+      'ApprovalWorkflowExample.RejectStep'
+    };
+  }
+
   public String getInitialStep() {
     return 'ApprovalWorkflowExample.ReserveBudgetStep';
   }

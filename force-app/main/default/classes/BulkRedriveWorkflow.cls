@@ -61,6 +61,10 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
 
   // ---- WorkflowDefinition ----
 
+  public List<String> getSteps() {
+    return new List<String>{ 'BulkRedriveWorkflow.BulkRedriveStep' };
+  }
+
   public String getInitialStep() {
     return 'BulkRedriveWorkflow.BulkRedriveStep';
   }

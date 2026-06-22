@@ -5,6 +5,12 @@ public class WorkflowEngineTest {
   // ==========================================
 
   public class HappyWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.HappyStep1',
+        'WorkflowEngineTest.HappyStep2'
+      };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.HappyStep1';
     }
@@ -117,6 +123,9 @@ public class WorkflowEngineTest {
   }
 
   public class LargePayloadWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.LargePayloadStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.LargePayloadStep';
     }
@@ -134,6 +143,9 @@ public class WorkflowEngineTest {
   }
 
   public class YieldingWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.YieldingStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.YieldingStep';
     }
@@ -170,6 +182,12 @@ public class WorkflowEngineTest {
   }
 
   public class SuspendingWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.SuspendingStep',
+        'WorkflowEngineTest.AfterSuspendStep'
+      };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.SuspendingStep';
     }
@@ -204,6 +222,9 @@ public class WorkflowEngineTest {
   }
 
   public class CrashingWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.CrashingStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.CrashingStep';
     }
@@ -219,6 +240,9 @@ public class WorkflowEngineTest {
   }
 
   public class FailingWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.FailingStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.FailingStep';
     }
@@ -241,6 +265,9 @@ public class WorkflowEngineTest {
   }
 
   public class ApprovalWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.ApprovalStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.ApprovalStep';
     }
@@ -274,6 +301,9 @@ public class WorkflowEngineTest {
   }
 
   public class TimeoutWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.TimeoutStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.TimeoutStep';
     }
@@ -292,6 +322,9 @@ public class WorkflowEngineTest {
   }
 
   public class RetryingWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.RetryingStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.RetryingStep';
     }
@@ -307,6 +340,9 @@ public class WorkflowEngineTest {
   }
 
   public class SignaledWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.SignaledStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.SignaledStep';
     }
@@ -340,6 +376,9 @@ public class WorkflowEngineTest {
   }
 
   public class CustomRetryWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.CustomRetryStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.CustomRetryStep';
     }
@@ -357,6 +396,12 @@ public class WorkflowEngineTest {
   }
 
   public class SleepingWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.SleepingStep',
+        'WorkflowEngineTest.AfterSleepStep'
+      };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.SleepingStep';
     }
@@ -391,6 +436,9 @@ public class WorkflowEngineTest {
   }
 
   public class ParentWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.ParentStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.ParentStep';
     }
@@ -428,6 +476,9 @@ public class WorkflowEngineTest {
   }
 
   public class ChildWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.ChildStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.ChildStep';
     }
@@ -1030,6 +1081,14 @@ public class WorkflowEngineTest {
   }
 
   public class ParallelWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.SplitStep',
+        'WorkflowEngineTest.ParallelStep1',
+        'WorkflowEngineTest.ParallelStep2',
+        'WorkflowEngineTest.JoinStep'
+      };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.SplitStep';
     }
@@ -1481,6 +1540,9 @@ public class WorkflowEngineTest {
   }
 
   public class SuffixForwardWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.Stage_Compensate' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.Stage_Compensate';
     }
@@ -2072,6 +2134,9 @@ public class WorkflowEngineTest {
   }
 
   public class DaemonWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.IncrementCounterStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.IncrementCounterStep';
     }
@@ -2081,6 +2146,9 @@ public class WorkflowEngineTest {
   }
 
   public class PreviousRunAtWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.PreviousRunAtCaptureStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.PreviousRunAtCaptureStep';
     }
@@ -2674,6 +2742,9 @@ public class WorkflowEngineTest {
   }
 
   public class TimeoutContinueWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.TimeoutContinueStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowEngineTest.TimeoutContinueStep';
     }
@@ -4433,5 +4504,62 @@ public class WorkflowEngineTest {
 
     List<Workflow_Step_Execution__c> steps = [SELECT Id FROM Workflow_Step_Execution__c];
     System.assertEquals(0, steps.size(), 'Signal delivery must not write step-execution rows');
+  }
+
+  // ==========================================
+  // WorkflowValidator coverage (issue #23)
+  // ==========================================
+
+  // A class that is not a WorkflowStep, used to prove the validator rejects a
+  // declared step name that resolves to a non-step class.
+  public class NotARealStep {
+    public String label() {
+      return 'not a step';
+    }
+  }
+
+  // Deliberately malformed DAG: bad initial step (not declared), a declared
+  // step that is not a WorkflowStep, and a dangling getNextStep successor.
+  public class MalformedValidatorWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.NotARealStep' };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.HappyStep1'; // not contained in getSteps()
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      return 'WorkflowEngineTest.NoSuchStep'; // dangling, undeclared successor
+    }
+  }
+
+  @isTest
+  static void testWorkflowValidatorReportsMalformedDag() {
+    // A deliberately malformed definition is reported with every structural
+    // defect, and a well-formed one (HappyWorkflow) passes clean.
+    WorkflowValidator.ValidationResult bad = WorkflowValidator.validate(
+      'WorkflowEngineTest.MalformedValidatorWorkflow'
+    );
+    System.assertEquals(false, bad.isValid(), 'Malformed DAG must be invalid');
+    System.assert(
+      bad.hasDefect(WorkflowValidator.INITIAL_STEP_NOT_DECLARED),
+      'bad initial step not reported: ' + bad.getMessages()
+    );
+    System.assert(
+      bad.hasDefect(WorkflowValidator.STEP_NOT_WORKFLOWSTEP),
+      'non-WorkflowStep class not reported: ' + bad.getMessages()
+    );
+    System.assert(
+      bad.hasDefect(WorkflowValidator.DANGLING_SUCCESSOR),
+      'dangling successor not reported: ' + bad.getMessages()
+    );
+
+    WorkflowValidator.ValidationResult good = WorkflowValidator.validate(
+      'WorkflowEngineTest.HappyWorkflow'
+    );
+    System.assertEquals(
+      true,
+      good.isValid(),
+      'Well-formed HappyWorkflow should pass clean: ' + good.getMessages()
+    );
   }
 }

@@ -20,6 +20,9 @@ public class WorkflowConcurrencyTest {
   // A workflow whose single step suspends (waits for a signal), so an admitted
   // instance stays in-flight holding its slot until it is driven terminal.
   public class WaitWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowConcurrencyTest.WaitStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowConcurrencyTest.WaitStep';
     }
@@ -37,6 +40,9 @@ public class WorkflowConcurrencyTest {
   // A bounded workflow whose initial step declares a timeout — used to prove the
   // initial step's deadline is deferred until admission for configured workflows.
   public class TimeoutWaitWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowConcurrencyTest.TimeoutWaitStep' };
+    }
     public String getInitialStep() {
       return 'WorkflowConcurrencyTest.TimeoutWaitStep';
     }

@@ -105,7 +105,7 @@ public class ProvisionSandboxStep implements CompensatableStep {
 
 ### 2. Define the Workflow DAG
 
-Create a class implementing [WorkflowDefinition](force-app/main/default/classes/WorkflowDefinition.cls) to model step transitions:
+Create a class implementing [WorkflowDefinition](force-app/main/default/classes/WorkflowDefinition.cls) to model step transitions. The contract has three methods: `getSteps()` declares the complete step inventory (required — it is what [`WorkflowValidator`](force-app/main/default/classes/WorkflowValidator.cls) checks the DAG against, see §9), `getInitialStep()` names the entry point, and `getNextStep()` routes transitions:
 
 ```java
 public class OnboardingWorkflow implements WorkflowDefinition {
@@ -386,6 +386,27 @@ List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(keyList);
 - The **Id** overloads cost **at most 2 SOQL queries** (one for the instance(s), at most one more for ContentVersion rehydration) and **zero DML**. The **correlation-key** overloads resolve each key's winning instance from metadata first and fetch outputs only for the winners, costing a **small constant number of SOQL queries regardless of list size** (and **zero DML**) — bounded per key, so a single hot key reused across many terminal runs can neither crowd out other requested keys nor exhaust the heap. All overloads are safe to call from any Apex context.
 - By correlation key, the active/live run is preferred over a recently-terminal one when a key has been reused. Lookup is case-insensitive (matching the correlation-key fields) and follows `ContinuedAsNew` chains via the shared root key, so polling the original key — **or any intermediate successor key** — returns the live/final successor, not a stale predecessor. `null` is returned (not an exception) when nothing matches.
 - **Known limitation — don't reuse a chain's correlation key for an unrelated run while that chain is live.** Chain following matches on the shared `Root_Correlation_Key__c`, which a continue-as-new chain shares with _any_ independent run that reuses the same key. If you start a separate workflow with a correlation key that is also the root of a still-live continue-as-new chain, polling an intermediate successor key of that chain may resolve to the unrelated reused run. Use distinct correlation keys per logical workflow (the normal case) to avoid this; precise disambiguation would require walking the `Previous_Instance__c` lineage, which is intentionally out of scope to keep `getStatus` bounded and constant-SOQL.
+
+### 9. Validate a Workflow Definition (Apex)
+
+A `WorkflowDefinition` is otherwise only exercised at runtime: the engine resolves each step class lazily via `Type.forName` as it reaches it, so a typo'd successor, an entry point missing from `getSteps()`, or a step name that doesn't resolve to a real `WorkflowStep` only surfaces **mid-execution — after earlier forward steps (and their side effects) have already committed**, triggering a real compensation rollback in production. `WorkflowValidator` moves that detection to authoring/deploy time.
+
+Call `WorkflowValidator.validate(workflowClassName)` — typically from an Apex test that runs in CI before deploy. It is **strictly read-only**: it creates no `Workflow_Instance__c`, writes no `Workflow_Step_Execution__c`, touches no compensation state, publishes no platform events, and enqueues no jobs. A single call returns **every** structural defect found (not just the first), each naming the offending step:
+
+```java
+@isTest
+static void onboardingWorkflowIsWellFormed() {
+    WorkflowValidator.ValidationResult result =
+        WorkflowValidator.validate('OnboardingWorkflow');
+
+    System.assert(
+        result.isValid(),
+        'OnboardingWorkflow DAG is malformed: ' + result.getMessages()
+    );
+}
+```
+
+`validate` flags: a definition class that doesn't resolve or doesn't implement `WorkflowDefinition`; a `getInitialStep()` that is blank or not contained in `getSteps()`; any `getSteps()` entry that doesn't resolve to an instantiable `WorkflowStep`/`CompensatableStep`; and duplicate `getSteps()` entries. It additionally runs a **best-effort** transition probe that drives `getNextStep(...)` for each declared step and flags any returned successor not in `getSteps()` — best-effort because `getNextStep` is data-dependent and cannot be fully enumerated. Inspect `result.defects` (each has a `code`, `stepName`, and `message`) or `result.getMessages()` for the full list. This is why `getSteps()` is part of the `WorkflowDefinition` contract: it is the authoritative step inventory the validator checks the DAG against.
 
 ---
 
