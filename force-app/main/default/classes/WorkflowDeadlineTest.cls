@@ -296,5 +296,110 @@ public class WorkflowDeadlineTest {
     Workflow_Instance__c reloadedInst = (Workflow_Instance__c) details.get('instance');
     System.assertEquals(deadline, reloadedInst.Deadline_At__c, 'Deadline should be returned in getInstanceDetails');
   }
+
+  @isTest
+  static void testWatchdogSweepExpiredWithCompensationBulk() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Create 3 running instances that have already expired and have a compensation stack
+    List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>{
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowDeadlineTest.TestCompWorkflow',
+        Status__c = 'Running',
+        Correlation_Key__c = 'Deadline-Expired-Bulk1',
+        Deadline_At__c = DateTime.now().addSeconds(-10),
+        Compensation_Stack__c = JSON.serialize(
+          new List<String>{'WorkflowDeadlineTest.TestCompensatableStep'}
+        )
+      ),
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowDeadlineTest.TestCompWorkflow',
+        Status__c = 'Running',
+        Correlation_Key__c = 'Deadline-Expired-Bulk2',
+        Deadline_At__c = DateTime.now().addSeconds(-10),
+        Compensation_Stack__c = JSON.serialize(
+          new List<String>{'WorkflowDeadlineTest.TestCompensatableStep'}
+        )
+      ),
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowDeadlineTest.TestCompWorkflow',
+        Status__c = 'Running',
+        Correlation_Key__c = 'Deadline-Expired-Bulk3',
+        Deadline_At__c = DateTime.now().addSeconds(-10),
+        Compensation_Stack__c = JSON.serialize(
+          new List<String>{'WorkflowDeadlineTest.TestCompensatableStep'}
+        )
+      )
+    };
+    insert insts;
+
+    // Insert original successful executions for the step for all 3 instances
+    List<Workflow_Step_Execution__c> origExecs = new List<Workflow_Step_Execution__c>{
+      new Workflow_Step_Execution__c(
+        Workflow_Instance__c = insts[0].Id,
+        Step_Name__c = 'WorkflowDeadlineTest.TestCompensatableStep',
+        Status__c = 'Completed',
+        Input__c = '{"test": 1}',
+        Output__c = '{"test": 10}'
+      ),
+      new Workflow_Step_Execution__c(
+        Workflow_Instance__c = insts[1].Id,
+        Step_Name__c = 'WorkflowDeadlineTest.TestCompensatableStep',
+        Status__c = 'Completed',
+        Input__c = '{"test": 2}',
+        Output__c = '{"test": 20}'
+      ),
+      new Workflow_Step_Execution__c(
+        Workflow_Instance__c = insts[2].Id,
+        Step_Name__c = 'WorkflowDeadlineTest.TestCompensatableStep',
+        Status__c = 'Completed',
+        Input__c = '{"test": 3}',
+        Output__c = '{"test": 30}'
+      )
+    };
+    insert origExecs;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Verify all 3 are in Compensating status and have pre-created compensation steps
+    Set<Id> instIds = new Map<Id, Workflow_Instance__c>(insts).keySet();
+    List<Workflow_Instance__c> reloadedInsts = [
+      SELECT Id, Status__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :instIds
+    ];
+    System.assertEquals(3, reloadedInsts.size());
+    for (Workflow_Instance__c ri : reloadedInsts) {
+      System.assertEquals('Compensating', ri.Status__c);
+      System.assertEquals('Execution deadline exceeded', ri.Error_Message__c);
+    }
+
+    // Verify Workflow_Deadline records
+    List<Workflow_Step_Execution__c> deadlineSteps = [
+      SELECT Workflow_Instance__c, Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :instIds
+        AND Step_Name__c = 'Workflow_Deadline'
+    ];
+    System.assertEquals(3, deadlineSteps.size());
+
+    // Verify compensation steps were pre-created correctly
+    List<Workflow_Step_Execution__c> compSteps = [
+      SELECT Workflow_Instance__c, Step_Name__c, Status__c, Input__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :instIds
+        AND Step_Name__c = 'WorkflowDeadlineTest.TestCompensatableStep_Compensate'
+    ];
+    System.assertEquals(3, compSteps.size());
+    Map<Id, Workflow_Step_Execution__c> compByInstId = new Map<Id, Workflow_Step_Execution__c>();
+    for (Workflow_Step_Execution__c cs : compSteps) {
+      compByInstId.put(cs.Workflow_Instance__c, cs);
+    }
+    System.assertEquals('{"test": 1}', compByInstId.get(insts[0].Id).Input__c);
+    System.assertEquals('{"test": 2}', compByInstId.get(insts[1].Id).Input__c);
+    System.assertEquals('{"test": 3}', compByInstId.get(insts[2].Id).Input__c);
+  }
 }
 

@@ -6560,6 +6560,105 @@ public inherited sharing class WorkflowEngine {
     insert as system compStepExec;
   }
 
+  private static void preCreateFirstCompensationSteps(
+    List<Workflow_Instance__c> instances
+  ) {
+    if (instances == null || instances.isEmpty()) {
+      return;
+    }
+
+    Set<Id> instanceIds = new Set<Id>();
+    List<Workflow_Instance__c> validInstances = new List<Workflow_Instance__c>();
+    Map<Id, String> activeStepNames = new Map<Id, String>();
+    Map<Id, String> compStepNames = new Map<Id, String>();
+
+    for (Workflow_Instance__c instance : instances) {
+      if (String.isBlank(instance.Compensation_Stack__c)) {
+        continue;
+      }
+      List<String> stack;
+      try {
+        stack = (List<String>) JSON.deserialize(
+          instance.Compensation_Stack__c,
+          List<String>.class
+        );
+      } catch (Exception ex) {
+        continue;
+      }
+      if (stack == null || stack.isEmpty()) {
+        continue;
+      }
+      String activeStepName = stack[stack.size() - 1];
+      String compensationStepLogName = activeStepName + '_Compensate';
+
+      instanceIds.add(instance.Id);
+      validInstances.add(instance);
+      activeStepNames.put(instance.Id, activeStepName);
+      compStepNames.put(instance.Id, compensationStepLogName);
+    }
+
+    if (instanceIds.isEmpty()) {
+      return;
+    }
+
+    // Query existing compensation steps in bulk to avoid duplicates
+    List<Workflow_Step_Execution__c> existingCompSteps = [
+      SELECT Workflow_Instance__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :instanceIds
+        AND Step_Name__c LIKE '%\_Compensate'
+      WITH SYSTEM_MODE
+    ];
+    Set<String> existingKeys = new Set<String>();
+    for (Workflow_Step_Execution__c step : existingCompSteps) {
+      existingKeys.add(step.Workflow_Instance__c + ':' + step.Step_Name__c);
+    }
+
+    // Query original executions to map Input/Output in bulk
+    List<Workflow_Step_Execution__c> originalExecs = [
+      SELECT Workflow_Instance__c, Step_Name__c, Input__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :instanceIds
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+
+    // Build a map of the latest execution for each step to resolve Input/Output
+    Map<String, Workflow_Step_Execution__c> latestOrigExecs = new Map<String, Workflow_Step_Execution__c>();
+    for (Workflow_Step_Execution__c exec : originalExecs) {
+      String key = exec.Workflow_Instance__c + ':' + exec.Step_Name__c;
+      if (!latestOrigExecs.containsKey(key)) {
+        latestOrigExecs.put(key, exec);
+      }
+    }
+
+    List<Workflow_Step_Execution__c> stepsToInsert = new List<Workflow_Step_Execution__c>();
+    for (Workflow_Instance__c instance : validInstances) {
+      String compName = compStepNames.get(instance.Id);
+      String key = instance.Id + ':' + compName;
+      if (existingKeys.contains(key)) {
+        continue;
+      }
+
+      String activeName = activeStepNames.get(instance.Id);
+      String origKey = instance.Id + ':' + activeName;
+      Workflow_Step_Execution__c origExec = latestOrigExecs.get(origKey);
+
+      Workflow_Step_Execution__c compStepExec = new Workflow_Step_Execution__c();
+      compStepExec.Workflow_Instance__c = instance.Id;
+      compStepExec.Step_Name__c = compName;
+      compStepExec.Status__c = 'Pending';
+      compStepExec.Input__c = (origExec != null) ? origExec.Input__c : null;
+      compStepExec.Output__c = (origExec != null) ? origExec.Output__c : null;
+      compStepExec.Retry_Count__c = 0;
+      stepsToInsert.add(compStepExec);
+    }
+
+    if (!stepsToInsert.isEmpty()) {
+      insert as system stepsToInsert;
+    }
+  }
+
   /**
    * Cancels a workflow instance, aborts scheduled jobs, and optionally runs saga compensations.
    */
@@ -7505,19 +7604,7 @@ public inherited sharing class WorkflowEngine {
         insert as system deadlineStepsToInsert;
       }
 
-      for (Workflow_Instance__c inst : expiredInstances) {
-        Boolean hasCompensations = false;
-        if (String.isNotBlank(inst.Compensation_Stack__c)) {
-          List<String> stack = (List<String>) JSON.deserialize(
-            inst.Compensation_Stack__c,
-            List<String>.class
-          );
-          hasCompensations = !stack.isEmpty();
-        }
-        if (hasCompensations) {
-          preCreateFirstCompensationStep(inst);
-        }
-      }
+      preCreateFirstCompensationSteps(expiredInstances);
 
       if (!instancesToFail.isEmpty()) {
         update as system instancesToFail;
