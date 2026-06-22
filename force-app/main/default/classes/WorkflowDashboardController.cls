@@ -292,7 +292,7 @@ public inherited sharing class WorkflowDashboardController {
     }
 
     String query =
-      'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c ' +
+      'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c, Deadline_At__c ' +
       'FROM Workflow_Instance__c' +
       buildWhereClause(workflowName, status, searchTerm);
 
@@ -343,6 +343,7 @@ public inherited sharing class WorkflowDashboardController {
         'Error_Message__c' => inst.Error_Message__c,
         'Async_Job_Id__c' => inst.Async_Job_Id__c,
         'Sleep_Until__c' => inst.Sleep_Until__c,
+        'Deadline_At__c' => inst.Deadline_At__c,
         'waitingOn' => waitingOn,
         'idleMinutes' => idleMinutes,
         'stalled' => stalled
@@ -381,7 +382,7 @@ public inherited sharing class WorkflowDashboardController {
     stalledCutoff = Datetime.now().addMinutes(-threshold);
 
     String query =
-      'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c ' +
+      'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c, Deadline_At__c ' +
       'FROM Workflow_Instance__c WHERE ' +
       buildStalledWhereClause(workflowName, searchTerm) +
       ' ORDER BY LastModifiedDate ASC LIMIT :STALLED_CANDIDATE_CAP';
@@ -439,6 +440,7 @@ public inherited sharing class WorkflowDashboardController {
           'Error_Message__c' => inst.Error_Message__c,
           'Async_Job_Id__c' => inst.Async_Job_Id__c,
           'Sleep_Until__c' => inst.Sleep_Until__c,
+          'Deadline_At__c' => inst.Deadline_At__c,
           'waitingOn' => waitingOn,
           'idleMinutes' => idleMinutes,
           'stalled' => true
@@ -927,7 +929,8 @@ public inherited sharing class WorkflowDashboardController {
         Previous_Instance__r.Name,
         Async_Job_Id__c,
         Sleep_Until__c,
-        Compensation_Stack__c
+        Compensation_Stack__c,
+        Deadline_At__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE

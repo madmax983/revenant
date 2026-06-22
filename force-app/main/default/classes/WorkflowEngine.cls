@@ -73,6 +73,9 @@ public inherited sharing class WorkflowEngine {
   // Max number of sleeping instances a single heartbeat resumes, for the same reason.
   @TestVisible
   private static Integer WATCHDOG_RESUME_BATCH_SIZE = 200;
+  // Max number of expired instances a single heartbeat fails/compensates, for the same reason.
+  @TestVisible
+  private static Integer WATCHDOG_DEADLINE_BATCH_SIZE = 100;
 
   static {
     try {
@@ -1084,6 +1087,13 @@ public inherited sharing class WorkflowEngine {
       if (defObj instanceof WorkflowDefinition) {
         instance.Current_Step__c = ((WorkflowDefinition) defObj)
           .getInitialStep();
+      }
+      if (defObj instanceof ExecutionTimeoutConfigurable) {
+        Integer timeoutSecs = ((ExecutionTimeoutConfigurable) defObj)
+          .getExecutionTimeoutSeconds();
+        if (timeoutSecs != null) {
+          instance.Deadline_At__c = DateTime.now().addSeconds(timeoutSecs);
+        }
       }
     } else {
       instance.Definition_Version__c = 1;
@@ -4064,11 +4074,19 @@ public inherited sharing class WorkflowEngine {
 
       // Resolve initial step for successor instance
       String initialStep = null;
+      Datetime nextDeadline = null;
       Type wflowType = Type.forName(instance.Workflow_Name__c);
       if (wflowType != null) {
         Object defObj = wflowType.newInstance();
         if (defObj instanceof WorkflowDefinition) {
           initialStep = ((WorkflowDefinition) defObj).getInitialStep();
+        }
+        if (defObj instanceof ExecutionTimeoutConfigurable) {
+          Integer timeoutSecs = ((ExecutionTimeoutConfigurable) defObj)
+            .getExecutionTimeoutSeconds();
+          if (timeoutSecs != null) {
+            nextDeadline = DateTime.now().addSeconds(timeoutSecs);
+          }
         }
       }
 
@@ -4087,6 +4105,7 @@ public inherited sharing class WorkflowEngine {
         Previous_Instance__c = instance.Id,
         Definition_Version__c = instance.Definition_Version__c,
         Current_Step__c = initialStep,
+        Deadline_At__c = nextDeadline,
         // Use the predecessor's CreatedDate (when it started) rather than
         // System.now() (when it finished). This prevents a gap: records
         // modified during the predecessor's execution window are covered by
@@ -6541,6 +6560,105 @@ public inherited sharing class WorkflowEngine {
     insert as system compStepExec;
   }
 
+  private static void preCreateFirstCompensationSteps(
+    List<Workflow_Instance__c> instances
+  ) {
+    if (instances == null || instances.isEmpty()) {
+      return;
+    }
+
+    Set<Id> instanceIds = new Set<Id>();
+    List<Workflow_Instance__c> validInstances = new List<Workflow_Instance__c>();
+    Map<Id, String> activeStepNames = new Map<Id, String>();
+    Map<Id, String> compStepNames = new Map<Id, String>();
+
+    for (Workflow_Instance__c instance : instances) {
+      if (String.isBlank(instance.Compensation_Stack__c)) {
+        continue;
+      }
+      List<String> stack;
+      try {
+        stack = (List<String>) JSON.deserialize(
+          instance.Compensation_Stack__c,
+          List<String>.class
+        );
+      } catch (Exception ex) {
+        continue;
+      }
+      if (stack == null || stack.isEmpty()) {
+        continue;
+      }
+      String activeStepName = stack[stack.size() - 1];
+      String compensationStepLogName = activeStepName + '_Compensate';
+
+      instanceIds.add(instance.Id);
+      validInstances.add(instance);
+      activeStepNames.put(instance.Id, activeStepName);
+      compStepNames.put(instance.Id, compensationStepLogName);
+    }
+
+    if (instanceIds.isEmpty()) {
+      return;
+    }
+
+    // Query existing compensation steps in bulk to avoid duplicates
+    List<Workflow_Step_Execution__c> existingCompSteps = [
+      SELECT Workflow_Instance__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :instanceIds
+        AND Step_Name__c LIKE '%\_Compensate'
+      WITH SYSTEM_MODE
+    ];
+    Set<String> existingKeys = new Set<String>();
+    for (Workflow_Step_Execution__c step : existingCompSteps) {
+      existingKeys.add(step.Workflow_Instance__c + ':' + step.Step_Name__c);
+    }
+
+    // Query original executions to map Input/Output in bulk
+    List<Workflow_Step_Execution__c> originalExecs = [
+      SELECT Workflow_Instance__c, Step_Name__c, Input__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :instanceIds
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+
+    // Build a map of the latest execution for each step to resolve Input/Output
+    Map<String, Workflow_Step_Execution__c> latestOrigExecs = new Map<String, Workflow_Step_Execution__c>();
+    for (Workflow_Step_Execution__c exec : originalExecs) {
+      String key = exec.Workflow_Instance__c + ':' + exec.Step_Name__c;
+      if (!latestOrigExecs.containsKey(key)) {
+        latestOrigExecs.put(key, exec);
+      }
+    }
+
+    List<Workflow_Step_Execution__c> stepsToInsert = new List<Workflow_Step_Execution__c>();
+    for (Workflow_Instance__c instance : validInstances) {
+      String compName = compStepNames.get(instance.Id);
+      String key = instance.Id + ':' + compName;
+      if (existingKeys.contains(key)) {
+        continue;
+      }
+
+      String activeName = activeStepNames.get(instance.Id);
+      String origKey = instance.Id + ':' + activeName;
+      Workflow_Step_Execution__c origExec = latestOrigExecs.get(origKey);
+
+      Workflow_Step_Execution__c compStepExec = new Workflow_Step_Execution__c();
+      compStepExec.Workflow_Instance__c = instance.Id;
+      compStepExec.Step_Name__c = compName;
+      compStepExec.Status__c = 'Pending';
+      compStepExec.Input__c = (origExec != null) ? origExec.Input__c : null;
+      compStepExec.Output__c = (origExec != null) ? origExec.Output__c : null;
+      compStepExec.Retry_Count__c = 0;
+      stepsToInsert.add(compStepExec);
+    }
+
+    if (!stepsToInsert.isEmpty()) {
+      insert as system stepsToInsert;
+    }
+  }
+
   /**
    * Cancels a workflow instance, aborts scheduled jobs, and optionally runs saga compensations.
    */
@@ -6816,16 +6934,24 @@ public inherited sharing class WorkflowEngine {
    * Aborts all Scheduled Apex cron jobs associated with the workflow instance.
    */
   public static void abortScheduledJobs(Id instanceId) {
-    String sleepPrefix = 'WorkflowSleep_' + instanceId + '_%';
-    String retryPrefix = 'WorkflowRetry_' + instanceId + '_%';
-    String timeoutPrefix = 'Timeout_' + instanceId + '_%';
+    abortScheduledJobs(new Set<Id>{ instanceId });
+  }
+
+  public static void abortScheduledJobs(Set<Id> instanceIds) {
+    if (instanceIds == null || instanceIds.isEmpty()) {
+      return;
+    }
+    List<String> nameLikeFilters = new List<String>();
+    for (Id instanceId : instanceIds) {
+      nameLikeFilters.add('WorkflowSleep_' + instanceId + '_%');
+      nameLikeFilters.add('WorkflowRetry_' + instanceId + '_%');
+      nameLikeFilters.add('Timeout_' + instanceId + '_%');
+    }
     List<CronTrigger> triggers = [
       SELECT Id
       FROM CronTrigger
       WHERE
-        CronJobDetail.Name LIKE :sleepPrefix
-        OR CronJobDetail.Name LIKE :retryPrefix
-        OR CronJobDetail.Name LIKE :timeoutPrefix
+        CronJobDetail.Name LIKE :nameLikeFilters
       WITH SYSTEM_MODE
     ];
     for (CronTrigger triggerJob : triggers) {
@@ -7413,6 +7539,103 @@ public inherited sharing class WorkflowEngine {
       // transitioned to a terminal state (Failed) emit — Compensating parents are
       // skipped by the publisher.
       watchdogTerminalInstances.addAll(instancesToUpdate.values());
+    }
+
+    // 1b. Process Exceeded Execution Deadlines (bounded per heartbeat).
+    List<Workflow_Instance__c> expiredInstances = [
+      SELECT
+        Id,
+        Name,
+        Status__c,
+        Deadline_At__c,
+        Compensation_Stack__c,
+        Error_Message__c,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c,
+        Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE
+        Status__c IN ('Pending', 'Running', 'Suspended')
+        AND Deadline_At__c <= :now
+      WITH SYSTEM_MODE
+      LIMIT :WATCHDOG_DEADLINE_BATCH_SIZE
+      FOR UPDATE
+    ];
+
+    if (!expiredInstances.isEmpty()) {
+      List<Workflow_Step_Execution__c> deadlineStepsToInsert = new List<Workflow_Step_Execution__c>();
+      List<Workflow_Instance__c> instancesToFail = new List<Workflow_Instance__c>();
+      List<Id> deadlineOrchestratorIds = new List<Id>();
+
+      // Bulk abort all scheduled jobs for all expired instances
+      Set<Id> expiredInstanceIds = new Set<Id>();
+      for (Workflow_Instance__c inst : expiredInstances) {
+        expiredInstanceIds.add(inst.Id);
+      }
+      abortScheduledJobs(expiredInstanceIds);
+
+      for (Workflow_Instance__c inst : expiredInstances) {
+        inst.Sleep_Until__c = null;
+        inst.Async_Job_Id__c = null;
+
+        // Check if there are compensations to run
+        Boolean hasCompensations = false;
+        List<String> stack = new List<String>();
+        if (String.isNotBlank(inst.Compensation_Stack__c)) {
+          stack = (List<String>) JSON.deserialize(
+            inst.Compensation_Stack__c,
+            List<String>.class
+          );
+          hasCompensations = !stack.isEmpty();
+        }
+
+        // Append a new failed step execution record (audit trail)
+        Workflow_Step_Execution__c deadlineStep = new Workflow_Step_Execution__c(
+          Workflow_Instance__c = inst.Id,
+          Step_Name__c = 'Workflow_Deadline',
+          Status__c = 'Failed',
+          Error_Details__c = 'Execution deadline exceeded',
+          Retry_Count__c = 0
+        );
+        deadlineStepsToInsert.add(deadlineStep);
+
+        if (hasCompensations) {
+          inst.Status__c = 'Compensating';
+          inst.Error_Message__c = 'Execution deadline exceeded';
+          instancesToFail.add(inst);
+          deadlineOrchestratorIds.add(inst.Id);
+        } else {
+          inst.Status__c = 'Failed';
+          inst.Error_Message__c = 'Execution deadline exceeded';
+          instancesToFail.add(inst);
+          watchdogTerminalInstances.add(inst);
+        }
+      }
+
+      if (!deadlineStepsToInsert.isEmpty()) {
+        insert as system deadlineStepsToInsert;
+      }
+
+      preCreateFirstCompensationSteps(expiredInstances);
+
+      if (!instancesToFail.isEmpty()) {
+        update as system instancesToFail;
+      }
+
+      for (Workflow_Instance__c inst : instancesToFail) {
+        if (inst.Status__c == 'Failed') {
+          WorkflowAlertManager.sendAlert(inst, inst.Error_Message__c);
+        }
+      }
+
+      if (!deadlineOrchestratorIds.isEmpty()) {
+        if (Test.isRunningTest() && disableQueueableInTest) {
+          // Do nothing
+        } else {
+          enqueueOrchestrators(deadlineOrchestratorIds);
+        }
+      }
     }
 
     // 2. Process Sleep Resumptions (bounded per heartbeat; backlog drains on subsequent
