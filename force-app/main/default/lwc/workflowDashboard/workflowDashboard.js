@@ -24,6 +24,7 @@ import pauseDefinition from "@salesforce/apex/WorkflowDashboardController.pauseD
 import resumeDefinition from "@salesforce/apex/WorkflowDashboardController.resumeDefinition";
 import getPausedDefinitions from "@salesforce/apex/WorkflowDashboardController.getPausedDefinitions";
 import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
+import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 
 export default class WorkflowDashboard extends LightningElement {
   instances = [];
@@ -94,6 +95,21 @@ export default class WorkflowDashboard extends LightningElement {
   showingStalled = false;
   stalledCountData = { count: 0, capped: false };
 
+  // Per-definition health trends (success rate & throughput over a window)
+  trendWindow = "24h";
+  trendRows = [];
+  loadingTrends = false;
+  trendsPanelCollapsed = false;
+  // Incremented on every fetchTrends() call; the .then() callback checks its
+  // captured snapshot against the current value and discards stale responses.
+  _trendRequestId = 0;
+  // Stable option array (see note above workflowOptions on why getters are avoided).
+  trendWindowOptions = [
+    { label: "Last 1 hour", value: "1h" },
+    { label: "Last 24 hours", value: "24h" },
+    { label: "Last 7 days", value: "7d" },
+  ];
+
   // Confirmation modals
   redriveModalOpen = false;
   redriveCount = 0;
@@ -130,7 +146,14 @@ export default class WorkflowDashboard extends LightningElement {
   ];
 
   connectedCallback() {
+    try {
+      this.trendsPanelCollapsed =
+        localStorage.getItem("revenant_dashboard_trends_collapsed") === "true";
+    } catch (_) {
+      // localStorage may be blocked by browser privacy settings; default stays false.
+    }
     this.fetchInstances(false);
+    this.fetchTrends();
     this.startAutoRefresh();
   }
 
@@ -260,7 +283,12 @@ export default class WorkflowDashboard extends LightningElement {
 
     const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null });
 
-    return Promise.all([instancesPromise, statsPromise, stalledCountPromise, unroutedCountPromise])
+    return Promise.all([
+      instancesPromise,
+      statsPromise,
+      stalledCountPromise,
+      unroutedCountPromise,
+    ])
       .then(([result, statsResult, stalledResult, unroutedResult]) => {
         const formatted = result.map((inst) => this.formatInstance(inst));
 
@@ -344,7 +372,12 @@ export default class WorkflowDashboard extends LightningElement {
 
     const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null });
 
-    return Promise.all([instancesPromise, statsPromise, stalledCountPromise, unroutedCountPromise])
+    return Promise.all([
+      instancesPromise,
+      statsPromise,
+      stalledCountPromise,
+      unroutedCountPromise,
+    ])
       .then(([result, statsResult, stalledResult, unroutedResult]) => {
         this.instances = result.map((inst) => this.formatInstance(inst));
         this.stats = statsResult;
@@ -406,6 +439,99 @@ export default class WorkflowDashboard extends LightningElement {
 
   get stalledFilterVariant() {
     return this.showingStalled ? "brand" : "neutral";
+  }
+
+  // Pluralizes "instance(s)" in the re-drive confirmation copy. A getter is used
+  // because LWC templates do not support inline conditional expressions.
+  get redrivePluralSuffix() {
+    return this.redriveCount === 1 ? "" : "s";
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // DEFINITION HEALTH TRENDS
+  // ────────────────────────────────────────────────────────────────────────
+
+  fetchTrends() {
+    this.loadingTrends = true;
+    const requestId = ++this._trendRequestId;
+    return getDefinitionTrends({ windowKey: this.trendWindow })
+      .then((result) => {
+        if (requestId !== this._trendRequestId) return;
+        const rows = (result && result.rows) || [];
+        this.trendRows = rows.map((row) => ({
+          ...row,
+          successRateDisplay:
+            row.successRate == null ? "—" : `${row.successRate}%`,
+          successRateClass:
+            row.successRate != null && row.successRate < 90
+              ? "text-red"
+              : "text-green",
+          failureCountClass: row.failureCount > 0 ? "text-red" : "",
+          throughputDisplay:
+            row.throughputPerHour == null
+              ? `${row.terminalCount}`
+              : `${row.terminalCount} (${row.throughputPerHour}/hr)`,
+        }));
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to load definition trends: " +
+            (error.body ? error.body.message : error.message),
+          "error",
+        );
+      })
+      .finally(() => {
+        if (requestId === this._trendRequestId) {
+          this.loadingTrends = false;
+        }
+      });
+  }
+
+  handleTrendWindowChange(event) {
+    this.trendWindow = event.detail ? event.detail.value : event.target.value;
+    this.fetchTrends();
+  }
+
+  get hasTrendRows() {
+    return this.trendRows.length > 0;
+  }
+
+  // Only show the spinner on initial load (when no rows are cached yet).
+  // Subsequent background refreshes update rows in-place without flicker.
+  get showTrendsSpinner() {
+    return this.loadingTrends && !this.hasTrendRows;
+  }
+
+  get trendWindowLabel() {
+    const option = this.trendWindowOptions.find(
+      (o) => o.value === this.trendWindow,
+    );
+    return option ? option.label : this.trendWindow;
+  }
+
+  get trendsPanelChevron() {
+    return this.trendsPanelCollapsed
+      ? "utility:chevronright"
+      : "utility:chevrondown";
+  }
+
+  get trendsPanelHeaderClass() {
+    const base =
+      "slds-grid slds-grid_align-spread slds-grid_vertical-align-center";
+    return this.trendsPanelCollapsed ? base : `${base} slds-m-bottom_small`;
+  }
+
+  handleToggleTrendsPanel() {
+    this.trendsPanelCollapsed = !this.trendsPanelCollapsed;
+    try {
+      localStorage.setItem(
+        "revenant_dashboard_trends_collapsed",
+        String(this.trendsPanelCollapsed),
+      );
+    } catch (_) {
+      // Silently ignore if localStorage is unavailable.
+    }
   }
 
   formatInstance(inst) {
@@ -623,6 +749,7 @@ export default class WorkflowDashboard extends LightningElement {
     if (this.viewingDrain) {
       this.loadDrain(true);
     }
+    this.fetchTrends();
     this.refreshInstances().then(() => {
       this.showToast("Success", "Workflow dashboard refreshed", "success");
     });
@@ -690,8 +817,13 @@ export default class WorkflowDashboard extends LightningElement {
     this.loadingUnrouted = true;
     const buster = new Date().getTime().toString();
     Promise.all([
-      getUnroutedSignals({ searchTerm: null, limitSize: 50, offsetSize: 0, cacheBuster: buster }),
-      getUnroutedSignalCount({ searchTerm: null })
+      getUnroutedSignals({
+        searchTerm: null,
+        limitSize: 50,
+        offsetSize: 0,
+        cacheBuster: buster,
+      }),
+      getUnroutedSignalCount({ searchTerm: null }),
     ])
       .then(([signals, countResult]) => {
         this.unroutedSignals = signals || [];
@@ -699,7 +831,11 @@ export default class WorkflowDashboard extends LightningElement {
       })
       .catch((err) => {
         this.dispatchEvent(
-          new ShowToastEvent({ title: "Error", message: err.body ? err.body.message : String(err), variant: "error" })
+          new ShowToastEvent({
+            title: "Error",
+            message: err.body ? err.body.message : String(err),
+            variant: "error",
+          }),
         );
       })
       .finally(() => {
@@ -720,8 +856,8 @@ export default class WorkflowDashboard extends LightningElement {
             message: matched
               ? "The signal was re-delivered and the workflow was woken."
               : "No active workflow matched — signal remains Unrouted.",
-            variant: matched ? "success" : "warning"
-          })
+            variant: matched ? "success" : "warning",
+          }),
         );
         if (matched) {
           this.loadUnroutedSignals();
@@ -729,7 +865,11 @@ export default class WorkflowDashboard extends LightningElement {
       })
       .catch((err) => {
         this.dispatchEvent(
-          new ShowToastEvent({ title: "Error", message: err.body ? err.body.message : String(err), variant: "error" })
+          new ShowToastEvent({
+            title: "Error",
+            message: err.body ? err.body.message : String(err),
+            variant: "error",
+          }),
         );
       })
       .finally(() => {
@@ -863,9 +1003,8 @@ export default class WorkflowDashboard extends LightningElement {
       .then((rows) => {
         this.concurrencyRows = (rows || []).map((r) => ({
           ...r,
-          ceilingLabel: r.ceiling === null || r.ceiling === undefined
-            ? "—"
-            : r.ceiling,
+          ceilingLabel:
+            r.ceiling === null || r.ceiling === undefined ? "—" : r.ceiling,
           atCapacity:
             r.ceiling !== null &&
             r.ceiling !== undefined &&
@@ -1013,7 +1152,10 @@ export default class WorkflowDashboard extends LightningElement {
   // Suspended, not Failed; showing the button there would re-drive hidden failures).
   get canRedriveMatching() {
     return (
-      this.stats && this.stats.failed > 0 && !this.redriving && !this.showingStalled
+      this.stats &&
+      this.stats.failed > 0 &&
+      !this.redriving &&
+      !this.showingStalled
     );
   }
 
@@ -1416,7 +1558,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.showToast(
             "Resumed",
             "Resumed " + label + ". Parked instances are re-queued.",
-            "success"
+            "success",
           );
           this.loadDoctorStatus();
           this.refreshInstances();
@@ -1426,7 +1568,7 @@ export default class WorkflowDashboard extends LightningElement {
             "Error",
             "Resume failed: " +
               (error.body ? error.body.message : error.message),
-            "error"
+            "error",
           );
         })
         .finally(() => {
@@ -1435,7 +1577,7 @@ export default class WorkflowDashboard extends LightningElement {
     } else {
       pauseDefinition({
         workflowName: this.pauseModalTarget,
-        reason: this.pauseModalReason
+        reason: this.pauseModalReason,
       })
         .then(() => {
           const label =
@@ -1445,7 +1587,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.showToast(
             "Paused",
             "Paused " + label + ". New steps will park at the chain handoff.",
-            "success"
+            "success",
           );
           this.loadDoctorStatus();
           this.refreshInstances();
@@ -1453,8 +1595,9 @@ export default class WorkflowDashboard extends LightningElement {
         .catch((error) => {
           this.showToast(
             "Error",
-            "Pause failed: " + (error.body ? error.body.message : error.message),
-            "error"
+            "Pause failed: " +
+              (error.body ? error.body.message : error.message),
+            "error",
           );
         })
         .finally(() => {

@@ -291,3 +291,8 @@
 .clickable-header:hover .text-secondary {
   color: hsl(210, 100%, 45%);
 }
+
+/* Window selector in the Definition Health trends panel header. */
+.trend-window-selector {
+  width: 12rem;
+}

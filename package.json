@@ -1,5 +1,11 @@
 {
+  "scripts": {
+    "test:unit": "sfdx-lwc-jest",
+    "test:unit:watch": "sfdx-lwc-jest --watch",
+    "test:unit:coverage": "sfdx-lwc-jest --coverage"
+  },
   "devDependencies": {
+    "@salesforce/sfdx-lwc-jest": "^7.1.2",
     "prettier": "3.8.4",
     "prettier-plugin-apex": "2.2.6"
   }
