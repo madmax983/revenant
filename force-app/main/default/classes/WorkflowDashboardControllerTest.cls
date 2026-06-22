@@ -112,6 +112,28 @@ public class WorkflowDashboardControllerTest {
       definitions.contains('SagaWorkflowExample.SagaWorkflow'),
       'Should find SagaWorkflowExample.SagaWorkflow inner class'
     );
+    // Regression (PR #?, 2026-06-20): the @isTest-substring guard skipped any
+    // class merely *mentioning* @isTest in a comment. Both AI examples document
+    // @isTest in their doc comments, so they silently fell out of discovery.
+    System.assert(
+      definitions.contains('AiSupportTriageWorkflowExample.TriageWorkflow'),
+      'Should find AiSupportTriageWorkflowExample.TriageWorkflow despite the ' +
+        '@isTest mention in its doc comment'
+    );
+    System.assert(
+      definitions.contains(
+        'AgentConversationWorkflowExample.AgentConversationWorkflow'
+      ),
+      'Should find AgentConversationWorkflowExample.AgentConversationWorkflow ' +
+        'despite the @isTest mention in its doc comment'
+    );
+    // Regression: the discovery regex matched comment prose. A doc comment in
+    // WorkflowScheduleSweeper reads "...a class that implements WorkflowDefinition",
+    // which captured "that" as a phantom definition.
+    System.assert(
+      !definitions.contains('WorkflowScheduleSweeper.that'),
+      'Comment prose must not be scanned as a definition (no phantom ".that")'
+    );
   }
 
   @isTest
@@ -864,6 +886,39 @@ public class WorkflowDashboardControllerTest {
     System.assert(status.containsKey('hasElasticLimit'));
     System.assert(status.containsKey('elasticAsyncValue'));
     System.assert(status.containsKey('elasticAsyncLimit'));
+  }
+
+  @isTest
+  static void testConcurrencyStatus() {
+    // A governed workflow with a durable counter and a parked instance.
+    ConcurrencyGate.mockConfigs.put(
+      'DashConcWf',
+      (Concurrency_Config__mdt) JSON.deserialize(
+        '{"DeveloperName":"DashConcWf","Max_Concurrent_Instances__c":5}',
+        Concurrency_Config__mdt.class
+      )
+    );
+    insert new Concurrency_State__c(
+      Workflow_Definition__c = 'DashConcWf',
+      In_Flight_Count__c = 5
+    );
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = 'DashConcWf',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'dash-parked-1',
+      Concurrency_Parked__c = true
+    );
+
+    Test.startTest();
+    List<Map<String, Object>> rows = WorkflowDashboardController.getConcurrencyStatus();
+    Test.stopTest();
+
+    System.assertEquals(1, rows.size(), 'One governed workflow row expected');
+    Map<String, Object> row = rows[0];
+    System.assertEquals('DashConcWf', row.get('workflowName'));
+    System.assertEquals(5, row.get('ceiling'), 'Ceiling surfaced from config');
+    System.assertEquals(5, row.get('inFlight'), 'In-flight surfaced from counter');
+    System.assertEquals(1, row.get('parked'), 'Parked count surfaced');
   }
 
   @isTest

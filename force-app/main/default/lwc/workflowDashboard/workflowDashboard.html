@@ -421,6 +421,36 @@
                                     </template>
                                 </div>
 
+                                <!-- Concurrency Limits -->
+                                <div class="slds-m-bottom_large">
+                                    <h3 class="slds-text-heading_small slds-m-bottom_small font-outfit">Concurrency Limits</h3>
+                                    <template if:true={hasConcurrencyRows}>
+                                        <div class="panel-card slds-p-around_medium">
+                                            <template for:each={concurrencyRows} for:item="cc">
+                                                <div key={cc.workflowName} class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-p-vertical_x-small border-bottom">
+                                                    <div>
+                                                        <div class="slds-text-body_regular font-bold">{cc.workflowName}</div>
+                                                        <div class="slds-text-body_small slds-text-color_weak">
+                                                            {cc.parked} parked / throttled instance(s)
+                                                        </div>
+                                                    </div>
+                                                    <div class="slds-text-align_right">
+                                                        <div class="slds-text-body_regular font-bold">
+                                                            {cc.inFlight} / {cc.ceilingLabel}
+                                                        </div>
+                                                        <div class="slds-text-body_small slds-text-color_weak">in-flight / ceiling</div>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </template>
+                                    <template if:false={hasConcurrencyRows}>
+                                        <div class="panel-card slds-p-around_medium slds-text-color_weak slds-text-align_center">
+                                            No workflows have a concurrency ceiling configured.
+                                        </div>
+                                    </template>
+                                </div>
+
                                 <!-- Latest Watchdog Instance Details -->
                                 <template if:true={doctorData.latestJob}>
                                     <div>
