@@ -4071,11 +4071,19 @@ public inherited sharing class WorkflowEngine {
 
       // Resolve initial step for successor instance
       String initialStep = null;
+      Datetime nextDeadline = null;
       Type wflowType = Type.forName(instance.Workflow_Name__c);
       if (wflowType != null) {
         Object defObj = wflowType.newInstance();
         if (defObj instanceof WorkflowDefinition) {
           initialStep = ((WorkflowDefinition) defObj).getInitialStep();
+        }
+        if (defObj instanceof ExecutionTimeoutConfigurable) {
+          Integer timeoutSecs = ((ExecutionTimeoutConfigurable) defObj)
+            .getExecutionTimeoutSeconds();
+          if (timeoutSecs != null) {
+            nextDeadline = DateTime.now().addSeconds(timeoutSecs);
+          }
         }
       }
 
@@ -4094,6 +4102,7 @@ public inherited sharing class WorkflowEngine {
         Previous_Instance__c = instance.Id,
         Definition_Version__c = instance.Definition_Version__c,
         Current_Step__c = initialStep,
+        Deadline_At__c = nextDeadline,
         // Use the predecessor's CreatedDate (when it started) rather than
         // System.now() (when it finished). This prevents a gap: records
         // modified during the predecessor's execution window are covered by
