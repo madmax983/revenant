@@ -127,7 +127,7 @@
                 </div>
             </div>
 
-            <template if:true={loadingTrends}>
+            <template if:true={showTrendsSpinner}>
                 <div class="slds-align_absolute-center slds-p-around_medium">
                     <lightning-spinner alternative-text="Loading trends..." size="small"></lightning-spinner>
                 </div>
@@ -161,7 +161,7 @@
             </template>
 
             <template if:false={hasTrendRows}>
-                <template if:false={loadingTrends}>
+                <template if:false={showTrendsSpinner}>
                     <div class="slds-align_absolute-center slds-p-around_medium slds-text-color_weak" data-id="trend-empty">
                         No terminal activity in this window.
                     </div>

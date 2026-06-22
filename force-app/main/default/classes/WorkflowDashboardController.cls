@@ -762,16 +762,18 @@ public inherited sharing class WorkflowDashboardController {
   };
   private static final String TREND_DEFAULT_WINDOW = '24h';
 
-  // Statuses counted as a successful terminal outcome by getDefinitionTrends.
-  // Kept identical to the getWorkflowStats snapshot convention so the trend panel
-  // and the snapshot stat cards never disagree.
+  // Terminal statuses classified as a successful outcome by getDefinitionTrends.
+  // CompensationFailed is intentionally absent from FAILURE_STATUSES: it is a
+  // non-terminal status (WorkflowInstanceTrigger never stamps Terminal_At__c for
+  // it), so the windowed query can never surface such instances. getWorkflowStats'
+  // snapshot "failed" bucket does include CompensationFailed because it queries
+  // all instances without a Terminal_At__c filter.
   private static final Set<String> SUCCESS_STATUSES = new Set<String>{
     'Completed',
     'ContinuedAsNew'
   };
   private static final Set<String> FAILURE_STATUSES = new Set<String>{
     'Failed',
-    'CompensationFailed',
     'Compensated',
     'Cancelled'
   };
@@ -780,10 +782,15 @@ public inherited sharing class WorkflowDashboardController {
    * Per-definition success-rate and throughput over a selectable recent window.
    *
    * Answers "is this workflow definition healthier or sicker than it was an hour
-   * ago?" without writing SOQL. The window is computed against Terminal_At__c (not
-   * CreatedDate) so a long-running instance that *finished* inside the window is
-   * counted in that window. Governor-safe by construction: a single bounded SOQL
-   * aggregate (GROUP BY) — no per-instance rows are materialized into heap.
+   * ago?". The window is computed against Terminal_At__c (not CreatedDate) so a
+   * long-running instance that *finished* inside the window is counted in that
+   * window. Uses a single GROUP BY aggregate — no per-instance rows are
+   * materialized into heap.
+   *
+   * Governor note: Salesforce counts the underlying rows scanned by an aggregate
+   * query toward the 50,000 synchronous query-row limit. On orgs with >50k
+   * terminal instances in the selected window the query will throw LimitException.
+   * Move to an async context if governor pressure is observed in practice.
    *
    * @param windowKey one of '1h' | '24h' | '7d' (blank/unknown → 24h)
    * @return Map with 'windowKey', 'windowHours', and 'rows' — a List<Map<String,Object>>
@@ -879,7 +886,6 @@ public inherited sharing class WorkflowDashboardController {
         'successCount' => successCount,
         'failureCount' => failureCount,
         'successRate' => successRate,
-        'throughputPerWindow' => terminal,
         'throughputPerHour' => throughputPerHour
       };
     }

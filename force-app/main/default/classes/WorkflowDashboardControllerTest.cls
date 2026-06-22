@@ -515,8 +515,11 @@ public class WorkflowDashboardControllerTest {
         )
       );
     }
-    // SagaWorkflow: exercises the full bucketing convention.
-    // success = ContinuedAsNew; failure = Compensated / Cancelled / CompensationFailed
+    // SagaWorkflow: exercises the full bucketing convention for genuinely terminal
+    // statuses. CompensationFailed is intentionally omitted: it is non-terminal
+    // and WorkflowInstanceTrigger never stamps Terminal_At__c for it, so the
+    // windowed query can never see such instances in production.
+    // success = ContinuedAsNew; failure = Compensated / Cancelled / Failed
     insts.add(
       new Workflow_Instance__c(
         Workflow_Name__c = 'SagaWorkflow',
@@ -541,7 +544,7 @@ public class WorkflowDashboardControllerTest {
     insts.add(
       new Workflow_Instance__c(
         Workflow_Name__c = 'SagaWorkflow',
-        Status__c = 'CompensationFailed',
+        Status__c = 'Failed',
         Terminal_At__c = now
       )
     );
@@ -574,10 +577,10 @@ public class WorkflowDashboardControllerTest {
       (Decimal) onboarding.get('successRate'),
       'Success rate should be success/terminal as a percent'
     );
-    System.assertEquals(
-      5,
-      onboarding.get('throughputPerWindow'),
-      'Throughput per window equals terminal count'
+    System.assertNotEquals(
+      null,
+      onboarding.get('throughputPerHour'),
+      'throughputPerWindow was removed; throughputPerHour must be present'
     );
     System.assertEquals(
       0.21,
@@ -597,7 +600,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(
       3,
       saga.get('failureCount'),
-      'Compensated/Cancelled/CompensationFailed are failures'
+      'Compensated/Cancelled/Failed are failures; CompensationFailed excluded (non-terminal)'
     );
     System.assertEquals(25.0, (Decimal) saga.get('successRate'));
   }

@@ -99,6 +99,9 @@ export default class WorkflowDashboard extends LightningElement {
   trendWindow = "24h";
   trendRows = [];
   loadingTrends = false;
+  // Incremented on every fetchTrends() call; the .then() callback checks its
+  // captured snapshot against the current value and discards stale responses.
+  _trendRequestId = 0;
   // Stable option array (see note above workflowOptions on why getters are avoided).
   trendWindowOptions = [
     { label: "Last 1 hour", value: "1h" },
@@ -443,8 +446,10 @@ export default class WorkflowDashboard extends LightningElement {
 
   fetchTrends() {
     this.loadingTrends = true;
+    const requestId = ++this._trendRequestId;
     return getDefinitionTrends({ windowKey: this.trendWindow })
       .then((result) => {
+        if (requestId !== this._trendRequestId) return;
         const rows = (result && result.rows) || [];
         this.trendRows = rows.map((row) => ({
           ...row,
@@ -455,7 +460,10 @@ export default class WorkflowDashboard extends LightningElement {
               ? "text-red"
               : "text-green",
           failureCountClass: row.failureCount > 0 ? "text-red" : "",
-          throughputDisplay: `${row.throughputPerWindow} (${row.throughputPerHour}/hr)`,
+          throughputDisplay:
+            row.throughputPerHour == null
+              ? `${row.terminalCount}`
+              : `${row.terminalCount} (${row.throughputPerHour}/hr)`,
         }));
       })
       .catch((error) => {
@@ -467,7 +475,9 @@ export default class WorkflowDashboard extends LightningElement {
         );
       })
       .finally(() => {
-        this.loadingTrends = false;
+        if (requestId === this._trendRequestId) {
+          this.loadingTrends = false;
+        }
       });
   }
 
@@ -478,6 +488,12 @@ export default class WorkflowDashboard extends LightningElement {
 
   get hasTrendRows() {
     return this.trendRows.length > 0;
+  }
+
+  // Only show the spinner on initial load (when no rows are cached yet).
+  // Subsequent background refreshes update rows in-place without flicker.
+  get showTrendsSpinner() {
+    return this.loadingTrends && !this.hasTrendRows;
   }
 
   get trendWindowLabel() {
@@ -1460,7 +1476,6 @@ export default class WorkflowDashboard extends LightningElement {
       if (this.viewingDrain) {
         this.loadDrain(true);
       }
-      this.fetchTrends();
       this.refreshInstances();
     }, 5000);
   }

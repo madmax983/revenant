@@ -49,7 +49,6 @@ const TRENDS_TWO_DEFS = {
       successCount: 1,
       failureCount: 2,
       successRate: 33.3,
-      throughputPerWindow: 3,
       throughputPerHour: 0.13,
     },
     {
@@ -58,7 +57,6 @@ const TRENDS_TWO_DEFS = {
       successCount: 4,
       failureCount: 1,
       successRate: 80.0,
-      throughputPerWindow: 5,
       throughputPerHour: 0.21,
     },
   ],
