@@ -42,6 +42,14 @@
                     onclick={handleOpenUnrouted}
                     class="slds-m-left_small">
                 </lightning-button>
+                <lightning-button
+                    label="Failure Breakdown"
+                    icon-name="utility:graph"
+                    variant="neutral"
+                    onclick={handleOpenFailureBreakdown}
+                    class="slds-m-left_small">
+                </lightning-button>
+
                 <lightning-button-icon
                     icon-name="utility:refresh"
                     variant="border-filled"
@@ -205,6 +213,7 @@
                             <div class="slds-col slds-size_1-of-2">
                                 <lightning-combobox
                                     name="workflowFilter"
+                                    data-id="workflow-filter"
                                     variant="label-hidden"
                                     placeholder="Filter by Definition"
                                     value={selectedWorkflow}
@@ -714,8 +723,137 @@
                             </template>
                         </template>
                         <template if:false={viewingUnrouted}>
+                        <!-- Failure Breakdown Panel -->
+                        <template if:true={viewingFailureBreakdown}>
+                            <template if:true={loadingFailureBreakdown}>
+                                <div class="slds-align_absolute-center slds-p-around_large spinner-height">
+                                    <lightning-spinner alternative-text="Loading failure breakdown..." size="medium"></lightning-spinner>
+                                </div>
+                            </template>
+                            <template if:false={loadingFailureBreakdown}>
+                                <div class="slds-p-around_medium">
+                                    <!-- Header -->
+                                    <div class="slds-grid slds-grid_align-spread slds-m-bottom_medium border-bottom slds-p-bottom_small">
+                                        <div>
+                                            <h2 class="slds-text-heading_medium font-outfit slds-grid slds-grid_vertical-align-center">
+                                                <lightning-icon icon-name="utility:graph" size="small" class="slds-m-right_small text-primary"></lightning-icon>
+                                                Failure Breakdown
+                                            </h2>
+                                            <p class="slds-text-color_weak slds-m-top_xx-small">Ranked failing steps and clustered error signatures. Bounded to prevent governor pressure.</p>
+                                        </div>
+                                        <lightning-button
+                                            label="Close"
+                                            variant="neutral"
+                                            icon-name="utility:close"
+                                            onclick={handleCloseFailureBreakdown}>
+                                        </lightning-button>
+                                    </div>
+
+                                    <!-- Selectors -->
+                                    <div class="slds-grid slds-wrap slds-gutters slds-m-bottom_medium">
+                                        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2 slds-m-bottom_small">
+                                            <lightning-combobox
+                                                label="Workflow Definition"
+                                                value={breakdownWorkflow}
+                                                options={definitionOptions}
+                                                placeholder="-- Select a Definition --"
+                                                onchange={handleBreakdownWorkflowChange}>
+                                            </lightning-combobox>
+                                        </div>
+                                        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2 slds-m-bottom_small">
+                                            <lightning-combobox
+                                                label="Time Window"
+                                                value={breakdownTimeWindow}
+                                                options={breakdownTimeWindowOptions}
+                                                onchange={handleBreakdownTimeWindowChange}>
+                                            </lightning-combobox>
+                                        </div>
+                                    </div>
+
+                                    <!-- Breakdown Content -->
+                                    <template if:true={breakdownWorkflow}>
+                                        <!-- Capped warning banner -->
+                                        <template if:true={breakdownIsCapped}>
+                                            <div class="slds-scoped-notification slds-media slds-media_center slds-theme_warning slds-m-bottom_medium" role="status">
+                                                <div class="slds-media__figure">
+                                                    <lightning-icon icon-name="utility:warning" alternative-text="Warning" size="small" variant="inverse"></lightning-icon>
+                                                </div>
+                                                <div class="slds-media__body">
+                                                    <p>Showing the most recent <strong>{breakdownData.capLimit}</strong> step failures. Truncated to avoid Salesforce governor limit issues.</p>
+                                                </div>
+                                            </div>
+                                        </template>
+
+                                        <template if:true={hasBreakdownRows}>
+                                            <lightning-accordion active-section-name="step-0" allow-multiple-sections-open>
+                                                <template for:each={breakdownRows} for:item="step">
+                                                    <lightning-accordion-section 
+                                                        key={step.stepName} 
+                                                        name={step.stepName} 
+                                                        label={step.stepAccordionLabel}>
+                                                        
+                                                        <div class="slds-p-around_small">
+                                                            <div class="slds-text-title_caps slds-m-bottom_small">Observed Error Signatures ({step.errorSignatures.length})</div>
+                                                            
+                                                            <template for:each={step.errorSignatures} for:item="sig">
+                                                                <div key={sig.signature} class="slds-box slds-m-bottom_small slds-theme_shade">
+                                                                    <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_x-small">
+                                                                        <div class="slds-col slds-size_9-of-12 font-mono text-red" style="word-break: break-all; white-space: pre-wrap;">
+                                                                            {sig.signature}
+                                                                        </div>
+                                                                        <div class="slds-col slds-size_3-of-12 slds-text-align_right">
+                                                                            <span class="badge badge-red">{sig.count} failure(s)</span>
+                                                                        </div>
+                                                                    </div>
+                                                                    
+                                                                    <!-- Example Links -->
+                                                                    <template if:true={sig.examples.length}>
+                                                                        <div class="slds-m-top_x-small">
+                                                                            <span class="slds-text-title slds-m-right_x-small">Representative Examples:</span>
+                                                                            <template for:each={sig.examples} for:item="ex">
+                                                                                <a 
+                                                                                    key={ex.id} 
+                                                                                    href="javascript:void(0);" 
+                                                                                    data-id={ex.id} 
+                                                                                    onclick={handleSelectRelatedInstance} 
+                                                                                    class="slds-text-link slds-m-right_medium">
+                                                                                    {ex.name}
+                                                                                </a>
+                                                                            </template>
+                                                                        </div>
+                                                                    </template>
+                                                                </div>
+                                                            </template>
+                                                        </div>
+                                                    </lightning-accordion-section>
+                                                </template>
+                                            </lightning-accordion>
+                                        </template>
+                                        <template if:false={hasBreakdownRows}>
+                                            <div class="slds-align_absolute-center slds-p-around_large slds-text-align_center">
+                                                <div class="slds-flex_column">
+                                                    <lightning-icon icon-name="utility:success" size="large" class="slds-m-bottom_medium text-green-icon"></lightning-icon>
+                                                    <p class="slds-text-color_weak slds-text-heading_small">No step failures found for this definition in the selected window.</p>
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </template>
+                                    <template if:false={breakdownWorkflow}>
+                                        <div class="slds-align_absolute-center slds-p-around_large slds-text-align_center">
+                                            <div class="slds-flex_column">
+                                                <lightning-icon icon-name="utility:graph" size="large" class="slds-m-bottom_medium text-weak-icon"></lightning-icon>
+                                                <p class="slds-text-color_weak">Select a workflow definition above to view its failure breakdown.</p>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                        </template>
+
+                        <template if:false={viewingFailureBreakdown}>
                         <template if:true={selectedInstanceId}>
                         <template if:true={loadingDetails}>
+
                             <div class="slds-align_absolute-center slds-p-around_large spinner-height">
                                 <lightning-spinner alternative-text="Loading Details..." size="medium"></lightning-spinner>
                             </div>
@@ -1033,7 +1171,9 @@
                     </template>
                         </template>
                         </template>
+                        </template>
                     </template>
+
                 </div>
             </div>
         </div>

@@ -1,6 +1,14 @@
 import { createElement } from "lwc";
 import WorkflowDashboard from "c/workflowDashboard";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
+import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
+
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
+  () => ({ default: jest.fn() }),
+  { virtual: true },
+);
+
 
 // Imperative Apex methods that fire on load are mocked so the component can
 // render without a backend. Only getDefinitionTrends is asserted on here; the
@@ -203,3 +211,110 @@ describe("c-workflow-dashboard trends panel", () => {
     localStorage.removeItem("revenant_dashboard_trends_collapsed");
   });
 });
+
+describe("c-workflow-dashboard failure breakdown panel", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function createComponent() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    return element;
+  }
+
+  it("requests breakdown with default 24h window when clicking Failure Breakdown button", async () => {
+    getWorkflowFailureBreakdown.mockResolvedValue({
+      workflowName: "BillingWorkflow",
+      timeWindow: "24h",
+      isCapped: false,
+      capLimit: 2000,
+      totalFailures: 0,
+      steps: []
+    });
+
+    const element = createComponent();
+    await flushPromises();
+
+    // Select a workflow filter
+    const combobox = element.shadowRoot.querySelector('[data-id="workflow-filter"]');
+
+    expect(combobox).not.toBeNull();
+    combobox.dispatchEvent(new CustomEvent("change", { detail: { value: "BillingWorkflow" } }));
+
+    // Click Failure Breakdown button in header
+    const button = Array.from(element.shadowRoot.querySelectorAll("lightning-button"))
+      .find(btn => btn.label === "Failure Breakdown");
+    expect(button).not.toBeNull();
+    button.dispatchEvent(new CustomEvent("click"));
+
+    await flushPromises();
+
+    expect(getWorkflowFailureBreakdown).toHaveBeenCalled();
+  });
+
+  it("renders steps, error signatures and example links correctly", async () => {
+    getWorkflowFailureBreakdown.mockResolvedValue({
+      workflowName: "BillingWorkflow",
+      timeWindow: "24h",
+      isCapped: true,
+      capLimit: 2000,
+      totalFailures: 2,
+      steps: [
+        {
+          stepName: "ChargeCard",
+          failureCount: 2,
+          errorSignatures: [
+            {
+              signature: "System.NullPointerException: Attempt to de-reference a null object",
+              count: 2,
+              examples: [
+                { id: "a0G000000000001", name: "WI-0001" }
+              ]
+            }
+          ]
+        }
+      ]
+    });
+
+    const element = createComponent();
+    await flushPromises();
+
+    // Select a workflow filter
+    const combobox = element.shadowRoot.querySelector('[data-id="workflow-filter"]');
+    expect(combobox).not.toBeNull();
+    combobox.dispatchEvent(new CustomEvent("change", { detail: { value: "BillingWorkflow" } }));
+
+
+    // Open Failure Breakdown
+    const button = Array.from(element.shadowRoot.querySelectorAll("lightning-button"))
+      .find(btn => btn.label === "Failure Breakdown");
+    button.dispatchEvent(new CustomEvent("click"));
+
+    await flushPromises();
+    await flushPromises();
+
+    // Verify it renders accordion sections and details
+    const accordion = element.shadowRoot.querySelector("lightning-accordion");
+    expect(accordion).not.toBeNull();
+
+    const section = element.shadowRoot.querySelector("lightning-accordion-section");
+    expect(section).not.toBeNull();
+    expect(section.name).toBe("ChargeCard");
+    expect(section.label).toBe("ChargeCard (2 failures)");
+
+    const panelText = element.shadowRoot.textContent;
+    expect(panelText).toContain("System.NullPointerException");
+
+    const exampleLink = element.shadowRoot.querySelector("a[data-id='a0G000000000001']");
+    expect(exampleLink).not.toBeNull();
+    expect(exampleLink.textContent).toBe("WI-0001");
+  });
+});
+
+

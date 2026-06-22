@@ -2146,4 +2146,202 @@ public inherited sharing class WorkflowDashboardController {
       throw new AuraHandledException(ex.getMessage());
     }
   }
+
+  private static final Integer FAILURE_BREAKDOWN_CAP = 2000;
+
+  @AuraEnabled(cacheable=true)
+  public static Map<String, Object> getWorkflowFailureBreakdown(String workflowName, String timeWindow) {
+    checkAuthorization();
+
+    if (String.isBlank(workflowName)) {
+      return new Map<String, Object>{
+        'workflowName' => '',
+        'timeWindow' => timeWindow,
+        'isCapped' => false,
+        'capLimit' => FAILURE_BREAKDOWN_CAP,
+        'totalFailures' => 0,
+        'steps' => new List<Map<String, Object>>()
+      };
+    }
+
+    Datetime since = null;
+    if (String.isNotBlank(timeWindow) && TREND_WINDOW_HOURS.containsKey(timeWindow)) {
+      Integer windowHours = TREND_WINDOW_HOURS.get(timeWindow);
+      since = Datetime.now().addHours(-windowHours);
+    }
+
+    List<Workflow_Step_Execution__c> steps;
+    if (since != null) {
+      steps = [
+        SELECT Step_Name__c, Error_Details__c, Workflow_Instance__c, Workflow_Instance__r.Name, CreatedDate
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__r.Workflow_Name__c = :workflowName
+          AND Status__c = 'Failed'
+          AND CreatedDate >= :since
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC
+        LIMIT :FAILURE_BREAKDOWN_CAP
+      ];
+    } else {
+      steps = [
+        SELECT Step_Name__c, Error_Details__c, Workflow_Instance__c, Workflow_Instance__r.Name, CreatedDate
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__r.Workflow_Name__c = :workflowName
+          AND Status__c = 'Failed'
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC
+        LIMIT :FAILURE_BREAKDOWN_CAP
+      ];
+    }
+
+    Map<String, StepFailureGroup> stepGroups = new Map<String, StepFailureGroup>();
+
+    for (Workflow_Step_Execution__c se : steps) {
+      String stepName = se.Step_Name__c;
+      if (String.isBlank(stepName)) {
+        stepName = 'Unknown Step';
+      }
+
+      StepFailureGroup stepGroup = stepGroups.get(stepName);
+      if (stepGroup == null) {
+        stepGroup = new StepFailureGroup(stepName);
+        stepGroups.put(stepName, stepGroup);
+      }
+      stepGroup.addFailure(se);
+    }
+
+    List<StepFailureGroup> sortedSteps = stepGroups.values();
+    sortedSteps.sort();
+
+    List<Map<String, Object>> stepList = new List<Map<String, Object>>();
+    for (StepFailureGroup sg : sortedSteps) {
+      stepList.add(sg.toMap());
+    }
+
+    return new Map<String, Object>{
+      'workflowName' => workflowName,
+      'timeWindow' => String.isNotBlank(timeWindow) ? timeWindow : 'all',
+      'isCapped' => (steps.size() >= FAILURE_BREAKDOWN_CAP),
+      'capLimit' => FAILURE_BREAKDOWN_CAP,
+      'totalFailures' => steps.size(),
+      'steps' => stepList
+    };
+  }
+
+  @TestVisible
+  private static String getNormalizedSignature(String errorDetails) {
+    if (String.isBlank(errorDetails)) {
+      return 'Unknown Error';
+    }
+    String signature = errorDetails.split('\n')[0];
+    if (String.isBlank(signature)) {
+      signature = 'Unknown Error';
+    }
+
+    // Normalize UUIDs
+    signature = signature.replaceAll('\\b[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}\\b', '[UUID]');
+
+    // Normalize Datetimes
+    signature = signature.replaceAll('\\b\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?\\b', '[DATETIME]');
+
+    // Normalize Dates
+    signature = signature.replaceAll('\\b\\d{4}-\\d{2}-\\d{2}\\b', '[DATE]');
+
+    // Normalize Salesforce IDs containing at least one digit
+    signature = signature.replaceAll('\\b(?=[a-zA-Z0-9]*[0-9])[a-zA-Z0-9]{15,18}\\b', '[ID]');
+
+    // Normalize standalone numbers
+    signature = signature.replaceAll('\\b\\d+\\b', '[NUM]');
+
+    signature = signature.trim();
+    if (signature.length() > 255) {
+      signature = signature.substring(0, 252) + '...';
+    }
+
+    return signature;
+  }
+
+  private class StepFailureGroup implements Comparable {
+    String stepName;
+    Integer failureCount = 0;
+    Map<String, SignatureGroup> signatures = new Map<String, SignatureGroup>();
+
+    StepFailureGroup(String stepName) {
+      this.stepName = stepName;
+    }
+
+    void addFailure(Workflow_Step_Execution__c se) {
+      this.failureCount++;
+      String sig = getNormalizedSignature(se.Error_Details__c);
+      SignatureGroup sigGroup = signatures.get(sig);
+      if (sigGroup == null) {
+        sigGroup = new SignatureGroup(sig);
+        signatures.put(sig, sigGroup);
+      }
+      sigGroup.addOccurrence(se);
+    }
+
+    Map<String, Object> toMap() {
+      List<SignatureGroup> sortedSigs = signatures.values();
+      sortedSigs.sort();
+
+      List<Map<String, Object>> sigList = new List<Map<String, Object>>();
+      for (SignatureGroup sg : sortedSigs) {
+        sigList.add(sg.toMap());
+      }
+
+      return new Map<String, Object>{
+        'stepName' => stepName,
+        'failureCount' => failureCount,
+        'errorSignatures' => sigList
+      };
+    }
+
+    public Integer compareTo(Object other) {
+      StepFailureGroup that = (StepFailureGroup) other;
+      if (this.failureCount != that.failureCount) {
+        return that.failureCount - this.failureCount; // higher failures first
+      }
+      return this.stepName.compareTo(that.stepName);
+    }
+  }
+
+  private class SignatureGroup implements Comparable {
+    String signature;
+    Integer count = 0;
+    List<Map<String, String>> examples = new List<Map<String, String>>();
+    Set<Id> exampleInstanceIds = new Set<Id>();
+
+    SignatureGroup(String signature) {
+      this.signature = signature;
+    }
+
+    void addOccurrence(Workflow_Step_Execution__c se) {
+      this.count++;
+      if (examples.size() < 5 && se.Workflow_Instance__c != null && !exampleInstanceIds.contains(se.Workflow_Instance__c)) {
+        exampleInstanceIds.add(se.Workflow_Instance__c);
+        examples.add(new Map<String, String>{
+          'id' => se.Workflow_Instance__c,
+          'name' => se.Workflow_Instance__r.Name
+        });
+      }
+    }
+
+    Map<String, Object> toMap() {
+      return new Map<String, Object>{
+        'signature' => signature,
+        'count' => count,
+        'examples' => examples
+      };
+    }
+
+    public Integer compareTo(Object other) {
+      SignatureGroup that = (SignatureGroup) other;
+      if (this.count != that.count) {
+        return that.count - this.count; // higher counts first
+      }
+      return this.signature.compareTo(that.signature);
+    }
+  }
 }
+

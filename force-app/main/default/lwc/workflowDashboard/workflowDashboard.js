@@ -1,4 +1,4 @@
-﻿import { LightningElement, wire } from "lwc";
+import { LightningElement, wire } from "lwc";
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
@@ -25,6 +25,8 @@ import resumeDefinition from "@salesforce/apex/WorkflowDashboardController.resum
 import getPausedDefinitions from "@salesforce/apex/WorkflowDashboardController.getPausedDefinitions";
 import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
+import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
+
 
 export default class WorkflowDashboard extends LightningElement {
   instances = [];
@@ -110,6 +112,20 @@ export default class WorkflowDashboard extends LightningElement {
     { label: "Last 7 days", value: "7d" },
   ];
 
+  // Failure Breakdown view state
+  viewingFailureBreakdown = false;
+  loadingFailureBreakdown = false;
+  breakdownWorkflow = "";
+  breakdownTimeWindow = "24h";
+  breakdownData = null;
+  breakdownTimeWindowOptions = [
+    { label: "Last 1 hour", value: "1h" },
+    { label: "Last 24 hours", value: "24h" },
+    { label: "Last 7 days", value: "7d" },
+    { label: "All Time", value: "all" }
+  ];
+
+
   // Confirmation modals
   redriveModalOpen = false;
   redriveCount = 0;
@@ -189,6 +205,25 @@ export default class WorkflowDashboard extends LightningElement {
   get hasChildren() {
     return this.childInstances && this.childInstances.length > 0;
   }
+
+  get hasBreakdownRows() {
+    return this.breakdownData && this.breakdownData.steps && this.breakdownData.steps.length > 0;
+  }
+
+  get breakdownRows() {
+    if (!this.breakdownData || !this.breakdownData.steps) {
+      return [];
+    }
+    return this.breakdownData.steps.map((step) => ({
+      ...step,
+      stepAccordionLabel: `${step.stepName} (${step.failureCount} failure${step.failureCount === 1 ? "" : "s"})`
+    }));
+  }
+
+  get breakdownIsCapped() {
+    return this.breakdownData ? this.breakdownData.isCapped : false;
+  }
+
 
   get isFailed() {
     return this.selectedInst && this.selectedInst.Status__c === "Failed";
@@ -411,9 +446,10 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   handleWorkflowFilterChange(event) {
-    this.selectedWorkflow = event.target.value;
+    this.selectedWorkflow = event.detail ? event.detail.value : event.target.value;
     this.fetchInstances(false);
   }
+
 
   handleStatusFilterChange(event) {
     this.selectedStatus = event.target.value;
@@ -594,10 +630,14 @@ export default class WorkflowDashboard extends LightningElement {
   handleSelectRelatedInstance(event) {
     this.stopPolling();
     this.viewingDoctor = false;
+    this.viewingDrain = false;
+    this.viewingUnrouted = false;
+    this.viewingFailureBreakdown = false;
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
   }
+
 
   loadDetails(showSpinner) {
     if (showSpinner) {
@@ -749,6 +789,9 @@ export default class WorkflowDashboard extends LightningElement {
     if (this.viewingDrain) {
       this.loadDrain(true);
     }
+    if (this.viewingFailureBreakdown) {
+      this.fetchFailureBreakdown();
+    }
     this.fetchTrends();
     this.refreshInstances().then(() => {
       this.showToast("Success", "Workflow dashboard refreshed", "success");
@@ -759,6 +802,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDoctor = true;
     this.viewingDrain = false;
     this.viewingUnrouted = false;
+    this.viewingFailureBreakdown = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     this.loadDoctorStatus();
@@ -772,6 +816,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDrain = true;
     this.viewingDoctor = false;
     this.viewingUnrouted = false;
+    this.viewingFailureBreakdown = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     // Re-run the query if a workflow is already selected; the combobox value
@@ -792,6 +837,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDoctor = false;
     this.viewingDrain = false;
     this.viewingUnrouted = false;
+    this.viewingFailureBreakdown = false;
     this.selectedInstanceId = null;
   }
 
@@ -804,6 +850,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDrain = false;
     this.viewingDoctor = false;
     this.viewingSchedules = false;
+    this.viewingFailureBreakdown = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     this.loadUnroutedSignals();
@@ -812,6 +859,64 @@ export default class WorkflowDashboard extends LightningElement {
   handleCloseUnrouted() {
     this.viewingUnrouted = false;
   }
+
+  handleOpenFailureBreakdown() {
+    this.viewingFailureBreakdown = true;
+    this.viewingDoctor = false;
+    this.viewingDrain = false;
+    this.viewingUnrouted = false;
+    this.viewingSchedules = false;
+    this.selectedInstanceId = null;
+    this.filterInstancesList();
+    if (this.selectedWorkflow) {
+      this.breakdownWorkflow = this.selectedWorkflow;
+    } else if (!this.breakdownWorkflow && this.definitionOptions.length > 0) {
+      this.breakdownWorkflow = this.definitionOptions[0].value;
+    }
+    this.fetchFailureBreakdown();
+  }
+
+  handleCloseFailureBreakdown() {
+    this.viewingFailureBreakdown = false;
+  }
+
+  handleBreakdownWorkflowChange(event) {
+    this.breakdownWorkflow = event.detail ? event.detail.value : event.target.value;
+    this.fetchFailureBreakdown();
+  }
+
+  handleBreakdownTimeWindowChange(event) {
+    this.breakdownTimeWindow = event.detail ? event.detail.value : event.target.value;
+    this.fetchFailureBreakdown();
+  }
+
+
+  fetchFailureBreakdown() {
+    if (!this.breakdownWorkflow) {
+      this.breakdownData = null;
+      return;
+    }
+    this.loadingFailureBreakdown = true;
+    getWorkflowFailureBreakdown({
+      workflowName: this.breakdownWorkflow,
+      timeWindow: this.breakdownTimeWindow === "all" ? null : this.breakdownTimeWindow
+    })
+      .then((result) => {
+        this.breakdownData = result;
+        this.loadingFailureBreakdown = false;
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to retrieve failure breakdown: " +
+            (error.body ? error.body.message : error.message),
+          "error"
+        );
+        this.loadingFailureBreakdown = false;
+        this.breakdownData = null;
+      });
+  }
+
 
   loadUnroutedSignals() {
     this.loadingUnrouted = true;
