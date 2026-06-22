@@ -4365,6 +4365,14 @@ public inherited sharing class WorkflowEngine {
     instance.Async_Job_Id__c = jobId;
     update as system instance;
 
+    if (jobId == null) {
+      // No delayed job was created (dynamic scheduling off, or async limit), so this
+      // retry relies entirely on the watchdog heartbeat to re-drive after the backoff.
+      // Ensure the watchdog singleton is alive — the removed immediate re-drive used to
+      // restart a dead watchdog via enqueueOrchestrator's bootstrap() call.
+      WorkflowWatchdog.bootstrap();
+    }
+
     // No immediate re-drive when jobId is null. The branch target is durably persisted
     // as its Pending step row carrying Transient_Retry_Count__c > 0 (set above), and
     // the watchdog sleep-resume re-drives exactly those branches BY NAME once
@@ -7304,26 +7312,70 @@ public inherited sharing class WorkflowEngine {
       // carried to completion by a worker draining at Test.stopTest().
       if (!(Test.isRunningTest() && disableQueueableInTest)) {
         enqueueOrchestrators(instanceIds);
-        // For a resumed parallel instance the blank-stepName orchestrator above is a
-        // no-op (runStep ignores it for a comma-separated Current_Step__c), so re-drive
-        // each branch that is parked for a transient row-lock retry BY NAME. Scoped to
-        // Pending steps carrying Transient_Retry_Count__c > 0 — the durable target the
-        // transient-lock backoff persists — so genuinely in-flight (Running) branches
-        // and ordinary fan-out steps are left untouched.
-        if (!parallelResumeIds.isEmpty()) {
-          for (Workflow_Step_Execution__c branch : [
-            SELECT Workflow_Instance__c, Step_Name__c
-            FROM Workflow_Step_Execution__c
-            WHERE
-              Workflow_Instance__c IN :parallelResumeIds
-              AND Status__c = 'Pending'
-              AND Transient_Retry_Count__c > 0
-            WITH SYSTEM_MODE
-          ]) {
-            enqueueOrchestrator(
-              branch.Workflow_Instance__c,
-              branch.Step_Name__c
-            );
+      }
+      // For a resumed parallel instance the blank-stepName orchestrator above is a
+      // no-op (runStep ignores it for a comma-separated Current_Step__c), so re-drive
+      // each branch parked for a transient row-lock retry BY NAME. Scoped to Pending/
+      // Running steps carrying Transient_Retry_Count__c > 0 — the durable target the
+      // transient-lock backoff persists. handleCrash leaves the row Pending after a
+      // rollback, or Running when the synchronous harness calls it without one, so both
+      // statuses are matched; genuinely in-flight branches (count 0) and ordinary
+      // fan-out steps are left untouched. The actual enqueue honors the test opt-out
+      // internally (like the bulk signal path) so the query/re-arm still run under it.
+      if (!parallelResumeIds.isEmpty()) {
+        List<Workflow_Step_Execution__c> retryBranches = [
+          SELECT Workflow_Instance__c, Step_Name__c
+          FROM Workflow_Step_Execution__c
+          WHERE
+            Workflow_Instance__c IN :parallelResumeIds
+            AND Status__c IN ('Pending', 'Running')
+            AND Transient_Retry_Count__c > 0
+          WITH SYSTEM_MODE
+        ];
+        if (!retryBranches.isEmpty()) {
+          // Re-arm the watchdog deadline scheduleTransientLockRetry cleared before the
+          // hand-off, so a delayed/lost branch event (or a CalloutStep deferring its
+          // pre-exec DML) still has a persisted timeout net — mirroring the admission
+          // and unbounded-fall-through re-drive paths. Scoped to the instances that
+          // actually carry a retrying branch, so ordinary parallel sleepers are
+          // unaffected.
+          Set<Id> retryInstanceIds = new Set<Id>();
+          for (Workflow_Step_Execution__c branch : retryBranches) {
+            retryInstanceIds.add(branch.Workflow_Instance__c);
+          }
+          List<Workflow_Instance__c> retryInstances = new List<Workflow_Instance__c>();
+          for (Id rid : retryInstanceIds) {
+            retryInstances.add(new Workflow_Instance__c(Id = rid));
+          }
+          reArmTimeoutsForResume(retryInstances);
+
+          // Bulk-publish ONE EventBus call for all retrying branches so a heartbeat
+          // waking many parallel sleepers cannot exceed the publish/DML statement limit
+          // (one publish per branch), mirroring the bulk branch publish in signal().
+          List<Workflow_Event__e> branchEvents = new List<Workflow_Event__e>();
+          for (Workflow_Step_Execution__c branch : retryBranches) {
+            if (Test.isRunningTest()) {
+              if (!disableQueueableInTest) {
+                System.enqueueJob(
+                  new WorkflowOrchestrator(
+                    branch.Workflow_Instance__c,
+                    branch.Step_Name__c
+                  )
+                );
+              }
+            } else {
+              branchEvents.add(
+                new Workflow_Event__e(
+                  Workflow_Instance_Id__c = branch.Workflow_Instance__c,
+                  Event_Type__c = 'RUN_STEP',
+                  Payload__c = branch.Step_Name__c
+                )
+              );
+            }
+          }
+          if (!branchEvents.isEmpty()) {
+            WorkflowWatchdog.bootstrap();
+            EventBus.publish(branchEvents);
           }
         }
       }

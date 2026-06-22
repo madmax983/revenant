@@ -1070,10 +1070,11 @@ public class WorkflowConcurrencyTest {
   }
 
   // The watchdog sleep-resume must drive a due, parallel, transient-lock-parked
-  // instance back to Running (and, in production, re-enqueue its retrying branch BY
-  // NAME — enqueueOrchestrator is a no-op under test, so this asserts the wake
-  // transition and that the new per-branch query/enqueue path runs without error for
-  // a comma-separated Current_Step__c). A non-retrying sibling branch is left as-is.
+  // instance back to Running and, in production, re-enqueue its retrying branch BY
+  // NAME. The actual branch enqueue honors the manual-drive switch, so with it on this
+  // exercises the new per-branch re-arm + query path (no exception, correct scoping)
+  // and asserts the wake transition without a drained worker carrying the branch to
+  // completion. A non-retrying sibling branch is left as-is.
   @isTest
   static void testWatchdogRedrivesParallelTransientBranch() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -1103,12 +1104,12 @@ public class WorkflowConcurrencyTest {
       Transient_Retry_Count__c = 0
     );
 
-    // Queueables enabled so the watchdog's enqueue block (and the new per-branch
-    // re-drive query) actually executes; enqueueOrchestrator(s) are test no-ops, and a
-    // blank-stepName orchestrator is ignored for a comma-separated Current_Step__c, so
-    // nothing auto-advances the instance past the wake transition under assertion.
+    // Manual-drive switch ON: the per-branch re-arm + query still run (they sit outside
+    // the opt-out guard, like the bulk signal path), but the branch enqueue is gated,
+    // so no drained worker re-drives WaitStep and flips the instance back to Suspended.
+    // This keeps the wake-transition assertion deterministic while covering the new code.
     Boolean priorDisable = WorkflowEngine.disableQueueableInTest;
-    WorkflowEngine.disableQueueableInTest = false;
+    WorkflowEngine.disableQueueableInTest = true;
     try {
       Test.startTest();
       WorkflowEngine.processWatchdogHeartbeat();
