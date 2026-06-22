@@ -94,4 +94,62 @@ public class WorkflowDeadlineTest {
     Long diffSeconds = Math.abs(successors[0].Deadline_At__c.getTime() - DateTime.now().getTime()) / 1000;
     System.assert(diffSeconds <= 125, 'Successor deadline should be roughly 120 seconds from now: ' + diffSeconds);
   }
+
+  @isTest
+  static void testWatchdogSweepExpiredNoCompensation() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Create a running instance that has already expired
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowDeadlineTest.TestDeadlineWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'Deadline-Expired-NoComp',
+      Deadline_At__c = DateTime.now().addSeconds(-10)
+    );
+    insert inst;
+
+    // Add an active step execution row
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowDeadlineTest.TestStep',
+      Status__c = 'Running',
+      Retry_Count__c = 0
+    );
+    insert step;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Reload the instance
+    Workflow_Instance__c reloadedInst = [
+      SELECT Status__c, Error_Message__c, Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+
+    System.assertEquals('Failed', reloadedInst.Status__c, 'Status should be Failed');
+    System.assertEquals('Execution deadline exceeded', reloadedInst.Error_Message__c);
+    System.assertNotEquals(null, reloadedInst.Terminal_At__c, 'Terminal_At__c should be set');
+
+    // Reload the step and check it was NOT mutated to Failed (remains Running or unchanged)
+    Workflow_Step_Execution__c reloadedStep = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :step.Id
+    ];
+    System.assertEquals('Running', reloadedStep.Status__c, 'Original step execution must not be mutated');
+
+    // Verify a new step execution of name 'Workflow_Deadline' was inserted
+    List<Workflow_Step_Execution__c> auditTrail = [
+      SELECT Step_Name__c, Status__c, Error_Details__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :inst.Id
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+    System.assertEquals(2, auditTrail.size(), 'Should have exactly 2 step execution rows (original + deadline)');
+    System.assertEquals('Workflow_Deadline', auditTrail[0].Step_Name__c);
+    System.assertEquals('Failed', auditTrail[0].Status__c);
+    System.assertEquals('Execution deadline exceeded', auditTrail[0].Error_Details__c);
+  }
 }

@@ -73,6 +73,9 @@ public inherited sharing class WorkflowEngine {
   // Max number of sleeping instances a single heartbeat resumes, for the same reason.
   @TestVisible
   private static Integer WATCHDOG_RESUME_BATCH_SIZE = 200;
+  // Max number of expired instances a single heartbeat fails/compensates, for the same reason.
+  @TestVisible
+  private static Integer WATCHDOG_DEADLINE_BATCH_SIZE = 100;
 
   static {
     try {
@@ -7429,6 +7432,110 @@ public inherited sharing class WorkflowEngine {
       // transitioned to a terminal state (Failed) emit — Compensating parents are
       // skipped by the publisher.
       watchdogTerminalInstances.addAll(instancesToUpdate.values());
+    }
+
+    // 1b. Process Exceeded Execution Deadlines (bounded per heartbeat).
+    List<Workflow_Instance__c> expiredInstances = [
+      SELECT
+        Id,
+        Name,
+        Status__c,
+        Deadline_At__c,
+        Compensation_Stack__c,
+        Error_Message__c,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c,
+        Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE
+        Status__c IN ('Pending', 'Running', 'Suspended')
+        AND Deadline_At__c <= :now
+      WITH SYSTEM_MODE
+      LIMIT :WATCHDOG_DEADLINE_BATCH_SIZE
+      FOR UPDATE
+    ];
+
+    if (!expiredInstances.isEmpty()) {
+      List<Workflow_Step_Execution__c> deadlineStepsToInsert = new List<Workflow_Step_Execution__c>();
+      List<Workflow_Instance__c> instancesToFail = new List<Workflow_Instance__c>();
+      List<Id> deadlineOrchestratorIds = new List<Id>();
+
+      for (Workflow_Instance__c inst : expiredInstances) {
+        // Abort all scheduled jobs for this instance (sleeps, retries, timeouts)
+        abortScheduledJobs(inst.Id);
+        inst.Sleep_Until__c = null;
+        inst.Async_Job_Id__c = null;
+
+        // Check if there are compensations to run
+        Boolean hasCompensations = false;
+        List<String> stack = new List<String>();
+        if (String.isNotBlank(inst.Compensation_Stack__c)) {
+          stack = (List<String>) JSON.deserialize(
+            inst.Compensation_Stack__c,
+            List<String>.class
+          );
+          hasCompensations = !stack.isEmpty();
+        }
+
+        // Append a new failed step execution record (audit trail)
+        Workflow_Step_Execution__c deadlineStep = new Workflow_Step_Execution__c(
+          Workflow_Instance__c = inst.Id,
+          Step_Name__c = 'Workflow_Deadline',
+          Status__c = 'Failed',
+          Error_Details__c = 'Execution deadline exceeded',
+          Retry_Count__c = 0
+        );
+        deadlineStepsToInsert.add(deadlineStep);
+
+        if (hasCompensations) {
+          inst.Status__c = 'Compensating';
+          inst.Error_Message__c = 'Execution deadline exceeded';
+          instancesToFail.add(inst);
+          deadlineOrchestratorIds.add(inst.Id);
+        } else {
+          inst.Status__c = 'Failed';
+          inst.Error_Message__c = 'Execution deadline exceeded';
+          instancesToFail.add(inst);
+          watchdogTerminalInstances.add(inst);
+        }
+      }
+
+      if (!deadlineStepsToInsert.isEmpty()) {
+        insert as system deadlineStepsToInsert;
+      }
+
+      for (Workflow_Instance__c inst : expiredInstances) {
+        Boolean hasCompensations = false;
+        if (String.isNotBlank(inst.Compensation_Stack__c)) {
+          List<String> stack = (List<String>) JSON.deserialize(
+            inst.Compensation_Stack__c,
+            List<String>.class
+          );
+          hasCompensations = !stack.isEmpty();
+        }
+        if (hasCompensations) {
+          preCreateFirstCompensationStep(inst);
+        }
+      }
+
+      if (!instancesToFail.isEmpty()) {
+        update as system instancesToFail;
+      }
+
+      for (Workflow_Instance__c inst : instancesToFail) {
+        if (inst.Status__c == 'Failed') {
+          WorkflowAlertManager.sendAlert(inst, inst.Error_Message__c);
+        }
+      }
+
+      if (!deadlineOrchestratorIds.isEmpty()) {
+        if (Test.isRunningTest() && disableQueueableInTest) {
+          // Do nothing
+        } else {
+          enqueueOrchestrators(deadlineOrchestratorIds);
+        }
+      }
     }
 
     // 2. Process Sleep Resumptions (bounded per heartbeat; backlog drains on subsequent
