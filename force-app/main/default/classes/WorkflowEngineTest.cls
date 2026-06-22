@@ -5077,4 +5077,57 @@ public class WorkflowEngineTest {
     System.assertEquals('Completed', inst.Status__c);
     System.assertEquals('"approval_timedout"', inst.Output__c);
   }
+
+  @isTest
+  static void testTimedSuspend_ManualResumeDisarmsTimer() {
+    // A manual resumeInstance() of an armed timed-wait must disarm Sleep_Until__c
+    // (issue #35) so the watchdog does not later mis-route to the fallback step.
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.TimedSuspendWorkflow',
+      'TimedSuspendResumeKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Timer is armed by the timed suspend
+    Workflow_Instance__c inst = [
+      SELECT Status__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', inst.Status__c);
+    System.assertNotEquals(null, inst.Sleep_Until__c, 'Timer should be armed');
+
+    // Manual resume (not via signal) must disarm the timer
+    WorkflowEngine.resumeInstance(instanceId, '{}');
+
+    inst = [
+      SELECT Status__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Running', inst.Status__c, 'Should be Running after resume');
+    System.assertEquals(
+      null,
+      inst.Sleep_Until__c,
+      'Manual resume must disarm the timed-wait timer (Sleep_Until__c must be null)'
+    );
+
+    // Watchdog must not mis-route to the fallback after a manual resume disarm
+    WorkflowEngine.processWatchdogHeartbeat();
+    List<Workflow_Step_Execution__c> fallbackExecs = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.TimeoutFallbackStep'
+    ];
+    System.assertEquals(
+      0,
+      fallbackExecs.size(),
+      'Watchdog must not create a fallback exec after a manual resume wins'
+    );
+  }
 }
