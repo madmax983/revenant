@@ -1139,4 +1139,59 @@ public class WorkflowConcurrencyTest {
       'A genuinely in-flight sibling branch is not disturbed by the watchdog re-drive'
     );
   }
+
+  // Stuck-forever guard: when a parallel sibling completes during a branch's transient-
+  // lock backoff (dynamic scheduling off) it can flip the parent to Running and persist
+  // it (a CompensatableStep), so the sleep-resume — which only selects Suspended
+  // parents — never re-drives the retry branch. The orphaned-retry sweep must catch it:
+  // a Running parallel parent with a due Sleep_Until__c and a retry-marked branch is
+  // re-driven by name (here observed via the branch's deadline being re-armed, since
+  // the actual enqueue honors the manual-drive switch).
+  @isTest
+  static void testWatchdogRescuesOrphanedTransientRetryBranch() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowConcurrencyTest.TimeoutWaitWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowConcurrencyTest.TimeoutWaitStep,WorkflowConcurrencyTest.OtherBranch',
+      Correlation_Key__c = 'orphan-1',
+      // The backoff deadline survives on the instance even though a sibling flipped the
+      // parent to Running — the signal the orphan sweep keys off.
+      Sleep_Until__c = DateTime.now().addSeconds(-60)
+    );
+    insert inst;
+    // Retry-marked branch (TimeoutConfigurable) with its deadline cleared for backoff.
+    Workflow_Step_Execution__c branch = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowConcurrencyTest.TimeoutWaitStep',
+      Status__c = 'Pending',
+      Retry_Count__c = 0,
+      Transient_Retry_Count__c = 1
+    );
+    insert branch;
+
+    WorkflowEngine.disableQueueableInTest = true;
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // The sweep selected the branch despite the parent being Running (not Suspended)
+    // and re-armed its watchdog deadline before the re-drive hand-off.
+    System.assertNotEquals(
+      null,
+      [
+        SELECT Timeout_At__c
+        FROM Workflow_Step_Execution__c
+        WHERE Id = :branch.Id
+      ]
+      .Timeout_At__c,
+      'The orphaned retry branch deadline is re-armed by the rescue sweep'
+    );
+    // The sweep only re-drives the branch; it does not alter the parent status.
+    System.assertEquals(
+      'Running',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
+        .Status__c,
+      'The Running parent is left as-is by the orphaned-retry sweep'
+    );
+  }
 }
