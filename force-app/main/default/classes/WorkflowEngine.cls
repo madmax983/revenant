@@ -6862,12 +6862,12 @@ public inherited sharing class WorkflowEngine {
 
   // Returns the String value of a reserved $-key from a JSON-object string, or
   // null for blank input, non-object JSON, a missing key, and parse failures.
-  private static String readJsonMapKey(String json, String key) {
-    if (String.isBlank(json)) {
+  private static String readJsonMapKey(String jsonText, String key) {
+    if (String.isBlank(jsonText)) {
       return null;
     }
     try {
-      Object parsed = JSON.deserializeUntyped(json);
+      Object parsed = JSON.deserializeUntyped(jsonText);
       if (!(parsed instanceof Map<String, Object>)) {
         return null;
       }
@@ -6885,20 +6885,20 @@ public inherited sharing class WorkflowEngine {
   // Removes a reserved $-key from a JSON-object string, returning the cleaned
   // JSON (null when the map is empty after removal). Returns the original string
   // for blank/missing-key input, non-object JSON, and parse failures.
-  private static String stripJsonMapKey(String json, String key) {
-    if (String.isBlank(json) || !json.contains(key)) {
-      return json;
+  private static String stripJsonMapKey(String jsonText, String key) {
+    if (String.isBlank(jsonText) || !jsonText.contains(key)) {
+      return jsonText;
     }
     try {
-      Object parsed = JSON.deserializeUntyped(json);
+      Object parsed = JSON.deserializeUntyped(jsonText);
       if (!(parsed instanceof Map<String, Object>)) {
-        return json;
+        return jsonText;
       }
       Map<String, Object> m = (Map<String, Object>) parsed;
       m.remove(key);
       return m.isEmpty() ? null : JSON.serialize(m);
     } catch (Exception e) {
-      return json;
+      return jsonText;
     }
   }
 
