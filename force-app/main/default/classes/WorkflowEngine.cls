@@ -6934,16 +6934,24 @@ public inherited sharing class WorkflowEngine {
    * Aborts all Scheduled Apex cron jobs associated with the workflow instance.
    */
   public static void abortScheduledJobs(Id instanceId) {
-    String sleepPrefix = 'WorkflowSleep_' + instanceId + '_%';
-    String retryPrefix = 'WorkflowRetry_' + instanceId + '_%';
-    String timeoutPrefix = 'Timeout_' + instanceId + '_%';
+    abortScheduledJobs(new Set<Id>{ instanceId });
+  }
+
+  public static void abortScheduledJobs(Set<Id> instanceIds) {
+    if (instanceIds == null || instanceIds.isEmpty()) {
+      return;
+    }
+    List<String> nameLikeFilters = new List<String>();
+    for (Id instanceId : instanceIds) {
+      nameLikeFilters.add('WorkflowSleep_' + instanceId + '_%');
+      nameLikeFilters.add('WorkflowRetry_' + instanceId + '_%');
+      nameLikeFilters.add('Timeout_' + instanceId + '_%');
+    }
     List<CronTrigger> triggers = [
       SELECT Id
       FROM CronTrigger
       WHERE
-        CronJobDetail.Name LIKE :sleepPrefix
-        OR CronJobDetail.Name LIKE :retryPrefix
-        OR CronJobDetail.Name LIKE :timeoutPrefix
+        CronJobDetail.Name LIKE :nameLikeFilters
       WITH SYSTEM_MODE
     ];
     for (CronTrigger triggerJob : triggers) {
@@ -7560,9 +7568,14 @@ public inherited sharing class WorkflowEngine {
       List<Workflow_Instance__c> instancesToFail = new List<Workflow_Instance__c>();
       List<Id> deadlineOrchestratorIds = new List<Id>();
 
+      // Bulk abort all scheduled jobs for all expired instances
+      Set<Id> expiredInstanceIds = new Set<Id>();
       for (Workflow_Instance__c inst : expiredInstances) {
-        // Abort all scheduled jobs for this instance (sleeps, retries, timeouts)
-        abortScheduledJobs(inst.Id);
+        expiredInstanceIds.add(inst.Id);
+      }
+      abortScheduledJobs(expiredInstanceIds);
+
+      for (Workflow_Instance__c inst : expiredInstances) {
         inst.Sleep_Until__c = null;
         inst.Async_Job_Id__c = null;
 
