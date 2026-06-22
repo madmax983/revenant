@@ -6,7 +6,7 @@
     <externalId>false</externalId>
     <label>Transient Retry Count</label>
     <precision>18</precision>
-    <required>false</required>
+    <required>true</required>
     <scale>0</scale>
     <trackTrending>false</trackTrending>
     <type>Number</type>

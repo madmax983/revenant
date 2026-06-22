@@ -2509,6 +2509,7 @@ public inherited sharing class WorkflowEngine {
       stepExec.Step_Name__c = activeStepName;
       stepExec.Status__c = 'Running';
       stepExec.Retry_Count__c = 0;
+      stepExec.Transient_Retry_Count__c = 0;
 
       // Get previous step's output to feed as input
       List<Workflow_Step_Execution__c> completedSteps = [
