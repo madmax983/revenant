@@ -2664,8 +2664,7 @@ public inherited sharing class WorkflowEngine {
     // step does not surface the reserved key to the author via stepStateJson.
     String resolvedState = resolvePayload(stepExec.Output__c);
     if (
-      String.isNotBlank(resolvedState) &&
-      resolvedState.contains('$timeoutStep')
+      String.isNotBlank(resolvedState) && resolvedState.contains('$timeoutStep')
     ) {
       resolvedState = stripJsonMapKey(resolvedState, '$timeoutStep');
     }
@@ -4154,6 +4153,40 @@ public inherited sharing class WorkflowEngine {
       } else {
         enqueueOrchestrator(nextInstance.Id, null);
       }
+    } else if (result.action == StepResult.ActionType.FAIL) {
+      // Explicit terminal failure (issue #37): the author returned a deliberate
+      // business failure — not a crash, not a retry. Record the step terminal
+      // exactly once (append-only) with the operator-readable reason (and any
+      // structured failureData) in Error_Details__c, then route through the
+      // existing failWorkflowInstance path. That performs ZERO retry hops and
+      // transitions to Compensating (LIFO rollback) when a Compensation_Stack__c
+      // exists, or to Failed otherwise; Terminal_At__c is stamped by
+      // WorkflowInstanceTrigger on the terminal transition, exactly as a thrown
+      // failure does today.
+      //
+      // Signal consumption mirrors the COMPLETE path: the step ran to its terminal
+      // conclusion so any signals it observed are marked consumed (not rolled back),
+      // preventing re-delivery to later compensation steps.
+      markSignalsConsumed(instance.Id, context, isParallel);
+      stepExec.Status__c = 'Failed';
+      // Plain-text schema matches RETRY/crash paths. When failureData is present
+      // the raw JSON is appended on a second line for downstream inspection without
+      // needing to detect a JSON envelope.
+      stepExec.Error_Details__c = (result.failureDataJson != null)
+        ? result.failureReason + '\nfailureData: ' + result.failureDataJson
+        : result.failureReason;
+      saveStepExec(stepExec);
+
+      // Publish any domain events the step buffered via StepContext.emit() before
+      // returning fail() — same commit-coupling contract as COMPLETE/SPLIT so
+      // callers never silently lose events on deliberate terminal failures.
+      publishOutboundEvents(result, context);
+
+      failWorkflowInstance(
+        instance.Id,
+        stepExec.Step_Name__c,
+        result.failureReason
+      );
     }
   }
 
@@ -4381,9 +4414,7 @@ public inherited sharing class WorkflowEngine {
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Id, Status__c, Transient_Retry_Count__c
       FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instance.Id
-        AND Step_Name__c = :stepName
+      WHERE Workflow_Instance__c = :instance.Id AND Step_Name__c = :stepName
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
       LIMIT 1
@@ -4419,8 +4450,7 @@ public inherited sharing class WorkflowEngine {
     // the re-drive and a fan-in of re-drives does not re-synchronize into a new storm.
     Double exponent = Math.min(attempts, 4); // widen Integer -> Double for Math.pow
     Integer delay =
-      TRANSIENT_LOCK_BASE_DELAY_SECONDS *
-      (Integer) Math.pow(2, exponent);
+      TRANSIENT_LOCK_BASE_DELAY_SECONDS * (Integer) Math.pow(2, exponent);
     delay = Math.min(delay, TRANSIENT_LOCK_MAX_DELAY_SECONDS);
     delay += (Integer) Math.floor(
       Math.random() * TRANSIENT_LOCK_JITTER_SECONDS
@@ -4493,11 +4523,11 @@ public inherited sharing class WorkflowEngine {
 
     if (!hasCompensations) {
       instance.Status__c = 'Failed';
-      instance.Error_Message__c =
-        'Failed at step ' +
+      instance.Error_Message__c = ('Failed at step ' +
         stepName +
         ': ' +
-        errorMessage;
+        errorMessage)
+        .left(255);
       update as system instance;
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       WorkflowLifecyclePublisher.publish(instance);
@@ -4527,12 +4557,13 @@ public inherited sharing class WorkflowEngine {
         instance.Error_Message__c.contains('Cancelled by user'));
       instance.Status__c = 'CompensationFailed';
       instance.Error_Message__c = buildRollbackIncompleteMessage(
-        wasCancelling,
-        'Rollback incomplete at compensation step ' +
-          stepName +
-          ': ' +
-          errorMessage
-      );
+          wasCancelling,
+          'Rollback incomplete at compensation step ' +
+            stepName +
+            ': ' +
+            errorMessage
+        )
+        .left(255);
       // Clear any stale sleep/retry deadline so the watchdog cannot prematurely wake a
       // remaining SUSPEND/approval gate once the rollback is resumed.
       instance.Sleep_Until__c = null;
@@ -4544,11 +4575,11 @@ public inherited sharing class WorkflowEngine {
     }
 
     instance.Status__c = 'Compensating';
-    instance.Error_Message__c =
-      'Failed at step ' +
+    instance.Error_Message__c = ('Failed at step ' +
       stepName +
       ': ' +
-      errorMessage;
+      errorMessage)
+      .left(255);
     preCreateFirstCompensationStep(instance);
     update as system instance;
 
@@ -4783,7 +4814,12 @@ public inherited sharing class WorkflowEngine {
     if (isId) {
       // Query by ID first to prevent matching a correlation key that equals this ID string
       instances = [
-        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c, Sleep_Until__c
+        SELECT
+          Id,
+          Status__c,
+          Concurrency_Parked__c,
+          Concurrency_Slot_Held__c,
+          Sleep_Until__c
         FROM Workflow_Instance__c
         WHERE Id = :targetId AND Status__c IN :lookupStatuses
         WITH SYSTEM_MODE
@@ -4794,7 +4830,12 @@ public inherited sharing class WorkflowEngine {
 
     if (instances.isEmpty()) {
       instances = [
-        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c, Sleep_Until__c
+        SELECT
+          Id,
+          Status__c,
+          Concurrency_Parked__c,
+          Concurrency_Slot_Held__c,
+          Sleep_Until__c
         FROM Workflow_Instance__c
         WHERE Correlation_Key__c = :keyOrId AND Status__c IN :lookupStatuses
         WITH SYSTEM_MODE
@@ -6359,11 +6400,12 @@ public inherited sharing class WorkflowEngine {
         Boolean wasCancelling = (instance.Status__c == 'Cancelling');
         instance.Status__c = 'CompensationFailed';
         instance.Error_Message__c = buildRollbackIncompleteMessage(
-          wasCancelling,
-          'Rollback incomplete: compensation step ' +
-            stepExec.Step_Name__c +
-            ' failed after max retries.'
-        );
+            wasCancelling,
+            'Rollback incomplete: compensation step ' +
+              stepExec.Step_Name__c +
+              ' failed after max retries.'
+          )
+          .left(255);
         // This branch was reached by the scheduled retry firing, so clear that elapsed
         // sleep deadline; otherwise a later resumed SUSPEND/approval gate would be
         // immediately re-woken by the watchdog (Sleep_Until__c <= now).
@@ -6392,6 +6434,32 @@ public inherited sharing class WorkflowEngine {
         );
         update as system instance;
       }
+    } else if (result.action == StepResult.ActionType.FAIL) {
+      // A compensation step returned an explicit fail() — treat it as a deliberate
+      // compensation crash: park the saga in the recoverable CompensationFailed state
+      // with the author's reason, preserving the remaining LIFO stack for operator
+      // resume. Same format as the RETRY-exhausted and thrown-exception paths.
+      stepExec.Status__c = 'Failed';
+      stepExec.Error_Details__c = (result.failureDataJson != null)
+        ? result.failureReason + '\nfailureData: ' + result.failureDataJson
+        : result.failureReason;
+      saveStepExec(stepExec);
+
+      Boolean wasCancellingFail = (instance.Status__c == 'Cancelling');
+      instance.Status__c = 'CompensationFailed';
+      instance.Error_Message__c = buildRollbackIncompleteMessage(
+          wasCancellingFail,
+          'Rollback incomplete: compensation step ' +
+            stepExec.Step_Name__c +
+            ' failed: ' +
+            result.failureReason
+        )
+        .left(255);
+      instance.Sleep_Until__c = null;
+      instance.Async_Job_Id__c = null;
+      update as system instance;
+      WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
+      WorkflowLifecyclePublisher.publish(instance);
     } else {
       stepExec.Status__c = 'Failed';
       stepExec.Error_Details__c =
@@ -6403,11 +6471,12 @@ public inherited sharing class WorkflowEngine {
       Boolean wasCancelling = (instance.Status__c == 'Cancelling');
       instance.Status__c = 'CompensationFailed';
       instance.Error_Message__c = buildRollbackIncompleteMessage(
-        wasCancelling,
-        'Rollback incomplete: compensation step ' +
-          stepExec.Step_Name__c +
-          ' failed: Unsupported action.'
-      );
+          wasCancelling,
+          'Rollback incomplete: compensation step ' +
+            stepExec.Step_Name__c +
+            ' failed: Unsupported action.'
+        )
+        .left(255);
       // Clear any stale sleep/retry deadline (see the max-retries branch above).
       instance.Sleep_Until__c = null;
       instance.Async_Job_Id__c = null;
@@ -7503,15 +7572,17 @@ public inherited sharing class WorkflowEngine {
       // fan-out steps are left untouched. The actual enqueue honors the test opt-out
       // internally (like the bulk signal path) so the query/re-arm still run under it.
       if (!parallelResumeIds.isEmpty()) {
-        reDriveTransientRetryBranches([
-          SELECT Id, Workflow_Instance__c, Step_Name__c
-          FROM Workflow_Step_Execution__c
-          WHERE
-            Workflow_Instance__c IN :parallelResumeIds
-            AND Status__c IN ('Pending', 'Running')
-            AND Transient_Retry_Count__c > 0
-          WITH SYSTEM_MODE
-        ]);
+        reDriveTransientRetryBranches(
+          [
+            SELECT Id, Workflow_Instance__c, Step_Name__c
+            FROM Workflow_Step_Execution__c
+            WHERE
+              Workflow_Instance__c IN :parallelResumeIds
+              AND Status__c IN ('Pending', 'Running')
+              AND Transient_Retry_Count__c > 0
+            WITH SYSTEM_MODE
+          ]
+        );
       }
     }
 
@@ -7552,20 +7623,22 @@ public inherited sharing class WorkflowEngine {
     try {
       if (!WorkflowPauseGate.wildcardPaused()) {
         Set<String> orphanPausedDefs = WorkflowPauseGate.pausedNames();
-        reDriveTransientRetryBranches([
-          SELECT Id, Workflow_Instance__c, Step_Name__c
-          FROM Workflow_Step_Execution__c
-          WHERE
-            Transient_Retry_Count__c > 0
-            AND Status__c IN ('Pending', 'Running')
-            AND Workflow_Instance__r.Status__c = 'Running'
-            AND Workflow_Instance__r.Sleep_Until__c != NULL
-            AND Workflow_Instance__r.Sleep_Until__c <= :now
-            AND Workflow_Instance__r.Current_Step__c LIKE '%,%'
-            AND Workflow_Instance__r.Workflow_Name__c NOT IN :orphanPausedDefs
-          WITH SYSTEM_MODE
-          LIMIT :WATCHDOG_RESUME_BATCH_SIZE
-        ]);
+        reDriveTransientRetryBranches(
+          [
+            SELECT Id, Workflow_Instance__c, Step_Name__c
+            FROM Workflow_Step_Execution__c
+            WHERE
+              Transient_Retry_Count__c > 0
+              AND Status__c IN ('Pending', 'Running')
+              AND Workflow_Instance__r.Status__c = 'Running'
+              AND Workflow_Instance__r.Sleep_Until__c != NULL
+              AND Workflow_Instance__r.Sleep_Until__c <= :now
+              AND Workflow_Instance__r.Current_Step__c LIKE '%,%'
+              AND Workflow_Instance__r.Workflow_Name__c NOT IN :orphanPausedDefs
+            WITH SYSTEM_MODE
+            LIMIT :WATCHDOG_RESUME_BATCH_SIZE
+          ]
+        );
       }
     } catch (Exception orphanEx) {
       System.debug(

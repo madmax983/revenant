@@ -262,6 +262,20 @@ WorkflowEngine.signal(correlationKey, 'Approve:PurchaseApproval', '{"approved":t
 
 **Saga rollback on rejection.** The reject step throws a `WorkflowEngine.WorkflowException`. Because the prior `CompensatableStep` is on `Compensation_Stack__c`, the engine automatically calls its `compensate()` method in LIFO order — reading the original step output from `ctx.stepStateJson` to retrieve any resource identifiers — and the instance reaches `Compensated` when the rollback is done. No additional wiring is required: the stack is maintained by the engine whenever a `CompensatableStep` completes on the forward path.
 
+**Deliberate, terminal failures — `StepResult.fail(reason)`.** For a *planned* business-rule failure ("order already refunded", "account closed", "KYC rejected"), return `StepResult.fail(reason)` instead of throwing. Unlike a thrown exception — which surfaces an Apex stack trace in `Error_Message__c` / on the dashboard — `fail()` records your operator-readable `reason` verbatim and stops the workflow in **zero retry hops** (it is Revenant's non-retryable / permanent-failure primitive, the terminal counterpart to opt-in `StepResult.retry()`). It honors the same compensation contract: with a non-empty `Compensation_Stack__c` the instance transitions to `Compensating` and runs `compensate()` LIFO; with no stack it goes straight to `Failed`. Pass structured data with `StepResult.fail(reason, failureData)` — it is persisted on the failing step's `Error_Details__c` for downstream compensation/alerting to inspect.
+
+```java
+public StepResult execute(StepContext ctx) {
+    if (orderAlreadyRefunded(ctx)) {
+        return StepResult.fail(
+            'Order already refunded',
+            new Map<String, Object>{ 'orderId' => ctx.getSignal('Order').payload }
+        );
+    }
+    ...
+}
+```
+
 ### 6. Parent→Child Workflow Composition
 
 The engine ships full parent→child orchestration: `StepResult.startChild()` suspends the parent, runs the child in its own durable Queueable chain, and resumes the parent via a `ChildCompleted:<childKey>` Platform Event when the child **successfully completes**. [`ChildWorkflowCompositionExample`](examples/main/default/classes/ChildWorkflowCompositionExample.cls) is the copyable reference — a loan-application parent that delegates credit scoring to a child and then branches on the child's score.
