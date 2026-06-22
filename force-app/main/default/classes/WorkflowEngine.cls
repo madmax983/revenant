@@ -7324,7 +7324,7 @@ public inherited sharing class WorkflowEngine {
       // internally (like the bulk signal path) so the query/re-arm still run under it.
       if (!parallelResumeIds.isEmpty()) {
         List<Workflow_Step_Execution__c> retryBranches = [
-          SELECT Workflow_Instance__c, Step_Name__c
+          SELECT Id, Workflow_Instance__c, Step_Name__c
           FROM Workflow_Step_Execution__c
           WHERE
             Workflow_Instance__c IN :parallelResumeIds
@@ -7335,19 +7335,27 @@ public inherited sharing class WorkflowEngine {
         if (!retryBranches.isEmpty()) {
           // Re-arm the watchdog deadline scheduleTransientLockRetry cleared before the
           // hand-off, so a delayed/lost branch event (or a CalloutStep deferring its
-          // pre-exec DML) still has a persisted timeout net — mirroring the admission
-          // and unbounded-fall-through re-drive paths. Scoped to the instances that
-          // actually carry a retrying branch, so ordinary parallel sleepers are
-          // unaffected.
-          Set<Id> retryInstanceIds = new Set<Id>();
+          // pre-exec DML) still has a persisted timeout net. Scoped to ONLY the
+          // retry-marked branch rows whose deadline was cleared for backoff — not every
+          // active step on the instance — so a sibling branch's already-overdue or hung
+          // deadline is not repeatedly masked by a fresh full timeout each time a retry
+          // branch wakes. The retry branch's instance is necessarily past admission (it
+          // was executing when it crashed), so no concurrency-defer check is needed.
+          List<Workflow_Step_Execution__c> toReArm = new List<Workflow_Step_Execution__c>();
           for (Workflow_Step_Execution__c branch : retryBranches) {
-            retryInstanceIds.add(branch.Workflow_Instance__c);
+            Integer timeout = getStepTimeoutSeconds(branch.Step_Name__c);
+            if (timeout != null && timeout > 0) {
+              toReArm.add(
+                new Workflow_Step_Execution__c(
+                  Id = branch.Id,
+                  Timeout_At__c = DateTime.now().addSeconds(timeout)
+                )
+              );
+            }
           }
-          List<Workflow_Instance__c> retryInstances = new List<Workflow_Instance__c>();
-          for (Id rid : retryInstanceIds) {
-            retryInstances.add(new Workflow_Instance__c(Id = rid));
+          if (!toReArm.isEmpty()) {
+            update as system toReArm;
           }
-          reArmTimeoutsForResume(retryInstances);
 
           // Bulk-publish ONE EventBus call for all retrying branches so a heartbeat
           // waking many parallel sleepers cannot exceed the publish/DML statement limit
@@ -7375,7 +7383,24 @@ public inherited sharing class WorkflowEngine {
           }
           if (!branchEvents.isEmpty()) {
             WorkflowWatchdog.bootstrap();
-            EventBus.publish(branchEvents);
+            // Check every SaveResult and throw on any failure (mirroring signal() and
+            // the bulk enqueue helpers): the instance has already been flipped to
+            // Running with Sleep_Until__c cleared, so a silently dropped publish would
+            // leave the retry branch unenqueued and unselectable by a later heartbeat.
+            // Throwing rolls the whole wake-up back so it is retried intact.
+            List<Database.SaveResult> srs = EventBus.publish(branchEvents);
+            for (Database.SaveResult sr : srs) {
+              if (!sr.isSuccess()) {
+                List<String> errMsgs = new List<String>();
+                for (Database.Error err : sr.getErrors()) {
+                  errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
+                }
+                throw new WorkflowException(
+                  'Failed to publish transient-retry branch event: ' +
+                  String.join(errMsgs, ', ')
+                );
+              }
+            }
           }
         }
       }
