@@ -4562,4 +4562,519 @@ public class WorkflowEngineTest {
       'Well-formed HappyWorkflow should pass clean: ' + good.getMessages()
     );
   }
+
+  // ==========================================
+  // TIMED WAIT — MOCK WORKFLOWS & STEPS (Issue #35)
+  // ==========================================
+
+  public class TimedSuspendWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.TimedSuspendStep',
+        'WorkflowEngineTest.TimeoutFallbackStep',
+        'WorkflowEngineTest.AfterTimedSignalStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.TimedSuspendStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (currentStepName == 'WorkflowEngineTest.TimedSuspendStep') {
+        return 'WorkflowEngineTest.AfterTimedSignalStep';
+      }
+      return null;
+    }
+  }
+
+  public class TimedSuspendStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      List<Workflow_Signal__c> signals = [
+        SELECT Id, Signal_Name__c, Payload__c
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :ctx.workflowInstanceId
+          AND Signal_Name__c = 'Resume'
+          AND Status__c = 'Received'
+        LIMIT 1
+      ];
+      if (!signals.isEmpty()) {
+        Workflow_Signal__c sig = signals[0];
+        sig.Status__c = 'Consumed';
+        update sig;
+        return StepResult.complete(
+          'WorkflowEngineTest.AfterTimedSignalStep',
+          'signaled'
+        );
+      }
+      return StepResult.suspend(
+        60,
+        'WorkflowEngineTest.TimeoutFallbackStep'
+      );
+    }
+  }
+
+  // Flag to record whether isTimeoutResume() was true when fallback ran
+  public static Boolean capturedIsTimeoutResume = null;
+
+  public class TimeoutFallbackStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      WorkflowEngineTest.capturedIsTimeoutResume = ctx.isTimeoutResume();
+      return StepResult.complete(null, 'timedout');
+    }
+  }
+
+  public class AfterTimedSignalStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'signaled');
+    }
+  }
+
+  // Timed approval variant
+  public class TimedApprovalWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.TimedApprovalStep',
+        'WorkflowEngineTest.ApprovalTimeoutFallbackStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.TimedApprovalStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  public class TimedApprovalStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      List<Workflow_Signal__c> signals = [
+        SELECT Id
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :ctx.workflowInstanceId
+          AND Signal_Name__c = 'Approve:TimedApproval'
+          AND Status__c = 'Received'
+        LIMIT 1
+      ];
+      if (!signals.isEmpty()) {
+        signals[0].Status__c = 'Consumed';
+        update signals[0];
+        return StepResult.complete(null, 'approved');
+      }
+      return StepResult.waitForApproval(
+        'TimedApproval',
+        'Manager',
+        60,
+        'WorkflowEngineTest.ApprovalTimeoutFallbackStep'
+      );
+    }
+  }
+
+  public class ApprovalTimeoutFallbackStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'approval_timedout');
+    }
+  }
+
+  // ==========================================
+  // TIMED WAIT — TESTS (Issue #35)
+  // ==========================================
+
+  @isTest
+  static void testTimedSuspend_TimeoutWins() {
+    WorkflowEngine.disableQueueableInTest = true;
+    capturedIsTimeoutResume = null;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.TimedSuspendWorkflow',
+      'TimedSuspendKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Assert the timed suspend armed the timer
+    Workflow_Instance__c inst = [
+      SELECT Status__c, Current_Step__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', inst.Status__c, 'Should be Suspended');
+    System.assertEquals(
+      'WorkflowEngineTest.TimedSuspendStep',
+      inst.Current_Step__c
+    );
+    System.assertNotEquals(null, inst.Sleep_Until__c, 'Timer should be armed');
+
+    // Capture the wait step exec id and assert $timeoutStep is persisted
+    Workflow_Step_Execution__c waitExec = [
+      SELECT Id, Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.TimedSuspendStep'
+      LIMIT 1
+    ];
+    System.assertEquals('Pending', waitExec.Status__c);
+    System.assert(
+      waitExec.Output__c != null &&
+        waitExec.Output__c.contains('"$timeoutStep"') &&
+        waitExec.Output__c.contains('WorkflowEngineTest.TimeoutFallbackStep'),
+      'Output should contain $timeoutStep: ' + waitExec.Output__c
+    );
+    Id waitExecId = waitExec.Id;
+    String waitExecOutput = waitExec.Output__c;
+
+    // Simulate the deadline firing
+    inst.Sleep_Until__c = DateTime.now().addSeconds(-10);
+    update as system inst;
+
+    // Run the watchdog
+    WorkflowEngine.processWatchdogHeartbeat();
+
+    // Assert routing: Current_Step__c advanced to the fallback
+    inst = [
+      SELECT Status__c, Current_Step__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Running', inst.Status__c, 'Should be Running after timeout');
+    System.assertEquals(
+      'WorkflowEngineTest.TimeoutFallbackStep',
+      inst.Current_Step__c,
+      'Should route to timeout fallback step'
+    );
+    System.assertEquals(null, inst.Sleep_Until__c, 'Timer should be disarmed');
+
+    // Assert a NEW Pending step exec was created for the fallback
+    List<Workflow_Step_Execution__c> fallbackExecs = [
+      SELECT Id, Status__c, Input__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.TimeoutFallbackStep'
+    ];
+    System.assertEquals(1, fallbackExecs.size(), 'Should have exactly one fallback exec');
+    System.assertEquals('Pending', fallbackExecs[0].Status__c);
+
+    // Assert the original wait exec is UNMUTATED (append-only)
+    Workflow_Step_Execution__c unchangedWaitExec = [
+      SELECT Id, Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :waitExecId
+    ];
+    System.assertEquals(
+      'Pending',
+      unchangedWaitExec.Status__c,
+      'Wait exec must remain Pending (append-only)'
+    );
+    System.assertEquals(
+      waitExecOutput,
+      unchangedWaitExec.Output__c,
+      'Wait exec Output must be unmutated'
+    );
+
+    // Run the fallback step
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    inst = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', inst.Status__c);
+    System.assertEquals('"timedout"', inst.Output__c);
+
+    // Assert isTimeoutResume() was true in the fallback step
+    System.assertEquals(
+      true,
+      capturedIsTimeoutResume,
+      'isTimeoutResume() must be true in the fallback step'
+    );
+
+    // Assert $timeoutResume was stripped from ctx.inputJson (not visible to step author)
+    Workflow_Step_Execution__c fallbackExec = [
+      SELECT Input__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :fallbackExecs[0].Id
+    ];
+    System.assert(
+      fallbackExec.Input__c == null ||
+        !fallbackExec.Input__c.contains('$timeoutResume'),
+      'Engine marker $timeoutResume should not be visible in stored Input: ' +
+      fallbackExec.Input__c
+    );
+  }
+
+  @isTest
+  static void testTimedSuspend_SignalWins() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.TimedSuspendWorkflow',
+      'TimedSuspendSignalKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Verify timer was armed
+    Workflow_Instance__c inst = [
+      SELECT Status__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', inst.Status__c);
+    System.assertNotEquals(null, inst.Sleep_Until__c, 'Timer should be armed');
+
+    // Send the winning signal (single-instance signal path)
+    WorkflowEngine.signal('TimedSuspendSignalKey', 'Resume', '{}');
+
+    // Assert signal disarmed the timer
+    inst = [
+      SELECT Status__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Running', inst.Status__c, 'Should be Running after signal');
+    System.assertEquals(
+      null,
+      inst.Sleep_Until__c,
+      'Signal win must disarm the timer (Sleep_Until__c must be null)'
+    );
+
+    // Run the resumed step
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Assert advanced to AfterTimedSignalStep and completed
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    inst = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', inst.Status__c);
+    System.assertEquals('"signaled"', inst.Output__c);
+
+    // Assert no fallback step exec was ever created
+    List<Workflow_Step_Execution__c> fallbackExecs = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.TimeoutFallbackStep'
+    ];
+    System.assertEquals(
+      0,
+      fallbackExecs.size(),
+      'No fallback exec should exist when signal wins'
+    );
+
+    // Run the watchdog — confirm it does NOT mis-route (timer is cleared)
+    WorkflowEngine.processWatchdogHeartbeat();
+
+    List<Workflow_Step_Execution__c> fallbackExecsAfterWatchdog = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.TimeoutFallbackStep'
+    ];
+    System.assertEquals(
+      0,
+      fallbackExecsAfterWatchdog.size(),
+      'Watchdog must not create fallback exec after signal wins'
+    );
+  }
+
+  @isTest
+  static void testTimedSuspend_LateSignalAfterTimeout_IsNoOp() {
+    WorkflowEngine.disableQueueableInTest = true;
+    capturedIsTimeoutResume = null;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.TimedSuspendWorkflow',
+      'TimedSuspendLateKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Force timeout to fire
+    Workflow_Instance__c inst = [
+      SELECT Id, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    inst.Sleep_Until__c = DateTime.now().addSeconds(-10);
+    update as system inst;
+    WorkflowEngine.processWatchdogHeartbeat();
+
+    // Run the fallback step to terminal
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    inst = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', inst.Status__c);
+    System.assertEquals('"timedout"', inst.Output__c);
+
+    // Deliver the late signal — should be a no-op (captured as Unrouted)
+    WorkflowEngine.signal('TimedSuspendLateKey', 'Resume', '{}');
+
+    // Instance must not change
+    inst = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'Completed',
+      inst.Status__c,
+      'Instance must stay Completed after late signal'
+    );
+    System.assertEquals('"timedout"', inst.Output__c);
+
+    // The late signal is captured as Unrouted
+    List<Workflow_Signal__c> unroutedSignals = [
+      SELECT Status__c
+      FROM Workflow_Signal__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Signal_Name__c = 'Resume'
+        AND Status__c = 'Unrouted'
+    ];
+    System.assertEquals(
+      1,
+      unroutedSignals.size(),
+      'Late signal should be captured as Unrouted'
+    );
+  }
+
+  @isTest
+  static void testTimedWait_BackCompat_UntimedOverloadsUnchanged() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Untimed suspend should leave Sleep_Until__c null
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SuspendingWorkflow',
+      'BackCompatSuspendKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    Workflow_Instance__c inst = [
+      SELECT Status__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', inst.Status__c);
+    System.assertEquals(
+      null,
+      inst.Sleep_Until__c,
+      'Untimed suspend must NOT arm a timer'
+    );
+
+    // Untimed waitForApproval should leave Sleep_Until__c null
+    Id approvalInstanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.ApprovalWorkflow',
+      'BackCompatApprovalKey',
+      null
+    );
+    new WorkflowOrchestrator(approvalInstanceId).execute(null);
+
+    Workflow_Instance__c approvalInst = [
+      SELECT Status__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :approvalInstanceId
+    ];
+    System.assertEquals('Suspended', approvalInst.Status__c);
+    System.assertEquals(
+      null,
+      approvalInst.Sleep_Until__c,
+      'Untimed waitForApproval must NOT arm a timer'
+    );
+  }
+
+  @isTest
+  static void testTimedApproval_TimeoutWins() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.TimedApprovalWorkflow',
+      'TimedApprovalKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    Workflow_Instance__c inst = [
+      SELECT Status__c, Current_Step__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', inst.Status__c);
+    System.assertNotEquals(
+      null,
+      inst.Sleep_Until__c,
+      'Timed approval should arm a timer'
+    );
+
+    // Verify approval state JSON includes both existing keys and $timeoutStep
+    Workflow_Step_Execution__c waitExec = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.TimedApprovalStep'
+      LIMIT 1
+    ];
+    System.assertEquals('Pending', waitExec.Status__c);
+    System.assert(
+      waitExec.Output__c.contains('"waitingForApproval":true'),
+      'Should retain waitingForApproval key'
+    );
+    System.assert(
+      waitExec.Output__c.contains('"approvalKey":"TimedApproval"'),
+      'Should retain approvalKey'
+    );
+    System.assert(
+      waitExec.Output__c.contains('"approvalRole":"Manager"'),
+      'Should retain approvalRole'
+    );
+    System.assert(
+      waitExec.Output__c.contains('"$timeoutStep"') &&
+        waitExec.Output__c.contains(
+          'WorkflowEngineTest.ApprovalTimeoutFallbackStep'
+        ),
+      'Should contain $timeoutStep: ' + waitExec.Output__c
+    );
+
+    // Fire the deadline
+    inst.Sleep_Until__c = DateTime.now().addSeconds(-10);
+    update as system inst;
+    WorkflowEngine.processWatchdogHeartbeat();
+
+    inst = [
+      SELECT Status__c, Current_Step__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Running', inst.Status__c);
+    System.assertEquals(
+      'WorkflowEngineTest.ApprovalTimeoutFallbackStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals(null, inst.Sleep_Until__c);
+
+    // Run the fallback step to completion
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    inst = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', inst.Status__c);
+    System.assertEquals('"approval_timedout"', inst.Output__c);
+  }
 }

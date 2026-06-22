@@ -235,4 +235,62 @@ public class WorkflowWatchdogTest {
     ];
     System.assertEquals(0, newWatchdogs.size(), 'Should not spawn a new watchdog if a successor is active');
   }
+
+  @isTest
+  static void testTimedSuspend_BulkSignalWins_DisarmsTimer() {
+    // Verifies the bulk signal(List<SignalRequest>) path also clears Sleep_Until__c
+    // when a signal wins the race against an armed timed-wait timer.
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.TimedSuspendWorkflow',
+      'BulkSignalKey',
+      null
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Timer should be armed
+    Workflow_Instance__c inst = [
+      SELECT Status__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', inst.Status__c);
+    System.assertNotEquals(null, inst.Sleep_Until__c, 'Timer should be armed before bulk signal');
+
+    // Deliver winning signal via bulk path
+    WorkflowEngine.signal(
+      new List<WorkflowEngine.SignalRequest>{
+        new WorkflowEngine.SignalRequest('BulkSignalKey', 'Resume', '{}')
+      }
+    );
+
+    // Timer must be disarmed by the bulk signal path
+    inst = [
+      SELECT Status__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Running', inst.Status__c, 'Should be Running after bulk signal');
+    System.assertEquals(
+      null,
+      inst.Sleep_Until__c,
+      'Bulk signal win must disarm the timer (Sleep_Until__c must be null)'
+    );
+
+    // Watchdog must not fire a timeout-route after disarm
+    WorkflowEngine.processWatchdogHeartbeat();
+    List<Workflow_Step_Execution__c> fallbackExecs = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.TimeoutFallbackStep'
+    ];
+    System.assertEquals(
+      0,
+      fallbackExecs.size(),
+      'Watchdog must not create fallback exec after bulk signal wins'
+    );
+  }
 }
