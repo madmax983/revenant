@@ -152,4 +152,105 @@ public class WorkflowDeadlineTest {
     System.assertEquals('Failed', auditTrail[0].Status__c);
     System.assertEquals('Execution deadline exceeded', auditTrail[0].Error_Details__c);
   }
+
+  public class TestCompWorkflow implements WorkflowDefinition, ExecutionTimeoutConfigurable {
+    public List<String> getSteps() {
+      return new List<String>{'WorkflowDeadlineTest.TestCompensatableStep'};
+    }
+    public String getInitialStep() {
+      return 'WorkflowDeadlineTest.TestCompensatableStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public Integer getExecutionTimeoutSeconds() {
+      return 30;
+    }
+  }
+
+  public class TestCompensatableStep implements CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'Done');
+    }
+    public StepResult compensate(StepContext ctx) {
+      return StepResult.complete(null, 'Compensated');
+    }
+  }
+
+  @isTest
+  static void testWatchdogSweepExpiredWithCompensation() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Create a running instance that has already expired but has a compensation stack
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowDeadlineTest.TestCompWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'Deadline-Expired-WithComp',
+      Deadline_At__c = DateTime.now().addSeconds(-10),
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{'WorkflowDeadlineTest.TestCompensatableStep'}
+      )
+    );
+    insert inst;
+
+    // Insert the original successful execution for the step so it can be compensated
+    Workflow_Step_Execution__c origExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowDeadlineTest.TestCompensatableStep',
+      Status__c = 'Completed',
+      Input__c = '{"test": 1}',
+      Output__c = '{"test": 2}'
+    );
+    insert origExec;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Reload the instance
+    Workflow_Instance__c reloadedInst = [
+      SELECT Status__c, Error_Message__c, Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+
+    System.assertEquals('Compensating', reloadedInst.Status__c, 'Status should be Compensating');
+    System.assertEquals('Execution deadline exceeded', reloadedInst.Error_Message__c);
+    System.assertEquals(null, reloadedInst.Terminal_At__c, 'Terminal_At__c should NOT be set yet as it is Compensating');
+
+    // Verify a new step execution of name 'Workflow_Deadline' was inserted
+    List<Workflow_Step_Execution__c> deadlineExecs = [
+      SELECT Step_Name__c, Status__c, Error_Details__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'Workflow_Deadline'
+    ];
+    System.assertEquals(1, deadlineExecs.size(), 'Should have inserted a Workflow_Deadline step');
+    System.assertEquals('Failed', deadlineExecs[0].Status__c);
+    System.assertEquals('Execution deadline exceeded', deadlineExecs[0].Error_Details__c);
+
+    // Verify the compensation step is pre-created and has status 'Pending'
+    List<Workflow_Step_Execution__c> compStepExecs = [
+      SELECT Step_Name__c, Status__c, Input__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = 'WorkflowDeadlineTest.TestCompensatableStep_Compensate'
+    ];
+    System.assertEquals(1, compStepExecs.size(), 'Should have pre-created the compensation step');
+    System.assertEquals('Pending', compStepExecs[0].Status__c);
+    System.assertEquals('{"test": 1}', compStepExecs[0].Input__c);
+
+    // Now execute the orchestrator (or runStep) to complete the compensation
+    WorkflowEngine.runStep(inst.Id, null);
+
+    // Reload instance and verify it is now Compensated
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c, Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Compensated', finalInst.Status__c, 'Status should transition to Compensated');
+    System.assertNotEquals(null, finalInst.Terminal_At__c, 'Terminal_At__c should be set');
+  }
 }
+
