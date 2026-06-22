@@ -23,6 +23,7 @@ import redeliverSignal from "@salesforce/apex/WorkflowDashboardController.redeli
 import pauseDefinition from "@salesforce/apex/WorkflowDashboardController.pauseDefinition";
 import resumeDefinition from "@salesforce/apex/WorkflowDashboardController.resumeDefinition";
 import getPausedDefinitions from "@salesforce/apex/WorkflowDashboardController.getPausedDefinitions";
+import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
 
 export default class WorkflowDashboard extends LightningElement {
   instances = [];
@@ -43,6 +44,7 @@ export default class WorkflowDashboard extends LightningElement {
   viewingDoctor = false;
   loadingDoctor = false;
   doctorData = { config: {} };
+  concurrencyRows = [];
 
   // Schedules view state (renders the standalone workflowScheduleManager component)
   viewingSchedules = false;
@@ -856,6 +858,28 @@ export default class WorkflowDashboard extends LightningElement {
       .finally(() => {
         this.loadingDoctor = false;
       });
+
+    getConcurrencyStatus()
+      .then((rows) => {
+        this.concurrencyRows = (rows || []).map((r) => ({
+          ...r,
+          ceilingLabel: r.ceiling === null || r.ceiling === undefined
+            ? "—"
+            : r.ceiling,
+          atCapacity:
+            r.ceiling !== null &&
+            r.ceiling !== undefined &&
+            r.inFlight >= r.ceiling,
+        }));
+      })
+      .catch(() => {
+        // Concurrency panel is best-effort; never block the System Doctor view.
+        this.concurrencyRows = [];
+      });
+  }
+
+  get hasConcurrencyRows() {
+    return this.concurrencyRows && this.concurrencyRows.length > 0;
   }
 
   handleEnqueueWatchdog() {

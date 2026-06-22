@@ -1010,8 +1010,17 @@ public inherited sharing class WorkflowDashboardController {
    */
   private static List<String> getDefinitionsFromSource() {
     List<String> definitions = new List<String>();
-    Pattern classPattern = Pattern.compile(
-      '(?i)\\bclass\\s+([a-zA-Z0-9_]+)\\s+[^\\{]*?\\bimplements\\s+[^\\{]*?\\b(WorkflowDefinition|VersionedWorkflow)\\b'
+    // Two linear patterns instead of one with nested lazy quantifiers. The previous
+    // single regex used '[^{]*?' twice; its backtracking tripped "Regex too
+    // complicated" once class bodies grew large. classHeaderPattern uses a single
+    // greedy negated class anchored to the opening brace (linear — no catastrophic
+    // backtracking) to capture each class name and its short declaration header;
+    // implementsPattern then runs only on that short header, never the full body.
+    Pattern classHeaderPattern = Pattern.compile(
+      '(?i)\\bclass\\s+([a-zA-Z0-9_]+)\\b([^{]*)\\{'
+    );
+    Pattern implementsPattern = Pattern.compile(
+      '(?i)\\bimplements\\b[^{]*\\b(WorkflowDefinition|VersionedWorkflow)\\b'
     );
 
     Long heapGuard = (Long) (Limits.getLimitHeapSize() *
@@ -1047,10 +1056,29 @@ public inherited sharing class WorkflowDashboardController {
       ) {
         continue;
       }
+      // Cheap pre-filter: a class that never names either interface cannot implement
+      // one, so skip the regex entirely for the (typically vast) majority of classes.
+      // Safe superset — an implementer always names the interface in real source, so
+      // a body that mentions it only in a comment is still let through and correctly
+      // rejected by the comment-stripped regex below.
+      String bodyLower = ac.Body.toLowerCase();
+      if (
+        !bodyLower.contains('workflowdefinition') &&
+        !bodyLower.contains('versionedworkflow')
+      ) {
+        continue;
+      }
       // Match against comment-stripped source so doc-comment prose like
       // "...a class that implements WorkflowDefinition" is never read as a definition.
-      Matcher pm = classPattern.matcher(COMMENT_PATTERN.matcher(ac.Body).replaceAll(''));
+      Matcher pm = classHeaderPattern.matcher(
+        COMMENT_PATTERN.matcher(ac.Body).replaceAll('')
+      );
       while (pm.find()) {
+        // group(2) is the short class declaration header; the precise word-boundary
+        // interface check runs only on it, never on the full class body.
+        if (!implementsPattern.matcher(pm.group(2)).find()) {
+          continue;
+        }
         String className = pm.group(1);
         // Outer class match returns the bare name; inner class is qualified.
         definitions.add(
@@ -1879,6 +1907,76 @@ public inherited sharing class WorkflowDashboardController {
       System.debug(
         LoggingLevel.ERROR,
         'Aura getPausedDefinitions failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  /**
+   * Returns the concurrency-limit picture for each governed workflow (issue #28):
+   * current in-flight count vs. its configured ceiling, and the number of
+   * parked/throttled instances awaiting admission. One row per durable counter
+   * (Concurrency_State__c) — i.e. every workflow that is, or has been, governed.
+   * Each entry: { workflowName, ceiling, inFlight, parked }.
+   */
+  @AuraEnabled
+  public static List<Map<String, Object>> getConcurrencyStatus() {
+    checkAuthorization();
+    try {
+      List<Concurrency_State__c> states = [
+        SELECT Workflow_Definition__c, In_Flight_Count__c
+        FROM Concurrency_State__c
+        WITH SYSTEM_MODE
+        ORDER BY Workflow_Definition__c ASC
+      ];
+      if (states.isEmpty()) {
+        return new List<Map<String, Object>>();
+      }
+
+      Set<String> workflowNames = new Set<String>();
+      for (Concurrency_State__c s : states) {
+        workflowNames.add(s.Workflow_Definition__c);
+      }
+
+      // Parked = Suspended specifically awaiting a concurrency slot (distinct from
+      // ordinary sleep/signal waits), grouped per definition.
+      Map<String, Integer> parkedByDef = new Map<String, Integer>();
+      for (AggregateResult ar : [
+        SELECT Workflow_Name__c wf, COUNT(Id) cnt
+        FROM Workflow_Instance__c
+        WHERE
+          Workflow_Name__c IN :workflowNames
+          AND Status__c = 'Suspended'
+          AND Concurrency_Parked__c = true
+        WITH SYSTEM_MODE
+        GROUP BY Workflow_Name__c
+      ]) {
+        parkedByDef.put((String) ar.get('wf'), (Integer) ar.get('cnt'));
+      }
+
+      List<Map<String, Object>> result = new List<Map<String, Object>>();
+      for (Concurrency_State__c s : states) {
+        result.add(
+          new Map<String, Object>{
+            'workflowName' => s.Workflow_Definition__c,
+            'ceiling' => ConcurrencyGate.getCeiling(s.Workflow_Definition__c),
+            'inFlight' => s.In_Flight_Count__c == null
+              ? 0
+              : (Integer) s.In_Flight_Count__c,
+            'parked' => parkedByDef.containsKey(s.Workflow_Definition__c)
+              ? parkedByDef.get(s.Workflow_Definition__c)
+              : 0
+          }
+        );
+      }
+      return result;
+    } catch (Exception ex) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura getConcurrencyStatus failed: ' +
           ex.getMessage() +
           '\n' +
           ex.getStackTraceString()

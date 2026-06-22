@@ -17,6 +17,23 @@ public inherited sharing class WorkflowEngine {
   // Revenant_Config__mdt.Stale_Threshold_Minutes__c; default 60 minutes.
   public static Integer staleThresholdMinutes = 60;
 
+  // Base + jitter (seconds) before a concurrency-parked instance re-attempts
+  // admission. Precise scheduling drives it promptly when slots free; under a large
+  // burst the scheduling degrades to the watchdog batch-resume (the scalable path).
+  @TestVisible
+  private static Integer concurrencyAdmissionRetrySeconds = 30;
+  private static final Integer CONCURRENCY_ADMISSION_RETRY_JITTER_SECONDS = 15;
+
+  // Bounds for re-driving a step after a TRANSIENT row-lock error (UNABLE_TO_LOCK_ROW)
+  // — e.g. a fan-in where many child-completion signals lock the shared parent row at
+  // once. These are CONSECUTIVE retries (reset on the next successful drive), so the
+  // cap need only outlast a contention burst, not the whole fan-in.
+  @TestVisible
+  private static Integer maxTransientLockRetries = 12;
+  private static final Integer TRANSIENT_LOCK_BASE_DELAY_SECONDS = 5;
+  private static final Integer TRANSIENT_LOCK_MAX_DELAY_SECONDS = 60;
+  private static final Integer TRANSIENT_LOCK_JITTER_SECONDS = 5;
+
   // Instances in these statuses are considered in-flight; a start that collides
   // with one of them always dedups to the existing instance.
   private static final Set<String> ACTIVE_STATUSES = new Set<String>{
@@ -974,13 +991,30 @@ public inherited sharing class WorkflowEngine {
       (input != null) ? JSON.serialize(input) : null,
       'Input_' + instance.Id
     );
-    update as system instance;
 
     // Operator pause gate — decide up front whether to park this start, so the
     // initial step's timeout clock is never started while parked.
     Boolean parkAtStart =
       WorkflowPauseGate.anyPaused() &&
       WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c);
+
+    // A concurrency-bounded workflow may park on its first RUN_STEP before executing
+    // a step. Defer arming the initial step's timeout until admission succeeds (the
+    // admission path re-arms it via reArmTimeoutsForResume). Otherwise a still-Pending
+    // step sitting in the event/queue backlog during a burst could be failed by the
+    // timeout sweep before it ever reaches the gate to park.
+    Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(
+      instance.Workflow_Name__c
+    );
+    // Stamp the durable awaiting-admission marker at deferral time. The pre-start
+    // watchdog (WorkflowTimeoutJob) keys its null-deadline skip off this marker, not
+    // the live CMDT, so a ceiling added later cannot retroactively silence a genuine
+    // unbounded pre-start watchdog. Cleared on admission (the acquire path) / when the
+    // ceiling is later removed (the unbounded fall-through).
+    if (deferTimeoutForConcurrency) {
+      instance.Concurrency_Parked__c = true;
+    }
+    update as system instance;
 
     if (String.isNotBlank(instance.Current_Step__c)) {
       Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
@@ -989,10 +1023,11 @@ public inherited sharing class WorkflowEngine {
       stepExec.Status__c = 'Pending';
       stepExec.Input__c = instance.Input__c;
       stepExec.Retry_Count__c = 0;
-      // Do not start the timeout clock while parked — a paused step's Timeout_At__c
-      // would otherwise pollute the watchdog timeout batch (selected, then skipped
-      // because the parent is not runnable). Resume re-establishes the timeout.
-      if (!parkAtStart) {
+      // Do not start the timeout clock while parked — a paused/throttled step's
+      // Timeout_At__c would otherwise pollute the watchdog timeout batch (selected,
+      // then skipped because the parent is not runnable) or, for a still-Pending
+      // bounded start, fail it before admission. Resume/admission re-establishes it.
+      if (!parkAtStart && !deferTimeoutForConcurrency) {
         Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
         if (timeout != null && timeout > 0) {
           stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
@@ -1011,8 +1046,11 @@ public inherited sharing class WorkflowEngine {
       return new StartResult(instance.Id, true);
     }
 
-    // Schedule watchdog for the initial step before executing it
-    scheduleTimeoutJobForInstance(instance.Id);
+    // Schedule watchdog for the initial step before executing it — unless this is a
+    // bounded workflow, where the admission gate arms the timeout once a slot is won.
+    if (!deferTimeoutForConcurrency) {
+      scheduleTimeoutJobForInstance(instance.Id);
+    }
 
     // Enqueue the first step execution
     if (Test.isRunningTest()) {
@@ -1237,6 +1275,19 @@ public inherited sharing class WorkflowEngine {
    * when resume re-drives the wait step.
    */
   private static void wakeInstanceForSignal(Workflow_Instance__c instance) {
+    // A concurrency-parked row is stored as an ordinary Suspended instance but has
+    // not yet won an admission slot. Waking it to Running would leave a Running
+    // instance holding no slot (violating the no-running-without-slot invariant) and
+    // hide it from the parked count. The signal is already captured (Received) and is
+    // observed once admission drives the step, so skip the wake and the enqueue
+    // entirely — mirroring the guard in the bulk signal(List<SignalRequest>) path.
+    if (
+      instance.Status__c == 'Suspended' &&
+      instance.Concurrency_Parked__c == true &&
+      instance.Concurrency_Slot_Held__c != true
+    ) {
+      return;
+    }
     if (
       instance.Status__c == 'Suspended' ||
       instance.Status__c == 'Running' ||
@@ -1715,6 +1766,35 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
+    // Concurrency-bounded workflows defer the initial timeout clock until the
+    // admission gate wins a slot (mirrors doStart). A bounded first step is enqueued
+    // so its RUN_STEP reaches the gate, but a still-Pending overflow item sitting in
+    // the event/queue backlog during a burst would be failed by the timeout sweep
+    // before it ever reaches the gate to park. Admission re-arms the timeout via
+    // reArmTimeoutsForResume. isConfigured is memoized per name, so this is bulk-safe.
+    Set<Id> deferTimeoutIds = new Set<Id>();
+    List<Workflow_Instance__c> deferredToMark = new List<Workflow_Instance__c>();
+    for (Workflow_Instance__c instance : insertedInstances) {
+      if (ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
+        deferTimeoutIds.add(instance.Id);
+        // Durable awaiting-admission marker (see doStart): the pre-start watchdog
+        // keys its null-deadline skip off this, not the live CMDT, so a ceiling added
+        // later cannot silence a genuine unbounded pre-start watchdog. Cleared on
+        // admission. Parked-at-start instances are handled by instancesToPark below.
+        if (!parkedIds.contains(instance.Id)) {
+          deferredToMark.add(
+            new Workflow_Instance__c(
+              Id = instance.Id,
+              Concurrency_Parked__c = true
+            )
+          );
+        }
+      }
+    }
+    if (!deferredToMark.isEmpty()) {
+      update as system deferredToMark;
+    }
+
     // 7. Construct initial Step Execution logs for inserted instances only
     List<Workflow_Step_Execution__c> stepExecs = new List<Workflow_Step_Execution__c>();
     for (Workflow_Instance__c instance : insertedInstances) {
@@ -1725,9 +1805,13 @@ public inherited sharing class WorkflowEngine {
         stepExec.Status__c = 'Pending';
         stepExec.Input__c = instance.Input__c;
         stepExec.Retry_Count__c = 0;
-        // No timeout clock for a parked step (see doStart) — it would otherwise
-        // pollute the watchdog timeout batch. Resume re-establishes the timeout.
-        if (!parkedIds.contains(instance.Id)) {
+        // No timeout clock for a parked step (see doStart) or a bounded start awaiting
+        // admission — either would otherwise pollute the watchdog timeout batch or fail
+        // a still-Pending bounded start before admission. Resume/admission re-establishes it.
+        if (
+          !parkedIds.contains(instance.Id) &&
+          !deferTimeoutIds.contains(instance.Id)
+        ) {
           Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
           if (timeout != null && timeout > 0) {
             stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
@@ -1746,17 +1830,23 @@ public inherited sharing class WorkflowEngine {
       update as system instancesToPark;
     }
 
-    // 8. Schedule timeout jobs and enqueue orchestrators for non-parked instances
-    List<Workflow_Instance__c> instancesToDrive = new List<Workflow_Instance__c>();
+    // 8. Schedule timeout jobs for non-parked, non-deferred instances and enqueue
+    // orchestrators for all non-parked instances. Concurrency-bounded instances are
+    // still enqueued so their first RUN_STEP reaches the admission gate, but their
+    // timeout job is deferred until the gate arms it on admission (see deferTimeoutIds).
+    List<Workflow_Instance__c> instancesToSchedule = new List<Workflow_Instance__c>();
     List<Id> instanceIds = new List<Id>();
     for (Workflow_Instance__c instance : insertedInstances) {
-      if (!parkedIds.contains(instance.Id)) {
-        instancesToDrive.add(instance);
-        instanceIds.add(instance.Id);
+      if (parkedIds.contains(instance.Id)) {
+        continue;
+      }
+      instanceIds.add(instance.Id);
+      if (!deferTimeoutIds.contains(instance.Id)) {
+        instancesToSchedule.add(instance);
       }
     }
-    if (!instancesToDrive.isEmpty()) {
-      scheduleTimeoutJobsForInstances(instancesToDrive);
+    if (!instancesToSchedule.isEmpty()) {
+      scheduleTimeoutJobsForInstances(instancesToSchedule);
     }
     if (!instanceIds.isEmpty()) {
       enqueueOrchestrators(instanceIds);
@@ -2052,6 +2142,8 @@ public inherited sharing class WorkflowEngine {
         Definition_Version__c,
         Error_Message__c,
         Previous_Run_At__c,
+        Concurrency_Slot_Held__c,
+        Concurrency_Parked__c,
         CreatedDate
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
@@ -2173,6 +2265,119 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
+    // 2b. Concurrency admission gate. An instance that does not yet hold a slot must
+    //     acquire one before executing any step of a definition with a configured
+    //     ceiling. Acquisition commits the guarded counter increment in THIS
+    //     transaction and re-drives the step in a fresh transaction, so execute()
+    //     never runs while the counter DML is uncommitted (which would make a
+    //     CalloutStep — the primary use case for this feature — illegal). A held slot
+    //     is released only on a terminal transition (WorkflowInstanceTrigger).
+    //     Compensating/Cancelling instances already returned to runCompensationStep
+    //     above; they keep the slot acquired on the forward path and are never re-gated.
+    if (!instance.Concurrency_Slot_Held__c) {
+      // Only bounded workflows are gated; resolving the ceiling first (a
+      // governor-free CMDT read) keeps unbounded workflows on the exact path they
+      // take today, with no instance lock.
+      if (ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
+        // Serialize concurrent RUN_STEP deliveries for the SAME instance: both may
+        // have read Concurrency_Slot_Held__c = false from the unlocked instance
+        // query above. Re-read the authoritative flag under a row lock so the loser
+        // observes the winner's committed acquire and no-ops, instead of either
+        // double-consuming a slot (ceiling > 1) or parking over the just-admitted
+        // row (ceiling = 1).
+        Workflow_Instance__c locked = [
+          SELECT Concurrency_Slot_Held__c, Status__c
+          FROM Workflow_Instance__c
+          WHERE Id = :instance.Id
+          WITH SYSTEM_MODE
+          FOR UPDATE
+        ];
+        if (locked.Concurrency_Slot_Held__c) {
+          // A concurrent delivery already admitted this instance; its re-hop drives
+          // the step. This delivery is a safe no-op.
+          return;
+        }
+        // A concurrent cancel/terminal transition may have landed between the
+        // unlocked instance query above and this locked re-read. Acquiring a slot
+        // and writing Status__c = 'Running' off the stale forward state would
+        // resurrect a finished/cancelled instance, so bail unless it is still
+        // forward-runnable. (Compensating/Cancelling/Paused are driven by their own
+        // paths, never the admission gate.)
+        if (
+          locked.Status__c != 'Pending' &&
+          locked.Status__c != 'Running' &&
+          locked.Status__c != 'Suspended'
+        ) {
+          return;
+        }
+
+        // Resolve the initial step for a fresh start BEFORE consuming a slot, so an
+        // unresolvable workflow class fails cleanly here (the same WorkflowException
+        // the validation below would throw) instead of holding a slot that
+        // reconciliation would count forever. Throwing before tryAcquire takes no
+        // slot; throwing after would roll back the uncommitted increment anyway.
+        String resolvedStep = instance.Current_Step__c;
+        if (String.isBlank(resolvedStep)) {
+          Type wfType = Type.forName(instance.Workflow_Name__c);
+          if (wfType == null) {
+            throw new WorkflowException(
+              'Could not resolve workflow definition class: ' +
+              instance.Workflow_Name__c
+            );
+          }
+          resolvedStep = ((WorkflowDefinition) wfType.newInstance())
+            .getInitialStep();
+        }
+
+        ConcurrencyGate.AdmissionResult admission = ConcurrencyGate.tryAcquire(
+          instance.Workflow_Name__c
+        );
+        if (admission.admitted) {
+          // Slot acquired: commit the acquire + flag, then re-drive in a fresh
+          // transaction. Clear the admission-retry sleep markers and restamp the
+          // step's watchdog deadline (cleared on park) durably via
+          // reArmTimeoutsForResume, so a re-admitted step keeps its timeout safety
+          // net even when dynamic scheduling is off or at the job limit.
+          instance.Concurrency_Slot_Held__c = true;
+          instance.Concurrency_Parked__c = false;
+          instance.Current_Step__c = resolvedStep;
+          instance.Status__c = 'Running';
+          instance.Sleep_Until__c = null;
+          instance.Async_Job_Id__c = null;
+          update as system instance;
+          reArmTimeoutsForResume(new List<Workflow_Instance__c>{ instance });
+          if (!(Test.isRunningTest() && disableQueueableInTest)) {
+            enqueueResume(instance.Id);
+          }
+          return;
+        }
+        // Ceiling full: park and re-attempt admission automatically through the
+        // existing sleep/watchdog resume plumbing.
+        parkForConcurrency(instance);
+        return;
+      }
+      // Otherwise unbounded (no ceiling): fall through and run exactly as today. If
+      // this instance was parked under a ceiling that an admin has since removed or
+      // disabled, clear the stale admission-retry markers before running. Leaving a
+      // due Sleep_Until__c in place would let the watchdog treat a later real SUSPEND
+      // as an overdue sleeper and re-run the step without its external signal.
+      if (instance.Concurrency_Parked__c) {
+        instance.Concurrency_Parked__c = false;
+        instance.Sleep_Until__c = null;
+        instance.Async_Job_Id__c = null;
+        update as system instance;
+        // Re-drive in a fresh transaction instead of executing the step now: the
+        // marker-clear DML above is uncommitted, and a CalloutStep cannot run while
+        // uncommitted DML is pending (Salesforce forbids it) — the same reason the
+        // admission-acquire path above re-hops. A fresh RUN_STEP re-reads this row
+        // (now unparked) and runs the step cleanly.
+        if (!(Test.isRunningTest() && disableQueueableInTest)) {
+          enqueueResume(instance.Id);
+        }
+        return;
+      }
+    }
+
     // 2. Initialize initial step in memory if this is the start (DML deferred to outcome handler)
     if (String.isBlank(instance.Current_Step__c)) {
       Type wflowType = Type.forName(instance.Workflow_Name__c);
@@ -2271,6 +2476,7 @@ public inherited sharing class WorkflowEngine {
           Input__c,
           Output__c,
           Retry_Count__c,
+          Transient_Retry_Count__c,
           Captured_Values__c
         FROM Workflow_Step_Execution__c
         WHERE Id = :stepExecs[0].Id
@@ -2295,6 +2501,8 @@ public inherited sharing class WorkflowEngine {
         Definition_Version__c,
         Error_Message__c,
         Previous_Run_At__c,
+        Concurrency_Slot_Held__c,
+        Concurrency_Parked__c,
         CreatedDate
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
@@ -2325,6 +2533,7 @@ public inherited sharing class WorkflowEngine {
       stepExec.Step_Name__c = activeStepName;
       stepExec.Status__c = 'Running';
       stepExec.Retry_Count__c = 0;
+      stepExec.Transient_Retry_Count__c = 0;
 
       // Get previous step's output to feed as input
       List<Workflow_Step_Execution__c> completedSteps = [
@@ -3234,6 +3443,8 @@ public inherited sharing class WorkflowEngine {
         Input__c,
         Definition_Version__c,
         Previous_Run_At__c,
+        Concurrency_Parked__c,
+        Concurrency_Slot_Held__c,
         CreatedDate
       FROM Workflow_Instance__c
       WHERE Id = :instance.Id
@@ -3266,6 +3477,28 @@ public inherited sharing class WorkflowEngine {
       freshInstance.Status__c = 'Running';
     }
     instance = freshInstance;
+
+    // Reaching here means this drive acquired the instance lock that the crash path
+    // re-drives on (the parent FOR UPDATE above) — i.e. any transient row-lock
+    // contention on this step has cleared. Reset the CONSECUTIVE transient-retry
+    // counter so a later, unrelated contention burst on this same long-lived
+    // suspend/join step gets the full budget again instead of inheriting a stale
+    // near-exhausted count from an earlier wake.
+    if (
+      stepExec != null &&
+      stepExec.Id != null &&
+      stepExec.Transient_Retry_Count__c != null &&
+      stepExec.Transient_Retry_Count__c > 0
+    ) {
+      // Targeted single-field update so this early reset never persists any other
+      // in-memory staging the outcome branches below have yet to commit.
+      update as system new Workflow_Step_Execution__c(
+        Id = stepExec.Id,
+        Transient_Retry_Count__c = 0
+      );
+      stepExec.Transient_Retry_Count__c = 0;
+    }
+
     Boolean isParallel =
       String.isNotBlank(instance.Current_Step__c) &&
       instance.Current_Step__c.contains(',');
@@ -3381,7 +3614,11 @@ public inherited sharing class WorkflowEngine {
         nextStepExec.Retry_Count__c = 0;
         insert as system nextStepExec;
 
-        scheduleTimeoutJobForInstance(instance.Id);
+        // Pass the in-memory instance (Current_Step__c just advanced to nextStepName,
+        // committed above) so the per-advance watchdog scheduling does not re-query the
+        // instance on every step — that re-read is what exhausts the SOQL limit on a
+        // long synchronous drive.
+        scheduleTimeoutJobForInstance(instance);
         enqueueOrchestrator(instance.Id, null);
         return;
       }
@@ -3802,6 +4039,19 @@ public inherited sharing class WorkflowEngine {
         result.nextInputJson,
         'Input_' + nextInstance.Id
       );
+
+      // A concurrency-bounded successor must pass the admission gate on its first
+      // RUN_STEP before it owns a slot, so defer the initial step's timeout until
+      // admission re-arms it (mirrors doStart). Otherwise the still-Pending successor
+      // could be failed by the timeout sweep while waiting in the backlog for a slot.
+      Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(
+        nextInstance.Workflow_Name__c
+      );
+      // Durable awaiting-admission marker (see doStart): keeps the pre-start watchdog
+      // keyed off persisted state rather than the live CMDT. Cleared on admission.
+      if (deferTimeoutForConcurrency) {
+        nextInstance.Concurrency_Parked__c = true;
+      }
       update as system nextInstance;
 
       // Pre-create the successor's first step execution log
@@ -3813,14 +4063,16 @@ public inherited sharing class WorkflowEngine {
         nextStepExec.Input__c = nextInstance.Input__c;
         nextStepExec.Retry_Count__c = 0;
         Integer timeout = getStepTimeoutSeconds(initialStep);
-        if (timeout != null && timeout > 0) {
+        if (timeout != null && timeout > 0 && !deferTimeoutForConcurrency) {
           nextStepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
         }
         insert as system nextStepExec;
       }
 
       // Enqueue the successor run
-      scheduleTimeoutJobForInstance(nextInstance.Id);
+      if (!deferTimeoutForConcurrency) {
+        scheduleTimeoutJobForInstance(nextInstance.Id);
+      }
       if (Test.isRunningTest()) {
         if (!disableQueueableInTest) {
           System.enqueueJob(new WorkflowOrchestrator(nextInstance.Id));
@@ -3907,6 +4159,20 @@ public inherited sharing class WorkflowEngine {
       targetStepName = instance.Current_Step__c;
     }
 
+    // Transient row-lock contention (UNABLE_TO_LOCK_ROW) is retryable, not a crash:
+    // it arises when many transactions touch the same row at once — e.g. a fan-in
+    // where every child-completion signal locks the shared parent row — and clears on
+    // its own once the competing transactions commit. Re-drive the step after a short
+    // backoff instead of failing/compensating the whole workflow. Bounded by the
+    // step's consecutive Transient_Retry_Count__c so a genuinely stuck row still fails.
+    if (
+      isTransientLockError(ex) &&
+      String.isNotBlank(targetStepName) &&
+      scheduleTransientLockRetry(instance, targetStepName)
+    ) {
+      return;
+    }
+
     // Mark step failed first
     if (String.isNotBlank(targetStepName)) {
       List<Workflow_Step_Execution__c> stepExecs = [
@@ -3980,6 +4246,133 @@ public inherited sharing class WorkflowEngine {
       'Transaction crashed: ' +
       (ex != null ? ex.getMessage() : 'Unknown governor limit');
     failWorkflowInstance(instanceId, targetStepName, errorMsg);
+  }
+
+  /**
+   * True when the exception is a transient row-lock contention error
+   * (UNABLE_TO_LOCK_ROW / "record currently unavailable") rather than a genuine
+   * crash. These resolve on their own once the competing transaction commits, so
+   * the crash handler re-drives the step instead of failing the workflow.
+   */
+  @TestVisible
+  private static Boolean isTransientLockError(Exception ex) {
+    if (ex == null) {
+      return false;
+    }
+    if (ex instanceof DmlException) {
+      DmlException de = (DmlException) ex;
+      for (Integer i = 0; i < de.getNumDml(); i++) {
+        if (de.getDmlType(i) == StatusCode.UNABLE_TO_LOCK_ROW) {
+          return true;
+        }
+      }
+    }
+    String msg = ex.getMessage();
+    if (String.isBlank(msg)) {
+      return false;
+    }
+    String lower = msg.toLowerCase();
+    return lower.contains('unable_to_lock_row') ||
+      lower.contains('unable to lock row') ||
+      lower.contains('unable to obtain exclusive access') ||
+      lower.contains('record currently unavailable') ||
+      lower.contains('currently being modified by another');
+  }
+
+  /**
+   * Re-drives a step after a transient row-lock error, bounded by the step's
+   * CONSECUTIVE Transient_Retry_Count__c (reset to 0 on the next successful drive in
+   * handleStepResult). Returns true when a retry was scheduled — the caller then
+   * skips the fail path; returns false when the budget is spent or there is no step
+   * row to retry against, so the caller fails the workflow as usual. Mirrors the
+   * RETRY action's suspend + scheduleRetry handoff so the watchdog/sleep plumbing
+   * re-drives even when dynamic scheduling is off.
+   */
+  private static Boolean scheduleTransientLockRetry(
+    Workflow_Instance__c instance,
+    String stepName
+  ) {
+    // Never resurrect an already-terminal instance: a stray late crash must fall
+    // through to the (idempotent) fail path, not flip a finished run back to Suspended.
+    if (
+      instance.Status__c == 'Completed' ||
+      instance.Status__c == 'Failed' ||
+      instance.Status__c == 'Compensated' ||
+      instance.Status__c == 'Cancelled' ||
+      instance.Status__c == 'ContinuedAsNew'
+    ) {
+      return false;
+    }
+
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Id, Status__c, Transient_Retry_Count__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instance.Id
+        AND Step_Name__c = :stepName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    if (stepExecs.isEmpty()) {
+      return false;
+    }
+    Workflow_Step_Execution__c stepExec = stepExecs[0];
+    Integer attempts = (stepExec.Transient_Retry_Count__c == null)
+      ? 0
+      : (Integer) stepExec.Transient_Retry_Count__c;
+    if (attempts >= maxTransientLockRetries) {
+      return false; // budget spent -> caller fails the workflow
+    }
+
+    // The crash rolled back any in-flight status change, so keep the step
+    // re-runnable and record the consecutive transient attempt without touching the
+    // business Retry_Count__c budget.
+    stepExec.Transient_Retry_Count__c = attempts + 1;
+    if (stepExec.Status__c == 'Failed') {
+      stepExec.Status__c = 'Pending';
+    }
+    // Clear the step's watchdog deadline for the duration of the backoff. The crash
+    // left the row Running/Pending carrying its pre-crash Timeout_At__c; once the
+    // sleep flips the parent back to Running, a now-stale (already-past) deadline
+    // would let the watchdog timeout batch fail the step before the retry worker
+    // re-drives it. runStep re-stamps a fresh deadline before execute() on the
+    // re-drive, mirroring how the RETRY action parks its step out of the timeout batch.
+    stepExec.Timeout_At__c = null;
+    update as system stepExec;
+
+    // Exponential backoff (capped) with jitter so the contention wave drains before
+    // the re-drive and a fan-in of re-drives does not re-synchronize into a new storm.
+    Double exponent = Math.min(attempts, 4); // widen Integer -> Double for Math.pow
+    Integer delay =
+      TRANSIENT_LOCK_BASE_DELAY_SECONDS *
+      (Integer) Math.pow(2, exponent);
+    delay = Math.min(delay, TRANSIENT_LOCK_MAX_DELAY_SECONDS);
+    delay += (Integer) Math.floor(
+      Math.random() * TRANSIENT_LOCK_JITTER_SECONDS
+    );
+
+    String jobId = scheduleRetry(instance.Id, stepName, delay);
+    instance.Status__c = 'Suspended';
+    instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
+    instance.Async_Job_Id__c = jobId;
+    update as system instance;
+
+    // The watchdog sleep-resume re-drives with a blank-stepName orchestrator, which
+    // runStep ignores for a parallel instance (comma-separated Current_Step__c). So
+    // when no delayed job carries the branch name forward — dynamic scheduling is off,
+    // or scheduleRetry hit the org job limit and returned null — re-drive the specific
+    // branch directly via its RUN_STEP event rather than stranding it Suspended
+    // forever. Single-step instances are resolved fine by the blank resume, so only
+    // the parallel case needs this fallback.
+    if (
+      jobId == null &&
+      String.isNotBlank(instance.Current_Step__c) &&
+      instance.Current_Step__c.contains(',')
+    ) {
+      enqueueOrchestrator(instance.Id, stepName);
+    }
+    return true;
   }
 
   /**
@@ -4191,8 +4584,19 @@ public inherited sharing class WorkflowEngine {
 
     // Schedule the watchdog for the child's initial step before executing it, matching
     // the start() overloads. Without this a TimeoutConfigurable first step of a child
-    // workflow would never get a scheduled timeout job.
-    scheduleTimeoutJobForInstance(instance.Id);
+    // workflow would never get a scheduled timeout job. A concurrency-bounded child
+    // defers this until its first RUN_STEP wins an admission slot (mirrors doStart):
+    // a parked sibling could take the freed slot before this child reaches the gate,
+    // so an armed timeout could fail it while it is only waiting for capacity.
+    if (!ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
+      scheduleTimeoutJobForInstance(instance.Id);
+    } else {
+      // Durable awaiting-admission marker (see doStart): the pre-start watchdog keys
+      // its null-deadline skip off this, not the live CMDT, so a ceiling added later
+      // cannot silence a genuine unbounded pre-start watchdog. Cleared on admission.
+      instance.Concurrency_Parked__c = true;
+      update as system instance;
+    }
 
     if (!Test.isRunningTest()) {
       enqueueOrchestrator(instance.Id, null);
@@ -4302,7 +4706,7 @@ public inherited sharing class WorkflowEngine {
     if (isId) {
       // Query by ID first to prevent matching a correlation key that equals this ID string
       instances = [
-        SELECT Id, Status__c
+        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
         FROM Workflow_Instance__c
         WHERE Id = :targetId AND Status__c IN :lookupStatuses
         WITH SYSTEM_MODE
@@ -4313,7 +4717,7 @@ public inherited sharing class WorkflowEngine {
 
     if (instances.isEmpty()) {
       instances = [
-        SELECT Id, Status__c
+        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
         FROM Workflow_Instance__c
         WHERE Correlation_Key__c = :keyOrId AND Status__c IN :lookupStatuses
         WITH SYSTEM_MODE
@@ -4516,7 +4920,9 @@ public inherited sharing class WorkflowEngine {
         Status__c,
         Correlation_Key__c,
         Current_Step__c,
-        Compensation_Stack__c
+        Compensation_Stack__c,
+        Concurrency_Parked__c,
+        Concurrency_Slot_Held__c
       FROM Workflow_Instance__c
       WHERE
         (Id IN :ids
@@ -4880,6 +5286,17 @@ public inherited sharing class WorkflowEngine {
         // A Paused instance keeps its status — the held signal (Received) is
         // observed when resume re-drives the wait step; do not wake it here.
         if (inst.Status__c == 'Suspended') {
+          // A concurrency-parked row has not won a slot. Waking it to Running would
+          // leave a Running instance holding no slot (violating the no-running-without-
+          // slot invariant) and hide it from the parked count. Like Paused, leave it
+          // alone: the signal is already captured (Received) and is observed once
+          // admission drives the step. Skip the wake and the enqueue entirely.
+          if (
+            inst.Concurrency_Parked__c == true &&
+            inst.Concurrency_Slot_Held__c != true
+          ) {
+            continue;
+          }
           inst.Status__c = 'Running';
           instancesToUpdate.add(inst);
         }
@@ -6254,6 +6671,15 @@ public inherited sharing class WorkflowEngine {
   public static void enqueueOrchestrators(List<Id> instanceIds) {
     WorkflowWatchdog.bootstrap();
     if (Test.isRunningTest()) {
+      // Honor the manual-drive switch: a test that sets disableQueueableInTest is
+      // driving steps itself and must observe the pre-execution state (e.g. a
+      // bounded bulk start whose initial timeout is deferred until admission).
+      // The scalar enqueueOrchestrator already returns early in tests; without
+      // this, the bulk path's auto-run at Test.stopTest() would admit/advance the
+      // very instances the test froze, defeating the assertion.
+      if (disableQueueableInTest) {
+        return;
+      }
       for (Id instId : instanceIds) {
         try {
           if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
@@ -6772,7 +7198,9 @@ public inherited sharing class WorkflowEngine {
           Sleep_Until__c,
           Async_Job_Id__c,
           Error_Message__c,
-          Workflow_Name__c
+          Workflow_Name__c,
+          Concurrency_Parked__c,
+          Concurrency_Slot_Held__c
         FROM Workflow_Instance__c
         WHERE
           Status__c = 'Suspended'
@@ -6816,6 +7244,22 @@ public inherited sharing class WorkflowEngine {
         ) {
           continue;
         }
+        // A concurrency-parked sleeper has not yet won an admission slot. Do NOT flip
+        // it to Running here: that would leave Running rows holding no slot (violating
+        // the status/cap invariant) and hide them from the parked count. Drive it back
+        // through the admission gate while leaving it Suspended/parked — the gate flips
+        // it to Running on a successful acquire, or re-parks it (bumping Sleep_Until__c
+        // into the future) on denial. Leave Sleep_Until__c/Async_Job_Id__c intact so
+        // the gate owns the transition; the next heartbeat will not re-select it once
+        // a re-park has pushed Sleep_Until__c forward, and a duplicate delivery before
+        // then is idempotent at the gate's locked re-read.
+        if (
+          inst.Concurrency_Parked__c == true &&
+          inst.Concurrency_Slot_Held__c != true
+        ) {
+          instanceIds.add(inst.Id);
+          continue;
+        }
         Workflow_Step_Execution__c latestStep = latestStepByInstId.get(inst.Id);
         if (
           latestStep != null &&
@@ -6857,6 +7301,19 @@ public inherited sharing class WorkflowEngine {
       System.debug(
         LoggingLevel.ERROR,
         'WorkflowEngine: schedule sweep failed: ' + scheduleEx.getMessage()
+      );
+    }
+
+    // 4. Reconcile concurrency slot counters. Recomputes each configured workflow's
+    // in-flight count from the true number of non-terminal slot-holding instances,
+    // reclaiming any slot leaked by an instance that died without releasing (crash,
+    // killed transaction) so a parked instance is never starved indefinitely.
+    try {
+      ConcurrencyGate.reconcileAll();
+    } catch (Exception concEx) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'WorkflowEngine: concurrency reconcile failed: ' + concEx.getMessage()
       );
     }
 
@@ -6965,6 +7422,29 @@ public inherited sharing class WorkflowEngine {
     for (Workflow_Instance__c inst : instances) {
       instanceIds.add(inst.Id);
     }
+
+    // A concurrency-bounded instance that has not yet won an admission slot must NOT
+    // have its initial step's deadline re-armed here. It is re-driven through the
+    // admission gate (the paused-resume and watchdog wake paths both enqueue it), and
+    // a deadline stamped before admission could fail the still-waiting step in the
+    // backlog. The admission path itself calls this method AFTER acquiring a slot
+    // (Concurrency_Slot_Held__c = true), so re-admitted steps still get re-armed.
+    // Re-query the authoritative slot flag so an in-memory caller value cannot skew it.
+    Set<Id> deferIds = new Set<Id>();
+    for (Workflow_Instance__c inst : [
+      SELECT Id, Workflow_Name__c, Concurrency_Slot_Held__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :instanceIds
+      WITH SYSTEM_MODE
+    ]) {
+      if (
+        !inst.Concurrency_Slot_Held__c &&
+        ConcurrencyGate.isConfigured(inst.Workflow_Name__c)
+      ) {
+        deferIds.add(inst.Id);
+      }
+    }
+
     List<Workflow_Step_Execution__c> steps = [
       SELECT Id, Workflow_Instance__c, Step_Name__c
       FROM Workflow_Step_Execution__c
@@ -6975,6 +7455,9 @@ public inherited sharing class WorkflowEngine {
     ];
     List<Workflow_Step_Execution__c> toUpdate = new List<Workflow_Step_Execution__c>();
     for (Workflow_Step_Execution__c step : steps) {
+      if (deferIds.contains(step.Workflow_Instance__c)) {
+        continue;
+      }
       Integer timeout = getStepTimeoutSeconds(step.Step_Name__c);
       if (timeout != null && timeout > 0) {
         step.Timeout_At__c = DateTime.now().addSeconds(timeout);
@@ -6991,13 +7474,21 @@ public inherited sharing class WorkflowEngine {
     // avoids scheduling a timeout for a completed branch that would later find no
     // active step row and wrongly fail the whole instance "before starting".
     for (Workflow_Step_Execution__c step : steps) {
+      if (deferIds.contains(step.Workflow_Instance__c)) {
+        continue;
+      }
       scheduleTimeoutJobIfNeeded(step.Workflow_Instance__c, step.Step_Name__c);
     }
   }
 
   public static void scheduleTimeoutJobForInstance(Id instanceId) {
     List<Workflow_Instance__c> instances = [
-      SELECT Status__c, Current_Step__c, Compensation_Stack__c
+      SELECT
+        Status__c,
+        Current_Step__c,
+        Compensation_Stack__c,
+        Concurrency_Parked__c,
+        Concurrency_Slot_Held__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -7006,7 +7497,29 @@ public inherited sharing class WorkflowEngine {
     if (instances.isEmpty()) {
       return;
     }
-    Workflow_Instance__c instance = instances[0];
+    scheduleTimeoutJobForInstance(instances[0]);
+  }
+
+  // Overload for callers that already hold the instance with the fields this needs
+  // (Status__c, Current_Step__c, Compensation_Stack__c, and the two concurrency
+  // flags). Skipping the re-query matters on the per-step drive: handleStepResult
+  // schedules the next step's watchdog on every advance, so re-reading the instance
+  // each time can exhaust the 100-SOQL limit on a long synchronous drive (e.g. the
+  // test harness driving many steps in one transaction).
+  public static void scheduleTimeoutJobForInstance(
+    Workflow_Instance__c instance
+  ) {
+    if (instance == null) {
+      return;
+    }
+    // A concurrency-parked instance that has not won a slot has a null step deadline;
+    // scheduling a timeout job now would only wake and return, while occupying one of
+    // the org's scarce scheduled-job slots — a large parked backlog could crowd out
+    // real sleep/admission/timeout jobs. Admission re-arms the timeout once a slot is
+    // won (the generic WorkflowSleepJob admission-retry path routes through here).
+    if (instance.Concurrency_Parked__c && !instance.Concurrency_Slot_Held__c) {
+      return;
+    }
     scheduleTimeoutJobsForInstances(new List<Workflow_Instance__c>{ instance });
   }
 
@@ -7134,6 +7647,49 @@ public inherited sharing class WorkflowEngine {
       );
       return null;
     }
+  }
+
+  /**
+   * Parks an instance that could not acquire a concurrency slot. It suspends with a
+   * short admission-retry wake time and re-enters admission through the SAME sleep/
+   * watchdog resume path used by SLEEP — no busy spin, no dropped Queueable chain. The
+   * current Pending step's watchdog deadline is cleared so a parked (not-yet-executed)
+   * step is never failed by the timeout sweep; admission re-arms it.
+   */
+  private static void parkForConcurrency(Workflow_Instance__c instance) {
+    // Reset the current step's pre-execution state so a re-park is always clean: an
+    // external resume() can have flipped the not-yet-executed step to Running and
+    // stamped a deadline before this delivery reached the gate. Put it back to
+    // Pending and clear Timeout_At__c (the watchdog/timeout job already skips a
+    // Suspended parent, but this keeps the step row consistent and re-armable).
+    List<Workflow_Step_Execution__c> pending = [
+      SELECT Id, Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instance.Id
+        AND Status__c IN ('Pending', 'Running')
+        AND Timeout_At__c != NULL
+      WITH SYSTEM_MODE
+    ];
+    if (!pending.isEmpty()) {
+      for (Workflow_Step_Execution__c step : pending) {
+        step.Status__c = 'Pending';
+        step.Timeout_At__c = null;
+      }
+      update as system pending;
+    }
+
+    Integer retrySeconds =
+      concurrencyAdmissionRetrySeconds +
+      (Integer) Math.floor(
+        Math.random() * CONCURRENCY_ADMISSION_RETRY_JITTER_SECONDS
+      );
+    instance.Status__c = 'Suspended';
+    instance.Concurrency_Parked__c = true;
+    instance.Concurrency_Slot_Held__c = false;
+    instance.Sleep_Until__c = DateTime.now().addSeconds(retrySeconds);
+    instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, retrySeconds);
+    update as system instance;
   }
 
   private static String scheduleSleepResume(
@@ -7393,7 +7949,7 @@ public inherited sharing class WorkflowEngine {
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
     if (isId) {
       instances = [
-        SELECT Id, Status__c
+        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
         FROM Workflow_Instance__c
         WHERE Id = :keyOrId AND Status__c IN :activeStatuses
         WITH SYSTEM_MODE
@@ -7403,7 +7959,7 @@ public inherited sharing class WorkflowEngine {
     }
     if (instances.isEmpty()) {
       instances = [
-        SELECT Id, Status__c
+        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
         FROM Workflow_Instance__c
         WHERE Correlation_Key__c = :keyOrId AND Status__c IN :activeStatuses
         WITH SYSTEM_MODE

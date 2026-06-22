@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Concurrency_Parked__c</fullName>
+    <defaultValue>false</defaultValue>
+    <description>True while this instance is Suspended specifically because it could not acquire a concurrency slot and is awaiting admission. Distinguishes a throttled/parked instance from an ordinary sleep/signal wait, and powers the dashboard parked count. Cleared once the instance is admitted.</description>
+    <externalId>false</externalId>
+    <label>Concurrency Parked</label>
+    <trackTrending>false</trackTrending>
+    <type>Checkbox</type>
+</CustomField>

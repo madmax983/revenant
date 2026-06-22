@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Transient_Retry_Count__c</fullName>
+    <defaultValue>0</defaultValue>
+    <description>Engine-internal count of CONSECUTIVE re-drives of this step after a transient row-lock error (UNABLE_TO_LOCK_ROW), e.g. a fan-in where many child-completion signals lock the shared parent row at once. Bounds those retries so a genuinely stuck row still fails, and is kept separate from the business Retry_Count__c so lock contention never eats a step's RetryPolicy budget. Reset to 0 on the next successful drive.</description>
+    <externalId>false</externalId>
+    <label>Transient Retry Count</label>
+    <precision>18</precision>
+    <required>true</required>
+    <scale>0</scale>
+    <trackTrending>false</trackTrending>
+    <type>Number</type>
+    <unique>false</unique>
+</CustomField>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Max_Concurrent_Instances__c</fullName>
+    <description>Maximum number of instances of this workflow definition allowed to be simultaneously in-flight (holding a concurrency slot). A newly-started or resuming instance that cannot acquire a slot parks and re-attempts admission automatically.</description>
+    <externalId>false</externalId>
+    <fieldManageability>DeveloperControlled</fieldManageability>
+    <label>Max Concurrent Instances</label>
+    <precision>18</precision>
+    <required>true</required>
+    <scale>0</scale>
+    <type>Number</type>
+</CustomField>

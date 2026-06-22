@@ -21,7 +21,13 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
   public void executeInternal() {
     // Parent-first locking: query and lock the parent instance first
     List<Workflow_Instance__c> instances = [
-      SELECT Status__c, Current_Step__c, Compensation_Stack__c, Workflow_Name__c
+      SELECT
+        Status__c,
+        Current_Step__c,
+        Compensation_Stack__c,
+        Workflow_Name__c,
+        Concurrency_Slot_Held__c,
+        Concurrency_Parked__c
       FROM Workflow_Instance__c
       WHERE Id = :this.instanceId
       WITH SYSTEM_MODE
@@ -111,7 +117,24 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
       // future deadline and schedules a new job; a delayed QueueableTimeoutJob
       // from before the re-arm may fire early. Skip it — the re-armed job
       // enforces the new (correct) deadline.
-      if (stepExec.Timeout_At__c != null && stepExec.Timeout_At__c > DateTime.now()) {
+      if (stepExec.Timeout_At__c != null) {
+        if (stepExec.Timeout_At__c > DateTime.now()) {
+          return;
+        }
+      } else if (instance.Concurrency_Parked__c == true) {
+        // A NULL deadline on a concurrency-PARKED instance means its timeout was
+        // deferred until an admission slot is won: a stray job must not fail a step
+        // that is only waiting for capacity; admission re-arms a real deadline.
+        //
+        // Keyed off the DURABLE Concurrency_Parked__c marker (set when a bounded
+        // start/child defers its timeout, and again when parkForConcurrency suspends
+        // a denied admission) rather than the CURRENT CMDT (isConfigured). A ceiling
+        // added AFTER an unbounded child/successor scheduled its pre-start watchdog
+        // would otherwise retroactively reclassify that watchdog as a deferred
+        // admission and leave the overdue step Pending forever. Because the marker is
+        // stamped at scheduling time and cleared only on admission, the null-deadline
+        // jobs reaching here split cleanly: parked rows (parked=true, skip) vs.
+        // genuine pre-start watchdogs (parked=false, fail "before starting").
         return;
       }
 
