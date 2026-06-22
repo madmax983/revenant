@@ -1000,8 +1000,17 @@ public inherited sharing class WorkflowDashboardController {
    */
   private static List<String> getDefinitionsFromSource() {
     List<String> definitions = new List<String>();
-    Pattern classPattern = Pattern.compile(
-      '(?i)\\bclass\\s+([a-zA-Z0-9_]+)\\s+[^\\{]*?\\bimplements\\s+[^\\{]*?\\b(WorkflowDefinition|VersionedWorkflow)\\b'
+    // Two linear patterns instead of one with nested lazy quantifiers. The previous
+    // single regex used '[^{]*?' twice; its backtracking tripped "Regex too
+    // complicated" once class bodies grew large. classHeaderPattern uses a single
+    // greedy negated class anchored to the opening brace (linear — no catastrophic
+    // backtracking) to capture each class name and its short declaration header;
+    // implementsPattern then runs only on that short header, never the full body.
+    Pattern classHeaderPattern = Pattern.compile(
+      '(?i)\\bclass\\s+([a-zA-Z0-9_]+)\\b([^{]*)\\{'
+    );
+    Pattern implementsPattern = Pattern.compile(
+      '(?i)\\bimplements\\b[^{]*\\b(WorkflowDefinition|VersionedWorkflow)\\b'
     );
 
     Long heapGuard = (Long) (Limits.getLimitHeapSize() *
@@ -1028,14 +1037,28 @@ public inherited sharing class WorkflowDashboardController {
       }
       // Skip @isTest classes (any class whose body carries the annotation) and
       // system-only workflows that must not be launched from the dashboard.
+      String bodyLower = ac.Body.toLowerCase();
       if (
-        ac.Body.toLowerCase().contains('@istest') ||
+        bodyLower.contains('@istest') ||
         ac.Name.equalsIgnoreCase('BulkRedriveWorkflow')
       ) {
         continue;
       }
-      Matcher pm = classPattern.matcher(ac.Body);
+      // Cheap pre-filter: a class that never names either interface cannot implement
+      // one, so skip the regex entirely for the (typically vast) majority of classes.
+      if (
+        !bodyLower.contains('workflowdefinition') &&
+        !bodyLower.contains('versionedworkflow')
+      ) {
+        continue;
+      }
+      Matcher pm = classHeaderPattern.matcher(ac.Body);
       while (pm.find()) {
+        // group(2) is the short class declaration header; the precise word-boundary
+        // interface check runs only on it, never on the full class body.
+        if (!implementsPattern.matcher(pm.group(2)).find()) {
+          continue;
+        }
         String className = pm.group(1);
         // Outer class match returns the bare name; inner class is qualified.
         definitions.add(
