@@ -112,6 +112,28 @@ public class WorkflowDashboardControllerTest {
       definitions.contains('SagaWorkflowExample.SagaWorkflow'),
       'Should find SagaWorkflowExample.SagaWorkflow inner class'
     );
+    // Regression (PR #?, 2026-06-20): the @isTest-substring guard skipped any
+    // class merely *mentioning* @isTest in a comment. Both AI examples document
+    // @isTest in their doc comments, so they silently fell out of discovery.
+    System.assert(
+      definitions.contains('AiSupportTriageWorkflowExample.TriageWorkflow'),
+      'Should find AiSupportTriageWorkflowExample.TriageWorkflow despite the ' +
+        '@isTest mention in its doc comment'
+    );
+    System.assert(
+      definitions.contains(
+        'AgentConversationWorkflowExample.AgentConversationWorkflow'
+      ),
+      'Should find AgentConversationWorkflowExample.AgentConversationWorkflow ' +
+        'despite the @isTest mention in its doc comment'
+    );
+    // Regression: the discovery regex matched comment prose. A doc comment in
+    // WorkflowScheduleSweeper reads "...a class that implements WorkflowDefinition",
+    // which captured "that" as a phantom definition.
+    System.assert(
+      !definitions.contains('WorkflowScheduleSweeper.that'),
+      'Comment prose must not be scanned as a definition (no phantom ".that")'
+    );
   }
 
   @isTest
