@@ -145,4 +145,61 @@ describe("c-workflow-dashboard trends panel", () => {
 
     expect(getDefinitionTrends).toHaveBeenCalledWith({ windowKey: "1h" });
   });
+
+  it("collapses and expands the panel body on header click", async () => {
+    getDefinitionTrends.mockResolvedValue(TRENDS_TWO_DEFS);
+    const element = createComponent();
+
+    await flushPromises();
+    await flushPromises();
+
+    // Panel body is visible by default.
+    expect(
+      element.shadowRoot.querySelector('[data-id="trend-row"]'),
+    ).not.toBeNull();
+
+    // Click the toggle button to collapse.
+    element.shadowRoot
+      .querySelector('[role="button"]')
+      .dispatchEvent(new CustomEvent("click"));
+
+    await Promise.resolve();
+
+    // Body rows should be gone; combobox should also be hidden.
+    expect(
+      element.shadowRoot.querySelector('[data-id="trend-row"]'),
+    ).toBeNull();
+    expect(
+      element.shadowRoot.querySelector('[data-id="trend-window"]'),
+    ).toBeNull();
+
+    // Click again to expand.
+    element.shadowRoot
+      .querySelector('[role="button"]')
+      .dispatchEvent(new CustomEvent("click"));
+
+    await Promise.resolve();
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="trend-row"]'),
+    ).not.toBeNull();
+  });
+
+  it("persists collapsed state to localStorage and restores it on mount", async () => {
+    getDefinitionTrends.mockResolvedValue(TRENDS_TWO_DEFS);
+
+    // Seed localStorage as if the user previously collapsed the panel.
+    localStorage.setItem("revenant_dashboard_trends_collapsed", "true");
+
+    const element = createComponent();
+    await flushPromises();
+    await flushPromises();
+
+    // Should start collapsed — body rows not rendered.
+    expect(
+      element.shadowRoot.querySelector('[data-id="trend-row"]'),
+    ).toBeNull();
+
+    localStorage.removeItem("revenant_dashboard_trends_collapsed");
+  });
 });
