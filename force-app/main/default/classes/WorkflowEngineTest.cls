@@ -4935,12 +4935,14 @@ public class WorkflowEngineTest {
     );
     System.assertEquals('"timedout"', inst.Output__c);
 
-    // The late signal is captured as Unrouted
+    // The late signal is captured as Unrouted. An Unrouted capture has no active
+    // instance to link to, so it is keyed by Correlation_Key__c with a null
+    // Workflow_Instance__c — query by the correlation key, not the instance id.
     List<Workflow_Signal__c> unroutedSignals = [
       SELECT Status__c
       FROM Workflow_Signal__c
       WHERE
-        Workflow_Instance__c = :instanceId
+        Correlation_Key__c = 'TimedSuspendLateKey'
         AND Signal_Name__c = 'Resume'
         AND Status__c = 'Unrouted'
     ];

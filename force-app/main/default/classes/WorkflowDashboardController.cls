@@ -958,6 +958,15 @@ public inherited sharing class WorkflowDashboardController {
     '(?s)/\\*.*?\\*/|//[^\\n]*'
   );
 
+  // Upper bound on a class body we will comment-strip with COMMENT_PATTERN. A
+  // single oversized body (e.g. the multi-hundred-KB engine class) can trip an
+  // uncatchable "Regex too complicated" LimitException inside replaceAll() before
+  // the per-iteration heap/CPU guard can react. Bodies this large are infra
+  // classes (engine/controllers), never small WorkflowDefinition holders, so
+  // skipping them from the source scan loses no real definitions.
+  @TestVisible
+  private static Integer maxScannableBodyLength = 100000;
+
   @AuraEnabled(cacheable=true)
   public static List<String> getDefinitions() {
     checkAuthorization();
@@ -1066,6 +1075,13 @@ public inherited sharing class WorkflowDashboardController {
         !bodyLower.contains('workflowdefinition') &&
         !bodyLower.contains('versionedworkflow')
       ) {
+        continue;
+      }
+      // Skip a body too large to comment-strip safely: COMMENT_PATTERN.replaceAll
+      // on a multi-hundred-KB body can throw an uncatchable "Regex too complicated"
+      // that the heap/CPU guard above cannot preempt. Such classes are infra, not
+      // WorkflowDefinition holders, so skipping them is safe (see field comment).
+      if (ac.Body.length() > maxScannableBodyLength) {
         continue;
       }
       // Match against comment-stripped source so doc-comment prose like
