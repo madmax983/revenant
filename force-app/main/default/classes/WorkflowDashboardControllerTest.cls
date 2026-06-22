@@ -608,25 +608,34 @@ public class WorkflowDashboardControllerTest {
   @isTest
   static void testGetDefinitionTrendsWindowFiltersByTerminalTime() {
     Datetime now = Datetime.now();
+
+    // WorkflowInstanceTrigger (before insert) stamps Terminal_At__c = System.now()
+    // for every terminal status on insert, overwriting any value set in the test.
+    // To control Terminal_At__c, we insert without specifying it, then update the
+    // record that must appear "old". An update where Status__c stays Completed →
+    // Completed is a terminal→terminal transition, so the trigger's wasTerminal guard
+    // fires and it does NOT re-stamp, leaving our backdated value intact.
+    Workflow_Instance__c recentInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WindowDef',
+      Status__c = 'Completed'
+      // Trigger stamps Terminal_At__c = System.now() — inside both 24h and 7d windows.
+    );
+    Workflow_Instance__c oldInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WindowDef',
+      Status__c = 'Completed'
+      // Trigger stamps now on insert; we backdate it below.
+    );
     insert new List<Workflow_Instance__c>{
-      // Terminal inside the 24h window
-      new Workflow_Instance__c(
-        Workflow_Name__c = 'WindowDef',
-        Status__c = 'Completed',
-        Terminal_At__c = now.addHours(-1)
-      ),
-      // Terminal 3 days ago: inside 7d but outside 24h
-      new Workflow_Instance__c(
-        Workflow_Name__c = 'WindowDef',
-        Status__c = 'Completed',
-        Terminal_At__c = now.addDays(-3)
-      ),
-      // Active instance: no Terminal_At__c, must never be counted in any window
-      new Workflow_Instance__c(
-        Workflow_Name__c = 'WindowDef',
-        Status__c = 'Running'
-      )
+      recentInst,
+      oldInst,
+      // Active instance: trigger sets Terminal_At__c = null for non-terminal statuses.
+      new Workflow_Instance__c(Workflow_Name__c = 'WindowDef', Status__c = 'Running')
     };
+
+    // Backdate to 3 days ago — inside 7d but outside 24h.
+    // Trigger does not re-stamp: old status == new status == Completed (wasTerminal = true).
+    oldInst.Terminal_At__c = now.addDays(-3);
+    update oldInst;
 
     Test.startTest();
     Map<String, Object> last24h = WorkflowDashboardController.getDefinitionTrends(
