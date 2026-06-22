@@ -252,5 +252,49 @@ public class WorkflowDeadlineTest {
     System.assertEquals('Compensated', finalInst.Status__c, 'Status should transition to Compensated');
     System.assertNotEquals(null, finalInst.Terminal_At__c, 'Terminal_At__c should be set');
   }
+
+  @isTest
+  static void testDashboardControllerQueries() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Datetime deadline = DateTime.now().addHours(2);
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowDeadlineTest.TestDeadlineWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Deadline-Dashboard-Test',
+      Deadline_At__c = deadline
+    );
+    insert inst;
+
+    // 1. Test getFilteredInstances
+    List<Map<String, Object>> filtered = WorkflowDashboardController.getFilteredInstances(
+      'WorkflowDeadlineTest.TestDeadlineWorkflow',
+      'Suspended',
+      'Deadline-Dashboard-Test',
+      10,
+      0,
+      'buster'
+    );
+    System.assert(!filtered.isEmpty(), 'Filtered instances should not be empty');
+    System.assertEquals(deadline, (Datetime) filtered[0].get('Deadline_At__c'), 'Deadline should be returned in getFilteredInstances');
+
+    // 2. Test getStalledInstances
+    List<Map<String, Object>> stalled = WorkflowDashboardController.getStalledInstances(
+      'WorkflowDeadlineTest.TestDeadlineWorkflow',
+      'Deadline-Dashboard-Test',
+      -1,
+      10,
+      0,
+      'buster'
+    );
+    System.assert(!stalled.isEmpty(), 'Stalled instances should not be empty');
+    System.assertEquals(deadline, (Datetime) stalled[0].get('Deadline_At__c'), 'Deadline should be returned in getStalledInstances');
+
+    // 3. Test getInstanceDetails
+    Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(inst.Id);
+    System.assertNotEquals(null, details, 'Details should not be null');
+    Workflow_Instance__c reloadedInst = (Workflow_Instance__c) details.get('instance');
+    System.assertEquals(deadline, reloadedInst.Deadline_At__c, 'Deadline should be returned in getInstanceDetails');
+  }
 }
 
