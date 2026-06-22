@@ -991,7 +991,6 @@ public inherited sharing class WorkflowEngine {
       (input != null) ? JSON.serialize(input) : null,
       'Input_' + instance.Id
     );
-    update as system instance;
 
     // Operator pause gate — decide up front whether to park this start, so the
     // initial step's timeout clock is never started while parked.
@@ -1007,6 +1006,15 @@ public inherited sharing class WorkflowEngine {
     Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(
       instance.Workflow_Name__c
     );
+    // Stamp the durable awaiting-admission marker at deferral time. The pre-start
+    // watchdog (WorkflowTimeoutJob) keys its null-deadline skip off this marker, not
+    // the live CMDT, so a ceiling added later cannot retroactively silence a genuine
+    // unbounded pre-start watchdog. Cleared on admission (the acquire path) / when the
+    // ceiling is later removed (the unbounded fall-through).
+    if (deferTimeoutForConcurrency) {
+      instance.Concurrency_Parked__c = true;
+    }
+    update as system instance;
 
     if (String.isNotBlank(instance.Current_Step__c)) {
       Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
@@ -1765,10 +1773,26 @@ public inherited sharing class WorkflowEngine {
     // before it ever reaches the gate to park. Admission re-arms the timeout via
     // reArmTimeoutsForResume. isConfigured is memoized per name, so this is bulk-safe.
     Set<Id> deferTimeoutIds = new Set<Id>();
+    List<Workflow_Instance__c> deferredToMark = new List<Workflow_Instance__c>();
     for (Workflow_Instance__c instance : insertedInstances) {
       if (ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
         deferTimeoutIds.add(instance.Id);
+        // Durable awaiting-admission marker (see doStart): the pre-start watchdog
+        // keys its null-deadline skip off this, not the live CMDT, so a ceiling added
+        // later cannot silence a genuine unbounded pre-start watchdog. Cleared on
+        // admission. Parked-at-start instances are handled by instancesToPark below.
+        if (!parkedIds.contains(instance.Id)) {
+          deferredToMark.add(
+            new Workflow_Instance__c(
+              Id = instance.Id,
+              Concurrency_Parked__c = true
+            )
+          );
+        }
       }
+    }
+    if (!deferredToMark.isEmpty()) {
+      update as system deferredToMark;
     }
 
     // 7. Construct initial Step Execution logs for inserted instances only
@@ -4015,7 +4039,6 @@ public inherited sharing class WorkflowEngine {
         result.nextInputJson,
         'Input_' + nextInstance.Id
       );
-      update as system nextInstance;
 
       // A concurrency-bounded successor must pass the admission gate on its first
       // RUN_STEP before it owns a slot, so defer the initial step's timeout until
@@ -4024,6 +4047,12 @@ public inherited sharing class WorkflowEngine {
       Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(
         nextInstance.Workflow_Name__c
       );
+      // Durable awaiting-admission marker (see doStart): keeps the pre-start watchdog
+      // keyed off persisted state rather than the live CMDT. Cleared on admission.
+      if (deferTimeoutForConcurrency) {
+        nextInstance.Concurrency_Parked__c = true;
+      }
+      update as system nextInstance;
 
       // Pre-create the successor's first step execution log
       if (String.isNotBlank(initialStep)) {
@@ -4561,6 +4590,12 @@ public inherited sharing class WorkflowEngine {
     // so an armed timeout could fail it while it is only waiting for capacity.
     if (!ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
       scheduleTimeoutJobForInstance(instance.Id);
+    } else {
+      // Durable awaiting-admission marker (see doStart): the pre-start watchdog keys
+      // its null-deadline skip off this, not the live CMDT, so a ceiling added later
+      // cannot silence a genuine unbounded pre-start watchdog. Cleared on admission.
+      instance.Concurrency_Parked__c = true;
+      update as system instance;
     }
 
     if (!Test.isRunningTest()) {

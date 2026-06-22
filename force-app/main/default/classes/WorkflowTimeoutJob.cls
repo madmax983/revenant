@@ -26,7 +26,8 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
         Current_Step__c,
         Compensation_Stack__c,
         Workflow_Name__c,
-        Concurrency_Slot_Held__c
+        Concurrency_Slot_Held__c,
+        Concurrency_Parked__c
       FROM Workflow_Instance__c
       WHERE Id = :this.instanceId
       WITH SYSTEM_MODE
@@ -120,18 +121,20 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
         if (stepExec.Timeout_At__c > DateTime.now()) {
           return;
         }
-      } else if (
-        instance.Concurrency_Slot_Held__c != true &&
-        ConcurrencyGate.isConfigured(instance.Workflow_Name__c)
-      ) {
-        // A NULL deadline on a concurrency-gated instance that has not yet won an
-        // admission slot means the timeout was deferred until admission (a bounded
-        // start/child awaiting capacity): a stray job must not fail a step that is
-        // only waiting for a slot. For any OTHER instance a null deadline on an
-        // existing Pending/Running row is the pre-start watchdog — e.g. an unbounded
-        // child or continueAsNew successor whose worker was lost before the step
-        // armed its own deadline — which must still fail "before starting", so it is
-        // deliberately NOT skipped here.
+      } else if (instance.Concurrency_Parked__c == true) {
+        // A NULL deadline on a concurrency-PARKED instance means its timeout was
+        // deferred until an admission slot is won: a stray job must not fail a step
+        // that is only waiting for capacity; admission re-arms a real deadline.
+        //
+        // Keyed off the DURABLE Concurrency_Parked__c marker (set when a bounded
+        // start/child defers its timeout, and again when parkForConcurrency suspends
+        // a denied admission) rather than the CURRENT CMDT (isConfigured). A ceiling
+        // added AFTER an unbounded child/successor scheduled its pre-start watchdog
+        // would otherwise retroactively reclassify that watchdog as a deferred
+        // admission and leave the overdue step Pending forever. Because the marker is
+        // stamped at scheduling time and cleared only on admission, the null-deadline
+        // jobs reaching here split cleanly: parked rows (parked=true, skip) vs.
+        // genuine pre-start watchdogs (parked=false, fail "before starting").
         return;
       }
 

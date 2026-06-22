@@ -405,19 +405,21 @@ public class WorkflowConcurrencyTest {
   }
 
   // A stray scheduled timeout job must never fail a step whose deadline is null when
-  // the instance is concurrency-gated and has not yet won an admission slot — that is
-  // the state of a deferred bounded start (or a parked step) awaiting capacity. The
-  // skip is scoped to that case: an unbounded null-deadline step is the pre-start
-  // watchdog and must still fail (see testTimeoutJobFailsNullDeadlinePreStartWatchdog).
+  // the instance is durably marked as awaiting an admission slot (Concurrency_Parked__c)
+  // — the state of a deferred bounded start (or a parked step) awaiting capacity. The
+  // skip is scoped to that durable marker, not the live CMDT: an unbounded null-deadline
+  // step (parked=false) is the pre-start watchdog and must still fail (see
+  // testTimeoutJobFailsNullDeadlinePreStartWatchdog), even if a ceiling is added later.
   @isTest
   static void testTimeoutJobSkipsNullDeadlineStep() {
-    // Bounded + slot not held => the null deadline is a deferred-admission state.
-    ConcurrencyGate.mockConfigs.put('WorkflowConcurrencyTest_WaitWorkflow', cfg(1));
+    // Durable awaiting-admission marker => the null deadline is a deferred-admission
+    // state, regardless of the current concurrency config.
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = WF,
       Status__c = 'Running',
       Current_Step__c = 'WorkflowConcurrencyTest.WaitStep',
-      Correlation_Key__c = 'nulldl-1'
+      Correlation_Key__c = 'nulldl-1',
+      Concurrency_Parked__c = true
     );
     insert inst;
     insert new Workflow_Step_Execution__c(
@@ -459,8 +461,12 @@ public class WorkflowConcurrencyTest {
   // deadline. The timeout job MUST fail it "before starting" rather than skip it.
   @isTest
   static void testTimeoutJobFailsNullDeadlinePreStartWatchdog() {
-    // No mockConfig => isConfigured(WF) is false => this is NOT a deferred-admission
-    // state, so the null-deadline step is the pre-start watchdog and must fail.
+    // A ceiling is present NOW (as if an admin added it after this unbounded child
+    // scheduled its pre-start watchdog), but the instance was never durably marked as
+    // awaiting admission (Concurrency_Parked__c = false). The skip must key off that
+    // durable marker, not the live config — so the null-deadline pre-start watchdog
+    // still fails the overdue step instead of leaving it Pending forever.
+    ConcurrencyGate.mockConfigs.put('WorkflowConcurrencyTest_WaitWorkflow', cfg(1));
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = WF,
       Status__c = 'Running',

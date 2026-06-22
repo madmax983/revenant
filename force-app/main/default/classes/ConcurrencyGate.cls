@@ -125,15 +125,35 @@ public inherited sharing class ConcurrencyGate {
     // keyed by DeveloperName; it omits long-text fields, but the only field we read
     // (Max_Concurrent_Instances__c, a Number) is included. Exact name wins over the
     // 40-char-truncated form, with the Default record as the final fallback.
-    Map<String, Concurrency_Config__mdt> all = Concurrency_Config__mdt.getAll();
-    Concurrency_Config__mdt config = all.get(devName);
+    Map<String, Concurrency_Config__mdt> all = getNormalizedConfigs();
+    Concurrency_Config__mdt config = all.get(devName.toLowerCase());
     if (config == null) {
-      config = all.get(truncatedDevName);
+      config = all.get(truncatedDevName.toLowerCase());
     }
     if (config == null) {
-      config = all.get('Default');
+      config = all.get('default');
     }
     return config;
+  }
+
+  // Per-transaction, case-insensitive view of Concurrency_Config__mdt.getAll().
+  // getAll() keys by exact DeveloperName and Apex map keys are case-sensitive, but
+  // the durable state/release/reconcile paths key off the case-insensitive unique
+  // Workflow_Definition__c. Re-keying by lowercase DeveloperName makes a case-variant
+  // start resolve the same ceiling those paths already enforce, instead of missing
+  // the specific config and silently falling back to Default/unbounded.
+  private static Map<String, Concurrency_Config__mdt> normalizedConfigsByName;
+
+  private static Map<String, Concurrency_Config__mdt> getNormalizedConfigs() {
+    if (normalizedConfigsByName == null) {
+      normalizedConfigsByName = new Map<String, Concurrency_Config__mdt>();
+      for (
+        Concurrency_Config__mdt cfg : Concurrency_Config__mdt.getAll().values()
+      ) {
+        normalizedConfigsByName.put(cfg.DeveloperName.toLowerCase(), cfg);
+      }
+    }
+    return normalizedConfigsByName;
   }
 
   /** True when the workflow has a concurrency ceiling configured. */
