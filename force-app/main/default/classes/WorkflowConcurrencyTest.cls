@@ -995,10 +995,12 @@ public class WorkflowConcurrencyTest {
 
   @isTest
   static void testTransientLockRetryParallelBranchWithoutDynamicScheduling() {
-    // With dynamic scheduling off, scheduleRetry returns null and the watchdog
-    // sleep-resume re-drives with a blank-stepName orchestrator, which runStep ignores
-    // for a parallel (comma-separated) Current_Step__c. The retry must still preserve
-    // the specific branch for re-drive instead of stranding it Suspended forever.
+    // With dynamic scheduling off, scheduleRetry returns null. The retry must NOT
+    // re-drive the branch immediately (that would bypass the backoff and, under a
+    // sustained lock storm, burn the retry budget before contention clears). Instead
+    // it suspends with a future Sleep_Until__c and persists the branch target as its
+    // Pending step (Transient_Retry_Count__c > 0); the watchdog re-drives that branch
+    // BY NAME once the backoff is due (see testWatchdogRedrivesParallelTransientBranch).
     Boolean priorDynamic = WorkflowEngine.useDynamicScheduling;
     WorkflowEngine.useDynamicScheduling = false;
     try {
@@ -1027,7 +1029,7 @@ public class WorkflowConcurrencyTest {
       Test.stopTest();
 
       Workflow_Instance__c r = [
-        SELECT Status__c, Async_Job_Id__c
+        SELECT Status__c, Async_Job_Id__c, Sleep_Until__c
         FROM Workflow_Instance__c
         WHERE Id = :inst.Id
       ];
@@ -1040,6 +1042,11 @@ public class WorkflowConcurrencyTest {
         null,
         r.Async_Job_Id__c,
         'No delayed job is scheduled when dynamic scheduling is off'
+      );
+      System.assert(
+        r.Sleep_Until__c != null && r.Sleep_Until__c > DateTime.now(),
+        'The backoff deadline is written so the branch waits before re-drive ' +
+          '(not re-driven immediately)'
       );
       Workflow_Step_Execution__c s = [
         SELECT Status__c, Transient_Retry_Count__c
@@ -1060,5 +1067,131 @@ public class WorkflowConcurrencyTest {
     } finally {
       WorkflowEngine.useDynamicScheduling = priorDynamic;
     }
+  }
+
+  // The watchdog sleep-resume must drive a due, parallel, transient-lock-parked
+  // instance back to Running and, in production, re-enqueue its retrying branch BY
+  // NAME. The actual branch enqueue honors the manual-drive switch, so with it on this
+  // exercises the new per-branch re-arm + query path (no exception, correct scoping)
+  // and asserts the wake transition without a drained worker carrying the branch to
+  // completion. A non-retrying sibling branch is left as-is.
+  @isTest
+  static void testWatchdogRedrivesParallelTransientBranch() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = WF,
+      Status__c = 'Suspended',
+      Current_Step__c = 'WorkflowConcurrencyTest.WaitStep,WorkflowConcurrencyTest.OtherBranch',
+      Correlation_Key__c = 'wd-parallel-1',
+      Sleep_Until__c = DateTime.now().addSeconds(-60)
+    );
+    insert inst;
+    // The retrying branch: Pending with a transient-retry marker — the watchdog's
+    // re-drive target.
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowConcurrencyTest.WaitStep',
+      Status__c = 'Pending',
+      Retry_Count__c = 0,
+      Transient_Retry_Count__c = 1
+    );
+    // A sibling branch that is genuinely in-flight (no transient marker) — must not be
+    // selected by the per-branch re-drive query.
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowConcurrencyTest.OtherBranch',
+      Status__c = 'Running',
+      Retry_Count__c = 0,
+      Transient_Retry_Count__c = 0
+    );
+
+    // Manual-drive switch ON: the per-branch re-arm + query still run (they sit outside
+    // the opt-out guard, like the bulk signal path), but the branch enqueue is gated,
+    // so no drained worker re-drives WaitStep and flips the instance back to Suspended.
+    // This keeps the wake-transition assertion deterministic while covering the new code.
+    Boolean priorDisable = WorkflowEngine.disableQueueableInTest;
+    WorkflowEngine.disableQueueableInTest = true;
+    try {
+      Test.startTest();
+      WorkflowEngine.processWatchdogHeartbeat();
+      Test.stopTest();
+    } finally {
+      WorkflowEngine.disableQueueableInTest = priorDisable;
+    }
+
+    System.assertEquals(
+      'Running',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
+        .Status__c,
+      'The due parallel transient-retry sleeper is woken to Running by the watchdog'
+    );
+    // The non-retrying sibling branch is untouched by the per-branch re-drive query.
+    System.assertEquals(
+      'Running',
+      [
+        SELECT Status__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :inst.Id
+          AND Step_Name__c = 'WorkflowConcurrencyTest.OtherBranch'
+        LIMIT 1
+      ]
+      .Status__c,
+      'A genuinely in-flight sibling branch is not disturbed by the watchdog re-drive'
+    );
+  }
+
+  // Stuck-forever guard: when a parallel sibling completes during a branch's transient-
+  // lock backoff (dynamic scheduling off) it can flip the parent to Running and persist
+  // it (a CompensatableStep), so the sleep-resume — which only selects Suspended
+  // parents — never re-drives the retry branch. The orphaned-retry sweep must catch it:
+  // a Running parallel parent with a due Sleep_Until__c and a retry-marked branch is
+  // re-driven by name (here observed via the branch's deadline being re-armed, since
+  // the actual enqueue honors the manual-drive switch).
+  @isTest
+  static void testWatchdogRescuesOrphanedTransientRetryBranch() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowConcurrencyTest.TimeoutWaitWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowConcurrencyTest.TimeoutWaitStep,WorkflowConcurrencyTest.OtherBranch',
+      Correlation_Key__c = 'orphan-1',
+      // The backoff deadline survives on the instance even though a sibling flipped the
+      // parent to Running — the signal the orphan sweep keys off.
+      Sleep_Until__c = DateTime.now().addSeconds(-60)
+    );
+    insert inst;
+    // Retry-marked branch (TimeoutConfigurable) with its deadline cleared for backoff.
+    Workflow_Step_Execution__c branch = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowConcurrencyTest.TimeoutWaitStep',
+      Status__c = 'Pending',
+      Retry_Count__c = 0,
+      Transient_Retry_Count__c = 1
+    );
+    insert branch;
+
+    WorkflowEngine.disableQueueableInTest = true;
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // The sweep selected the branch despite the parent being Running (not Suspended)
+    // and re-armed its watchdog deadline before the re-drive hand-off.
+    System.assertNotEquals(
+      null,
+      [
+        SELECT Timeout_At__c
+        FROM Workflow_Step_Execution__c
+        WHERE Id = :branch.Id
+      ]
+      .Timeout_At__c,
+      'The orphaned retry branch deadline is re-armed by the rescue sweep'
+    );
+    // The sweep only re-drives the branch; it does not alter the parent status.
+    System.assertEquals(
+      'Running',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
+        .Status__c,
+      'The Running parent is left as-is by the orphaned-retry sweep'
+    );
   }
 }

@@ -2366,6 +2366,13 @@ public inherited sharing class WorkflowEngine {
         instance.Sleep_Until__c = null;
         instance.Async_Job_Id__c = null;
         update as system instance;
+        // Re-arm the pending step's watchdog deadline that parkForConcurrency cleared,
+        // mirroring the successful-admission path above. Without this a re-drive that
+        // is delayed or lost (and a CalloutStep, whose pre-exec bookkeeping relies on
+        // the watchdog already being armed) would run with no pre-start timeout net.
+        // reArmTimeoutsForResume re-arms here because the workflow is now unbounded
+        // (isConfigured is false), so it is not treated as a deferred admission.
+        reArmTimeoutsForResume(new List<Workflow_Instance__c>{ instance });
         // Re-drive in a fresh transaction instead of executing the step now: the
         // marker-clear DML above is uncommitted, and a CalloutStep cannot run while
         // uncommitted DML is pending (Salesforce forbids it) — the same reason the
@@ -4358,20 +4365,23 @@ public inherited sharing class WorkflowEngine {
     instance.Async_Job_Id__c = jobId;
     update as system instance;
 
-    // The watchdog sleep-resume re-drives with a blank-stepName orchestrator, which
-    // runStep ignores for a parallel instance (comma-separated Current_Step__c). So
-    // when no delayed job carries the branch name forward — dynamic scheduling is off,
-    // or scheduleRetry hit the org job limit and returned null — re-drive the specific
-    // branch directly via its RUN_STEP event rather than stranding it Suspended
-    // forever. Single-step instances are resolved fine by the blank resume, so only
-    // the parallel case needs this fallback.
-    if (
-      jobId == null &&
-      String.isNotBlank(instance.Current_Step__c) &&
-      instance.Current_Step__c.contains(',')
-    ) {
-      enqueueOrchestrator(instance.Id, stepName);
+    if (jobId == null) {
+      // No delayed job was created (dynamic scheduling off, or async limit), so this
+      // retry relies entirely on the watchdog heartbeat to re-drive after the backoff.
+      // Ensure the watchdog singleton is alive — the removed immediate re-drive used to
+      // restart a dead watchdog via enqueueOrchestrator's bootstrap() call.
+      WorkflowWatchdog.bootstrap();
     }
+
+    // No immediate re-drive when jobId is null. The branch target is durably persisted
+    // as its Pending step row carrying Transient_Retry_Count__c > 0 (set above), and
+    // the watchdog sleep-resume re-drives exactly those branches BY NAME once
+    // Sleep_Until__c is due (see processWatchdogHeartbeat). Enqueuing the branch
+    // immediately here would bypass the backoff just written and, under a sustained
+    // UNABLE_TO_LOCK_ROW fan-in, burn through maxTransientLockRetries before the
+    // contending transactions clear — failing the very workflow the backoff exists to
+    // wait out. A single-step instance is still resolved by the watchdog's blank-name
+    // resume; only the parallel branch needed a name-carrying path, now the watchdog's.
     return true;
   }
 
@@ -7199,6 +7209,7 @@ public inherited sharing class WorkflowEngine {
           Async_Job_Id__c,
           Error_Message__c,
           Workflow_Name__c,
+          Current_Step__c,
           Concurrency_Parked__c,
           Concurrency_Slot_Held__c
         FROM Workflow_Instance__c
@@ -7235,6 +7246,11 @@ public inherited sharing class WorkflowEngine {
 
       List<Id> instanceIds = new List<Id>();
       List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+      // Parallel instances (comma-separated Current_Step__c) ignore the blank-stepName
+      // orchestrator enqueued below, so a branch suspended for a transient row-lock
+      // retry would never re-drive off the watchdog. Collect them here to re-drive
+      // their retrying branches BY NAME after the loop.
+      List<Id> parallelResumeIds = new List<Id>();
       for (Workflow_Instance__c inst : readyToResume) {
         // Hold, not drop: if the definition is paused, leave the instance Suspended
         // with Sleep_Until__c intact so it re-fires on the next heartbeat after resume.
@@ -7276,6 +7292,12 @@ public inherited sharing class WorkflowEngine {
           }
         } else {
           inst.Status__c = 'Running';
+          if (
+            String.isNotBlank(inst.Current_Step__c) &&
+            inst.Current_Step__c.contains(',')
+          ) {
+            parallelResumeIds.add(inst.Id);
+          }
         }
         inst.Sleep_Until__c = null;
         inst.Async_Job_Id__c = null;
@@ -7290,6 +7312,26 @@ public inherited sharing class WorkflowEngine {
       // carried to completion by a worker draining at Test.stopTest().
       if (!(Test.isRunningTest() && disableQueueableInTest)) {
         enqueueOrchestrators(instanceIds);
+      }
+      // For a resumed parallel instance the blank-stepName orchestrator above is a
+      // no-op (runStep ignores it for a comma-separated Current_Step__c), so re-drive
+      // each branch parked for a transient row-lock retry BY NAME. Scoped to Pending/
+      // Running steps carrying Transient_Retry_Count__c > 0 — the durable target the
+      // transient-lock backoff persists. handleCrash leaves the row Pending after a
+      // rollback, or Running when the synchronous harness calls it without one, so both
+      // statuses are matched; genuinely in-flight branches (count 0) and ordinary
+      // fan-out steps are left untouched. The actual enqueue honors the test opt-out
+      // internally (like the bulk signal path) so the query/re-arm still run under it.
+      if (!parallelResumeIds.isEmpty()) {
+        reDriveTransientRetryBranches([
+          SELECT Id, Workflow_Instance__c, Step_Name__c
+          FROM Workflow_Step_Execution__c
+          WHERE
+            Workflow_Instance__c IN :parallelResumeIds
+            AND Status__c IN ('Pending', 'Running')
+            AND Transient_Retry_Count__c > 0
+          WITH SYSTEM_MODE
+        ]);
       }
     }
 
@@ -7314,6 +7356,42 @@ public inherited sharing class WorkflowEngine {
       System.debug(
         LoggingLevel.ERROR,
         'WorkflowEngine: concurrency reconcile failed: ' + concEx.getMessage()
+      );
+    }
+
+    // 5. Rescue transient-lock retry branches orphaned when a parallel sibling that
+    // completed during the backoff flipped the parent out of Suspended (e.g. a
+    // CompensatableStep persisting the parent as Running). The sleep-resume above only
+    // selects Suspended parents, so such a retry branch would otherwise never be
+    // re-driven and the workflow would hang. Sleep_Until__c survives on the instance,
+    // so re-drive any due retry-marked branch under a non-terminal, non-Suspended
+    // (Running) parallel parent. Best-effort like the sweeps above: a publish hiccup
+    // retries on the next heartbeat (Sleep_Until__c is left intact) instead of aborting
+    // the core wake/timeout work. Self-resolving — once re-driven the branch either
+    // succeeds (counter resets to 0) or re-crashes back to Suspended (handled above).
+    try {
+      if (!WorkflowPauseGate.wildcardPaused()) {
+        Set<String> orphanPausedDefs = WorkflowPauseGate.pausedNames();
+        reDriveTransientRetryBranches([
+          SELECT Id, Workflow_Instance__c, Step_Name__c
+          FROM Workflow_Step_Execution__c
+          WHERE
+            Transient_Retry_Count__c > 0
+            AND Status__c IN ('Pending', 'Running')
+            AND Workflow_Instance__r.Status__c = 'Running'
+            AND Workflow_Instance__r.Sleep_Until__c != NULL
+            AND Workflow_Instance__r.Sleep_Until__c <= :now
+            AND Workflow_Instance__r.Current_Step__c LIKE '%,%'
+            AND Workflow_Instance__r.Workflow_Name__c NOT IN :orphanPausedDefs
+          WITH SYSTEM_MODE
+          LIMIT :WATCHDOG_RESUME_BATCH_SIZE
+        ]);
+      }
+    } catch (Exception orphanEx) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'WorkflowEngine: orphaned transient-retry sweep failed: ' +
+        orphanEx.getMessage()
       );
     }
 
@@ -7398,6 +7476,80 @@ public inherited sharing class WorkflowEngine {
           }
         } else {
           scheduleTimeoutJobIfNeeded(instance.Id, instance.Current_Step__c);
+        }
+      }
+    }
+  }
+
+  /**
+   * Re-drives a set of parallel-branch steps that are parked for a transient row-lock
+   * retry, BY NAME (the blank-stepName watchdog orchestrator is ignored for a
+   * comma-separated Current_Step__c). Shared by the watchdog sleep-resume (Suspended
+   * parents) and the orphaned-retry sweep (Running parents whose sibling flipped them
+   * out of Suspended). Re-arms ONLY these retry-marked rows' watchdog deadlines (so a
+   * sibling's overdue deadline is not masked) and bulk-publishes a single EventBus
+   * call (so a heartbeat waking many sleepers cannot exhaust the DML-statement limit),
+   * throwing on any failed publish so the wake-up rolls back and retries intact.
+   */
+  private static void reDriveTransientRetryBranches(
+    List<Workflow_Step_Execution__c> retryBranches
+  ) {
+    if (retryBranches == null || retryBranches.isEmpty()) {
+      return;
+    }
+    // Re-arm only the retry-marked rows whose deadline scheduleTransientLockRetry
+    // cleared for backoff (their instance is necessarily past admission, so no
+    // concurrency-defer check is needed) — never every active step on the instance.
+    List<Workflow_Step_Execution__c> toReArm = new List<Workflow_Step_Execution__c>();
+    for (Workflow_Step_Execution__c branch : retryBranches) {
+      Integer timeout = getStepTimeoutSeconds(branch.Step_Name__c);
+      if (timeout != null && timeout > 0) {
+        toReArm.add(
+          new Workflow_Step_Execution__c(
+            Id = branch.Id,
+            Timeout_At__c = DateTime.now().addSeconds(timeout)
+          )
+        );
+      }
+    }
+    if (!toReArm.isEmpty()) {
+      update as system toReArm;
+    }
+
+    List<Workflow_Event__e> branchEvents = new List<Workflow_Event__e>();
+    for (Workflow_Step_Execution__c branch : retryBranches) {
+      if (Test.isRunningTest()) {
+        if (!disableQueueableInTest) {
+          System.enqueueJob(
+            new WorkflowOrchestrator(
+              branch.Workflow_Instance__c,
+              branch.Step_Name__c
+            )
+          );
+        }
+      } else {
+        branchEvents.add(
+          new Workflow_Event__e(
+            Workflow_Instance_Id__c = branch.Workflow_Instance__c,
+            Event_Type__c = 'RUN_STEP',
+            Payload__c = branch.Step_Name__c
+          )
+        );
+      }
+    }
+    if (!branchEvents.isEmpty()) {
+      WorkflowWatchdog.bootstrap();
+      List<Database.SaveResult> srs = EventBus.publish(branchEvents);
+      for (Database.SaveResult sr : srs) {
+        if (!sr.isSuccess()) {
+          List<String> errMsgs = new List<String>();
+          for (Database.Error err : sr.getErrors()) {
+            errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
+          }
+          throw new WorkflowException(
+            'Failed to publish transient-retry branch event: ' +
+            String.join(errMsgs, ', ')
+          );
         }
       }
     }
