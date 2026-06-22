@@ -101,7 +101,6 @@ export default class WorkflowDashboard extends LightningElement {
   trendWindow = "24h";
   trendRows = [];
   loadingTrends = false;
-  trendsPanelCollapsed = false;
   // Incremented on every fetchTrends() call; the .then() callback checks its
   // captured snapshot against the current value and discards stale responses.
   _trendRequestId = 0;
@@ -162,14 +161,7 @@ export default class WorkflowDashboard extends LightningElement {
   ];
 
   connectedCallback() {
-    try {
-      this.trendsPanelCollapsed =
-        localStorage.getItem("revenant_dashboard_trends_collapsed") === "true";
-    } catch (_) {
-      // localStorage may be blocked by browser privacy settings; default stays false.
-    }
     this.fetchInstances(false);
-    this.fetchTrends();
     this.startAutoRefresh();
   }
 
@@ -535,40 +527,7 @@ export default class WorkflowDashboard extends LightningElement {
 
   // Only show the spinner on initial load (when no rows are cached yet).
   // Subsequent background refreshes update rows in-place without flicker.
-  get showTrendsSpinner() {
-    return this.loadingTrends && !this.hasTrendRows;
-  }
 
-  get trendWindowLabel() {
-    const option = this.trendWindowOptions.find(
-      (o) => o.value === this.trendWindow,
-    );
-    return option ? option.label : this.trendWindow;
-  }
-
-  get trendsPanelChevron() {
-    return this.trendsPanelCollapsed
-      ? "utility:chevronright"
-      : "utility:chevrondown";
-  }
-
-  get trendsPanelHeaderClass() {
-    const base =
-      "slds-grid slds-grid_align-spread slds-grid_vertical-align-center";
-    return this.trendsPanelCollapsed ? base : `${base} slds-m-bottom_small`;
-  }
-
-  handleToggleTrendsPanel() {
-    this.trendsPanelCollapsed = !this.trendsPanelCollapsed;
-    try {
-      localStorage.setItem(
-        "revenant_dashboard_trends_collapsed",
-        String(this.trendsPanelCollapsed),
-      );
-    } catch (_) {
-      // Silently ignore if localStorage is unavailable.
-    }
-  }
 
   formatInstance(inst) {
     const idleLabel =
@@ -1073,6 +1032,7 @@ export default class WorkflowDashboard extends LightningElement {
 
   loadDoctorStatus() {
     this.loadingDoctor = true;
+    this.fetchTrends();
     getWatchdogStatus()
       .then((result) => {
         let latestJobVal = null;

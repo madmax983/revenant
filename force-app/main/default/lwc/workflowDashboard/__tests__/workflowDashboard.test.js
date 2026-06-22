@@ -46,6 +46,30 @@ jest.mock(
   }),
   { virtual: true },
 );
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getWatchdogStatus",
+  () => ({
+    default: jest.fn(() =>
+      Promise.resolve({
+        isRunning: true,
+        scheduledJobsCount: 0,
+        sleepingInstances: 0,
+        pendingTimeouts: 0,
+        dailyAsyncValue: 0,
+        dailyAsyncLimit: 250000,
+        config: {},
+      }),
+    ),
+  }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus",
+  () => ({
+    default: jest.fn(() => Promise.resolve([])),
+  }),
+  { virtual: true },
+);
 
 const TRENDS_TWO_DEFS = {
   windowKey: "24h",
@@ -90,9 +114,25 @@ describe("c-workflow-dashboard trends panel", () => {
     return element;
   }
 
-  it("requests trends with the default 24h window on load", async () => {
+  it("does not request trends on load", async () => {
     getDefinitionTrends.mockResolvedValue(TRENDS_TWO_DEFS);
     createComponent();
+
+    await flushPromises();
+
+    expect(getDefinitionTrends).not.toHaveBeenCalled();
+  });
+
+  it("requests trends with default 24h window when System Doctor is opened", async () => {
+    getDefinitionTrends.mockResolvedValue(TRENDS_TWO_DEFS);
+    const element = createComponent();
+
+    await flushPromises();
+
+    const button = Array.from(element.shadowRoot.querySelectorAll("lightning-button"))
+      .find(btn => btn.label === "System Doctor");
+    expect(button).not.toBeNull();
+    button.dispatchEvent(new CustomEvent("click"));
 
     await flushPromises();
 
@@ -100,9 +140,15 @@ describe("c-workflow-dashboard trends panel", () => {
     expect(getDefinitionTrends.mock.calls[0][0]).toEqual({ windowKey: "24h" });
   });
 
-  it("renders one row per definition with a success-rate cell", async () => {
+  it("renders one row per definition with a success-rate cell in System Doctor", async () => {
     getDefinitionTrends.mockResolvedValue(TRENDS_TWO_DEFS);
     const element = createComponent();
+
+    await flushPromises();
+
+    const button = Array.from(element.shadowRoot.querySelectorAll("lightning-button"))
+      .find(btn => btn.label === "System Doctor");
+    button.dispatchEvent(new CustomEvent("click"));
 
     await flushPromises();
     await flushPromises();
@@ -110,9 +156,7 @@ describe("c-workflow-dashboard trends panel", () => {
     const rows = element.shadowRoot.querySelectorAll('[data-id="trend-row"]');
     expect(rows.length).toBe(2);
 
-    const panelText = element.shadowRoot.querySelector(
-      '[data-id="trends-panel"]',
-    ).textContent;
+    const panelText = element.shadowRoot.textContent;
     expect(panelText).toContain("OnboardingWorkflow");
     expect(panelText).toContain("80%");
     expect(panelText).toContain("BillingWorkflow");
@@ -127,6 +171,12 @@ describe("c-workflow-dashboard trends panel", () => {
     const element = createComponent();
 
     await flushPromises();
+
+    const button = Array.from(element.shadowRoot.querySelectorAll("lightning-button"))
+      .find(btn => btn.label === "System Doctor");
+    button.dispatchEvent(new CustomEvent("click"));
+
+    await flushPromises();
     await flushPromises();
 
     const rows = element.shadowRoot.querySelectorAll('[data-id="trend-row"]');
@@ -135,9 +185,15 @@ describe("c-workflow-dashboard trends panel", () => {
     expect(empty).not.toBeNull();
   });
 
-  it("re-queries trends when the window selector changes", async () => {
+  it("re-queries trends when the window selector changes in System Doctor", async () => {
     getDefinitionTrends.mockResolvedValue(TRENDS_TWO_DEFS);
     const element = createComponent();
+
+    await flushPromises();
+
+    const button = Array.from(element.shadowRoot.querySelectorAll("lightning-button"))
+      .find(btn => btn.label === "System Doctor");
+    button.dispatchEvent(new CustomEvent("click"));
 
     await flushPromises();
     getDefinitionTrends.mockClear();
@@ -145,6 +201,7 @@ describe("c-workflow-dashboard trends panel", () => {
     const combobox = element.shadowRoot.querySelector(
       '[data-id="trend-window"]',
     );
+    expect(combobox).not.toBeNull();
     combobox.dispatchEvent(
       new CustomEvent("change", { detail: { value: "1h" } }),
     );
@@ -152,63 +209,6 @@ describe("c-workflow-dashboard trends panel", () => {
     await flushPromises();
 
     expect(getDefinitionTrends).toHaveBeenCalledWith({ windowKey: "1h" });
-  });
-
-  it("collapses and expands the panel body on header click", async () => {
-    getDefinitionTrends.mockResolvedValue(TRENDS_TWO_DEFS);
-    const element = createComponent();
-
-    await flushPromises();
-    await flushPromises();
-
-    // Panel body is visible by default.
-    expect(
-      element.shadowRoot.querySelector('[data-id="trend-row"]'),
-    ).not.toBeNull();
-
-    // Click the toggle button to collapse.
-    element.shadowRoot
-      .querySelector('[role="button"]')
-      .dispatchEvent(new CustomEvent("click"));
-
-    await Promise.resolve();
-
-    // Body rows should be gone; combobox should also be hidden.
-    expect(
-      element.shadowRoot.querySelector('[data-id="trend-row"]'),
-    ).toBeNull();
-    expect(
-      element.shadowRoot.querySelector('[data-id="trend-window"]'),
-    ).toBeNull();
-
-    // Click again to expand.
-    element.shadowRoot
-      .querySelector('[role="button"]')
-      .dispatchEvent(new CustomEvent("click"));
-
-    await Promise.resolve();
-
-    expect(
-      element.shadowRoot.querySelector('[data-id="trend-row"]'),
-    ).not.toBeNull();
-  });
-
-  it("persists collapsed state to localStorage and restores it on mount", async () => {
-    getDefinitionTrends.mockResolvedValue(TRENDS_TWO_DEFS);
-
-    // Seed localStorage as if the user previously collapsed the panel.
-    localStorage.setItem("revenant_dashboard_trends_collapsed", "true");
-
-    const element = createComponent();
-    await flushPromises();
-    await flushPromises();
-
-    // Should start collapsed — body rows not rendered.
-    expect(
-      element.shadowRoot.querySelector('[data-id="trend-row"]'),
-    ).toBeNull();
-
-    localStorage.removeItem("revenant_dashboard_trends_collapsed");
   });
 });
 

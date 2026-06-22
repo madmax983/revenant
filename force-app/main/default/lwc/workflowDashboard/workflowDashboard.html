@@ -114,82 +114,7 @@
             </div>
         </div>
 
-        <!-- Definition Health Trends Panel -->
-        <div class="panel-card slds-p-around_medium slds-m-bottom_large" data-id="trends-panel">
-            <div class={trendsPanelHeaderClass}>
-                <div class="slds-grid slds-grid_vertical-align-center clickable-header"
-                     onclick={handleToggleTrendsPanel}
-                     role="button"
-                     tabindex="0">
-                    <lightning-icon
-                        icon-name={trendsPanelChevron}
-                        size="x-small"
-                        class="slds-m-right_x-small text-weak-icon">
-                    </lightning-icon>
-                    <div>
-                        <h2 class="slds-text-heading_small font-outfit">Definition Health</h2>
-                        <p class="slds-text-color_weak slds-text-body_small">
-                            Per-definition success rate &amp; throughput over the {trendWindowLabel}. Terminal outcomes only; sickest first.
-                        </p>
-                    </div>
-                </div>
-                <template if:false={trendsPanelCollapsed}>
-                    <div class="trend-window-selector">
-                        <lightning-combobox
-                            name="trendWindow"
-                            data-id="trend-window"
-                            variant="label-hidden"
-                            value={trendWindow}
-                            options={trendWindowOptions}
-                            onchange={handleTrendWindowChange}>
-                        </lightning-combobox>
-                    </div>
-                </template>
-            </div>
 
-            <template if:false={trendsPanelCollapsed}>
-                <template if:true={showTrendsSpinner}>
-                    <div class="slds-align_absolute-center slds-p-around_medium">
-                        <lightning-spinner alternative-text="Loading trends..." size="small"></lightning-spinner>
-                    </div>
-                </template>
-
-                <template if:true={hasTrendRows}>
-                    <table class="slds-table slds-table_cell-buffer slds-table_bordered" aria-label="Definition health trends">
-                        <thead>
-                            <tr class="slds-line-height_reset">
-                                <th scope="col"><div class="slds-truncate" title="Definition">Definition</div></th>
-                                <th scope="col"><div class="slds-truncate" title="Terminal">Terminal</div></th>
-                                <th scope="col"><div class="slds-truncate" title="Success">Success</div></th>
-                                <th scope="col"><div class="slds-truncate" title="Failure">Failure</div></th>
-                                <th scope="col"><div class="slds-truncate" title="Success Rate">Success Rate</div></th>
-                                <th scope="col"><div class="slds-truncate" title="Throughput (per window / per hour)">Throughput</div></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <template for:each={trendRows} for:item="row">
-                                <tr key={row.workflowName} data-id="trend-row" class="slds-hint-parent">
-                                    <td><div class="slds-truncate" title={row.workflowName}>{row.workflowName}</div></td>
-                                    <td>{row.terminalCount}</td>
-                                    <td class="text-green">{row.successCount}</td>
-                                    <td class={row.failureCountClass}>{row.failureCount}</td>
-                                    <td><strong class={row.successRateClass}>{row.successRateDisplay}</strong></td>
-                                    <td><div class="slds-truncate" title={row.throughputDisplay}>{row.throughputDisplay}</div></td>
-                                </tr>
-                            </template>
-                        </tbody>
-                    </table>
-                </template>
-
-                <template if:false={hasTrendRows}>
-                    <template if:false={showTrendsSpinner}>
-                        <div class="slds-align_absolute-center slds-p-around_medium slds-text-color_weak" data-id="trend-empty">
-                            No terminal activity in this window.
-                        </div>
-                    </template>
-                </template>
-            </template>
-        </div>
 
         <!-- Main Workspace Split Layout -->
         <div class="slds-grid slds-wrap slds-gutters">
@@ -534,6 +459,64 @@
                                         <div class="panel-card slds-p-around_medium slds-text-color_weak slds-text-align_center">
                                             No workflows have a concurrency ceiling configured.
                                         </div>
+                                    </template>
+                                </div>
+
+                                <!-- Definition Health Trends -->
+                                <div class="slds-m-bottom_large">
+                                    <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_small">
+                                        <h3 class="slds-text-heading_small font-outfit">Definition Health</h3>
+                                        <div class="trend-window-selector">
+                                            <lightning-combobox
+                                                name="trendWindow"
+                                                data-id="trend-window"
+                                                variant="label-hidden"
+                                                value={trendWindow}
+                                                options={trendWindowOptions}
+                                                onchange={handleTrendWindowChange}>
+                                            </lightning-combobox>
+                                        </div>
+                                    </div>
+
+                                    <template if:true={loadingTrends}>
+                                        <div class="slds-align_absolute-center slds-p-around_medium">
+                                            <lightning-spinner alternative-text="Loading trends..." size="small"></lightning-spinner>
+                                        </div>
+                                    </template>
+                                    <template if:false={loadingTrends}>
+                                        <template if:true={hasTrendRows}>
+                                            <div class="panel-card slds-p-around_medium">
+                                                <table class="slds-table slds-table_cell-buffer slds-table_bordered" aria-label="Definition health trends">
+                                                    <thead>
+                                                        <tr class="slds-line-height_reset">
+                                                            <th scope="col"><div class="slds-truncate" title="Definition">Definition</div></th>
+                                                            <th scope="col"><div class="slds-truncate" title="Terminal">Terminal</div></th>
+                                                            <th scope="col"><div class="slds-truncate" title="Success">Success</div></th>
+                                                            <th scope="col"><div class="slds-truncate" title="Failure">Failure</div></th>
+                                                            <th scope="col"><div class="slds-truncate" title="Success Rate">Success Rate</div></th>
+                                                            <th scope="col"><div class="slds-truncate" title="Throughput">Throughput</div></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <template for:each={trendRows} for:item="row">
+                                                            <tr key={row.workflowName} data-id="trend-row" class="slds-hint-parent">
+                                                                <td><div class="slds-truncate" title={row.workflowName}>{row.workflowName}</div></td>
+                                                                <td>{row.terminalCount}</td>
+                                                                <td class="text-green">{row.successCount}</td>
+                                                                <td class={row.failureCountClass}>{row.failureCount}</td>
+                                                                <td><strong class={row.successRateClass}>{row.successRateDisplay}</strong></td>
+                                                                <td><div class="slds-truncate" title={row.throughputDisplay}>{row.throughputDisplay}</div></td>
+                                                            </tr>
+                                                        </template>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </template>
+                                        <template if:false={hasTrendRows}>
+                                            <div class="panel-card slds-p-around_medium slds-text-color_weak slds-text-align_center" data-id="trend-empty">
+                                                No terminal activity in this window.
+                                            </div>
+                                        </template>
                                     </template>
                                 </div>
 
