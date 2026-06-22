@@ -2713,4 +2713,112 @@ public class WorkflowDashboardControllerTest {
       }
     }
   }
+
+  @isTest
+  static void testGetWorkflowFailureBreakdown_emptyState() {
+    Test.startTest();
+    Map<String, Object> result = WorkflowDashboardController.getWorkflowFailureBreakdown('CleanupWorkflow', '24h');
+    Test.stopTest();
+
+    System.assertEquals('CleanupWorkflow', result.get('workflowName'));
+    System.assertEquals('24h', result.get('timeWindow'));
+    System.assertEquals(false, result.get('isCapped'));
+    System.assertEquals(0, result.get('totalFailures'));
+    List<Object> steps = (List<Object>) result.get('steps');
+    System.assertEquals(0, steps.size());
+  }
+
+  @isTest
+  static void testGetWorkflowFailureBreakdown_filtersAndGroups() {
+    Workflow_Instance__c inst1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'CleanupWorkflow',
+      Status__c = 'Failed'
+    );
+    insert inst1;
+
+    List<Workflow_Step_Execution__c> stepsToInsert = new List<Workflow_Step_Execution__c>{
+      new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst1.Id,
+        Step_Name__c = 'StepOne',
+        Status__c = 'Failed',
+        Error_Details__c = 'System.NullPointerException: Attempt to de-reference a null object\nClass.MyClass.method: line 10'
+      ),
+      new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst1.Id,
+        Step_Name__c = 'StepOne',
+        Status__c = 'Failed',
+        Error_Details__c = 'System.NullPointerException: Attempt to de-reference a null object\nClass.MyClass.method: line 15'
+      ),
+      new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst1.Id,
+        Step_Name__c = 'StepTwo',
+        Status__c = 'Failed',
+        Error_Details__c = 'System.DmlException: Insert failed. First exception on row 0; first error: REQUIRED_FIELD_MISSING, Required fields are missing: [Name]: [Name]'
+      )
+    };
+    insert stepsToInsert;
+
+    Test.startTest();
+    Map<String, Object> result = WorkflowDashboardController.getWorkflowFailureBreakdown('CleanupWorkflow', '24h');
+    Test.stopTest();
+
+    System.assertEquals('CleanupWorkflow', result.get('workflowName'));
+    System.assertEquals('24h', result.get('timeWindow'));
+    System.assertEquals(3, result.get('totalFailures'));
+
+    List<Object> steps = (List<Object>) result.get('steps');
+    System.assertEquals(2, steps.size(), 'Should have 2 failing steps grouped');
+
+    Map<String, Object> step1 = (Map<String, Object>) steps[0];
+    System.assertEquals('StepOne', step1.get('stepName'));
+    System.assertEquals(2, step1.get('failureCount'));
+
+    List<Object> signatures1 = (List<Object>) step1.get('errorSignatures');
+    System.assertEquals(1, signatures1.size(), 'Should group both NPEs together');
+    Map<String, Object> sig1 = (Map<String, Object>) signatures1[0];
+    System.assertEquals('System.NullPointerException: Attempt to de-reference a null object', sig1.get('signature'));
+    System.assertEquals(2, sig1.get('count'));
+
+    List<Object> examples1 = (List<Object>) sig1.get('examples');
+    System.assertEquals(1, examples1.size(), 'Should unique examples by instance');
+
+    Map<String, Object> step2 = (Map<String, Object>) steps[1];
+    System.assertEquals('StepTwo', step2.get('stepName'));
+    System.assertEquals(1, step2.get('failureCount'));
+  }
+
+  @isTest
+  static void testGetWorkflowFailureBreakdown_normalization() {
+    Workflow_Instance__c inst1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'CleanupWorkflow',
+      Status__c = 'Failed'
+    );
+    insert inst1;
+
+    List<Workflow_Step_Execution__c> stepsToInsert = new List<Workflow_Step_Execution__c>{
+      new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst1.Id,
+        Step_Name__c = 'NormalizeStep',
+        Status__c = 'Failed',
+        Error_Details__c = 'Failed to update Account 001DSv00000CFwWKMA at 2026-06-22T20:16:30Z with transaction 3d3b7e41-0f46-4c4f-9e7b-c9e504c5fb43. Retries: 3'
+      )
+    };
+    insert stepsToInsert;
+
+    Test.startTest();
+    Map<String, Object> result = WorkflowDashboardController.getWorkflowFailureBreakdown('CleanupWorkflow', 'all');
+    Test.stopTest();
+
+    List<Object> steps = (List<Object>) result.get('steps');
+    Map<String, Object> step = (Map<String, Object>) steps[0];
+    List<Object> signatures = (List<Object>) step.get('errorSignatures');
+    Map<String, Object> sig = (Map<String, Object>) signatures[0];
+
+    String signature = (String) sig.get('signature');
+    System.assert(signature.contains('[ID]'), 'Should contain [ID]: ' + signature);
+    System.assert(signature.contains('[DATETIME]'), 'Should contain [DATETIME]: ' + signature);
+    System.assert(signature.contains('[UUID]'), 'Should contain [UUID]: ' + signature);
+    System.assert(signature.contains('[NUM]'), 'Should contain [NUM]: ' + signature);
+  }
 }
+
