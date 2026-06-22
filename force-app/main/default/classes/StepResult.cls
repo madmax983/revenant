@@ -38,6 +38,11 @@ public inherited sharing class StepResult {
    */
   public List<SObject> outboundEvents { get; set; }
 
+  // Durable wait timeout (issue #35). When set, the engine arms Sleep_Until__c
+  // and routes to timeoutStep if the deadline elapses before a signal/approval.
+  public Integer timeoutSeconds { get; set; }
+  public String timeoutStep { get; set; }
+
   public static StepResult complete(String nextStepName, Object output) {
     StepResult r = new StepResult();
     r.action = ActionType.COMPLETE;
@@ -84,6 +89,24 @@ public inherited sharing class StepResult {
     StepResult r = new StepResult();
     r.action = ActionType.SUSPEND;
     r.stepStateJson = stepStateJson;
+    return r;
+  }
+
+  public static StepResult suspend(Integer timeoutSeconds, String timeoutStep) {
+    if (String.isBlank(timeoutStep)) {
+      throw new IllegalArgumentException(
+        'StepResult.suspend: timeoutStep must not be blank'
+      );
+    }
+    if (timeoutSeconds == null || timeoutSeconds <= 0) {
+      throw new IllegalArgumentException(
+        'StepResult.suspend: timeoutSeconds must be a positive integer'
+      );
+    }
+    StepResult r = new StepResult();
+    r.action = ActionType.SUSPEND;
+    r.timeoutSeconds = timeoutSeconds;
+    r.timeoutStep = timeoutStep;
     return r;
   }
 
@@ -135,6 +158,31 @@ public inherited sharing class StepResult {
     r.action = ActionType.WAIT_FOR_APPROVAL;
     r.approvalKey = key;
     r.approvalRole = role;
+    return r;
+  }
+
+  public static StepResult waitForApproval(
+    String key,
+    String role,
+    Integer timeoutSeconds,
+    String timeoutStep
+  ) {
+    if (String.isBlank(timeoutStep)) {
+      throw new IllegalArgumentException(
+        'StepResult.waitForApproval: timeoutStep must not be blank'
+      );
+    }
+    if (timeoutSeconds == null || timeoutSeconds <= 0) {
+      throw new IllegalArgumentException(
+        'StepResult.waitForApproval: timeoutSeconds must be a positive integer'
+      );
+    }
+    StepResult r = new StepResult();
+    r.action = ActionType.WAIT_FOR_APPROVAL;
+    r.approvalKey = key;
+    r.approvalRole = role;
+    r.timeoutSeconds = timeoutSeconds;
+    r.timeoutStep = timeoutStep;
     return r;
   }
 

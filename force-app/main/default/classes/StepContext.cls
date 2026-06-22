@@ -80,6 +80,14 @@ public inherited sharing class StepContext {
     }
   }
 
+  // True when this execution is the engine-routed timeout fallback (issue #35).
+  // Set by the engine via withCapturedValues; false by default for all normal runs.
+  private Boolean timeoutResume = false;
+
+  public Boolean isTimeoutResume() {
+    return timeoutResume == true;
+  }
+
   @TestVisible
   private static Double mockQueryRowsFraction = null;
   @TestVisible
@@ -1012,6 +1020,40 @@ public inherited sharing class StepContext {
         capturedValuesJson
       );
     }
+    return ctx;
+  }
+
+  @TestVisible
+  public static StepContext withCapturedValues(
+    Id workflowInstanceId,
+    String workflowName,
+    String stepName,
+    String inputJson,
+    String previousStepOutput,
+    String stepStateJson,
+    String workflowInputJson,
+    Integer workflowVersion,
+    Integer stepVisit,
+    SignalSource signalSource,
+    Datetime previousRunAt,
+    String capturedValuesJson,
+    Boolean timeoutResume
+  ) {
+    StepContext ctx = withCapturedValues(
+      workflowInstanceId,
+      workflowName,
+      stepName,
+      inputJson,
+      previousStepOutput,
+      stepStateJson,
+      workflowInputJson,
+      workflowVersion,
+      stepVisit,
+      signalSource,
+      previousRunAt,
+      capturedValuesJson
+    );
+    ctx.timeoutResume = (timeoutResume == true);
     return ctx;
   }
 

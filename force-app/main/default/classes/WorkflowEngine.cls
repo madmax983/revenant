@@ -1296,6 +1296,12 @@ public inherited sharing class WorkflowEngine {
     ) {
       if (instance.Status__c == 'Suspended') {
         instance.Status__c = 'Running';
+        // Disarm the wait deadline (issue #35): a signal-wake ends the current
+        // wait, so any armed Sleep_Until__c (timed-wait timeout, or a plain
+        // sleeper's deadline) must be cleared or the watchdog would later
+        // re-select this instance and mis-route/double-wake it. The resumed step
+        // re-arms its own deadline if it suspends or sleeps again.
+        instance.Sleep_Until__c = null;
         update as system instance;
       }
       enqueueResume(instance.Id);
@@ -1876,6 +1882,9 @@ public inherited sharing class WorkflowEngine {
 
     Workflow_Instance__c instance = instances[0];
     instance.Status__c = 'Running';
+    // Disarm any armed timed-wait timeout so the watchdog does not mis-route to
+    // the fallback step after a manual resume wins the race (issue #35).
+    instance.Sleep_Until__c = null;
     update as system instance;
 
     // If there is an active step, we can store the resume payload in its step execution record
@@ -1938,6 +1947,9 @@ public inherited sharing class WorkflowEngine {
 
     Workflow_Instance__c instance = instances[0];
     instance.Status__c = 'Running';
+    // Disarm any armed timed-wait timeout so the watchdog does not mis-route to
+    // the fallback step after a manual resume wins the race (issue #35).
+    instance.Sleep_Until__c = null;
     update as system instance;
 
     // If there is an active step, we can store the resume payload in its step execution record
@@ -2081,6 +2093,9 @@ public inherited sharing class WorkflowEngine {
 
       if (inst != null) {
         inst.Status__c = 'Running';
+        // Disarm any armed timed-wait timeout so the watchdog does not mis-route
+        // to the fallback step after a manual resume wins the race (issue #35).
+        inst.Sleep_Until__c = null;
         instancesToUpdate.add(inst);
 
         Workflow_Step_Execution__c stepExec = latestStepByInstanceId.get(
@@ -2629,13 +2644,38 @@ public inherited sharing class WorkflowEngine {
     // stepVisit: number of already-completed runs of this step in this instance.
     // Computed above from the stepExecs list (before FOR UPDATE re-assigns it)
     // to avoid a separate COUNT() SOQL query.
+    // Detect and strip the $timeoutResume marker (issue #35): the watchdog sets it
+    // in Input__c of the fallback exec to durably signal the timeout-triggered path.
+    // Strip it before passing inputJson to the context so the author step never
+    // sees the engine-internal key.
+    String resolvedInput = resolvePayload(stepExec.Input__c);
+    Boolean isTimeoutResume =
+      String.isNotBlank(resolvedInput) &&
+      resolvedInput.contains('$timeoutResume') &&
+      'true'.equalsIgnoreCase(readJsonMapKey(resolvedInput, '$timeoutResume'));
+    if (isTimeoutResume) {
+      resolvedInput = stripJsonMapKey(resolvedInput, '$timeoutResume');
+      // Persist the cleaned input back to the locked record so the engine marker
+      // does not linger in the durable audit row (saved with the exec below).
+      stepExec.Input__c = resolvedInput;
+    }
+    // Strip the engine-internal $timeoutStep marker from the state JSON a timed
+    // wait persisted in Output__c, so a signal-win resume that re-runs the wait
+    // step does not surface the reserved key to the author via stepStateJson.
+    String resolvedState = resolvePayload(stepExec.Output__c);
+    if (
+      String.isNotBlank(resolvedState) &&
+      resolvedState.contains('$timeoutStep')
+    ) {
+      resolvedState = stripJsonMapKey(resolvedState, '$timeoutStep');
+    }
     StepContext context = StepContext.withCapturedValues(
       instanceId,
       instance.Workflow_Name__c,
       activeStepName,
-      resolvePayload(stepExec.Input__c),
+      resolvedInput,
       resolvePayload(prevOutput),
-      resolvePayload(stepExec.Output__c),
+      resolvedState,
       resolvePayload(instance.Input__c),
       instance.Definition_Version__c != null
         ? (Integer) instance.Definition_Version__c
@@ -2643,7 +2683,8 @@ public inherited sharing class WorkflowEngine {
       stepVisit,
       signalSrc,
       instance.Previous_Run_At__c,
-      resolvePayload(stepExec.Captured_Values__c)
+      resolvePayload(stepExec.Captured_Values__c),
+      isTimeoutResume
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts.
@@ -3776,14 +3817,30 @@ public inherited sharing class WorkflowEngine {
       if (isParallel) {
         rollbackClaimedSignals(context);
       }
-      // Explicit stepStateJson is preserved; no-arg suspend() nulls Output__c so
-      // stale yield checkpoints from a prior YIELD in the same execution don't
-      // survive into a retry and cause duplicate-spawn collisions.
       stepExec.Status__c = 'Pending';
-      stepExec.Output__c = String.isNotBlank(result.stepStateJson)
+      String suspendStateJson;
+      if (String.isNotBlank(result.timeoutStep)) {
+        // Timed suspend (issue #35): persist the fallback step in a reserved key
+        // so the watchdog can route to it when the deadline elapses.
+        suspendStateJson = JSON.serialize(
+          new Map<String, Object>{ '$timeoutStep' => result.timeoutStep }
+        );
+        instance.Sleep_Until__c = DateTime.now()
+          .addSeconds(result.timeoutSeconds);
+      } else {
+        // Explicit stepStateJson is preserved; no-arg suspend() nulls Output__c so
+        // stale yield checkpoints from a prior YIELD in the same execution don't
+        // survive into a retry and cause duplicate-spawn collisions.
+        suspendStateJson = result.stepStateJson;
+        // A plain (deadline-less) suspend must not inherit a stale timer left by
+        // an earlier timed wait or a manual resume, or the watchdog would wake it
+        // early. Reset the deadline defensively (issue #35).
+        instance.Sleep_Until__c = null;
+      }
+      stepExec.Output__c = String.isNotBlank(suspendStateJson)
         ? savePayloadIfNeeded(
             instance.Id,
-            result.stepStateJson,
+            suspendStateJson,
             'State_Suspend_' +
             stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
           )
@@ -3858,6 +3915,16 @@ public inherited sharing class WorkflowEngine {
         'approvalKey' => result.approvalKey,
         'approvalRole' => result.approvalRole
       };
+      if (String.isNotBlank(result.timeoutStep)) {
+        // Timed approval (issue #35): add fallback step so watchdog can route.
+        state.put('$timeoutStep', result.timeoutStep);
+        instance.Sleep_Until__c = DateTime.now()
+          .addSeconds(result.timeoutSeconds);
+      } else {
+        // A deadline-less approval wait must not inherit a stale timer left by an
+        // earlier timed wait or a manual resume (issue #35).
+        instance.Sleep_Until__c = null;
+      }
       stepExec.Output__c = savePayloadIfNeeded(
         instance.Id,
         JSON.serialize(state),
@@ -4716,7 +4783,7 @@ public inherited sharing class WorkflowEngine {
     if (isId) {
       // Query by ID first to prevent matching a correlation key that equals this ID string
       instances = [
-        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
+        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c, Sleep_Until__c
         FROM Workflow_Instance__c
         WHERE Id = :targetId AND Status__c IN :lookupStatuses
         WITH SYSTEM_MODE
@@ -4727,7 +4794,7 @@ public inherited sharing class WorkflowEngine {
 
     if (instances.isEmpty()) {
       instances = [
-        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
+        SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c, Sleep_Until__c
         FROM Workflow_Instance__c
         WHERE Correlation_Key__c = :keyOrId AND Status__c IN :lookupStatuses
         WITH SYSTEM_MODE
@@ -4932,7 +4999,8 @@ public inherited sharing class WorkflowEngine {
         Current_Step__c,
         Compensation_Stack__c,
         Concurrency_Parked__c,
-        Concurrency_Slot_Held__c
+        Concurrency_Slot_Held__c,
+        Sleep_Until__c
       FROM Workflow_Instance__c
       WHERE
         (Id IN :ids
@@ -5308,6 +5376,12 @@ public inherited sharing class WorkflowEngine {
             continue;
           }
           inst.Status__c = 'Running';
+          // Disarm the wait deadline (issue #35): a signal-wake ends the current
+          // wait, so any armed Sleep_Until__c (timed-wait timeout, or a plain
+          // sleeper's deadline) must be cleared or the watchdog would later
+          // re-select this instance and mis-route/double-wake it. The resumed
+          // step re-arms its own deadline if it suspends or sleeps again.
+          inst.Sleep_Until__c = null;
           instancesToUpdate.add(inst);
         }
         activeInstances.add(inst);
@@ -6205,6 +6279,13 @@ public inherited sharing class WorkflowEngine {
       scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.SUSPEND) {
+      if (String.isNotBlank(result.timeoutStep)) {
+        System.debug(
+          LoggingLevel.WARN,
+          'StepResult.suspend(timeoutSeconds, timeoutStep) used from compensate() — ' +
+          'timed-wait timeout is not supported in compensation steps; the timeout will not be armed.'
+        );
+      }
       stepExec.Status__c = 'Pending';
       stepExec.Output__c = String.isNotBlank(result.stepStateJson)
         ? savePayloadIfNeeded(
@@ -6236,6 +6317,13 @@ public inherited sharing class WorkflowEngine {
       }
       update as system instance;
     } else if (result.action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
+      if (String.isNotBlank(result.timeoutStep)) {
+        System.debug(
+          LoggingLevel.WARN,
+          'StepResult.waitForApproval(..., timeoutSeconds, timeoutStep) used from compensate() — ' +
+          'timed-wait timeout is not supported in compensation steps; the timeout will not be armed.'
+        );
+      }
       stepExec.Status__c = 'Pending';
       Map<String, Object> state = new Map<String, Object>{
         'waitingForApproval' => true,
@@ -6563,6 +6651,11 @@ public inherited sharing class WorkflowEngine {
     // Abort all scheduled jobs for this instance (sleeps, retries, timeouts)
     abortScheduledJobs(instanceId);
 
+    // Disarm any armed timed-wait timeout so the watchdog cannot mis-route a
+    // cancelled (or compensating) instance to a fallback step (issue #35). Every
+    // cancel branch below commits `instance`, so set it once here.
+    instance.Sleep_Until__c = null;
+
     // Update step executions to Cancelled
     for (Workflow_Step_Execution__c stepExec : stepExecs) {
       stepExec.Status__c = 'Cancelled';
@@ -6765,6 +6858,67 @@ public inherited sharing class WorkflowEngine {
         'Correlation key length cannot exceed 200 characters.'
       );
     }
+  }
+
+  // Returns the String value of a reserved $-key from a JSON-object string, or
+  // null for blank input, non-object JSON, a missing key, and parse failures.
+  private static String readJsonMapKey(String jsonText, String key) {
+    if (String.isBlank(jsonText)) {
+      return null;
+    }
+    try {
+      Object parsed = JSON.deserializeUntyped(jsonText);
+      if (!(parsed instanceof Map<String, Object>)) {
+        return null;
+      }
+      Object value = ((Map<String, Object>) parsed).get(key);
+      if (value == null) {
+        return null;
+      }
+      String strValue = String.valueOf(value);
+      return String.isBlank(strValue) ? null : strValue;
+    } catch (Exception e) {
+      return null;
+    }
+  }
+
+  // Removes a reserved $-key from a JSON-object string, returning the cleaned
+  // JSON (null when the map is empty after removal). Returns the original string
+  // for blank/missing-key input, non-object JSON, and parse failures.
+  private static String stripJsonMapKey(String jsonText, String key) {
+    if (String.isBlank(jsonText) || !jsonText.contains(key)) {
+      return jsonText;
+    }
+    try {
+      Object parsed = JSON.deserializeUntyped(jsonText);
+      if (!(parsed instanceof Map<String, Object>)) {
+        return jsonText;
+      }
+      Map<String, Object> m = (Map<String, Object>) parsed;
+      m.remove(key);
+      return m.isEmpty() ? null : JSON.serialize(m);
+    } catch (Exception e) {
+      return jsonText;
+    }
+  }
+
+  // Extracts the $timeoutStep value from a step exec's Output__c if it is a
+  // timed-wait state envelope (issue #35). Returns null for plain SLEEP state,
+  // author-supplied JSON, null/blank, and any parse failure.
+  private static String extractTimedWaitTarget(
+    Workflow_Step_Execution__c stepExec
+  ) {
+    if (stepExec == null || String.isBlank(stepExec.Output__c)) {
+      return null;
+    }
+    // Cheap gate: the timed-wait marker is always inline (the {"$timeoutStep":..}
+    // envelope is tiny and never offloaded), so the raw field already contains
+    // the key without needing resolvePayload. This avoids a ContentVersion SOQL
+    // per plain-sleeper instance inside the watchdog resume loop.
+    if (!stepExec.Output__c.contains('$timeoutStep')) {
+      return null;
+    }
+    return readJsonMapKey(resolvePayload(stepExec.Output__c), '$timeoutStep');
   }
 
   public static String resolvePayload(String textValue) {
@@ -7230,7 +7384,7 @@ public inherited sharing class WorkflowEngine {
       }
 
       List<Workflow_Step_Execution__c> latestSteps = [
-        SELECT Workflow_Instance__c, Step_Name__c
+        SELECT Workflow_Instance__c, Step_Name__c, Output__c, Id, Status__c
         FROM Workflow_Step_Execution__c
         WHERE Workflow_Instance__c IN :resumeIds
         WITH SYSTEM_MODE
@@ -7251,6 +7405,8 @@ public inherited sharing class WorkflowEngine {
       // retry would never re-drive off the watchdog. Collect them here to re-drive
       // their retrying branches BY NAME after the loop.
       List<Id> parallelResumeIds = new List<Id>();
+      // Timed-wait fallback execs to bulk-insert after the loop (issue #35).
+      List<Workflow_Step_Execution__c> timedWaitFallbackExecs = new List<Workflow_Step_Execution__c>();
       for (Workflow_Instance__c inst : readyToResume) {
         // Hold, not drop: if the definition is paused, leave the instance Suspended
         // with Sleep_Until__c intact so it re-fires on the next heartbeat after resume.
@@ -7291,6 +7447,27 @@ public inherited sharing class WorkflowEngine {
             inst.Status__c = 'Compensating';
           }
         } else {
+          // Timed-wait detection (issue #35): if the latest step exec carries a
+          // $timeoutStep key in its Output, the timer fired for a timed suspend/
+          // approval wait. Route to the fallback step instead of re-running the
+          // current step. Non-compensating, serial instances only.
+          String timedWaitTarget = extractTimedWaitTarget(latestStep);
+          Boolean isSerial =
+            String.isBlank(inst.Current_Step__c) ||
+            !inst.Current_Step__c.contains(',');
+          if (String.isNotBlank(timedWaitTarget) && isSerial) {
+            // Route to the fallback step: create a new Pending exec (append-only)
+            // and advance Current_Step__c. The prior wait exec is never mutated.
+            Workflow_Step_Execution__c fallbackExec = new Workflow_Step_Execution__c();
+            fallbackExec.Workflow_Instance__c = inst.Id;
+            fallbackExec.Step_Name__c = timedWaitTarget;
+            fallbackExec.Status__c = 'Pending';
+            fallbackExec.Input__c = '{"$timeoutResume":true}';
+            fallbackExec.Retry_Count__c = 0;
+            fallbackExec.Transient_Retry_Count__c = 0;
+            timedWaitFallbackExecs.add(fallbackExec);
+            inst.Current_Step__c = timedWaitTarget;
+          }
           inst.Status__c = 'Running';
           if (
             String.isNotBlank(inst.Current_Step__c) &&
@@ -7303,6 +7480,9 @@ public inherited sharing class WorkflowEngine {
         inst.Async_Job_Id__c = null;
         instanceIds.add(inst.Id);
         instancesToUpdate.add(inst);
+      }
+      if (!timedWaitFallbackExecs.isEmpty()) {
+        insert as system timedWaitFallbackExecs;
       }
       if (!instancesToUpdate.isEmpty()) {
         update as system instancesToUpdate;
