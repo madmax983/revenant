@@ -4154,6 +4154,37 @@ public inherited sharing class WorkflowEngine {
       } else {
         enqueueOrchestrator(nextInstance.Id, null);
       }
+    } else if (result.action == StepResult.ActionType.FAIL) {
+      // Explicit terminal failure (issue #37): the author returned a deliberate
+      // business failure — not a crash, not a retry. Record the step terminal
+      // exactly once (append-only) with the operator-readable reason (and any
+      // structured failureData) in Error_Details__c, then route through the
+      // existing failWorkflowInstance path. That performs ZERO retry hops and
+      // transitions to Compensating (LIFO rollback) when a Compensation_Stack__c
+      // exists, or to Failed otherwise; Terminal_At__c is stamped by
+      // WorkflowInstanceTrigger on the terminal transition, exactly as a thrown
+      // failure does today.
+      if (isParallel) {
+        rollbackClaimedSignals(context);
+      }
+      stepExec.Status__c = 'Failed';
+      stepExec.Error_Details__c = (result.failureDataJson != null)
+        ? JSON.serialize(
+            new Map<String, Object>{
+              'reason' => result.failureReason,
+              'failureData' => (Object) JSON.deserializeUntyped(
+                result.failureDataJson
+              )
+            }
+          )
+        : result.failureReason;
+      saveStepExec(stepExec);
+
+      failWorkflowInstance(
+        instance.Id,
+        stepExec.Step_Name__c,
+        result.failureReason
+      );
     }
   }
 

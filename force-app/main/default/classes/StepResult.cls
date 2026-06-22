@@ -8,7 +8,8 @@ public inherited sharing class StepResult {
     START_CHILD,
     WAIT_FOR_APPROVAL,
     SPLIT,
-    CONTINUE_AS_NEW
+    CONTINUE_AS_NEW,
+    FAIL
   }
 
   public ActionType action { get; set; }
@@ -42,6 +43,13 @@ public inherited sharing class StepResult {
   // and routes to timeoutStep if the deadline elapses before a signal/approval.
   public Integer timeoutSeconds { get; set; }
   public String timeoutStep { get; set; }
+
+  // Explicit terminal failure (issue #37). Populated by the fail() factories: a
+  // deliberate, non-retryable business failure the author returns instead of
+  // throwing. failureReason is the operator-readable message; failureDataJson is
+  // optional structured data serialized for downstream compensation/alerting.
+  public String failureReason { get; set; }
+  public String failureDataJson { get; set; }
 
   public static StepResult complete(String nextStepName, Object output) {
     StepResult r = new StepResult();
@@ -232,6 +240,39 @@ public inherited sharing class StepResult {
     r.action = ActionType.CONTINUE_AS_NEW;
     r.nextInputJson = (nextInput != null) ? JSON.serialize(nextInput) : null;
     r.newCorrelationKey = customKey;
+    return r;
+  }
+
+  /**
+   * Deliberately, terminally fails the step (issue #37). Returning this — rather
+   * than throwing — records the author's operator-readable reason as the failure
+   * (not an Apex stack trace) and stops the workflow in ZERO retry hops: the
+   * engine routes straight through the existing failure/compensation path,
+   * compensating (LIFO) when the instance has a Compensation_Stack__c or failing
+   * outright when it does not. This is Revenant's non-retryable / permanent-
+   * failure primitive: use it for business-rule violations the author knows will
+   * never succeed (e.g. "order already refunded", "KYC rejected").
+   */
+  public static StepResult fail(String reason) {
+    return fail(reason, null);
+  }
+
+  /**
+   * Same as fail(reason) but also carries structured failureData, persisted with
+   * the failing step for downstream inspection (compensation, alerting).
+   */
+  public static StepResult fail(String reason, Object failureData) {
+    if (String.isBlank(reason)) {
+      throw new IllegalArgumentException(
+        'StepResult.fail: reason must not be blank'
+      );
+    }
+    StepResult r = new StepResult();
+    r.action = ActionType.FAIL;
+    r.failureReason = reason;
+    r.failureDataJson = (failureData != null)
+      ? JSON.serialize(failureData)
+      : null;
     return r;
   }
 }
