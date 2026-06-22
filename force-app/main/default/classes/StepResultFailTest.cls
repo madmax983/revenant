@@ -275,4 +275,84 @@ public class StepResultFailTest {
       'Structured failureData persisted and retrievable on the step record'
     );
   }
+
+  // --- fail() returned from a compensation step ----------------------------
+  public class FailCompWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'StepResultFailTest.CompensatableChargeStep',
+        'StepResultFailTest.AlwaysFailStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'StepResultFailTest.CompensatableChargeStep';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      if (currentStepName == 'StepResultFailTest.CompensatableChargeStep') {
+        return 'StepResultFailTest.AlwaysFailStep';
+      }
+      return null;
+    }
+  }
+
+  public class CompensatableChargeStep implements CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'charged');
+    }
+    public StepResult compensate(StepContext ctx) {
+      // Compensation step deliberately fails (e.g. reversal account locked).
+      return StepResult.fail('Reversal account locked');
+    }
+  }
+
+  public class AlwaysFailStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.fail('Trigger compensation');
+    }
+  }
+
+  @isTest
+  static void testCompensationStepFailLandsInCompensationFailed() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'StepResultFailTest.FailCompWorkflow',
+      'FailCompKey',
+      null
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    WorkflowTestHarness.Result result = harness.drive();
+    Test.stopTest();
+
+    System.assertEquals(
+      'CompensationFailed',
+      result.status,
+      'fail() from a compensation step must land in CompensationFailed'
+    );
+
+    Workflow_Instance__c inst = [
+      SELECT Status__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('CompensationFailed', inst.Status__c);
+    System.assert(
+      inst.Error_Message__c.contains('Reversal account locked'),
+      'Author compensation reason must appear in Error_Message__c, got: ' +
+      inst.Error_Message__c
+    );
+
+    Workflow_Step_Execution__c compStep = [
+      SELECT Status__c, Error_Details__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'StepResultFailTest.CompensatableChargeStep_Compensate'
+      LIMIT 1
+    ];
+    System.assertEquals('Failed', compStep.Status__c);
+    System.assert(
+      compStep.Error_Details__c.contains('Reversal account locked'),
+      'Compensation reason must appear in step Error_Details__c'
+    );
+  }
 }
