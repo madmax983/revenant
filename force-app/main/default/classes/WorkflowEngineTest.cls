@@ -3015,12 +3015,13 @@ public class WorkflowEngineTest {
 
     // Verify instance status transitions to Failed and does not get stuck in Compensating
     Workflow_Instance__c timedOutInst = [
-      SELECT Status__c, Error_Message__c, Compensation_Stack__c
+      SELECT Status__c, Error_Message__c, Compensation_Stack__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
     System.assertEquals('CompensationFailed', timedOutInst.Status__c);
     System.assert(timedOutInst.Error_Message__c.contains('timed out'));
+    System.assertEquals('COMPENSATION_FAILED', timedOutInst.Failure_Category__c);
     // Compensation stack should NOT be popped
     List<String> stack = (List<String>) JSON.deserialize(
       timedOutInst.Compensation_Stack__c,
@@ -3050,7 +3051,7 @@ public class WorkflowEngineTest {
 
     // Verify instance transitions to Failed and does not pop the stack
     Workflow_Instance__c failedInst = [
-      SELECT Status__c, Error_Message__c, Compensation_Stack__c
+      SELECT Status__c, Error_Message__c, Compensation_Stack__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
@@ -3058,6 +3059,7 @@ public class WorkflowEngineTest {
     System.assert(
       failedInst.Error_Message__c.contains('Compensation crash simulation')
     );
+    System.assertEquals('COMPENSATION_FAILED', failedInst.Failure_Category__c);
 
     List<String> stack = (List<String>) JSON.deserialize(
       failedInst.Compensation_Stack__c,
