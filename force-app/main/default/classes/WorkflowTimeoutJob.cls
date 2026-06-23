@@ -153,7 +153,7 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
         this.instanceId,
         this.stepName,
         errorMsg,
-        'TIMEOUT'
+        WorkflowEngine.CAT_TIMEOUT
       );
       return;
     }
@@ -197,7 +197,7 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
         this.instanceId,
         this.stepName,
         'Step execution timed out before starting.',
-        'TIMEOUT'
+        WorkflowEngine.CAT_TIMEOUT
       );
     }
   }

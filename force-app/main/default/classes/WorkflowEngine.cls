@@ -7,6 +7,14 @@ public inherited sharing class WorkflowEngine {
   // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
   public static Boolean publishLifecycleEvents = true;
 
+  // Failure Category picklist API values
+  public static final String CAT_STEP_EXCEPTION = 'STEP_EXCEPTION';
+  public static final String CAT_RETRIES_EXHAUSTED = 'RETRIES_EXHAUSTED';
+  public static final String CAT_TIMEOUT = 'TIMEOUT';
+  public static final String CAT_COMPENSATION_FAILED = 'COMPENSATION_FAILED';
+  public static final String CAT_EXPLICIT_FAIL = 'EXPLICIT_FAIL';
+  public static final String CAT_UNKNOWN = 'UNKNOWN';
+
   // Get-or-start dedup window in minutes. Redelivered starts whose correlation
   // key matches a terminal instance that became terminal within this many
   // minutes resolve to that instance instead of spawning a duplicate. Set to 0
@@ -4028,7 +4036,7 @@ public inherited sharing class WorkflowEngine {
           instance.Id,
           instance.Current_Step__c,
           'Max retries exceeded.',
-          'RETRIES_EXHAUSTED'
+          CAT_RETRIES_EXHAUSTED
         );
       } else {
         stepExec.Status__c = 'Retrying';
@@ -4208,7 +4216,7 @@ public inherited sharing class WorkflowEngine {
         instance.Id,
         stepExec.Step_Name__c,
         result.failureReason,
-        'EXPLICIT_FAIL'
+        CAT_EXPLICIT_FAIL
       );
     }
   }
@@ -4375,7 +4383,7 @@ public inherited sharing class WorkflowEngine {
     String errorMsg =
       'Transaction crashed: ' +
       (ex != null ? ex.getMessage() : 'Unknown governor limit');
-    failWorkflowInstance(instanceId, targetStepName, errorMsg, 'STEP_EXCEPTION');
+    failWorkflowInstance(instanceId, targetStepName, errorMsg, CAT_STEP_EXCEPTION);
   }
 
   /**
@@ -4513,7 +4521,7 @@ public inherited sharing class WorkflowEngine {
     String stepName,
     String errorMessage
   ) {
-    failWorkflowInstance(instanceId, stepName, errorMessage, 'UNKNOWN');
+    failWorkflowInstance(instanceId, stepName, errorMessage, CAT_UNKNOWN);
   }
 
   public static void failWorkflowInstance(
@@ -4590,7 +4598,7 @@ public inherited sharing class WorkflowEngine {
         (instance.Error_Message__c != null &&
         instance.Error_Message__c.contains('Cancelled by user'));
       instance.Status__c = 'CompensationFailed';
-      instance.Failure_Category__c = 'COMPENSATION_FAILED';
+      instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
       instance.Error_Message__c = buildRollbackIncompleteMessage(
           wasCancelling,
           'Rollback incomplete at compensation step ' +
