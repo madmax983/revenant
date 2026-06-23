@@ -157,40 +157,42 @@
                                     onchange={handleStatusFilterChange}>
                                 </lightning-combobox>
                             </div>
-                            <!-- Stalled-instance filter toggle -->
+                            <!-- Action Buttons Row -->
                             <div class="slds-col slds-size_1-of-1 slds-m-top_x-small">
-                                <lightning-button
-                                    label={stalledFilterLabel}
-                                    icon-name="utility:clock"
-                                    variant={stalledFilterVariant}
-                                    title="Toggle stalled-instance view — Suspended instances with no active resume mechanism, sorted by idle age"
-                                    onclick={handleToggleStalledFilter}
-                                    class="slds-button_stretch">
-                                </lightning-button>
-                            </div>
-                            <!-- Bulk Re-drive of failed instances matching the current filter -->
-                            <div class="slds-col slds-size_1-of-1 slds-m-top_x-small">
-                                <lightning-button
-                                    label={redriveButtonLabel}
-                                    icon-name="utility:redo"
-                                    variant="destructive-text"
-                                    title="Re-drive every failed instance matching the current filter"
-                                    onclick={handleRedriveMatching}
-                                    disabled={isRedriveDisabled}
-                                    class="slds-button_stretch">
-                                </lightning-button>
-                            </div>
-                            <!-- Bulk Cancel of active instances matching the current filter -->
-                            <div class="slds-col slds-size_1-of-1 slds-m-top_x-small">
-                                <lightning-button
-                                    label={cancelButtonLabel}
-                                    icon-name="utility:close"
-                                    variant="destructive-text"
-                                    title="Cancel every active instance matching the current filter"
-                                    onclick={handleCancelMatching}
-                                    disabled={isCancelDisabled}
-                                    class="slds-button_stretch">
-                                </lightning-button>
+                                <div class="slds-grid slds-gutters_xx-small">
+                                    <div class="slds-col slds-size_1-of-3">
+                                        <lightning-button
+                                            label={stalledFilterLabel}
+                                            icon-name="utility:clock"
+                                            variant={stalledFilterVariant}
+                                            title="Toggle stalled-instance view — Suspended instances with no active resume mechanism, sorted by idle age"
+                                            onclick={handleToggleStalledFilter}
+                                            class="slds-button_stretch">
+                                        </lightning-button>
+                                    </div>
+                                    <div class="slds-col slds-size_1-of-3">
+                                        <lightning-button
+                                            label={redriveButtonLabel}
+                                            icon-name="utility:redo"
+                                            variant="destructive-text"
+                                            title="Re-drive every failed instance matching the current filter"
+                                            onclick={handleRedriveMatching}
+                                            disabled={isRedriveDisabled}
+                                            class="slds-button_stretch">
+                                        </lightning-button>
+                                    </div>
+                                    <div class="slds-col slds-size_1-of-3">
+                                        <lightning-button
+                                            label={cancelButtonLabel}
+                                            icon-name="utility:close"
+                                            variant="destructive-text"
+                                            title="Cancel every active instance matching the current filter"
+                                            onclick={handleCancelMatching}
+                                            disabled={isCancelDisabled}
+                                            class="slds-button_stretch">
+                                        </lightning-button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>

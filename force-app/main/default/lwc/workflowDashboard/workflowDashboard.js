@@ -498,7 +498,7 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   get stalledFilterLabel() {
-    return this.showingStalled ? "Show All" : "Show Stalled";
+    return this.showingStalled ? "Show All" : "Stalled";
   }
 
   get stalledFilterVariant() {
@@ -1263,7 +1263,7 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   get redriveButtonLabel() {
-    return `Re-drive Matching Failed (${this.stats ? this.stats.failed : 0})`;
+    return `Re-drive (${this.stats ? this.stats.failed : 0})`;
   }
 
   get isCancelDisabled() {
@@ -1271,7 +1271,7 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   get cancelButtonLabel() {
-    return this.cancellingMatching ? "Counting..." : `Cancel Matching Active (${this.stats ? this.stats.active : 0})`;
+    return this.cancellingMatching ? "Counting..." : `Cancel (${this.stats ? this.stats.active : 0})`;
   }
 
   handleRedriveMatching() {

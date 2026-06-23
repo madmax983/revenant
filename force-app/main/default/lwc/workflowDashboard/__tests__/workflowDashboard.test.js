@@ -403,7 +403,7 @@ describe("c-workflow-dashboard bulk cancel", () => {
     // Find the button "Cancel Matching Active"
     const button = Array.from(
       element.shadowRoot.querySelectorAll("lightning-button"),
-    ).find((btn) => btn.label && btn.label.startsWith("Cancel Matching Active"));
+    ).find((btn) => btn.label && btn.label.startsWith("Cancel ("));
     expect(button).not.toBeNull();
 
     button.dispatchEvent(new CustomEvent("click"));
@@ -441,7 +441,7 @@ describe("c-workflow-dashboard bulk cancel", () => {
     // Find the button "Cancel Matching Active"
     const button = Array.from(
       element.shadowRoot.querySelectorAll("lightning-button"),
-    ).find((btn) => btn.label && btn.label.startsWith("Cancel Matching Active"));
+    ).find((btn) => btn.label && btn.label.startsWith("Cancel ("));
     button.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
@@ -486,7 +486,7 @@ describe("c-workflow-dashboard bulk cancel", () => {
 
     const button = Array.from(
       element.shadowRoot.querySelectorAll("lightning-button")
-    ).find((btn) => btn.label && btn.label.startsWith("Cancel Matching Active"));
+    ).find((btn) => btn.label && btn.label.startsWith("Cancel ("));
     
     const toastHandler = jest.fn();
     element.addEventListener("lightning__showtoast", toastHandler);
@@ -510,7 +510,7 @@ describe("c-workflow-dashboard bulk cancel", () => {
 
     const button = Array.from(
       element.shadowRoot.querySelectorAll("lightning-button")
-    ).find((btn) => btn.label && btn.label.startsWith("Cancel Matching Active"));
+    ).find((btn) => btn.label && btn.label.startsWith("Cancel ("));
     
     const toastHandler = jest.fn();
     element.addEventListener("lightning__showtoast", toastHandler);
@@ -532,7 +532,7 @@ describe("c-workflow-dashboard bulk cancel", () => {
 
     const button = Array.from(
       element.shadowRoot.querySelectorAll("lightning-button")
-    ).find((btn) => btn.label && btn.label.startsWith("Cancel Matching Active"));
+    ).find((btn) => btn.label && btn.label.startsWith("Cancel ("));
     button.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
@@ -582,7 +582,7 @@ describe("c-workflow-dashboard bulk redrive", () => {
     // Find the button "Re-drive Matching Failed"
     const button = Array.from(
       element.shadowRoot.querySelectorAll("lightning-button"),
-    ).find((btn) => btn.label && btn.label.startsWith("Re-drive Matching Failed"));
+    ).find((btn) => btn.label && btn.label.startsWith("Re-drive ("));
     expect(button).not.toBeNull();
 
     button.dispatchEvent(new CustomEvent("click"));
@@ -621,7 +621,7 @@ describe("c-workflow-dashboard bulk redrive", () => {
     // Find the button "Re-drive Matching Failed"
     const button = Array.from(
       element.shadowRoot.querySelectorAll("lightning-button"),
-    ).find((btn) => btn.label && btn.label.startsWith("Re-drive Matching Failed"));
+    ).find((btn) => btn.label && btn.label.startsWith("Re-drive ("));
     button.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
@@ -670,7 +670,7 @@ describe("c-workflow-dashboard bulk redrive", () => {
 
     const button = Array.from(
       element.shadowRoot.querySelectorAll("lightning-button"),
-    ).find((btn) => btn.label && btn.label.startsWith("Re-drive Matching Failed"));
+    ).find((btn) => btn.label && btn.label.startsWith("Re-drive ("));
 
     const toastHandler = jest.fn();
     element.addEventListener("lightning__showtoast", toastHandler);
@@ -699,7 +699,7 @@ describe("c-workflow-dashboard bulk redrive", () => {
 
     const button = Array.from(
       element.shadowRoot.querySelectorAll("lightning-button"),
-    ).find((btn) => btn.label && btn.label.startsWith("Re-drive Matching Failed"));
+    ).find((btn) => btn.label && btn.label.startsWith("Re-drive ("));
 
     const toastHandler = jest.fn();
     element.addEventListener("lightning__showtoast", toastHandler);
@@ -727,7 +727,7 @@ describe("c-workflow-dashboard bulk redrive", () => {
 
     const button = Array.from(
       element.shadowRoot.querySelectorAll("lightning-button"),
-    ).find((btn) => btn.label && btn.label.startsWith("Re-drive Matching Failed"));
+    ).find((btn) => btn.label && btn.label.startsWith("Re-drive ("));
     button.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
