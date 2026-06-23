@@ -29,6 +29,15 @@ import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.g
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
 
+const FAILURE_CATEGORY_LABELS = {
+  STEP_EXCEPTION: "Step Exception",
+  RETRIES_EXHAUSTED: "Retries Exhausted",
+  TIMEOUT: "Timeout",
+  COMPENSATION_FAILED: "Compensation Failed",
+  EXPLICIT_FAIL: "Explicit Step Failure",
+  UNKNOWN: "Unknown",
+};
+
 export default class WorkflowDashboard extends LightningElement {
   instances = [];
   filteredInstances = [];
@@ -87,6 +96,7 @@ export default class WorkflowDashboard extends LightningElement {
   // Pagination & Filters State
   selectedWorkflow = "";
   selectedStatus = "";
+  selectedFailureCategory = "";
   limitSize = 50;
   offsetSize = 0;
   hasMore = true;
@@ -164,6 +174,16 @@ export default class WorkflowDashboard extends LightningElement {
     { label: "Cancelled", value: "Cancelled" },
     { label: "ContinuedAsNew", value: "ContinuedAsNew" },
     { label: "Paused", value: "Paused" },
+  ];
+
+  failureCategoryOptions = [
+    { label: "-- All Categories --", value: "" },
+    { label: "Step Exception", value: "STEP_EXCEPTION" },
+    { label: "Retries Exhausted", value: "RETRIES_EXHAUSTED" },
+    { label: "Timeout", value: "TIMEOUT" },
+    { label: "Compensation Failed", value: "COMPENSATION_FAILED" },
+    { label: "Explicit Step Failure", value: "EXPLICIT_FAIL" },
+    { label: "Unknown", value: "UNKNOWN" },
   ];
 
   connectedCallback() {
@@ -301,6 +321,7 @@ export default class WorkflowDashboard extends LightningElement {
           workflowName: this.selectedWorkflow,
           status: this.selectedStatus,
           searchTerm: this.searchTerm,
+          failureCategory: this.selectedFailureCategory,
           limitSize: currentLimit,
           offsetSize: currentOffset,
           cacheBuster: this.cacheBuster,
@@ -415,6 +436,7 @@ export default class WorkflowDashboard extends LightningElement {
           workflowName: this.selectedWorkflow,
           status: this.selectedStatus,
           searchTerm: this.searchTerm,
+          failureCategory: this.selectedFailureCategory,
           limitSize: currentSize,
           offsetSize: 0,
           cacheBuster: this.cacheBuster,
@@ -481,7 +503,21 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleStatusFilterChange(event) {
     this.selectedStatus = event.target.value;
+    this.selectedFailureCategory = "";
     this.fetchInstances(false);
+  }
+
+  handleFailureCategoryFilterChange(event) {
+    this.selectedFailureCategory = event.target.value;
+    this.fetchInstances(false);
+  }
+
+  get showFailureCategoryFilter() {
+    return (
+      !this.selectedStatus ||
+      this.selectedStatus === "Failed" ||
+      this.selectedStatus === "CompensationFailed"
+    );
   }
 
   handleToggleStalledFilter() {
@@ -661,6 +697,9 @@ export default class WorkflowDashboard extends LightningElement {
             ? this.formatDateTime(inst.Deadline_At__c)
             : null,
           statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
+          failureCategoryLabel:
+            FAILURE_CATEGORY_LABELS[inst.Failure_Category__c] ||
+            inst.Failure_Category__c,
           Input__c: this.formatJson(inst.Input__c),
           Output__c: this.formatJson(inst.Output__c),
           inputFile: this.buildPayloadFile(payloadFiles["instance.Input"]),

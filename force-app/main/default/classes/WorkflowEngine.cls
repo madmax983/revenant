@@ -6446,7 +6446,7 @@ public inherited sharing class WorkflowEngine {
         // state (resumable by an operator) instead of abandoning the deeper steps.
         Boolean wasCancelling = (instance.Status__c == 'Cancelling');
         instance.Status__c = 'CompensationFailed';
-        instance.Failure_Category__c = 'COMPENSATION_FAILED';
+        instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
         instance.Error_Message__c = buildRollbackIncompleteMessage(
             wasCancelling,
             'Rollback incomplete: compensation step ' +
@@ -6495,7 +6495,7 @@ public inherited sharing class WorkflowEngine {
 
       Boolean wasCancellingFail = (instance.Status__c == 'Cancelling');
       instance.Status__c = 'CompensationFailed';
-      instance.Failure_Category__c = 'COMPENSATION_FAILED';
+      instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
       instance.Error_Message__c = buildRollbackIncompleteMessage(
           wasCancellingFail,
           'Rollback incomplete: compensation step ' +
@@ -6519,7 +6519,7 @@ public inherited sharing class WorkflowEngine {
       // Remaining stack is intact; leave the saga recoverable rather than abandoning it.
       Boolean wasCancelling = (instance.Status__c == 'Cancelling');
       instance.Status__c = 'CompensationFailed';
-      instance.Failure_Category__c = 'COMPENSATION_FAILED';
+      instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
       instance.Error_Message__c = buildRollbackIncompleteMessage(
           wasCancelling,
           'Rollback incomplete: compensation step ' +
@@ -7411,7 +7411,7 @@ public inherited sharing class WorkflowEngine {
             // state rather than abandoning the deeper compensations.
             Boolean wasCancelling = (parent.Status__c == 'Cancelling');
             parent.Status__c = 'CompensationFailed';
-            parent.Failure_Category__c = 'COMPENSATION_FAILED';
+            parent.Failure_Category__c = CAT_COMPENSATION_FAILED;
             parent.Error_Message__c = buildRollbackIncompleteMessage(
               wasCancelling,
               'Rollback incomplete at compensation step ' +
@@ -7426,7 +7426,7 @@ public inherited sharing class WorkflowEngine {
             instancesToUpdate.put(parent.Id, parent);
           } else if (!hasCompensations) {
             parent.Status__c = 'Failed';
-            parent.Failure_Category__c = 'TIMEOUT';
+            parent.Failure_Category__c = CAT_TIMEOUT;
             parent.Error_Message__c =
               'Failed at step ' +
               step.Step_Name__c +
@@ -7613,7 +7613,7 @@ public inherited sharing class WorkflowEngine {
           deadlineOrchestratorIds.add(inst.Id);
         } else {
           inst.Status__c = 'Failed';
-          inst.Failure_Category__c = 'TIMEOUT';
+          inst.Failure_Category__c = CAT_TIMEOUT;
           inst.Error_Message__c = 'Execution deadline exceeded';
           instancesToFail.add(inst);
           watchdogTerminalInstances.add(inst);

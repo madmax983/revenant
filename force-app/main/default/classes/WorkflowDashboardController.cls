@@ -242,7 +242,7 @@ public inherited sharing class WorkflowDashboardController {
     if (String.isNotBlank(searchTerm)) {
       likeTerm = '%' + searchTerm + '%';
       conditions.add(
-        '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm OR Failure_Category__c LIKE :likeTerm)'
+        '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
     }
     return conditions.isEmpty()

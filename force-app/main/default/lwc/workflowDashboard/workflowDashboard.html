@@ -157,6 +157,19 @@
                                     onchange={handleStatusFilterChange}>
                                 </lightning-combobox>
                             </div>
+                            <!-- Failure Category Filter -->
+                            <template if:true={showFailureCategoryFilter}>
+                                <div class="slds-col slds-size_1-of-1 slds-m-top_xx-small">
+                                    <lightning-combobox
+                                        name="failureCategoryFilter"
+                                        variant="label-hidden"
+                                        placeholder="Filter by Failure Category"
+                                        value={selectedFailureCategory}
+                                        options={failureCategoryOptions}
+                                        onchange={handleFailureCategoryFilterChange}>
+                                    </lightning-combobox>
+                                </div>
+                            </template>
                             <!-- Action Buttons Row -->
                             <div class="slds-col slds-size_1-of-1 slds-m-top_x-small">
                                 <div class="slds-grid slds-gutters_xx-small">
@@ -925,6 +938,14 @@
                                         <div class="slds-text-title slds-text-color_weak">Started Date</div>
                                         <div class="slds-text-body_regular">{selectedInst.formattedDate}</div>
                                     </div>
+                                    <template if:true={selectedInst.Failure_Category__c}>
+                                        <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                            <div class="slds-text-title slds-text-color_weak">Failure Category</div>
+                                            <div class="slds-text-body_regular">
+                                                <span class="badge badge-red">{selectedInst.failureCategoryLabel}</span>
+                                            </div>
+                                        </div>
+                                    </template>
                                     <template if:true={selectedInst.formattedDeadline}>
                                         <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
                                             <div class="slds-text-title slds-text-color_weak">Execution Deadline</div>

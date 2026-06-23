@@ -3145,11 +3145,11 @@ public class WorkflowDashboardControllerTest {
     // Calls WorkflowDashboardController.getInstanceDetails for the first instance
     Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(testInstances[0].Id);
 
-    // Calls the 6-parameter WorkflowDashboardController.getFilteredInstances with searchTerm = 'STEP_EXCEPTION'
+    // Calls the 6-parameter WorkflowDashboardController.getFilteredInstances with searchTerm = 'StepExceptionKey'
     List<Map<String, Object>> resSearch = WorkflowDashboardController.getFilteredInstances(
       '',
       '',
-      'STEP_EXCEPTION',
+      'StepExceptionKey',
       10,
       0,
       'cb'
@@ -3167,7 +3167,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals('TIMEOUT', returnedInst.Failure_Category__c, 'Failure_Category__c should be TIMEOUT');
 
     // asserts the matching instance is returned
-    System.assertEquals(1, resSearch.size(), 'Should find exactly 1 instance matching STEP_EXCEPTION searchTerm');
+    System.assertEquals(1, resSearch.size(), 'Should find exactly 1 instance matching StepExceptionKey searchTerm');
     System.assertEquals(testInstances[1].Id, (Id) resSearch[0].get('Id'), 'Should return the correct instance matching search term');
   }
 }
