@@ -113,6 +113,11 @@
         <field>Workflow_Instance__c.Terminal_At__c</field>
         <readable>true</readable>
     </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Instance__c.Failure_Category__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
 
     <!-- fieldPermissions for Workflow_Step_Execution__c (excluding required/master-detail fields) -->
     <fieldPermissions>
