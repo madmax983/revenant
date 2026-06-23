@@ -126,6 +126,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
             Workflow_Instance__c = :ctx.workflowInstanceId
             AND Signal_Name__c = 'Approve:VIPOrderApproval'
             AND Status__c = 'Received'
+          WITH USER_MODE
           LIMIT 1
         ];
 
@@ -144,7 +145,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
         // approve/reject pattern using ctx.getSignal(...).
         Workflow_Signal__c sig = signals[0];
         sig.Status__c = 'Consumed';
-        update sig;
+        update as user sig;
 
         Map<String, Object> payloadMap = (Map<String, Object>) JSON.deserializeUntyped(
           sig.Payload__c
@@ -177,6 +178,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
           Workflow_Instance__c = :ctx.workflowInstanceId
           AND Signal_Name__c = :('ChildCompleted:' + childKey)
           AND Status__c = 'Received'
+        WITH USER_MODE
         LIMIT 1
       ];
 

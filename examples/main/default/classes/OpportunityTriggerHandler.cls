@@ -23,6 +23,7 @@ public inherited sharing class OpportunityTriggerHandler {
       SELECT Id, Amount, Name, Account.Name
       FROM Opportunity
       WHERE Id IN :oppIdsToOnboard
+      WITH USER_MODE
     ];
 
     List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();

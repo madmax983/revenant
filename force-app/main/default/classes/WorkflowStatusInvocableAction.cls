@@ -106,7 +106,9 @@ public inherited sharing class WorkflowStatusInvocableAction {
       return new List<StatusResult>();
     }
 
-    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe()
+    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
+        SObjectDescribeOptions.DEFERRED
+      )
       .getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
 
