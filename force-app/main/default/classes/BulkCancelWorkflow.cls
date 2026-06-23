@@ -15,7 +15,8 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
   };
 
   @TestVisible
-  public static Integer CHUNK_SIZE = 30;
+  // Capped at 4 because of Salesforce Apex's hard limit of 5 savepoints per transaction, leaving 1 slot for safety/triggers.
+  public static Integer CHUNK_SIZE = 4;
 
   // ---- WorkflowDefinition ----
 
@@ -56,7 +57,7 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
     }
     String excludeName = CANCELER_WORKFLOW_NAME;
     String likeTerm = String.isNotBlank(searchTerm)
-      ? '%' + String.escapeSingleQuotes(searchTerm) + '%'
+      ? '%' + searchTerm + '%'
       : null;
 
     if (String.isBlank(workflowName)) {
@@ -123,7 +124,7 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
     }
     String excludeName = CANCELER_WORKFLOW_NAME;
     String likeTerm = String.isNotBlank(searchTerm)
-      ? '%' + String.escapeSingleQuotes(searchTerm) + '%'
+      ? '%' + searchTerm + '%'
       : null;
     Integer lim = chunkSize;
 
@@ -306,6 +307,7 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
         if (ctx.shouldYield()) {
           break;
         }
+        Savepoint sp = Database.setSavepoint();
         try {
           List<Workflow_Instance__c> toCancel = [
             SELECT Status__c
@@ -324,6 +326,7 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
             skipped++;
           }
         } catch (Exception ex) {
+          Database.rollback(sp);
           errored++;
         }
         afterId = instId;

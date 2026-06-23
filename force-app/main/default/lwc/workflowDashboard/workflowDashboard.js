@@ -174,6 +174,9 @@ export default class WorkflowDashboard extends LightningElement {
   disconnectedCallback() {
     this.stopPolling();
     this.stopAutoRefresh();
+    if (this.searchTimeout) {
+      clearTimeout(this.searchTimeout);
+    }
   }
 
   @wire(getDefinitions)
@@ -268,9 +271,7 @@ export default class WorkflowDashboard extends LightningElement {
       status === "Paused" ||
       status === "CompensationFailed"
     );
-  }
-
-  fetchInstances(isAppend) {
+  }  fetchInstances(isAppend) {
     if (!isAppend) {
       this.offsetSize = 0;
       this.hasMore = true;
@@ -305,6 +306,37 @@ export default class WorkflowDashboard extends LightningElement {
           cacheBuster: this.cacheBuster,
         });
 
+    if (isAppend) {
+      return instancesPromise
+        .then((result) => {
+          const formatted = result.map((inst) => this.formatInstance(inst));
+          this.instances = [...this.instances, ...formatted];
+
+          // Guard against SOQL 2000 offset limit
+          if (
+            result.length < currentLimit ||
+            this.offsetSize + result.length >= 2000
+          ) {
+            this.hasMore = false;
+          } else {
+            this.hasMore = true;
+          }
+
+          this.filterInstancesList();
+        })
+        .catch((error) => {
+          this.showToast(
+            "Error",
+            "Failed to retrieve workflow instances: " + this.reduceErrors(error),
+            "error",
+          );
+        })
+        .finally(() => {
+          this.loadingMore = false;
+          this.loadingDetails = false;
+        });
+    }
+
     const statsPromise = getWorkflowStats({
       workflowName: this.selectedWorkflow,
       status: this.selectedStatus,
@@ -327,12 +359,7 @@ export default class WorkflowDashboard extends LightningElement {
     ])
       .then(([result, statsResult, stalledResult, unroutedResult]) => {
         const formatted = result.map((inst) => this.formatInstance(inst));
-
-        if (isAppend) {
-          this.instances = [...this.instances, ...formatted];
-        } else {
-          this.instances = formatted;
-        }
+        this.instances = formatted;
 
         // Guard against SOQL 2000 offset limit
         if (
@@ -350,15 +377,14 @@ export default class WorkflowDashboard extends LightningElement {
         this.filterInstancesList();
 
         // Auto-refresh detail view if selected instance is currently loaded
-        if (this.selectedInstanceId && !isAppend) {
+        if (this.selectedInstanceId) {
           this.loadDetails(false);
         }
       })
       .catch((error) => {
         this.showToast(
           "Error",
-          "Failed to retrieve workflow instances: " +
-            (error.body ? error.body.message : error.message),
+          "Failed to retrieve workflow instances: " + this.reduceErrors(error),
           "error",
         );
       })
@@ -432,7 +458,7 @@ export default class WorkflowDashboard extends LightningElement {
         });
       })
       .catch((error) => {
-        console.error("Error refreshing instances:", error);
+        console.error("Error refreshing instances:", this.reduceErrors(error));
       });
   }
 
@@ -518,8 +544,7 @@ export default class WorkflowDashboard extends LightningElement {
       .catch((error) => {
         this.showToast(
           "Error",
-          "Failed to load definition trends: " +
-            (error.body ? error.body.message : error.message),
+          "Failed to load definition trends: " + this.reduceErrors(error),
           "error",
         );
       })
@@ -740,7 +765,7 @@ export default class WorkflowDashboard extends LightningElement {
         if (currentInstanceId === this.selectedInstanceId) {
           this.showToast(
             "Error",
-            "Failed to retrieve details: " + error.body.message,
+            "Failed to retrieve details: " + this.reduceErrors(error),
             "error",
           );
         }
@@ -889,8 +914,7 @@ export default class WorkflowDashboard extends LightningElement {
       .catch((error) => {
         this.showToast(
           "Error",
-          "Failed to retrieve failure breakdown: " +
-            (error.body ? error.body.message : error.message),
+          "Failed to retrieve failure breakdown: " + this.reduceErrors(error),
           "error",
         );
         this.loadingFailureBreakdown = false;
@@ -918,7 +942,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.dispatchEvent(
           new ShowToastEvent({
             title: "Error",
-            message: err.body ? err.body.message : String(err),
+            message: this.reduceErrors(err),
             variant: "error",
           }),
         );
@@ -952,7 +976,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.dispatchEvent(
           new ShowToastEvent({
             title: "Error",
-            message: err.body ? err.body.message : String(err),
+            message: this.reduceErrors(err),
             variant: "error",
           }),
         );
@@ -1031,8 +1055,7 @@ export default class WorkflowDashboard extends LightningElement {
         }
         this.showToast(
           "Error",
-          "Failed to load version drain: " +
-            (error.body ? error.body.message : error.message),
+          "Failed to load version drain: " + this.reduceErrors(error),
           "error",
         );
       })
@@ -1076,8 +1099,7 @@ export default class WorkflowDashboard extends LightningElement {
       .catch((error) => {
         this.showToast(
           "Error",
-          "Failed to load doctor status: " +
-            (error.body ? error.body.message : error.message),
+          "Failed to load doctor status: " + this.reduceErrors(error),
           "error",
         );
       })
@@ -1097,9 +1119,10 @@ export default class WorkflowDashboard extends LightningElement {
             r.inFlight >= r.ceiling,
         }));
       })
-      .catch(() => {
+      .catch((error) => {
         // Concurrency panel is best-effort; never block the System Doctor view.
         this.concurrencyRows = [];
+        console.error("Failed to load concurrency status:", this.reduceErrors(error));
       });
   }
 
@@ -1117,8 +1140,7 @@ export default class WorkflowDashboard extends LightningElement {
       .catch((error) => {
         this.showToast(
           "Error",
-          "Failed to enqueue watchdog: " +
-            (error.body ? error.body.message : error.message),
+          "Failed to enqueue watchdog: " + this.reduceErrors(error),
           "error",
         );
         this.loadingDoctor = false;
@@ -1201,7 +1223,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.refreshInstances();
       })
       .catch((error) => {
-        this.launchError = "Failed to execute workflow: " + error.body.message;
+        this.launchError = "Failed to execute workflow: " + this.reduceErrors(error);
       })
       .finally(() => {
         this.executingLaunch = false;
@@ -1224,7 +1246,7 @@ export default class WorkflowDashboard extends LightningElement {
       .catch((error) => {
         this.showToast(
           "Error",
-          "Failed to retry workflow: " + error.body.message,
+          "Failed to retry workflow: " + this.reduceErrors(error),
           "error",
         );
       })
@@ -1236,22 +1258,20 @@ export default class WorkflowDashboard extends LightningElement {
   // Enable bulk re-drive only when the current filter actually contains failed
   // (recoverable) instances and the stalled view is not active (stalled rows are
   // Suspended, not Failed; showing the button there would re-drive hidden failures).
-  get canRedriveMatching() {
-    return (
-      this.stats &&
-      this.stats.failed > 0 &&
-      !this.redriving &&
-      !this.showingStalled
-    );
+  get isRedriveDisabled() {
+    return !this.stats || this.stats.failed === 0 || this.redriving || this.showingStalled;
   }
 
-  get canCancelMatching() {
-    return (
-      this.stats &&
-      this.stats.active > 0 &&
-      !this.cancellingMatching &&
-      !this.showingStalled
-    );
+  get redriveButtonLabel() {
+    return `Re-drive Matching Failed (${this.stats ? this.stats.failed : 0})`;
+  }
+
+  get isCancelDisabled() {
+    return !this.stats || this.stats.active === 0 || this.cancellingMatching || this.showingStalled;
+  }
+
+  get cancelButtonLabel() {
+    return this.cancellingMatching ? "Counting..." : `Cancel Matching Active (${this.stats ? this.stats.active : 0})`;
   }
 
   handleRedriveMatching() {
@@ -1288,8 +1308,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.redriving = false;
         this.showToast(
           "Error",
-          "Failed to count re-drive candidates: " +
-            (error.body ? error.body.message : error.message),
+          "Failed to count re-drive candidates: " + this.reduceErrors(error),
           "error",
         );
       });
@@ -1333,8 +1352,7 @@ export default class WorkflowDashboard extends LightningElement {
       .catch((error) => {
         this.showToast(
           "Error",
-          "Failed to re-drive matching instances: " +
-            (error.body ? error.body.message : error.message),
+          "Failed to re-drive matching instances: " + this.reduceErrors(error),
           "error",
         );
       })
@@ -1374,8 +1392,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.cancellingMatching = false;
         this.showToast(
           "Error",
-          "Failed to count cancel candidates: " +
-            (error.body ? error.body.message : error.message),
+          "Failed to count cancel candidates: " + this.reduceErrors(error),
           "error",
         );
       });
@@ -1392,6 +1409,7 @@ export default class WorkflowDashboard extends LightningElement {
       workflowName: this.cancelSnapshotName,
       status: this.cancelSnapshotStatus,
       searchTerm: this.cancelSnapshotSearchTerm,
+      runCompensations: false,
     })
       .then((outcome) => {
         if (!outcome) {
@@ -1419,8 +1437,7 @@ export default class WorkflowDashboard extends LightningElement {
       .catch((error) => {
         this.showToast(
           "Error",
-          "Failed to cancel matching instances: " +
-            (error.body ? error.body.message : error.message),
+          "Failed to cancel matching instances: " + this.reduceErrors(error),
           "error",
         );
       })
@@ -1458,8 +1475,7 @@ export default class WorkflowDashboard extends LightningElement {
       .catch((error) => {
         this.showToast(
           "Error",
-          "Failed to cancel workflow: " +
-            (error.body ? error.body.message : error.message),
+          "Failed to cancel workflow: " + this.reduceErrors(error),
           "error",
         );
       })
@@ -1497,7 +1513,7 @@ export default class WorkflowDashboard extends LightningElement {
       .catch((error) => {
         this.showToast(
           "Error",
-          "Failed to submit approval: " + error.body.message,
+          "Failed to submit approval: " + this.reduceErrors(error),
           "error",
         );
       })
@@ -1521,8 +1537,7 @@ export default class WorkflowDashboard extends LightningElement {
       .catch((error) => {
         this.showToast(
           "Error",
-          "Failed to resume workflow: " +
-            (error.body ? error.body.message : error.message),
+          "Failed to resume workflow: " + this.reduceErrors(error),
           "error",
         );
       })
@@ -1547,8 +1562,7 @@ export default class WorkflowDashboard extends LightningElement {
       .catch((error) => {
         this.showToast(
           "Error",
-          "Failed to resume rollback: " +
-            (error.body ? error.body.message : error.message),
+          "Failed to resume rollback: " + this.reduceErrors(error),
           "error",
         );
       })
@@ -1661,6 +1675,22 @@ export default class WorkflowDashboard extends LightningElement {
     );
   }
 
+  reduceErrors(error) {
+    if (!error) return 'Unknown error';
+    if (error.body) {
+      if (Array.isArray(error.body)) {
+        return error.body.map(e => e.message).join(', ');
+      }
+      if (typeof error.body.message === 'string') {
+        return error.body.message;
+      }
+    }
+    if (typeof error.message === 'string') {
+      return error.message;
+    }
+    return JSON.stringify(error);
+  }
+
   startPolling() {
     this.stopPolling();
     let attempts = 0;
@@ -1747,8 +1777,7 @@ export default class WorkflowDashboard extends LightningElement {
         .catch((error) => {
           this.showToast(
             "Error",
-            "Resume failed: " +
-              (error.body ? error.body.message : error.message),
+            "Resume failed: " + this.reduceErrors(error),
             "error",
           );
         })
@@ -1776,8 +1805,7 @@ export default class WorkflowDashboard extends LightningElement {
         .catch((error) => {
           this.showToast(
             "Error",
-            "Pause failed: " +
-              (error.body ? error.body.message : error.message),
+            "Pause failed: " + this.reduceErrors(error),
             "error",
           );
         })

@@ -3044,4 +3044,65 @@ public class WorkflowDashboardControllerTest {
       'Should contain [NUM]: ' + signature
     );
   }
+
+  @isTest
+  static void testSearchWithSingleQuote() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'O\'Connor.Workflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'O\'ConnorKey',
+      Input__c = '"TestInput"'
+    );
+    insert inst;
+
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Correlation_Key__c = 'O\'ConnorKey',
+      Signal_Name__c = 'O\'ConnorSignal',
+      Status__c = 'Unrouted'
+    );
+    insert sig;
+
+    Test.startTest();
+    List<Map<String, Object>> filteredInsts = WorkflowDashboardController.getFilteredInstances(
+      '',
+      '',
+      'O\'Connor',
+      10,
+      0,
+      ''
+    );
+
+    List<Map<String, Object>> stalledInsts = WorkflowDashboardController.getStalledInstances(
+      '',
+      'O\'Connor',
+      -1,
+      10,
+      0,
+      ''
+    );
+
+    Map<String, Object> stalledCountResult = WorkflowDashboardController.getStalledCount(
+      '',
+      'O\'Connor',
+      -1
+    );
+
+    List<Map<String, Object>> unroutedSigs = WorkflowDashboardController.getUnroutedSignals(
+      'O\'Connor',
+      10,
+      0,
+      ''
+    );
+
+    Map<String, Object> unroutedCountResult = WorkflowDashboardController.getUnroutedSignalCount(
+      'O\'Connor'
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, filteredInsts.size(), 'Should find 1 filtered instance');
+    System.assertEquals(1, stalledInsts.size(), 'Should find 1 stalled instance');
+    System.assertEquals(1, (Integer) stalledCountResult.get('count'), 'Should count 1 stalled instance');
+    System.assertEquals(1, unroutedSigs.size(), 'Should find 1 unrouted signal');
+    System.assertEquals(1, (Integer) unroutedCountResult.get('count'), 'Should count 1 unrouted signal');
+  }
 }

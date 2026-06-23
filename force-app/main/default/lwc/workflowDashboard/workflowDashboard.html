@@ -169,33 +169,29 @@
                                 </lightning-button>
                             </div>
                             <!-- Bulk Re-drive of failed instances matching the current filter -->
-                            <template if:true={canRedriveMatching}>
-                                <div class="slds-col slds-size_1-of-1 slds-m-top_x-small">
-                                    <lightning-button
-                                        label="Re-drive Matching Failed"
-                                        icon-name="utility:redo"
-                                        variant="destructive-text"
-                                        title="Re-drive every failed instance matching the current filter"
-                                        onclick={handleRedriveMatching}
-                                        disabled={redriving}
-                                        class="slds-button_stretch">
-                                    </lightning-button>
-                                </div>
-                            </template>
+                            <div class="slds-col slds-size_1-of-1 slds-m-top_x-small">
+                                <lightning-button
+                                    label={redriveButtonLabel}
+                                    icon-name="utility:redo"
+                                    variant="destructive-text"
+                                    title="Re-drive every failed instance matching the current filter"
+                                    onclick={handleRedriveMatching}
+                                    disabled={isRedriveDisabled}
+                                    class="slds-button_stretch">
+                                </lightning-button>
+                            </div>
                             <!-- Bulk Cancel of active instances matching the current filter -->
-                            <template if:true={canCancelMatching}>
-                                <div class="slds-col slds-size_1-of-1 slds-m-top_x-small">
-                                    <lightning-button
-                                        label="Cancel Matching Active"
-                                        icon-name="utility:close"
-                                        variant="destructive-text"
-                                        title="Cancel every active instance matching the current filter"
-                                        onclick={handleCancelMatching}
-                                        disabled={cancellingMatching}
-                                        class="slds-button_stretch">
-                                    </lightning-button>
-                                </div>
-                            </template>
+                            <div class="slds-col slds-size_1-of-1 slds-m-top_x-small">
+                                <lightning-button
+                                    label={cancelButtonLabel}
+                                    icon-name="utility:close"
+                                    variant="destructive-text"
+                                    title="Cancel every active instance matching the current filter"
+                                    onclick={handleCancelMatching}
+                                    disabled={isCancelDisabled}
+                                    class="slds-button_stretch">
+                                </lightning-button>
+                            </div>
                         </div>
                     </div>
 
@@ -1187,9 +1183,13 @@
             <section role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="redrive-modal-title" class="slds-modal slds-fade-in-open">
                 <div class="slds-modal__container">
                     <header class="slds-modal__header">
-                        <button class="slds-button slds-button_icon slds-modal__close" title="Close" onclick={handleRedriveModalClose}>
-                            <lightning-icon icon-name="utility:close" size="small" alternative-text="Close" variant="inverse"></lightning-icon>
-                        </button>
+                        <lightning-button-icon
+                            icon-name="utility:close"
+                            onclick={handleRedriveModalClose}
+                            alternative-text="Close"
+                            variant="bare-inverse"
+                            class="slds-modal__close">
+                        </lightning-button-icon>
                         <h2 id="redrive-modal-title" class="slds-modal__title slds-hyphenate font-outfit">Re-drive Failed Instances</h2>
                     </header>
                     <div class="slds-modal__content slds-p-around_medium">
@@ -1214,9 +1214,13 @@
             <section role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="cancel-matching-modal-title" class="slds-modal slds-fade-in-open">
                 <div class="slds-modal__container">
                     <header class="slds-modal__header slds-theme_error slds-theme_alert-texture">
-                        <button class="slds-button slds-button_icon slds-modal__close" title="Close" onclick={handleCancelMatchingModalClose}>
-                            <lightning-icon icon-name="utility:close" size="small" alternative-text="Close" variant="inverse"></lightning-icon>
-                        </button>
+                        <lightning-button-icon
+                            icon-name="utility:close"
+                            onclick={handleCancelMatchingModalClose}
+                            alternative-text="Close"
+                            variant="bare-inverse"
+                            class="slds-modal__close">
+                        </lightning-button-icon>
                         <h2 id="cancel-matching-modal-title" class="slds-modal__title slds-hyphenate font-outfit">Cancel Active Instances</h2>
                     </header>
                     <div class="slds-modal__content slds-p-around_medium">
@@ -1241,9 +1245,13 @@
             <section role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="cancel-modal-title" class="slds-modal slds-fade-in-open">
                 <div class="slds-modal__container">
                     <header class="slds-modal__header slds-theme_error">
-                        <button class="slds-button slds-button_icon slds-modal__close" title="Close" onclick={handleCancelModalClose}>
-                            <lightning-icon icon-name="utility:close" size="small" alternative-text="Close" variant="inverse"></lightning-icon>
-                        </button>
+                        <lightning-button-icon
+                            icon-name="utility:close"
+                            onclick={handleCancelModalClose}
+                            alternative-text="Close"
+                            variant="bare-inverse"
+                            class="slds-modal__close">
+                        </lightning-button-icon>
                         <h2 id="cancel-modal-title" class="slds-modal__title slds-hyphenate font-outfit">Cancel Workflow</h2>
                     </header>
                     <div class="slds-modal__content slds-p-around_medium">
@@ -1278,9 +1286,13 @@
             <section role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="pause-modal-title" class="slds-modal slds-fade-in-open">
                 <div class="slds-modal__container">
                     <header class="slds-modal__header">
-                        <button class="slds-button slds-button_icon slds-modal__close" title="Close" onclick={handleClosePauseModal}>
-                            <lightning-icon icon-name="utility:close" size="small" alternative-text="Close" variant="inverse"></lightning-icon>
-                        </button>
+                        <lightning-button-icon
+                            icon-name="utility:close"
+                            onclick={handleClosePauseModal}
+                            alternative-text="Close"
+                            variant="bare-inverse"
+                            class="slds-modal__close">
+                        </lightning-button-icon>
                         <h2 id="pause-modal-title" class="slds-modal__title slds-hyphenate font-outfit">{pauseModalTitle}</h2>
                     </header>
                     <div class="slds-modal__content slds-p-around_medium">
@@ -1320,9 +1332,13 @@
             <section role="dialog" tabindex="-1" aria-modal="true" class="slds-modal slds-fade-in-open">
                 <div class="slds-modal__container">
                     <header class="slds-modal__header">
-                        <button class="slds-button slds-button_icon slds-modal__close" title="Close" onclick={handleCloseModal}>
-                            <lightning-icon icon-name="utility:close" size="small" alternative-text="Close" variant="inverse"></lightning-icon>
-                        </button>
+                        <lightning-button-icon
+                            icon-name="utility:close"
+                            onclick={handleCloseModal}
+                            alternative-text="Close"
+                            variant="bare-inverse"
+                            class="slds-modal__close">
+                        </lightning-button-icon>
                         <h2 class="slds-modal__title slds-hyphenate font-outfit">Run Workflow / Backfill</h2>
                     </header>
                     <div class="slds-modal__content slds-p-around_medium">

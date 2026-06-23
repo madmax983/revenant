@@ -272,40 +272,46 @@ public class BulkRedriveWorkflowTest {
   @isTest
   static void testOneFailureDoesNotAbortRest() {
     WorkflowEngine.disableQueueableInTest = true;
-    makeFailedInstance('GoodA');
-    makeFailedInstance('GoodB');
-    makeFailedInstance('GoodC');
-    // Malformed compensation stack makes retryWorkflow throw a JSON exception for
-    // this one instance — it must be counted as errored without aborting the rest.
-    Workflow_Instance__c poison = new Workflow_Instance__c(
-      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
-      Status__c = 'Failed',
-      Correlation_Key__c = 'Poison',
-      Current_Step__c = 'WorkflowEngineTest.HappyStep1',
-      Compensation_Stack__c = '{ this is not valid json'
-    );
-    insert poison;
+    Integer original = BulkRedriveWorkflow.CHUNK_SIZE;
+    BulkRedriveWorkflow.CHUNK_SIZE = 10;
+    try {
+      makeFailedInstance('GoodA');
+      makeFailedInstance('GoodB');
+      makeFailedInstance('GoodC');
+      // Malformed compensation stack makes retryWorkflow throw a JSON exception for
+      // this one instance — it must be counted as errored without aborting the rest.
+      Workflow_Instance__c poison = new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+        Status__c = 'Failed',
+        Correlation_Key__c = 'Poison',
+        Current_Step__c = 'WorkflowEngineTest.HappyStep1',
+        Compensation_Stack__c = '{ this is not valid json'
+      );
+      insert poison;
 
-    String filter = JSON.serialize(
-      new Map<String, Object>{ 'workflowName' => '', 'status' => '', 'searchTerm' => '' }
-    );
+      String filter = JSON.serialize(
+        new Map<String, Object>{ 'workflowName' => '', 'status' => '', 'searchTerm' => '' }
+      );
 
-    Test.startTest();
-    StepResult result = new BulkRedriveWorkflow.BulkRedriveStep()
-      .execute(ctxFor(filter, null));
-    Test.stopTest();
+      Test.startTest();
+      StepResult result = new BulkRedriveWorkflow.BulkRedriveStep()
+        .execute(ctxFor(filter, null));
+      Test.stopTest();
 
-    Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
-      result.outputJson
-    );
-    System.assertEquals(3, (Integer) summary.get('redriven'), 'The 3 healthy instances re-drive');
-    System.assertEquals(1, (Integer) summary.get('errored'), 'The poison instance is counted as errored');
-    Workflow_Instance__c reloaded = [
-      SELECT Status__c
-      FROM Workflow_Instance__c
-      WHERE Id = :poison.Id
-    ];
-    System.assertEquals('Failed', reloaded.Status__c, 'Errored instance is left Failed for re-inspection');
+      Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
+        result.outputJson
+      );
+      System.assertEquals(3, (Integer) summary.get('redriven'), 'The 3 healthy instances re-drive');
+      System.assertEquals(1, (Integer) summary.get('errored'), 'The poison instance is counted as errored');
+      Workflow_Instance__c reloaded = [
+        SELECT Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :poison.Id
+      ];
+      System.assertEquals('Failed', reloaded.Status__c, 'Errored instance is left Failed for re-inspection');
+    } finally {
+      BulkRedriveWorkflow.CHUNK_SIZE = original;
+    }
   }
 
   @isTest

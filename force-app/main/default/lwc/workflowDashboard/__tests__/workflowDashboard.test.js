@@ -6,6 +6,8 @@ import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardContr
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
 import getCancelEligibleCount from "@salesforce/apex/WorkflowDashboardController.getCancelEligibleCount";
 import cancelMatchingInstances from "@salesforce/apex/WorkflowDashboardController.cancelMatchingInstances";
+import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardController.getRedriveEligibleCount";
+import redriveMatchingInstances from "@salesforce/apex/WorkflowDashboardController.redriveMatchingInstances";
 
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
@@ -19,6 +21,16 @@ jest.mock(
 );
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.cancelMatchingInstances",
+  () => ({ default: jest.fn(() => Promise.resolve({ started: false })) }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getRedriveEligibleCount",
+  () => ({ default: jest.fn(() => Promise.resolve(0)) }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.redriveMatchingInstances",
   () => ({ default: jest.fn(() => Promise.resolve({ started: false })) }),
   { virtual: true },
 );
@@ -391,7 +403,7 @@ describe("c-workflow-dashboard bulk cancel", () => {
     // Find the button "Cancel Matching Active"
     const button = Array.from(
       element.shadowRoot.querySelectorAll("lightning-button"),
-    ).find((btn) => btn.label === "Cancel Matching Active");
+    ).find((btn) => btn.label && btn.label.startsWith("Cancel Matching Active"));
     expect(button).not.toBeNull();
 
     button.dispatchEvent(new CustomEvent("click"));
@@ -429,7 +441,7 @@ describe("c-workflow-dashboard bulk cancel", () => {
     // Find the button "Cancel Matching Active"
     const button = Array.from(
       element.shadowRoot.querySelectorAll("lightning-button"),
-    ).find((btn) => btn.label === "Cancel Matching Active");
+    ).find((btn) => btn.label && btn.label.startsWith("Cancel Matching Active"));
     button.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
@@ -451,6 +463,7 @@ describe("c-workflow-dashboard bulk cancel", () => {
       workflowName: "",
       status: "",
       searchTerm: "",
+      runCompensations: false,
     });
 
     // Verify modal is closed
@@ -463,4 +476,274 @@ describe("c-workflow-dashboard bulk cancel", () => {
     expect(toastEvent.detail.variant).toBe("success");
     expect(toastEvent.detail.title).toBe("Success");
   });
+
+  it("shows info toast and does not open modal when getCancelEligibleCount returns 0", async () => {
+    getWorkflowStats.mockResolvedValue({ total: 5, active: 5, completed: 0, failed: 0 });
+    getCancelEligibleCount.mockResolvedValue(0);
+
+    const element = createComponent();
+    await flushPromises();
+
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button")
+    ).find((btn) => btn.label && btn.label.startsWith("Cancel Matching Active"));
+    
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    button.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    expect(getCancelEligibleCount).toHaveBeenCalled();
+    const modal = element.shadowRoot.querySelector("section.slds-modal");
+    expect(modal).toBeNull();
+    expect(toastHandler).toHaveBeenCalled();
+    expect(toastHandler.mock.calls[0][0].detail.variant).toBe("info");
+  });
+
+  it("shows error toast when getCancelEligibleCount fails", async () => {
+    getWorkflowStats.mockResolvedValue({ total: 5, active: 5, completed: 0, failed: 0 });
+    getCancelEligibleCount.mockRejectedValue(new Error("Count failed"));
+
+    const element = createComponent();
+    await flushPromises();
+
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button")
+    ).find((btn) => btn.label && btn.label.startsWith("Cancel Matching Active"));
+    
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    button.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    expect(toastHandler).toHaveBeenCalled();
+    expect(toastHandler.mock.calls[0][0].detail.variant).toBe("error");
+  });
+
+  it("shows error toast when cancelMatchingInstances fails", async () => {
+    getWorkflowStats.mockResolvedValue({ total: 5, active: 5, completed: 0, failed: 0 });
+    getCancelEligibleCount.mockResolvedValue(3);
+    cancelMatchingInstances.mockRejectedValue(new Error("Execution failed"));
+
+    const element = createComponent();
+    await flushPromises();
+
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button")
+    ).find((btn) => btn.label && btn.label.startsWith("Cancel Matching Active"));
+    button.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    const confirmButton = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button")
+    ).find((btn) => btn.label === "Cancel Instances");
+    
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    confirmButton.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    expect(toastHandler).toHaveBeenCalled();
+    expect(toastHandler.mock.calls[0][0].detail.variant).toBe("error");
+  });
 });
+
+describe("c-workflow-dashboard bulk redrive", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function createComponent() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    return element;
+  }
+
+  it("clicking the Re-drive Matching Failed button calls getRedriveEligibleCount and opens the redrive confirmation modal", async () => {
+    getWorkflowStats.mockResolvedValue({
+      total: 5,
+      active: 0,
+      completed: 0,
+      failed: 5,
+    });
+    getRedriveEligibleCount.mockResolvedValue(3);
+
+    const element = createComponent();
+    await flushPromises();
+
+    // Find the button "Re-drive Matching Failed"
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label && btn.label.startsWith("Re-drive Matching Failed"));
+    expect(button).not.toBeNull();
+
+    button.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify getRedriveEligibleCount was called
+    expect(getRedriveEligibleCount).toHaveBeenCalled();
+
+    // Verify modal is open and shows correct redriveCount
+    const modal = element.shadowRoot.querySelector("section.slds-modal");
+    expect(modal).not.toBeNull();
+
+    const modalText = element.shadowRoot.textContent;
+    expect(modalText).toContain(
+      "3 failed workflow instances match the current filter and will be re-driven",
+    );
+  });
+
+  it("clicking confirm in the modal calls redriveMatchingInstances with the snapshotted filters, closes the modal, and fires a success toast event", async () => {
+    getWorkflowStats.mockResolvedValue({
+      total: 5,
+      active: 0,
+      completed: 0,
+      failed: 5,
+    });
+    getRedriveEligibleCount.mockResolvedValue(3);
+    redriveMatchingInstances.mockResolvedValue({
+      started: true,
+      eligibleCount: 3,
+      redriveInstanceId: "a0G000000000002",
+    });
+
+    const element = createComponent();
+    await flushPromises();
+
+    // Find the button "Re-drive Matching Failed"
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label && btn.label.startsWith("Re-drive Matching Failed"));
+    button.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Check modal confirm button
+    const confirmButton = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "Re-drive Instances");
+    expect(confirmButton).not.toBeNull();
+
+    // Listen to the showtoast event
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    confirmButton.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify redriveMatchingInstances was called with the snapshotted filters
+    expect(redriveMatchingInstances).toHaveBeenCalledWith({
+      workflowName: "",
+      status: "",
+      searchTerm: "",
+    });
+
+    // Verify modal is closed
+    const modal = element.shadowRoot.querySelector("section.slds-modal");
+    expect(modal).toBeNull();
+
+    // Verify toast was fired
+    expect(toastHandler).toHaveBeenCalled();
+    const toastEvent = toastHandler.mock.calls[0][0];
+    expect(toastEvent.detail.variant).toBe("success");
+    expect(toastEvent.detail.title).toBe("Re-drive started");
+  });
+
+  it("shows info toast and does not open modal when getRedriveEligibleCount returns 0", async () => {
+    getWorkflowStats.mockResolvedValue({
+      total: 5,
+      active: 0,
+      completed: 0,
+      failed: 5,
+    });
+    getRedriveEligibleCount.mockResolvedValue(0);
+
+    const element = createComponent();
+    await flushPromises();
+
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label && btn.label.startsWith("Re-drive Matching Failed"));
+
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    button.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    expect(getRedriveEligibleCount).toHaveBeenCalled();
+    const modal = element.shadowRoot.querySelector("section.slds-modal");
+    expect(modal).toBeNull();
+    expect(toastHandler).toHaveBeenCalled();
+    expect(toastHandler.mock.calls[0][0].detail.variant).toBe("info");
+  });
+
+  it("shows error toast when getRedriveEligibleCount fails and does not crash", async () => {
+    getWorkflowStats.mockResolvedValue({
+      total: 5,
+      active: 0,
+      completed: 0,
+      failed: 5,
+    });
+    getRedriveEligibleCount.mockRejectedValue(new Error("Count failed"));
+
+    const element = createComponent();
+    await flushPromises();
+
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label && btn.label.startsWith("Re-drive Matching Failed"));
+
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    button.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    expect(toastHandler).toHaveBeenCalled();
+    expect(toastHandler.mock.calls[0][0].detail.variant).toBe("error");
+    expect(toastHandler.mock.calls[0][0].detail.message).toContain("Failed to count re-drive candidates: Count failed");
+  });
+
+  it("shows error toast when redriveMatchingInstances fails", async () => {
+    getWorkflowStats.mockResolvedValue({
+      total: 5,
+      active: 0,
+      completed: 0,
+      failed: 5,
+    });
+    getRedriveEligibleCount.mockResolvedValue(3);
+    redriveMatchingInstances.mockRejectedValue(new Error("Execution failed"));
+
+    const element = createComponent();
+    await flushPromises();
+
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label && btn.label.startsWith("Re-drive Matching Failed"));
+    button.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    const confirmButton = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "Re-drive Instances");
+
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    confirmButton.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    expect(toastHandler).toHaveBeenCalled();
+    expect(toastHandler.mock.calls[0][0].detail.variant).toBe("error");
+    expect(toastHandler.mock.calls[0][0].detail.message).toContain("Failed to re-drive matching instances: Execution failed");
+  });
+});
+

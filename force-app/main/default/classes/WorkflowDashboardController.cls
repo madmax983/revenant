@@ -228,7 +228,7 @@ public inherited sharing class WorkflowDashboardController {
       conditions.add('Status__c = :status');
     }
     if (String.isNotBlank(searchTerm)) {
-      likeTerm = '%' + String.escapeSingleQuotes(searchTerm) + '%';
+      likeTerm = '%' + searchTerm + '%';
       conditions.add(
         '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
@@ -260,7 +260,7 @@ public inherited sharing class WorkflowDashboardController {
       conditions.add('Workflow_Name__c = :workflowName');
     }
     if (String.isNotBlank(searchTerm)) {
-      likeTerm = '%' + String.escapeSingleQuotes(searchTerm) + '%';
+      likeTerm = '%' + searchTerm + '%';
       conditions.add(
         '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
@@ -1977,7 +1977,7 @@ public inherited sharing class WorkflowDashboardController {
       'WHERE Status__c = \'Unrouted\'';
 
     if (String.isNotBlank(searchTerm)) {
-      likeTerm = '%' + String.escapeSingleQuotes(searchTerm.trim()) + '%';
+      likeTerm = '%' + searchTerm.trim() + '%';
       query += ' AND (Correlation_Key__c LIKE :likeTerm OR Signal_Name__c LIKE :likeTerm)';
     }
 
@@ -2015,7 +2015,7 @@ public inherited sharing class WorkflowDashboardController {
     String query = 'SELECT Id FROM Workflow_Signal__c WHERE Status__c = \'Unrouted\'';
 
     if (String.isNotBlank(searchTerm)) {
-      likeTerm = '%' + String.escapeSingleQuotes(searchTerm.trim()) + '%';
+      likeTerm = '%' + searchTerm.trim() + '%';
       query += ' AND (Correlation_Key__c LIKE :likeTerm OR Signal_Name__c LIKE :likeTerm)';
     }
 

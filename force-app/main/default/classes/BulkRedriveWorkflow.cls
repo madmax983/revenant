@@ -57,7 +57,8 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
    * it further under real load. Overridable in tests.
    */
   @TestVisible
-  public static Integer CHUNK_SIZE = 30;
+  // Capped at 4 because of Salesforce Apex's hard limit of 5 savepoints per transaction, leaving 1 slot for safety/triggers.
+  public static Integer CHUNK_SIZE = 4;
 
   // ---- WorkflowDefinition ----
 
@@ -109,7 +110,7 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
     }
     String excludeName = REDRIVER_WORKFLOW_NAME;
     String likeTerm = String.isNotBlank(searchTerm)
-      ? '%' + String.escapeSingleQuotes(searchTerm) + '%'
+      ? '%' + searchTerm + '%'
       : null;
 
     if (String.isBlank(workflowName)) {
@@ -181,7 +182,7 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
     }
     String excludeName = REDRIVER_WORKFLOW_NAME;
     String likeTerm = String.isNotBlank(searchTerm)
-      ? '%' + String.escapeSingleQuotes(searchTerm) + '%'
+      ? '%' + searchTerm + '%'
       : null;
     Integer lim = chunkSize;
 
@@ -368,29 +369,19 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
         if (ctx.shouldYield()) {
           break;
         }
+        Savepoint sp = Database.setSavepoint();
         try {
-          // Reuse the proven single-instance primitive: it acquires a FOR UPDATE
-          // lock and refuses any instance that is no longer Failed, so concurrent
-          // / double-click re-drives can never produce two orchestrator chains.
-          // Revenant's orchestration uses Platform Events, which are committed
-          // atomically with the enclosing transaction, so a partial-write scenario
-          // (status updated, enqueue not committed) cannot arise; no savepoint is
-          // needed, and using one per iteration would hit Apex's 5-savepoint limit.
           WorkflowEngine.retryWorkflow(instId);
           redriven++;
         } catch (WorkflowEngine.WorkflowException wex) {
-          // The active-state guard fired: the instance is no longer Failed
-          // (already re-driven by an overlapping sweep). Idempotent skip.
-          if (
-            wex.getMessage() != null &&
-            wex.getMessage().contains('Failed status')
-          ) {
+          Database.rollback(sp);
+          if (wex.getMessage() != null && wex.getMessage().contains('Failed status')) {
             skipped++;
           } else {
             errored++;
           }
         } catch (Exception ex) {
-          // A failure on one instance must not abort the rest of the selection.
+          Database.rollback(sp);
           errored++;
         }
         afterId = instId;
