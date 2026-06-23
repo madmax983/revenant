@@ -38,7 +38,7 @@
             </value>
             <value>
                 <fullName>UNKNOWN</fullName>
-                <default>true</default>
+                <default>false</default>
                 <label>Unknown</label>
             </value>
         </valueSetDefinition>

@@ -60,6 +60,11 @@ trigger WorkflowInstanceTrigger on Workflow_Instance__c(
       instance.Terminal_At__c = null;
     }
 
+    // Clear failure category for non-failed states
+    if (instance.Status__c != 'Failed' && instance.Status__c != 'CompensationFailed') {
+      instance.Failure_Category__c = null;
+    }
+
     // Release the concurrency slot on the FIRST transition into a terminal state
     // (CompensationFailed is non-terminal and correctly retains its slot). Only an
     // instance that actually held a slot decrements; the flag is cleared in-place so
