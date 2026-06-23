@@ -20,7 +20,11 @@ public inherited sharing class ContinueAsNewWorkflowExample {
         try {
           runsCompleted = Integer.valueOf(ctx.workflowInputJson);
         } catch (Exception e) {
-          // fallback to 0
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to parse runsCompleted from workflowInputJson: ' +
+            e.getMessage()
+          );
         }
       }
 

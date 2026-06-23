@@ -712,7 +712,10 @@ public class StepContextTest {
   @isTest
   static void testNamedListIncludesClaimedRowsFromCappedFullRead() {
     Id dummyInstanceId = '00D000000000001EAA';
-    String prefix = Workflow_Signal__c.SObjectType.getDescribe().getKeyPrefix();
+    String prefix = Workflow_Signal__c.SObjectType.getDescribe(
+        SObjectDescribeOptions.DEFERRED
+      )
+      .getKeyPrefix();
     List<StepContext.Signal> allRows = new List<StepContext.Signal>{
       new StepContext.Signal(
         prefix + '000000000001',
@@ -758,7 +761,10 @@ public class StepContextTest {
   static void testLatestMergeUsesIdTieBreakOnEqualTimestamp() {
     Id dummyInstanceId = '00D000000000001EAA';
     DateTime ts = DateTime.now();
-    String prefix = Workflow_Signal__c.SObjectType.getDescribe().getKeyPrefix();
+    String prefix = Workflow_Signal__c.SObjectType.getDescribe(
+        SObjectDescribeOptions.DEFERRED
+      )
+      .getKeyPrefix();
     // Capped page row (claimed) shares the timestamp with the source's latest
     // but has a LOWER id, so the source row is the true latest (Id DESC).
     List<StepContext.Signal> page = new List<StepContext.Signal>{

@@ -43,7 +43,10 @@ public inherited sharing class SagaWorkflowExample {
             chargeId = (String) origOutput.get('chargeId');
           }
         } catch (Exception e) {
-          // Fallback to mock chargeId
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to deserialize stepStateJson: ' + e.getMessage()
+          );
         }
       }
 

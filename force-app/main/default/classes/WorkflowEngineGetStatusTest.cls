@@ -165,8 +165,10 @@ private class WorkflowEngineGetStatusTest {
   static void testGetStatusById_NotFound_returnsNull() {
     // Use a well-formed but non-existent Id (same key prefix as Workflow_Instance__c)
     WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
-      (Id) (Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix() +
-      '000000000001')
+      (Id) (Workflow_Instance__c.SObjectType.getDescribe(
+          SObjectDescribeOptions.DEFERRED
+        )
+        .getKeyPrefix() + '000000000001')
     );
 
     System.assertEquals(null, ws, 'Should return null for an unknown Id');
@@ -731,7 +733,9 @@ private class WorkflowEngineGetStatusTest {
       'out',
       null
     );
-    Id unknownId = (Id) (Workflow_Instance__c.SObjectType.getDescribe()
+    Id unknownId = (Id) (Workflow_Instance__c.SObjectType.getDescribe(
+        SObjectDescribeOptions.DEFERRED
+      )
       .getKeyPrefix() + '000000000099');
 
     List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(

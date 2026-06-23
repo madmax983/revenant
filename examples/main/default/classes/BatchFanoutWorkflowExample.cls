@@ -123,7 +123,10 @@ public inherited sharing class BatchFanoutWorkflowExample {
             offset = ((Decimal) stateMap.get('offset')).intValue();
           }
         } catch (Exception ex) {
-          // fallback
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to deserialize stepStateJson: ' + ex.getMessage()
+          );
         }
       }
 

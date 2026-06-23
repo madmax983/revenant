@@ -1,3 +1,4 @@
+/* eslint-disable @lwc/lwc/no-async-operation */
 import { LightningElement, wire } from "lwc";
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
@@ -22,11 +23,9 @@ import getUnroutedSignalCount from "@salesforce/apex/WorkflowDashboardController
 import redeliverSignal from "@salesforce/apex/WorkflowDashboardController.redeliverSignal";
 import pauseDefinition from "@salesforce/apex/WorkflowDashboardController.pauseDefinition";
 import resumeDefinition from "@salesforce/apex/WorkflowDashboardController.resumeDefinition";
-import getPausedDefinitions from "@salesforce/apex/WorkflowDashboardController.getPausedDefinitions";
 import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
-
 
 export default class WorkflowDashboard extends LightningElement {
   instances = [];
@@ -121,9 +120,8 @@ export default class WorkflowDashboard extends LightningElement {
     { label: "Last 1 hour", value: "1h" },
     { label: "Last 24 hours", value: "24h" },
     { label: "Last 7 days", value: "7d" },
-    { label: "All Time", value: "all" }
+    { label: "All Time", value: "all" },
   ];
-
 
   // Confirmation modals
   redriveModalOpen = false;
@@ -199,7 +197,11 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   get hasBreakdownRows() {
-    return this.breakdownData && this.breakdownData.steps && this.breakdownData.steps.length > 0;
+    return (
+      this.breakdownData &&
+      this.breakdownData.steps &&
+      this.breakdownData.steps.length > 0
+    );
   }
 
   get breakdownRows() {
@@ -208,14 +210,13 @@ export default class WorkflowDashboard extends LightningElement {
     }
     return this.breakdownData.steps.map((step) => ({
       ...step,
-      stepAccordionLabel: `${step.stepName} (${step.failureCount} failure${step.failureCount === 1 ? "" : "s"})`
+      stepAccordionLabel: `${step.stepName} (${step.failureCount} failure${step.failureCount === 1 ? "" : "s"})`,
     }));
   }
 
   get breakdownIsCapped() {
     return this.breakdownData ? this.breakdownData.isCapped : false;
   }
-
 
   get isFailed() {
     return this.selectedInst && this.selectedInst.Status__c === "Failed";
@@ -438,10 +439,11 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   handleWorkflowFilterChange(event) {
-    this.selectedWorkflow = event.detail ? event.detail.value : event.target.value;
+    this.selectedWorkflow = event.detail
+      ? event.detail.value
+      : event.target.value;
     this.fetchInstances(false);
   }
-
 
   handleStatusFilterChange(event) {
     this.selectedStatus = event.target.value;
@@ -528,14 +530,15 @@ export default class WorkflowDashboard extends LightningElement {
   // Only show the spinner on initial load (when no rows are cached yet).
   // Subsequent background refreshes update rows in-place without flicker.
 
-
   formatInstance(inst) {
     const idleLabel =
       inst.idleMinutes != null ? `${inst.idleMinutes}m idle` : null;
     return {
       ...inst,
       formattedDate: this.formatDateTime(inst.CreatedDate),
-      formattedDeadline: inst.Deadline_At__c ? this.formatDateTime(inst.Deadline_At__c) : null,
+      formattedDeadline: inst.Deadline_At__c
+        ? this.formatDateTime(inst.Deadline_At__c)
+        : null,
       listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? "item-selected" : ""}`,
       statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
       isWatchdogWaiting: inst.waitingOn === "Watchdog",
@@ -598,7 +601,6 @@ export default class WorkflowDashboard extends LightningElement {
     this.loadDetails(true);
   }
 
-
   loadDetails(showSpinner) {
     if (showSpinner) {
       this.loadingDetails = true;
@@ -618,7 +620,9 @@ export default class WorkflowDashboard extends LightningElement {
         this.selectedInst = {
           ...inst,
           formattedDate: this.formatDateTime(inst.CreatedDate),
-          formattedDeadline: inst.Deadline_At__c ? this.formatDateTime(inst.Deadline_At__c) : null,
+          formattedDeadline: inst.Deadline_At__c
+            ? this.formatDateTime(inst.Deadline_At__c)
+            : null,
           statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
           Input__c: this.formatJson(inst.Input__c),
           Output__c: this.formatJson(inst.Output__c),
@@ -674,7 +678,7 @@ export default class WorkflowDashboard extends LightningElement {
                   };
                 }
               }
-            } catch (e) {
+            } catch {
               // ignore non-json
             }
           }
@@ -842,15 +846,18 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   handleBreakdownWorkflowChange(event) {
-    this.breakdownWorkflow = event.detail ? event.detail.value : event.target.value;
+    this.breakdownWorkflow = event.detail
+      ? event.detail.value
+      : event.target.value;
     this.fetchFailureBreakdown();
   }
 
   handleBreakdownTimeWindowChange(event) {
-    this.breakdownTimeWindow = event.detail ? event.detail.value : event.target.value;
+    this.breakdownTimeWindow = event.detail
+      ? event.detail.value
+      : event.target.value;
     this.fetchFailureBreakdown();
   }
-
 
   fetchFailureBreakdown() {
     if (!this.breakdownWorkflow) {
@@ -860,7 +867,8 @@ export default class WorkflowDashboard extends LightningElement {
     this.loadingFailureBreakdown = true;
     getWorkflowFailureBreakdown({
       workflowName: this.breakdownWorkflow,
-      timeWindow: this.breakdownTimeWindow === "all" ? null : this.breakdownTimeWindow
+      timeWindow:
+        this.breakdownTimeWindow === "all" ? null : this.breakdownTimeWindow,
     })
       .then((result) => {
         this.breakdownData = result;
@@ -871,13 +879,12 @@ export default class WorkflowDashboard extends LightningElement {
           "Error",
           "Failed to retrieve failure breakdown: " +
             (error.body ? error.body.message : error.message),
-          "error"
+          "error",
         );
         this.loadingFailureBreakdown = false;
         this.breakdownData = null;
       });
   }
-
 
   loadUnroutedSignals() {
     this.loadingUnrouted = true;
@@ -1142,11 +1149,11 @@ export default class WorkflowDashboard extends LightningElement {
       let payload = this.launchInputJson;
       try {
         JSON.parse(payload);
-      } catch (_) {
+      } catch {
         // First parse failed. Try normalizing common paste artifacts — but only as
         // a fallback so valid JSON is never rewritten:
         //   · typographic (“curly”) quotes from Word / macOS autocorrect
-        //   · non-breaking spaces ( ) from Word / Google Docs / some chat
+        //   · non-breaking spaces (\u00A0) from Word / Google Docs / some chat
         //     renderers; they look identical to spaces but are invalid JSON whitespace
         const normalized = payload
           .replace(/[\u201C\u201D]/g, '"')
@@ -1155,7 +1162,7 @@ export default class WorkflowDashboard extends LightningElement {
         try {
           JSON.parse(normalized);
           payload = normalized;
-        } catch (ex) {
+        } catch {
           this.launchError =
             "Input Payload must be valid JSON. " +
             "If you pasted from a chat or document, re-type the quote characters — " +
@@ -1455,7 +1462,7 @@ export default class WorkflowDashboard extends LightningElement {
     try {
       const obj = JSON.parse(str);
       return JSON.stringify(obj, null, 2);
-    } catch (ex) {
+    } catch {
       return str; // Return raw string if not json
     }
   }

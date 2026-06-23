@@ -1195,7 +1195,7 @@ public inherited sharing class WorkflowDashboardController {
       WITH SYSTEM_MODE
       ORDER BY Name ASC
     ]) {
-      if (Limits.getHeapSize() > heapGuard || Limits.getCpuTime() > cpuGuard) {
+      if (guardsTripped(heapGuard, cpuGuard)) {
         throw new DefinitionScanLimitException(
           'Heap/CPU guard tripped during Apex source scan.'
         );
@@ -1255,6 +1255,10 @@ public inherited sharing class WorkflowDashboardController {
     }
     definitions.sort();
     return definitions;
+  }
+
+  private static Boolean guardsTripped(Long heapGuard, Integer cpuGuard) {
+    return Limits.getHeapSize() > heapGuard || Limits.getCpuTime() > cpuGuard;
   }
 
   /**
@@ -1598,7 +1602,10 @@ public inherited sharing class WorkflowDashboardController {
           break;
         }
       } catch (Exception ex) {
-        // Malformed/oversized state payload — ignore and keep scanning.
+        System.debug(
+          LoggingLevel.WARN,
+          'Malformed or oversized state payload ignored: ' + ex.getMessage()
+        );
       }
     }
 
@@ -1842,8 +1849,11 @@ public inherited sharing class WorkflowDashboardController {
           'nonTerminalCount' => nonTerminal,
           'failedCount' => failed,
           'terminalCount' => terminal,
-          'totalCount' => nonTerminal + failed + terminal,
-          'safeToRetire' => nonTerminal == 0 && failed == 0
+          'totalCount' => nonTerminal +
+          failed +
+          terminal,
+          'safeToRetire' => nonTerminal == 0 &&
+          failed == 0
         }
       );
     }
@@ -1864,8 +1874,14 @@ public inherited sharing class WorkflowDashboardController {
   ) {
     checkAuthorization();
 
-    Integer lim = (limitSize == null || limitSize <= 0) ? 50 : Math.min(limitSize, 100);
-    Integer off = (offsetSize == null || offsetSize < 0) ? 0 : Math.min(offsetSize, 2000);
+    Integer lim = (limitSize == null ||
+      limitSize <= 0)
+      ? 50
+      : Math.min(limitSize, 100);
+    Integer off = (offsetSize == null ||
+      offsetSize < 0)
+      ? 0
+      : Math.min(offsetSize, 2000);
 
     String query =
       'SELECT Id, Correlation_Key__c, Signal_Name__c, CreatedDate ' +
@@ -1874,8 +1890,7 @@ public inherited sharing class WorkflowDashboardController {
 
     if (String.isNotBlank(searchTerm)) {
       likeTerm = '%' + String.escapeSingleQuotes(searchTerm.trim()) + '%';
-      query +=
-        ' AND (Correlation_Key__c LIKE :likeTerm OR Signal_Name__c LIKE :likeTerm)';
+      query += ' AND (Correlation_Key__c LIKE :likeTerm OR Signal_Name__c LIKE :likeTerm)';
     }
 
     query += ' ORDER BY CreatedDate ASC LIMIT :lim OFFSET :off';
@@ -1909,13 +1924,11 @@ public inherited sharing class WorkflowDashboardController {
   public static Map<String, Object> getUnroutedSignalCount(String searchTerm) {
     checkAuthorization();
 
-    String query =
-      'SELECT Id FROM Workflow_Signal__c WHERE Status__c = \'Unrouted\'';
+    String query = 'SELECT Id FROM Workflow_Signal__c WHERE Status__c = \'Unrouted\'';
 
     if (String.isNotBlank(searchTerm)) {
       likeTerm = '%' + String.escapeSingleQuotes(searchTerm.trim()) + '%';
-      query +=
-        ' AND (Correlation_Key__c LIKE :likeTerm OR Signal_Name__c LIKE :likeTerm)';
+      query += ' AND (Correlation_Key__c LIKE :likeTerm OR Signal_Name__c LIKE :likeTerm)';
     }
 
     query += ' LIMIT :UNROUTED_CANDIDATE_CAP';
@@ -2115,7 +2128,7 @@ public inherited sharing class WorkflowDashboardController {
         WHERE
           Workflow_Name__c IN :workflowNames
           AND Status__c = 'Suspended'
-          AND Concurrency_Parked__c = true
+          AND Concurrency_Parked__c = TRUE
         WITH SYSTEM_MODE
         GROUP BY Workflow_Name__c
       ]) {
@@ -2153,7 +2166,10 @@ public inherited sharing class WorkflowDashboardController {
   private static final Integer FAILURE_BREAKDOWN_CAP = 2000;
 
   @AuraEnabled(cacheable=true)
-  public static Map<String, Object> getWorkflowFailureBreakdown(String workflowName, String timeWindow) {
+  public static Map<String, Object> getWorkflowFailureBreakdown(
+    String workflowName,
+    String timeWindow
+  ) {
     checkAuthorization();
 
     if (String.isBlank(workflowName)) {
@@ -2168,7 +2184,10 @@ public inherited sharing class WorkflowDashboardController {
     }
 
     Datetime since = null;
-    if (String.isNotBlank(timeWindow) && TREND_WINDOW_HOURS.containsKey(timeWindow)) {
+    if (
+      String.isNotBlank(timeWindow) &&
+      TREND_WINDOW_HOURS.containsKey(timeWindow)
+    ) {
       Integer windowHours = TREND_WINDOW_HOURS.get(timeWindow);
       since = Datetime.now().addHours(-windowHours);
     }
@@ -2176,9 +2195,15 @@ public inherited sharing class WorkflowDashboardController {
     List<Workflow_Step_Execution__c> steps;
     if (since != null) {
       steps = [
-        SELECT Step_Name__c, Error_Details__c, Workflow_Instance__c, Workflow_Instance__r.Name, CreatedDate
+        SELECT
+          Step_Name__c,
+          Error_Details__c,
+          Workflow_Instance__c,
+          Workflow_Instance__r.Name,
+          CreatedDate
         FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__r.Workflow_Name__c = :workflowName
+        WHERE
+          Workflow_Instance__r.Workflow_Name__c = :workflowName
           AND Status__c = 'Failed'
           AND CreatedDate >= :since
         WITH SYSTEM_MODE
@@ -2187,9 +2212,15 @@ public inherited sharing class WorkflowDashboardController {
       ];
     } else {
       steps = [
-        SELECT Step_Name__c, Error_Details__c, Workflow_Instance__c, Workflow_Instance__r.Name, CreatedDate
+        SELECT
+          Step_Name__c,
+          Error_Details__c,
+          Workflow_Instance__c,
+          Workflow_Instance__r.Name,
+          CreatedDate
         FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__r.Workflow_Name__c = :workflowName
+        WHERE
+          Workflow_Instance__r.Workflow_Name__c = :workflowName
           AND Status__c = 'Failed'
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC
@@ -2242,16 +2273,25 @@ public inherited sharing class WorkflowDashboardController {
     }
 
     // Normalize UUIDs
-    signature = signature.replaceAll('\\b[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}\\b', '[UUID]');
+    signature = signature.replaceAll(
+      '\\b[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}\\b',
+      '[UUID]'
+    );
 
     // Normalize Datetimes
-    signature = signature.replaceAll('\\b\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?\\b', '[DATETIME]');
+    signature = signature.replaceAll(
+      '\\b\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?\\b',
+      '[DATETIME]'
+    );
 
     // Normalize Dates
     signature = signature.replaceAll('\\b\\d{4}-\\d{2}-\\d{2}\\b', '[DATE]');
 
     // Normalize Salesforce IDs containing at least one digit
-    signature = signature.replaceAll('\\b(?=[a-zA-Z0-9]*[0-9])[a-zA-Z0-9]{15,18}\\b', '[ID]');
+    signature = signature.replaceAll(
+      '\\b(?=[a-zA-Z0-9]*[0-9])[a-zA-Z0-9]{15,18}\\b',
+      '[ID]'
+    );
 
     // Normalize standalone numbers
     signature = signature.replaceAll('\\b\\d+\\b', '[NUM]');
@@ -2321,12 +2361,18 @@ public inherited sharing class WorkflowDashboardController {
 
     void addOccurrence(Workflow_Step_Execution__c se) {
       this.count++;
-      if (examples.size() < 5 && se.Workflow_Instance__c != null && !exampleInstanceIds.contains(se.Workflow_Instance__c)) {
+      if (
+        examples.size() < 5 &&
+        se.Workflow_Instance__c != null &&
+        !exampleInstanceIds.contains(se.Workflow_Instance__c)
+      ) {
         exampleInstanceIds.add(se.Workflow_Instance__c);
-        examples.add(new Map<String, String>{
-          'id' => se.Workflow_Instance__c,
-          'name' => se.Workflow_Instance__r.Name
-        });
+        examples.add(
+          new Map<String, String>{
+            'id' => se.Workflow_Instance__c,
+            'name' => se.Workflow_Instance__r.Name
+          }
+        );
       }
     }
 
@@ -2347,4 +2393,3 @@ public inherited sharing class WorkflowDashboardController {
     }
   }
 }
-

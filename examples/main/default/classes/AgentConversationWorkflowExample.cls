@@ -59,7 +59,9 @@ public with sharing class AgentConversationWorkflowExample {
       if (currentStep == 'AgentConversationWorkflowExample.AwaitFollowUpStep') {
         return 'AgentConversationWorkflowExample.ContinuationTurnStep';
       }
-      if (currentStep == 'AgentConversationWorkflowExample.ContinuationTurnStep') {
+      if (
+        currentStep == 'AgentConversationWorkflowExample.ContinuationTurnStep'
+      ) {
         return 'AgentConversationWorkflowExample.ConversationCompleteStep';
       }
       return null; // ConversationCompleteStep is terminal
@@ -83,7 +85,9 @@ public with sharing class AgentConversationWorkflowExample {
       String userMessage = (String) input.get('userMessage');
 
       if (String.isBlank(agentDevName)) {
-        throw new WorkflowEngine.WorkflowException('agentDeveloperName is required');
+        throw new WorkflowEngine.WorkflowException(
+          'agentDeveloperName is required'
+        );
       }
       if (String.isBlank(userMessage)) {
         throw new WorkflowEngine.WorkflowException('userMessage is required');
@@ -137,7 +141,7 @@ public with sharing class AgentConversationWorkflowExample {
 
       Workflow_Signal__c sig = signals[0];
       sig.Status__c = 'Consumed';
-      update sig;
+      update as user sig;
 
       Map<String, Object> payload = parseJson(sig.Payload__c);
       return StepResult.complete(
@@ -164,7 +168,12 @@ public with sharing class AgentConversationWorkflowExample {
       String sessionId = (String) input.get('sessionId');
       String followUpMessage = (String) input.get('followUpMessage');
 
-      AgentResponse turn = invokeAgent(agentDevName, followUpMessage, sessionId, 1);
+      AgentResponse turn = invokeAgent(
+        agentDevName,
+        followUpMessage,
+        sessionId,
+        1
+      );
 
       return StepResult.complete(
         null,
@@ -212,10 +221,10 @@ public with sharing class AgentConversationWorkflowExample {
   ) {
     if (Test.isRunningTest()) {
       AgentResponse mock = new AgentResponse();
-      mock.agentResponse =
-        (mockAgentResponses != null && mockAgentResponses.size() > mockResponseIndex)
-          ? mockAgentResponses[mockResponseIndex]
-          : 'Mock agent response';
+      mock.agentResponse = (mockAgentResponses != null &&
+        mockAgentResponses.size() > mockResponseIndex)
+        ? mockAgentResponses[mockResponseIndex]
+        : 'Mock agent response';
       mock.sessionId = 'mock-session-' + mockResponseIndex;
       mock.success = true;
       return mock;
@@ -235,7 +244,8 @@ public with sharing class AgentConversationWorkflowExample {
 
     AgentResponse resp = new AgentResponse();
     if (outcome.isSuccess()) {
-      resp.agentResponse = (String) outcome.getOutputParameters().get('agentResponse');
+      resp.agentResponse = (String) outcome.getOutputParameters()
+        .get('agentResponse');
       resp.sessionId = (String) outcome.getOutputParameters().get('sessionId');
       resp.success = true;
     } else {

@@ -57,7 +57,11 @@ public inherited sharing class IdempotentChargeWorkflowExample {
             }
           }
         } catch (Exception ex) {
-          // Fall back to the default amount.
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to deserialize amountCents from workflowInputJson: ' +
+            ex.getMessage()
+          );
         }
       }
 

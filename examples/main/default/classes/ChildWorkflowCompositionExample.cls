@@ -29,9 +29,7 @@
  *    never publishes ChildCompleted, so its parent stays Suspended.  A production
  *    composite would add its own child-failure/timeout signal to cover that path.
  */
-public inherited sharing class ChildWorkflowCompositionExample
-  implements WorkflowDefinition {
-
+public inherited sharing class ChildWorkflowCompositionExample implements WorkflowDefinition {
   /** Minimum credit score required to approve the loan. */
   public static final Integer APPROVE_THRESHOLD = 680;
 
@@ -129,6 +127,7 @@ public inherited sharing class ChildWorkflowCompositionExample
         WHERE
           Parent_Instance__c = :ctx.workflowInstanceId
           AND Correlation_Key__c = :childKey
+        WITH USER_MODE
         LIMIT 1
       ];
       if (!alreadyLaunched.isEmpty()) {
@@ -237,7 +236,10 @@ public inherited sharing class ChildWorkflowCompositionExample
 
       return StepResult.complete(
         null,
-        new Map<String, Object>{ 'creditScore' => score, 'applicant' => applicant }
+        new Map<String, Object>{
+          'creditScore' => score,
+          'applicant' => applicant
+        }
       );
     }
   }

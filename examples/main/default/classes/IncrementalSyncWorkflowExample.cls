@@ -37,7 +37,10 @@ public inherited sharing class IncrementalSyncWorkflowExample {
     }
 
     public String getNextStep(String currentStepName, StepResult result) {
-      if (currentStepName == 'IncrementalSyncWorkflowExample.SyncChangedAccountsStep') {
+      if (
+        currentStepName ==
+        'IncrementalSyncWorkflowExample.SyncChangedAccountsStep'
+      ) {
         return 'IncrementalSyncWorkflowExample.SleepStep';
       }
       if (currentStepName == 'IncrementalSyncWorkflowExample.SleepStep') {
@@ -68,6 +71,7 @@ public inherited sharing class IncrementalSyncWorkflowExample {
         SELECT Id, Name, LastModifiedDate
         FROM Account
         WHERE LastModifiedDate >= :since
+        WITH USER_MODE
         ORDER BY LastModifiedDate ASC
       ];
 

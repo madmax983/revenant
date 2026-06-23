@@ -43,18 +43,31 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
               Integer retryDelay = 2;
               if (String.isNotBlank(ctx.workflowInputJson)) {
                 try {
-                  Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(ctx.workflowInputJson);
+                  Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
+                    ctx.workflowInputJson
+                  );
                   if (input.containsKey('retryDelay')) {
                     retryDelay = (Integer) input.get('retryDelay');
                   }
-                } catch (Exception ex) {}
+                } catch (Exception ex) {
+                  System.debug(
+                    LoggingLevel.WARN,
+                    'Failed to deserialize retryDelay from workflowInputJson: ' +
+                    ex.getMessage()
+                  );
+                }
               }
               // If it failed, we retry using retry policy
-              return StepResult.retry(new RetryPolicy(retryDelay, (Double) 1.0, 3));
+              return StepResult.retry(
+                new RetryPolicy(retryDelay, (Double) 1.0, 3)
+              );
             }
           }
         } catch (Exception ex) {
-          // Fall back to initiate callout
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to deserialize stepStateJson: ' + ex.getMessage()
+          );
         }
       }
 
@@ -69,7 +82,11 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
             endpoint = (String) input.get('endpoint');
           }
         } catch (Exception ex) {
-          // Fall back
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to deserialize endpoint from workflowInputJson: ' +
+            ex.getMessage()
+          );
         }
       }
 

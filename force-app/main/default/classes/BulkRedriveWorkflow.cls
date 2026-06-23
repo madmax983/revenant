@@ -82,10 +82,12 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
    */
   private static List<String> effectiveStatuses(String status) {
     List<String> result = new List<String>();
-    if (String.isBlank(status)) {
+    if (String.isNotBlank(status)) {
+      if (RECOVERABLE_STATUSES.contains(status)) {
+        result.add(status);
+      }
+    } else {
       result.addAll(RECOVERABLE_STATUSES);
-    } else if (RECOVERABLE_STATUSES.contains(status)) {
-      result.add(status);
     }
     return result;
   }
@@ -110,19 +112,55 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
       ? '%' + String.escapeSingleQuotes(searchTerm) + '%'
       : null;
 
-    String q =
-      'SELECT COUNT() FROM Workflow_Instance__c ' +
-      'WHERE Status__c IN :effStatuses AND Workflow_Name__c != :excludeName';
-    if (String.isNotBlank(workflowName)) {
-      q += ' AND Workflow_Name__c = :workflowName';
+    if (String.isBlank(workflowName)) {
+      if (likeTerm == null) {
+        return [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE Status__c IN :effStatuses AND Workflow_Name__c != :excludeName
+          WITH SYSTEM_MODE
+        ];
+      } else {
+        return [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE
+            Status__c IN :effStatuses
+            AND Workflow_Name__c != :excludeName
+            AND (Name LIKE :likeTerm
+            OR Correlation_Key__c LIKE :likeTerm
+            OR Workflow_Name__c LIKE :likeTerm
+            OR Error_Message__c LIKE :likeTerm)
+          WITH SYSTEM_MODE
+        ];
+      }
+    } else {
+      if (likeTerm == null) {
+        return [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE
+            Status__c IN :effStatuses
+            AND Workflow_Name__c != :excludeName
+            AND Workflow_Name__c = :workflowName
+          WITH SYSTEM_MODE
+        ];
+      } else {
+        return [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE
+            Status__c IN :effStatuses
+            AND Workflow_Name__c != :excludeName
+            AND Workflow_Name__c = :workflowName
+            AND (Name LIKE :likeTerm
+            OR Correlation_Key__c LIKE :likeTerm
+            OR Workflow_Name__c LIKE :likeTerm
+            OR Error_Message__c LIKE :likeTerm)
+          WITH SYSTEM_MODE
+        ];
+      }
     }
-    if (likeTerm != null) {
-      q +=
-        ' AND (Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm' +
-        ' OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)';
-    }
-    q += ' WITH SYSTEM_MODE';
-    return Database.countQuery(q);
   }
 
   /**
@@ -147,26 +185,131 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
       : null;
     Integer lim = chunkSize;
 
-    String q =
-      'SELECT Id FROM Workflow_Instance__c ' +
-      'WHERE Status__c IN :effStatuses AND Workflow_Name__c != :excludeName';
-    if (afterId != null) {
-      q += ' AND Id > :afterId';
+    List<Workflow_Instance__c> rows;
+    if (afterId == null) {
+      if (String.isBlank(workflowName)) {
+        if (likeTerm == null) {
+          rows = [
+            SELECT Id
+            FROM Workflow_Instance__c
+            WHERE Status__c IN :effStatuses AND Workflow_Name__c != :excludeName
+            WITH SYSTEM_MODE
+            ORDER BY Id ASC
+            LIMIT :lim
+          ];
+        } else {
+          rows = [
+            SELECT Id
+            FROM Workflow_Instance__c
+            WHERE
+              Status__c IN :effStatuses
+              AND Workflow_Name__c != :excludeName
+              AND (Name LIKE :likeTerm
+              OR Correlation_Key__c LIKE :likeTerm
+              OR Workflow_Name__c LIKE :likeTerm
+              OR Error_Message__c LIKE :likeTerm)
+            WITH SYSTEM_MODE
+            ORDER BY Id ASC
+            LIMIT :lim
+          ];
+        }
+      } else {
+        if (likeTerm == null) {
+          rows = [
+            SELECT Id
+            FROM Workflow_Instance__c
+            WHERE
+              Status__c IN :effStatuses
+              AND Workflow_Name__c != :excludeName
+              AND Workflow_Name__c = :workflowName
+            WITH SYSTEM_MODE
+            ORDER BY Id ASC
+            LIMIT :lim
+          ];
+        } else {
+          rows = [
+            SELECT Id
+            FROM Workflow_Instance__c
+            WHERE
+              Status__c IN :effStatuses
+              AND Workflow_Name__c != :excludeName
+              AND Workflow_Name__c = :workflowName
+              AND (Name LIKE :likeTerm
+              OR Correlation_Key__c LIKE :likeTerm
+              OR Workflow_Name__c LIKE :likeTerm
+              OR Error_Message__c LIKE :likeTerm)
+            WITH SYSTEM_MODE
+            ORDER BY Id ASC
+            LIMIT :lim
+          ];
+        }
+      }
+    } else {
+      if (String.isBlank(workflowName)) {
+        if (likeTerm == null) {
+          rows = [
+            SELECT Id
+            FROM Workflow_Instance__c
+            WHERE
+              Status__c IN :effStatuses
+              AND Workflow_Name__c != :excludeName
+              AND Id > :afterId
+            WITH SYSTEM_MODE
+            ORDER BY Id ASC
+            LIMIT :lim
+          ];
+        } else {
+          rows = [
+            SELECT Id
+            FROM Workflow_Instance__c
+            WHERE
+              Status__c IN :effStatuses
+              AND Workflow_Name__c != :excludeName
+              AND Id > :afterId
+              AND (Name LIKE :likeTerm
+              OR Correlation_Key__c LIKE :likeTerm
+              OR Workflow_Name__c LIKE :likeTerm
+              OR Error_Message__c LIKE :likeTerm)
+            WITH SYSTEM_MODE
+            ORDER BY Id ASC
+            LIMIT :lim
+          ];
+        }
+      } else {
+        if (likeTerm == null) {
+          rows = [
+            SELECT Id
+            FROM Workflow_Instance__c
+            WHERE
+              Status__c IN :effStatuses
+              AND Workflow_Name__c != :excludeName
+              AND Id > :afterId
+              AND Workflow_Name__c = :workflowName
+            WITH SYSTEM_MODE
+            ORDER BY Id ASC
+            LIMIT :lim
+          ];
+        } else {
+          rows = [
+            SELECT Id
+            FROM Workflow_Instance__c
+            WHERE
+              Status__c IN :effStatuses
+              AND Workflow_Name__c != :excludeName
+              AND Id > :afterId
+              AND Workflow_Name__c = :workflowName
+              AND (Name LIKE :likeTerm
+              OR Correlation_Key__c LIKE :likeTerm
+              OR Workflow_Name__c LIKE :likeTerm
+              OR Error_Message__c LIKE :likeTerm)
+            WITH SYSTEM_MODE
+            ORDER BY Id ASC
+            LIMIT :lim
+          ];
+        }
+      }
     }
-    if (String.isNotBlank(workflowName)) {
-      q += ' AND Workflow_Name__c = :workflowName';
-    }
-    if (likeTerm != null) {
-      q +=
-        ' AND (Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm' +
-        ' OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)';
-    }
-    q += ' ORDER BY Id ASC LIMIT :lim';
 
-    List<Workflow_Instance__c> rows = Database.query(
-      q,
-      AccessLevel.SYSTEM_MODE
-    );
     List<Id> ids = new List<Id>();
     for (Workflow_Instance__c inst : rows) {
       ids.add(inst.Id);
@@ -183,7 +326,9 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
       // state carries the cursor and running tallies forward.
       Map<String, Object> state;
       if (String.isNotBlank(ctx.stepStateJson)) {
-        state = (Map<String, Object>) JSON.deserializeUntyped(ctx.stepStateJson);
+        state = (Map<String, Object>) JSON.deserializeUntyped(
+          ctx.stepStateJson
+        );
       } else {
         state = new Map<String, Object>();
         if (String.isNotBlank(ctx.workflowInputJson)) {
@@ -279,7 +424,9 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
         'redriven' => redriven,
         'skipped' => skipped,
         'errored' => errored,
-        'totalProcessed' => redriven + skipped + errored
+        'totalProcessed' => redriven +
+        skipped +
+        errored
       };
       return StepResult.complete(null, summary);
     }

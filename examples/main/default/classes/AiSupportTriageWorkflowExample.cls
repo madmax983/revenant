@@ -126,7 +126,7 @@ public with sharing class AiSupportTriageWorkflowExample {
         Priority = 'Medium',
         Description = (String) classify.get('inquiryText')
       );
-      insert c;
+      insert as user c;
 
       return StepResult.complete(
         null,
@@ -166,7 +166,7 @@ public with sharing class AiSupportTriageWorkflowExample {
 
       Workflow_Signal__c sig = signals[0];
       sig.Status__c = 'Consumed';
-      update sig;
+      update as user sig;
 
       Map<String, Object> decision = (Map<String, Object>) JSON.deserializeUntyped(
         sig.Payload__c
@@ -209,7 +209,8 @@ public with sharing class AiSupportTriageWorkflowExample {
       request
     );
 
-    String content = response.Code200.generation.generatedText.trim().toLowerCase();
+    String content = response.Code200.generation.generatedText.trim()
+      .toLowerCase();
     if (content.startsWith('billing')) {
       return 'billing';
     }

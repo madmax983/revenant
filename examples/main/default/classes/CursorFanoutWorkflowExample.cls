@@ -80,7 +80,11 @@ public inherited sharing class CursorFanoutWorkflowExample {
             chunkSize = Integer.valueOf(String.valueOf(cs));
           }
         } catch (Exception e) {
-          // Malformed input — keep the default chunk size.
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to deserialize chunkSize from workflowInputJson: ' +
+            e.getMessage()
+          );
         }
       }
       if (chunkSize < 1) {
@@ -108,6 +112,7 @@ public inherited sharing class CursorFanoutWorkflowExample {
         SELECT Id, Status__c, Correlation_Key__c, Output__c
         FROM Workflow_Instance__c
         WHERE Parent_Instance__c = :ctx.workflowInstanceId
+        WITH USER_MODE
       ];
 
       // First run: spawn chunks

@@ -12,7 +12,6 @@
  * cannot express because they have no durable multi-step orchestration or compensating rollback.
  */
 public inherited sharing class ApprovalWorkflowExample implements WorkflowDefinition {
-
   /** Approval gate identifier passed to waitForApproval(). */
   public static final String APPROVAL_KEY = 'PurchaseApproval';
 
@@ -50,7 +49,8 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
         Map<String, Object> decision = (Map<String, Object>) JSON.deserializeUntyped(
           result.outputJson
         );
-        Boolean approved = decision.get('approved') != null &&
+        Boolean approved =
+          decision.get('approved') != null &&
           (Boolean) decision.get('approved');
         return approved
           ? 'ApprovalWorkflowExample.PlaceOrderStep'
@@ -79,12 +79,19 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
             amount = (Decimal) input.get('purchaseAmount');
           }
         } catch (Exception e) {
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to deserialize input JSON: ' + e.getMessage()
+          );
         }
       }
       String reservationId = 'res_' + String.valueOf(amount).replace('.', '_');
       return StepResult.complete(
         null,
-        new Map<String, Object>{ 'reservationId' => reservationId, 'amount' => amount }
+        new Map<String, Object>{
+          'reservationId' => reservationId,
+          'amount' => amount
+        }
       );
     }
 
@@ -103,11 +110,18 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
             reservationId = (String) orig.get('reservationId');
           }
         } catch (Exception e) {
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to deserialize step state JSON: ' + e.getMessage()
+          );
         }
       }
       return StepResult.complete(
         null,
-        new Map<String, Object>{ 'released' => true, 'reservationId' => reservationId }
+        new Map<String, Object>{
+          'released' => true,
+          'reservationId' => reservationId
+        }
       );
     }
   }
@@ -182,9 +196,15 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
             reason = String.valueOf(note);
           }
         } catch (Exception e) {
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to deserialize rejection input JSON: ' + e.getMessage()
+          );
         }
       }
-      throw new WorkflowEngine.WorkflowException('Approval rejected: ' + reason);
+      throw new WorkflowEngine.WorkflowException(
+        'Approval rejected: ' + reason
+      );
     }
   }
 }

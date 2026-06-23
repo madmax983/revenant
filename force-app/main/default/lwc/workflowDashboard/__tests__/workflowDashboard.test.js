@@ -1,3 +1,4 @@
+/* eslint-disable @lwc/lwc/no-async-operation */
 import { createElement } from "lwc";
 import WorkflowDashboard from "c/workflowDashboard";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
@@ -8,7 +9,6 @@ jest.mock(
   () => ({ default: jest.fn() }),
   { virtual: true },
 );
-
 
 // Imperative Apex methods that fire on load are mocked so the component can
 // render without a backend. Only getDefinitionTrends is asserted on here; the
@@ -129,8 +129,9 @@ describe("c-workflow-dashboard trends panel", () => {
 
     await flushPromises();
 
-    const button = Array.from(element.shadowRoot.querySelectorAll("lightning-button"))
-      .find(btn => btn.label === "System Doctor");
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "System Doctor");
     expect(button).not.toBeNull();
     button.dispatchEvent(new CustomEvent("click"));
 
@@ -146,8 +147,9 @@ describe("c-workflow-dashboard trends panel", () => {
 
     await flushPromises();
 
-    const button = Array.from(element.shadowRoot.querySelectorAll("lightning-button"))
-      .find(btn => btn.label === "System Doctor");
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "System Doctor");
     button.dispatchEvent(new CustomEvent("click"));
 
     await flushPromises();
@@ -172,8 +174,9 @@ describe("c-workflow-dashboard trends panel", () => {
 
     await flushPromises();
 
-    const button = Array.from(element.shadowRoot.querySelectorAll("lightning-button"))
-      .find(btn => btn.label === "System Doctor");
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "System Doctor");
     button.dispatchEvent(new CustomEvent("click"));
 
     await flushPromises();
@@ -191,8 +194,9 @@ describe("c-workflow-dashboard trends panel", () => {
 
     await flushPromises();
 
-    const button = Array.from(element.shadowRoot.querySelectorAll("lightning-button"))
-      .find(btn => btn.label === "System Doctor");
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "System Doctor");
     button.dispatchEvent(new CustomEvent("click"));
 
     await flushPromises();
@@ -235,21 +239,26 @@ describe("c-workflow-dashboard failure breakdown panel", () => {
       isCapped: false,
       capLimit: 2000,
       totalFailures: 0,
-      steps: []
+      steps: [],
     });
 
     const element = createComponent();
     await flushPromises();
 
     // Select a workflow filter
-    const combobox = element.shadowRoot.querySelector('[data-id="workflow-filter"]');
+    const combobox = element.shadowRoot.querySelector(
+      '[data-id="workflow-filter"]',
+    );
 
     expect(combobox).not.toBeNull();
-    combobox.dispatchEvent(new CustomEvent("change", { detail: { value: "BillingWorkflow" } }));
+    combobox.dispatchEvent(
+      new CustomEvent("change", { detail: { value: "BillingWorkflow" } }),
+    );
 
     // Click Failure Breakdown button in header
-    const button = Array.from(element.shadowRoot.querySelectorAll("lightning-button"))
-      .find(btn => btn.label === "Failure Breakdown");
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "Failure Breakdown");
     expect(button).not.toBeNull();
     button.dispatchEvent(new CustomEvent("click"));
 
@@ -271,29 +280,32 @@ describe("c-workflow-dashboard failure breakdown panel", () => {
           failureCount: 2,
           errorSignatures: [
             {
-              signature: "System.NullPointerException: Attempt to de-reference a null object",
+              signature:
+                "System.NullPointerException: Attempt to de-reference a null object",
               count: 2,
-              examples: [
-                { id: "a0G000000000001", name: "WI-0001" }
-              ]
-            }
-          ]
-        }
-      ]
+              examples: [{ id: "a0G000000000001", name: "WI-0001" }],
+            },
+          ],
+        },
+      ],
     });
 
     const element = createComponent();
     await flushPromises();
 
     // Select a workflow filter
-    const combobox = element.shadowRoot.querySelector('[data-id="workflow-filter"]');
+    const combobox = element.shadowRoot.querySelector(
+      '[data-id="workflow-filter"]',
+    );
     expect(combobox).not.toBeNull();
-    combobox.dispatchEvent(new CustomEvent("change", { detail: { value: "BillingWorkflow" } }));
-
+    combobox.dispatchEvent(
+      new CustomEvent("change", { detail: { value: "BillingWorkflow" } }),
+    );
 
     // Open Failure Breakdown
-    const button = Array.from(element.shadowRoot.querySelectorAll("lightning-button"))
-      .find(btn => btn.label === "Failure Breakdown");
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "Failure Breakdown");
     button.dispatchEvent(new CustomEvent("click"));
 
     await flushPromises();
@@ -303,7 +315,9 @@ describe("c-workflow-dashboard failure breakdown panel", () => {
     const accordion = element.shadowRoot.querySelector("lightning-accordion");
     expect(accordion).not.toBeNull();
 
-    const section = element.shadowRoot.querySelector("lightning-accordion-section");
+    const section = element.shadowRoot.querySelector(
+      "lightning-accordion-section",
+    );
     expect(section).not.toBeNull();
     expect(section.name).toBe("ChargeCard");
     expect(section.label).toBe("ChargeCard (2 failures)");
@@ -311,10 +325,10 @@ describe("c-workflow-dashboard failure breakdown panel", () => {
     const panelText = element.shadowRoot.textContent;
     expect(panelText).toContain("System.NullPointerException");
 
-    const exampleLink = element.shadowRoot.querySelector("a[data-id='a0G000000000001']");
+    const exampleLink = element.shadowRoot.querySelector(
+      "a[data-id='a0G000000000001']",
+    );
     expect(exampleLink).not.toBeNull();
     expect(exampleLink.textContent).toBe("WI-0001");
   });
 });
-
-
