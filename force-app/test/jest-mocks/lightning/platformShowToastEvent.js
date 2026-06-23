@@ -9,7 +9,7 @@ export const ShowToastEvent = class ShowToastEvent extends CustomEvent {
       composed: true,
       cancelable: true,
       bubbles: true,
+      detail: config,
     });
-    this.detail = config;
   }
 };

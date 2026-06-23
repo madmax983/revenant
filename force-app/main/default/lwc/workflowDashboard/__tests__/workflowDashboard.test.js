@@ -3,10 +3,23 @@ import { createElement } from "lwc";
 import WorkflowDashboard from "c/workflowDashboard";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
+import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
+import getCancelEligibleCount from "@salesforce/apex/WorkflowDashboardController.getCancelEligibleCount";
+import cancelMatchingInstances from "@salesforce/apex/WorkflowDashboardController.cancelMatchingInstances";
 
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
   () => ({ default: jest.fn() }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getCancelEligibleCount",
+  () => ({ default: jest.fn(() => Promise.resolve(0)) }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.cancelMatchingInstances",
+  () => ({ default: jest.fn(() => Promise.resolve({ started: false })) }),
   { virtual: true },
 );
 
@@ -21,6 +34,20 @@ jest.mock(
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getFilteredInstances",
   () => ({ default: jest.fn(() => Promise.resolve([])) }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getInstanceDetails",
+  () => ({
+    default: jest.fn(() =>
+      Promise.resolve({
+        instance: { Id: "a0G000000000002", Status__c: "Cancelled" },
+        steps: [],
+        children: [],
+        payloadFiles: {},
+      }),
+    ),
+  }),
   { virtual: true },
 );
 jest.mock(
@@ -330,5 +357,110 @@ describe("c-workflow-dashboard failure breakdown panel", () => {
     );
     expect(exampleLink).not.toBeNull();
     expect(exampleLink.textContent).toBe("WI-0001");
+  });
+});
+
+describe("c-workflow-dashboard bulk cancel", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function createComponent() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    return element;
+  }
+
+  it("clicking the Cancel Matching Active button calls getCancelEligibleCount and opens the cancel modal", async () => {
+    getWorkflowStats.mockResolvedValue({
+      total: 5,
+      active: 5,
+      completed: 0,
+      failed: 0,
+    });
+    getCancelEligibleCount.mockResolvedValue(3);
+
+    const element = createComponent();
+    await flushPromises();
+
+    // Find the button "Cancel Matching Active"
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "Cancel Matching Active");
+    expect(button).not.toBeNull();
+
+    button.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify getCancelEligibleCount was called
+    expect(getCancelEligibleCount).toHaveBeenCalled();
+
+    // Verify modal is open and shows correct cancelMatchingCount
+    const modal = element.shadowRoot.querySelector("section.slds-modal");
+    expect(modal).not.toBeNull();
+
+    const modalText = element.shadowRoot.textContent;
+    expect(modalText).toContain(
+      "3 active workflow instances match the current filter and will be cancelled",
+    );
+  });
+
+  it("clicking confirm in the modal calls cancelMatchingInstances, closes the modal, shows success toast, and sets selectedInstanceId", async () => {
+    getWorkflowStats.mockResolvedValue({
+      total: 5,
+      active: 5,
+      completed: 0,
+      failed: 0,
+    });
+    getCancelEligibleCount.mockResolvedValue(3);
+    cancelMatchingInstances.mockResolvedValue({
+      started: true,
+      cancelInstanceId: "a0G000000000002",
+    });
+
+    const element = createComponent();
+    await flushPromises();
+
+    // Find the button "Cancel Matching Active"
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "Cancel Matching Active");
+    button.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Check modal confirm button
+    const confirmButton = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "Cancel Instances");
+    expect(confirmButton).not.toBeNull();
+
+    // Listen to the showtoast event
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    confirmButton.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify cancelMatchingInstances was called with the snapshotted filters
+    expect(cancelMatchingInstances).toHaveBeenCalledWith({
+      workflowName: "",
+      status: "",
+      searchTerm: "",
+    });
+
+    // Verify modal is closed
+    const modal = element.shadowRoot.querySelector("section.slds-modal");
+    expect(modal).toBeNull();
+
+    // Verify toast was fired
+    expect(toastHandler).toHaveBeenCalled();
+    const toastEvent = toastHandler.mock.calls[0][0];
+    expect(toastEvent.detail.variant).toBe("success");
+    expect(toastEvent.detail.title).toBe("Success");
   });
 });

@@ -26,7 +26,8 @@ public inherited sharing class WorkflowPauseGate {
   private static final Set<String> RESERVED_NAMES = new Set<String>{
     'WatchdogWorkflow',
     'CleanupWorkflow',
-    'BulkRedriveWorkflow'
+    'BulkRedriveWorkflow',
+    'BulkCancelWorkflow'
   };
 
   // Transaction-scope cache: null = not yet loaded this tx
@@ -95,15 +96,13 @@ public inherited sharing class WorkflowPauseGate {
   // ──────────────────────────────────────────────────────────────────────────
   public static void pauseDefinition(String workflowName, String reason) {
     if (String.isBlank(workflowName)) {
-      throw new PauseException(
-        'workflowName must not be blank when pausing.'
-      );
+      throw new PauseException('workflowName must not be blank when pausing.');
     }
     if (isReserved(workflowName)) {
       throw new PauseException(
         'Cannot pause reserved engine workflow: ' +
-        workflowName +
-        '. Reserved workflows keep the engine running.'
+          workflowName +
+          '. Reserved workflows keep the engine running.'
       );
     }
     Workflow_Pause_State__c record = new Workflow_Pause_State__c(
@@ -121,9 +120,7 @@ public inherited sharing class WorkflowPauseGate {
   // ──────────────────────────────────────────────────────────────────────────
   public static void resumeDefinition(String workflowName) {
     if (String.isBlank(workflowName)) {
-      throw new PauseException(
-        'workflowName must not be blank when resuming.'
-      );
+      throw new PauseException('workflowName must not be blank when resuming.');
     }
 
     // Delete pause records
@@ -373,9 +370,7 @@ public inherited sharing class WorkflowPauseGate {
               )
             );
           } else {
-            if (
-              Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()
-            ) {
+            if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
               System.enqueueJob(
                 new WorkflowOrchestrator(inst.Id, branch.trim())
               );

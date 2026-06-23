@@ -9,6 +9,8 @@ import startWorkflow from "@salesforce/apex/WorkflowDashboardController.startWor
 import retryWorkflowInstance from "@salesforce/apex/WorkflowDashboardController.retryWorkflowInstance";
 import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardController.getRedriveEligibleCount";
 import redriveMatchingInstances from "@salesforce/apex/WorkflowDashboardController.redriveMatchingInstances";
+import getCancelEligibleCount from "@salesforce/apex/WorkflowDashboardController.getCancelEligibleCount";
+import cancelMatchingInstances from "@salesforce/apex/WorkflowDashboardController.cancelMatchingInstances";
 import resumeWorkflowInstance from "@salesforce/apex/WorkflowDashboardController.resumeWorkflowInstance";
 import resumeCompensationInstance from "@salesforce/apex/WorkflowDashboardController.resumeCompensationInstance";
 import cancelWorkflow from "@salesforce/apex/WorkflowDashboardController.cancelWorkflow";
@@ -130,6 +132,12 @@ export default class WorkflowDashboard extends LightningElement {
   redriveSnapshotName;
   redriveSnapshotStatus;
   redriveSnapshotSearchTerm;
+  cancelMatchingModalOpen = false;
+  cancellingMatching = false;
+  cancelMatchingCount = 0;
+  cancelSnapshotName;
+  cancelSnapshotStatus;
+  cancelSnapshotSearchTerm;
 
   wiredDefinitionsResult;
   pollingInterval;
@@ -475,6 +483,10 @@ export default class WorkflowDashboard extends LightningElement {
   // because LWC templates do not support inline conditional expressions.
   get redrivePluralSuffix() {
     return this.redriveCount === 1 ? "" : "s";
+  }
+
+  get cancelPluralSuffix() {
+    return this.cancelMatchingCount === 1 ? "" : "s";
   }
 
   // ────────────────────────────────────────────────────────────────────────
@@ -1233,6 +1245,15 @@ export default class WorkflowDashboard extends LightningElement {
     );
   }
 
+  get canCancelMatching() {
+    return (
+      this.stats &&
+      this.stats.active > 0 &&
+      !this.cancellingMatching &&
+      !this.showingStalled
+    );
+  }
+
   handleRedriveMatching() {
     if (this.redriving) {
       return;
@@ -1319,6 +1340,92 @@ export default class WorkflowDashboard extends LightningElement {
       })
       .finally(() => {
         this.redriving = false;
+      });
+  }
+
+  handleCancelMatching() {
+    if (this.cancellingMatching) {
+      return;
+    }
+    this.cancellingMatching = true;
+    this.cancelSnapshotName = this.selectedWorkflow;
+    this.cancelSnapshotStatus = this.selectedStatus;
+    this.cancelSnapshotSearchTerm = this.searchTerm;
+    getCancelEligibleCount({
+      workflowName: this.cancelSnapshotName,
+      status: this.cancelSnapshotStatus,
+      searchTerm: this.cancelSnapshotSearchTerm,
+    })
+      .then((count) => {
+        if (!count || count === 0) {
+          this.cancellingMatching = false;
+          this.showToast(
+            "Nothing to cancel",
+            "No active instances match the current filter.",
+            "info",
+          );
+          return;
+        }
+        this.cancelMatchingCount = count;
+        this.cancellingMatching = false;
+        this.cancelMatchingModalOpen = true;
+      })
+      .catch((error) => {
+        this.cancellingMatching = false;
+        this.showToast(
+          "Error",
+          "Failed to count cancel candidates: " +
+            (error.body ? error.body.message : error.message),
+          "error",
+        );
+      });
+  }
+
+  handleCancelMatchingModalClose() {
+    this.cancelMatchingModalOpen = false;
+  }
+
+  handleCancelMatchingModalConfirm() {
+    this.cancelMatchingModalOpen = false;
+    this.cancellingMatching = true;
+    cancelMatchingInstances({
+      workflowName: this.cancelSnapshotName,
+      status: this.cancelSnapshotStatus,
+      searchTerm: this.cancelSnapshotSearchTerm,
+    })
+      .then((outcome) => {
+        if (!outcome) {
+          return;
+        }
+        if (outcome.started) {
+          this.showToast(
+            "Success",
+            `Cancellation requested for ${outcome.eligibleCount} active instance${outcome.eligibleCount === 1 ? "" : "s"}. ` +
+              "Progress is shown in the detail panel below.",
+            "success",
+          );
+          this.selectedInstanceId = outcome.cancelInstanceId;
+          this.refreshInstances();
+          this.loadDetails(true);
+          this.startPolling();
+        } else {
+          this.showToast(
+            "Nothing to cancel",
+            "No active instances match the current filter.",
+            "info",
+          );
+        }
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to cancel matching instances: " +
+            (error.body ? error.body.message : error.message),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.cancellingMatching = false;
       });
   }
 

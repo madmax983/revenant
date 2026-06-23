@@ -1210,7 +1210,8 @@ public inherited sharing class WorkflowDashboardController {
       // merely mention @isTest in a comment (e.g. the AI examples).
       if (
         ac.Name.toLowerCase().endsWith('test') ||
-        ac.Name.equalsIgnoreCase('BulkRedriveWorkflow')
+        ac.Name.equalsIgnoreCase('BulkRedriveWorkflow') ||
+        ac.Name.equalsIgnoreCase('BulkCancelWorkflow')
       ) {
         continue;
       }
@@ -1289,7 +1290,8 @@ public inherited sharing class WorkflowDashboardController {
         : className;
       if (
         outerClass.toLowerCase().endsWith('test') ||
-        className.equalsIgnoreCase('BulkRedriveWorkflow')
+        className.equalsIgnoreCase('BulkRedriveWorkflow') ||
+        className.equalsIgnoreCase('BulkCancelWorkflow')
       ) {
         continue;
       }
@@ -1442,6 +1444,92 @@ public inherited sharing class WorkflowDashboardController {
       System.debug(
         LoggingLevel.ERROR,
         'Aura redriveMatchingInstances failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  /**
+   * Exact count of active/stalled instances that a "Cancel matching" action would
+   * cancel/rollback for the operator's CURRENT filter.
+   */
+  @AuraEnabled
+  public static Integer getCancelEligibleCount(
+    String workflowName,
+    String status,
+    String searchTerm
+  ) {
+    checkAuthorization();
+    try {
+      return BulkCancelWorkflow.countEligible(workflowName, status, searchTerm);
+    } catch (Exception ex) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura getCancelEligibleCount failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  /**
+   * Cancels every active or stalled instance matching the operator's current filter
+   * in a single bounded action. The actual cancellation runs asynchronously as a
+   * BulkCancelWorkflow instance.
+   */
+  @AuraEnabled
+  public static Map<String, Object> cancelMatchingInstances(
+    String workflowName,
+    String status,
+    String searchTerm,
+    Boolean runCompensations
+  ) {
+    checkAuthorization();
+    try {
+      Integer eligibleCount = BulkCancelWorkflow.countEligible(
+        workflowName,
+        status,
+        searchTerm
+      );
+      if (eligibleCount == 0) {
+        return new Map<String, Object>{
+          'started' => false,
+          'eligibleCount' => 0,
+          'cancelInstanceId' => null
+        };
+      }
+
+      Map<String, Object> filter = new Map<String, Object>{
+        'workflowName' => workflowName,
+        'status' => status,
+        'searchTerm' => searchTerm,
+        'runCompensations' => runCompensations
+      };
+      String correlationKey =
+        'BulkCancel_' +
+        DateTime.now().getTime() +
+        '_' +
+        Math.abs(Crypto.getRandomLong());
+      Id cancelInstanceId = WorkflowEngine.start(
+        BulkCancelWorkflow.CANCELER_WORKFLOW_NAME,
+        correlationKey,
+        filter
+      );
+
+      return new Map<String, Object>{
+        'started' => true,
+        'eligibleCount' => eligibleCount,
+        'cancelInstanceId' => cancelInstanceId
+      };
+    } catch (Exception ex) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura cancelMatchingInstances failed: ' +
           ex.getMessage() +
           '\n' +
           ex.getStackTraceString()
