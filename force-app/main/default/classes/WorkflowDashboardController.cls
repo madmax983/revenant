@@ -220,12 +220,24 @@ public inherited sharing class WorkflowDashboardController {
     String status,
     String searchTerm
   ) {
+    return buildWhereClause(workflowName, status, searchTerm, null);
+  }
+
+  private static String buildWhereClause(
+    String workflowName,
+    String status,
+    String searchTerm,
+    String failureCategory
+  ) {
     List<String> conditions = new List<String>();
     if (String.isNotBlank(workflowName)) {
       conditions.add('Workflow_Name__c = :workflowName');
     }
     if (String.isNotBlank(status)) {
       conditions.add('Status__c = :status');
+    }
+    if (String.isNotBlank(failureCategory)) {
+      conditions.add('Failure_Category__c = :failureCategory');
     }
     if (String.isNotBlank(searchTerm)) {
       likeTerm = '%' + searchTerm + '%';
@@ -268,11 +280,31 @@ public inherited sharing class WorkflowDashboardController {
     return String.join(conditions, ' AND ');
   }
 
+  public static List<Map<String, Object>> getFilteredInstances(
+    String workflowName,
+    String status,
+    String searchTerm,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster
+  ) {
+    return getFilteredInstances(
+      workflowName,
+      status,
+      searchTerm,
+      null,
+      limitSize,
+      offsetSize,
+      cacheBuster
+    );
+  }
+
   @AuraEnabled(cacheable=true)
   public static List<Map<String, Object>> getFilteredInstances(
     String workflowName,
     String status,
     String searchTerm,
+    String failureCategory,
     Integer limitSize,
     Integer offsetSize,
     String cacheBuster
@@ -292,9 +324,9 @@ public inherited sharing class WorkflowDashboardController {
     }
 
     String query =
-      'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c, Deadline_At__c ' +
+      'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c, Deadline_At__c, Failure_Category__c ' +
       'FROM Workflow_Instance__c' +
-      buildWhereClause(workflowName, status, searchTerm);
+      buildWhereClause(workflowName, status, searchTerm, failureCategory);
 
     query += ' ORDER BY CreatedDate DESC LIMIT :limitSize OFFSET :offsetSize';
 
@@ -344,6 +376,7 @@ public inherited sharing class WorkflowDashboardController {
         'Async_Job_Id__c' => inst.Async_Job_Id__c,
         'Sleep_Until__c' => inst.Sleep_Until__c,
         'Deadline_At__c' => inst.Deadline_At__c,
+        'Failure_Category__c' => inst.Failure_Category__c,
         'waitingOn' => waitingOn,
         'idleMinutes' => idleMinutes,
         'stalled' => stalled
@@ -930,7 +963,8 @@ public inherited sharing class WorkflowDashboardController {
         Async_Job_Id__c,
         Sleep_Until__c,
         Compensation_Stack__c,
-        Deadline_At__c
+        Deadline_At__c,
+        Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE

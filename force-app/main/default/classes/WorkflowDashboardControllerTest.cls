@@ -3105,4 +3105,69 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(1, unroutedSigs.size(), 'Should find 1 unrouted signal');
     System.assertEquals(1, (Integer) unroutedCountResult.get('count'), 'Should count 1 unrouted signal');
   }
+
+  @isTest
+  static void testFailureCategoryFiltering() {
+    List<Workflow_Instance__c> testInstances = new List<Workflow_Instance__c>{
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'TestDefA',
+        Status__c = 'Failed',
+        Correlation_Key__c = 'TimeoutKey',
+        Failure_Category__c = 'TIMEOUT'
+      ),
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'TestDefA',
+        Status__c = 'Failed',
+        Correlation_Key__c = 'StepExceptionKey',
+        Failure_Category__c = 'STEP_EXCEPTION'
+      ),
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'TestDefB',
+        Status__c = 'Failed',
+        Correlation_Key__c = 'RetriesExhaustedKey',
+        Failure_Category__c = 'RETRIES_EXHAUSTED'
+      )
+    };
+    insert testInstances;
+
+    Test.startTest();
+    // Calls the 7-parameter WorkflowDashboardController.getFilteredInstances with failureCategory = 'TIMEOUT'
+    List<Map<String, Object>> resCategory = WorkflowDashboardController.getFilteredInstances(
+      '',
+      'Failed',
+      '',
+      'TIMEOUT',
+      10,
+      0,
+      'cb'
+    );
+
+    // Calls WorkflowDashboardController.getInstanceDetails for the first instance
+    Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(testInstances[0].Id);
+
+    // Calls the 6-parameter WorkflowDashboardController.getFilteredInstances with searchTerm = 'StepExceptionKey'
+    List<Map<String, Object>> resSearch = WorkflowDashboardController.getFilteredInstances(
+      '',
+      '',
+      'StepExceptionKey',
+      10,
+      0,
+      'cb'
+    );
+    Test.stopTest();
+
+    // asserts only the matching instance is returned and contains the correct category
+    System.assertEquals(1, resCategory.size(), 'Should find exactly 1 instance for TIMEOUT category');
+    System.assertEquals(testInstances[0].Id, (Id) resCategory[0].get('Id'), 'Should return the correct instance');
+    System.assertEquals('TIMEOUT', (String) resCategory[0].get('Failure_Category__c'), 'Should contain the correct failure category');
+
+    // asserts Failure_Category__c equals 'TIMEOUT'
+    Workflow_Instance__c returnedInst = (Workflow_Instance__c) details.get('instance');
+    System.assertNotEquals(null, returnedInst, 'Returned instance details should not be null');
+    System.assertEquals('TIMEOUT', returnedInst.Failure_Category__c, 'Failure_Category__c should be TIMEOUT');
+
+    // asserts the matching instance is returned
+    System.assertEquals(1, resSearch.size(), 'Should find exactly 1 instance matching StepExceptionKey searchTerm');
+    System.assertEquals(testInstances[1].Id, (Id) resSearch[0].get('Id'), 'Should return the correct instance matching search term');
+  }
 }

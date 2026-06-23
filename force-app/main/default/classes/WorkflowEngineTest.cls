@@ -738,12 +738,13 @@ public class WorkflowEngineTest {
     System.assertEquals(3, step.Retry_Count__c);
 
     Workflow_Instance__c inst = [
-      SELECT Status__c, Error_Message__c
+      SELECT Status__c, Error_Message__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
     System.assertEquals('Failed', inst.Status__c);
     System.assert(inst.Error_Message__c.contains('Max retries exceeded'));
+    System.assertEquals('RETRIES_EXHAUSTED', inst.Failure_Category__c);
   }
 
   @isTest
@@ -776,12 +777,13 @@ public class WorkflowEngineTest {
     System.assert(threw, 'Should have thrown exception');
 
     inst = [
-      SELECT Status__c, Error_Message__c
+      SELECT Status__c, Error_Message__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
     System.assertEquals('Failed', inst.Status__c);
     System.assert(inst.Error_Message__c.contains('Simulated Crash'));
+    System.assertEquals('STEP_EXCEPTION', inst.Failure_Category__c);
 
     Workflow_Step_Execution__c step = [
       SELECT Status__c, Error_Details__c
@@ -916,12 +918,13 @@ public class WorkflowEngineTest {
     new WorkflowOrchestrator(instanceId).execute(null);
 
     Workflow_Instance__c inst = [
-      SELECT Status__c, Error_Message__c, Current_Step__c
+      SELECT Status__c, Error_Message__c, Current_Step__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
     System.assertEquals('Failed', inst.Status__c, 'Should be failed');
     System.assertNotEquals(null, inst.Error_Message__c);
+    System.assertEquals('RETRIES_EXHAUSTED', inst.Failure_Category__c);
 
     Workflow_Step_Execution__c stepExec = [
       SELECT Status__c, Retry_Count__c, Error_Details__c
@@ -942,7 +945,7 @@ public class WorkflowEngineTest {
     Test.stopTest();
 
     Workflow_Instance__c retriedInst = [
-      SELECT Status__c, Error_Message__c
+      SELECT Status__c, Error_Message__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
@@ -952,6 +955,7 @@ public class WorkflowEngineTest {
       'Should complete successfully now'
     );
     System.assertEquals(null, retriedInst.Error_Message__c);
+    System.assertEquals(null, retriedInst.Failure_Category__c);
   }
 
   @isTest
@@ -997,7 +1001,7 @@ public class WorkflowEngineTest {
 
     // Check if both records are marked Failed
     Workflow_Instance__c timedOutInst = [
-      SELECT Status__c, Error_Message__c
+      SELECT Status__c, Error_Message__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
@@ -1006,6 +1010,7 @@ public class WorkflowEngineTest {
       'Failed at step WorkflowEngineTest.TimeoutStep: Step execution timed out.',
       timedOutInst.Error_Message__c
     );
+    System.assertEquals('TIMEOUT', timedOutInst.Failure_Category__c);
 
     Workflow_Step_Execution__c timedOutStep = [
       SELECT Status__c, Error_Details__c
@@ -1680,7 +1685,7 @@ public class WorkflowEngineTest {
     Test.stopTest();
 
     Workflow_Instance__c failedInst = [
-      SELECT Status__c, Error_Message__c, Sleep_Until__c, Async_Job_Id__c
+      SELECT Status__c, Error_Message__c, Sleep_Until__c, Async_Job_Id__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
@@ -1690,6 +1695,7 @@ public class WorkflowEngineTest {
     System.assert(
       failedInst.Error_Message__c.contains('failed after max retries')
     );
+    System.assertEquals('COMPENSATION_FAILED', failedInst.Failure_Category__c);
     // The elapsed retry deadline must be cleared so the watchdog cannot prematurely
     // wake a remaining SUSPEND/approval gate once the rollback is resumed.
     System.assertEquals(null, failedInst.Sleep_Until__c);
@@ -1711,11 +1717,12 @@ public class WorkflowEngineTest {
     WorkflowEngine.runStep(inst.Id, null); // Stack empty -> transition status to Compensated
 
     Workflow_Instance__c retriedInst = [
-      SELECT Status__c, Error_Message__c
+      SELECT Status__c, Error_Message__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
     System.assertEquals('Compensated', retriedInst.Status__c);
+    System.assertEquals(null, retriedInst.Failure_Category__c);
 
     // Append-only: the original failed attempt's record is preserved untouched.
     Workflow_Step_Execution__c preservedFailedExec = [
@@ -3008,12 +3015,13 @@ public class WorkflowEngineTest {
 
     // Verify instance status transitions to Failed and does not get stuck in Compensating
     Workflow_Instance__c timedOutInst = [
-      SELECT Status__c, Error_Message__c, Compensation_Stack__c
+      SELECT Status__c, Error_Message__c, Compensation_Stack__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
     System.assertEquals('CompensationFailed', timedOutInst.Status__c);
     System.assert(timedOutInst.Error_Message__c.contains('timed out'));
+    System.assertEquals('COMPENSATION_FAILED', timedOutInst.Failure_Category__c);
     // Compensation stack should NOT be popped
     List<String> stack = (List<String>) JSON.deserialize(
       timedOutInst.Compensation_Stack__c,
@@ -3043,7 +3051,7 @@ public class WorkflowEngineTest {
 
     // Verify instance transitions to Failed and does not pop the stack
     Workflow_Instance__c failedInst = [
-      SELECT Status__c, Error_Message__c, Compensation_Stack__c
+      SELECT Status__c, Error_Message__c, Compensation_Stack__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
@@ -3051,6 +3059,7 @@ public class WorkflowEngineTest {
     System.assert(
       failedInst.Error_Message__c.contains('Compensation crash simulation')
     );
+    System.assertEquals('COMPENSATION_FAILED', failedInst.Failure_Category__c);
 
     List<String> stack = (List<String>) JSON.deserialize(
       failedInst.Compensation_Stack__c,

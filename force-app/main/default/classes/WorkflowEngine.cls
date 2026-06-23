@@ -7,6 +7,14 @@ public inherited sharing class WorkflowEngine {
   // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
   public static Boolean publishLifecycleEvents = true;
 
+  // Failure Category picklist API values
+  public static final String CAT_STEP_EXCEPTION = 'STEP_EXCEPTION';
+  public static final String CAT_RETRIES_EXHAUSTED = 'RETRIES_EXHAUSTED';
+  public static final String CAT_TIMEOUT = 'TIMEOUT';
+  public static final String CAT_COMPENSATION_FAILED = 'COMPENSATION_FAILED';
+  public static final String CAT_EXPLICIT_FAIL = 'EXPLICIT_FAIL';
+  public static final String CAT_UNKNOWN = 'UNKNOWN';
+
   // Get-or-start dedup window in minutes. Redelivered starts whose correlation
   // key matches a terminal instance that became terminal within this many
   // minutes resolve to that instance instead of spawning a duplicate. Set to 0
@@ -2170,7 +2178,8 @@ public inherited sharing class WorkflowEngine {
         Previous_Run_At__c,
         Concurrency_Slot_Held__c,
         Concurrency_Parked__c,
-        CreatedDate
+        CreatedDate,
+        Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -4026,7 +4035,8 @@ public inherited sharing class WorkflowEngine {
         failWorkflowInstance(
           instance.Id,
           instance.Current_Step__c,
-          'Max retries exceeded.'
+          'Max retries exceeded.',
+          CAT_RETRIES_EXHAUSTED
         );
       } else {
         stepExec.Status__c = 'Retrying';
@@ -4205,7 +4215,8 @@ public inherited sharing class WorkflowEngine {
       failWorkflowInstance(
         instance.Id,
         stepExec.Step_Name__c,
-        result.failureReason
+        result.failureReason,
+        CAT_EXPLICIT_FAIL
       );
     }
   }
@@ -4372,7 +4383,7 @@ public inherited sharing class WorkflowEngine {
     String errorMsg =
       'Transaction crashed: ' +
       (ex != null ? ex.getMessage() : 'Unknown governor limit');
-    failWorkflowInstance(instanceId, targetStepName, errorMsg);
+    failWorkflowInstance(instanceId, targetStepName, errorMsg, CAT_STEP_EXCEPTION);
   }
 
   /**
@@ -4510,6 +4521,15 @@ public inherited sharing class WorkflowEngine {
     String stepName,
     String errorMessage
   ) {
+    failWorkflowInstance(instanceId, stepName, errorMessage, CAT_UNKNOWN);
+  }
+
+  public static void failWorkflowInstance(
+    Id instanceId,
+    String stepName,
+    String errorMessage,
+    String failureCategory
+  ) {
     List<Workflow_Instance__c> instances = [
       SELECT
         Id,
@@ -4519,7 +4539,8 @@ public inherited sharing class WorkflowEngine {
         Compensation_Stack__c,
         Workflow_Name__c,
         Correlation_Key__c,
-        Root_Correlation_Key__c
+        Root_Correlation_Key__c,
+        Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -4543,6 +4564,7 @@ public inherited sharing class WorkflowEngine {
 
     if (!hasCompensations) {
       instance.Status__c = 'Failed';
+      instance.Failure_Category__c = failureCategory;
       instance.Error_Message__c = ('Failed at step ' +
         stepName +
         ': ' +
@@ -4576,6 +4598,7 @@ public inherited sharing class WorkflowEngine {
         (instance.Error_Message__c != null &&
         instance.Error_Message__c.contains('Cancelled by user'));
       instance.Status__c = 'CompensationFailed';
+      instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
       instance.Error_Message__c = buildRollbackIncompleteMessage(
           wasCancelling,
           'Rollback incomplete at compensation step ' +
@@ -5591,7 +5614,8 @@ public inherited sharing class WorkflowEngine {
         Current_Step__c,
         Error_Message__c,
         Compensation_Stack__c,
-        Workflow_Name__c
+        Workflow_Name__c,
+        Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -5686,6 +5710,7 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c = 'Running';
     }
     instance.Error_Message__c = null;
+    instance.Failure_Category__c = null;
     update as system instance;
 
     // Enqueue the orchestrator to resume execution
@@ -5755,7 +5780,7 @@ public inherited sharing class WorkflowEngine {
    */
   public static void resumeCompensation(Id instanceId) {
     List<Workflow_Instance__c> instances = [
-      SELECT Id, Status__c, Compensation_Stack__c, Error_Message__c
+      SELECT Id, Status__c, Compensation_Stack__c, Error_Message__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId AND Status__c = 'CompensationFailed'
       WITH SYSTEM_MODE
@@ -5783,6 +5808,7 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c = 'Compensated';
       instance.Current_Step__c = null;
       instance.Error_Message__c = null;
+      instance.Failure_Category__c = null;
       update as system instance;
       return;
     }
@@ -5808,6 +5834,7 @@ public inherited sharing class WorkflowEngine {
       : null;
     instance.Sleep_Until__c = null;
     instance.Async_Job_Id__c = null;
+    instance.Failure_Category__c = null;
     update as system instance;
 
     // Append-only: create a FRESH pending compensation attempt for the stalled
@@ -6419,6 +6446,7 @@ public inherited sharing class WorkflowEngine {
         // state (resumable by an operator) instead of abandoning the deeper steps.
         Boolean wasCancelling = (instance.Status__c == 'Cancelling');
         instance.Status__c = 'CompensationFailed';
+        instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
         instance.Error_Message__c = buildRollbackIncompleteMessage(
             wasCancelling,
             'Rollback incomplete: compensation step ' +
@@ -6467,6 +6495,7 @@ public inherited sharing class WorkflowEngine {
 
       Boolean wasCancellingFail = (instance.Status__c == 'Cancelling');
       instance.Status__c = 'CompensationFailed';
+      instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
       instance.Error_Message__c = buildRollbackIncompleteMessage(
           wasCancellingFail,
           'Rollback incomplete: compensation step ' +
@@ -6490,6 +6519,7 @@ public inherited sharing class WorkflowEngine {
       // Remaining stack is intact; leave the saga recoverable rather than abandoning it.
       Boolean wasCancelling = (instance.Status__c == 'Cancelling');
       instance.Status__c = 'CompensationFailed';
+      instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
       instance.Error_Message__c = buildRollbackIncompleteMessage(
           wasCancelling,
           'Rollback incomplete: compensation step ' +
@@ -7267,7 +7297,8 @@ public inherited sharing class WorkflowEngine {
             Error_Message__c,
             Workflow_Name__c,
             Correlation_Key__c,
-            Root_Correlation_Key__c
+            Root_Correlation_Key__c,
+            Failure_Category__c
           FROM Workflow_Instance__c
           WHERE Id IN :instanceIds
           WITH SYSTEM_MODE
@@ -7380,6 +7411,7 @@ public inherited sharing class WorkflowEngine {
             // state rather than abandoning the deeper compensations.
             Boolean wasCancelling = (parent.Status__c == 'Cancelling');
             parent.Status__c = 'CompensationFailed';
+            parent.Failure_Category__c = CAT_COMPENSATION_FAILED;
             parent.Error_Message__c = buildRollbackIncompleteMessage(
               wasCancelling,
               'Rollback incomplete at compensation step ' +
@@ -7394,6 +7426,7 @@ public inherited sharing class WorkflowEngine {
             instancesToUpdate.put(parent.Id, parent);
           } else if (!hasCompensations) {
             parent.Status__c = 'Failed';
+            parent.Failure_Category__c = CAT_TIMEOUT;
             parent.Error_Message__c =
               'Failed at step ' +
               step.Step_Name__c +
@@ -7525,7 +7558,8 @@ public inherited sharing class WorkflowEngine {
         Workflow_Name__c,
         Correlation_Key__c,
         Root_Correlation_Key__c,
-        Current_Step__c
+        Current_Step__c,
+        Failure_Category__c
       FROM Workflow_Instance__c
       WHERE
         Status__c IN ('Pending', 'Running', 'Suspended')
@@ -7579,6 +7613,7 @@ public inherited sharing class WorkflowEngine {
           deadlineOrchestratorIds.add(inst.Id);
         } else {
           inst.Status__c = 'Failed';
+          inst.Failure_Category__c = CAT_TIMEOUT;
           inst.Error_Message__c = 'Execution deadline exceeded';
           instancesToFail.add(inst);
           watchdogTerminalInstances.add(inst);

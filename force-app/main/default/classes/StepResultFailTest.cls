@@ -156,7 +156,7 @@ public class StepResultFailTest {
     );
 
     Workflow_Instance__c inst = [
-      SELECT Status__c, Error_Message__c, Terminal_At__c
+      SELECT Status__c, Error_Message__c, Terminal_At__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
@@ -166,6 +166,7 @@ public class StepResultFailTest {
       'Author reason must appear verbatim in Error_Message__c, got: ' +
       inst.Error_Message__c
     );
+    System.assertEquals('EXPLICIT_FAIL', inst.Failure_Category__c);
     System.assertNotEquals(
       null,
       inst.Terminal_At__c,
@@ -217,7 +218,7 @@ public class StepResultFailTest {
     );
 
     Workflow_Instance__c inst = [
-      SELECT Status__c, Error_Message__c, Terminal_At__c
+      SELECT Status__c, Error_Message__c, Terminal_At__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
@@ -227,6 +228,7 @@ public class StepResultFailTest {
       'Author reason must appear verbatim in Error_Message__c, got: ' +
       inst.Error_Message__c
     );
+    System.assertEquals(null, inst.Failure_Category__c);
     System.assertNotEquals(null, inst.Terminal_At__c);
 
     // The failing forward step took zero retry hops.
@@ -330,7 +332,7 @@ public class StepResultFailTest {
     );
 
     Workflow_Instance__c inst = [
-      SELECT Status__c, Error_Message__c
+      SELECT Status__c, Error_Message__c, Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
@@ -340,6 +342,7 @@ public class StepResultFailTest {
       'Author compensation reason must appear in Error_Message__c, got: ' +
       inst.Error_Message__c
     );
+    System.assertEquals('COMPENSATION_FAILED', inst.Failure_Category__c);
 
     Workflow_Step_Execution__c compStep = [
       SELECT Status__c, Error_Details__c
