@@ -293,4 +293,407 @@ public class WorkflowWatchdogTest {
       'Watchdog must not create fallback exec after bulk signal wins'
     );
   }
+
+  private static Workflow_Alert_Config__mdt createMockStallConfig(
+    String devName,
+    String recipients,
+    Boolean enabled,
+    Integer stallThresholdMinutes
+  ) {
+    Map<String, Object> fields = new Map<String, Object>{
+      'DeveloperName' => devName,
+      'Email_Recipients__c' => recipients,
+      'Enable_Alerts__c' => enabled,
+      'Stall_Threshold_Minutes__c' => stallThresholdMinutes
+    };
+    return (Workflow_Alert_Config__mdt) JSON.deserialize(
+      JSON.serialize(fields),
+      Workflow_Alert_Config__mdt.class
+    );
+  }
+
+  @isTest
+  static void testWatchdogStallAlertBasicAndDedup() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Mock Config with Stall Threshold = 10 minutes
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockStallConfig('WorkflowEngineTest_HappyWorkflow', 'ops@test.com', true, 10)
+    );
+
+    // 2. Create a stalled instance
+    Workflow_Instance__c stalledInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running'
+    );
+    insert stalledInst;
+
+    // Backdate the instance CreatedDate to 15 minutes ago
+    Datetime fifteenMinsAgo = DateTime.now().addMinutes(-15);
+    Test.setCreatedDate(stalledInst.Id, fifteenMinsAgo);
+
+    // Create a step execution backdated to 15 minutes ago as well
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = stalledInst.Id,
+      Step_Name__c = 'Step1',
+      Status__c = 'Completed'
+    );
+    insert step;
+    Test.setCreatedDate(step.Id, fifteenMinsAgo);
+
+    // Reset alert counter
+    WorkflowAlertManager.sentEmailsCount = 0;
+
+    // Run watchdog heartbeat -> should detect stall and send alert
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    System.assertEquals(1, WorkflowAlertManager.sentEmailsCount, 'Stall alert should be sent');
+
+    // Verify dedup marker (Workflow_Log__c) exists
+    List<Workflow_Log__c> logs = [
+      SELECT Id, Log_Type__c, Message__c
+      FROM Workflow_Log__c
+      WHERE Workflow_Instance__c = :stalledInst.Id
+    ];
+    System.assertEquals(1, logs.size(), 'Dedup log should be written');
+    System.assertEquals('WorkflowStallAlert', logs[0].Log_Type__c);
+
+    // Run watchdog heartbeat again -> should NOT send duplicate alert
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowEngine.processWatchdogHeartbeat();
+    System.assertEquals(0, WorkflowAlertManager.sentEmailsCount, 'Should not send duplicate alert');
+  }
+
+  @isTest
+  static void testWatchdogStallAlertResumeAndStallAgain() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Mock Config
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockStallConfig('WorkflowEngineTest_HappyWorkflow', 'ops@test.com', true, 10)
+    );
+
+    // Create stalled instance
+    Workflow_Instance__c stalledInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running'
+    );
+    insert stalledInst;
+
+    Datetime fifteenMinsAgo = DateTime.now().addMinutes(-15);
+    Test.setCreatedDate(stalledInst.Id, fifteenMinsAgo);
+
+    Workflow_Step_Execution__c step1 = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = stalledInst.Id,
+      Step_Name__c = 'Step1',
+      Status__c = 'Completed'
+    );
+    insert step1;
+    Test.setCreatedDate(step1.Id, fifteenMinsAgo);
+
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowEngine.processWatchdogHeartbeat();
+    System.assertEquals(1, WorkflowAlertManager.sentEmailsCount, 'First stall alert sent');
+
+    // Retrieve and backdate the stall alert log so it is older than step2's timestamp
+    List<Workflow_Log__c> logs = [
+      SELECT Id, CreatedDate
+      FROM Workflow_Log__c
+      WHERE Workflow_Instance__c = :stalledInst.Id AND Log_Type__c = 'WorkflowStallAlert'
+    ];
+    System.assertEquals(1, logs.size());
+    Datetime fourteenMinsAgo = DateTime.now().addMinutes(-14);
+    Test.setCreatedDate(logs[0].Id, fourteenMinsAgo);
+
+    // Simulate forward progress by inserting a new step execution created 5 minutes ago (newer than the alert)
+    Datetime fiveMinsAgo = DateTime.now().addMinutes(-5);
+    Workflow_Step_Execution__c step2 = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = stalledInst.Id,
+      Step_Name__c = 'Step2',
+      Status__c = 'Running'
+    );
+    insert step2;
+    Test.setCreatedDate(step2.Id, fiveMinsAgo);
+
+    // Run watchdog -> should NOT alert because the latest progress is only 5 minutes old (threshold is 10)
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowEngine.processWatchdogHeartbeat();
+    System.assertEquals(0, WorkflowAlertManager.sentEmailsCount, 'Should not alert before threshold reached');
+
+    // Now backdate the new step execution to 12 minutes ago (so it is now stalled again)
+    Datetime twelveMinsAgo = DateTime.now().addMinutes(-12);
+    Test.setCreatedDate(step2.Id, twelveMinsAgo);
+
+    // Run watchdog -> should alert again because it stalled again
+    WorkflowEngine.processWatchdogHeartbeat();
+    System.assertEquals(1, WorkflowAlertManager.sentEmailsCount, 'Second stall alert should be sent');
+  }
+
+  @isTest
+  static void testWatchdogStallAlertLegitimateSleepExclusion() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Mock Config
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockStallConfig('WorkflowEngineTest_HappyWorkflow', 'ops@test.com', true, 10)
+    );
+
+    // Create a suspended instance that is legitimately sleeping until 10 minutes in the future
+    Workflow_Instance__c sleepingInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Sleep_Until__c = DateTime.now().addMinutes(10)
+    );
+    insert sleepingInst;
+
+    // Backdate CreatedDate to 15 minutes ago
+    Datetime fifteenMinsAgo = DateTime.now().addMinutes(-15);
+    Test.setCreatedDate(sleepingInst.Id, fifteenMinsAgo);
+
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowEngine.processWatchdogHeartbeat();
+    System.assertEquals(0, WorkflowAlertManager.sentEmailsCount, 'Legitimate sleeper should not alert');
+  }
+
+  @isTest
+  static void testWatchdogStallAlertApprovalWaitExclusion() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Mock Config
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockStallConfig('WorkflowEngineTest_HappyWorkflow', 'ops@test.com', true, 10)
+    );
+
+    // Create a suspended instance
+    Workflow_Instance__c waitingInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended'
+    );
+    insert waitingInst;
+
+    // Backdate CreatedDate to 15 minutes ago
+    Datetime fifteenMinsAgo = DateTime.now().addMinutes(-15);
+    Test.setCreatedDate(waitingInst.Id, fifteenMinsAgo);
+
+    // Create a pending step execution representing an active approval wait
+    Workflow_Step_Execution__c pendingStep = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = waitingInst.Id,
+      Step_Name__c = 'Step1',
+      Status__c = 'Pending'
+    );
+    insert pendingStep;
+    Test.setCreatedDate(pendingStep.Id, fifteenMinsAgo);
+
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowEngine.processWatchdogHeartbeat();
+    System.assertEquals(0, WorkflowAlertManager.sentEmailsCount, 'Sleeper waiting on pending approval step should not alert');
+  }
+
+  @isTest
+  static void testWatchdogStallAlertPausedDefinitionExclusion() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Mock Config
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockStallConfig('WorkflowEngineTest_HappyWorkflow', 'ops@test.com', true, 10)
+    );
+
+    // Create a stalled instance
+    Workflow_Instance__c stalledInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running'
+    );
+    insert stalledInst;
+
+    // Backdate CreatedDate to 15 minutes ago
+    Datetime fifteenMinsAgo = DateTime.now().addMinutes(-15);
+    Test.setCreatedDate(stalledInst.Id, fifteenMinsAgo);
+
+    // Pause the definition
+    WorkflowPauseGate.pauseDefinition('WorkflowEngineTest.HappyWorkflow', 'test');
+
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowEngine.processWatchdogHeartbeat();
+    System.assertEquals(0, WorkflowAlertManager.sentEmailsCount, 'Stalled instance on a paused definition should not alert');
+  }
+
+  @isTest
+  static void testWatchdogStallAlertCaseInsensitiveResolution() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Mock Config using lowercase DeveloperName
+    WorkflowAlertManager.mockConfigs.put(
+      'workflowenginetest_happyworkflow',
+      createMockStallConfig('workflowenginetest_happyworkflow', 'ops@test.com', true, 10)
+    );
+
+    // Create stalled instance with mixed case name
+    Workflow_Instance__c stalledInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running'
+    );
+    insert stalledInst;
+
+    Datetime fifteenMinsAgo = DateTime.now().addMinutes(-15);
+    Test.setCreatedDate(stalledInst.Id, fifteenMinsAgo);
+
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowEngine.processWatchdogHeartbeat();
+
+    System.assertEquals(1, WorkflowAlertManager.sentEmailsCount, 'Stall alert should be sent using case-insensitive config matching');
+  }
+
+  @isTest
+  static void testWatchdogStallAlertDefaultFallback() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Mock 'Default' config ONLY
+    WorkflowAlertManager.mockConfigs.put(
+      'Default',
+      createMockStallConfig('Default', 'ops@test.com', true, 10)
+    );
+
+    // Create stalled instance with a completely unmatched name
+    Workflow_Instance__c stalledInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.SomeRandomWorkflow',
+      Status__c = 'Running'
+    );
+    insert stalledInst;
+
+    Datetime fifteenMinsAgo = DateTime.now().addMinutes(-15);
+    Test.setCreatedDate(stalledInst.Id, fifteenMinsAgo);
+
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowEngine.processWatchdogHeartbeat();
+
+    System.assertEquals(1, WorkflowAlertManager.sentEmailsCount, 'Stall alert should fallback to Default configuration');
+  }
+
+  @isTest
+  static void testWatchdogStallAlertEmptyEmailHandling() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Mock Config with empty email list
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockStallConfig('WorkflowEngineTest_HappyWorkflow', '', true, 10)
+    );
+
+    // Create stalled instance
+    Workflow_Instance__c stalledInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running'
+    );
+    insert stalledInst;
+
+    Datetime fifteenMinsAgo = DateTime.now().addMinutes(-15);
+    Test.setCreatedDate(stalledInst.Id, fifteenMinsAgo);
+
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowEngine.processWatchdogHeartbeat();
+
+    // No emails should be sent
+    System.assertEquals(0, WorkflowAlertManager.sentEmailsCount, 'No emails should be sent when recipients list is empty');
+
+    // But warning log should still be recorded
+    List<Workflow_Log__c> logs = [
+      SELECT Id, Log_Type__c
+      FROM Workflow_Log__c
+      WHERE Workflow_Instance__c = :stalledInst.Id AND Log_Type__c = 'WorkflowStallAlert'
+    ];
+    System.assertEquals(1, logs.size(), 'Warning log marker should still be recorded');
+  }
+
+  @isTest
+  static void testWatchdogStallAlertBulkStallHandling() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Mock configs
+    WorkflowAlertManager.mockConfigs.put(
+      'Workflow1',
+      createMockStallConfig('Workflow1', 'ops@test.com', true, 10)
+    );
+    WorkflowAlertManager.mockConfigs.put(
+      'Workflow2',
+      createMockStallConfig('Workflow2', 'ops@test.com', true, 10)
+    );
+
+    // Create two stalled instances
+    Workflow_Instance__c inst1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'Workflow1',
+      Status__c = 'Running'
+    );
+    Workflow_Instance__c inst2 = new Workflow_Instance__c(
+      Workflow_Name__c = 'Workflow2',
+      Status__c = 'Running'
+    );
+    insert new List<Workflow_Instance__c>{ inst1, inst2 };
+
+    Datetime fifteenMinsAgo = DateTime.now().addMinutes(-15);
+    Test.setCreatedDate(inst1.Id, fifteenMinsAgo);
+    Test.setCreatedDate(inst2.Id, fifteenMinsAgo);
+
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowEngine.processWatchdogHeartbeat();
+
+    System.assertEquals(2, WorkflowAlertManager.sentEmailsCount, 'Stall alerts for both instances should be sent in bulk');
+  }
+
+  @isTest
+  static void testWatchdogStallAlertResumedInstanceExclusion() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Mock config
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockStallConfig('WorkflowEngineTest_HappyWorkflow', 'ops@test.com', true, 10)
+    );
+
+    // Create suspended instance that is sleeping (ready to resume)
+    Workflow_Instance__c sleepingInst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Sleep_Until__c = DateTime.now().addMinutes(-5) // expired sleep
+    );
+    insert sleepingInst;
+
+    // Backdate the instance CreatedDate and step execution to 30 minutes ago
+    Datetime thirtyMinsAgo = DateTime.now().addMinutes(-30);
+    Test.setCreatedDate(sleepingInst.Id, thirtyMinsAgo);
+
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = sleepingInst.Id,
+      Step_Name__c = 'Step1',
+      Status__c = 'Completed'
+    );
+    insert step;
+    Test.setCreatedDate(step.Id, thirtyMinsAgo);
+
+    // Run watchdog heartbeat -> should resume the sleeping instance and NOT flag it as stalled in the same transaction
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowEngine.processWatchdogHeartbeat();
+
+    System.assertEquals(0, WorkflowAlertManager.sentEmailsCount, 'Recently resumed instance should not trigger a false positive stall alert');
+    
+    // Verify it was flipped to Running
+    Workflow_Instance__c updatedInst = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :sleepingInst.Id];
+    System.assertEquals('Running', updatedInst.Status__c, 'Instance should be resumed to Running');
+  }
 }
