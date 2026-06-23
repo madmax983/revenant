@@ -105,6 +105,10 @@ public class WorkflowDashboardControllerTest {
       'Should find CleanupWorkflow'
     );
     System.assert(
+      !definitions.contains('BulkCancelWorkflow'),
+      'Should not find BulkCancelWorkflow (system workflow)'
+    );
+    System.assert(
       definitions.contains('BatchFanoutWorkflowExample.BatchFanoutWorkflow'),
       'Should find BatchFanoutWorkflowExample.BatchFanoutWorkflow inner class'
     );
@@ -118,14 +122,14 @@ public class WorkflowDashboardControllerTest {
     System.assert(
       definitions.contains('AiSupportTriageWorkflowExample.TriageWorkflow'),
       'Should find AiSupportTriageWorkflowExample.TriageWorkflow despite the ' +
-        '@isTest mention in its doc comment'
+      '@isTest mention in its doc comment'
     );
     System.assert(
       definitions.contains(
         'AgentConversationWorkflowExample.AgentConversationWorkflow'
       ),
       'Should find AgentConversationWorkflowExample.AgentConversationWorkflow ' +
-        'despite the @isTest mention in its doc comment'
+      'despite the @isTest mention in its doc comment'
     );
     // Regression: the discovery regex matched comment prose. A doc comment in
     // WorkflowScheduleSweeper reads "...a class that implements WorkflowDefinition",
@@ -556,7 +560,11 @@ public class WorkflowDashboardControllerTest {
     );
     Test.stopTest();
 
-    System.assertEquals(24, trends.get('windowHours'), 'windowHours should be 24');
+    System.assertEquals(
+      24,
+      trends.get('windowHours'),
+      'windowHours should be 24'
+    );
     List<Object> rows = (List<Object>) trends.get('rows');
     System.assertEquals(3, rows.size(), 'Should have one row per definition');
 
@@ -596,7 +604,11 @@ public class WorkflowDashboardControllerTest {
 
     Map<String, Object> saga = findTrendRow(trends, 'SagaWorkflow');
     System.assertEquals(4, saga.get('terminalCount'));
-    System.assertEquals(1, saga.get('successCount'), 'ContinuedAsNew is success');
+    System.assertEquals(
+      1,
+      saga.get('successCount'),
+      'ContinuedAsNew is success'
+    );
     System.assertEquals(
       3,
       saga.get('failureCount'),
@@ -629,7 +641,10 @@ public class WorkflowDashboardControllerTest {
       recentInst,
       oldInst,
       // Active instance: trigger sets Terminal_At__c = null for non-terminal statuses.
-      new Workflow_Instance__c(Workflow_Name__c = 'WindowDef', Status__c = 'Running')
+      new Workflow_Instance__c(
+        Workflow_Name__c = 'WindowDef',
+        Status__c = 'Running'
+      )
     };
 
     // Backdate to 3 days ago — inside 7d but outside 24h.
@@ -653,7 +668,11 @@ public class WorkflowDashboardControllerTest {
       'Only the instance terminal within 24h counts; active (null Terminal_At__c) excluded'
     );
 
-    System.assertEquals(168, last7d.get('windowHours'), '7d window is 168 hours');
+    System.assertEquals(
+      168,
+      last7d.get('windowHours'),
+      '7d window is 168 hours'
+    );
     Map<String, Object> row7 = findTrendRow(last7d, 'WindowDef');
     System.assertEquals(
       2,
@@ -706,7 +725,8 @@ public class WorkflowDashboardControllerTest {
     );
     System.assertEquals(
       24,
-      WorkflowDashboardController.getDefinitionTrends('bogus').get('windowHours')
+      WorkflowDashboardController.getDefinitionTrends('bogus')
+        .get('windowHours')
     );
     Test.stopTest();
   }
@@ -1210,7 +1230,11 @@ public class WorkflowDashboardControllerTest {
     Map<String, Object> row = rows[0];
     System.assertEquals('DashConcWf', row.get('workflowName'));
     System.assertEquals(5, row.get('ceiling'), 'Ceiling surfaced from config');
-    System.assertEquals(5, row.get('inFlight'), 'In-flight surfaced from counter');
+    System.assertEquals(
+      5,
+      row.get('inFlight'),
+      'In-flight surfaced from counter'
+    );
     System.assertEquals(1, row.get('parked'), 'Parked count surfaced');
   }
 
@@ -1306,6 +1330,11 @@ public class WorkflowDashboardControllerTest {
     System.assert(
       definitions.contains('CleanupWorkflow'),
       'Fallback should find top-level CleanupWorkflow: ' + definitions
+    );
+    System.assert(
+      !definitions.contains('BulkCancelWorkflow'),
+      'Fallback should not find BulkCancelWorkflow (system workflow): ' +
+      definitions
     );
     System.assert(
       definitions.contains('SagaWorkflowExample.SagaWorkflow'),
@@ -1587,6 +1616,48 @@ public class WorkflowDashboardControllerTest {
     System.assert(
       threw,
       'Unauthorized users must be blocked from re-drive count'
+    );
+  }
+
+  @isTest
+  static void testCancelAuthorizationEnforced() {
+    User restricted = buildRestrictedUser();
+    Boolean countThrew = false;
+    Boolean runThrew = false;
+    System.runAs(restricted) {
+      Test.startTest();
+      try {
+        WorkflowDashboardController.getCancelEligibleCount('', 'Running', '');
+        System.assert(
+          false,
+          'Expected AuraHandledException for unauthorized user'
+        );
+      } catch (AuraHandledException e) {
+        countThrew = true;
+      }
+      try {
+        WorkflowDashboardController.cancelMatchingInstances(
+          '',
+          'Running',
+          '',
+          true
+        );
+        System.assert(
+          false,
+          'Expected AuraHandledException for unauthorized user'
+        );
+      } catch (AuraHandledException e) {
+        runThrew = true;
+      }
+      Test.stopTest();
+    }
+    System.assert(
+      countThrew,
+      'Unauthorized users must be blocked from cancel count'
+    );
+    System.assert(
+      runThrew,
+      'Unauthorized users must be blocked from executing cancel'
     );
   }
 
@@ -2360,16 +2431,48 @@ public class WorkflowDashboardControllerTest {
     }
 
     System.assertNotEquals(null, v1Row, 'Expected a row for version 1');
-    System.assertEquals(1, (Integer) v1Row.get('nonTerminalCount'), 'v1 nonTerminal should be 1');
-    System.assertEquals(0, (Integer) v1Row.get('failedCount'), 'v1 failed should be 0');
-    System.assertEquals(1, (Integer) v1Row.get('terminalCount'), 'v1 terminal should be 1');
-    System.assertEquals(false, (Boolean) v1Row.get('safeToRetire'), 'v1 should NOT be safe');
+    System.assertEquals(
+      1,
+      (Integer) v1Row.get('nonTerminalCount'),
+      'v1 nonTerminal should be 1'
+    );
+    System.assertEquals(
+      0,
+      (Integer) v1Row.get('failedCount'),
+      'v1 failed should be 0'
+    );
+    System.assertEquals(
+      1,
+      (Integer) v1Row.get('terminalCount'),
+      'v1 terminal should be 1'
+    );
+    System.assertEquals(
+      false,
+      (Boolean) v1Row.get('safeToRetire'),
+      'v1 should NOT be safe'
+    );
 
     System.assertNotEquals(null, v2Row, 'Expected a row for version 2');
-    System.assertEquals(0, (Integer) v2Row.get('nonTerminalCount'), 'v2 nonTerminal should be 0');
-    System.assertEquals(0, (Integer) v2Row.get('failedCount'), 'v2 failed should be 0');
-    System.assertEquals(1, (Integer) v2Row.get('terminalCount'), 'v2 terminal should be 1');
-    System.assertEquals(true, (Boolean) v2Row.get('safeToRetire'), 'v2 SHOULD be safe');
+    System.assertEquals(
+      0,
+      (Integer) v2Row.get('nonTerminalCount'),
+      'v2 nonTerminal should be 0'
+    );
+    System.assertEquals(
+      0,
+      (Integer) v2Row.get('failedCount'),
+      'v2 failed should be 0'
+    );
+    System.assertEquals(
+      1,
+      (Integer) v2Row.get('terminalCount'),
+      'v2 terminal should be 1'
+    );
+    System.assertEquals(
+      true,
+      (Boolean) v2Row.get('safeToRetire'),
+      'v2 SHOULD be safe'
+    );
   }
 
   @isTest
@@ -2422,23 +2525,60 @@ public class WorkflowDashboardControllerTest {
     }
 
     System.assertNotEquals(null, v1Row, 'Expected a row for version 1');
-    System.assertEquals(0, (Integer) v1Row.get('nonTerminalCount'), 'v1 nonTerminal should be 0');
-    System.assertEquals(2, (Integer) v1Row.get('failedCount'), 'v1 failed should be 2');
-    System.assertEquals(0, (Integer) v1Row.get('terminalCount'), 'Failed must NOT be counted as clean terminal');
-    System.assertEquals(2, (Integer) v1Row.get('totalCount'), 'v1 total should be 2');
-    System.assertEquals(false, (Boolean) v1Row.get('safeToRetire'), 're-drivable failures must block retire');
+    System.assertEquals(
+      0,
+      (Integer) v1Row.get('nonTerminalCount'),
+      'v1 nonTerminal should be 0'
+    );
+    System.assertEquals(
+      2,
+      (Integer) v1Row.get('failedCount'),
+      'v1 failed should be 2'
+    );
+    System.assertEquals(
+      0,
+      (Integer) v1Row.get('terminalCount'),
+      'Failed must NOT be counted as clean terminal'
+    );
+    System.assertEquals(
+      2,
+      (Integer) v1Row.get('totalCount'),
+      'v1 total should be 2'
+    );
+    System.assertEquals(
+      false,
+      (Boolean) v1Row.get('safeToRetire'),
+      're-drivable failures must block retire'
+    );
 
     System.assertNotEquals(null, v2Row, 'Expected a row for version 2');
-    System.assertEquals(1, (Integer) v2Row.get('failedCount'), 'v2 failed should be 1');
-    System.assertEquals(1, (Integer) v2Row.get('terminalCount'), 'v2 clean terminal should be 1');
-    System.assertEquals(false, (Boolean) v2Row.get('safeToRetire'), 'v2 still has a re-drivable failure');
+    System.assertEquals(
+      1,
+      (Integer) v2Row.get('failedCount'),
+      'v2 failed should be 1'
+    );
+    System.assertEquals(
+      1,
+      (Integer) v2Row.get('terminalCount'),
+      'v2 clean terminal should be 1'
+    );
+    System.assertEquals(
+      false,
+      (Boolean) v2Row.get('safeToRetire'),
+      'v2 still has a re-drivable failure'
+    );
   }
 
   @isTest
   static void testGetVersionDrain_safeOnlyWhenZeroNonTerminal() {
     String wfName = 'TestVersionDrainWorkflow.NonTerminal';
     List<String> nonTerminalStatuses = new List<String>{
-      'Pending', 'Running', 'Suspended', 'Compensating', 'Cancelling', 'CompensationFailed'
+      'Pending',
+      'Running',
+      'Suspended',
+      'Compensating',
+      'Cancelling',
+      'CompensationFailed'
     };
 
     Integer ver = 10;
@@ -2467,7 +2607,8 @@ public class WorkflowDashboardControllerTest {
       System.assertEquals(
         false,
         (Boolean) row.get('safeToRetire'),
-        'Version with a non-terminal instance must NOT be safe to retire: ' + row.get('version')
+        'Version with a non-terminal instance must NOT be safe to retire: ' +
+        row.get('version')
       );
       System.assertEquals(
         1,
@@ -2499,23 +2640,43 @@ public class WorkflowDashboardControllerTest {
     );
 
     Test.startTest();
-    List<Map<String, Object>> rows = WorkflowDashboardController.getVersionDrain(wfX);
+    List<Map<String, Object>> rows = WorkflowDashboardController.getVersionDrain(
+      wfX
+    );
     Test.stopTest();
 
     // Only wfX instances reported; wfY instances absent from results
-    System.assertEquals(1, rows.size(), 'Only versions observed under wfX should appear');
+    System.assertEquals(
+      1,
+      rows.size(),
+      'Only versions observed under wfX should appear'
+    );
     Map<String, Object> row = rows[0];
     System.assertEquals(1, (Integer) row.get('version'));
-    System.assertEquals(0, (Integer) row.get('nonTerminalCount'), 'wfY running instance must not contaminate wfX count');
-    System.assertEquals(true, (Boolean) row.get('safeToRetire'), 'wfX v1 should be safe');
+    System.assertEquals(
+      0,
+      (Integer) row.get('nonTerminalCount'),
+      'wfY running instance must not contaminate wfX count'
+    );
+    System.assertEquals(
+      true,
+      (Boolean) row.get('safeToRetire'),
+      'wfX v1 should be safe'
+    );
   }
 
   @isTest
   static void testGetVersionDrain_blankWorkflowName_returnsEmpty() {
     Test.startTest();
-    List<Map<String, Object>> rows = WorkflowDashboardController.getVersionDrain('');
+    List<Map<String, Object>> rows = WorkflowDashboardController.getVersionDrain(
+      ''
+    );
     Test.stopTest();
-    System.assertEquals(0, rows.size(), 'Blank workflow name should return empty list');
+    System.assertEquals(
+      0,
+      rows.size(),
+      'Blank workflow name should return empty list'
+    );
   }
 
   @isTest
@@ -2537,7 +2698,10 @@ public class WorkflowDashboardControllerTest {
     System.runAs(stdUser) {
       try {
         WorkflowDashboardController.getVersionDrain('SomeWorkflow.Def');
-        System.assert(false, 'Expected AuraHandledException for unauthorized user');
+        System.assert(
+          false,
+          'Expected AuraHandledException for unauthorized user'
+        );
       } catch (AuraHandledException e) {
         System.assert(
           e.getMessage().contains('Unauthorized') ||
@@ -2580,15 +2744,26 @@ public class WorkflowDashboardControllerTest {
 
     Test.startTest();
     List<Map<String, Object>> results = WorkflowDashboardController.getUnroutedSignals(
-      null, 10, 0, ''
+      null,
+      10,
+      0,
+      ''
     );
     Test.stopTest();
 
-    System.assertEquals(2, results.size(), 'Only Unrouted signals must be returned');
+    System.assertEquals(
+      2,
+      results.size(),
+      'Only Unrouted signals must be returned'
+    );
     Set<String> returnedKeys = new Set<String>();
     for (Map<String, Object> row : results) {
       returnedKeys.add((String) row.get('correlationKey'));
-      System.assertNotEquals(null, row.get('ageMinutes'), 'ageMinutes must be populated');
+      System.assertNotEquals(
+        null,
+        row.get('ageMinutes'),
+        'ageMinutes must be populated'
+      );
       System.assertNotEquals(null, row.get('signalName'));
     }
     System.assert(returnedKeys.contains('Unrouted-Key-1'));
@@ -2611,7 +2786,9 @@ public class WorkflowDashboardControllerTest {
     };
 
     Test.startTest();
-    Map<String, Object> result = WorkflowDashboardController.getUnroutedSignalCount(null);
+    Map<String, Object> result = WorkflowDashboardController.getUnroutedSignalCount(
+      null
+    );
     Test.stopTest();
 
     System.assertEquals(2, (Integer) result.get('count'));
@@ -2637,15 +2814,27 @@ public class WorkflowDashboardControllerTest {
     WorkflowEngine.disableQueueableInTest = true;
 
     Test.startTest();
-    Map<String, Object> result = WorkflowDashboardController.redeliverSignal(sig.Id);
+    Map<String, Object> result = WorkflowDashboardController.redeliverSignal(
+      sig.Id
+    );
     Test.stopTest();
 
-    System.assertEquals(true, (Boolean) result.get('matched'), 'Re-deliver must return matched=true when instance found');
+    System.assertEquals(
+      true,
+      (Boolean) result.get('matched'),
+      'Re-deliver must return matched=true when instance found'
+    );
 
     Workflow_Signal__c reloaded = [
-      SELECT Status__c FROM Workflow_Signal__c WHERE Id = :sig.Id
+      SELECT Status__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig.Id
     ];
-    System.assertEquals('Received', reloaded.Status__c, 'Re-delivered signal must transition to Received');
+    System.assertEquals(
+      'Received',
+      reloaded.Status__c,
+      'Re-delivered signal must transition to Received'
+    );
   }
 
   @isTest
@@ -2658,10 +2847,16 @@ public class WorkflowDashboardControllerTest {
     insert sig;
 
     Test.startTest();
-    Map<String, Object> result = WorkflowDashboardController.redeliverSignal(sig.Id);
+    Map<String, Object> result = WorkflowDashboardController.redeliverSignal(
+      sig.Id
+    );
     Test.stopTest();
 
-    System.assertEquals(false, (Boolean) result.get('matched'), 'Re-deliver must return matched=false when no active instance');
+    System.assertEquals(
+      false,
+      (Boolean) result.get('matched'),
+      'Re-deliver must return matched=false when no active instance'
+    );
   }
 
   @isTest
@@ -2676,10 +2871,7 @@ public class WorkflowDashboardControllerTest {
       LocaleSidKey = 'en_US',
       ProfileId = p.Id,
       TimeZoneSidKey = 'America/Los_Angeles',
-      UserName =
-        'unrouted_user_' +
-        DateTime.now().getTime() +
-        '@testorg.com'
+      UserName = 'unrouted_user_' + DateTime.now().getTime() + '@testorg.com'
     );
     insert stdUser;
 
@@ -2717,7 +2909,10 @@ public class WorkflowDashboardControllerTest {
   @isTest
   static void testGetWorkflowFailureBreakdown_emptyState() {
     Test.startTest();
-    Map<String, Object> result = WorkflowDashboardController.getWorkflowFailureBreakdown('CleanupWorkflow', '24h');
+    Map<String, Object> result = WorkflowDashboardController.getWorkflowFailureBreakdown(
+      'CleanupWorkflow',
+      '24h'
+    );
     Test.stopTest();
 
     System.assertEquals('CleanupWorkflow', result.get('workflowName'));
@@ -2759,7 +2954,10 @@ public class WorkflowDashboardControllerTest {
     insert stepsToInsert;
 
     Test.startTest();
-    Map<String, Object> result = WorkflowDashboardController.getWorkflowFailureBreakdown('CleanupWorkflow', '24h');
+    Map<String, Object> result = WorkflowDashboardController.getWorkflowFailureBreakdown(
+      'CleanupWorkflow',
+      '24h'
+    );
     Test.stopTest();
 
     System.assertEquals('CleanupWorkflow', result.get('workflowName'));
@@ -2774,13 +2972,24 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(2, step1.get('failureCount'));
 
     List<Object> signatures1 = (List<Object>) step1.get('errorSignatures');
-    System.assertEquals(1, signatures1.size(), 'Should group both NPEs together');
+    System.assertEquals(
+      1,
+      signatures1.size(),
+      'Should group both NPEs together'
+    );
     Map<String, Object> sig1 = (Map<String, Object>) signatures1[0];
-    System.assertEquals('System.NullPointerException: Attempt to de-reference a null object', sig1.get('signature'));
+    System.assertEquals(
+      'System.NullPointerException: Attempt to de-reference a null object',
+      sig1.get('signature')
+    );
     System.assertEquals(2, sig1.get('count'));
 
     List<Object> examples1 = (List<Object>) sig1.get('examples');
-    System.assertEquals(1, examples1.size(), 'Should unique examples by instance');
+    System.assertEquals(
+      1,
+      examples1.size(),
+      'Should unique examples by instance'
+    );
 
     Map<String, Object> step2 = (Map<String, Object>) steps[1];
     System.assertEquals('StepTwo', step2.get('stepName'));
@@ -2806,7 +3015,10 @@ public class WorkflowDashboardControllerTest {
     insert stepsToInsert;
 
     Test.startTest();
-    Map<String, Object> result = WorkflowDashboardController.getWorkflowFailureBreakdown('CleanupWorkflow', 'all');
+    Map<String, Object> result = WorkflowDashboardController.getWorkflowFailureBreakdown(
+      'CleanupWorkflow',
+      'all'
+    );
     Test.stopTest();
 
     List<Object> steps = (List<Object>) result.get('steps');
@@ -2815,10 +3027,82 @@ public class WorkflowDashboardControllerTest {
     Map<String, Object> sig = (Map<String, Object>) signatures[0];
 
     String signature = (String) sig.get('signature');
-    System.assert(signature.contains('[ID]'), 'Should contain [ID]: ' + signature);
-    System.assert(signature.contains('[DATETIME]'), 'Should contain [DATETIME]: ' + signature);
-    System.assert(signature.contains('[UUID]'), 'Should contain [UUID]: ' + signature);
-    System.assert(signature.contains('[NUM]'), 'Should contain [NUM]: ' + signature);
+    System.assert(
+      signature.contains('[ID]'),
+      'Should contain [ID]: ' + signature
+    );
+    System.assert(
+      signature.contains('[DATETIME]'),
+      'Should contain [DATETIME]: ' + signature
+    );
+    System.assert(
+      signature.contains('[UUID]'),
+      'Should contain [UUID]: ' + signature
+    );
+    System.assert(
+      signature.contains('[NUM]'),
+      'Should contain [NUM]: ' + signature
+    );
+  }
+
+  @isTest
+  static void testSearchWithSingleQuote() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'O\'Connor.Workflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'O\'ConnorKey',
+      Input__c = '"TestInput"'
+    );
+    insert inst;
+
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Correlation_Key__c = 'O\'ConnorKey',
+      Signal_Name__c = 'O\'ConnorSignal',
+      Status__c = 'Unrouted'
+    );
+    insert sig;
+
+    Test.startTest();
+    List<Map<String, Object>> filteredInsts = WorkflowDashboardController.getFilteredInstances(
+      '',
+      '',
+      'O\'Connor',
+      10,
+      0,
+      ''
+    );
+
+    List<Map<String, Object>> stalledInsts = WorkflowDashboardController.getStalledInstances(
+      '',
+      'O\'Connor',
+      -1,
+      10,
+      0,
+      ''
+    );
+
+    Map<String, Object> stalledCountResult = WorkflowDashboardController.getStalledCount(
+      '',
+      'O\'Connor',
+      -1
+    );
+
+    List<Map<String, Object>> unroutedSigs = WorkflowDashboardController.getUnroutedSignals(
+      'O\'Connor',
+      10,
+      0,
+      ''
+    );
+
+    Map<String, Object> unroutedCountResult = WorkflowDashboardController.getUnroutedSignalCount(
+      'O\'Connor'
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, filteredInsts.size(), 'Should find 1 filtered instance');
+    System.assertEquals(1, stalledInsts.size(), 'Should find 1 stalled instance');
+    System.assertEquals(1, (Integer) stalledCountResult.get('count'), 'Should count 1 stalled instance');
+    System.assertEquals(1, unroutedSigs.size(), 'Should find 1 unrouted signal');
+    System.assertEquals(1, (Integer) unroutedCountResult.get('count'), 'Should count 1 unrouted signal');
   }
 }
-

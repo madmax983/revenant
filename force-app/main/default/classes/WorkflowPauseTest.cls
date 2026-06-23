@@ -267,7 +267,11 @@ public class WorkflowPauseTest {
       FROM Workflow_Pause_State__c
       WHERE Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow'
     ];
-    System.assertEquals(1, records.size(), 'Should be exactly one pause record');
+    System.assertEquals(
+      1,
+      records.size(),
+      'Should be exactly one pause record'
+    );
   }
 
   // ============================================================
@@ -279,7 +283,8 @@ public class WorkflowPauseTest {
     List<String> reserved = new List<String>{
       'WatchdogWorkflow',
       'CleanupWorkflow',
-      'BulkRedriveWorkflow'
+      'BulkRedriveWorkflow',
+      'BulkCancelWorkflow'
     };
     for (String name : reserved) {
       Boolean threw = false;
@@ -358,7 +363,9 @@ public class WorkflowPauseTest {
     List<Workflow_Step_Execution__c> steps = [
       SELECT Status__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId AND Status__c IN ('Running', 'Completed')
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Status__c IN ('Running', 'Completed')
     ];
     System.assertEquals(
       0,
@@ -570,9 +577,8 @@ public class WorkflowPauseTest {
     Test.startTest();
     WorkflowPauseGate.resumeDefinition('WorkflowPauseTest.ParallelWorkflow');
     // Drive BranchB manually
-    new WorkflowOrchestrator(inst.Id, 'WorkflowPauseTest.BranchB').execute(
-      null
-    );
+    new WorkflowOrchestrator(inst.Id, 'WorkflowPauseTest.BranchB')
+      .execute(null);
     Test.stopTest();
 
     // BranchA should still have exactly one Completed record (no double-exec)
@@ -634,10 +640,8 @@ public class WorkflowPauseTest {
       new List<Workflow_Instance__c>{ inst }
     );
 
-    String aJob =
-      'Timeout_' + inst.Id + '_WorkflowPauseTest_TimeoutBranchA';
-    String bJob =
-      'Timeout_' + inst.Id + '_WorkflowPauseTest_TimeoutBranchB';
+    String aJob = 'Timeout_' + inst.Id + '_WorkflowPauseTest_TimeoutBranchA';
+    String bJob = 'Timeout_' + inst.Id + '_WorkflowPauseTest_TimeoutBranchB';
     Integer aTriggers = [
       SELECT COUNT()
       FROM CronTrigger
@@ -932,7 +936,11 @@ public class WorkflowPauseTest {
       branchA.size(),
       'Completed branch must not be re-driven on resume'
     );
-    System.assertEquals('Completed', branchA[0].Status__c, 'BranchA stays done');
+    System.assertEquals(
+      'Completed',
+      branchA[0].Status__c,
+      'BranchA stays done'
+    );
   }
 
   // ============================================================
@@ -1197,6 +1205,9 @@ public class WorkflowPauseTest {
     Boolean bulkRedrivePaused = WorkflowPauseGate.isDefinitionPaused(
       'BulkRedriveWorkflow'
     );
+    Boolean bulkCancelPaused = WorkflowPauseGate.isDefinitionPaused(
+      'BulkCancelWorkflow'
+    );
     Test.stopTest();
 
     System.assertEquals(true, userPaused, 'User def should be paused by *');
@@ -1209,6 +1220,11 @@ public class WorkflowPauseTest {
       false,
       bulkRedrivePaused,
       'BulkRedriveWorkflow must NEVER be paused by *'
+    );
+    System.assertEquals(
+      false,
+      bulkCancelPaused,
+      'BulkCancelWorkflow must NEVER be paused by *'
     );
   }
 
@@ -1244,7 +1260,11 @@ public class WorkflowPauseTest {
       WHERE Id IN (:inst1.Id, :inst2.Id)
     ];
     for (Workflow_Instance__c i : instances) {
-      System.assertEquals('Running', i.Status__c, 'All parked instances should be Running after * resume');
+      System.assertEquals(
+        'Running',
+        i.Status__c,
+        'All parked instances should be Running after * resume'
+      );
     }
   }
 
@@ -1266,7 +1286,11 @@ public class WorkflowPauseTest {
       FROM Workflow_Pause_State__c
       WHERE Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow'
     ];
-    System.assertEquals(1, records.size(), 'Pause state should exist after controller call');
+    System.assertEquals(
+      1,
+      records.size(),
+      'Pause state should exist after controller call'
+    );
   }
 
   @isTest
@@ -1294,7 +1318,10 @@ public class WorkflowPauseTest {
   @isTest
   static void testControllerGetPausedDefinitions() {
     WorkflowEngine.disableQueueableInTest = true;
-    WorkflowPauseGate.pauseDefinition('WorkflowPauseTest.TwoStepWorkflow', 'Incident-42');
+    WorkflowPauseGate.pauseDefinition(
+      'WorkflowPauseTest.TwoStepWorkflow',
+      'Incident-42'
+    );
 
     // Create a parked instance for this def
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -1309,7 +1336,11 @@ public class WorkflowPauseTest {
     List<Map<String, Object>> paused = WorkflowDashboardController.getPausedDefinitions();
     Test.stopTest();
 
-    System.assertEquals(1, paused.size(), 'Should return one paused definition');
+    System.assertEquals(
+      1,
+      paused.size(),
+      'Should return one paused definition'
+    );
     Map<String, Object> entry = paused[0];
     System.assertEquals(
       'WorkflowPauseTest.TwoStepWorkflow',
@@ -1569,7 +1600,7 @@ public class WorkflowPauseTest {
     );
     System.assert(
       afterChild.Status__c == 'Cancelled' ||
-      afterChild.Status__c == 'Cancelling',
+        afterChild.Status__c == 'Cancelling',
       'Paused child should be Cancelled/Cancelling, was: ' +
       afterChild.Status__c
     );
@@ -1847,7 +1878,8 @@ public class WorkflowPauseTest {
     );
 
     Test.startTest();
-    new WorkflowTimeoutJob(inst.Id, 'WorkflowPauseTest.StepB').executeInternal();
+    new WorkflowTimeoutJob(inst.Id, 'WorkflowPauseTest.StepB')
+      .executeInternal();
     Test.stopTest();
 
     Workflow_Step_Execution__c after = [
@@ -1925,7 +1957,8 @@ public class WorkflowPauseTest {
     insert step;
 
     Test.startTest();
-    new WorkflowTimeoutJob(inst.Id, 'WorkflowPauseTest.StepB').executeInternal();
+    new WorkflowTimeoutJob(inst.Id, 'WorkflowPauseTest.StepB')
+      .executeInternal();
     Test.stopTest();
 
     Workflow_Step_Execution__c after = [

@@ -6747,11 +6747,20 @@ public inherited sharing class WorkflowEngine {
     Boolean throwIfMissing
   ) {
     List<Workflow_Instance__c> instances = [
-      SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c
+      SELECT
+        Id,
+        Status__c,
+        Current_Step__c,
+        Compensation_Stack__c,
+        Error_Message__c,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
       LIMIT 1
+      FOR UPDATE
     ];
     if (instances.isEmpty()) {
       if (throwIfMissing) {
@@ -6776,7 +6785,7 @@ public inherited sharing class WorkflowEngine {
     // rollback is resumable and still holds un-reversed side effects, so cancellation must
     // reach it (handled explicitly below) rather than skip it.
 
-    // 1. Lock active step executions FOR UPDATE first
+    // Lock active step executions FOR UPDATE second
     List<Workflow_Step_Execution__c> stepExecs = new List<Workflow_Step_Execution__c>();
     if (String.isNotBlank(instance.Current_Step__c)) {
       List<String> activeStepNames = new List<String>();
@@ -6796,44 +6805,6 @@ public inherited sharing class WorkflowEngine {
         WITH SYSTEM_MODE
         FOR UPDATE
       ];
-    }
-
-    // 2. Lock the instance FOR UPDATE second
-    instances = [
-      SELECT
-        Id,
-        Status__c,
-        Current_Step__c,
-        Compensation_Stack__c,
-        Error_Message__c,
-        Workflow_Name__c,
-        Correlation_Key__c,
-        Root_Correlation_Key__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-      WITH SYSTEM_MODE
-      LIMIT 1
-      FOR UPDATE
-    ];
-    if (instances.isEmpty()) {
-      if (throwIfMissing) {
-        throw new WorkflowException(
-          'Workflow instance not found: ' + instanceId
-        );
-      }
-      return null;
-    }
-    instance = instances[0];
-
-    // Recheck status under lock
-    if (
-      instance.Status__c == 'Completed' ||
-      instance.Status__c == 'Failed' ||
-      instance.Status__c == 'Compensated' ||
-      instance.Status__c == 'Cancelled' ||
-      instance.Status__c == 'ContinuedAsNew'
-    ) {
-      return null;
     }
 
     // Abort all scheduled jobs for this instance (sleeps, retries, timeouts)

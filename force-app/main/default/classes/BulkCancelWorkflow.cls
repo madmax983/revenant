@@ -1,61 +1,19 @@
 /**
- * BulkRedriveWorkflow
+ * BulkCancelWorkflow
  *
- * Operator-initiated bulk re-drive of failed workflow instances. When a shared
- * downstream dependency recovers (an endpoint comes back, a throttle clears, a
- * credential is rotated), an operator can re-drive every instance matching their
- * current dashboard filter in a single bounded action instead of clicking
- * "Retry" once per instance.
- *
- * Design (issue #1):
- *  - This re-driver runs AS a Revenant workflow instance (dogfooding the
- *    CursorFanout / yield story), so it inherits resumability, the append-only
- *    audit trail, and dashboard visibility for free.
- *  - The single step pages over the eligible selection in safe-sized chunks,
- *    yielding to a fresh transaction (`StepResult.yield`) whenever it approaches
- *    a governor limit, so an arbitrarily large selection never throws.
- *  - Each eligible instance is recovered through the EXISTING
- *    WorkflowEngine.retryWorkflow(Id) primitive — no new state-transition path.
- *    Idempotency leans on that primitive's FOR UPDATE active-state guard: an
- *    instance that is no longer Failed is skipped, never double-chained.
- *  - Eligibility is restricted to the operator-recoverable terminal set
- *    ({Failed}); Completed / Cancelled / Running / Suspended / Pending /
- *    Compensating / Cancelling / Compensated are excluded. Compensated is listed
- *    in the spec as recoverable "where applicable", but retryWorkflow only
- *    accepts Failed, so re-driving it would require a new state path — out of
- *    scope for this slice.
- *  - The confirmed count is a pre-flight approximation, not a hard contract.
- *    Instances that fail between confirmation and the final chunk may be swept
- *    in; this is acceptable (they are Failed and match the operator's filter),
- *    and the idempotency guard prevents double-drives. A LastModifiedDate bound
- *    was considered but rejected: it would silently DROP confirmed rows whenever
- *    an automation or operator edits a field on a still-Failed instance mid-sweep,
- *    which is a worse failure mode than re-driving a few extra instances.
- *  - OUROBOROS GUARD: the selection hard-excludes the re-driver's own
- *    Workflow_Name__c, so a future "re-drive all Failed" sweep can never
- *    re-drive a previously-failed re-drive instance and build a self-replaying
- *    loop with governor limits as the only brake.
+ * Operator-initiated bulk cancel of workflow instances.
  */
-public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition {
-  /**
-   * The re-driver's own Workflow_Name__c. Must be excluded from every eligible
-   * selection (the ouroboros guard).
-   */
-  public static final String REDRIVER_WORKFLOW_NAME = 'BulkRedriveWorkflow';
+public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition {
+  public static final String CANCELER_WORKFLOW_NAME = 'BulkCancelWorkflow';
 
-  /**
-   * Operator-recoverable terminal statuses. Only these are ever re-enqueued.
-   */
-  private static final Set<String> RECOVERABLE_STATUSES = new Set<String>{
-    'Failed'
+  private static final Set<String> ELIGIBLE_STATUSES = new Set<String>{
+    'Pending',
+    'Running',
+    'Suspended',
+    'Paused',
+    'CompensationFailed'
   };
 
-  /**
-   * Max instances re-driven per transaction before yielding. Each retryWorkflow
-   * call costs a few DML statements plus an orchestrator enqueue, so this is kept
-   * comfortably under the synchronous DML-statement budget; shouldYield() trims
-   * it further under real load. Overridable in tests.
-   */
   @TestVisible
   // Capped at 4 because of Salesforce Apex's hard limit of 5 savepoints per transaction, leaving 1 slot for safety/triggers.
   public static Integer CHUNK_SIZE = 4;
@@ -63,42 +21,31 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
   // ---- WorkflowDefinition ----
 
   public List<String> getSteps() {
-    return new List<String>{ 'BulkRedriveWorkflow.BulkRedriveStep' };
+    return new List<String>{ 'BulkCancelWorkflow.BulkCancelStep' };
   }
 
   public String getInitialStep() {
-    return 'BulkRedriveWorkflow.BulkRedriveStep';
+    return 'BulkCancelWorkflow.BulkCancelStep';
   }
 
   public String getNextStep(String currentStepName, StepResult result) {
     return null; // single-step workflow
   }
 
-  // ---- Eligible-selection helpers (single source of truth) ----
+  // ---- Eligible-selection helpers ----
 
-  /**
-   * Resolves the effective status set for the selection. Honors the operator's
-   * status filter but intersects it with the recoverable set, so filtering to a
-   * non-recoverable status (e.g. Completed) yields nothing.
-   */
   private static List<String> effectiveStatuses(String status) {
     List<String> result = new List<String>();
     if (String.isNotBlank(status)) {
-      if (RECOVERABLE_STATUSES.contains(status)) {
+      if (ELIGIBLE_STATUSES.contains(status)) {
         result.add(status);
       }
     } else {
-      result.addAll(RECOVERABLE_STATUSES);
+      result.addAll(ELIGIBLE_STATUSES);
     }
     return result;
   }
 
-  /**
-   * Exact count of instances that WILL be re-driven for the given filter — the
-   * number shown to the operator for confirmation. Uses the same selection
-   * surface (workflowName / status / searchTerm) as getFilteredInstances and
-   * excludes the re-driver itself.
-   */
   public static Integer countEligible(
     String workflowName,
     String status,
@@ -108,7 +55,7 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
     if (effStatuses.isEmpty()) {
       return 0;
     }
-    String excludeName = REDRIVER_WORKFLOW_NAME;
+    String excludeName = CANCELER_WORKFLOW_NAME;
     String likeTerm = String.isNotBlank(searchTerm)
       ? '%' + searchTerm + '%'
       : null;
@@ -164,11 +111,6 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
     }
   }
 
-  /**
-   * Returns up to `chunkSize` eligible instance Ids ordered by Id, starting
-   * strictly after `afterId` (the cursor). Ordering by Id gives a stable,
-   * resumable cursor across yield boundaries.
-   */
   public static List<Id> fetchEligibleChunk(
     String workflowName,
     String status,
@@ -180,7 +122,7 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
     if (effStatuses.isEmpty()) {
       return new List<Id>();
     }
-    String excludeName = REDRIVER_WORKFLOW_NAME;
+    String excludeName = CANCELER_WORKFLOW_NAME;
     String likeTerm = String.isNotBlank(searchTerm)
       ? '%' + searchTerm + '%'
       : null;
@@ -318,13 +260,10 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
     return ids;
   }
 
-  // ---- The re-drive step ----
+  // ---- The cancel step ----
 
-  public class BulkRedriveStep implements WorkflowStep {
+  public class BulkCancelStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      // Hydrate state: on the first run the persisted state is empty, so seed it
-      // from the operator's filter (the workflow input). On resume, the yield
-      // state carries the cursor and running tallies forward.
       Map<String, Object> state;
       if (String.isNotBlank(ctx.stepStateJson)) {
         state = (Map<String, Object>) JSON.deserializeUntyped(
@@ -339,16 +278,18 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
           state.put('workflowName', filter.get('workflowName'));
           state.put('status', filter.get('status'));
           state.put('searchTerm', filter.get('searchTerm'));
+          state.put('runCompensations', filter.get('runCompensations'));
         }
       }
 
       String workflowName = (String) state.get('workflowName');
       String status = (String) state.get('status');
       String searchTerm = (String) state.get('searchTerm');
+      Boolean runCompensations = state.get('runCompensations') == true;
       Id afterId = state.get('lastId') != null
         ? (Id) (String) state.get('lastId')
         : null;
-      Integer redriven = intOf(state.get('redriven'));
+      Integer cancelled = intOf(state.get('cancelled'));
       Integer skipped = intOf(state.get('skipped'));
       Integer errored = intOf(state.get('errored'));
 
@@ -363,22 +304,26 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
 
       Integer processed = 0;
       for (Id instId : chunk) {
-        // Pre-flight yield check: a previous high-fan-out parallel retry may have
-        // consumed significant DML/event budget. Yield now rather than enter the
-        // next retryWorkflow call when already near the governor ceiling.
         if (ctx.shouldYield()) {
           break;
         }
         Savepoint sp = Database.setSavepoint();
         try {
-          WorkflowEngine.retryWorkflow(instId);
-          redriven++;
-        } catch (WorkflowEngine.WorkflowException wex) {
-          Database.rollback(sp);
-          if (wex.getMessage() != null && wex.getMessage().contains('Failed status')) {
-            skipped++;
+          List<Workflow_Instance__c> toCancel = [
+            SELECT Status__c
+            FROM Workflow_Instance__c
+            WHERE Id = :instId
+            WITH SYSTEM_MODE
+            FOR UPDATE
+          ];
+          if (
+            !toCancel.isEmpty() &&
+            ELIGIBLE_STATUSES.contains(toCancel[0].Status__c)
+          ) {
+            WorkflowEngine.cancel(instId, runCompensations);
+            cancelled++;
           } else {
-            errored++;
+            skipped++;
           }
         } catch (Exception ex) {
           Database.rollback(sp);
@@ -387,8 +332,6 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
         afterId = instId;
         processed++;
 
-        // Post-retry yield check: stop early if we are approaching a governor
-        // limit; progress is checkpointed below and resumed in a fresh transaction.
         if (ctx.shouldYield()) {
           break;
         }
@@ -397,14 +340,12 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
       state.put('workflowName', workflowName);
       state.put('status', status);
       state.put('searchTerm', searchTerm);
+      state.put('runCompensations', runCompensations);
       state.put('lastId', afterId == null ? null : String.valueOf(afterId));
-      state.put('redriven', redriven);
+      state.put('cancelled', cancelled);
       state.put('skipped', skipped);
       state.put('errored', errored);
 
-      // More work remains if we either stopped early mid-chunk (processed fewer
-      // than we fetched) or fetched a full chunk (so another page likely exists).
-      // Only a fully-drained short chunk means the selection is exhausted.
       Boolean moreRemain =
         (processed < chunk.size()) || (chunk.size() == chunkSize);
       if (moreRemain) {
@@ -412,10 +353,10 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
       }
 
       Map<String, Object> summary = new Map<String, Object>{
-        'redriven' => redriven,
+        'cancelled' => cancelled,
         'skipped' => skipped,
         'errored' => errored,
-        'totalProcessed' => redriven +
+        'totalProcessed' => cancelled +
         skipped +
         errored
       };
