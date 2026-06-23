@@ -1,4 +1,5 @@
 public inherited sharing class WorkflowEngine {
+  public static Set<Id> resumedInstanceIds = new Set<Id>();
   public static Boolean disableQueueableInTest = false;
   public static Integer watchdogDelayMinutes = 10;
   public static Boolean useDynamicScheduling = true;
@@ -7777,6 +7778,9 @@ public inherited sharing class WorkflowEngine {
         insert as system timedWaitFallbackExecs;
       }
       if (!instancesToUpdate.isEmpty()) {
+        for (Workflow_Instance__c inst : instancesToUpdate) {
+          resumedInstanceIds.add(inst.Id);
+        }
         update as system instancesToUpdate;
       }
       // Honor the test opt-out (mirrors the timed-out-step enqueue above) so a
@@ -7871,11 +7875,24 @@ public inherited sharing class WorkflowEngine {
       );
     }
 
+    // Run proactive stall detection and alerting hook
+    try {
+      WorkflowAlertManager.detectAndAlertStalls();
+    } catch (Exception stallEx) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'WorkflowEngine: stall detection sweep failed: ' + stallEx.getMessage()
+      );
+    }
+
     // All required heartbeat work (timed-out-step failures, sleep resumptions,
     // and schedule sweeps) is now done, so the best-effort lifecycle publish
     // runs last with no risk of starving a required update/enqueue of its DML budget.
     WorkflowLifecyclePublisher.publish(watchdogTerminalInstances);
   }
+
+
+
 
   private static Integer getStepTimeoutSeconds(String stepName) {
     if (String.isBlank(stepName)) {
