@@ -296,3 +296,10 @@
 .trend-window-selector {
   width: 12rem;
 }
+
+/* Ensure lightning-button with slds-button_stretch stretches to full width */
+lightning-button.slds-button_stretch {
+  display: block;
+  width: 100%;
+}
+
