@@ -960,6 +960,8 @@ public inherited sharing class WorkflowDashboardController {
         Parent_Instance__r.Name,
         Previous_Instance__c,
         Previous_Instance__r.Name,
+        Compensated_By__c,
+        Compensated_By__r.Name,
         Async_Job_Id__c,
         Sleep_Until__c,
         Compensation_Stack__c,
@@ -1163,36 +1165,7 @@ public inherited sharing class WorkflowDashboardController {
    * exact discovery logic without tripping this controller's Workflow_Admin gate.
    */
   public static List<String> getDefinitionsUnchecked() {
-    // Primary strategy: scan Apex source so we can detect *inner-class* definitions
-    // (reported as "Outer.Inner"), which the platform index cannot express. This is
-    // governor-bounded by the proactive guards inside getDefinitionsFromSource().
-    //
-    // Fallback strategy: on very large orgs the source scan can exhaust heap or CPU.
-    // Governor LimitExceptions are uncatchable in Apex, so we cannot react to them;
-    // instead we monitor Limits.* and bail to the cheap ApexTypeImplementor index.
-    //
-    // KNOWN TRADE-OFF: the fallback queries the platform's compiled-type index rather
-    // than raw source. Verified behavior (API 67): it DOES surface inner-class
-    // definitions with qualified "Outer.Inner" names and resolves transitive interface
-    // inheritance, so for *startable* definitions it is at least as complete as the
-    // regex. The differences are (a) it lists only concrete (IsConcrete = true) types,
-    // so non-instantiable abstract/virtual definition classes are omitted — acceptable,
-    // since those cannot be started anyway; and (b) it reflects the compiled index, a
-    // separate source of truth that is normally current but updates on class compile.
-    try {
-      if (forceDefinitionFallback) {
-        throw new DefinitionScanLimitException('Forced fallback (test).');
-      }
-      return getDefinitionsFromSource();
-    } catch (DefinitionScanLimitException ex) {
-      System.debug(
-        LoggingLevel.WARN,
-        'getDefinitions: source scan hit governor guard, falling back to ' +
-          'ApexTypeImplementor (inner-class definitions will be omitted): ' +
-          ex.getMessage()
-      );
-      return getDefinitionsFromTypeIndex();
-    }
+    return getDefinitionsFromTypeIndex();
   }
 
   /**
@@ -1200,101 +1173,7 @@ public inherited sharing class WorkflowDashboardController {
    * bodies are resident in heap at a time, and proactively aborts (throwing
    * DefinitionScanLimitException) before crossing the heap/CPU governor limits.
    */
-  private static List<String> getDefinitionsFromSource() {
-    List<String> definitions = new List<String>();
-    // Two linear patterns instead of one with nested lazy quantifiers. The previous
-    // single regex used '[^{]*?' twice; its backtracking tripped "Regex too
-    // complicated" once class bodies grew large. classHeaderPattern uses a single
-    // greedy negated class anchored to the opening brace (linear — no catastrophic
-    // backtracking) to capture each class name and its short declaration header;
-    // implementsPattern then runs only on that short header, never the full body.
-    Pattern classHeaderPattern = Pattern.compile(
-      '(?i)\\bclass\\s+([a-zA-Z0-9_]+)\\b([^{]*)\\{'
-    );
-    Pattern implementsPattern = Pattern.compile(
-      '(?i)\\bimplements\\b[^{]*\\b(WorkflowDefinition|VersionedWorkflow)\\b'
-    );
-
-    Long heapGuard = (Long) (Limits.getLimitHeapSize() *
-    definitionScanGuardFraction);
-    Integer cpuGuard = (Integer) (Limits.getLimitCpuTime() *
-    definitionScanGuardFraction);
-
-    // SOQL for-loop retrieves records in chunks of 200, bounding resident heap so a
-    // large org's class bodies are not all materialized at once.
-    for (ApexClass ac : [
-      SELECT Name, Body
-      FROM ApexClass
-      WHERE NamespacePrefix = NULL
-      WITH SYSTEM_MODE
-      ORDER BY Name ASC
-    ]) {
-      if (guardsTripped(heapGuard, cpuGuard)) {
-        throw new DefinitionScanLimitException(
-          'Heap/CPU guard tripped during Apex source scan.'
-        );
-      }
-      if (ac.Body == null) {
-        continue;
-      }
-      // Skip test classes (by convention their name ends in 'Test' — same rule
-      // the ApexTypeImplementor fallback applies) and system-only workflows that
-      // must not be launched from the dashboard. We exclude by NAME, not by an
-      // '@istest' body-substring: the latter also catches production classes that
-      // merely mention @isTest in a comment (e.g. the AI examples).
-      if (
-        ac.Name.toLowerCase().endsWith('test') ||
-        ac.Name.equalsIgnoreCase('BulkRedriveWorkflow') ||
-        ac.Name.equalsIgnoreCase('BulkCancelWorkflow')
-      ) {
-        continue;
-      }
-      // Cheap pre-filter: a class that never names either interface cannot implement
-      // one, so skip the regex entirely for the (typically vast) majority of classes.
-      // Safe superset — an implementer always names the interface in real source, so
-      // a body that mentions it only in a comment is still let through and correctly
-      // rejected by the comment-stripped regex below.
-      String bodyLower = ac.Body.toLowerCase();
-      if (
-        !bodyLower.contains('workflowdefinition') &&
-        !bodyLower.contains('versionedworkflow')
-      ) {
-        continue;
-      }
-      // Skip a body too large to comment-strip safely: COMMENT_PATTERN.replaceAll
-      // on a multi-hundred-KB body can throw an uncatchable "Regex too complicated"
-      // that the heap/CPU guard above cannot preempt. Such classes are infra, not
-      // WorkflowDefinition holders, so skipping them is safe (see field comment).
-      if (ac.Body.length() > maxScannableBodyLength) {
-        continue;
-      }
-      // Match against comment-stripped source so doc-comment prose like
-      // "...a class that implements WorkflowDefinition" is never read as a definition.
-      Matcher pm = classHeaderPattern.matcher(
-        COMMENT_PATTERN.matcher(ac.Body).replaceAll('')
-      );
-      while (pm.find()) {
-        // group(2) is the short class declaration header; the precise word-boundary
-        // interface check runs only on it, never on the full class body.
-        if (!implementsPattern.matcher(pm.group(2)).find()) {
-          continue;
-        }
-        String className = pm.group(1);
-        // Outer class match returns the bare name; inner class is qualified.
-        definitions.add(
-          className.equalsIgnoreCase(ac.Name)
-            ? ac.Name
-            : ac.Name + '.' + className
-        );
-      }
-    }
-    definitions.sort();
-    return definitions;
-  }
-
-  private static Boolean guardsTripped(Long heapGuard, Integer cpuGuard) {
-    return Limits.getHeapSize() > heapGuard || Limits.getCpuTime() > cpuGuard;
-  }
+  // getDefinitionsFromSource and guardsTripped removed to optimize performance and safety.
 
   /**
    * Degraded-mode discovery via the platform's compiled-type index. Heap/CPU cheap.
@@ -1627,6 +1506,23 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   @AuraEnabled
+  public static Id compensateWorkflow(Id instanceId) {
+    checkAuthorization();
+    try {
+      return WorkflowEngine.compensate(instanceId);
+    } catch (Exception ex) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura compensateWorkflow failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
+      throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  @AuraEnabled
   public static void cancelWorkflow(Id instanceId, Boolean runCompensations) {
     checkAuthorization();
     try {
@@ -1715,9 +1611,11 @@ public inherited sharing class WorkflowDashboardController {
         Map<String, Object> state = (Map<String, Object>) JSON.deserializeUntyped(
           resolved
         );
+        String stateKey = (String) state.get('approvalKey');
         if (
           state.get('waitingForApproval') == true &&
-          approvalKey == (String) state.get('approvalKey')
+          approvalKey != null &&
+          approvalKey.equalsIgnoreCase(stateKey)
         ) {
           gateFound = true;
           requiredRole = (String) state.get('approvalRole');
@@ -1908,52 +1806,145 @@ public inherited sharing class WorkflowDashboardController {
       return new List<Map<String, Object>>();
     }
 
-    // Definition_Version__c is a Number field, and Number fields are not groupable
-    // in SOQL (isGroupable() == false) — a `GROUP BY Definition_Version__c` throws
-    // "field ... can not be grouped in a query call". So we tally per version+status
-    // in Apex instead. The inline SOQL for-loop streams rows in 200-record chunks,
-    // keeping heap flat up to the 50k query-row limit. WITH SYSTEM_MODE mirrors the
-    // dashboard's intent to aggregate across all instances regardless of sharing/FLS.
-
-    // Accumulate counts per version: key = version (may be null → use 'null' string key)
     Map<String, Integer> nonTerminalByVersion = new Map<String, Integer>();
     Map<String, Integer> failedByVersion = new Map<String, Integer>();
     Map<String, Integer> terminalByVersion = new Map<String, Integer>();
     Map<String, Integer> versionKeyToInt = new Map<String, Integer>();
 
-    for (Workflow_Instance__c inst : [
-      SELECT Definition_Version__c, Status__c
+    Integer totalCount = [
+      SELECT COUNT()
       FROM Workflow_Instance__c
       WHERE Workflow_Name__c = :workflowName
       WITH SYSTEM_MODE
-    ]) {
-      // Definition_Version__c is a Number, so it materializes as Decimal on the SObject.
-      Decimal verDecimal = inst.Definition_Version__c;
-      Integer ver = verDecimal == null ? null : verDecimal.intValue();
-      String verKey = ver == null ? 'null' : String.valueOf(ver);
-      String stat = inst.Status__c;
+    ];
 
-      if (!nonTerminalByVersion.containsKey(verKey)) {
+    if (totalCount <= 40000) {
+      for (Workflow_Instance__c inst : [
+        SELECT Definition_Version__c, Status__c
+        FROM Workflow_Instance__c
+        WHERE Workflow_Name__c = :workflowName
+        WITH SYSTEM_MODE
+      ]) {
+        Decimal verDecimal = inst.Definition_Version__c;
+        Integer ver = verDecimal == null ? null : verDecimal.intValue();
+        String verKey = ver == null ? 'null' : String.valueOf(ver);
+        String stat = inst.Status__c;
+
+        if (!nonTerminalByVersion.containsKey(verKey)) {
+          nonTerminalByVersion.put(verKey, 0);
+          failedByVersion.put(verKey, 0);
+          terminalByVersion.put(verKey, 0);
+          versionKeyToInt.put(verKey, ver);
+        }
+
+        if (NON_TERMINAL_STATUSES.contains(stat)) {
+          nonTerminalByVersion.put(verKey, nonTerminalByVersion.get(verKey) + 1);
+        } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
+          failedByVersion.put(verKey, failedByVersion.get(verKey) + 1);
+        } else {
+          terminalByVersion.put(verKey, terminalByVersion.get(verKey) + 1);
+        }
+      }
+    } else {
+      Set<Decimal> versionDecimals = new Set<Decimal>();
+      Boolean hasNullVersion = false;
+
+      // Query active/failed runs to extract version numbers
+      for (Workflow_Instance__c inst : [
+        SELECT Definition_Version__c
+        FROM Workflow_Instance__c
+        WHERE Workflow_Name__c = :workflowName
+          AND Status__c NOT IN ('Completed', 'Cancelled', 'ContinuedAsNew')
+        WITH SYSTEM_MODE
+        LIMIT 5000
+      ]) {
+        if (inst.Definition_Version__c != null) {
+          versionDecimals.add(inst.Definition_Version__c);
+        } else {
+          hasNullVersion = true;
+        }
+      }
+
+      // Query recent runs to find other versions
+      for (Workflow_Instance__c inst : [
+        SELECT Definition_Version__c
+        FROM Workflow_Instance__c
+        WHERE Workflow_Name__c = :workflowName
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC
+        LIMIT 10000
+      ]) {
+        if (inst.Definition_Version__c != null) {
+          versionDecimals.add(inst.Definition_Version__c);
+        } else {
+          hasNullVersion = true;
+        }
+      }
+
+      List<Decimal> versionsToQuery = new List<Decimal>(versionDecimals);
+
+      for (Decimal ver : versionsToQuery) {
+        Integer verInt = ver == null ? null : ver.intValue();
+        String verKey = String.valueOf(verInt);
+
         nonTerminalByVersion.put(verKey, 0);
         failedByVersion.put(verKey, 0);
         terminalByVersion.put(verKey, 0);
-        versionKeyToInt.put(verKey, ver);
+        versionKeyToInt.put(verKey, verInt);
+
+        for (AggregateResult ar : [
+          SELECT Status__c, COUNT(Id) cnt
+          FROM Workflow_Instance__c
+          WHERE Workflow_Name__c = :workflowName
+            AND Definition_Version__c = :ver
+          WITH SYSTEM_MODE
+          GROUP BY Status__c
+        ]) {
+          String stat = (String) ar.get('Status__c');
+          Integer count = (Integer) ar.get('cnt');
+
+          if (NON_TERMINAL_STATUSES.contains(stat)) {
+            nonTerminalByVersion.put(verKey, nonTerminalByVersion.get(verKey) + count);
+          } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
+            failedByVersion.put(verKey, failedByVersion.get(verKey) + count);
+          } else {
+            terminalByVersion.put(verKey, terminalByVersion.get(verKey) + count);
+          }
+        }
       }
 
-      if (NON_TERMINAL_STATUSES.contains(stat)) {
-        nonTerminalByVersion.put(verKey, nonTerminalByVersion.get(verKey) + 1);
-      } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
-        failedByVersion.put(verKey, failedByVersion.get(verKey) + 1);
-      } else {
-        terminalByVersion.put(verKey, terminalByVersion.get(verKey) + 1);
+      if (hasNullVersion) {
+        String verKey = 'null';
+        nonTerminalByVersion.put(verKey, 0);
+        failedByVersion.put(verKey, 0);
+        terminalByVersion.put(verKey, 0);
+        versionKeyToInt.put(verKey, null);
+
+        for (AggregateResult ar : [
+          SELECT Status__c, COUNT(Id) cnt
+          FROM Workflow_Instance__c
+          WHERE Workflow_Name__c = :workflowName
+            AND Definition_Version__c = NULL
+          WITH SYSTEM_MODE
+          GROUP BY Status__c
+        ]) {
+          String stat = (String) ar.get('Status__c');
+          Integer count = (Integer) ar.get('cnt');
+
+          if (NON_TERMINAL_STATUSES.contains(stat)) {
+            nonTerminalByVersion.put(verKey, nonTerminalByVersion.get(verKey) + count);
+          } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
+            failedByVersion.put(verKey, failedByVersion.get(verKey) + count);
+          } else {
+            terminalByVersion.put(verKey, terminalByVersion.get(verKey) + count);
+          }
+        }
       }
     }
 
     // Sort version keys numerically (null sorts last)
     List<String> sortedKeys = new List<String>(nonTerminalByVersion.keySet());
     sortedKeys.sort();
-    // Move 'null' key to end if present.
-    // Apex List.remove() only accepts an Integer index, so locate-then-remove.
     Integer nullKeyIdx = sortedKeys.indexOf('null');
     if (nullKeyIdx != -1) {
       sortedKeys.remove(nullKeyIdx);
@@ -1971,11 +1962,8 @@ public inherited sharing class WorkflowDashboardController {
           'nonTerminalCount' => nonTerminal,
           'failedCount' => failed,
           'terminalCount' => terminal,
-          'totalCount' => nonTerminal +
-          failed +
-          terminal,
-          'safeToRetire' => nonTerminal == 0 &&
-          failed == 0
+          'totalCount' => nonTerminal + failed + terminal,
+          'safeToRetire' => nonTerminal == 0 && failed == 0
         }
       );
     }
@@ -2287,7 +2275,7 @@ public inherited sharing class WorkflowDashboardController {
 
   private static final Integer FAILURE_BREAKDOWN_CAP = 2000;
 
-  @AuraEnabled(cacheable=true)
+  @AuraEnabled
   public static Map<String, Object> getWorkflowFailureBreakdown(
     String workflowName,
     String timeWindow

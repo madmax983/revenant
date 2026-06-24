@@ -912,6 +912,16 @@
                                              class="slds-m-right_small"
                                              title="Park all new and in-flight executions of this workflow definition">
                                          </lightning-button>
+                                         <template if:true={isCompensatable}>
+                                             <lightning-button
+                                                 label="Compensate"
+                                                 icon-name="utility:undo"
+                                                 variant="brand"
+                                                 onclick={handleOpenCompensateModal}
+                                                 class="slds-m-right_small brand-button"
+                                                 title="Spawn a compensating workflow run to reverse side effects">
+                                             </lightning-button>
+                                         </template>
                                          <template if:true={isCancelable}>
                                              <lightning-button
                                                  label="Cancel Workflow"
@@ -978,6 +988,16 @@
                                             <div class="slds-text-body_regular">
                                                 <a href="javascript:void(0);" data-id={successor.Id} onclick={handleSelectRelatedInstance} class="slds-text-link">
                                                     {successor.Name}
+                                                </a>
+                                            </div>
+                                        </div>
+                                    </template>
+                                    <template if:true={selectedInst.Compensated_By__c}>
+                                        <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
+                                            <div class="slds-text-title slds-text-color_weak">Compensated By</div>
+                                            <div class="slds-text-body_regular">
+                                                <a href="javascript:void(0);" data-id={selectedInst.Compensated_By__c} onclick={handleSelectRelatedInstance} class="slds-text-link">
+                                                    {selectedInst.Compensated_By__r.Name}
                                                 </a>
                                             </div>
                                         </div>
@@ -1404,6 +1424,33 @@
                     <footer class="slds-modal__footer">
                         <lightning-button label="Cancel" onclick={handleCloseModal} class="slds-m-right_small"></lightning-button>
                         <lightning-button label="Execute Workflow" variant="brand" onclick={handleExecuteWorkflow} loading={executingLaunch} disabled={executingLaunch} class="brand-button"></lightning-button>
+                    </footer>
+                </div>
+            </section>
+            <div class="slds-backdrop slds-backdrop_open" role="presentation"></div>
+        </template>
+
+        <!-- Compensate Confirmation Modal -->
+        <template if:true={compensateModalOpen}>
+            <section role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="compensate-modal-title" class="slds-modal slds-fade-in-open">
+                <div class="slds-modal__container">
+                    <header class="slds-modal__header">
+                        <lightning-button-icon
+                            icon-name="utility:close"
+                            alternative-text="Close"
+                            variant="bare-inverse"
+                            onclick={handleCloseCompensateModal}
+                            class="slds-modal__close">
+                        </lightning-button-icon>
+                        <h2 id="compensate-modal-title" class="slds-modal__title slds-hyphenate font-outfit">Manually Compensate Workflow</h2>
+                    </header>
+                    <div class="slds-modal__content slds-p-around_medium">
+                        <p>Are you sure you want to compensate this completed workflow instance?</p>
+                        <p class="slds-m-top_small slds-text-color_weak">This will spawn a new compensating workflow instance (linked via Previous Instance) to execute all compensatable steps in reverse order with a full audit trail.</p>
+                    </div>
+                    <footer class="slds-modal__footer">
+                        <lightning-button label="Never Mind" onclick={handleCloseCompensateModal} class="slds-m-right_small"></lightning-button>
+                        <lightning-button label="Compensate" variant="brand" icon-name="utility:undo" onclick={handleConfirmCompensate} class="brand-button"></lightning-button>
                     </footer>
                 </div>
             </section>
