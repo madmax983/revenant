@@ -6,6 +6,8 @@ public inherited sharing class WorkflowDashboardController {
   // Binding variable for the stalled-instance cutoff DateTime (used in getStalledInstances /
   // getStalledCount dynamic SOQL — same reason as likeTerm above).
   private static Datetime stalledCutoff;
+  // Binding variable for filtering by attributes (Set of matching instance IDs).
+  private static Set<Id> matchingInstanceIds;
 
   private static final Set<String> TERMINAL_STATUSES = new Set<String>{
     'Completed',
@@ -225,6 +227,46 @@ public inherited sharing class WorkflowDashboardController {
     return payloadFiles;
   }
 
+  private static void resolveMatchingAttributes(String attributesFilterJson) {
+    matchingInstanceIds = null;
+    if (String.isBlank(attributesFilterJson)) {
+      return;
+    }
+    Map<String, String> attrs = new Map<String, String>();
+    try {
+      Map<String, Object> raw = (Map<String, Object>) JSON.deserializeUntyped(attributesFilterJson);
+      for (String k : raw.keySet()) {
+        attrs.put(k, String.valueOf(raw.get(k)));
+      }
+    } catch (Exception ex) {
+      System.debug(LoggingLevel.WARN, 'Failed to deserialize attributesFilterJson: ' + ex.getMessage());
+      return;
+    }
+    if (attrs.isEmpty()) {
+      return;
+    }
+
+    List<String> targetKeyValues = new List<String>();
+    for (String k : attrs.keySet()) {
+      String val = attrs.get(k);
+      targetKeyValues.add(k + '=' + (val == null ? '' : val));
+    }
+
+    List<AggregateResult> aggResults = [
+      SELECT Workflow_Instance__c
+      FROM Workflow_Search_Attribute__c
+      WHERE Key_Value__c IN :targetKeyValues
+      WITH SYSTEM_MODE
+      GROUP BY Workflow_Instance__c
+      HAVING COUNT(Id) = :targetKeyValues.size()
+    ];
+
+    matchingInstanceIds = new Set<Id>();
+    for (AggregateResult ar : aggResults) {
+      matchingInstanceIds.add((Id) ar.get('Workflow_Instance__c'));
+    }
+  }
+
   private static String buildWhereClause(
     String workflowName,
     String status,
@@ -254,6 +296,9 @@ public inherited sharing class WorkflowDashboardController {
       conditions.add(
         '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
+    }
+    if (matchingInstanceIds != null) {
+      conditions.add('Id IN :matchingInstanceIds');
     }
     return conditions.isEmpty()
       ? ''
@@ -287,6 +332,9 @@ public inherited sharing class WorkflowDashboardController {
         '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
     }
+    if (matchingInstanceIds != null) {
+      conditions.add('Id IN :matchingInstanceIds');
+    }
     return String.join(conditions, ' AND ');
   }
 
@@ -305,7 +353,29 @@ public inherited sharing class WorkflowDashboardController {
       null,
       limitSize,
       offsetSize,
-      cacheBuster
+      cacheBuster,
+      null
+    );
+  }
+
+  public static List<Map<String, Object>> getFilteredInstances(
+    String workflowName,
+    String status,
+    String searchTerm,
+    String failureCategory,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster
+  ) {
+    return getFilteredInstances(
+      workflowName,
+      status,
+      searchTerm,
+      failureCategory,
+      limitSize,
+      offsetSize,
+      cacheBuster,
+      null
     );
   }
 
@@ -317,9 +387,14 @@ public inherited sharing class WorkflowDashboardController {
     String failureCategory,
     Integer limitSize,
     Integer offsetSize,
-    String cacheBuster
+    String cacheBuster,
+    String attributesFilterJson
   ) {
     checkAuthorization();
+    resolveMatchingAttributes(attributesFilterJson);
+    if (matchingInstanceIds != null && matchingInstanceIds.isEmpty()) {
+      return new List<Map<String, Object>>();
+    }
 
     if (limitSize == null || limitSize <= 0) {
       limitSize = 50;
@@ -751,17 +826,23 @@ public inherited sharing class WorkflowDashboardController {
     return idleMinutes > thresholdMinutes;
   }
 
-  @AuraEnabled
   public static Map<String, Integer> getWorkflowStats(
     String workflowName,
     String status,
     String searchTerm
   ) {
+    return getWorkflowStats(workflowName, status, searchTerm, null);
+  }
+
+  @AuraEnabled
+  public static Map<String, Integer> getWorkflowStats(
+    String workflowName,
+    String status,
+    String searchTerm,
+    String attributesFilterJson
+  ) {
     checkAuthorization();
-    String query =
-      'SELECT Status__c, COUNT(Id) cnt FROM Workflow_Instance__c' +
-      buildWhereClause(workflowName, status, searchTerm) +
-      ' GROUP BY Status__c';
+    resolveMatchingAttributes(attributesFilterJson);
 
     Map<String, Integer> results = new Map<String, Integer>{
       'total' => 0,
@@ -769,6 +850,15 @@ public inherited sharing class WorkflowDashboardController {
       'completed' => 0,
       'failed' => 0
     };
+
+    if (matchingInstanceIds != null && matchingInstanceIds.isEmpty()) {
+      return results;
+    }
+
+    String query =
+      'SELECT Status__c, COUNT(Id) cnt FROM Workflow_Instance__c' +
+      buildWhereClause(workflowName, status, searchTerm) +
+      ' GROUP BY Status__c';
 
     for (AggregateResult ar : Database.query(query, AccessLevel.SYSTEM_MODE)) {
       String stat = (String) ar.get('Status__c');
@@ -1118,6 +1208,14 @@ public inherited sharing class WorkflowDashboardController {
       }
     }
 
+    List<Workflow_Search_Attribute__c> attributes = [
+      SELECT Key__c, Value__c
+      FROM Workflow_Search_Attribute__c
+      WHERE Workflow_Instance__c = :instanceId
+      WITH SYSTEM_MODE
+      ORDER BY Key__c ASC
+    ];
+
     return new Map<String, Object>{
       'instance' => instance,
       'steps' => steps,
@@ -1126,7 +1224,8 @@ public inherited sharing class WorkflowDashboardController {
       'waitingOn' => waitingOn,
       'pendingCompensationCount' => pendingCompensations.size(),
       'pendingCompensations' => pendingCompensations,
-      'payloadFiles' => payloadFiles
+      'payloadFiles' => payloadFiles,
+      'attributes' => attributes
     };
   }
 
