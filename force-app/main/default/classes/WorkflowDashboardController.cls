@@ -2492,4 +2492,103 @@ public inherited sharing class WorkflowDashboardController {
       return this.signature.compareTo(that.signature);
     }
   }
+
+  @AuraEnabled
+  public static void injectSignal(Id instanceId, String signalName, String payloadJson) {
+    checkAuthorization();
+    
+    if (
+      !FeatureManagement.checkPermission('Workflow_Signal_Injection') &&
+      !currentUserHasModifyAllData()
+    ) {
+      AuraHandledException ex = new AuraHandledException(
+        'Unauthorized: this action requires the "Workflow_Signal_Injection" permission.'
+      );
+      ex.setMessage(
+        'Unauthorized: this action requires the "Workflow_Signal_Injection" permission.'
+      );
+      throw ex;
+    }
+
+    if (instanceId == null) {
+      AuraHandledException ex = new AuraHandledException('Instance ID is required.');
+      ex.setMessage('Instance ID is required.');
+      throw ex;
+    }
+
+    if (String.isBlank(signalName)) {
+      AuraHandledException ex = new AuraHandledException('Signal name is required.');
+      ex.setMessage('Signal name is required.');
+      throw ex;
+    }
+
+    List<Workflow_Instance__c> instances = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    if (instances.isEmpty()) {
+      AuraHandledException ex = new AuraHandledException('Workflow instance not found.');
+      ex.setMessage('Workflow instance not found.');
+      throw ex;
+    }
+    
+    Workflow_Instance__c inst = instances[0];
+    if (inst.Status__c != 'Suspended') {
+      AuraHandledException ex = new AuraHandledException('Signal injection is only allowed on Suspended instances.');
+      ex.setMessage('Signal injection is only allowed on Suspended instances.');
+      throw ex;
+    }
+
+    if (payloadJson != null && payloadJson.length() > 250000) {
+      AuraHandledException ex = new AuraHandledException('Payload size exceeds maximum allowed limit of 250KB.');
+      ex.setMessage('Payload size exceeds maximum allowed limit of 250KB.');
+      throw ex;
+    }
+
+    Map<String, Object> payloadMap = new Map<String, Object>();
+    if (String.isNotBlank(payloadJson)) {
+      try {
+        Object parsed = JSON.deserializeUntyped(payloadJson);
+        if (parsed instanceof Map<String, Object>) {
+          payloadMap = (Map<String, Object>) parsed;
+        } else {
+          AuraHandledException ex = new AuraHandledException('Invalid payload JSON: Payload JSON must be a JSON object (e.g., {"key": "value"}).');
+          ex.setMessage('Invalid payload JSON: Payload JSON must be a JSON object (e.g., {"key": "value"}).');
+          throw ex;
+        }
+      } catch (AuraHandledException ex) {
+        throw ex;
+      } catch (Exception ex) {
+        AuraHandledException ex2 = new AuraHandledException('Invalid payload JSON: ' + ex.getMessage());
+        ex2.setMessage('Invalid payload JSON: ' + ex.getMessage());
+        throw ex2;
+      }
+    }
+
+    payloadMap.put('operatorId', UserInfo.getUserId());
+    payloadMap.put('operatorUsername', UserInfo.getUserName());
+    payloadMap.put('operator', UserInfo.getName());
+
+    try {
+      WorkflowEngine.signal(
+        String.valueOf(instanceId),
+        signalName,
+        JSON.serialize(payloadMap)
+      );
+    } catch (Exception ex) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura injectSignal failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
+      AuraHandledException aex = new AuraHandledException(ex.getMessage());
+      aex.setMessage(ex.getMessage());
+      throw aex;
+    }
+  }
 }

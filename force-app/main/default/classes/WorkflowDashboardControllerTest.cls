@@ -3264,4 +3264,309 @@ public class WorkflowDashboardControllerTest {
     Workflow_Instance__c instReload = (Workflow_Instance__c) details.get('instance');
     System.assertEquals(compensatingId, instReload.Compensated_By__c, 'getInstanceDetails should return linked Compensated_By__c field');
   }
+
+  @isTest
+  static void testInjectSignalSuccess() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'SignalKey1',
+      Input__c = '"InputData"',
+      Sleep_Until__c = Datetime.now().addDays(1)
+    );
+    insert inst;
+
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Test.startTest();
+    WorkflowDashboardController.injectSignal(inst.Id, 'PaymentReceived', '{"amount": 100}');
+    Test.stopTest();
+
+    List<Workflow_Signal__c> signals = [
+      SELECT Id, Signal_Name__c, Payload__c
+      FROM Workflow_Signal__c
+      WHERE Workflow_Instance__c = :inst.Id
+    ];
+    System.assertEquals(1, signals.size());
+    System.assertEquals('PaymentReceived', signals[0].Signal_Name__c);
+    System.assert(signals[0].Payload__c.contains('"amount":100') || signals[0].Payload__c.contains('"amount": 100'), 'Payload should match');
+
+    // Verify status mutation and sleep until clearing
+    Workflow_Instance__c updatedInst = [
+      SELECT Status__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Running', updatedInst.Status__c, 'Instance status should transition to Running after signal injection');
+    System.assertEquals(null, updatedInst.Sleep_Until__c, 'Sleep_Until__c should be cleared (null) after signal injection');
+  }
+
+  @isTest
+  static void testInjectSignalNonSuspendedRejection() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'SignalKey2',
+      Input__c = '"InputData"'
+    );
+    insert inst;
+
+    try {
+      WorkflowDashboardController.injectSignal(inst.Id, 'PaymentReceived', '{}');
+      System.assert(false, 'Should throw exception on non-Suspended instance');
+    } catch (AuraHandledException e) {
+      System.assert(e.getMessage().contains('Suspended'), e.getMessage());
+    }
+  }
+
+  @isTest
+  static void testInjectSignalInvalidJsonRejection() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'SignalKey3',
+      Input__c = '"InputData"'
+    );
+    insert inst;
+
+    try {
+      WorkflowDashboardController.injectSignal(inst.Id, 'PaymentReceived', '{invalid}');
+      System.assert(false, 'Should throw exception on invalid JSON');
+    } catch (AuraHandledException e) {
+      System.assert(e.getMessage().contains('Invalid payload JSON'), e.getMessage());
+    }
+  }
+
+  @isTest
+  static void testInjectSignalAuthorization() {
+    Profile stdProfile = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
+    User stdUser = new User(
+      Alias = 'sigusr',
+      Email = 'siguser@testorg.com',
+      EmailEncodingKey = 'UTF-8',
+      LastName = 'Signaler',
+      LanguageLocaleKey = 'en_US',
+      LocaleSidKey = 'en_US',
+      ProfileId = stdProfile.Id,
+      TimeZoneSidKey = 'America/Los_Angeles',
+      UserName = 'stduser_sig_test_' + DateTime.now().getTime() + '@testorg.com'
+    );
+
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insert stdUser;
+      CustomPermission cp = [SELECT Id FROM CustomPermission WHERE DeveloperName = 'Workflow_Admin' LIMIT 1];
+      PermissionSet ps = new PermissionSet(Label = 'Workflow Admin Sig PS', Name = 'Workflow_Admin_Sig_PS');
+      insert ps;
+      insert new SetupEntityAccess(ParentId = ps.Id, SetupEntityId = cp.Id);
+      insert new PermissionSetAssignment(AssigneeId = stdUser.Id, PermissionSetId = ps.Id);
+    }
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'SignalKey4',
+      Input__c = '"InputData"'
+    );
+    insert inst;
+
+    System.runAs(stdUser) {
+      try {
+        WorkflowDashboardController.injectSignal(inst.Id, 'PaymentReceived', '{}');
+        System.assert(false, 'Should be blocked without Workflow_Signal_Injection permission');
+      } catch (AuraHandledException e) {
+        System.assert(e.getMessage().contains('Workflow_Signal_Injection'), e.getMessage());
+      }
+    }
+  }
+
+  @isTest
+  static void testInjectSignalAttribution() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'SignalKey5',
+      Input__c = '"InputData"'
+    );
+    insert inst;
+
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Test.startTest();
+    WorkflowDashboardController.injectSignal(inst.Id, 'PaymentReceived', '{}');
+    Test.stopTest();
+
+    List<Workflow_Signal__c> signals = [
+      SELECT Id, Payload__c
+      FROM Workflow_Signal__c
+      WHERE Workflow_Instance__c = :inst.Id
+    ];
+    System.assertEquals(1, signals.size());
+    
+    Map<String, Object> payloadMap = (Map<String, Object>) JSON.deserializeUntyped(signals[0].Payload__c);
+    System.assertEquals(UserInfo.getUserId(), (String) payloadMap.get('operatorId'), 'operatorId should match running user ID');
+    System.assertEquals(UserInfo.getUserName(), (String) payloadMap.get('operatorUsername'), 'operatorUsername should match running user username');
+    System.assertEquals(UserInfo.getName(), (String) payloadMap.get('operator'), 'operator should match running user display name');
+  }
+
+  @isTest
+  static void testInjectSignalNullInstanceRejection() {
+    try {
+      WorkflowDashboardController.injectSignal(null, 'PaymentReceived', '{}');
+      System.assert(false, 'Should throw exception on null instance ID');
+    } catch (AuraHandledException e) {
+      System.assert(
+        e.getMessage().contains('Workflow instance not found') ||
+        e.getMessage().contains('Instance ID is required'),
+        'Exception message should contain relevant validation error, but was: ' + e.getMessage()
+      );
+    }
+  }
+
+  @isTest
+  static void testInjectSignalBlankSignalNameRejection() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'SignalKeyBlankSig',
+      Input__c = '"InputData"'
+    );
+    insert inst;
+
+    try {
+      WorkflowDashboardController.injectSignal(inst.Id, ' ', '{}');
+      System.assert(false, 'Should throw exception on blank signal name');
+    } catch (AuraHandledException e) {
+      System.assert(e.getMessage().contains('Signal name is required.'), e.getMessage());
+    }
+  }
+
+  @isTest
+  static void testInjectSignalNoDashboardAccess() {
+    Profile stdProfile = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
+    User stdUser = new User(
+      Alias = 'signo',
+      Email = 'signouser@testorg.com',
+      EmailEncodingKey = 'UTF-8',
+      LastName = 'SignalerNo',
+      LanguageLocaleKey = 'en_US',
+      LocaleSidKey = 'en_US',
+      ProfileId = stdProfile.Id,
+      TimeZoneSidKey = 'America/Los_Angeles',
+      UserName = 'stduser_signo_test_' + DateTime.now().getTime() + '@testorg.com'
+    );
+    insert stdUser;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'SignalKey7',
+      Input__c = '"InputData"'
+    );
+    insert inst;
+
+    System.runAs(stdUser) {
+      try {
+        WorkflowDashboardController.injectSignal(inst.Id, 'PaymentReceived', '{}');
+        System.assert(false, 'Should have thrown AuraHandledException');
+      } catch (AuraHandledException e) {
+        System.assert(e.getMessage().contains('Unauthorized: Access to the Workflow Dashboard is restricted.'), e.getMessage());
+      }
+    }
+  }
+
+  @isTest
+  static void testInjectSignalAuthorizationSuccess() {
+    Profile stdProfile = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
+    User stdUser = new User(
+      Alias = 'sigok',
+      Email = 'sigokuser@testorg.com',
+      EmailEncodingKey = 'UTF-8',
+      LastName = 'SignalerOk',
+      LanguageLocaleKey = 'en_US',
+      LocaleSidKey = 'en_US',
+      ProfileId = stdProfile.Id,
+      TimeZoneSidKey = 'America/Los_Angeles',
+      UserName = 'stduser_sigok_test_' + DateTime.now().getTime() + '@testorg.com'
+    );
+
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insert stdUser;
+      
+      CustomPermission cpAdmin = [SELECT Id FROM CustomPermission WHERE DeveloperName = 'Workflow_Admin' LIMIT 1];
+      CustomPermission cpInject = [SELECT Id FROM CustomPermission WHERE DeveloperName = 'Workflow_Signal_Injection' LIMIT 1];
+      
+      PermissionSet ps = new PermissionSet(Label = 'Workflow Admin and Inject PS', Name = 'Workflow_Admin_Inject_PS');
+      insert ps;
+      
+      insert new List<SetupEntityAccess>{
+        new SetupEntityAccess(ParentId = ps.Id, SetupEntityId = cpAdmin.Id),
+        new SetupEntityAccess(ParentId = ps.Id, SetupEntityId = cpInject.Id)
+      };
+      insert new PermissionSetAssignment(AssigneeId = stdUser.Id, PermissionSetId = ps.Id);
+    }
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'SignalKey6',
+      Input__c = '"InputData"'
+    );
+    insert inst;
+
+    WorkflowEngine.disableQueueableInTest = true;
+
+    System.runAs(stdUser) {
+      Test.startTest();
+      WorkflowDashboardController.injectSignal(inst.Id, 'PaymentReceived', '{}');
+      Test.stopTest();
+    }
+
+    List<Workflow_Signal__c> signals = [
+      SELECT Id, Signal_Name__c, Payload__c
+      FROM Workflow_Signal__c
+      WHERE Workflow_Instance__c = :inst.Id
+    ];
+    System.assertEquals(1, signals.size(), 'Should have inserted one signal record');
+  }
+
+  @isTest
+  static void testInjectSignalExceptionMapping() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'SignalKeyException',
+      Input__c = '"InputData"'
+    );
+    insert inst;
+
+    // Use a signal name that is too long (length > 255) to trigger a DmlException inside WorkflowEngine.signal
+    String longSignalName = 'A'.repeat(300);
+
+    try {
+      WorkflowDashboardController.injectSignal(inst.Id, longSignalName, '{}');
+      System.assert(false, 'Should have thrown AuraHandledException due to DmlException mapping');
+    } catch (AuraHandledException e) {
+      System.assertNotEquals(null, e.getMessage(), 'Exception message should not be null');
+    }
+  }
+
+  @isTest
+  static void testInjectSignalOversizedPayloadRejection() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'SignalKeyOversized',
+      Input__c = '"InputData"'
+    );
+    insert inst;
+
+    String oversizedString = 'A'.repeat(250001);
+
+    try {
+      WorkflowDashboardController.injectSignal(inst.Id, 'PaymentReceived', oversizedString);
+      System.assert(false, 'Should have thrown AuraHandledException due to oversized payload');
+    } catch (AuraHandledException e) {
+      System.assert(e.getMessage().contains('Payload size exceeds maximum'), 'Exception message should indicate payload size limit: ' + e.getMessage());
+    }
+  }
 }
