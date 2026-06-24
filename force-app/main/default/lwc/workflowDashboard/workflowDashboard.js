@@ -29,6 +29,7 @@ import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.g
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
 import compensateWorkflow from "@salesforce/apex/WorkflowDashboardController.compensateWorkflow";
+import injectSignal from "@salesforce/apex/WorkflowDashboardController.injectSignal";
 
 const FAILURE_CATEGORY_LABELS = {
   STEP_EXCEPTION: "Step Exception",
@@ -99,6 +100,11 @@ export default class WorkflowDashboard extends LightningElement {
   launchInputJson = "";
   executingLaunch = false;
   launchError = "";
+
+  // Send Signal Action State
+  signalModalOpen = false;
+  signalName = "";
+  signalPayload = "";
 
   // Pagination & Filters State
   selectedWorkflow = "";
@@ -309,6 +315,14 @@ export default class WorkflowDashboard extends LightningElement {
       status === "Paused" ||
       status === "CompensationFailed"
     );
+  }
+
+  get isSuspended() {
+    return this.selectedInst && this.selectedInst.Status__c === "Suspended";
+  }
+
+  get isSendSignalDisabled() {
+    return !this.signalName || !this.signalName.trim();
   }  fetchInstances(isAppend, targetOffset) {
     const requestId = ++this._instanceRequestId;
     if (!isAppend) {
@@ -1630,6 +1644,54 @@ export default class WorkflowDashboard extends LightningElement {
           "Error",
           "Failed to trigger compensation: " + this.reduceErrors(error),
           "error",
+        );
+      })
+      .finally(() => {
+        this.loadingDetails = false;
+      });
+  }
+
+  handleOpenSignalModal() {
+    this.signalModalOpen = true;
+    this.signalName = "";
+    this.signalPayload = "";
+  }
+
+  handleSignalModalClose() {
+    this.signalModalOpen = false;
+    this.signalName = "";
+    this.signalPayload = "";
+  }
+
+  handleSignalNameChange(event) {
+    this.signalName = event.target.value;
+  }
+
+  handleSignalPayloadChange(event) {
+    this.signalPayload = event.target.value;
+  }
+
+  handleSignalModalConfirm() {
+    this.loadingDetails = true;
+    injectSignal({
+      instanceId: this.selectedInstanceId,
+      signalName: this.signalName,
+      payloadJson: this.signalPayload
+    })
+      .then(() => {
+        this.signalModalOpen = false;
+        this.showToast(
+          "Signal Sent",
+          "Signal injected successfully.",
+          "success"
+        );
+        this.loadDetails(true);
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to inject signal: " + this.reduceErrors(error),
+          "error"
         );
       })
       .finally(() => {

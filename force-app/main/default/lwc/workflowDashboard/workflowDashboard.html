@@ -922,6 +922,17 @@
                                                  title="Spawn a compensating workflow run to reverse side effects">
                                              </lightning-button>
                                          </template>
+                                         <template if:true={isSuspended}>
+                                             <lightning-button
+                                                 label="Send Signal"
+                                                 icon-name="utility:record"
+                                                 variant="brand"
+                                                 onclick={handleOpenSignalModal}
+                                                 class="slds-m-right_small brand-button"
+                                                 title="Inject a named signal into this suspended workflow instance"
+                                                 data-id="send-signal-btn">
+                                             </lightning-button>
+                                         </template>
                                          <template if:true={isCancelable}>
                                              <lightning-button
                                                  label="Cancel Workflow"
@@ -1468,6 +1479,53 @@
                     <footer class="slds-modal__footer">
                         <lightning-button label="Never Mind" onclick={handleCloseCompensateModal} class="slds-m-right_small"></lightning-button>
                         <lightning-button label="Compensate" variant="brand" icon-name="utility:undo" onclick={handleConfirmCompensate} class="brand-button"></lightning-button>
+                    </footer>
+                </div>
+            </section>
+            <div class="slds-backdrop slds-backdrop_open" role="presentation"></div>
+        </template>
+
+        <!-- Send Signal Modal -->
+        <template if:true={signalModalOpen}>
+            <section role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="signal-modal-title" class="slds-modal slds-fade-in-open">
+                <div class="slds-modal__container">
+                    <header class="slds-modal__header">
+                        <lightning-button-icon
+                            icon-name="utility:close"
+                            onclick={handleSignalModalClose}
+                            alternative-text="Close"
+                            variant="bare-inverse"
+                            class="slds-modal__close"
+                            data-id="close-signal-modal">
+                        </lightning-button-icon>
+                        <h2 id="signal-modal-title" class="slds-modal__title slds-hyphenate font-outfit">Send Signal</h2>
+                    </header>
+                    <div class="slds-modal__content slds-p-around_medium">
+                        <p class="slds-text-body_regular slds-m-bottom_medium">
+                            Inject a named signal directly into this stuck instance. The signal will follow the standard at-least-once routing and idempotency guarantees.
+                        </p>
+                        <lightning-input
+                            label="Signal Name"
+                            value={signalName}
+                            onchange={handleSignalNameChange}
+                            required
+                            placeholder="e.g. PaymentConfirmed"
+                            class="slds-m-bottom_small signal-name-input"
+                            data-id="signal-name-input">
+                        </lightning-input>
+                        <lightning-textarea
+                            label="Payload JSON (Optional)"
+                            value={signalPayload}
+                            onchange={handleSignalPayloadChange}
+                            placeholder='e.g. {"amount": 100, "status": "success"}'
+                            rows="5"
+                            class="slds-m-bottom_small signal-payload-input"
+                            data-id="signal-payload-input">
+                        </lightning-textarea>
+                    </div>
+                    <footer class="slds-modal__footer">
+                        <lightning-button label="Cancel" onclick={handleSignalModalClose} class="slds-m-right_small" data-id="cancel-signal-btn"></lightning-button>
+                        <lightning-button label="Send Signal" variant="brand" icon-name="utility:send" onclick={handleSignalModalConfirm} class="brand-button" disabled={isSendSignalDisabled} data-id="confirm-signal-btn"></lightning-button>
                     </footer>
                 </div>
             </section>

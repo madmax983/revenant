@@ -486,16 +486,21 @@ describe("c-workflow-dashboard bulk cancel", () => {
   });
 
   it("shows info toast and does not open modal when getCancelEligibleCount returns 0", async () => {
-    getWorkflowStats.mockResolvedValue({ total: 5, active: 5, completed: 0, failed: 0 });
+    getWorkflowStats.mockResolvedValue({
+      total: 5,
+      active: 5,
+      completed: 0,
+      failed: 0,
+    });
     getCancelEligibleCount.mockResolvedValue(0);
 
     const element = createComponent();
     await flushPromises();
 
     const button = Array.from(
-      element.shadowRoot.querySelectorAll("lightning-button")
+      element.shadowRoot.querySelectorAll("lightning-button"),
     ).find((btn) => btn.label && btn.label.startsWith("Cancel ("));
-    
+
     const toastHandler = jest.fn();
     element.addEventListener("lightning__showtoast", toastHandler);
 
@@ -510,16 +515,21 @@ describe("c-workflow-dashboard bulk cancel", () => {
   });
 
   it("shows error toast when getCancelEligibleCount fails", async () => {
-    getWorkflowStats.mockResolvedValue({ total: 5, active: 5, completed: 0, failed: 0 });
+    getWorkflowStats.mockResolvedValue({
+      total: 5,
+      active: 5,
+      completed: 0,
+      failed: 0,
+    });
     getCancelEligibleCount.mockRejectedValue(new Error("Count failed"));
 
     const element = createComponent();
     await flushPromises();
 
     const button = Array.from(
-      element.shadowRoot.querySelectorAll("lightning-button")
+      element.shadowRoot.querySelectorAll("lightning-button"),
     ).find((btn) => btn.label && btn.label.startsWith("Cancel ("));
-    
+
     const toastHandler = jest.fn();
     element.addEventListener("lightning__showtoast", toastHandler);
 
@@ -531,7 +541,12 @@ describe("c-workflow-dashboard bulk cancel", () => {
   });
 
   it("shows error toast when cancelMatchingInstances fails", async () => {
-    getWorkflowStats.mockResolvedValue({ total: 5, active: 5, completed: 0, failed: 0 });
+    getWorkflowStats.mockResolvedValue({
+      total: 5,
+      active: 5,
+      completed: 0,
+      failed: 0,
+    });
     getCancelEligibleCount.mockResolvedValue(3);
     cancelMatchingInstances.mockRejectedValue(new Error("Execution failed"));
 
@@ -539,15 +554,15 @@ describe("c-workflow-dashboard bulk cancel", () => {
     await flushPromises();
 
     const button = Array.from(
-      element.shadowRoot.querySelectorAll("lightning-button")
+      element.shadowRoot.querySelectorAll("lightning-button"),
     ).find((btn) => btn.label && btn.label.startsWith("Cancel ("));
     button.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
     const confirmButton = Array.from(
-      element.shadowRoot.querySelectorAll("lightning-button")
+      element.shadowRoot.querySelectorAll("lightning-button"),
     ).find((btn) => btn.label === "Cancel Instances");
-    
+
     const toastHandler = jest.fn();
     element.addEventListener("lightning__showtoast", toastHandler);
 
@@ -717,7 +732,9 @@ describe("c-workflow-dashboard bulk redrive", () => {
 
     expect(toastHandler).toHaveBeenCalled();
     expect(toastHandler.mock.calls[0][0].detail.variant).toBe("error");
-    expect(toastHandler.mock.calls[0][0].detail.message).toContain("Failed to count re-drive candidates: Count failed");
+    expect(toastHandler.mock.calls[0][0].detail.message).toContain(
+      "Failed to count re-drive candidates: Count failed",
+    );
   });
 
   it("shows error toast when redriveMatchingInstances fails", async () => {
@@ -751,7 +768,9 @@ describe("c-workflow-dashboard bulk redrive", () => {
 
     expect(toastHandler).toHaveBeenCalled();
     expect(toastHandler.mock.calls[0][0].detail.variant).toBe("error");
-    expect(toastHandler.mock.calls[0][0].detail.message).toContain("Failed to re-drive matching instances: Execution failed");
+    expect(toastHandler.mock.calls[0][0].detail.message).toContain(
+      "Failed to re-drive matching instances: Execution failed",
+    );
   });
 });
 
@@ -796,7 +815,8 @@ describe("c-workflow-dashboard details panel", () => {
       children: [],
       payloadFiles: {
         "instance.Progress": {
-          downloadUrl: "/sfc/servlet.shepherd/document/download/069000000000001",
+          downloadUrl:
+            "/sfc/servlet.shepherd/document/download/069000000000001",
           fullLength: 51200,
         },
       },
@@ -813,81 +833,130 @@ describe("c-workflow-dashboard details panel", () => {
     await flushPromises();
 
     // 4. Assert on rendered details in details panel
-    const codeBlocks = Array.from(element.shadowRoot.querySelectorAll("pre.code-block"));
-    const progressBlock = codeBlocks.find((block) => block.textContent === "Progress info");
+    const codeBlocks = Array.from(
+      element.shadowRoot.querySelectorAll("pre.code-block"),
+    );
+    const progressBlock = codeBlocks.find(
+      (block) => block.textContent === "Progress info",
+    );
     expect(progressBlock).not.toBeNull();
 
     const links = Array.from(element.shadowRoot.querySelectorAll("a"));
-    const progressLink = links.find((link) => link.textContent === "Download full payload (50 KB)");
+    const progressLink = links.find(
+      (link) => link.textContent === "Download full payload (50 KB)",
+    );
     expect(progressLink).not.toBeNull();
-    expect(progressLink.getAttribute("href")).toBe("/sfc/servlet.shepherd/document/download/069000000000001");
+    expect(progressLink.getAttribute("href")).toBe(
+      "/sfc/servlet.shepherd/document/download/069000000000001",
+    );
   });
 
   it("renders progress payload without offloaded link when progressFile is absent", async () => {
     getFilteredInstances.mockResolvedValue([
-      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" }
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+      },
     ]);
     getInstanceDetails.mockResolvedValue({
-      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running", Progress__c: "Standard progress info" },
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+        Progress__c: "Standard progress info",
+      },
       steps: [],
       children: [],
-      payloadFiles: {}
+      payloadFiles: {},
     });
 
     const element = createComponent();
     await flushPromises();
-    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
     await flushPromises();
     await flushPromises();
 
-    const codeBlocks = Array.from(element.shadowRoot.querySelectorAll("pre.code-block"));
-    const progressBlock = codeBlocks.find((block) => block.textContent === "Standard progress info");
+    const codeBlocks = Array.from(
+      element.shadowRoot.querySelectorAll("pre.code-block"),
+    );
+    const progressBlock = codeBlocks.find(
+      (block) => block.textContent === "Standard progress info",
+    );
     expect(progressBlock).not.toBeNull();
 
     const links = Array.from(element.shadowRoot.querySelectorAll("a"));
-    const progressLink = links.find((link) => link.textContent.includes("Download full payload"));
+    const progressLink = links.find((link) =>
+      link.textContent.includes("Download full payload"),
+    );
     expect(progressLink).toBeUndefined();
   });
 
   it("prettifies and renders valid JSON progress payloads", async () => {
     getFilteredInstances.mockResolvedValue([
-      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" }
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+      },
     ]);
     getInstanceDetails.mockResolvedValue({
-      instance: { 
-        Id: "a0G000000000001", 
-        Name: "WI-0001", 
-        Workflow_Name__c: "TestWorkflow", 
-        Status__c: "Running", 
-        Progress__c: "{\"status\":\"ok\",\"step\":3}" 
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+        Progress__c: '{"status":"ok","step":3}',
       },
       steps: [],
       children: [],
-      payloadFiles: {}
+      payloadFiles: {},
     });
 
     const element = createComponent();
     await flushPromises();
-    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
     await flushPromises();
     await flushPromises();
 
-    const codeBlocks = Array.from(element.shadowRoot.querySelectorAll("pre.code-block"));
-    const expectedFormattedJson = JSON.stringify({ status: "ok", step: 3 }, null, 2);
-    const progressBlock = codeBlocks.find((block) => block.textContent === expectedFormattedJson);
+    const codeBlocks = Array.from(
+      element.shadowRoot.querySelectorAll("pre.code-block"),
+    );
+    const expectedFormattedJson = JSON.stringify(
+      { status: "ok", step: 3 },
+      null,
+      2,
+    );
+    const progressBlock = codeBlocks.find(
+      (block) => block.textContent === expectedFormattedJson,
+    );
     expect(progressBlock).not.toBeNull();
   });
 
   it("handles empty details response without crashing", async () => {
     getFilteredInstances.mockResolvedValue([
-      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" }
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+      },
     ]);
     getInstanceDetails.mockResolvedValue(null);
 
     const element = createComponent();
     await flushPromises();
-    
-    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
     await flushPromises();
     await flushPromises();
 
@@ -897,10 +966,20 @@ describe("c-workflow-dashboard details panel", () => {
 
   it("renders per-step budget indicator and flags limit pressure", async () => {
     getFilteredInstances.mockResolvedValue([
-      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" }
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+      },
     ]);
     getInstanceDetails.mockResolvedValue({
-      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" },
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+      },
       steps: [
         {
           Id: "step1",
@@ -928,15 +1007,17 @@ describe("c-workflow-dashboard details panel", () => {
           CPU_Time_Ms__c: null,
           SOQL_Query_Count__c: null,
           Heap_Size_Bytes__c: null,
-        }
+        },
       ],
       children: [],
-      payloadFiles: {}
+      payloadFiles: {},
     });
 
     const element = createComponent();
     await flushPromises();
-    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
     await flushPromises();
     await flushPromises();
 
@@ -945,13 +1026,19 @@ describe("c-workflow-dashboard details panel", () => {
     expect(stepCards.length).toBe(3);
 
     // Verify step 1 (normal telemetry)
-    const usageTexts = Array.from(element.shadowRoot.querySelectorAll(".step-card")).map(card => card.textContent);
-    
+    const usageTexts = Array.from(
+      element.shadowRoot.querySelectorAll(".step-card"),
+    ).map((card) => card.textContent);
+
     // Check normal usage text
-    expect(usageTexts[0]).toContain("Resource Usage: CPU: 1000 ms (2%) | SOQL: 10/200 (5%) | Heap: 1.00 MB (9%)");
-    
+    expect(usageTexts[0]).toContain(
+      "Resource Usage: CPU: 1000 ms (2%) | SOQL: 10/200 (5%) | Heap: 1.00 MB (9%)",
+    );
+
     // Check limit pressure warning and style for step 2
-    expect(usageTexts[1]).toContain("Resource Usage: CPU: 50000 ms (83%) | SOQL: 5/200 (3%) | Heap: 0.48 MB (4%)");
+    expect(usageTexts[1]).toContain(
+      "Resource Usage: CPU: 50000 ms (83%) | SOQL: 5/200 (3%) | Heap: 0.48 MB (4%)",
+    );
     const warningIcon = stepCards[1].querySelector("lightning-icon");
     expect(warningIcon).not.toBeNull();
     expect(warningIcon.alternativeText).toBe("Limit Pressure");
@@ -962,10 +1049,20 @@ describe("c-workflow-dashboard details panel", () => {
 
   it("guards against null/undefined telemetry and retry count values to prevent NaN and unrendered retries", async () => {
     getFilteredInstances.mockResolvedValue([
-      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" }
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+      },
     ]);
     getInstanceDetails.mockResolvedValue({
-      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" },
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+      },
       steps: [
         {
           Id: "step1",
@@ -976,15 +1073,17 @@ describe("c-workflow-dashboard details panel", () => {
           SOQL_Query_Count__c: null,
           Heap_Size_Bytes__c: undefined,
           Retry_Count__c: null,
-        }
+        },
       ],
       children: [],
-      payloadFiles: {}
+      payloadFiles: {},
     });
 
     const element = createComponent();
     await flushPromises();
-    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
     await flushPromises();
     await flushPromises();
 
@@ -992,7 +1091,9 @@ describe("c-workflow-dashboard details panel", () => {
     expect(stepCards.length).toBe(1);
 
     const usageText = stepCards[0].textContent;
-    expect(usageText).toContain("Resource Usage: CPU: 1000 ms (2%) | SOQL: 0/200 (0%) | Heap: 0.00 MB (0%)");
+    expect(usageText).toContain(
+      "Resource Usage: CPU: 1000 ms (2%) | SOQL: 0/200 (0%) | Heap: 0.00 MB (0%)",
+    );
     expect(usageText).toContain("Retries: —");
   });
 });
@@ -1016,33 +1117,57 @@ describe("c-workflow-dashboard operator signal injection", () => {
   it("renders Send Signal button for Suspended instance, but not for other statuses", async () => {
     // 1. Check Cancelled status first
     getFilteredInstances.mockResolvedValue([
-      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Cancelled" }
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Cancelled",
+      },
     ]);
     getInstanceDetails.mockResolvedValue({
-      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Cancelled" },
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Cancelled",
+      },
       steps: [],
       children: [],
-      payloadFiles: {}
+      payloadFiles: {},
     });
 
     const element = createComponent();
     await flushPromises();
-    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
     await flushPromises();
     await flushPromises();
 
-    let sendSignalBtn = element.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    let sendSignalBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="send-signal-btn"]',
+    );
     expect(sendSignalBtn).toBeNull();
 
     // 2. Check Suspended status
     getFilteredInstances.mockResolvedValue([
-      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" }
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
     ]);
     getInstanceDetails.mockResolvedValue({
-      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" },
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
       steps: [],
       children: [],
-      payloadFiles: {}
+      payloadFiles: {},
     });
 
     while (document.body.firstChild) {
@@ -1050,32 +1175,50 @@ describe("c-workflow-dashboard operator signal injection", () => {
     }
     const elementSuspended = createComponent();
     await flushPromises();
-    elementSuspended.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    elementSuspended.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
     await flushPromises();
     await flushPromises();
 
-    sendSignalBtn = elementSuspended.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    sendSignalBtn = elementSuspended.shadowRoot.querySelector(
+      'lightning-button[data-id="send-signal-btn"]',
+    );
     expect(sendSignalBtn).not.toBeNull();
   });
 
   it("opens modal on click, verifies inputs, and confirm button is disabled by default", async () => {
     getFilteredInstances.mockResolvedValue([
-      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" }
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
     ]);
     getInstanceDetails.mockResolvedValue({
-      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" },
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
       steps: [],
       children: [],
-      payloadFiles: {}
+      payloadFiles: {},
     });
 
     const element = createComponent();
     await flushPromises();
-    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
     await flushPromises();
     await flushPromises();
 
-    const sendSignalBtn = element.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    const sendSignalBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="send-signal-btn"]',
+    );
     sendSignalBtn.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
@@ -1084,40 +1227,64 @@ describe("c-workflow-dashboard operator signal injection", () => {
     expect(modal).not.toBeNull();
 
     // Verify Signal Name input and Payload JSON textarea are rendered
-    const nameInput = element.shadowRoot.querySelector('lightning-input[data-id="signal-name-input"]');
+    const nameInput = element.shadowRoot.querySelector(
+      'lightning-input[data-id="signal-name-input"]',
+    );
     expect(nameInput).not.toBeNull();
-    const payloadTextarea = element.shadowRoot.querySelector('lightning-textarea[data-id="signal-payload-input"]');
+    const payloadTextarea = element.shadowRoot.querySelector(
+      'lightning-textarea[data-id="signal-payload-input"]',
+    );
     expect(payloadTextarea).not.toBeNull();
 
     // Verify confirm button in modal is disabled when Signal Name is empty
-    const confirmBtn = element.shadowRoot.querySelector('lightning-button[data-id="confirm-signal-btn"]');
+    const confirmBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="confirm-signal-btn"]',
+    );
     expect(confirmBtn).not.toBeNull();
     expect(confirmBtn.disabled).toBe(true);
   });
 
   it("enables confirm button when Signal Name is provided, and handles optional Payload JSON", async () => {
     getFilteredInstances.mockResolvedValue([
-      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" }
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
     ]);
     getInstanceDetails.mockResolvedValue({
-      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" },
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
       steps: [],
       children: [],
-      payloadFiles: {}
+      payloadFiles: {},
     });
 
     const element = createComponent();
     await flushPromises();
-    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
     await flushPromises();
     await flushPromises();
 
-    const sendSignalBtn = element.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    const sendSignalBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="send-signal-btn"]',
+    );
     sendSignalBtn.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
-    const nameInput = element.shadowRoot.querySelector('lightning-input[data-id="signal-name-input"]');
-    const confirmBtn = element.shadowRoot.querySelector('lightning-button[data-id="confirm-signal-btn"]');
+    const nameInput = element.shadowRoot.querySelector(
+      'lightning-input[data-id="signal-name-input"]',
+    );
+    const confirmBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="confirm-signal-btn"]',
+    );
 
     // Initially disabled
     expect(confirmBtn.disabled).toBe(true);
@@ -1139,33 +1306,51 @@ describe("c-workflow-dashboard operator signal injection", () => {
 
   it("calls injectSignal with correct arguments on confirm (success), shows success toast, closes modal, and refreshes instance details", async () => {
     getFilteredInstances.mockResolvedValue([
-      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" }
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
     ]);
     getInstanceDetails.mockResolvedValue({
-      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" },
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
       steps: [],
       children: [],
-      payloadFiles: {}
+      payloadFiles: {},
     });
     injectSignal.mockResolvedValue({ success: true });
 
     const element = createComponent();
     await flushPromises();
-    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
     await flushPromises();
     await flushPromises();
 
     // Click "Send Signal" button to open modal
-    const sendSignalBtn = element.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    const sendSignalBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="send-signal-btn"]',
+    );
     sendSignalBtn.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
     // Set input values
-    const nameInput = element.shadowRoot.querySelector('lightning-input[data-id="signal-name-input"]');
+    const nameInput = element.shadowRoot.querySelector(
+      'lightning-input[data-id="signal-name-input"]',
+    );
     nameInput.value = "PaymentReceived";
     nameInput.dispatchEvent(new CustomEvent("change"));
 
-    const payloadTextarea = element.shadowRoot.querySelector('lightning-textarea[data-id="signal-payload-input"]');
+    const payloadTextarea = element.shadowRoot.querySelector(
+      'lightning-textarea[data-id="signal-payload-input"]',
+    );
     payloadTextarea.value = '{"amount": 100}';
     payloadTextarea.dispatchEvent(new CustomEvent("change"));
 
@@ -1179,7 +1364,9 @@ describe("c-workflow-dashboard operator signal injection", () => {
     getInstanceDetails.mockClear();
 
     // Click confirm button
-    const confirmBtn = element.shadowRoot.querySelector('lightning-button[data-id="confirm-signal-btn"]');
+    const confirmBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="confirm-signal-btn"]',
+    );
     confirmBtn.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
@@ -1187,7 +1374,7 @@ describe("c-workflow-dashboard operator signal injection", () => {
     expect(injectSignal).toHaveBeenCalledWith({
       instanceId: "a0G000000000001",
       signalName: "PaymentReceived",
-      payloadJson: '{"amount": 100}'
+      payloadJson: '{"amount": 100}',
     });
 
     // Verify success toast
@@ -1206,29 +1393,47 @@ describe("c-workflow-dashboard operator signal injection", () => {
 
   it("calls injectSignal and handles failure by showing error toast and keeping modal open", async () => {
     getFilteredInstances.mockResolvedValue([
-      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" }
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
     ]);
     getInstanceDetails.mockResolvedValue({
-      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" },
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
       steps: [],
       children: [],
-      payloadFiles: {}
+      payloadFiles: {},
     });
-    injectSignal.mockRejectedValue(new Error("Failed to inject signal: invalid state"));
+    injectSignal.mockRejectedValue(
+      new Error("Failed to inject signal: invalid state"),
+    );
 
     const element = createComponent();
     await flushPromises();
-    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
     await flushPromises();
     await flushPromises();
 
     // Click "Send Signal" button to open modal
-    const sendSignalBtn = element.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    const sendSignalBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="send-signal-btn"]',
+    );
     sendSignalBtn.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
     // Set input values
-    const nameInput = element.shadowRoot.querySelector('lightning-input[data-id="signal-name-input"]');
+    const nameInput = element.shadowRoot.querySelector(
+      'lightning-input[data-id="signal-name-input"]',
+    );
     nameInput.value = "PaymentReceived";
     nameInput.dispatchEvent(new CustomEvent("change"));
     await flushPromises();
@@ -1238,7 +1443,9 @@ describe("c-workflow-dashboard operator signal injection", () => {
     element.addEventListener("lightning__showtoast", toastHandler);
 
     // Click confirm button
-    const confirmBtn = element.shadowRoot.querySelector('lightning-button[data-id="confirm-signal-btn"]');
+    const confirmBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="confirm-signal-btn"]',
+    );
     confirmBtn.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
@@ -1246,14 +1453,16 @@ describe("c-workflow-dashboard operator signal injection", () => {
     expect(injectSignal).toHaveBeenCalledWith({
       instanceId: "a0G000000000001",
       signalName: "PaymentReceived",
-      payloadJson: ""
+      payloadJson: "",
     });
 
     // Verify error toast
     expect(toastHandler).toHaveBeenCalled();
     const toastEvent = toastHandler.mock.calls[0][0];
     expect(toastEvent.detail.variant).toBe("error");
-    expect(toastEvent.detail.message).toContain("Failed to inject signal: invalid state");
+    expect(toastEvent.detail.message).toContain(
+      "Failed to inject signal: invalid state",
+    );
 
     // Verify modal remains open
     const modal = element.shadowRoot.querySelector("section.slds-modal");
@@ -1262,23 +1471,37 @@ describe("c-workflow-dashboard operator signal injection", () => {
 
   it("closes modal on cancel button click without sending", async () => {
     getFilteredInstances.mockResolvedValue([
-      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" }
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
     ]);
     getInstanceDetails.mockResolvedValue({
-      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" },
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
       steps: [],
       children: [],
-      payloadFiles: {}
+      payloadFiles: {},
     });
 
     const element = createComponent();
     await flushPromises();
-    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
     await flushPromises();
     await flushPromises();
 
     // Click "Send Signal" button to open modal
-    const sendSignalBtn = element.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    const sendSignalBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="send-signal-btn"]',
+    );
     sendSignalBtn.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
@@ -1287,7 +1510,9 @@ describe("c-workflow-dashboard operator signal injection", () => {
     expect(modal).not.toBeNull();
 
     // Click cancel/close button
-    const cancelBtn = element.shadowRoot.querySelector('lightning-button[data-id="cancel-signal-btn"]');
+    const cancelBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="cancel-signal-btn"]',
+    );
     expect(cancelBtn).not.toBeNull();
     cancelBtn.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
@@ -1298,5 +1523,3 @@ describe("c-workflow-dashboard operator signal injection", () => {
     expect(injectSignal).not.toHaveBeenCalled();
   });
 });
-
-
