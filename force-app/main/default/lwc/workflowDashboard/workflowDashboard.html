@@ -1020,6 +1020,15 @@
                                             </template>
                                         </div>
                                     </template>
+                                    <template if:true={selectedInst.Progress__c}>
+                                        <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
+                                            <div class="slds-text-title slds-text-color_weak">Workflow Progress</div>
+                                            <pre class="code-block">{selectedInst.Progress__c}</pre>
+                                            <template if:true={selectedInst.progressFile}>
+                                                <a href={selectedInst.progressFile.url} target="_blank" rel="noopener" class="slds-text-body_small">{selectedInst.progressFile.label}</a>
+                                            </template>
+                                        </div>
+                                    </template>
                                     <template if:true={isRollbackIncomplete}>
                                         <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
                                             <div class="slds-text-title text-red">Rollback Incomplete</div>

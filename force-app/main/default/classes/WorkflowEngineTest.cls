@@ -5521,4 +5521,117 @@ public class WorkflowEngineTest {
     // Second visit: resets to attempt 1
     System.assertEquals(1, loopObservedStates[2].get('attempt'));
   }
+
+  public class ProgressWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.ProgressStep1',
+        'WorkflowEngineTest.ProgressStep2'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.ProgressStep1';
+    }
+    public String getNextStep(String currentStepName, StepResult sr) {
+      if (currentStepName == 'WorkflowEngineTest.ProgressStep1') {
+        if (sr.action == StepResult.ActionType.YIELD) {
+          return 'WorkflowEngineTest.ProgressStep1';
+        }
+        return 'WorkflowEngineTest.ProgressStep2';
+      }
+      return null;
+    }
+  }
+
+  public class ProgressStep1 implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (String.isBlank(ctx.stepStateJson)) {
+        ctx.reportProgress(20.0, 'Step 1: Yielding first');
+        return StepResult.yield('{"yieldedOnce": true}');
+      }
+      ctx.reportProgress(50.0, 'Step 1: Done');
+      return StepResult.complete('WorkflowEngineTest.ProgressStep2', 'Output1');
+    }
+  }
+
+  public class ProgressStep2 implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      ctx.reportProgress(new Map<String, Object>{ 'stage' => 'Step 2 final', 'percent' => 90.0 });
+      String inputStr = ctx.workflowInputJson;
+      if (String.isBlank(inputStr) || !inputStr.contains('isSuccessor')) {
+        return StepResult.continueAsNew('{"isSuccessor": true}', 'key_successor');
+      }
+      ctx.reportProgress(100.0, 'Workflow Complete');
+      return StepResult.complete(null, 'Done');
+    }
+  }
+
+  @isTest
+  static void testProgressReportingEndToEnd() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.ProgressWorkflow',
+      'ProgressKey',
+      'InitialInput'
+    );
+
+    // 1. Run first step execution -> Should Yield and save progress (20%, Step 1: Yielding first)
+    new WorkflowOrchestrator(instanceId).execute(null);
+    Workflow_Instance__c inst1 = [SELECT Status__c, Progress__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+    System.assertEquals('Running', inst1.Status__c);
+    System.assertNotEquals(null, inst1.Progress__c);
+    Map<String, Object> progress1 = (Map<String, Object>) JSON.deserializeUntyped(inst1.Progress__c);
+    System.assertEquals(20.0, (Decimal) progress1.get('percentComplete'));
+    System.assertEquals('Step 1: Yielding first', (String) progress1.get('message'));
+
+    // 2. Run next step execution -> Should Complete Step 1 and update progress (50%, Step 1: Done)
+    new WorkflowOrchestrator(instanceId).execute(null);
+    Workflow_Instance__c inst2 = [SELECT Status__c, Progress__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+    System.assertEquals('Running', inst2.Status__c);
+    Map<String, Object> progress2 = (Map<String, Object>) JSON.deserializeUntyped(inst2.Progress__c);
+    System.assertEquals(50.0, (Decimal) progress2.get('percentComplete'));
+    System.assertEquals('Step 1: Done', (String) progress2.get('message'));
+
+    // 3. Run Step 2 execution -> Should ContinueAsNew and set progress (stage: Step 2 final, percent: 90%)
+    new WorkflowOrchestrator(instanceId).execute(null);
+    Workflow_Instance__c inst3 = [SELECT Status__c, Progress__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+    System.assertEquals('ContinuedAsNew', inst3.Status__c);
+    Map<String, Object> progress3 = (Map<String, Object>) JSON.deserializeUntyped(inst3.Progress__c);
+    System.assertEquals(90.0, (Decimal) progress3.get('percent'));
+    System.assertEquals('Step 2 final', (String) progress3.get('stage'));
+
+    // Find successor run and verify progress carried forward
+    Workflow_Instance__c successor = [
+      SELECT Id, Status__c, Progress__c
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :instanceId
+    ];
+    System.assertEquals('Pending', successor.Status__c);
+    System.assertNotEquals(null, successor.Progress__c);
+    Map<String, Object> progressSucc = (Map<String, Object>) JSON.deserializeUntyped(successor.Progress__c);
+    System.assertEquals(90.0, (Decimal) progressSucc.get('percent'));
+
+    // 4. Run successor (first run) -> runs ProgressStep1 (first yield)
+    new WorkflowOrchestrator(successor.Id).execute(null);
+    Workflow_Instance__c finalInst1 = [SELECT Status__c, Progress__c FROM Workflow_Instance__c WHERE Id = :successor.Id];
+    System.assertEquals('Running', finalInst1.Status__c);
+    Map<String, Object> progressFinal1 = (Map<String, Object>) JSON.deserializeUntyped(finalInst1.Progress__c);
+    System.assertEquals(20.0, (Decimal) progressFinal1.get('percentComplete'));
+
+    // 5. Run successor (second run) -> completes ProgressStep1
+    new WorkflowOrchestrator(successor.Id).execute(null);
+    Workflow_Instance__c finalInst2 = [SELECT Status__c, Progress__c FROM Workflow_Instance__c WHERE Id = :successor.Id];
+    System.assertEquals('Running', finalInst2.Status__c);
+    Map<String, Object> progressFinal2 = (Map<String, Object>) JSON.deserializeUntyped(finalInst2.Progress__c);
+    System.assertEquals(50.0, (Decimal) progressFinal2.get('percentComplete'));
+
+    // 6. Run successor (third run) -> runs ProgressStep2 and completes
+    new WorkflowOrchestrator(successor.Id).execute(null);
+    Workflow_Instance__c finalInst = [SELECT Status__c, Progress__c FROM Workflow_Instance__c WHERE Id = :successor.Id];
+    System.assertEquals('Completed', finalInst.Status__c);
+    Map<String, Object> progressFinal = (Map<String, Object>) JSON.deserializeUntyped(finalInst.Progress__c);
+    System.assertEquals(100.0, (Decimal) progressFinal.get('percentComplete'));
+    System.assertEquals('Workflow Complete', (String) progressFinal.get('message'));
+  }
 }

@@ -1,6 +1,8 @@
 /* eslint-disable @lwc/lwc/no-async-operation */
 import { createElement } from "lwc";
 import WorkflowDashboard from "c/workflowDashboard";
+import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
+import getInstanceDetails from "@salesforce/apex/WorkflowDashboardController.getInstanceDetails";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
@@ -746,4 +748,146 @@ describe("c-workflow-dashboard bulk redrive", () => {
     expect(toastHandler.mock.calls[0][0].detail.message).toContain("Failed to re-drive matching instances: Execution failed");
   });
 });
+
+describe("c-workflow-dashboard details panel", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function createComponent() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    return element;
+  }
+
+  it("renders progress payload and offloaded download link when details are loaded", async () => {
+    // 1. Mock getFilteredInstances to return at least one instance so it shows up in list
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+        CreatedDate: "2026-06-24T12:00:00.000Z",
+      },
+    ]);
+
+    // 2. Mock getInstanceDetails to return progress payload details
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+        Progress__c: "Progress info",
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {
+        "instance.Progress": {
+          downloadUrl: "/sfc/servlet.shepherd/document/download/069000000000001",
+          fullLength: 51200,
+        },
+      },
+    });
+
+    const element = createComponent();
+    await flushPromises();
+
+    // 3. Click the instance item to load details
+    const item = element.shadowRoot.querySelector(".list-item");
+    expect(item).not.toBeNull();
+    item.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    // 4. Assert on rendered details in details panel
+    const codeBlocks = Array.from(element.shadowRoot.querySelectorAll("pre.code-block"));
+    const progressBlock = codeBlocks.find((block) => block.textContent === "Progress info");
+    expect(progressBlock).not.toBeNull();
+
+    const links = Array.from(element.shadowRoot.querySelectorAll("a"));
+    const progressLink = links.find((link) => link.textContent === "Download full payload (50 KB)");
+    expect(progressLink).not.toBeNull();
+    expect(progressLink.getAttribute("href")).toBe("/sfc/servlet.shepherd/document/download/069000000000001");
+  });
+
+  it("renders progress payload without offloaded link when progressFile is absent", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" }
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running", Progress__c: "Standard progress info" },
+      steps: [],
+      children: [],
+      payloadFiles: {}
+    });
+
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    const codeBlocks = Array.from(element.shadowRoot.querySelectorAll("pre.code-block"));
+    const progressBlock = codeBlocks.find((block) => block.textContent === "Standard progress info");
+    expect(progressBlock).not.toBeNull();
+
+    const links = Array.from(element.shadowRoot.querySelectorAll("a"));
+    const progressLink = links.find((link) => link.textContent.includes("Download full payload"));
+    expect(progressLink).toBeUndefined();
+  });
+
+  it("prettifies and renders valid JSON progress payloads", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" }
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: { 
+        Id: "a0G000000000001", 
+        Name: "WI-0001", 
+        Workflow_Name__c: "TestWorkflow", 
+        Status__c: "Running", 
+        Progress__c: "{\"status\":\"ok\",\"step\":3}" 
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {}
+    });
+
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    const codeBlocks = Array.from(element.shadowRoot.querySelectorAll("pre.code-block"));
+    const expectedFormattedJson = JSON.stringify({ status: "ok", step: 3 }, null, 2);
+    const progressBlock = codeBlocks.find((block) => block.textContent === expectedFormattedJson);
+    expect(progressBlock).not.toBeNull();
+  });
+
+  it("handles empty details response without crashing", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" }
+    ]);
+    getInstanceDetails.mockResolvedValue(null);
+
+    const element = createComponent();
+    await flushPromises();
+    
+    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    // Verify it settled and component did not crash
+    expect(element.shadowRoot.querySelector(".list-item")).not.toBeNull();
+  });
+});
+
 

@@ -3549,12 +3549,21 @@ public inherited sharing class WorkflowEngine {
         Previous_Run_At__c,
         Concurrency_Parked__c,
         Concurrency_Slot_Held__c,
-        CreatedDate
+        CreatedDate,
+        Progress__c
       FROM Workflow_Instance__c
       WHERE Id = :instance.Id
       WITH SYSTEM_MODE
       FOR UPDATE
     ];
+    if (context != null && context.isProgressReported()) {
+      String progJson = context.getProgressJson();
+      freshInstance.Progress__c = savePayloadIfNeeded(
+        freshInstance.Id,
+        progJson,
+        'Progress_' + (stepExec != null && String.isNotBlank(stepExec.Step_Name__c) ? stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_') : 'Default')
+      );
+    }
     if (
       String.isBlank(freshInstance.Current_Step__c) &&
       String.isNotBlank(instance.Current_Step__c)
@@ -4170,6 +4179,7 @@ public inherited sharing class WorkflowEngine {
         Definition_Version__c = instance.Definition_Version__c,
         Current_Step__c = initialStep,
         Deadline_At__c = nextDeadline,
+        Progress__c = instance.Progress__c,
         // Use the predecessor's CreatedDate (when it started) rather than
         // System.now() (when it finished). This prevents a gap: records
         // modified during the predecessor's execution window are covered by
@@ -6366,7 +6376,23 @@ public inherited sharing class WorkflowEngine {
     StepContext context
   ) {
     Workflow_Instance__c freshInstance = [
-      SELECT Status__c
+      SELECT
+        Id,
+        Status__c,
+        Progress__c,
+        Current_Step__c,
+        Compensation_Stack__c,
+        Sleep_Until__c,
+        Async_Job_Id__c,
+        Failure_Category__c,
+        Error_Message__c,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c,
+        Input__c,
+        Definition_Version__c,
+        Previous_Run_At__c,
+        CreatedDate
       FROM Workflow_Instance__c
       WHERE Id = :instance.Id
       WITH SYSTEM_MODE
@@ -6379,6 +6405,15 @@ public inherited sharing class WorkflowEngine {
     ) {
       throw new WorkflowException(
         'Workflow execution was terminated or cancelled.'
+      );
+    }
+    instance = freshInstance;
+    if (context != null && context.isProgressReported()) {
+      String progJson = context.getProgressJson();
+      instance.Progress__c = savePayloadIfNeeded(
+        instance.Id,
+        progJson,
+        'Progress_' + (stepExec != null && String.isNotBlank(stepExec.Step_Name__c) ? stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_') : 'Default')
       );
     }
 

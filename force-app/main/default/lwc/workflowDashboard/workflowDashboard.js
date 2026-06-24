@@ -724,6 +724,12 @@ export default class WorkflowDashboard extends LightningElement {
         if (currentInstanceId !== this.selectedInstanceId) {
           return;
         }
+        if (!result || !result.instance) {
+          this.selectedInst = {};
+          this.steps = [];
+          this.childInstances = [];
+          return;
+        }
         const inst = result.instance;
         const payloadFiles = result.payloadFiles || {};
         this.successor = result.successor;
@@ -739,8 +745,10 @@ export default class WorkflowDashboard extends LightningElement {
             inst.Failure_Category__c,
           Input__c: this.formatJson(inst.Input__c),
           Output__c: this.formatJson(inst.Output__c),
+          Progress__c: this.formatJson(inst.Progress__c),
           inputFile: this.buildPayloadFile(payloadFiles["instance.Input"]),
           outputFile: this.buildPayloadFile(payloadFiles["instance.Output"]),
+          progressFile: this.buildPayloadFile(payloadFiles["instance.Progress"]),
           waitingOn: result.waitingOn,
           isWatchdogWaiting: result.waitingOn === "Watchdog",
           waitingOnBadgeClass:
@@ -1156,7 +1164,7 @@ export default class WorkflowDashboard extends LightningElement {
     getWatchdogStatus()
       .then((result) => {
         let latestJobVal = null;
-        if (result.latestJob) {
+        if (result && result.latestJob) {
           latestJobVal = {
             ...result.latestJob,
             statusBadgeClass: this.getStatusBadgeClass(
@@ -1164,13 +1172,13 @@ export default class WorkflowDashboard extends LightningElement {
             ),
           };
         }
-        this.doctorData = {
+        this.doctorData = result ? {
           ...result,
           latestJob: latestJobVal,
           latestJobCreatedDate: result.latestJob
             ? this.formatDateTime(result.latestJob.CreatedDate)
             : null,
-        };
+        } : { config: {} };
       })
       .catch((error) => {
         this.showToast(

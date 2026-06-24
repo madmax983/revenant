@@ -89,6 +89,12 @@ public inherited sharing class WorkflowStatusInvocableAction {
     )
     public String errorMessage;
 
+    @InvocableVariable(
+      label='Progress JSON'
+      description='The workflow progress snapshot, fully rehydrated from offloaded storage when applicable.'
+    )
+    public String progressJson;
+
     public StatusResult() {
       this.found = false;
       this.isTerminal = false;
@@ -159,7 +165,8 @@ public inherited sharing class WorkflowStatusInvocableAction {
           Error_Message__c,
           Correlation_Key__c,
           Previous_Instance__c,
-          CreatedDate
+          CreatedDate,
+          Progress__c
         FROM Workflow_Instance__c
         WHERE Id IN :lookupIds OR Correlation_Key__c IN :lookupKeys
         WITH SYSTEM_MODE
@@ -227,7 +234,8 @@ public inherited sharing class WorkflowStatusInvocableAction {
           Output__c,
           Error_Message__c,
           Correlation_Key__c,
-          Previous_Instance__c
+          Previous_Instance__c,
+          Progress__c
         FROM Workflow_Instance__c
         WHERE Previous_Instance__c IN :predecessorIds
         WITH SYSTEM_MODE
@@ -264,6 +272,10 @@ public inherited sharing class WorkflowStatusInvocableAction {
         if (attachmentId != null) {
           attachmentIds.add(attachmentId);
         }
+        Id progressAttachmentId = getAttachmentId(inst.Progress__c);
+        if (progressAttachmentId != null) {
+          attachmentIds.add(progressAttachmentId);
+        }
       }
     }
     Map<Id, String> dataByAttachment = new Map<Id, String>();
@@ -292,6 +304,7 @@ public inherited sharing class WorkflowStatusInvocableAction {
         res.isSuccess = (inst.Status__c == 'Completed');
         res.errorMessage = inst.Error_Message__c;
         res.outputJson = rehydrate(inst.Output__c, dataByAttachment);
+        res.progressJson = rehydrate(inst.Progress__c, dataByAttachment);
       }
       results.add(res);
     }

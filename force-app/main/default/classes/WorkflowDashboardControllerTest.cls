@@ -1173,6 +1173,53 @@ public class WorkflowDashboardControllerTest {
   }
 
   @isTest
+  static void testProgressRehydrationInDetails() {
+    // 1. Create a ContentVersion record for offloaded progress
+    ContentVersion cv = new ContentVersion(
+      Title = 'TestProgressCV',
+      PathOnClient = 'progress.json',
+      VersionData = Blob.valueOf('P'.repeat(50005))
+    );
+    insert cv;
+
+    Id docId = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv.Id].ContentDocumentId;
+    String offloadedMarker = '{"$attachmentId":"' + docId + '"}';
+
+    // 2. Create one instance with inline progress, and one with offloaded progress
+    Workflow_Instance__c instInline = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestDefInlineProgress',
+      Status__c = 'Running',
+      Correlation_Key__c = 'ProgressInlineKey',
+      Progress__c = '{"percent":42.0}'
+    );
+    Workflow_Instance__c instOffloaded = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestDefOffloadedProgress',
+      Status__c = 'Running',
+      Correlation_Key__c = 'ProgressOffloadedKey',
+      Progress__c = offloadedMarker
+    );
+    insert new List<Workflow_Instance__c>{ instInline, instOffloaded };
+
+    Test.startTest();
+    Map<String, Object> inlineDetails = WorkflowDashboardController.getInstanceDetails(instInline.Id);
+    Map<String, Object> offloadedDetails = WorkflowDashboardController.getInstanceDetails(instOffloaded.Id);
+    Test.stopTest();
+
+    Workflow_Instance__c returnedInline = (Workflow_Instance__c) inlineDetails.get('instance');
+    System.assertEquals('{"percent":42.0}', returnedInline.Progress__c);
+    Map<String, Object> inlinePayloadFiles = (Map<String, Object>) inlineDetails.get('payloadFiles');
+    System.assert(!inlinePayloadFiles.containsKey('instance.Progress'), 'Small inline progress should not have a download file');
+
+    Workflow_Instance__c returnedOffloaded = (Workflow_Instance__c) offloadedDetails.get('instance');
+    System.assertEquals('P'.repeat(50000) + '... (truncated)', returnedOffloaded.Progress__c);
+    Map<String, Object> offloadedPayloadFiles = (Map<String, Object>) offloadedDetails.get('payloadFiles');
+    System.assert(offloadedPayloadFiles.containsKey('instance.Progress'), 'Truncated offloaded progress should have a download file');
+    Map<String, Object> progressFile = (Map<String, Object>) offloadedPayloadFiles.get('instance.Progress');
+    System.assertEquals(50005, (Integer) progressFile.get('fullLength'));
+    System.assertEquals(docId, (Id) progressFile.get('contentDocumentId'));
+  }
+
+  @isTest
   static void testWatchdogStatusAndEnqueue() {
     // Mock the WatchdogWorkflow instance
     Workflow_Instance__c watchdogInst = new Workflow_Instance__c(
