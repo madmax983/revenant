@@ -1104,6 +1104,14 @@
                                                                     <div class="slds-text-body_small slds-text-color_weak">
                                                                         Attempted: {step.formattedDate} | Retries: {step.Retry_Count__c}
                                                                     </div>
+                                                                    <div class="slds-text-body_small slds-m-top_xx-small">
+                                                                        <span class={step.budgetClass}>
+                                                                            <template if:true={step.hasLimitPressure}>
+                                                                                <lightning-icon icon-name="utility:warning" size="xx-small" alternative-text="Limit Pressure" title="Limit Pressure >= 80%" class="slds-m-right_xx-small text-red-icon"></lightning-icon>
+                                                                            </template>
+                                                                            Resource Usage: {step.telemetryString}
+                                                                        </span>
+                                                                    </div>
                                                                 </div>
 
                                                                 <!-- Direct Sub-Workflow Link -->

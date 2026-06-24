@@ -1001,6 +1001,9 @@ public inherited sharing class WorkflowDashboardController {
         Output__c,
         Retry_Count__c,
         Error_Details__c,
+        CPU_Time_Ms__c,
+        SOQL_Query_Count__c,
+        Heap_Size_Bytes__c,
         CreatedDate
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c = :instanceId

@@ -3456,7 +3456,16 @@ public inherited sharing class WorkflowEngine {
     update as system toConsume.values();
   }
 
+  private static void populateTelemetry(Workflow_Step_Execution__c stepExec) {
+    if (stepExec != null && stepExec.Status__c != 'Pending') {
+      stepExec.CPU_Time_Ms__c = Limits.getCpuTime();
+      stepExec.SOQL_Query_Count__c = Limits.getQueries();
+      stepExec.Heap_Size_Bytes__c = Limits.getHeapSize();
+    }
+  }
+
   private static void saveStepExec(Workflow_Step_Execution__c stepExec) {
+    populateTelemetry(stepExec);
     if (stepExec.Id == null) {
       insert as system stepExec;
     } else {
@@ -4392,7 +4401,7 @@ public inherited sharing class WorkflowEngine {
         stepExec.Error_Details__c = (ex != null
           ? ex.getMessage() + '\n' + ex.getStackTraceString()
           : 'Unknown governor limit / crash');
-        update as system stepExec;
+        saveStepExec(stepExec);
       } else {
         // Construct and insert the step execution log with failed status
         Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
@@ -4438,7 +4447,7 @@ public inherited sharing class WorkflowEngine {
             ? completedSteps[0].Output__c
             : instance.Input__c;
         }
-        insert as system stepExec;
+        saveStepExec(stepExec);
       }
     }
 

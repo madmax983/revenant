@@ -267,6 +267,10 @@
   --sds-c-icon-color-foreground: hsl(215, 15%, 75%);
 }
 
+.text-red-icon {
+  --sds-c-icon-color-foreground: hsl(0, 80%, 55%);
+}
+
 .text-weak {
   color: hsl(215, 20%, 30%);
 }
