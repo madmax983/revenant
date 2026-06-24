@@ -20,6 +20,10 @@
         <enabled>true</enabled>
         <name>Workflow_Schedule_Admin</name>
     </customPermissions>
+    <customPermissions>
+        <enabled>true</enabled>
+        <name>Workflow_Signal_Injection</name>
+    </customPermissions>
     <description>Permissions for Revenant Workflow Engine administration and execution.</description>
 
     <!-- fieldPermissions for Workflow_Instance__c (excluding required/master-detail fields) -->
