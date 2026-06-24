@@ -14,10 +14,28 @@ public class AiSupportTriageWorkflowExampleTest {
       'Triage_Billing_1',
       new Map<String, Object>{
         'inquiryText' => 'I was charged twice for my subscription last month.'
+      },
+      new Map<String, String>{
+        'region' => 'US',
+        'tier' => 'premium'
       }
     );
     WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId).drive();
     Test.stopTest();
+
+    List<Workflow_Search_Attribute__c> searchAttrs = [
+      SELECT Key__c, Value__c, Key_Value__c
+      FROM Workflow_Search_Attribute__c
+      WHERE Workflow_Instance__c = :instanceId
+      ORDER BY Key__c ASC
+    ];
+    System.assertEquals(2, searchAttrs.size(), 'Should persist two attributes');
+    System.assertEquals('region', searchAttrs[0].Key__c);
+    System.assertEquals('US', searchAttrs[0].Value__c);
+    System.assertEquals('region=US', searchAttrs[0].Key_Value__c);
+    System.assertEquals('tier', searchAttrs[1].Key__c);
+    System.assertEquals('premium', searchAttrs[1].Value__c);
+    System.assertEquals('tier=premium', searchAttrs[1].Key_Value__c);
 
     System.assertEquals('Completed', result.status, 'Billing inquiries should auto-resolve');
     System.assert(result.isTerminal, 'Completed is a terminal state');

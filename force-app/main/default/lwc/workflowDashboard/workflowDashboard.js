@@ -112,6 +112,11 @@ export default class WorkflowDashboard extends LightningElement {
   selectedFailureCategory = "";
   limitSize = 50;
   offsetSize = 0;
+
+  // Attribute Filters
+  attributeFilters = {};
+  newAttrKey = "";
+  newAttrValue = "";
   hasMore = true;
   loadingMore = false;
   cacheBuster = "";
@@ -351,6 +356,7 @@ export default class WorkflowDashboard extends LightningElement {
         limitSize: currentLimit,
         offsetSize: currentOffset,
         cacheBuster: this.cacheBuster,
+        attributesFilterJson: this.attributesFilterJson,
       })
       : getFilteredInstances({
         workflowName: this.selectedWorkflow,
@@ -360,6 +366,7 @@ export default class WorkflowDashboard extends LightningElement {
         limitSize: currentLimit,
         offsetSize: currentOffset,
         cacheBuster: this.cacheBuster,
+        attributesFilterJson: this.attributesFilterJson,
       });
 
     if (isAppend) {
@@ -403,12 +410,14 @@ export default class WorkflowDashboard extends LightningElement {
       workflowName: this.selectedWorkflow,
       status: this.selectedStatus,
       searchTerm: this.searchTerm,
+      attributesFilterJson: this.attributesFilterJson,
     });
 
     const stalledCountPromise = getStalledCount({
       workflowName: this.selectedWorkflow,
       searchTerm: this.searchTerm,
       thresholdMinutes: null,
+      attributesFilterJson: this.attributesFilterJson,
     }).catch((error) => {
       console.error("Stalled count query failed:", error);
       return { count: 0, capped: false };
@@ -483,6 +492,7 @@ export default class WorkflowDashboard extends LightningElement {
         limitSize: currentSize,
         offsetSize: 0,
         cacheBuster: this.cacheBuster,
+        attributesFilterJson: this.attributesFilterJson,
       })
       : getFilteredInstances({
         workflowName: this.selectedWorkflow,
@@ -492,18 +502,21 @@ export default class WorkflowDashboard extends LightningElement {
         limitSize: currentSize,
         offsetSize: 0,
         cacheBuster: this.cacheBuster,
+        attributesFilterJson: this.attributesFilterJson,
       });
 
     const statsPromise = getWorkflowStats({
       workflowName: this.selectedWorkflow,
       status: this.selectedStatus,
       searchTerm: this.searchTerm,
+      attributesFilterJson: this.attributesFilterJson,
     });
 
     const stalledCountPromise = getStalledCount({
       workflowName: this.selectedWorkflow,
       searchTerm: this.searchTerm,
       thresholdMinutes: null,
+      attributesFilterJson: this.attributesFilterJson,
     }).catch((error) => {
       console.error("Stalled count query failed:", error);
       return { count: 0, capped: false };
@@ -584,6 +597,92 @@ export default class WorkflowDashboard extends LightningElement {
     this.offsetSize = 0;
     this.instances = [];
     this.fetchInstances(false);
+  }
+
+  handleNewAttrKeyChange(event) {
+    this.newAttrKey = event.target.value;
+    event.target.setCustomValidity("");
+    event.target.reportValidity();
+  }
+
+  handleNewAttrValueChange(event) {
+    this.newAttrValue = event.target.value;
+    event.target.setCustomValidity("");
+    event.target.reportValidity();
+  }
+
+  handleAddAttribute() {
+    const keyInput = this.template.querySelector('[data-id="attr-key-input"]');
+    const valueInput = this.template.querySelector('[data-id="attr-val-input"]');
+
+    const key = this.newAttrKey ? this.newAttrKey.trim() : "";
+    const value = this.newAttrValue ? this.newAttrValue.trim() : "";
+
+    let isValid = true;
+
+    if (!key) {
+      keyInput.setCustomValidity("Please enter an attribute key.");
+      keyInput.reportValidity();
+      isValid = false;
+    } else {
+      keyInput.setCustomValidity("");
+      keyInput.reportValidity();
+    }
+
+    if (!value) {
+      valueInput.setCustomValidity("Please enter an attribute value.");
+      valueInput.reportValidity();
+      isValid = false;
+    } else {
+      valueInput.setCustomValidity("");
+      valueInput.reportValidity();
+    }
+
+    if (isValid) {
+      if (Object.keys(this.attributeFilters).length >= 2) {
+        this.showToast(
+          "Warning",
+          "A maximum of 2 active attribute filters is allowed to ensure query performance.",
+          "warning"
+        );
+        return;
+      }
+      this.attributeFilters = {
+        ...this.attributeFilters,
+        [key]: value
+      };
+      this.newAttrKey = "";
+      this.newAttrValue = "";
+      this.fetchInstances(false);
+    }
+  }
+
+  handleRemoveAttribute(event) {
+    const key = event.currentTarget.dataset.id;
+    if (key) {
+      const filters = { ...this.attributeFilters };
+      delete filters[key];
+      this.attributeFilters = filters;
+      this.fetchInstances(false);
+    }
+  }
+
+  get hasAttributes() {
+    return Object.keys(this.attributeFilters).length > 0;
+  }
+
+  get attributeFiltersList() {
+    return Object.entries(this.attributeFilters).map(([key, val]) => {
+      return { 
+        id: key, 
+        display: `${key}=${val}`,
+        removeAriaLabel: `Remove filter for ${key} equals ${val}`
+      };
+    });
+  }
+
+  get attributesFilterJson() {
+    return this.hasAttributes ? JSON.stringify(this.attributeFilters) : "";
   }
 
   get stalledCountDisplay() {
@@ -781,6 +880,7 @@ export default class WorkflowDashboard extends LightningElement {
                 : "badge badge-blue",
           pendingCompensationCount: result.pendingCompensationCount || 0,
           pendingCompensations: result.pendingCompensations || [],
+          attributes: result.attributes || [],
         };
 
         // Map children

@@ -87,4 +87,40 @@ public class WorkflowSearchAttributesDashboardTest {
     System.assertEquals(1, stats.get('total'), 'Stats total should be 1');
     Test.stopTest();
   }
+
+  @isTest
+  static void testGetStalledInstancesByAttributes() {
+    Id instId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.PlainWaitWorkflow',
+      'CK_STALL_1',
+      null,
+      new Map<String, String>{ 'region' => 'EU' }
+    );
+
+    // Force status to Suspended
+    Workflow_Instance__c inst = [SELECT Id FROM Workflow_Instance__c WHERE Id = :instId];
+    inst.Status__c = 'Suspended';
+    update inst;
+
+    Test.startTest();
+    // 1. Get stalled list with matching filter region=EU
+    List<Map<String, Object>> stalledList1 = WorkflowDashboardController.getStalledInstances(
+      null, null, -1, 10, 0, null, '{"region":"EU"}'
+    );
+    System.assertEquals(1, stalledList1.size(), 'Should find 1 stalled instance');
+    System.assertEquals(instId, (Id) stalledList1[0].get('Id'));
+
+    // 2. Get stalled count with matching filter region=EU
+    Map<String, Object> countRes1 = WorkflowDashboardController.getStalledCount(
+      null, null, -1, '{"region":"EU"}'
+    );
+    System.assertEquals(1, countRes1.get('count'), 'Count should be 1');
+
+    // 3. Get stalled list with mismatching filter region=US
+    List<Map<String, Object>> stalledList2 = WorkflowDashboardController.getStalledInstances(
+      null, null, -1, 10, 0, null, '{"region":"US"}'
+    );
+    System.assertEquals(0, stalledList2.size(), 'Should find 0 stalled instances');
+    Test.stopTest();
+  }
 }

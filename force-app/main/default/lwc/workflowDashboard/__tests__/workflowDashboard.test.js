@@ -1669,3 +1669,180 @@ describe("c-workflow-dashboard operator signal injection", () => {
     await flushPromises();
   });
 });
+
+describe("c-workflow-dashboard business attributes filters", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function createComponent() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    return element;
+  }
+
+
+  it("handles adding and removing business attribute filters", async () => {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+        CreatedDate: "2026-06-24T12:00:00.000Z",
+      },
+    ]);
+    getWorkflowStats.mockResolvedValue({ total: 1, active: 1, completed: 0, failed: 0 });
+
+    const element = createComponent();
+    await flushPromises();
+
+    // Query key & value inputs and add button using their properties
+    const inputs = Array.from(element.shadowRoot.querySelectorAll('lightning-input'));
+    const keyInput = inputs.find(i => i.name === 'attrKey');
+    const valueInput = inputs.find(i => i.name === 'attrValue');
+
+    const btns = Array.from(element.shadowRoot.querySelectorAll('lightning-button-icon'));
+    const addBtn = btns.find(b => b.alternativeText === 'Add Attribute');
+
+    expect(keyInput).toBeDefined();
+    expect(valueInput).toBeDefined();
+    expect(addBtn).toBeDefined();
+
+    // Add filter: region = EU
+    keyInput.value = "region";
+    keyInput.dispatchEvent(new CustomEvent("change", { target: { value: "region" } }));
+    valueInput.value = "EU";
+    valueInput.dispatchEvent(new CustomEvent("change", { target: { value: "EU" } }));
+
+    addBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify getFilteredInstances was called with region=EU
+    expect(getFilteredInstances).toHaveBeenCalledWith(expect.objectContaining({
+      attributesFilterJson: JSON.stringify({ region: "EU" })
+    }));
+
+    // Verify active pill is rendered
+    const pills = element.shadowRoot.querySelectorAll(".slds-pill");
+    expect(pills.length).toBe(1);
+    expect(pills[0].querySelector(".slds-pill__label").textContent).toBe("region=EU");
+
+    // Remove the attribute filter
+    const removeBtn = pills[0].querySelector(".slds-pill__remove");
+    removeBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify getFilteredInstances was called with empty attributesFilterJson
+    expect(getFilteredInstances).toHaveBeenLastCalledWith(expect.objectContaining({
+      attributesFilterJson: ""
+    }));
+
+    // Verify pill is removed
+    const postPills = element.shadowRoot.querySelectorAll(".slds-pill");
+    expect(postPills.length).toBe(0);
+  });
+
+  it("renders attributes badges in details panel when a workflow instance is selected", async () => {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+        CreatedDate: "2026-06-24T12:00:00.000Z",
+      },
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {},
+      attributes: [
+        { Id: "attr1", Key__c: "region", Value__c: "EU" },
+        { Id: "attr2", Key__c: "tier", Value__c: "enterprise" }
+      ]
+    });
+
+    const element = createComponent();
+    await flushPromises();
+
+    // Click list item to load details
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    // Verify badge container and badges are rendered
+    const badges = element.shadowRoot.querySelectorAll(".slds-badge");
+    expect(badges.length).toBe(2);
+    expect(badges[0].textContent.trim()).toBe("region=EU");
+    expect(badges[1].textContent.trim()).toBe("tier=enterprise");
+  });
+
+  it("enforces maximum limit of 2 attribute filters and shows a toast warning on the 3rd", async () => {
+    getFilteredInstances.mockResolvedValue([]);
+    getWorkflowStats.mockResolvedValue({ total: 0, active: 0, completed: 0, failed: 0 });
+
+    const element = createComponent();
+    await flushPromises();
+
+    const inputs = Array.from(element.shadowRoot.querySelectorAll('lightning-input'));
+    const keyInput = inputs.find(i => i.name === 'attrKey');
+    const valueInput = inputs.find(i => i.name === 'attrValue');
+    const btns = Array.from(element.shadowRoot.querySelectorAll('lightning-button-icon'));
+    const addBtn = btns.find(b => b.alternativeText === 'Add Attribute');
+
+    // Mock showToast event listener
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    // 1. Add filter 1: a=1
+    keyInput.value = "a";
+    keyInput.dispatchEvent(new CustomEvent("change", { target: { value: "a" } }));
+    valueInput.value = "1";
+    valueInput.dispatchEvent(new CustomEvent("change", { target: { value: "1" } }));
+    addBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // 2. Add filter 2: b=2
+    keyInput.value = "b";
+    keyInput.dispatchEvent(new CustomEvent("change", { target: { value: "b" } }));
+    valueInput.value = "2";
+    valueInput.dispatchEvent(new CustomEvent("change", { target: { value: "2" } }));
+    addBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify 2 pills are rendered
+    let pills = element.shadowRoot.querySelectorAll(".slds-pill");
+    expect(pills.length).toBe(2);
+
+    // 3. Attempt to add filter 3: c=3
+    keyInput.value = "c";
+    keyInput.dispatchEvent(new CustomEvent("change", { target: { value: "c" } }));
+    valueInput.value = "3";
+    valueInput.dispatchEvent(new CustomEvent("change", { target: { value: "3" } }));
+    addBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify warning toast was fired and pill count remains 2
+    expect(toastHandler).toHaveBeenCalled();
+    const toastEvent = toastHandler.mock.calls[0][0];
+    expect(toastEvent.detail.variant).toBe("warning");
+    expect(toastEvent.detail.message).toContain("A maximum of 2 active attribute filters is allowed");
+
+    pills = element.shadowRoot.querySelectorAll(".slds-pill");
+    expect(pills.length).toBe(2);
+  });
+});

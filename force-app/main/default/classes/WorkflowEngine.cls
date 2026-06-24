@@ -4357,6 +4357,27 @@ public inherited sharing class WorkflowEngine {
         throw ex;
       }
 
+      List<Workflow_Search_Attribute__c> predecessorAttrs = [
+        SELECT Key__c, Value__c
+        FROM Workflow_Search_Attribute__c
+        WHERE Workflow_Instance__c = :instance.Id
+        WITH SYSTEM_MODE
+      ];
+      if (!predecessorAttrs.isEmpty()) {
+        List<Workflow_Search_Attribute__c> successorAttrs = new List<Workflow_Search_Attribute__c>();
+        for (Workflow_Search_Attribute__c attr : predecessorAttrs) {
+          successorAttrs.add(
+            new Workflow_Search_Attribute__c(
+              Workflow_Instance__c = nextInstance.Id,
+              Key__c = attr.Key__c,
+              Value__c = attr.Value__c,
+              Key_Value__c = attr.Key__c + '=' + (attr.Value__c == null ? '' : attr.Value__c)
+            )
+          );
+        }
+        insert as system successorAttrs;
+      }
+
       // Set input and save payload
       nextInstance.Input__c = savePayloadIfNeeded(
         nextInstance.Id,

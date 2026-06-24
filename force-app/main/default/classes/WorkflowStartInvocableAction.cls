@@ -43,9 +43,22 @@ public inherited sharing class WorkflowStartInvocableAction {
       Map<String, String> attributes = null;
       if (String.isNotBlank(req.attributesJson)) {
         attributes = new Map<String, String>();
-        Map<String, Object> raw = (Map<String, Object>) JSON.deserializeUntyped(req.attributesJson);
-        for (String k : raw.keySet()) {
-          attributes.put(k, String.valueOf(raw.get(k)));
+        try {
+          Object deserialized = JSON.deserializeUntyped(req.attributesJson);
+          if (deserialized instanceof Map<String, Object>) {
+            Map<String, Object> raw = (Map<String, Object>) deserialized;
+            for (String k : raw.keySet()) {
+              attributes.put(k, String.valueOf(raw.get(k)));
+            }
+          } else {
+            throw new WorkflowEngine.WorkflowException(
+              'Attributes JSON must represent a key-value object.'
+            );
+          }
+        } catch (Exception ex) {
+          throw new WorkflowEngine.WorkflowException(
+            'Invalid Attributes JSON: ' + ex.getMessage()
+          );
         }
       }
       engineRequests.add(

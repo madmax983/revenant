@@ -99,4 +99,27 @@ public class WorkflowSearchAttributesTest {
     System.assertEquals('region', dbAttrs[0].Key__c);
     System.assertEquals('EU', dbAttrs[0].Value__c, 'Deduplicated start must not overwrite attributes');
   }
+
+  @isTest
+  static void testInvocableActionInvalidJsonHandling() {
+    WorkflowStartInvocableAction.StartRequest req = new WorkflowStartInvocableAction.StartRequest();
+    req.workflowName = 'StepContextSignalEngineTest.PlainWaitWorkflow';
+    req.correlationKey = 'CK_INV_ERR_1';
+    req.attributesJson = '[1, 2, 3]';
+
+    try {
+      WorkflowStartInvocableAction.startWorkflow(new List<WorkflowStartInvocableAction.StartRequest>{ req });
+      System.assert(false, 'Should have failed due to invalid JSON casting');
+    } catch (Exception ex) {
+      System.assert(ex.getMessage().contains('Attributes JSON must represent a key-value object'), 'Unexpected error: ' + ex.getMessage());
+    }
+
+    req.attributesJson = 'invalid_json';
+    try {
+      WorkflowStartInvocableAction.startWorkflow(new List<WorkflowStartInvocableAction.StartRequest>{ req });
+      System.assert(false, 'Should have failed due to invalid JSON syntax');
+    } catch (Exception ex) {
+      System.assert(ex.getMessage().contains('Invalid Attributes JSON'), 'Unexpected error: ' + ex.getMessage());
+    }
+  }
 }

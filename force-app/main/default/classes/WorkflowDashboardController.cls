@@ -6,8 +6,9 @@ public inherited sharing class WorkflowDashboardController {
   // Binding variable for the stalled-instance cutoff DateTime (used in getStalledInstances /
   // getStalledCount dynamic SOQL — same reason as likeTerm above).
   private static Datetime stalledCutoff;
-  // Binding variable for filtering by attributes (Set of matching instance IDs).
-  private static Set<Id> matchingInstanceIds;
+  // Binding variables for filtering by attributes (up to 2 semi-joins for performance).
+  private static String attributeFilter0;
+  private static String attributeFilter1;
 
   private static final Set<String> TERMINAL_STATUSES = new Set<String>{
     'Completed',
@@ -228,42 +229,29 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   private static void resolveMatchingAttributes(String attributesFilterJson) {
-    matchingInstanceIds = null;
+    attributeFilter0 = null;
+    attributeFilter1 = null;
     if (String.isBlank(attributesFilterJson)) {
       return;
     }
-    Map<String, String> attrs = new Map<String, String>();
     try {
       Map<String, Object> raw = (Map<String, Object>) JSON.deserializeUntyped(attributesFilterJson);
+      if (raw == null || raw.isEmpty()) {
+        return;
+      }
+      List<String> targetKeyValues = new List<String>();
       for (String k : raw.keySet()) {
-        attrs.put(k, String.valueOf(raw.get(k)));
+        String val = String.valueOf(raw.get(k));
+        targetKeyValues.add(k + '=' + (val == null ? '' : val));
+      }
+      if (targetKeyValues.size() > 0) {
+        attributeFilter0 = targetKeyValues[0];
+      }
+      if (targetKeyValues.size() > 1) {
+        attributeFilter1 = targetKeyValues[1];
       }
     } catch (Exception ex) {
       System.debug(LoggingLevel.WARN, 'Failed to deserialize attributesFilterJson: ' + ex.getMessage());
-      return;
-    }
-    if (attrs.isEmpty()) {
-      return;
-    }
-
-    List<String> targetKeyValues = new List<String>();
-    for (String k : attrs.keySet()) {
-      String val = attrs.get(k);
-      targetKeyValues.add(k + '=' + (val == null ? '' : val));
-    }
-
-    List<AggregateResult> aggResults = [
-      SELECT Workflow_Instance__c
-      FROM Workflow_Search_Attribute__c
-      WHERE Key_Value__c IN :targetKeyValues
-      WITH SYSTEM_MODE
-      GROUP BY Workflow_Instance__c
-      HAVING COUNT(Id) = :targetKeyValues.size()
-    ];
-
-    matchingInstanceIds = new Set<Id>();
-    for (AggregateResult ar : aggResults) {
-      matchingInstanceIds.add((Id) ar.get('Workflow_Instance__c'));
     }
   }
 
@@ -297,8 +285,11 @@ public inherited sharing class WorkflowDashboardController {
         '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
     }
-    if (matchingInstanceIds != null) {
-      conditions.add('Id IN :matchingInstanceIds');
+    if (attributeFilter0 != null) {
+      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter0)');
+    }
+    if (attributeFilter1 != null) {
+      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter1)');
     }
     return conditions.isEmpty()
       ? ''
@@ -332,8 +323,11 @@ public inherited sharing class WorkflowDashboardController {
         '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
     }
-    if (matchingInstanceIds != null) {
-      conditions.add('Id IN :matchingInstanceIds');
+    if (attributeFilter0 != null) {
+      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter0)');
+    }
+    if (attributeFilter1 != null) {
+      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter1)');
     }
     return String.join(conditions, ' AND ');
   }
@@ -392,9 +386,6 @@ public inherited sharing class WorkflowDashboardController {
   ) {
     checkAuthorization();
     resolveMatchingAttributes(attributesFilterJson);
-    if (matchingInstanceIds != null && matchingInstanceIds.isEmpty()) {
-      return new List<Map<String, Object>>();
-    }
 
     if (limitSize == null || limitSize <= 0) {
       limitSize = 50;
@@ -474,7 +465,6 @@ public inherited sharing class WorkflowDashboardController {
   // cacheBuster is unused in Apex; it only varies the client-side cache key so a
   // dashboard refresh re-queries instead of serving a stale cached list (mirrors
   // getFilteredInstances).
-  @AuraEnabled(cacheable=true)
   public static List<Map<String, Object>> getStalledInstances(
     String workflowName,
     String searchTerm,
@@ -483,7 +473,29 @@ public inherited sharing class WorkflowDashboardController {
     Integer offsetSize,
     String cacheBuster
   ) {
+    return getStalledInstances(
+      workflowName,
+      searchTerm,
+      thresholdMinutes,
+      limitSize,
+      offsetSize,
+      cacheBuster,
+      null
+    );
+  }
+
+  @AuraEnabled(cacheable=true)
+  public static List<Map<String, Object>> getStalledInstances(
+    String workflowName,
+    String searchTerm,
+    Integer thresholdMinutes,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster,
+    String attributesFilterJson
+  ) {
     checkAuthorization();
+    resolveMatchingAttributes(attributesFilterJson);
 
     if (limitSize == null || limitSize <= 0) {
       limitSize = 50;
@@ -578,13 +590,23 @@ public inherited sharing class WorkflowDashboardController {
     return results;
   }
 
-  @AuraEnabled
   public static Map<String, Object> getStalledCount(
     String workflowName,
     String searchTerm,
     Integer thresholdMinutes
   ) {
+    return getStalledCount(workflowName, searchTerm, thresholdMinutes, null);
+  }
+
+  @AuraEnabled
+  public static Map<String, Object> getStalledCount(
+    String workflowName,
+    String searchTerm,
+    Integer thresholdMinutes,
+    String attributesFilterJson
+  ) {
     checkAuthorization();
+    resolveMatchingAttributes(attributesFilterJson);
 
     Integer threshold = (thresholdMinutes == null)
       ? WorkflowEngine.staleThresholdMinutes
@@ -850,10 +872,6 @@ public inherited sharing class WorkflowDashboardController {
       'completed' => 0,
       'failed' => 0
     };
-
-    if (matchingInstanceIds != null && matchingInstanceIds.isEmpty()) {
-      return results;
-    }
 
     String query =
       'SELECT Status__c, COUNT(Id) cnt FROM Workflow_Instance__c' +
