@@ -3170,4 +3170,45 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(1, resSearch.size(), 'Should find exactly 1 instance matching StepExceptionKey searchTerm');
     System.assertEquals(testInstances[1].Id, (Id) resSearch[0].get('Id'), 'Should return the correct instance matching search term');
   }
+
+  @isTest
+  static void testCompensateWorkflowInstance() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Create a target Completed workflow instance with compensation stack
+    Workflow_Instance__c target = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Completed',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{
+          'WorkflowEngineTest.NonCompensatableStep',
+          'WorkflowEngineTest.CompensatableHappyStep'
+        }
+      ),
+      Correlation_Key__c = 'TestKey_Comp_Controller',
+      Input__c = '{"key": "val"}'
+    );
+    insert target;
+
+    // Create the original completed step execution for the compensatable step
+    Workflow_Step_Execution__c origExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = target.Id,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep',
+      Status__c = 'Completed',
+      Input__c = '{"stepInput": 1}',
+      Output__c = '{"stepOutput": 2}'
+    );
+    insert origExec;
+
+    Test.startTest();
+    Id compensatingId = WorkflowDashboardController.compensateWorkflow(target.Id);
+    Test.stopTest();
+
+    System.assertNotEquals(null, compensatingId, 'Compensating run ID should be returned from controller');
+
+    // Verify detail retrieval shows Compensated_By__c
+    Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(target.Id);
+    Workflow_Instance__c instReload = (Workflow_Instance__c) details.get('instance');
+    System.assertEquals(compensatingId, instReload.Compensated_By__c, 'getInstanceDetails should return linked Compensated_By__c field');
+  }
 }

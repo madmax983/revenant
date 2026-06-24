@@ -28,6 +28,7 @@ import resumeDefinition from "@salesforce/apex/WorkflowDashboardController.resum
 import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
+import compensateWorkflow from "@salesforce/apex/WorkflowDashboardController.compensateWorkflow";
 
 const FAILURE_CATEGORY_LABELS = {
   STEP_EXCEPTION: "Step Exception",
@@ -115,6 +116,8 @@ export default class WorkflowDashboard extends LightningElement {
   // Incremented on every fetchTrends() call; the .then() callback checks its
   // captured snapshot against the current value and discards stale responses.
   _trendRequestId = 0;
+  _instanceRequestId = 0;
+  _isConnected = false;
   // Stable option array (see note above workflowOptions on why getters are avoided).
   trendWindowOptions = [
     { label: "Last 1 hour", value: "1h" },
@@ -139,6 +142,7 @@ export default class WorkflowDashboard extends LightningElement {
   redriveModalOpen = false;
   redriveCount = 0;
   cancelModalOpen = false;
+  compensateModalOpen = false;
   redriveSnapshotName;
   redriveSnapshotStatus;
   redriveSnapshotSearchTerm;
@@ -187,12 +191,14 @@ export default class WorkflowDashboard extends LightningElement {
   ];
 
   connectedCallback() {
+    this._isConnected = true;
     this.fetchInstances(false);
     this.startAutoRefresh();
   }
 
   disconnectedCallback() {
-    this.stopPolling();
+    this._isConnected = false;
+    this.stopPolling(false);
     this.stopAutoRefresh();
     if (this.searchTimeout) {
       clearTimeout(this.searchTimeout);
@@ -278,6 +284,12 @@ export default class WorkflowDashboard extends LightningElement {
     }));
   }
 
+  get isCompensatable() {
+    if (!this.selectedInst) return false;
+    const status = this.selectedInst.Status__c;
+    return status === "Completed" && this.pendingCompensationCount > 0;
+  }
+
   get isCancelable() {
     if (!this.selectedInst) return false;
     const status = this.selectedInst.Status__c;
@@ -291,7 +303,8 @@ export default class WorkflowDashboard extends LightningElement {
       status === "Paused" ||
       status === "CompensationFailed"
     );
-  }  fetchInstances(isAppend) {
+  }  fetchInstances(isAppend, targetOffset) {
+    const requestId = ++this._instanceRequestId;
     if (!isAppend) {
       this.offsetSize = 0;
       this.hasMore = true;
@@ -299,7 +312,7 @@ export default class WorkflowDashboard extends LightningElement {
       this.cacheBuster = Date.now().toString();
     }
 
-    const currentOffset = this.offsetSize;
+    const currentOffset = isAppend ? (targetOffset || this.offsetSize) : 0;
     const currentLimit = this.limitSize;
 
     if (isAppend) {
@@ -330,8 +343,11 @@ export default class WorkflowDashboard extends LightningElement {
     if (isAppend) {
       return instancesPromise
         .then((result) => {
+          if (!this._isConnected || requestId !== this._instanceRequestId) return;
           const formatted = result.map((inst) => this.formatInstance(inst));
           this.instances = [...this.instances, ...formatted];
+
+          this.offsetSize = currentOffset;
 
           // Guard against SOQL 2000 offset limit
           if (
@@ -346,6 +362,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.filterInstancesList();
         })
         .catch((error) => {
+          if (!this._isConnected || requestId !== this._instanceRequestId) return;
           this.showToast(
             "Error",
             "Failed to retrieve workflow instances: " + this.reduceErrors(error),
@@ -353,8 +370,10 @@ export default class WorkflowDashboard extends LightningElement {
           );
         })
         .finally(() => {
-          this.loadingMore = false;
-          this.loadingDetails = false;
+          if (this._isConnected && requestId === this._instanceRequestId) {
+            this.loadingMore = false;
+            this.loadingDetails = false;
+          }
         });
     }
 
@@ -368,9 +387,16 @@ export default class WorkflowDashboard extends LightningElement {
       workflowName: this.selectedWorkflow,
       searchTerm: this.searchTerm,
       thresholdMinutes: null,
+    }).catch((error) => {
+      console.error("Stalled count query failed:", error);
+      return { count: 0, capped: false };
     });
 
-    const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null });
+    const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null })
+      .catch((error) => {
+        console.error("Unrouted signal count query failed:", error);
+        return { count: 0, capped: false };
+      });
 
     return Promise.all([
       instancesPromise,
@@ -379,6 +405,7 @@ export default class WorkflowDashboard extends LightningElement {
       unroutedCountPromise,
     ])
       .then(([result, statsResult, stalledResult, unroutedResult]) => {
+        if (!this._isConnected || requestId !== this._instanceRequestId) return;
         const formatted = result.map((inst) => this.formatInstance(inst));
         this.instances = formatted;
 
@@ -403,6 +430,7 @@ export default class WorkflowDashboard extends LightningElement {
         }
       })
       .catch((error) => {
+        if (!this._isConnected || requestId !== this._instanceRequestId) return;
         this.showToast(
           "Error",
           "Failed to retrieve workflow instances: " + this.reduceErrors(error),
@@ -410,8 +438,10 @@ export default class WorkflowDashboard extends LightningElement {
         );
       })
       .finally(() => {
-        this.loadingMore = false;
-        this.loadingDetails = false;
+        if (this._isConnected && requestId === this._instanceRequestId) {
+          this.loadingMore = false;
+          this.loadingDetails = false;
+        }
       });
   }
 
@@ -452,9 +482,16 @@ export default class WorkflowDashboard extends LightningElement {
       workflowName: this.selectedWorkflow,
       searchTerm: this.searchTerm,
       thresholdMinutes: null,
+    }).catch((error) => {
+      console.error("Stalled count query failed:", error);
+      return { count: 0, capped: false };
     });
 
-    const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null });
+    const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null })
+      .catch((error) => {
+        console.error("Unrouted signal count query failed:", error);
+        return { count: 0, capped: false };
+      });
 
     return Promise.all([
       instancesPromise,
@@ -649,8 +686,8 @@ export default class WorkflowDashboard extends LightningElement {
     if (this.loadingMore || !this.hasMore) {
       return;
     }
-    this.offsetSize += this.limitSize;
-    this.fetchInstances(true);
+    const targetOffset = this.offsetSize + this.limitSize;
+    this.fetchInstances(true, targetOffset);
   }
 
   handleSelectInstance(event) {
@@ -1523,6 +1560,41 @@ export default class WorkflowDashboard extends LightningElement {
       });
   }
 
+  handleOpenCompensateModal() {
+    this.compensateModalOpen = true;
+  }
+
+  handleCloseCompensateModal() {
+    this.compensateModalOpen = false;
+  }
+
+  handleConfirmCompensate() {
+    this.compensateModalOpen = false;
+    this.loadingDetails = true;
+    compensateWorkflow({ instanceId: this.selectedInstanceId })
+      .then((compensatingInstanceId) => {
+        this.showToast(
+          "Success",
+          "Compensation workflow spawned successfully.",
+          "success",
+        );
+        this.selectedInstanceId = compensatingInstanceId;
+        this.refreshInstances();
+        this.loadDetails(true);
+        this.startPolling();
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to trigger compensation: " + this.reduceErrors(error),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.loadingDetails = false;
+      });
+  }
+
   handleCommentsChange(event) {
     this.approvalComments = event.target.value;
   }
@@ -1732,6 +1804,7 @@ export default class WorkflowDashboard extends LightningElement {
 
   startPolling() {
     this.stopPolling();
+    this.stopAutoRefresh();
     let attempts = 0;
     this.pollingInterval = setInterval(() => {
       attempts += 1;
@@ -1742,10 +1815,13 @@ export default class WorkflowDashboard extends LightningElement {
     }, 2000);
   }
 
-  stopPolling() {
+  stopPolling(shouldResumeAutoRefresh = true) {
     if (this.pollingInterval) {
       clearInterval(this.pollingInterval);
       this.pollingInterval = null;
+      if (shouldResumeAutoRefresh) {
+        this.startAutoRefresh();
+      }
     }
   }
 

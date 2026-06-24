@@ -60,6 +60,11 @@
     </fieldPermissions>
     <fieldPermissions>
         <editable>true</editable>
+        <field>Workflow_Instance__c.Compensated_By__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
         <field>Workflow_Instance__c.Input__c</field>
         <readable>true</readable>
     </fieldPermissions>
@@ -145,6 +150,11 @@
         <field>Workflow_Step_Execution__c.Timeout_At__c</field>
         <readable>true</readable>
     </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Step_Execution__c.Transient_Retry_Count__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
 
     <!-- fieldPermissions for Workflow_Signal__c (excluding required/master-detail fields) -->
     <fieldPermissions>
@@ -165,6 +175,11 @@
     <fieldPermissions>
         <editable>true</editable>
         <field>Workflow_Signal__c.Signal_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Signal__c.Workflow_Instance__c</field>
         <readable>true</readable>
     </fieldPermissions>
 

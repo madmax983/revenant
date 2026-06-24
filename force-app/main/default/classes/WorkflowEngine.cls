@@ -1084,6 +1084,20 @@ public inherited sharing class WorkflowEngine {
     instance.Correlation_Key__c = req.correlationKey;
     instance.Parent_Instance__c = req.parentInstanceId;
 
+    if (String.isNotBlank(req.workflowName)) {
+      List<ApexTypeImplementor> impls = [
+        SELECT ClassName
+        FROM ApexTypeImplementor
+        WHERE ClassName = :req.workflowName
+          AND InterfaceName IN ('WorkflowDefinition', 'VersionedWorkflow')
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      if (impls.isEmpty()) {
+        throw new WorkflowException('Unauthorized or invalid workflow definition: ' + req.workflowName);
+      }
+    }
+
     Type wflowType = Type.forName(req.workflowName);
     if (wflowType != null) {
       Object defObj = wflowType.newInstance();
@@ -5954,6 +5968,28 @@ public inherited sharing class WorkflowEngine {
     Workflow_Instance__c instance,
     String reassertedStatus
   ) {
+    // Determine the source of the forward executions (original completed run or this run)
+    Id forwardSourceInstanceId = instance.Id;
+    Id prevInstId = null;
+    try {
+      prevInstId = instance.Previous_Instance__c;
+    } catch (SObjectException ex) {
+      List<Workflow_Instance__c> temp = [
+        SELECT Previous_Instance__c FROM Workflow_Instance__c WHERE Id = :instance.Id WITH SYSTEM_MODE LIMIT 1
+      ];
+      if (!temp.isEmpty()) {
+        prevInstId = temp[0].Previous_Instance__c;
+      }
+    }
+    if (prevInstId != null) {
+      List<Workflow_Instance__c> preds = [
+        SELECT Status__c FROM Workflow_Instance__c WHERE Id = :prevInstId WITH SYSTEM_MODE LIMIT 1
+      ];
+      if (!preds.isEmpty() && preds[0].Status__c == 'Completed') {
+        forwardSourceInstanceId = prevInstId;
+      }
+    }
+
     // 1. Read the compensation stack
     if (String.isBlank(instance.Compensation_Stack__c)) {
       instance.Status__c = (instance.Status__c == 'Cancelling')
@@ -6088,7 +6124,7 @@ public inherited sharing class WorkflowEngine {
         SELECT Input__c, Output__c
         FROM Workflow_Step_Execution__c
         WHERE
-          Workflow_Instance__c = :instance.Id
+          Workflow_Instance__c = :forwardSourceInstanceId
           AND Step_Name__c = :activeStepName
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
@@ -6169,7 +6205,7 @@ public inherited sharing class WorkflowEngine {
       SELECT Output__c
       FROM Workflow_Step_Execution__c
       WHERE
-        Workflow_Instance__c = :instance.Id
+        Workflow_Instance__c = :forwardSourceInstanceId
         AND Status__c = 'Completed'
         AND Step_Name__c != :activeStepName
         AND Step_Name__c != :compensationStepLogName
@@ -6566,11 +6602,33 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
+    // Determine the source of the forward executions (original completed run or this run)
+    Id forwardSourceInstanceId = instance.Id;
+    Id prevInstId = null;
+    try {
+      prevInstId = instance.Previous_Instance__c;
+    } catch (SObjectException ex) {
+      List<Workflow_Instance__c> temp = [
+        SELECT Previous_Instance__c FROM Workflow_Instance__c WHERE Id = :instance.Id WITH SYSTEM_MODE LIMIT 1
+      ];
+      if (!temp.isEmpty()) {
+        prevInstId = temp[0].Previous_Instance__c;
+      }
+    }
+    if (prevInstId != null) {
+      List<Workflow_Instance__c> preds = [
+        SELECT Status__c FROM Workflow_Instance__c WHERE Id = :prevInstId WITH SYSTEM_MODE LIMIT 1
+      ];
+      if (!preds.isEmpty() && preds[0].Status__c == 'Completed') {
+        forwardSourceInstanceId = prevInstId;
+      }
+    }
+
     List<Workflow_Step_Execution__c> originalExecs = [
       SELECT Input__c, Output__c
       FROM Workflow_Step_Execution__c
       WHERE
-        Workflow_Instance__c = :instance.Id
+        Workflow_Instance__c = :forwardSourceInstanceId
         AND Step_Name__c = :activeStepName
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
@@ -6688,6 +6746,92 @@ public inherited sharing class WorkflowEngine {
     if (!stepsToInsert.isEmpty()) {
       insert as system stepsToInsert;
     }
+  }
+
+  /**
+   * Manually triggers compensation for a completed workflow instance.
+   * Validates status, copies the compensation stack, spawns a new compensating instance,
+   * links it to the original instance, and runs the rollback.
+   */
+  public static Id compensate(Id instanceId) {
+    if (instanceId == null) {
+      throw new WorkflowException('Instance ID cannot be null.');
+    }
+
+    List<Workflow_Instance__c> targetInstances = [
+      SELECT
+        Id,
+        Status__c,
+        Compensation_Stack__c,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c,
+        Definition_Version__c,
+        Previous_Run_At__c,
+        Input__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+
+    if (targetInstances.isEmpty()) {
+      throw new WorkflowException('Workflow instance not found: ' + instanceId);
+    }
+
+    Workflow_Instance__c target = targetInstances[0];
+
+    if (target.Status__c != 'Completed') {
+      throw new WorkflowException(
+        'Only Completed workflow instances can be compensated. Current status: ' +
+        target.Status__c
+      );
+    }
+
+    if (String.isBlank(target.Compensation_Stack__c)) {
+      throw new WorkflowException('No compensation stack found on instance: ' + instanceId);
+    }
+
+    List<String> stack = (List<String>) JSON.deserialize(
+      target.Compensation_Stack__c,
+      List<String>.class
+    );
+    if (stack.isEmpty()) {
+      throw new WorkflowException('Compensation stack is empty for instance: ' + instanceId);
+    }
+
+    // Spawn successor compensating instance. Carry the root correlation key forward.
+    Workflow_Instance__c compensatingInstance = new Workflow_Instance__c(
+      Workflow_Name__c = target.Workflow_Name__c,
+      Correlation_Key__c = target.Correlation_Key__c,
+      Root_Correlation_Key__c = String.isNotBlank(target.Root_Correlation_Key__c) ? target.Root_Correlation_Key__c : target.Correlation_Key__c,
+      Previous_Instance__c = target.Id,
+      Definition_Version__c = target.Definition_Version__c,
+      Status__c = 'Compensating',
+      Compensation_Stack__c = target.Compensation_Stack__c,
+      Input__c = target.Input__c
+    );
+
+    insert as system compensatingInstance;
+
+    // Link original instance to new compensating instance
+    target.Compensated_By__c = compensatingInstance.Id;
+    update as system target;
+
+    // Pre-create the first compensation step execution log
+    preCreateFirstCompensationStep(compensatingInstance);
+
+    // Schedule watchdog and enqueue orchestrator
+    scheduleTimeoutJobForInstance(compensatingInstance.Id);
+    if (Test.isRunningTest()) {
+      if (!disableQueueableInTest) {
+        System.enqueueJob(new WorkflowOrchestrator(compensatingInstance.Id));
+      }
+    } else {
+      enqueueOrchestrator(compensatingInstance.Id, null);
+    }
+
+    return compensatingInstance.Id;
   }
 
   /**

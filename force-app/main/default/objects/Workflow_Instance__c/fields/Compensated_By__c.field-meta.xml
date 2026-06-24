@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Compensated_By__c</fullName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <description>Points to the new workflow instance that compensated this completed instance.</description>
+    <externalId>false</externalId>
+    <label>Compensated By</label>
+    <referenceTo>Workflow_Instance__c</referenceTo>
+    <relationshipLabel>Compensated Instances</relationshipLabel>
+    <relationshipName>Compensated_Instances</relationshipName>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Lookup</type>
+</CustomField>

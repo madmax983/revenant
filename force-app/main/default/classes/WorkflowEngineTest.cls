@@ -5141,4 +5141,115 @@ public class WorkflowEngineTest {
       'Watchdog must not create a fallback exec after a manual resume wins'
     );
   }
+
+  @isTest
+  static void testManualCompensationValidation() {
+    // 1. Create a non-completed instance and check it fails validation
+    Workflow_Instance__c inst1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running'
+    );
+    insert inst1;
+
+    try {
+      WorkflowEngine.compensate(inst1.Id);
+      System.assert(false, 'Should have thrown exception for non-completed status');
+    } catch (Exception ex) {
+      System.assert(ex.getMessage().contains('Only Completed'), 'Expected "Only Completed" error message: ' + ex.getMessage());
+    }
+
+    // 2. Create a completed instance without compensation stack
+    Workflow_Instance__c inst2 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Completed',
+      Compensation_Stack__c = null
+    );
+    insert inst2;
+
+    try {
+      WorkflowEngine.compensate(inst2.Id);
+      System.assert(false, 'Should have thrown exception for missing stack');
+    } catch (Exception ex) {
+      System.assert(ex.getMessage().contains('No compensation stack found'), 'Expected "No compensation stack found" error message: ' + ex.getMessage());
+    }
+  }
+
+  @isTest
+  static void testManualCompensationHappyPath() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Create a target Completed workflow instance with compensation stack
+    Workflow_Instance__c target = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Completed',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{
+          'WorkflowEngineTest.NonCompensatableStep',
+          'WorkflowEngineTest.CompensatableHappyStep'
+        }
+      ),
+      Correlation_Key__c = 'TestKey_Comp',
+      Input__c = '{"key": "val"}'
+    );
+    insert target;
+
+    // Create the original completed step execution for the compensatable step so the compensation context can resolve it
+    Workflow_Step_Execution__c origExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = target.Id,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep',
+      Status__c = 'Completed',
+      Input__c = '{"stepInput": 1}',
+      Output__c = '{"stepOutput": 2}'
+    );
+    insert origExec;
+
+    Test.startTest();
+    Id compensatingId = WorkflowEngine.compensate(target.Id);
+    Test.stopTest();
+
+    System.assertNotEquals(null, compensatingId, 'Compensating run ID should be returned');
+
+    // Verify original target instance is linked to the new compensating instance
+    Workflow_Instance__c targetReload = [
+      SELECT Compensated_By__c, Status__c FROM Workflow_Instance__c WHERE Id = :target.Id
+    ];
+    System.assertEquals(compensatingId, targetReload.Compensated_By__c, 'Compensated_By__c should link to compensating run');
+    System.assertEquals('Completed', targetReload.Status__c, 'Original instance status must stay Completed');
+
+    // Verify the new compensating instance details
+    Workflow_Instance__c compInst = [
+      SELECT Status__c, Previous_Instance__c, Correlation_Key__c, Root_Correlation_Key__c, Compensation_Stack__c
+      FROM Workflow_Instance__c
+      WHERE Id = :compensatingId
+    ];
+    System.assertEquals('Compensating', compInst.Status__c, 'New run status must start as Compensating');
+    System.assertEquals(target.Id, compInst.Previous_Instance__c, 'Previous_Instance__c should link to the original target run');
+    System.assertEquals(target.Correlation_Key__c, compInst.Correlation_Key__c, 'Correlation key should carry forward');
+    System.assertEquals(target.Correlation_Key__c, compInst.Root_Correlation_Key__c, 'Root correlation key should carry forward');
+    System.assertEquals(target.Compensation_Stack__c, compInst.Compensation_Stack__c, 'Compensation stack should be copied');
+
+    // Drive the compensation execution
+    WorkflowEngine.runStep(compensatingId, null); // Runs CompensatableHappyStep
+    WorkflowEngine.runStep(compensatingId, null); // Runs NonCompensatableStep (skipped)
+    WorkflowEngine.runStep(compensatingId, null); // Stack empty -> transition status to Compensated
+
+    compInst = [
+      SELECT Status__c FROM Workflow_Instance__c WHERE Id = :compensatingId
+    ];
+    System.assertEquals('Compensated', compInst.Status__c, 'Spawned compensating run should end in Compensated status');
+
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Step_Name__c, Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :compensatingId
+      ORDER BY CreatedDate ASC, Id ASC
+    ];
+    System.assertEquals(2, stepExecs.size(), 'Should have created step execution logs on compensating run');
+    System.assertEquals(
+      'WorkflowEngineTest.CompensatableHappyStep_Compensate',
+      stepExecs[0].Step_Name__c
+    );
+    System.assertEquals('Compensated', stepExecs[0].Status__c);
+    System.assertEquals('"Compensated"', stepExecs[0].Output__c);
+  }
 }
