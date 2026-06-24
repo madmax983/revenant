@@ -170,6 +170,60 @@
                                     </lightning-combobox>
                                 </div>
                             </template>
+                            <!-- Attribute Filter Builder -->
+                            <div class="slds-col slds-size_1-of-1 slds-m-top_xx-small">
+                                <div class="slds-text-title_caps slds-text-color_weak slds-m-bottom_xx-small">Business Attributes</div>
+                                <!-- List of active attribute pills -->
+                                <template if:true={hasAttributes}>
+                                    <div class="slds-grid slds-wrap slds-m-bottom_xx-small">
+                                        <template for:each={attributeFiltersList} for:item="attr">
+                                            <span key={attr.id} class="slds-pill slds-m-right_xx-small slds-m-bottom_xx-small">
+                                                <span class="slds-pill__label" title={attr.display}>{attr.display}</span>
+                                                <button class="slds-button slds-button_icon slds-button_icon-bare slds-pill__remove" title="Remove" aria-label={attr.removeAriaLabel} data-id={attr.id} onclick={handleRemoveAttribute}>
+                                                    <lightning-icon icon-name="utility:close" size="xx-small" alternative-text="Remove"></lightning-icon>
+                                                </button>
+                                            </span>
+                                        </template>
+                                    </div>
+                                </template>
+                                <!-- Inputs to add a new attribute -->
+                                <div class="slds-grid slds-gutters_xx-small slds-grid_vertical-align-center">
+                                    <div class="slds-col slds-size_5-of-12">
+                                        <lightning-input 
+                                            name="attrKey"
+                                            data-id="attr-key-input"
+                                            label="Attribute Key"
+                                            type="text" 
+                                            variant="label-hidden" 
+                                            placeholder="Key" 
+                                            max-length="100"
+                                            value={newAttrKey}
+                                            onchange={handleNewAttrKeyChange}>
+                                        </lightning-input>
+                                    </div>
+                                    <div class="slds-col slds-size_5-of-12">
+                                        <lightning-input 
+                                            name="attrValue"
+                                            data-id="attr-val-input"
+                                            label="Attribute Value"
+                                            type="text" 
+                                            variant="label-hidden" 
+                                            placeholder="Value" 
+                                            max-length="150"
+                                            value={newAttrValue}
+                                            onchange={handleNewAttrValueChange}>
+                                        </lightning-input>
+                                    </div>
+                                    <div class="slds-col slds-size_2-of-12 slds-text-align_right">
+                                        <lightning-button-icon 
+                                            icon-name="utility:add" 
+                                            variant="brand" 
+                                            alternative-text="Add Attribute" 
+                                            onclick={handleAddAttribute}>
+                                        </lightning-button-icon>
+                                    </div>
+                                </div>
+                            </div>
                             <!-- Action Buttons Row -->
                             <div class="slds-col slds-size_1-of-1 slds-m-top_x-small">
                                 <div class="slds-grid slds-gutters_xx-small">
@@ -1010,6 +1064,18 @@
                                                 <a href="javascript:void(0);" data-id={selectedInst.Compensated_By__c} onclick={handleSelectRelatedInstance} class="slds-text-link">
                                                     {selectedInst.Compensated_By__r.Name}
                                                 </a>
+                                            </div>
+                                        </div>
+                                    </template>
+                                    <template if:true={selectedInst.attributes}>
+                                        <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
+                                            <div class="slds-text-title slds-text-color_weak slds-m-bottom_xx-small">Business Attributes</div>
+                                            <div class="slds-grid slds-wrap">
+                                                <template for:each={selectedInst.attributes} for:item="attr">
+                                                    <span key={attr.Id} class="slds-badge attribute-badge slds-m-right_xx-small slds-m-bottom_xx-small">
+                                                        {attr.Key__c}={attr.Value__c}
+                                                    </span>
+                                                </template>
                                             </div>
                                         </div>
                                     </template>

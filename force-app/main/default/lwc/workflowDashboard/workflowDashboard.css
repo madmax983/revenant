@@ -307,3 +307,12 @@ lightning-button.slds-button_stretch {
   width: 100%;
 }
 
+.attribute-badge {
+  background-color: #ffffff;
+  border: 1px solid var(--slds-g-color-brand-base-50, #1b96ff);
+  color: var(--slds-g-color-brand-base-30, #0176d3);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: bold;
+}
+

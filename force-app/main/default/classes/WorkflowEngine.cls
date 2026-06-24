@@ -74,6 +74,11 @@ public inherited sharing class WorkflowEngine {
   @TestVisible
   private static Integer DEDUP_LOOKUP_ROW_CAP = 10000;
 
+  // Search Attributes configuration limits
+  public static final Integer MAX_ATTRIBUTES_PER_INSTANCE = 10;
+  public static final Integer MAX_ATTRIBUTE_KEY_LENGTH = 100;
+  public static final Integer MAX_ATTRIBUTE_VALUE_LENGTH = 150;
+
   // Max number of timed-out steps a single watchdog heartbeat will fail. Each failure
   // triggers failWorkflowInstance() (its own SOQL/DML + optional alert queries), so this
   // bounds the heartbeat's governor usage. Remaining timeouts drain on the next heartbeat.
@@ -875,7 +880,16 @@ public inherited sharing class WorkflowEngine {
     String correlationKey,
     Object input
   ) {
-    return doStart(workflowName, correlationKey, input, null).instanceId;
+    return doStart(workflowName, correlationKey, input, null, null).instanceId;
+  }
+
+  public static Id start(
+    String workflowName,
+    String correlationKey,
+    Object input,
+    Map<String, String> attributes
+  ) {
+    return doStart(workflowName, correlationKey, input, null, attributes).instanceId;
   }
 
   /**
@@ -888,7 +902,18 @@ public inherited sharing class WorkflowEngine {
     Object input,
     Id parentInstanceId
   ) {
-    return doStart(workflowName, correlationKey, input, parentInstanceId)
+    return doStart(workflowName, correlationKey, input, parentInstanceId, null)
+      .instanceId;
+  }
+
+  public static Id start(
+    String workflowName,
+    String correlationKey,
+    Object input,
+    Id parentInstanceId,
+    Map<String, String> attributes
+  ) {
+    return doStart(workflowName, correlationKey, input, parentInstanceId, attributes)
       .instanceId;
   }
 
@@ -901,7 +926,16 @@ public inherited sharing class WorkflowEngine {
     String correlationKey,
     Object input
   ) {
-    return doStart(workflowName, correlationKey, input, null);
+    return doStart(workflowName, correlationKey, input, null, null);
+  }
+
+  public static StartResult startOrGet(
+    String workflowName,
+    String correlationKey,
+    Object input,
+    Map<String, String> attributes
+  ) {
+    return doStart(workflowName, correlationKey, input, null, attributes);
   }
 
   public static StartResult startOrGet(
@@ -910,7 +944,17 @@ public inherited sharing class WorkflowEngine {
     Object input,
     Id parentInstanceId
   ) {
-    return doStart(workflowName, correlationKey, input, parentInstanceId, true);
+    return doStart(workflowName, correlationKey, input, parentInstanceId, true, null);
+  }
+
+  public static StartResult startOrGet(
+    String workflowName,
+    String correlationKey,
+    Object input,
+    Id parentInstanceId,
+    Map<String, String> attributes
+  ) {
+    return doStart(workflowName, correlationKey, input, parentInstanceId, true, attributes);
   }
 
   /**
@@ -924,16 +968,45 @@ public inherited sharing class WorkflowEngine {
     String correlationKey,
     Object input
   ) {
-    return doStart(workflowName, correlationKey, input, null, false).instanceId;
+    return doStart(workflowName, correlationKey, input, null, false, null).instanceId;
   }
 
-  private static StartResult doStart(
-    String workflowName,
-    String correlationKey,
-    Object input,
-    Id parentInstanceId
-  ) {
-    return doStart(workflowName, correlationKey, input, parentInstanceId, true);
+  private static void validateAttributes(Map<String, String> attributes) {
+    if (attributes == null || attributes.isEmpty()) {
+      return;
+    }
+    if (attributes.size() > MAX_ATTRIBUTES_PER_INSTANCE) {
+      throw new WorkflowException('Attribute count exceeds maximum limit of ' + MAX_ATTRIBUTES_PER_INSTANCE);
+    }
+    for (String key : attributes.keySet()) {
+      if (String.isBlank(key)) {
+        throw new WorkflowException('Attribute key cannot be blank');
+      }
+      if (key.length() > MAX_ATTRIBUTE_KEY_LENGTH) {
+        throw new WorkflowException('Attribute key length exceeds maximum limit of ' + MAX_ATTRIBUTE_KEY_LENGTH + ' characters: ' + key);
+      }
+      String val = attributes.get(key);
+      if (val != null && val.length() > MAX_ATTRIBUTE_VALUE_LENGTH) {
+        throw new WorkflowException('Attribute value length exceeds maximum limit of ' + MAX_ATTRIBUTE_VALUE_LENGTH + ' characters: ' + val);
+      }
+    }
+  }
+
+  private static List<Workflow_Search_Attribute__c> buildAttributes(Id instanceId, Map<String, String> attributes) {
+    List<Workflow_Search_Attribute__c> records = new List<Workflow_Search_Attribute__c>();
+    if (attributes == null || attributes.isEmpty()) {
+      return records;
+    }
+    for (String key : attributes.keySet()) {
+      String val = attributes.get(key);
+      records.add(new Workflow_Search_Attribute__c(
+        Workflow_Instance__c = instanceId,
+        Key__c = key,
+        Value__c = val,
+        Key_Value__c = key + '=' + (val == null ? '' : val)
+      ));
+    }
+    return records;
   }
 
   private static StartResult doStart(
@@ -941,9 +1014,21 @@ public inherited sharing class WorkflowEngine {
     String correlationKey,
     Object input,
     Id parentInstanceId,
-    Boolean includeTerminal
+    Map<String, String> attributes
+  ) {
+    return doStart(workflowName, correlationKey, input, parentInstanceId, true, attributes);
+  }
+
+  private static StartResult doStart(
+    String workflowName,
+    String correlationKey,
+    Object input,
+    Id parentInstanceId,
+    Boolean includeTerminal,
+    Map<String, String> attributes
   ) {
     validateCorrelationKey(correlationKey);
+    validateAttributes(attributes);
 
     // Get-or-start: return an existing instance within the dedup scope (active,
     // and optionally recently terminal within the configured window) instead of
@@ -977,6 +1062,10 @@ public inherited sharing class WorkflowEngine {
 
     try {
       insert as system instance;
+      List<Workflow_Search_Attribute__c> attrsToInsert = buildAttributes(instance.Id, attributes);
+      if (!attrsToInsert.isEmpty()) {
+        insert as system attrsToInsert;
+      }
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
         // Concurrency backstop: a sibling start won the race on the unique
@@ -1518,6 +1607,7 @@ public inherited sharing class WorkflowEngine {
     public String correlationKey;
     public Object input;
     public Id parentInstanceId;
+    public Map<String, String> attributes;
 
     public StartRequest(
       String workflowName,
@@ -1533,12 +1623,38 @@ public inherited sharing class WorkflowEngine {
       String workflowName,
       String correlationKey,
       Object input,
+      Map<String, String> attributes
+    ) {
+      this.workflowName = workflowName;
+      this.correlationKey = correlationKey;
+      this.input = input;
+      this.attributes = attributes;
+    }
+
+    public StartRequest(
+      String workflowName,
+      String correlationKey,
+      Object input,
       Id parentInstanceId
     ) {
       this.workflowName = workflowName;
       this.correlationKey = correlationKey;
       this.input = input;
       this.parentInstanceId = parentInstanceId;
+    }
+
+    public StartRequest(
+      String workflowName,
+      String correlationKey,
+      Object input,
+      Id parentInstanceId,
+      Map<String, String> attributes
+    ) {
+      this.workflowName = workflowName;
+      this.correlationKey = correlationKey;
+      this.input = input;
+      this.parentInstanceId = parentInstanceId;
+      this.attributes = attributes;
     }
   }
 
@@ -1625,6 +1741,7 @@ public inherited sharing class WorkflowEngine {
     Set<String> correlationKeys = new Set<String>();
     for (StartRequest req : requests) {
       validateCorrelationKey(req.correlationKey);
+      validateAttributes(req.attributes);
       if (String.isNotBlank(req.correlationKey)) {
         correlationKeys.add(req.correlationKey);
       }
@@ -1715,6 +1832,28 @@ public inherited sharing class WorkflowEngine {
         throw new WorkflowException(
           'Failed to start workflow: ' + genuineError
         );
+      }
+    }
+
+    if (!insertedInstances.isEmpty()) {
+      List<Workflow_Search_Attribute__c> attrsToInsert = new List<Workflow_Search_Attribute__c>();
+      for (Integer j = 0; j < insertedInstances.size(); j++) {
+        StartRequest req = requests[insertedReqIndexes[j]];
+        Workflow_Instance__c instance = insertedInstances[j];
+        if (req.attributes != null && !req.attributes.isEmpty()) {
+          for (String key : req.attributes.keySet()) {
+            String val = req.attributes.get(key);
+            attrsToInsert.add(new Workflow_Search_Attribute__c(
+              Workflow_Instance__c = instance.Id,
+              Key__c = key,
+              Value__c = val,
+              Key_Value__c = key + '=' + (val == null ? '' : val)
+            ));
+          }
+        }
+      }
+      if (!attrsToInsert.isEmpty()) {
+        insert as system attrsToInsert;
       }
     }
 
@@ -4216,6 +4355,27 @@ public inherited sharing class WorkflowEngine {
           );
         }
         throw ex;
+      }
+
+      List<Workflow_Search_Attribute__c> predecessorAttrs = [
+        SELECT Key__c, Value__c
+        FROM Workflow_Search_Attribute__c
+        WHERE Workflow_Instance__c = :instance.Id
+        WITH SYSTEM_MODE
+      ];
+      if (!predecessorAttrs.isEmpty()) {
+        List<Workflow_Search_Attribute__c> successorAttrs = new List<Workflow_Search_Attribute__c>();
+        for (Workflow_Search_Attribute__c attr : predecessorAttrs) {
+          successorAttrs.add(
+            new Workflow_Search_Attribute__c(
+              Workflow_Instance__c = nextInstance.Id,
+              Key__c = attr.Key__c,
+              Value__c = attr.Value__c,
+              Key_Value__c = attr.Key__c + '=' + (attr.Value__c == null ? '' : attr.Value__c)
+            )
+          );
+        }
+        insert as system successorAttrs;
       }
 
       // Set input and save payload

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Key_Value__c</fullName>
+    <description>Composite key=value string. Marked as external ID to automatically index it for selective equality filtering.</description>
+    <externalId>true</externalId>
+    <label>Key Value</label>
+    <length>255</length>
+    <required>true</required>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>

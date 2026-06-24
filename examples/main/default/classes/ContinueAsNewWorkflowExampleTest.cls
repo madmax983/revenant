@@ -9,7 +9,8 @@ public class ContinueAsNewWorkflowExampleTest {
     Id run1Id = WorkflowEngine.start(
       'ContinueAsNewWorkflowExample.PollerWorkflow',
       'PollerKey',
-      0
+      0,
+      new Map<String, String>{ 'poller_type' => 'daily' }
     );
     WorkflowTestHarness.Result run1Result = new WorkflowTestHarness(run1Id).drive();
     System.assertEquals('ContinuedAsNew', run1Result.status);
@@ -22,6 +23,15 @@ public class ContinueAsNewWorkflowExampleTest {
     System.assertEquals('Pending', run2.Status__c);
     System.assertEquals('PollerKey_run2', run2.Correlation_Key__c);
     System.assertEquals('1', run2.Input__c);
+
+    List<Workflow_Search_Attribute__c> run2Attrs = [
+      SELECT Key__c, Value__c 
+      FROM Workflow_Search_Attribute__c 
+      WHERE Workflow_Instance__c = :run2.Id
+    ];
+    System.assertEquals(1, run2Attrs.size(), 'Successor run2 should inherit predecessor attributes');
+    System.assertEquals('poller_type', run2Attrs[0].Key__c);
+    System.assertEquals('daily', run2Attrs[0].Value__c);
 
     WorkflowTestHarness.Result run2Result = new WorkflowTestHarness(run2.Id).drive();
     System.assertEquals('ContinuedAsNew', run2Result.status);

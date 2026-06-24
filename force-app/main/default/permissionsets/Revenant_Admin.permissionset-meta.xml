@@ -343,6 +343,13 @@
         <readable>true</readable>
     </fieldPermissions>
 
+    <!-- fieldPermissions for Workflow_Search_Attribute__c -->
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Search_Attribute__c.Value__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
     <hasActivationRequired>false</hasActivationRequired>
     <label>Revenant Admin</label>
 
@@ -434,6 +441,16 @@
         <allowRead>true</allowRead>
         <modifyAllRecords>true</modifyAllRecords>
         <object>Workflow_Log__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>true</allowDelete>
+        <allowEdit>true</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords>
+        <object>Workflow_Search_Attribute__c</object>
         <viewAllRecords>true</viewAllRecords>
     </objectPermissions>
 </PermissionSet>

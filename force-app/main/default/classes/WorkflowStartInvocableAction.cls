@@ -8,6 +8,9 @@ public inherited sharing class WorkflowStartInvocableAction {
 
     @InvocableVariable(label='Input JSON')
     public String inputJson;
+
+    @InvocableVariable(label='Attributes JSON')
+    public String attributesJson;
   }
 
   public class StartResult {
@@ -37,11 +40,33 @@ public inherited sharing class WorkflowStartInvocableAction {
       if (String.isNotBlank(req.inputJson)) {
         input = JSON.deserializeUntyped(req.inputJson);
       }
+      Map<String, String> attributes = null;
+      if (String.isNotBlank(req.attributesJson)) {
+        attributes = new Map<String, String>();
+        try {
+          Object deserialized = JSON.deserializeUntyped(req.attributesJson);
+          if (deserialized instanceof Map<String, Object>) {
+            Map<String, Object> raw = (Map<String, Object>) deserialized;
+            for (String k : raw.keySet()) {
+              attributes.put(k, String.valueOf(raw.get(k)));
+            }
+          } else {
+            throw new WorkflowEngine.WorkflowException(
+              'Attributes JSON must represent a key-value object.'
+            );
+          }
+        } catch (Exception ex) {
+          throw new WorkflowEngine.WorkflowException(
+            'Invalid Attributes JSON: ' + ex.getMessage()
+          );
+        }
+      }
       engineRequests.add(
         new WorkflowEngine.StartRequest(
           req.workflowName,
           req.correlationKey,
-          input
+          input,
+          attributes
         )
       );
     }
