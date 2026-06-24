@@ -28,7 +28,10 @@ public class WorkflowDashboardControllerTest {
       Status__c = 'Completed',
       Input__c = '"InputData"',
       Output__c = '"Output1"',
-      Retry_Count__c = 0
+      Retry_Count__c = 0,
+      CPU_Time_Ms__c = 50,
+      SOQL_Query_Count__c = 5,
+      Heap_Size_Bytes__c = 1000
     );
     insert step;
 
@@ -78,6 +81,9 @@ public class WorkflowDashboardControllerTest {
       'Should find one step execution'
     );
     System.assertEquals(step.Id, returnedSteps[0].Id);
+    System.assertEquals(50, returnedSteps[0].CPU_Time_Ms__c);
+    System.assertEquals(5, returnedSteps[0].SOQL_Query_Count__c);
+    System.assertEquals(1000, returnedSteps[0].Heap_Size_Bytes__c);
     System.assertEquals(0, returnedChildren.size(), 'Child has no children');
 
     // Check parent's details for children

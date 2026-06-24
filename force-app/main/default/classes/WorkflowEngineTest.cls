@@ -5634,4 +5634,82 @@ public class WorkflowEngineTest {
     System.assertEquals(100.0, (Decimal) progressFinal.get('percentComplete'));
     System.assertEquals('Workflow Complete', (String) progressFinal.get('message'));
   }
+
+  @isTest
+  static void testTelemetryCapturedOnTransitions() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'TelemetryKey',
+      'InitialInput'
+    );
+
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Status__c, CPU_Time_Ms__c, SOQL_Query_Count__c, Heap_Size_Bytes__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId
+      ORDER BY CreatedDate ASC
+    ];
+
+    System.assert(!stepExecs.isEmpty(), 'Should have recorded step executions');
+    for (Workflow_Step_Execution__c step : stepExecs) {
+      if (step.Status__c == 'Completed') {
+        System.assertNotEquals(null, step.CPU_Time_Ms__c, 'CPU time telemetry should be captured');
+        System.assertNotEquals(null, step.SOQL_Query_Count__c, 'SOQL queries telemetry should be captured');
+        System.assertNotEquals(null, step.Heap_Size_Bytes__c, 'Heap size telemetry should be captured');
+        System.assert(step.CPU_Time_Ms__c >= 0, 'CPU time should be non-negative');
+        System.assert(step.SOQL_Query_Count__c >= 0, 'SOQL query count should be non-negative');
+        System.assert(step.Heap_Size_Bytes__c >= 0, 'Heap size should be non-negative');
+      }
+    }
+  }
+
+  @isTest
+  static void testTelemetryOnPendingAndCrash() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start a sleeping workflow to verify telemetry is populated on Pending status (sleep/suspension)
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SleepingWorkflow',
+      'TelemetrySleepKey',
+      'InitialInput'
+    );
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Status__c, CPU_Time_Ms__c, SOQL_Query_Count__c, Heap_Size_Bytes__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId
+      ORDER BY CreatedDate ASC
+    ];
+    System.assert(!stepExecs.isEmpty(), 'Should have recorded step executions');
+    Boolean foundPending = false;
+    for (Workflow_Step_Execution__c step : stepExecs) {
+      if (step.Status__c == 'Pending') {
+        foundPending = true;
+        System.assertNotEquals(null, step.CPU_Time_Ms__c, 'CPU time telemetry should be captured on Pending/sleep status');
+        System.assertNotEquals(null, step.SOQL_Query_Count__c, 'SOQL queries telemetry should be captured on Pending/sleep status');
+        System.assertNotEquals(null, step.Heap_Size_Bytes__c, 'Heap size telemetry should be captured on Pending/sleep status');
+      }
+    }
+    System.assert(foundPending, 'Should have found a Pending step execution for sleep');
+
+    // Trigger handleCrash to verify telemetry is cleared/skipped during crashes
+    WorkflowEngine.handleCrash(instanceId, 'WorkflowEngineTest.SleepingStep', new WorkflowEngine.WorkflowException('Test Exception'));
+    List<Workflow_Step_Execution__c> crashedExecs = [
+      SELECT Status__c, CPU_Time_Ms__c, SOQL_Query_Count__c, Heap_Size_Bytes__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Failed'
+      ORDER BY CreatedDate DESC
+      LIMIT 1
+    ];
+    System.assert(!crashedExecs.isEmpty(), 'Should have recorded failed step execution from handleCrash');
+    Workflow_Step_Execution__c failedStep = crashedExecs[0];
+    System.assertEquals(null, failedStep.CPU_Time_Ms__c, 'CPU time telemetry should be null on crash');
+    System.assertEquals(null, failedStep.SOQL_Query_Count__c, 'SOQL queries telemetry should be null on crash');
+    System.assertEquals(null, failedStep.Heap_Size_Bytes__c, 'Heap size telemetry should be null on crash');
+  }
 }

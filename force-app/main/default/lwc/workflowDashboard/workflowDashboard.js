@@ -39,6 +39,12 @@ const FAILURE_CATEGORY_LABELS = {
   UNKNOWN: "Unknown",
 };
 
+const ASYNC_LIMITS = {
+  CPU: 60000,
+  SOQL: 200,
+  HEAP: 12000000
+};
+
 export default class WorkflowDashboard extends LightningElement {
   instances = [];
   filteredInstances = [];
@@ -804,6 +810,27 @@ export default class WorkflowDashboard extends LightningElement {
             }
           }
 
+          const cpu = step.CPU_Time_Ms__c;
+          const soql = step.SOQL_Query_Count__c;
+          const heap = step.Heap_Size_Bytes__c;
+
+          let hasTelemetry = cpu !== undefined && cpu !== null;
+          let telemetryString = "—";
+          let hasLimitPressure = false;
+
+          if (hasTelemetry) {
+            const cpuVal = cpu ?? 0;
+            const soqlVal = soql ?? 0;
+            const heapVal = heap ?? 0;
+
+            const cpuPct = Math.round((cpuVal / ASYNC_LIMITS.CPU) * 100);
+            const soqlPct = Math.round((soqlVal / ASYNC_LIMITS.SOQL) * 100);
+            const heapPct = Math.round((heapVal / ASYNC_LIMITS.HEAP) * 100);
+
+            telemetryString = `CPU: ${cpuVal} ms (${cpuPct}%) | SOQL: ${soqlVal}/${ASYNC_LIMITS.SOQL} (${soqlPct}%) | Heap: ${(heapVal / 1024 / 1024).toFixed(2)} MB (${heapPct}%)`;
+            hasLimitPressure = cpuPct >= 80 || soqlPct >= 80 || heapPct >= 80;
+          }
+
           return {
             ...step,
             formattedDate: this.formatDateTime(step.CreatedDate),
@@ -830,6 +857,13 @@ export default class WorkflowDashboard extends LightningElement {
             outputFile: this.buildPayloadFile(
               payloadFiles["step." + step.Id + ".Output"],
             ),
+            hasTelemetry,
+            telemetryString,
+            hasLimitPressure,
+            formattedRetryCount: step.Retry_Count__c !== undefined && step.Retry_Count__c !== null ? step.Retry_Count__c : "—",
+            budgetClass: hasLimitPressure
+              ? "text-red slds-text-title_bold"
+              : "slds-text-color_weak",
           };
         });
 

@@ -888,6 +888,107 @@ describe("c-workflow-dashboard details panel", () => {
     // Verify it settled and component did not crash
     expect(element.shadowRoot.querySelector(".list-item")).not.toBeNull();
   });
+
+  it("renders per-step budget indicator and flags limit pressure", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" }
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" },
+      steps: [
+        {
+          Id: "step1",
+          Step_Name__c: "StepNormal",
+          Status__c: "Completed",
+          CreatedDate: "2026-06-24T12:00:00.000Z",
+          CPU_Time_Ms__c: 1000,
+          SOQL_Query_Count__c: 10,
+          Heap_Size_Bytes__c: 1048576, // 1 MB
+        },
+        {
+          Id: "step2",
+          Step_Name__c: "StepPressure",
+          Status__c: "Failed",
+          CreatedDate: "2026-06-24T12:05:00.000Z",
+          CPU_Time_Ms__c: 50000, // 50s (>=80% of 60s)
+          SOQL_Query_Count__c: 5,
+          Heap_Size_Bytes__c: 500000,
+        },
+        {
+          Id: "step3",
+          Step_Name__c: "StepNoTelemetry",
+          Status__c: "Completed",
+          CreatedDate: "2026-06-24T12:10:00.000Z",
+          CPU_Time_Ms__c: null,
+          SOQL_Query_Count__c: null,
+          Heap_Size_Bytes__c: null,
+        }
+      ],
+      children: [],
+      payloadFiles: {}
+    });
+
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    // Verify budget info is rendered
+    const stepCards = element.shadowRoot.querySelectorAll(".step-card");
+    expect(stepCards.length).toBe(3);
+
+    // Verify step 1 (normal telemetry)
+    const usageTexts = Array.from(element.shadowRoot.querySelectorAll(".step-card")).map(card => card.textContent);
+    
+    // Check normal usage text
+    expect(usageTexts[0]).toContain("Resource Usage: CPU: 1000 ms (2%) | SOQL: 10/200 (5%) | Heap: 1.00 MB (9%)");
+    
+    // Check limit pressure warning and style for step 2
+    expect(usageTexts[1]).toContain("Resource Usage: CPU: 50000 ms (83%) | SOQL: 5/200 (3%) | Heap: 0.48 MB (4%)");
+    const warningIcon = stepCards[1].querySelector("lightning-icon");
+    expect(warningIcon).not.toBeNull();
+    expect(warningIcon.alternativeText).toBe("Limit Pressure");
+
+    // Check missing telemetry for step 3
+    expect(usageTexts[2]).toContain("Resource Usage: —");
+  });
+
+  it("guards against null/undefined telemetry and retry count values to prevent NaN and unrendered retries", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" }
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Running" },
+      steps: [
+        {
+          Id: "step1",
+          Step_Name__c: "StepGuarded",
+          Status__c: "Completed",
+          CreatedDate: "2026-06-24T12:00:00.000Z",
+          CPU_Time_Ms__c: 1000,
+          SOQL_Query_Count__c: null,
+          Heap_Size_Bytes__c: undefined,
+          Retry_Count__c: null,
+        }
+      ],
+      children: [],
+      payloadFiles: {}
+    });
+
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    const stepCards = element.shadowRoot.querySelectorAll(".step-card");
+    expect(stepCards.length).toBe(1);
+
+    const usageText = stepCards[0].textContent;
+    expect(usageText).toContain("Resource Usage: CPU: 1000 ms (2%) | SOQL: 0/200 (0%) | Heap: 0.00 MB (0%)");
+    expect(usageText).toContain("Retries: —");
+  });
 });
 
 

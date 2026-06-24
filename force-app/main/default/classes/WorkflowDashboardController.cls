@@ -1001,6 +1001,9 @@ public inherited sharing class WorkflowDashboardController {
         Output__c,
         Retry_Count__c,
         Error_Details__c,
+        CPU_Time_Ms__c,
+        SOQL_Query_Count__c,
+        Heap_Size_Bytes__c,
         CreatedDate
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c = :instanceId
@@ -1136,32 +1139,8 @@ public inherited sharing class WorkflowDashboardController {
   private class DefinitionScanLimitException extends Exception {
   }
 
-  // When the running transaction reaches this fraction of its heap or CPU budget while
-  // scanning Apex source, abandon the source scan and fall back to ApexTypeImplementor.
-  @TestVisible
-  private static Decimal definitionScanGuardFraction = 0.7;
-  // Forces the fallback path in tests (an empty org has no classes to scan otherwise).
   @TestVisible
   private static Boolean forceDefinitionFallback = false;
-
-  // Strips Apex line ('// ...') and block ('/* ... */') comments so the definition
-  // scan never reads documentation prose as code. DOTALL (?s) lets a block comment
-  // span lines; the line-comment branch stops at the newline. Note: this does not
-  // protect '//' or '/*' sequences that live inside string literals, but that is
-  // harmless here — a real 'class X implements WorkflowDefinition' is never inside
-  // a literal, so stripping can only remove noise, never a genuine definition.
-  private static final Pattern COMMENT_PATTERN = Pattern.compile(
-    '(?s)/\\*.*?\\*/|//[^\\n]*'
-  );
-
-  // Upper bound on a class body we will comment-strip with COMMENT_PATTERN. A
-  // single oversized body (e.g. the multi-hundred-KB engine class) can trip an
-  // uncatchable "Regex too complicated" LimitException inside replaceAll() before
-  // the per-iteration heap/CPU guard can react. Bodies this large are infra
-  // classes (engine/controllers), never small WorkflowDefinition holders, so
-  // skipping them from the source scan loses no real definitions.
-  @TestVisible
-  private static Integer maxScannableBodyLength = 100000;
 
   @AuraEnabled(cacheable=true)
   public static List<String> getDefinitions() {

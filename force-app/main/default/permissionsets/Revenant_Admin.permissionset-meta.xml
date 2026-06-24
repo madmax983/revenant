@@ -160,6 +160,21 @@
         <field>Workflow_Step_Execution__c.Transient_Retry_Count__c</field>
         <readable>true</readable>
     </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Step_Execution__c.CPU_Time_Ms__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Step_Execution__c.Heap_Size_Bytes__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Step_Execution__c.SOQL_Query_Count__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
 
     <!-- fieldPermissions for Workflow_Signal__c (excluding required/master-detail fields) -->
     <fieldPermissions>

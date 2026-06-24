@@ -3456,7 +3456,26 @@ public inherited sharing class WorkflowEngine {
     update as system toConsume.values();
   }
 
+  private static void populateTelemetry(Workflow_Step_Execution__c stepExec, Boolean isCrash) {
+    if (stepExec != null) {
+      if (isCrash) {
+        stepExec.CPU_Time_Ms__c = null;
+        stepExec.SOQL_Query_Count__c = null;
+        stepExec.Heap_Size_Bytes__c = null;
+      } else {
+        stepExec.CPU_Time_Ms__c = Limits.getCpuTime();
+        stepExec.SOQL_Query_Count__c = Limits.getQueries();
+        stepExec.Heap_Size_Bytes__c = Limits.getHeapSize();
+      }
+    }
+  }
+
   private static void saveStepExec(Workflow_Step_Execution__c stepExec) {
+    saveStepExec(stepExec, false);
+  }
+
+  private static void saveStepExec(Workflow_Step_Execution__c stepExec, Boolean isCrash) {
+    populateTelemetry(stepExec, isCrash);
     if (stepExec.Id == null) {
       insert as system stepExec;
     } else {
@@ -4392,7 +4411,7 @@ public inherited sharing class WorkflowEngine {
         stepExec.Error_Details__c = (ex != null
           ? ex.getMessage() + '\n' + ex.getStackTraceString()
           : 'Unknown governor limit / crash');
-        update as system stepExec;
+        saveStepExec(stepExec, true);
       } else {
         // Construct and insert the step execution log with failed status
         Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
@@ -4438,7 +4457,7 @@ public inherited sharing class WorkflowEngine {
             ? completedSteps[0].Output__c
             : instance.Input__c;
         }
-        insert as system stepExec;
+        saveStepExec(stepExec, true);
       }
     }
 
@@ -4461,11 +4480,15 @@ public inherited sharing class WorkflowEngine {
       return false;
     }
     if (ex instanceof DmlException) {
-      DmlException de = (DmlException) ex;
-      for (Integer i = 0; i < de.getNumDml(); i++) {
-        if (de.getDmlType(i) == StatusCode.UNABLE_TO_LOCK_ROW) {
-          return true;
+      try {
+        DmlException de = (DmlException) ex;
+        for (Integer i = 0; i < de.getNumDml(); i++) {
+          if (de.getDmlType(i) == StatusCode.UNABLE_TO_LOCK_ROW) {
+            return true;
+          }
         }
+      } catch (Exception unexpected) {
+        // Safeguard against programmatically constructed DmlExceptions in tests
       }
     }
     String msg = ex.getMessage();
