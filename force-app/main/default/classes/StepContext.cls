@@ -7,6 +7,13 @@ public inherited sharing class StepContext {
   public String stepStateJson { get; set; }
   public String workflowInputJson { get; set; }
   public Integer workflowVersion { get; set; }
+  public Integer attempt { get; private set; }
+  public Integer maxAttempts { get; private set; }
+
+  public Boolean isFinalAttempt() {
+    return this.attempt >= this.maxAttempts;
+  }
+
 
   /**
    * Start time of the predecessor instance (its CreatedDate). Null for the
@@ -302,6 +309,8 @@ public inherited sharing class StepContext {
     this.workflowInputJson = workflowInputJson;
     this.workflowVersion = workflowVersion;
     this.stepVisit = (stepVisit != null && stepVisit > 0) ? stepVisit : 0;
+    this.attempt = 1;
+    this.maxAttempts = 1;
   }
 
   /**
@@ -357,6 +366,8 @@ public inherited sharing class StepContext {
     this.workflowVersion = workflowVersion;
     // Defer loading until a signal accessor is actually called.
     this.signalSource = signalSource;
+    this.attempt = 1;
+    this.maxAttempts = 1;
   }
 
   /**
@@ -1019,6 +1030,50 @@ public inherited sharing class StepContext {
       ctx.capturedValues = (Map<String, Object>) JSON.deserializeUntyped(
         capturedValuesJson
       );
+      if (ctx.capturedValues.containsKey('__maxAttempts')) {
+        ctx.maxAttempts = (Integer) ctx.capturedValues.get('__maxAttempts');
+        ctx.capturedValues.remove('__maxAttempts');
+      }
+    }
+    return ctx;
+  }
+
+  @TestVisible
+  public static StepContext withCapturedValues(
+    Id workflowInstanceId,
+    String workflowName,
+    String stepName,
+    String inputJson,
+    String previousStepOutput,
+    String stepStateJson,
+    String workflowInputJson,
+    Integer workflowVersion,
+    Integer stepVisit,
+    SignalSource signalSource,
+    Datetime previousRunAt,
+    String capturedValuesJson,
+    Integer attempt,
+    Integer maxAttempts
+  ) {
+    StepContext ctx = withCapturedValues(
+      workflowInstanceId,
+      workflowName,
+      stepName,
+      inputJson,
+      previousStepOutput,
+      stepStateJson,
+      workflowInputJson,
+      workflowVersion,
+      stepVisit,
+      signalSource,
+      previousRunAt,
+      capturedValuesJson
+    );
+    if (attempt != null && attempt > 0) {
+      ctx.attempt = attempt;
+    }
+    if (maxAttempts != null && maxAttempts > 0) {
+      ctx.maxAttempts = maxAttempts;
     }
     return ctx;
   }
@@ -1054,6 +1109,48 @@ public inherited sharing class StepContext {
       capturedValuesJson
     );
     ctx.timeoutResume = (timeoutResume == true);
+    return ctx;
+  }
+
+  @TestVisible
+  public static StepContext withCapturedValues(
+    Id workflowInstanceId,
+    String workflowName,
+    String stepName,
+    String inputJson,
+    String previousStepOutput,
+    String stepStateJson,
+    String workflowInputJson,
+    Integer workflowVersion,
+    Integer stepVisit,
+    SignalSource signalSource,
+    Datetime previousRunAt,
+    String capturedValuesJson,
+    Boolean timeoutResume,
+    Integer attempt,
+    Integer maxAttempts
+  ) {
+    StepContext ctx = withCapturedValues(
+      workflowInstanceId,
+      workflowName,
+      stepName,
+      inputJson,
+      previousStepOutput,
+      stepStateJson,
+      workflowInputJson,
+      workflowVersion,
+      stepVisit,
+      signalSource,
+      previousRunAt,
+      capturedValuesJson,
+      timeoutResume
+    );
+    if (attempt != null && attempt > 0) {
+      ctx.attempt = attempt;
+    }
+    if (maxAttempts != null && maxAttempts > 0) {
+      ctx.maxAttempts = maxAttempts;
+    }
     return ctx;
   }
 

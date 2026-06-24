@@ -2702,6 +2702,24 @@ public inherited sharing class WorkflowEngine {
     ) {
       resolvedState = stripJsonMapKey(resolvedState, '$timeoutStep');
     }
+
+    Integer attempt = stepExec.Retry_Count__c != null ? (Integer) stepExec.Retry_Count__c + 1 : 1;
+    Integer maxAttempts = 1;
+    if (stepInstance instanceof RetryConfigurable) {
+      RetryPolicy policy = ((RetryConfigurable) stepInstance).getRetryPolicy();
+      if (policy != null && policy.maximumAttempts != null) {
+        maxAttempts = policy.maximumAttempts;
+      }
+    } else if (String.isNotBlank(stepExec.Captured_Values__c)) {
+      String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
+      if (String.isNotBlank(resolvedCaptures)) {
+        Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+        if (captures.containsKey('__maxAttempts')) {
+          maxAttempts = (Integer) captures.get('__maxAttempts');
+        }
+      }
+    }
+
     StepContext context = StepContext.withCapturedValues(
       instanceId,
       instance.Workflow_Name__c,
@@ -2717,7 +2735,9 @@ public inherited sharing class WorkflowEngine {
       signalSrc,
       instance.Previous_Run_At__c,
       resolvePayload(stepExec.Captured_Values__c),
-      isTimeoutResume
+      isTimeoutResume,
+      attempt,
+      maxAttempts
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts.
@@ -4037,6 +4057,20 @@ public inherited sharing class WorkflowEngine {
       RetryPolicy policy = (result.retryPolicy != null)
         ? result.retryPolicy
         : new RetryPolicy();
+
+      Map<String, Object> captures = new Map<String, Object>();
+      if (String.isNotBlank(stepExec.Captured_Values__c)) {
+        String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
+        if (String.isNotBlank(resolvedCaptures)) {
+          captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+        }
+      }
+      captures.put('__maxAttempts', policy.maximumAttempts);
+      stepExec.Captured_Values__c = savePayloadIfNeeded(
+        instance.Id,
+        JSON.serialize(captures),
+        'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+      );
 
       if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
         stepExec.Status__c = 'Failed';
@@ -6217,15 +6251,23 @@ public inherited sharing class WorkflowEngine {
       prevOutput = completedBefore[0].Output__c;
     }
 
-    // compensateVisit: computed above from the stepExecs list to avoid a
-    // separate COUNT() SOQL query.
+    Integer attempt = stepExec.Retry_Count__c != null ? (Integer) stepExec.Retry_Count__c + 1 : 1;
+    Integer maxAttempts = 1;
+    if (compensatableStepInstance instanceof RetryConfigurable) {
+      RetryPolicy policy = ((RetryConfigurable) compensatableStepInstance).getRetryPolicy();
+      if (policy != null && policy.maximumAttempts != null) {
+        maxAttempts = policy.maximumAttempts;
+      }
+    } else if (String.isNotBlank(stepExec.Captured_Values__c)) {
+      String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
+      if (String.isNotBlank(resolvedCaptures)) {
+        Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+        if (captures.containsKey('__maxAttempts')) {
+          maxAttempts = (Integer) captures.get('__maxAttempts');
+        }
+      }
+    }
 
-    // previousRunAt is threaded here only for parity with the forward execute()
-    // context, so compensate() sees the same instance metadata rather than a
-    // surprising null. It is NOT how a compensation identifies what to undo: a
-    // correct compensate() reverses exactly what the forward step did, using the
-    // recorded step Input__c/Output__c above -- never a fresh "scan since
-    // previousRunAt", which can drift to records the forward run never touched.
     StepContext context = StepContext.withCapturedValues(
       instance.Id,
       instance.Workflow_Name__c,
@@ -6240,7 +6282,9 @@ public inherited sharing class WorkflowEngine {
       compensateVisit,
       new PendingSignalSource(instance.Id),
       instance.Previous_Run_At__c,
-      resolvePayload(stepExec.Captured_Values__c)
+      resolvePayload(stepExec.Captured_Values__c),
+      attempt,
+      maxAttempts
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts.
@@ -6468,6 +6512,20 @@ public inherited sharing class WorkflowEngine {
       RetryPolicy policy = (result.retryPolicy != null)
         ? result.retryPolicy
         : new RetryPolicy();
+
+      Map<String, Object> captures = new Map<String, Object>();
+      if (String.isNotBlank(stepExec.Captured_Values__c)) {
+        String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
+        if (String.isNotBlank(resolvedCaptures)) {
+          captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+        }
+      }
+      captures.put('__maxAttempts', policy.maximumAttempts);
+      stepExec.Captured_Values__c = savePayloadIfNeeded(
+        instance.Id,
+        JSON.serialize(captures),
+        'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+      );
 
       if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
         stepExec.Status__c = 'Failed';

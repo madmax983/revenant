@@ -5252,4 +5252,273 @@ public class WorkflowEngineTest {
     System.assertEquals('Compensated', stepExecs[0].Status__c);
     System.assertEquals('"Compensated"', stepExecs[0].Output__c);
   }
+
+  // ==========================================
+  // RETRY ATTEMPT EXPOSE TESTS
+  // ==========================================
+  
+  public static List<Map<String, Object>> observedAttemptStates = new List<Map<String, Object>>();
+
+  public class RetryExposeWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.RetryExposeStep' };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.RetryExposeStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  public class RetryExposeStep implements WorkflowStep, RetryConfigurable {
+    public StepResult execute(StepContext ctx) {
+      observedAttemptStates.add(new Map<String, Object>{
+        'attempt' => ctx.attempt,
+        'maxAttempts' => ctx.maxAttempts,
+        'isFinalAttempt' => ctx.isFinalAttempt()
+      });
+      RetryPolicy policy = getRetryPolicy();
+      if (ctx.isFinalAttempt()) {
+        return StepResult.complete(null, 'FallbackComplete');
+      }
+      return StepResult.retry(policy);
+    }
+
+    public RetryPolicy getRetryPolicy() {
+      return new RetryPolicy(1, (Double) 1.0, 3);
+    }
+  }
+
+  public static List<Map<String, Object>> dynamicObservedStates = new List<Map<String, Object>>();
+
+  public class DynamicRetryWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.DynamicRetryStep' };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.DynamicRetryStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  public class DynamicRetryStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      dynamicObservedStates.add(new Map<String, Object>{
+        'attempt' => ctx.attempt,
+        'maxAttempts' => ctx.maxAttempts,
+        'isFinalAttempt' => ctx.isFinalAttempt()
+      });
+      if (ctx.attempt >= 3) {
+        return StepResult.complete(null, 'DynamicComplete');
+      }
+      return StepResult.retry(new RetryPolicy(1, (Double) 1.0, 3));
+    }
+  }
+
+  public static List<Map<String, Object>> compensationObservedStates = new List<Map<String, Object>>();
+
+  public class CompensatableRetryWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.CompensatableRetryStep',
+        'WorkflowEngineTest.AlwaysFailStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.CompensatableRetryStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (currentStepName == 'WorkflowEngineTest.CompensatableRetryStep') {
+        return 'WorkflowEngineTest.AlwaysFailStep';
+      }
+      return null;
+    }
+  }
+
+  public class CompensatableRetryStep implements CompensatableStep, RetryConfigurable {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'Success');
+    }
+
+    public StepResult compensate(StepContext ctx) {
+      compensationObservedStates.add(new Map<String, Object>{
+        'attempt' => ctx.attempt,
+        'maxAttempts' => ctx.maxAttempts,
+        'isFinalAttempt' => ctx.isFinalAttempt()
+      });
+      if (ctx.isFinalAttempt()) {
+        return StepResult.complete(null, 'Compensated');
+      }
+      return StepResult.retry(getRetryPolicy());
+    }
+
+    public RetryPolicy getRetryPolicy() {
+      return new RetryPolicy(1, (Double) 1.0, 2);
+    }
+  }
+
+  public class AlwaysFailStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.fail('Forced fail to trigger compensation');
+    }
+  }
+
+  public static List<Map<String, Object>> loopObservedStates = new List<Map<String, Object>>();
+  public static Integer loopCounter = 0;
+
+  public class LoopExposeWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.LoopExposeStep' };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.LoopExposeStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return stepResult.nextStepName;
+    }
+  }
+
+  public class LoopExposeStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      loopObservedStates.add(new Map<String, Object>{
+        'attempt' => ctx.attempt,
+        'maxAttempts' => ctx.maxAttempts
+      });
+      loopCounter++;
+      if (loopCounter == 1) {
+        return StepResult.retry(new RetryPolicy(1, (Double) 1.0, 2));
+      } else if (loopCounter == 2) {
+        return StepResult.complete('WorkflowEngineTest.LoopExposeStep', 'TransitionSelf');
+      }
+      return StepResult.complete(null, 'LoopFinished');
+    }
+  }
+
+  @isTest
+  static void testRetryAttemptProgressionAndFallback() {
+    observedAttemptStates.clear();
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.RetryExposeWorkflow',
+      'ExposeKey',
+      null
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    WorkflowTestHarness.Result result = harness.drive();
+    Test.stopTest();
+
+    System.assertEquals('Completed', result.status);
+    System.assertEquals(3, observedAttemptStates.size());
+
+    // Attempt 1
+    System.assertEquals(1, observedAttemptStates[0].get('attempt'));
+    System.assertEquals(3, observedAttemptStates[0].get('maxAttempts'));
+    System.assertEquals(false, observedAttemptStates[0].get('isFinalAttempt'));
+
+    // Attempt 2
+    System.assertEquals(2, observedAttemptStates[1].get('attempt'));
+    System.assertEquals(3, observedAttemptStates[1].get('maxAttempts'));
+    System.assertEquals(false, observedAttemptStates[1].get('isFinalAttempt'));
+
+    // Attempt 3 (Final attempt)
+    System.assertEquals(3, observedAttemptStates[2].get('attempt'));
+    System.assertEquals(3, observedAttemptStates[2].get('maxAttempts'));
+    System.assertEquals(true, observedAttemptStates[2].get('isFinalAttempt'));
+
+    // Verify persisted Retry Count agrees (2 retries performed before completing)
+    Workflow_Step_Execution__c step = [
+      SELECT Retry_Count__c, Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId
+      LIMIT 1
+    ];
+    System.assertEquals('Completed', step.Status__c);
+    System.assertEquals(2, step.Retry_Count__c, 'Persisted Retry Count must be 2 (0-based retry count)');
+  }
+
+  @isTest
+  static void testDynamicRetryAttemptProgression() {
+    dynamicObservedStates.clear();
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.DynamicRetryWorkflow',
+      'DynamicKey',
+      null
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    WorkflowTestHarness.Result result = harness.drive();
+    Test.stopTest();
+
+    System.assertEquals('Completed', result.status);
+    System.assertEquals(3, dynamicObservedStates.size());
+
+    // Attempt 1 (No policy resolved yet -> defaults to 1)
+    System.assertEquals(1, dynamicObservedStates[0].get('attempt'));
+    System.assertEquals(1, dynamicObservedStates[0].get('maxAttempts'));
+
+    // Attempt 2 (Policy was resolved on attempt 1 -> loaded from Captured_Values__c)
+    System.assertEquals(2, dynamicObservedStates[1].get('attempt'));
+    System.assertEquals(3, dynamicObservedStates[1].get('maxAttempts'));
+
+    // Attempt 3 (Policy was resolved on attempt 2 -> loaded from Captured_Values__c)
+    System.assertEquals(3, dynamicObservedStates[2].get('attempt'));
+    System.assertEquals(3, dynamicObservedStates[2].get('maxAttempts'));
+  }
+
+  @isTest
+  static void testCompensationRetryAttemptProgression() {
+    compensationObservedStates.clear();
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.CompensatableRetryWorkflow',
+      'CompensateRetryKey',
+      null
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    WorkflowTestHarness.Result result = harness.drive();
+    Test.stopTest();
+
+    System.assertEquals('Compensated', result.status);
+    System.assertEquals(2, compensationObservedStates.size());
+
+    // Compensation Attempt 1
+    System.assertEquals(1, compensationObservedStates[0].get('attempt'));
+    System.assertEquals(2, compensationObservedStates[0].get('maxAttempts'));
+    System.assertEquals(false, compensationObservedStates[0].get('isFinalAttempt'));
+
+    // Compensation Attempt 2 (Final attempt)
+    System.assertEquals(2, compensationObservedStates[1].get('attempt'));
+    System.assertEquals(2, compensationObservedStates[1].get('maxAttempts'));
+    System.assertEquals(true, compensationObservedStates[1].get('isFinalAttempt'));
+  }
+
+  @isTest
+  static void testRetryAttemptResetOnFreshVisit() {
+    loopObservedStates.clear();
+    loopCounter = 0;
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.LoopExposeWorkflow',
+      'LoopKey',
+      null
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    WorkflowTestHarness.Result result = harness.drive();
+    Test.stopTest();
+
+    System.assertEquals('Completed', result.status);
+    System.assertEquals(3, loopObservedStates.size());
+
+    // First visit: attempt 1
+    System.assertEquals(1, loopObservedStates[0].get('attempt'));
+    
+    // First visit: attempt 2 (retry)
+    System.assertEquals(2, loopObservedStates[1].get('attempt'));
+
+    // Second visit: resets to attempt 1
+    System.assertEquals(1, loopObservedStates[2].get('attempt'));
+  }
 }

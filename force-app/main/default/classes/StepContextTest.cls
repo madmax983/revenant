@@ -1293,4 +1293,73 @@ public class StepContextTest {
       'Producer must not be called on rehydration'
     );
   }
+
+  @isTest
+  static void testExposedRetryPropertiesAndDefaults() {
+    Id instanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null
+    );
+    System.assertEquals(1, ctx.attempt, 'Default attempt should be 1');
+    System.assertEquals(1, ctx.maxAttempts, 'Default maxAttempts should be 1');
+    System.assert(ctx.isFinalAttempt(), 'Default context should be final attempt');
+  }
+
+  @isTest
+  static void testExposedRetryPropertiesOverloads() {
+    Id instanceId = '00D000000000001EAA';
+    StepContext ctx = StepContext.withCapturedValues(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null,
+      1,
+      0,
+      null,
+      null,
+      null,
+      2,
+      5
+    );
+    System.assertEquals(2, ctx.attempt);
+    System.assertEquals(5, ctx.maxAttempts);
+    System.assert(!ctx.isFinalAttempt());
+  }
+
+  @isTest
+  static void testExposedRetryPropertiesFromCapturedValues() {
+    Id instanceId = '00D000000000001EAA';
+    String priorJson = JSON.serialize(
+      new Map<String, Object>{ 'refNumber' => 'REF-001', '__maxAttempts' => 3 }
+    );
+    StepContext ctx = StepContext.withCapturedValues(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null,
+      1,
+      0,
+      null,
+      null,
+      priorJson
+    );
+    System.assertEquals(1, ctx.attempt);
+    System.assertEquals(3, ctx.maxAttempts);
+    System.assert(!ctx.isFinalAttempt());
+    // Verify that '__maxAttempts' was stripped from captured values
+    String capturesJson = ctx.getCapturedValuesJson();
+    System.assert(capturesJson != null && !capturesJson.contains('__maxAttempts'), 'Should strip __maxAttempts from captured values JSON');
+  }
 }
