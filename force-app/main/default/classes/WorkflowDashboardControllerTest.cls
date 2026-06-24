@@ -3549,4 +3549,24 @@ public class WorkflowDashboardControllerTest {
       System.assertNotEquals(null, e.getMessage(), 'Exception message should not be null');
     }
   }
+
+  @isTest
+  static void testInjectSignalOversizedPayloadRejection() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'SignalKeyOversized',
+      Input__c = '"InputData"'
+    );
+    insert inst;
+
+    String oversizedString = 'A'.repeat(250001);
+
+    try {
+      WorkflowDashboardController.injectSignal(inst.Id, 'PaymentReceived', oversizedString);
+      System.assert(false, 'Should have thrown AuraHandledException due to oversized payload');
+    } catch (AuraHandledException e) {
+      System.assert(e.getMessage().contains('Payload size exceeds maximum'), 'Exception message should indicate payload size limit: ' + e.getMessage());
+    }
+  }
 }

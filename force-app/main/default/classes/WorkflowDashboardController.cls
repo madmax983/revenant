@@ -2542,6 +2542,12 @@ public inherited sharing class WorkflowDashboardController {
       throw ex;
     }
 
+    if (payloadJson != null && payloadJson.length() > 250000) {
+      AuraHandledException ex = new AuraHandledException('Payload size exceeds maximum allowed limit of 250KB.');
+      ex.setMessage('Payload size exceeds maximum allowed limit of 250KB.');
+      throw ex;
+    }
+
     Map<String, Object> payloadMap = new Map<String, Object>();
     if (String.isNotBlank(payloadJson)) {
       try {
