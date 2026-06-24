@@ -322,8 +322,10 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   get isSendSignalDisabled() {
-    return !this.signalName || !this.signalName.trim();
-  }  fetchInstances(isAppend, targetOffset) {
+    return !this.signalName || !this.signalName.trim() || this.loadingDetails;
+  }
+
+  fetchInstances(isAppend, targetOffset) {
     const requestId = ++this._instanceRequestId;
     if (!isAppend) {
       this.offsetSize = 0;
