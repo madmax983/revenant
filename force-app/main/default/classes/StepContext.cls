@@ -1,12 +1,19 @@
 public inherited sharing class StepContext {
-  public Id workflowInstanceId { get; set; }
-  public String workflowName { get; set; }
-  public String stepName { get; set; }
-  public String inputJson { get; set; }
-  public String previousStepOutput { get; set; }
-  public String stepStateJson { get; set; }
-  public String workflowInputJson { get; set; }
-  public Integer workflowVersion { get; set; }
+  public Id workflowInstanceId { get; private set; }
+  public String workflowName { get; private set; }
+  public String stepName { get; private set; }
+  public String inputJson { get; private set; }
+  public String previousStepOutput { get; private set; }
+  public String stepStateJson { get; private set; }
+  public String workflowInputJson { get; private set; }
+  public Integer workflowVersion { get; private set; }
+  public Integer attempt { get; private set; }
+  public Integer maxAttempts { get; private set; }
+
+  public Boolean isFinalAttempt() {
+    return this.attempt >= this.maxAttempts;
+  }
+
 
   /**
    * Start time of the predecessor instance (its CreatedDate). Null for the
@@ -302,6 +309,8 @@ public inherited sharing class StepContext {
     this.workflowInputJson = workflowInputJson;
     this.workflowVersion = workflowVersion;
     this.stepVisit = (stepVisit != null && stepVisit > 0) ? stepVisit : 0;
+    this.attempt = 1;
+    this.maxAttempts = 1;
   }
 
   /**
@@ -357,6 +366,8 @@ public inherited sharing class StepContext {
     this.workflowVersion = workflowVersion;
     // Defer loading until a signal accessor is actually called.
     this.signalSource = signalSource;
+    this.attempt = 1;
+    this.maxAttempts = 1;
   }
 
   /**
@@ -927,10 +938,14 @@ public inherited sharing class StepContext {
    * captures to Workflow_Step_Execution__c.Captured_Values__c.
    */
   public String getCapturedValuesJson() {
-    if (capturedValues.isEmpty()) {
+    if (capturedValues.isEmpty() && (this.maxAttempts == null || this.maxAttempts <= 1)) {
       return null;
     }
-    return JSON.serialize(capturedValues);
+    Map<String, Object> toSerialize = new Map<String, Object>(capturedValues);
+    if (this.maxAttempts != null && this.maxAttempts > 1) {
+      toSerialize.put('__maxAttempts', this.maxAttempts);
+    }
+    return JSON.serialize(toSerialize);
   }
 
   /**
@@ -947,12 +962,6 @@ public inherited sharing class StepContext {
   // ---------------------------------------------------------------------------
 
   /**
-   * Hands the engine an author-owned Platform Event to publish effectively-once,
-   * coupled to this step's COMPLETE (or SPLIT) transition commit. The event is
-   * buffered in heap now and published in the SAME transaction that writes the
-   * step's durable Completed record — so retries, yields, suspends, re-drives,
-   * and at-least-once resumes that re-run execute() before that commit publish
-   * nothing, and a step already Completed never re-executes and so never
    * re-emits. Call it as many times as needed; events publish in arrival order
    * once the step completes.
    *
@@ -975,7 +984,7 @@ public inherited sharing class StepContext {
    * StepResult.complete(next, output, events).
    */
   public List<SObject> getPendingEmits() {
-    return this.pendingEmits;
+    return this.pendingEmits.clone();
   }
 
   /**
@@ -987,6 +996,25 @@ public inherited sharing class StepContext {
    * Also exposed as @TestVisible for unit tests that need to simulate a
    * re-execution context with prior captures in place.
    */
+  /**
+   * Helper to parse captured values JSON string safely into a Map.
+   * Catches parsing exceptions and handles malformed payloads defensively.
+   */
+  private static Map<String, Object> parseCaptures(String jsonStr) {
+    if (String.isBlank(jsonStr)) {
+      return new Map<String, Object>();
+    }
+    try {
+      Object deserialized = JSON.deserializeUntyped(jsonStr);
+      if (deserialized instanceof Map<String, Object>) {
+        return (Map<String, Object>) deserialized;
+      }
+    } catch (Exception e) {
+      System.debug(LoggingLevel.ERROR, 'Failed to parse captured values JSON: ' + e.getMessage());
+    }
+    return new Map<String, Object>();
+  }
+
   @TestVisible
   public static StepContext withCapturedValues(
     Id workflowInstanceId,
@@ -1002,7 +1030,8 @@ public inherited sharing class StepContext {
     Datetime previousRunAt,
     String capturedValuesJson
   ) {
-    StepContext ctx = new StepContext(
+    Map<String, Object> capturedValuesMap = parseCaptures(capturedValuesJson);
+    return withCapturedValuesMap(
       workflowInstanceId,
       workflowName,
       stepName,
@@ -1013,14 +1042,49 @@ public inherited sharing class StepContext {
       workflowVersion,
       stepVisit,
       signalSource,
-      previousRunAt
+      previousRunAt,
+      capturedValuesMap,
+      false,
+      1,
+      1
     );
-    if (String.isNotBlank(capturedValuesJson)) {
-      ctx.capturedValues = (Map<String, Object>) JSON.deserializeUntyped(
-        capturedValuesJson
-      );
-    }
-    return ctx;
+  }
+
+  @TestVisible
+  public static StepContext withCapturedValues(
+    Id workflowInstanceId,
+    String workflowName,
+    String stepName,
+    String inputJson,
+    String previousStepOutput,
+    String stepStateJson,
+    String workflowInputJson,
+    Integer workflowVersion,
+    Integer stepVisit,
+    SignalSource signalSource,
+    Datetime previousRunAt,
+    String capturedValuesJson,
+    Integer attempt,
+    Integer maxAttempts
+  ) {
+    Map<String, Object> capturedValuesMap = parseCaptures(capturedValuesJson);
+    return withCapturedValuesMap(
+      workflowInstanceId,
+      workflowName,
+      stepName,
+      inputJson,
+      previousStepOutput,
+      stepStateJson,
+      workflowInputJson,
+      workflowVersion,
+      stepVisit,
+      signalSource,
+      previousRunAt,
+      capturedValuesMap,
+      false,
+      attempt,
+      maxAttempts
+    );
   }
 
   @TestVisible
@@ -1039,7 +1103,8 @@ public inherited sharing class StepContext {
     String capturedValuesJson,
     Boolean timeoutResume
   ) {
-    StepContext ctx = withCapturedValues(
+    Map<String, Object> capturedValuesMap = parseCaptures(capturedValuesJson);
+    return withCapturedValuesMap(
       workflowInstanceId,
       workflowName,
       stepName,
@@ -1051,10 +1116,143 @@ public inherited sharing class StepContext {
       stepVisit,
       signalSource,
       previousRunAt,
-      capturedValuesJson
+      capturedValuesMap,
+      timeoutResume,
+      1,
+      1
+    );
+  }
+
+  @TestVisible
+  public static StepContext withCapturedValues(
+    Id workflowInstanceId,
+    String workflowName,
+    String stepName,
+    String inputJson,
+    String previousStepOutput,
+    String stepStateJson,
+    String workflowInputJson,
+    Integer workflowVersion,
+    Integer stepVisit,
+    SignalSource signalSource,
+    Datetime previousRunAt,
+    String capturedValuesJson,
+    Boolean timeoutResume,
+    Integer attempt,
+    Integer maxAttempts
+  ) {
+    Map<String, Object> capturedValuesMap = parseCaptures(capturedValuesJson);
+    return withCapturedValuesMap(
+      workflowInstanceId,
+      workflowName,
+      stepName,
+      inputJson,
+      previousStepOutput,
+      stepStateJson,
+      workflowInputJson,
+      workflowVersion,
+      stepVisit,
+      signalSource,
+      previousRunAt,
+      capturedValuesMap,
+      timeoutResume,
+      attempt,
+      maxAttempts
+    );
+  }
+
+  /**
+   * Optimized factory that accepts a pre-parsed map of captured values to avoid double deserialization.
+   */
+  @TestVisible
+  public static StepContext withCapturedValuesMap(
+    Id workflowInstanceId,
+    String workflowName,
+    String stepName,
+    String inputJson,
+    String previousStepOutput,
+    String stepStateJson,
+    String workflowInputJson,
+    Integer workflowVersion,
+    Integer stepVisit,
+    SignalSource signalSource,
+    Datetime previousRunAt,
+    Map<String, Object> capturedValuesMap,
+    Boolean timeoutResume,
+    Integer attempt,
+    Integer maxAttempts
+  ) {
+    StepContext ctx = new StepContext(
+      workflowInstanceId,
+      workflowName,
+      stepName,
+      inputJson,
+      previousStepOutput,
+      stepStateJson,
+      workflowInputJson,
+      workflowVersion,
+      stepVisit,
+      signalSource,
+      previousRunAt
     );
     ctx.timeoutResume = (timeoutResume == true);
+    if (attempt != null && attempt > 0) {
+      ctx.attempt = attempt;
+    }
+    if (maxAttempts != null && maxAttempts > 0) {
+      ctx.maxAttempts = maxAttempts;
+    }
+    if (capturedValuesMap != null) {
+      ctx.capturedValues = capturedValuesMap;
+      if (ctx.capturedValues.containsKey('__maxAttempts')) {
+        try {
+          ctx.maxAttempts = Integer.valueOf(ctx.capturedValues.get('__maxAttempts'));
+        } catch (Exception e) {
+          System.debug(LoggingLevel.WARN, 'Failed to parse __maxAttempts: ' + e.getMessage());
+        }
+        ctx.capturedValues.remove('__maxAttempts');
+      }
+    }
     return ctx;
+  }
+
+  /**
+   * Optimized factory overload for the compensation path that accepts a pre-parsed map.
+   */
+  @TestVisible
+  public static StepContext withCapturedValuesMap(
+    Id workflowInstanceId,
+    String workflowName,
+    String stepName,
+    String inputJson,
+    String previousStepOutput,
+    String stepStateJson,
+    String workflowInputJson,
+    Integer workflowVersion,
+    Integer stepVisit,
+    SignalSource signalSource,
+    Datetime previousRunAt,
+    Map<String, Object> capturedValuesMap,
+    Integer attempt,
+    Integer maxAttempts
+  ) {
+    return withCapturedValuesMap(
+      workflowInstanceId,
+      workflowName,
+      stepName,
+      inputJson,
+      previousStepOutput,
+      stepStateJson,
+      workflowInputJson,
+      workflowVersion,
+      stepVisit,
+      signalSource,
+      previousRunAt,
+      capturedValuesMap,
+      false,
+      attempt,
+      maxAttempts
+    );
   }
 
   /**

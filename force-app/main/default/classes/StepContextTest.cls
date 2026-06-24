@@ -1293,4 +1293,162 @@ public class StepContextTest {
       'Producer must not be called on rehydration'
     );
   }
+
+  @isTest
+  static void testExposedRetryPropertiesAndDefaults() {
+    Id instanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null
+    );
+    System.assertEquals(1, ctx.attempt, 'Default attempt should be 1');
+    System.assertEquals(1, ctx.maxAttempts, 'Default maxAttempts should be 1');
+    System.assert(ctx.isFinalAttempt(), 'Default context should be final attempt');
+  }
+
+  @isTest
+  static void testExposedRetryPropertiesOverloads() {
+    Id instanceId = '00D000000000001EAA';
+    StepContext ctx = StepContext.withCapturedValues(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null,
+      1,
+      0,
+      null,
+      null,
+      null,
+      2,
+      5
+    );
+    System.assertEquals(2, ctx.attempt);
+    System.assertEquals(5, ctx.maxAttempts);
+    System.assert(!ctx.isFinalAttempt());
+  }
+
+  @isTest
+  static void testExposedRetryPropertiesFromCapturedValues() {
+    Id instanceId = '00D000000000001EAA';
+    String priorJson = JSON.serialize(
+      new Map<String, Object>{ 'refNumber' => 'REF-001', '__maxAttempts' => 3 }
+    );
+    StepContext ctx = StepContext.withCapturedValues(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null,
+      1,
+      0,
+      null,
+      null,
+      priorJson
+    );
+    System.assertEquals(1, ctx.attempt);
+    System.assertEquals(3, ctx.maxAttempts);
+    System.assert(!ctx.isFinalAttempt());
+    // Verify that '__maxAttempts' was stripped from the in-memory captured values map (so a once() check executes the producer)
+    System.assertEquals(5, Integer.valueOf(ctx.once('__maxAttempts', new ObjectProducer(5))), 'Should strip __maxAttempts from in-memory captured values');
+  }
+
+  @isTest
+  static void testExposedRetryPropertiesStatePreservationOnYield() {
+    Id instanceId = '00D000000000001EAA';
+    String priorJson = JSON.serialize(
+      new Map<String, Object>{ 'refNumber' => 'REF-001', '__maxAttempts' => 3 }
+    );
+    // Hydrate
+    StepContext ctx = StepContext.withCapturedValues(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null,
+      1,
+      0,
+      null,
+      null,
+      priorJson,
+      1, // attempt
+      3  // maxAttempts
+    );
+    System.assertEquals(3, ctx.maxAttempts);
+    
+    // Simulate step execution yielding and capturing a new value
+    ctx.once('newValue', new ObjectProducer('val'));
+    System.assert(ctx.hasNewCaptures());
+    
+    // Get serialized JSON to write back to db
+    String outputJson = ctx.getCapturedValuesJson();
+    System.assert(outputJson.contains('newValue'));
+    System.assert(outputJson.contains('REF-001'));
+    System.assert(outputJson.contains('__maxAttempts')); // MUST contain max attempts!
+    
+    // De-serialize and verify
+    Map<String, Object> deserialized = (Map<String, Object>) JSON.deserializeUntyped(outputJson);
+    System.assertEquals(3, Integer.valueOf(deserialized.get('__maxAttempts')));
+  }
+
+  @isTest
+  static void testRetryRobustnessDecimalAndMalformedJson() {
+    Id instanceId = '00D000000000001EAA';
+    
+    // 1. Double/Decimal value parsed from JSON
+    String decimalJson = '{"__maxAttempts":3.0}';
+    StepContext ctx = StepContext.withCapturedValues(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null,
+      1,
+      0,
+      null,
+      null,
+      decimalJson
+    );
+    System.assertEquals(3, ctx.maxAttempts, 'Should parse double/decimal attempts safely');
+    
+    // 2. Malformed JSON should not crash
+    StepContext ctx2 = StepContext.withCapturedValues(
+      instanceId,
+      'WF',
+      'StepA',
+      null,
+      null,
+      null,
+      null,
+      1,
+      0,
+      null,
+      null,
+      '{"__maxAttempts":'
+    );
+    System.assertEquals(1, ctx2.maxAttempts, 'Should fallback to default 1 on malformed JSON');
+  }
+
+  private class ObjectProducer implements CaptureProducer {
+    private Object value;
+    public ObjectProducer(Object value) {
+      this.value = value;
+    }
+    public Object produce() {
+      return this.value;
+    }
+  }
 }

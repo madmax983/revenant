@@ -2702,7 +2702,28 @@ public inherited sharing class WorkflowEngine {
     ) {
       resolvedState = stripJsonMapKey(resolvedState, '$timeoutStep');
     }
-    StepContext context = StepContext.withCapturedValues(
+
+    Integer attempt = stepExec.Retry_Count__c != null ? (Integer) stepExec.Retry_Count__c + 1 : 1;
+    Integer maxAttempts = 1;
+    Map<String, Object> capturesMap = new Map<String, Object>();
+    if (stepInstance instanceof RetryConfigurable) {
+      RetryPolicy policy = sanitizePolicy(((RetryConfigurable) stepInstance).getRetryPolicy());
+      maxAttempts = policy.maximumAttempts;
+    } else if (String.isNotBlank(stepExec.Captured_Values__c)) {
+      String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
+      if (String.isNotBlank(resolvedCaptures)) {
+        try {
+          capturesMap = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+          if (capturesMap.containsKey('__maxAttempts')) {
+            maxAttempts = Integer.valueOf(capturesMap.get('__maxAttempts'));
+          }
+        } catch (Exception e) {
+          System.debug(LoggingLevel.ERROR, 'Failed to deserialize captured values: ' + e.getMessage());
+        }
+      }
+    }
+
+    StepContext context = StepContext.withCapturedValuesMap(
       instanceId,
       instance.Workflow_Name__c,
       activeStepName,
@@ -2716,8 +2737,10 @@ public inherited sharing class WorkflowEngine {
       stepVisit,
       signalSrc,
       instance.Previous_Run_At__c,
-      resolvePayload(stepExec.Captured_Values__c),
-      isTimeoutResume
+      capturesMap,
+      isTimeoutResume,
+      attempt,
+      maxAttempts
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts.
@@ -4033,10 +4056,26 @@ public inherited sharing class WorkflowEngine {
       }
       stepExec.Retry_Count__c += 1;
 
-      // Get or default retry policy
-      RetryPolicy policy = (result.retryPolicy != null)
-        ? result.retryPolicy
-        : new RetryPolicy();
+      // Get and sanitize retry policy
+      RetryPolicy policy = sanitizePolicy(result.retryPolicy);
+
+      Map<String, Object> captures = new Map<String, Object>();
+      if (String.isNotBlank(stepExec.Captured_Values__c)) {
+        String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
+        if (String.isNotBlank(resolvedCaptures)) {
+          try {
+            captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+          } catch (Exception e) {
+            System.debug(LoggingLevel.ERROR, 'Failed to deserialize captures in retry handler: ' + e.getMessage());
+          }
+        }
+      }
+      captures.put('__maxAttempts', policy.maximumAttempts);
+      stepExec.Captured_Values__c = savePayloadIfNeeded(
+        instance.Id,
+        JSON.serialize(captures),
+        'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+      );
 
       if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
         stepExec.Status__c = 'Failed';
@@ -6217,16 +6256,27 @@ public inherited sharing class WorkflowEngine {
       prevOutput = completedBefore[0].Output__c;
     }
 
-    // compensateVisit: computed above from the stepExecs list to avoid a
-    // separate COUNT() SOQL query.
+    Integer attempt = stepExec.Retry_Count__c != null ? (Integer) stepExec.Retry_Count__c + 1 : 1;
+    Integer maxAttempts = 1;
+    Map<String, Object> capturesMap = new Map<String, Object>();
+    if (compensatableStepInstance instanceof RetryConfigurable) {
+      RetryPolicy policy = sanitizePolicy(((RetryConfigurable) compensatableStepInstance).getRetryPolicy());
+      maxAttempts = policy.maximumAttempts;
+    } else if (String.isNotBlank(stepExec.Captured_Values__c)) {
+      String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
+      if (String.isNotBlank(resolvedCaptures)) {
+        try {
+          capturesMap = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+          if (capturesMap.containsKey('__maxAttempts')) {
+            maxAttempts = Integer.valueOf(capturesMap.get('__maxAttempts'));
+          }
+        } catch (Exception e) {
+          System.debug(LoggingLevel.ERROR, 'Failed to deserialize captured values: ' + e.getMessage());
+        }
+      }
+    }
 
-    // previousRunAt is threaded here only for parity with the forward execute()
-    // context, so compensate() sees the same instance metadata rather than a
-    // surprising null. It is NOT how a compensation identifies what to undo: a
-    // correct compensate() reverses exactly what the forward step did, using the
-    // recorded step Input__c/Output__c above -- never a fresh "scan since
-    // previousRunAt", which can drift to records the forward run never touched.
-    StepContext context = StepContext.withCapturedValues(
+    StepContext context = StepContext.withCapturedValuesMap(
       instance.Id,
       instance.Workflow_Name__c,
       compensationStepLogName,
@@ -6240,7 +6290,9 @@ public inherited sharing class WorkflowEngine {
       compensateVisit,
       new PendingSignalSource(instance.Id),
       instance.Previous_Run_At__c,
-      resolvePayload(stepExec.Captured_Values__c)
+      capturesMap,
+      attempt,
+      maxAttempts
     );
 
     // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts.
@@ -6465,9 +6517,26 @@ public inherited sharing class WorkflowEngine {
       update as system instance;
     } else if (result.action == StepResult.ActionType.RETRY) {
       stepExec.Retry_Count__c += 1;
-      RetryPolicy policy = (result.retryPolicy != null)
-        ? result.retryPolicy
-        : new RetryPolicy();
+      // Get and sanitize retry policy
+      RetryPolicy policy = sanitizePolicy(result.retryPolicy);
+
+      Map<String, Object> captures = new Map<String, Object>();
+      if (String.isNotBlank(stepExec.Captured_Values__c)) {
+        String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
+        if (String.isNotBlank(resolvedCaptures)) {
+          try {
+            captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+          } catch (Exception e) {
+            System.debug(LoggingLevel.ERROR, 'Failed to deserialize captures in compensation retry handler: ' + e.getMessage());
+          }
+        }
+      }
+      captures.put('__maxAttempts', policy.maximumAttempts);
+      stepExec.Captured_Values__c = savePayloadIfNeeded(
+        instance.Id,
+        JSON.serialize(captures),
+        'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+      );
 
       if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
         stepExec.Status__c = 'Failed';
@@ -8814,5 +8883,21 @@ public inherited sharing class WorkflowEngine {
     }
 
     return true;
+  }
+
+  private static RetryPolicy sanitizePolicy(RetryPolicy policy) {
+    RetryPolicy clean = new RetryPolicy();
+    if (policy != null) {
+      if (policy.maximumAttempts != null && policy.maximumAttempts > 0) {
+        clean.maximumAttempts = policy.maximumAttempts;
+      }
+      if (policy.initialIntervalSeconds != null && policy.initialIntervalSeconds > 0) {
+        clean.initialIntervalSeconds = policy.initialIntervalSeconds;
+      }
+      if (policy.backoffCoefficient != null && policy.backoffCoefficient >= 1.0) {
+        clean.backoffCoefficient = policy.backoffCoefficient;
+      }
+    }
+    return clean;
   }
 }
