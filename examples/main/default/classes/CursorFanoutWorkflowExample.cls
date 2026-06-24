@@ -56,6 +56,7 @@ public inherited sharing class CursorFanoutWorkflowExample {
    */
   public class CursorQueryStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
+      ctx.reportProgress(10.0, 'Cursor opened; calculating partitions');
       // Construct query (using Accounts for demonstration)
       String query = 'SELECT Id, Name FROM Account ORDER BY Name';
 
@@ -117,6 +118,7 @@ public inherited sharing class CursorFanoutWorkflowExample {
 
       // First run: spawn chunks
       if (childInstances.isEmpty()) {
+        ctx.reportProgress(40.0, 'Fanning out parallel child chunks');
         if (String.isBlank(ctx.previousStepOutput)) {
           return StepResult.complete(
             null,
@@ -184,6 +186,8 @@ public inherited sharing class CursorFanoutWorkflowExample {
         return StepResult.suspend();
       }
 
+      ctx.reportProgress(80.0, 'All chunks completed; aggregating outputs');
+
       // Aggregate outputs
       List<Object> aggregatedOutputs = new List<Object>();
       Integer totalProcessed = 0;
@@ -250,6 +254,8 @@ public inherited sharing class CursorFanoutWorkflowExample {
         accountNames.add(acc.Name);
       }
 
+      ctx.reportProgress(100.0, 'Chunk offset ' + offset + ' processed successfully');
+
       Map<String, Object> result = new Map<String, Object>{
         'offset' => offset,
         'count' => records.size(),
@@ -265,6 +271,7 @@ public inherited sharing class CursorFanoutWorkflowExample {
    */
   public class CursorVerifyStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
+      ctx.reportProgress(100.0, 'Verification complete; fanned-out records validated');
       Map<String, Object> fanoutResult = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.previousStepOutput
       );
