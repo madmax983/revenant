@@ -1208,7 +1208,7 @@ public inherited sharing class StepContext {
         try {
           ctx.maxAttempts = Integer.valueOf(ctx.capturedValues.get('__maxAttempts'));
         } catch (Exception e) {
-          // fallback or leave as is
+          System.debug(LoggingLevel.WARN, 'Failed to parse __maxAttempts: ' + e.getMessage());
         }
         ctx.capturedValues.remove('__maxAttempts');
       }
