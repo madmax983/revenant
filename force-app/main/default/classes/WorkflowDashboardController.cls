@@ -158,6 +158,10 @@ public inherited sharing class WorkflowDashboardController {
     if (instOutputId != null)
       attachmentIds.add(instOutputId);
 
+    Id instProgressId = getAttachmentId(instance.Progress__c);
+    if (instProgressId != null)
+      attachmentIds.add(instProgressId);
+
     for (Workflow_Step_Execution__c step : steps) {
       Id stepInputId = getAttachmentId(step.Input__c);
       if (stepInputId != null)
@@ -195,6 +199,12 @@ public inherited sharing class WorkflowDashboardController {
     instance.Output__c = resolveAndRecordPayload(
       instance.Output__c,
       'instance.Output',
+      attachmentIdToData,
+      payloadFiles
+    );
+    instance.Progress__c = resolveAndRecordPayload(
+      instance.Progress__c,
+      'instance.Progress',
       attachmentIdToData,
       payloadFiles
     );
@@ -966,7 +976,8 @@ public inherited sharing class WorkflowDashboardController {
         Sleep_Until__c,
         Compensation_Stack__c,
         Deadline_At__c,
-        Failure_Category__c
+        Failure_Category__c,
+        Progress__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE

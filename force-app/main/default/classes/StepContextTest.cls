@@ -1442,6 +1442,38 @@ public class StepContextTest {
     System.assertEquals(1, ctx2.maxAttempts, 'Should fallback to default 1 on malformed JSON');
   }
 
+  @isTest
+  static void testReportProgress() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null
+    );
+
+    System.assertEquals(false, ctx.isProgressReported());
+    System.assertEquals(null, ctx.getProgressJson());
+
+    ctx.reportProgress(42.5, 'Processing batch 3');
+    System.assertEquals(true, ctx.isProgressReported());
+    Map<String, Object> progress = (Map<String, Object>) JSON.deserializeUntyped(ctx.getProgressJson());
+    System.assertEquals(42.5, (Decimal) progress.get('percentComplete'));
+    System.assertEquals('Processing batch 3', (String) progress.get('message'));
+
+    ctx.reportProgress(new Map<String, Object>{ 'custom' => 'data' });
+    System.assertEquals(true, ctx.isProgressReported());
+    Map<String, Object> customProgress = (Map<String, Object>) JSON.deserializeUntyped(ctx.getProgressJson());
+    System.assertEquals('data', (String) customProgress.get('custom'));
+
+    ctx.reportProgress(null);
+    System.assertEquals(true, ctx.isProgressReported());
+    System.assertEquals(null, ctx.getProgressJson());
+  }
+
   private class ObjectProducer implements CaptureProducer {
     private Object value;
     public ObjectProducer(Object value) {

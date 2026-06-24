@@ -471,4 +471,43 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals(inst.Id, results[1].workflowInstanceId);
     System.assertEquals(false, results[2].found);
   }
+
+  @isTest
+  static void testExposesProgressAndRehydrates() {
+    Workflow_Instance__c inst1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'Test.Workflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'ProgressKey1',
+      Progress__c = '{"percentComplete":42.5,"message":"Working"}'
+    );
+    insert inst1;
+
+    List<WorkflowStatusInvocableAction.StatusResult> results1 = call('ProgressKey1');
+
+    System.assertEquals(1, results1.size());
+    System.assertEquals(true, results1[0].found);
+    System.assertEquals('{"percentComplete":42.5,"message":"Working"}', results1[0].progressJson);
+
+    // Test offloaded progress rehydration
+    Workflow_Instance__c inst2 = new Workflow_Instance__c(
+      Workflow_Name__c = 'Test.Workflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'ProgressKey2'
+    );
+    insert inst2;
+
+    String bigProgress = '{"percent":95.0,"details":"' + 'P'.repeat(110000) + '"}';
+    inst2.Progress__c = WorkflowEngine.savePayloadIfNeeded(
+      inst2.Id,
+      bigProgress,
+      'Progress_Big'
+    );
+    update inst2;
+
+    List<WorkflowStatusInvocableAction.StatusResult> results2 = call(inst2.Id);
+
+    System.assertEquals(1, results2.size());
+    System.assertEquals(true, results2[0].found);
+    System.assertEquals(bigProgress, results2[0].progressJson, 'Offloaded progress should be rehydrated');
+  }
 }

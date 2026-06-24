@@ -114,6 +114,38 @@ public inherited sharing class StepContext {
   // context, which is rebuilt fresh on every re-execution.
   private List<SObject> pendingEmits = new List<SObject>();
 
+  // Progress snapshot state (issue #52). Set from within execute() or compensate()
+  // via reportProgress(). Buffered in-memory and read by the engine/orchestrator
+  // to persist onto Workflow_Instance__c.Progress__c at the transition checkpoint.
+  private String progressJson = null;
+  private Boolean progressReported = false;
+
+  public void reportProgress(Decimal percentComplete, String message) {
+    Map<String, Object> progressMap = new Map<String, Object>{
+      'percentComplete' => percentComplete,
+      'message' => message
+    };
+    reportProgress(progressMap);
+  }
+
+  public void reportProgress(Object progressData) {
+    if (progressData == null) {
+      this.progressJson = null;
+    } else {
+      this.progressJson = JSON.serialize(progressData);
+    }
+    this.progressReported = true;
+  }
+
+  public String getProgressJson() {
+    return this.progressJson;
+  }
+
+  public Boolean isProgressReported() {
+    return this.progressReported;
+  }
+
+
   /**
    * Read-only view of an inbound signal that targets this workflow instance.
    * Carries the author-interpreted name and payload string; the internal record
