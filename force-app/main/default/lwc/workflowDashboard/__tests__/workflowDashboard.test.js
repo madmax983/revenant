@@ -10,6 +10,7 @@ import getCancelEligibleCount from "@salesforce/apex/WorkflowDashboardController
 import cancelMatchingInstances from "@salesforce/apex/WorkflowDashboardController.cancelMatchingInstances";
 import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardController.getRedriveEligibleCount";
 import redriveMatchingInstances from "@salesforce/apex/WorkflowDashboardController.redriveMatchingInstances";
+import injectSignal from "@salesforce/apex/WorkflowDashboardController.injectSignal";
 
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
@@ -34,6 +35,11 @@ jest.mock(
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.redriveMatchingInstances",
   () => ({ default: jest.fn(() => Promise.resolve({ started: false })) }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.injectSignal",
+  () => ({ default: jest.fn() }),
   { virtual: true },
 );
 
@@ -988,6 +994,308 @@ describe("c-workflow-dashboard details panel", () => {
     const usageText = stepCards[0].textContent;
     expect(usageText).toContain("Resource Usage: CPU: 1000 ms (2%) | SOQL: 0/200 (0%) | Heap: 0.00 MB (0%)");
     expect(usageText).toContain("Retries: —");
+  });
+});
+
+describe("c-workflow-dashboard operator signal injection", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function createComponent() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    return element;
+  }
+
+  it("renders Send Signal button for Suspended instance, but not for other statuses", async () => {
+    // 1. Check Cancelled status first
+    getFilteredInstances.mockResolvedValue([
+      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Cancelled" }
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Cancelled" },
+      steps: [],
+      children: [],
+      payloadFiles: {}
+    });
+
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    let sendSignalBtn = element.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    expect(sendSignalBtn).toBeNull();
+
+    // 2. Check Suspended status
+    getFilteredInstances.mockResolvedValue([
+      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" }
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" },
+      steps: [],
+      children: [],
+      payloadFiles: {}
+    });
+
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    const elementSuspended = createComponent();
+    await flushPromises();
+    elementSuspended.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    sendSignalBtn = elementSuspended.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    expect(sendSignalBtn).not.toBeNull();
+  });
+
+  it("opens modal on click, verifies inputs, and confirm button is disabled by default", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" }
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" },
+      steps: [],
+      children: [],
+      payloadFiles: {}
+    });
+
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    const sendSignalBtn = element.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify modal is open
+    const modal = element.shadowRoot.querySelector("section.slds-modal");
+    expect(modal).not.toBeNull();
+
+    // Verify Signal Name input and Payload JSON textarea are rendered
+    const nameInput = element.shadowRoot.querySelector('lightning-input[data-id="signal-name-input"]');
+    expect(nameInput).not.toBeNull();
+    const payloadTextarea = element.shadowRoot.querySelector('lightning-textarea[data-id="signal-payload-input"]');
+    expect(payloadTextarea).not.toBeNull();
+
+    // Verify confirm button in modal is disabled when Signal Name is empty
+    const confirmBtn = element.shadowRoot.querySelector('lightning-button[data-id="confirm-signal-btn"]');
+    expect(confirmBtn).not.toBeNull();
+    expect(confirmBtn.disabled).toBe(true);
+  });
+
+  it("enables confirm button when Signal Name is provided, and handles optional Payload JSON", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" }
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" },
+      steps: [],
+      children: [],
+      payloadFiles: {}
+    });
+
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    const sendSignalBtn = element.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    const nameInput = element.shadowRoot.querySelector('lightning-input[data-id="signal-name-input"]');
+    const confirmBtn = element.shadowRoot.querySelector('lightning-button[data-id="confirm-signal-btn"]');
+
+    // Initially disabled
+    expect(confirmBtn.disabled).toBe(true);
+
+    // Set Signal Name
+    nameInput.value = "PaymentReceived";
+    nameInput.dispatchEvent(new CustomEvent("change"));
+    await flushPromises();
+
+    // Now enabled
+    expect(confirmBtn.disabled).toBe(false);
+
+    // Empty it again to verify it disables
+    nameInput.value = "";
+    nameInput.dispatchEvent(new CustomEvent("change"));
+    await flushPromises();
+    expect(confirmBtn.disabled).toBe(true);
+  });
+
+  it("calls injectSignal with correct arguments on confirm (success), shows success toast, closes modal, and refreshes instance details", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" }
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" },
+      steps: [],
+      children: [],
+      payloadFiles: {}
+    });
+    injectSignal.mockResolvedValue({ success: true });
+
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    // Click "Send Signal" button to open modal
+    const sendSignalBtn = element.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Set input values
+    const nameInput = element.shadowRoot.querySelector('lightning-input[data-id="signal-name-input"]');
+    nameInput.value = "PaymentReceived";
+    nameInput.dispatchEvent(new CustomEvent("change"));
+
+    const payloadTextarea = element.shadowRoot.querySelector('lightning-textarea[data-id="signal-payload-input"]');
+    payloadTextarea.value = '{"amount": 100}';
+    payloadTextarea.dispatchEvent(new CustomEvent("change"));
+
+    await flushPromises();
+
+    // Track toast event
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    // Reset calls of getInstanceDetails to be sure we count only the post-success refresh
+    getInstanceDetails.mockClear();
+
+    // Click confirm button
+    const confirmBtn = element.shadowRoot.querySelector('lightning-button[data-id="confirm-signal-btn"]');
+    confirmBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify injectSignal is called with correct arguments
+    expect(injectSignal).toHaveBeenCalledWith({
+      instanceId: "a0G000000000001",
+      signalName: "PaymentReceived",
+      payloadJson: '{"amount": 100}'
+    });
+
+    // Verify success toast
+    expect(toastHandler).toHaveBeenCalled();
+    const toastEvent = toastHandler.mock.calls[0][0];
+    expect(toastEvent.detail.variant).toBe("success");
+    expect(toastEvent.detail.title).toBe("Signal Sent");
+
+    // Verify modal is closed
+    const modal = element.shadowRoot.querySelector("section.slds-modal");
+    expect(modal).toBeNull();
+
+    // Verify getInstanceDetails was called to refresh
+    expect(getInstanceDetails).toHaveBeenCalled();
+  });
+
+  it("calls injectSignal and handles failure by showing error toast and keeping modal open", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" }
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" },
+      steps: [],
+      children: [],
+      payloadFiles: {}
+    });
+    injectSignal.mockRejectedValue(new Error("Failed to inject signal: invalid state"));
+
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    // Click "Send Signal" button to open modal
+    const sendSignalBtn = element.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Set input values
+    const nameInput = element.shadowRoot.querySelector('lightning-input[data-id="signal-name-input"]');
+    nameInput.value = "PaymentReceived";
+    nameInput.dispatchEvent(new CustomEvent("change"));
+    await flushPromises();
+
+    // Track toast event
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    // Click confirm button
+    const confirmBtn = element.shadowRoot.querySelector('lightning-button[data-id="confirm-signal-btn"]');
+    confirmBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify injectSignal was called
+    expect(injectSignal).toHaveBeenCalledWith({
+      instanceId: "a0G000000000001",
+      signalName: "PaymentReceived",
+      payloadJson: ""
+    });
+
+    // Verify error toast
+    expect(toastHandler).toHaveBeenCalled();
+    const toastEvent = toastHandler.mock.calls[0][0];
+    expect(toastEvent.detail.variant).toBe("error");
+    expect(toastEvent.detail.message).toContain("Failed to inject signal: invalid state");
+
+    // Verify modal remains open
+    const modal = element.shadowRoot.querySelector("section.slds-modal");
+    expect(modal).not.toBeNull();
+  });
+
+  it("closes modal on cancel button click without sending", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" }
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: { Id: "a0G000000000001", Name: "WI-0001", Workflow_Name__c: "TestWorkflow", Status__c: "Suspended" },
+      steps: [],
+      children: [],
+      payloadFiles: {}
+    });
+
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot.querySelector(".list-item").dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    // Click "Send Signal" button to open modal
+    const sendSignalBtn = element.shadowRoot.querySelector('lightning-button[data-id="send-signal-btn"]');
+    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify modal is open
+    let modal = element.shadowRoot.querySelector("section.slds-modal");
+    expect(modal).not.toBeNull();
+
+    // Click cancel/close button
+    const cancelBtn = element.shadowRoot.querySelector('lightning-button[data-id="cancel-signal-btn"]');
+    expect(cancelBtn).not.toBeNull();
+    cancelBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify modal is closed
+    modal = element.shadowRoot.querySelector("section.slds-modal");
+    expect(modal).toBeNull();
+    expect(injectSignal).not.toHaveBeenCalled();
   });
 });
 
