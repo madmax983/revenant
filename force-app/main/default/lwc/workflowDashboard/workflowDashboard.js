@@ -1682,7 +1682,7 @@ export default class WorkflowDashboard extends LightningElement {
           textarea.setCustomValidity("");
           textarea.reportValidity();
         }
-      } catch (e) {
+      } catch {
         if (textarea) {
           textarea.setCustomValidity("Invalid JSON format.");
           textarea.reportValidity();
