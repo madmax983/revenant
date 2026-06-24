@@ -2705,22 +2705,25 @@ public inherited sharing class WorkflowEngine {
 
     Integer attempt = stepExec.Retry_Count__c != null ? (Integer) stepExec.Retry_Count__c + 1 : 1;
     Integer maxAttempts = 1;
+    Map<String, Object> capturesMap = new Map<String, Object>();
     if (stepInstance instanceof RetryConfigurable) {
-      RetryPolicy policy = ((RetryConfigurable) stepInstance).getRetryPolicy();
-      if (policy != null && policy.maximumAttempts != null) {
-        maxAttempts = policy.maximumAttempts;
-      }
+      RetryPolicy policy = sanitizePolicy(((RetryConfigurable) stepInstance).getRetryPolicy());
+      maxAttempts = policy.maximumAttempts;
     } else if (String.isNotBlank(stepExec.Captured_Values__c)) {
       String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
       if (String.isNotBlank(resolvedCaptures)) {
-        Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
-        if (captures.containsKey('__maxAttempts')) {
-          maxAttempts = (Integer) captures.get('__maxAttempts');
+        try {
+          capturesMap = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+          if (capturesMap.containsKey('__maxAttempts')) {
+            maxAttempts = Integer.valueOf(capturesMap.get('__maxAttempts'));
+          }
+        } catch (Exception e) {
+          System.debug(LoggingLevel.ERROR, 'Failed to deserialize captured values: ' + e.getMessage());
         }
       }
     }
 
-    StepContext context = StepContext.withCapturedValues(
+    StepContext context = StepContext.withCapturedValuesMap(
       instanceId,
       instance.Workflow_Name__c,
       activeStepName,
@@ -2734,7 +2737,7 @@ public inherited sharing class WorkflowEngine {
       stepVisit,
       signalSrc,
       instance.Previous_Run_At__c,
-      resolvePayload(stepExec.Captured_Values__c),
+      capturesMap,
       isTimeoutResume,
       attempt,
       maxAttempts
@@ -4053,16 +4056,18 @@ public inherited sharing class WorkflowEngine {
       }
       stepExec.Retry_Count__c += 1;
 
-      // Get or default retry policy
-      RetryPolicy policy = (result.retryPolicy != null)
-        ? result.retryPolicy
-        : new RetryPolicy();
+      // Get and sanitize retry policy
+      RetryPolicy policy = sanitizePolicy(result.retryPolicy);
 
       Map<String, Object> captures = new Map<String, Object>();
       if (String.isNotBlank(stepExec.Captured_Values__c)) {
         String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
         if (String.isNotBlank(resolvedCaptures)) {
-          captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+          try {
+            captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+          } catch (Exception e) {
+            System.debug(LoggingLevel.ERROR, 'Failed to deserialize captures in retry handler: ' + e.getMessage());
+          }
         }
       }
       captures.put('__maxAttempts', policy.maximumAttempts);
@@ -6253,22 +6258,25 @@ public inherited sharing class WorkflowEngine {
 
     Integer attempt = stepExec.Retry_Count__c != null ? (Integer) stepExec.Retry_Count__c + 1 : 1;
     Integer maxAttempts = 1;
+    Map<String, Object> capturesMap = new Map<String, Object>();
     if (compensatableStepInstance instanceof RetryConfigurable) {
-      RetryPolicy policy = ((RetryConfigurable) compensatableStepInstance).getRetryPolicy();
-      if (policy != null && policy.maximumAttempts != null) {
-        maxAttempts = policy.maximumAttempts;
-      }
+      RetryPolicy policy = sanitizePolicy(((RetryConfigurable) compensatableStepInstance).getRetryPolicy());
+      maxAttempts = policy.maximumAttempts;
     } else if (String.isNotBlank(stepExec.Captured_Values__c)) {
       String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
       if (String.isNotBlank(resolvedCaptures)) {
-        Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
-        if (captures.containsKey('__maxAttempts')) {
-          maxAttempts = (Integer) captures.get('__maxAttempts');
+        try {
+          capturesMap = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+          if (capturesMap.containsKey('__maxAttempts')) {
+            maxAttempts = Integer.valueOf(capturesMap.get('__maxAttempts'));
+          }
+        } catch (Exception e) {
+          System.debug(LoggingLevel.ERROR, 'Failed to deserialize captured values: ' + e.getMessage());
         }
       }
     }
 
-    StepContext context = StepContext.withCapturedValues(
+    StepContext context = StepContext.withCapturedValuesMap(
       instance.Id,
       instance.Workflow_Name__c,
       compensationStepLogName,
@@ -6282,7 +6290,7 @@ public inherited sharing class WorkflowEngine {
       compensateVisit,
       new PendingSignalSource(instance.Id),
       instance.Previous_Run_At__c,
-      resolvePayload(stepExec.Captured_Values__c),
+      capturesMap,
       attempt,
       maxAttempts
     );
@@ -6509,15 +6517,18 @@ public inherited sharing class WorkflowEngine {
       update as system instance;
     } else if (result.action == StepResult.ActionType.RETRY) {
       stepExec.Retry_Count__c += 1;
-      RetryPolicy policy = (result.retryPolicy != null)
-        ? result.retryPolicy
-        : new RetryPolicy();
+      // Get and sanitize retry policy
+      RetryPolicy policy = sanitizePolicy(result.retryPolicy);
 
       Map<String, Object> captures = new Map<String, Object>();
       if (String.isNotBlank(stepExec.Captured_Values__c)) {
         String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
         if (String.isNotBlank(resolvedCaptures)) {
-          captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+          try {
+            captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+          } catch (Exception e) {
+            System.debug(LoggingLevel.ERROR, 'Failed to deserialize captures in compensation retry handler: ' + e.getMessage());
+          }
         }
       }
       captures.put('__maxAttempts', policy.maximumAttempts);
@@ -8872,5 +8883,21 @@ public inherited sharing class WorkflowEngine {
     }
 
     return true;
+  }
+
+  private static RetryPolicy sanitizePolicy(RetryPolicy policy) {
+    RetryPolicy clean = new RetryPolicy();
+    if (policy != null) {
+      if (policy.maximumAttempts != null && policy.maximumAttempts > 0) {
+        clean.maximumAttempts = policy.maximumAttempts;
+      }
+      if (policy.initialIntervalSeconds != null && policy.initialIntervalSeconds > 0) {
+        clean.initialIntervalSeconds = policy.initialIntervalSeconds;
+      }
+      if (policy.backoffCoefficient != null && policy.backoffCoefficient >= 1.0) {
+        clean.backoffCoefficient = policy.backoffCoefficient;
+      }
+    }
+    return clean;
   }
 }
