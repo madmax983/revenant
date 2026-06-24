@@ -345,22 +345,22 @@ export default class WorkflowDashboard extends LightningElement {
 
     const instancesPromise = this.showingStalled
       ? getStalledInstances({
-          workflowName: this.selectedWorkflow,
-          searchTerm: this.searchTerm,
-          thresholdMinutes: null,
-          limitSize: currentLimit,
-          offsetSize: currentOffset,
-          cacheBuster: this.cacheBuster,
-        })
+        workflowName: this.selectedWorkflow,
+        searchTerm: this.searchTerm,
+        thresholdMinutes: null,
+        limitSize: currentLimit,
+        offsetSize: currentOffset,
+        cacheBuster: this.cacheBuster,
+      })
       : getFilteredInstances({
-          workflowName: this.selectedWorkflow,
-          status: this.selectedStatus,
-          searchTerm: this.searchTerm,
-          failureCategory: this.selectedFailureCategory,
-          limitSize: currentLimit,
-          offsetSize: currentOffset,
-          cacheBuster: this.cacheBuster,
-        });
+        workflowName: this.selectedWorkflow,
+        status: this.selectedStatus,
+        searchTerm: this.searchTerm,
+        failureCategory: this.selectedFailureCategory,
+        limitSize: currentLimit,
+        offsetSize: currentOffset,
+        cacheBuster: this.cacheBuster,
+      });
 
     if (isAppend) {
       return instancesPromise
@@ -477,22 +477,22 @@ export default class WorkflowDashboard extends LightningElement {
 
     const instancesPromise = this.showingStalled
       ? getStalledInstances({
-          workflowName: this.selectedWorkflow,
-          searchTerm: this.searchTerm,
-          thresholdMinutes: null,
-          limitSize: currentSize,
-          offsetSize: 0,
-          cacheBuster: this.cacheBuster,
-        })
+        workflowName: this.selectedWorkflow,
+        searchTerm: this.searchTerm,
+        thresholdMinutes: null,
+        limitSize: currentSize,
+        offsetSize: 0,
+        cacheBuster: this.cacheBuster,
+      })
       : getFilteredInstances({
-          workflowName: this.selectedWorkflow,
-          status: this.selectedStatus,
-          searchTerm: this.searchTerm,
-          failureCategory: this.selectedFailureCategory,
-          limitSize: currentSize,
-          offsetSize: 0,
-          cacheBuster: this.cacheBuster,
-        });
+        workflowName: this.selectedWorkflow,
+        status: this.selectedStatus,
+        searchTerm: this.searchTerm,
+        failureCategory: this.selectedFailureCategory,
+        limitSize: currentSize,
+        offsetSize: 0,
+        cacheBuster: this.cacheBuster,
+      });
 
     const statsPromise = getWorkflowStats({
       workflowName: this.selectedWorkflow,
@@ -1468,7 +1468,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.showToast(
             "Re-drive started",
             `Re-driving ${outcome.eligibleCount} failed instance${outcome.eligibleCount === 1 ? "" : "s"}. ` +
-              "Progress is shown in the detail panel below.",
+            "Progress is shown in the detail panel below.",
             "success",
           );
           this.selectedInstanceId = outcome.redriveInstanceId;
@@ -1553,7 +1553,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.showToast(
             "Success",
             `Cancellation requested for ${outcome.eligibleCount} active instance${outcome.eligibleCount === 1 ? "" : "s"}. ` +
-              "Progress is shown in the detail panel below.",
+            "Progress is shown in the detail panel below.",
             "success",
           );
           this.selectedInstanceId = outcome.cancelInstanceId;
@@ -1682,7 +1682,7 @@ export default class WorkflowDashboard extends LightningElement {
           textarea.setCustomValidity("");
           textarea.reportValidity();
         }
-      } catch (e) {
+      } catch {
         if (textarea) {
           textarea.setCustomValidity("Invalid JSON format.");
           textarea.reportValidity();
