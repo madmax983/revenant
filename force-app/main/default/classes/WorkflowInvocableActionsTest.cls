@@ -182,4 +182,35 @@ public class WorkflowInvocableActionsTest {
       signals[1].Signal_Name__c
     );
   }
+
+  @isTest
+  static void testStartWorkflowInvocableWithAttributes() {
+    WorkflowStartInvocableAction.StartRequest req = new WorkflowStartInvocableAction.StartRequest();
+    req.workflowName = 'WorkflowEngineTest.HappyWorkflow';
+    req.correlationKey = 'InvocableAttrKey';
+    req.inputJson = '"InvocableInput"';
+    req.attributesJson = '{"region":"EU","tier":"enterprise"}';
+
+    Test.startTest();
+    List<WorkflowStartInvocableAction.StartResult> results = WorkflowStartInvocableAction.startWorkflow(
+      new List<WorkflowStartInvocableAction.StartRequest>{ req }
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, results.size());
+    Id instanceId = results[0].workflowInstanceId;
+    System.assertNotEquals(null, instanceId);
+
+    List<Workflow_Search_Attribute__c> attrs = [
+      SELECT Key__c, Value__c
+      FROM Workflow_Search_Attribute__c
+      WHERE Workflow_Instance__c = :instanceId
+      ORDER BY Key__c ASC
+    ];
+    System.assertEquals(2, attrs.size());
+    System.assertEquals('region', attrs[0].Key__c);
+    System.assertEquals('EU', attrs[0].Value__c);
+    System.assertEquals('tier', attrs[1].Key__c);
+    System.assertEquals('enterprise', attrs[1].Value__c);
+  }
 }

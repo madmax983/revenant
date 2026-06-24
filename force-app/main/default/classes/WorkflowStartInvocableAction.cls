@@ -8,6 +8,9 @@ public inherited sharing class WorkflowStartInvocableAction {
 
     @InvocableVariable(label='Input JSON')
     public String inputJson;
+
+    @InvocableVariable(label='Attributes JSON')
+    public String attributesJson;
   }
 
   public class StartResult {
@@ -37,11 +40,20 @@ public inherited sharing class WorkflowStartInvocableAction {
       if (String.isNotBlank(req.inputJson)) {
         input = JSON.deserializeUntyped(req.inputJson);
       }
+      Map<String, String> attributes = null;
+      if (String.isNotBlank(req.attributesJson)) {
+        attributes = new Map<String, String>();
+        Map<String, Object> raw = (Map<String, Object>) JSON.deserializeUntyped(req.attributesJson);
+        for (String k : raw.keySet()) {
+          attributes.put(k, String.valueOf(raw.get(k)));
+        }
+      }
       engineRequests.add(
         new WorkflowEngine.StartRequest(
           req.workflowName,
           req.correlationKey,
-          input
+          input,
+          attributes
         )
       );
     }
