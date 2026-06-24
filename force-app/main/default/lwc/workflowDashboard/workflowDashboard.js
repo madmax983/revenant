@@ -1674,6 +1674,29 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   handleSignalModalConfirm() {
+    if (this.signalPayload && this.signalPayload.trim()) {
+      const textarea = this.template.querySelector('[data-id="signal-payload-input"]');
+      try {
+        JSON.parse(this.signalPayload);
+        if (textarea) {
+          textarea.setCustomValidity("");
+          textarea.reportValidity();
+        }
+      } catch (e) {
+        if (textarea) {
+          textarea.setCustomValidity("Invalid JSON format.");
+          textarea.reportValidity();
+        }
+        return;
+      }
+    } else {
+      const textarea = this.template.querySelector('[data-id="signal-payload-input"]');
+      if (textarea) {
+        textarea.setCustomValidity("");
+        textarea.reportValidity();
+      }
+    }
+
     this.loadingDetails = true;
     injectSignal({
       instanceId: this.selectedInstanceId,

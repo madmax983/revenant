@@ -1522,4 +1522,150 @@ describe("c-workflow-dashboard operator signal injection", () => {
     expect(modal).toBeNull();
     expect(injectSignal).not.toHaveBeenCalled();
   });
+
+  it("rejects invalid JSON payload on confirm", async () => {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {},
+    });
+
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    // Click "Send Signal" button to open modal
+    const sendSignalBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="send-signal-btn"]',
+    );
+    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Set input values
+    const nameInput = element.shadowRoot.querySelector(
+      'lightning-input[data-id="signal-name-input"]',
+    );
+    nameInput.value = "PaymentReceived";
+    nameInput.dispatchEvent(new CustomEvent("change"));
+
+    const payloadTextarea = element.shadowRoot.querySelector(
+      'lightning-textarea[data-id="signal-payload-input"]',
+    );
+    payloadTextarea.value = "{invalid}";
+    payloadTextarea.dispatchEvent(new CustomEvent("change"));
+
+    // Mock validation methods
+    const setCustomValidityMock = jest.fn();
+    const reportValidityMock = jest.fn();
+    payloadTextarea.setCustomValidity = setCustomValidityMock;
+    payloadTextarea.reportValidity = reportValidityMock;
+
+    await flushPromises();
+
+    // Click confirm button
+    const confirmBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="confirm-signal-btn"]',
+    );
+    confirmBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Verify injectSignal is NOT called
+    expect(injectSignal).not.toHaveBeenCalled();
+
+    // Verify validation is checked and reported
+    expect(setCustomValidityMock).toHaveBeenCalledWith("Invalid JSON format.");
+    expect(reportValidityMock).toHaveBeenCalled();
+  });
+
+  it("disables Cancel button when loadingDetails is true", async () => {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {},
+    });
+    // Return a promise that doesn't resolve immediately to keep loadingDetails = true
+    let resolveSignal;
+    injectSignal.mockImplementation(() => {
+      return new Promise((resolve) => {
+        resolveSignal = resolve;
+      });
+    });
+
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    // Click "Send Signal" button to open modal
+    const sendSignalBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="send-signal-btn"]',
+    );
+    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Set input values
+    const nameInput = element.shadowRoot.querySelector(
+      'lightning-input[data-id="signal-name-input"]',
+    );
+    nameInput.value = "PaymentReceived";
+    nameInput.dispatchEvent(new CustomEvent("change"));
+    await flushPromises();
+
+    // Click confirm button to trigger loadingDetails = true
+    const confirmBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="confirm-signal-btn"]',
+    );
+    confirmBtn.dispatchEvent(new CustomEvent("click"));
+
+    await Promise.resolve();
+
+    const cancelBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="cancel-signal-btn"]',
+    );
+    const closeBtn = element.shadowRoot.querySelector(
+      'lightning-button-icon[data-id="close-signal-modal"]',
+    );
+
+    expect(cancelBtn.disabled).toBe(true);
+    expect(closeBtn.disabled).toBe(true);
+
+    // Clean up/resolve the pending promise to avoid leaks or hung tests
+    resolveSignal({ success: true });
+    await flushPromises();
+  });
 });
