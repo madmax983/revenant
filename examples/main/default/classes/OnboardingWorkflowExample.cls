@@ -41,6 +41,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
 
   public class VerifyOrderStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
+      ctx.reportProgress(10.0, 'Validating order details');
       if (String.isBlank(ctx.inputJson)) {
         throw new WorkflowEngine.WorkflowException('Input payload is required');
       }
@@ -71,6 +72,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
 
   public class ProvisionSandboxStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
+      ctx.reportProgress(30.0, 'Creating client sandbox');
       Map<String, Object> order = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.inputJson
       );
@@ -87,6 +89,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
 
   public class CreateBillingAccountStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
+      ctx.reportProgress(50.0, 'Configuring billing accounts');
       Map<String, Object> order = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.inputJson
       );
@@ -113,6 +116,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
 
   public class VIPApprovalStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
+      ctx.reportProgress(70.0, 'Verifying manager approvals');
       Map<String, Object> instanceInput = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.workflowInputJson
       );
@@ -198,6 +202,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
 
   public class CompleteOnboardingStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
+      ctx.reportProgress(100.0, 'Finished onboarding checklist');
       Map<String, Object> onboardingResults = new Map<String, Object>{
         'status' => 'Completed',
         'completedDate' => Datetime.now()
