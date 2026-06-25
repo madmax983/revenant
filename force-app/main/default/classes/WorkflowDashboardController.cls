@@ -296,6 +296,7 @@ public inherited sharing class WorkflowDashboardController {
       if (!conditions.isEmpty()) {
         query += ' WHERE ' + String.join(conditions, ' AND ');
       }
+      query += ' LIMIT 5000';
       
       for (Workflow_Instance__c inst : Database.query(query, AccessLevel.SYSTEM_MODE)) {
         filterInstanceIds.add(inst.Id);
