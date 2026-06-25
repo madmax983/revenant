@@ -1739,4 +1739,63 @@ public class StepContextSignalEngineTest {
       stepExec.Output__c
     );
   }
+
+  public class E2EYieldWaitStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (ctx.shouldYield()) {
+        return StepResult.suspend();
+      }
+      if (ctx.getSignal('E2EGo').isPresent()) {
+        return StepResult.complete(null, 'completed');
+      }
+      return StepResult.suspend();
+    }
+  }
+
+  public class E2EYieldWaitWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'StepContextSignalEngineTest.E2EYieldWaitStep' };
+    }
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.E2EYieldWaitStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  @isTest
+  static void testE2EAutoReplayPreArrivedSignal() {
+    WorkflowEngine.disableQueueableInTest = false;
+
+    // Publish signal BEFORE starting the workflow
+    WorkflowEngine.signal('E2E-CorrKey-999', 'E2EGo', '{"ready":true}');
+
+    // Verify it is captured as Unrouted
+    List<Workflow_Signal__c> unrouted = [
+      SELECT Status__c, Correlation_Key__c 
+      FROM Workflow_Signal__c 
+      WHERE Correlation_Key__c = 'E2E-CorrKey-999'
+    ];
+    System.assertEquals(1, unrouted.size());
+    System.assertEquals('Unrouted', unrouted[0].Status__c);
+
+    // Start the workflow
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.E2EYieldWaitWorkflow',
+      'E2E-CorrKey-999',
+      null
+    );
+    Test.stopTest(); // Drives the initial step execution and background queues
+
+    // Assert that the workflow reaches completion without any operator action
+    Workflow_Instance__c inst = [
+      SELECT Status__c, Current_Step__c 
+      FROM Workflow_Instance__c 
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', inst.Status__c, 'Workflow should have reached completion automatically');
+  }
 }
+

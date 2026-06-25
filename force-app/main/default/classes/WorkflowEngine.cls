@@ -2941,11 +2941,13 @@ public inherited sharing class WorkflowEngine {
    * accessor calls so the step can never observe (and mark consumed) more rows
    * than the COMPLETE consume pass can handle.
    */
+  @TestVisible
   private class PendingSignalSource implements StepContext.SignalSource {
     private final Id instanceId;
     private Integer rowBudget = SERIAL_SIGNAL_ROW_CAP;
     private Boolean capped = false;
 
+    @TestVisible
     private PendingSignalSource(Id instanceId) {
       this.instanceId = instanceId;
     }
@@ -8247,6 +8249,66 @@ public inherited sharing class WorkflowEngine {
             WITH SYSTEM_MODE
           ]
         );
+      }
+    }
+
+    // 2b. Sweep Suspended instances for matching Unrouted signals (safety net)
+    if (!WorkflowPauseGate.wildcardPaused()) {
+      Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
+      
+      // Query all Unrouted signals to find candidate correlation keys
+      List<Workflow_Signal__c> unrouted = [
+        SELECT Correlation_Key__c
+        FROM Workflow_Signal__c
+        WHERE Status__c = 'Unrouted'
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate ASC, Id ASC
+      ];
+      
+      if (!unrouted.isEmpty()) {
+        Set<String> keys = new Set<String>();
+        for (Workflow_Signal__c sig : unrouted) {
+          if (String.isNotBlank(sig.Correlation_Key__c)) {
+            keys.add(sig.Correlation_Key__c);
+          }
+        }
+        
+        if (!keys.isEmpty()) {
+          List<Workflow_Instance__c> matchInsts = [
+            SELECT Id, Correlation_Key__c
+            FROM Workflow_Instance__c
+            WHERE Status__c = 'Suspended'
+            AND (Id IN :keys OR Correlation_Key__c IN :keys)
+            AND Workflow_Name__c NOT IN :pausedDefNames
+            WITH SYSTEM_MODE
+            LIMIT :WATCHDOG_RESUME_BATCH_SIZE
+            FOR UPDATE
+          ];
+          
+          if (!matchInsts.isEmpty()) {
+            for (Workflow_Instance__c inst : matchInsts) {
+              // Find oldest matching unrouted signal for this instance
+              List<String> instKeys = new List<String>{ String.valueOf(inst.Id) };
+              if (String.isNotBlank(inst.Correlation_Key__c)) {
+                instKeys.add(inst.Correlation_Key__c);
+              }
+              
+              List<Workflow_Signal__c> oldestMatching = [
+                SELECT Id
+                FROM Workflow_Signal__c
+                WHERE Status__c = 'Unrouted'
+                AND Correlation_Key__c IN :instKeys
+                WITH SYSTEM_MODE
+                ORDER BY CreatedDate ASC, Id ASC
+                LIMIT 1
+              ];
+              
+              if (!oldestMatching.isEmpty()) {
+                redeliverCapturedSignal(oldestMatching[0].Id);
+              }
+            }
+          }
+        }
       }
     }
 

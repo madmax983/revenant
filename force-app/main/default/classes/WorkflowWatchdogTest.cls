@@ -696,4 +696,100 @@ public class WorkflowWatchdogTest {
     Workflow_Instance__c updatedInst = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :sleepingInst.Id];
     System.assertEquals('Running', updatedInst.Status__c, 'Instance should be resumed to Running');
   }
+
+  @isTest
+  static void testWatchdogSweepSignalAutoDelivery() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Create suspended instance waiting indefinitely (Sleep_Until__c is null)
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'WatchdogCorr-123'
+    );
+    insert inst;
+
+    // Create an unrouted signal matching the correlation key
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Correlation_Key__c = 'WatchdogCorr-123',
+      Signal_Name__c = 'WakeMe',
+      Payload__c = '{"data":1}',
+      Status__c = 'Unrouted'
+    );
+    insert sig;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Verify signal is auto-delivered
+    Workflow_Signal__c reloadedSig = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig.Id
+    ];
+    System.assertEquals('Received', reloadedSig.Status__c);
+    System.assertEquals(inst.Id, reloadedSig.Workflow_Instance__c);
+
+    // Verify instance is resumed to Running
+    Workflow_Instance__c reloadedInst = [
+      SELECT Status__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Running', reloadedInst.Status__c);
+    System.assertEquals(null, reloadedInst.Sleep_Until__c);
+  }
+
+  @isTest
+  static void testWatchdogSweepSignalAutoDeliveryOldestFirst() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'WatchdogCorr-456'
+    );
+    insert inst;
+
+    Workflow_Signal__c sig1 = new Workflow_Signal__c(
+      Correlation_Key__c = 'WatchdogCorr-456',
+      Signal_Name__c = 'WakeMe',
+      Payload__c = '{"val":1}',
+      Status__c = 'Unrouted'
+    );
+    insert sig1;
+
+    Workflow_Signal__c sig2 = new Workflow_Signal__c(
+      Correlation_Key__c = 'WatchdogCorr-456',
+      Signal_Name__c = 'WakeMe',
+      Payload__c = '{"val":2}',
+      Status__c = 'Unrouted'
+    );
+    insert sig2;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Oldest signal must be auto-delivered
+    Workflow_Signal__c reloadedSig1 = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig1.Id
+    ];
+    System.assertEquals('Received', reloadedSig1.Status__c);
+    System.assertEquals(inst.Id, reloadedSig1.Workflow_Instance__c);
+
+    // Newer signal must remain Unrouted
+    Workflow_Signal__c reloadedSig2 = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig2.Id
+    ];
+    System.assertEquals('Unrouted', reloadedSig2.Status__c);
+  }
 }
+
