@@ -4074,6 +4074,7 @@ public inherited sharing class WorkflowEngine {
 
       instance.Status__c = 'Suspended';
       update as system instance;
+      redeliverMatchingSignalsForInstance(instance.Id, instance.Correlation_Key__c);
     } else if (result.action == StepResult.ActionType.SLEEP) {
       // Step requested sleep
       if (isParallel) {
@@ -4123,6 +4124,7 @@ public inherited sharing class WorkflowEngine {
 
       instance.Status__c = 'Suspended';
       update as system instance;
+      redeliverMatchingSignalsForInstance(instance.Id, instance.Correlation_Key__c);
 
       startChildWorkflow(
         instance.Id,
@@ -4160,6 +4162,7 @@ public inherited sharing class WorkflowEngine {
 
       instance.Status__c = 'Suspended';
       update as system instance;
+      redeliverMatchingSignalsForInstance(instance.Id, instance.Correlation_Key__c);
     } else if (result.action == StepResult.ActionType.SPLIT) {
       stepExec.Status__c = 'Completed';
       stepExec.Output__c = savePayloadIfNeeded(
@@ -8256,24 +8259,33 @@ public inherited sharing class WorkflowEngine {
     if (!WorkflowPauseGate.wildcardPaused()) {
       Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
       
-      // Query all Unrouted signals to find candidate correlation keys
+      // Query Unrouted signals with safety limit
       List<Workflow_Signal__c> unrouted = [
-        SELECT Correlation_Key__c
+        SELECT Id, Correlation_Key__c
         FROM Workflow_Signal__c
         WHERE Status__c = 'Unrouted'
         WITH SYSTEM_MODE
         ORDER BY CreatedDate ASC, Id ASC
+        LIMIT 1000
       ];
       
       if (!unrouted.isEmpty()) {
         Set<String> keys = new Set<String>();
+        Map<String, Id> keyToOldestSignalId = new Map<String, Id>();
+        
         for (Workflow_Signal__c sig : unrouted) {
           if (String.isNotBlank(sig.Correlation_Key__c)) {
             keys.add(sig.Correlation_Key__c);
+            // Keep only the oldest signal per correlation key (first one found due to ASC sort)
+            if (!keyToOldestSignalId.containsKey(sig.Correlation_Key__c)) {
+              keyToOldestSignalId.put(sig.Correlation_Key__c, sig.Id);
+            }
           }
         }
         
         if (!keys.isEmpty()) {
+          // Limit batch size defensively for this non-bulkified redelivery loop
+          Integer sweepLimit = 20; 
           List<Workflow_Instance__c> matchInsts = [
             SELECT Id, Correlation_Key__c
             FROM Workflow_Instance__c
@@ -8281,30 +8293,26 @@ public inherited sharing class WorkflowEngine {
             AND (Id IN :keys OR Correlation_Key__c IN :keys)
             AND Workflow_Name__c NOT IN :pausedDefNames
             WITH SYSTEM_MODE
-            LIMIT :WATCHDOG_RESUME_BATCH_SIZE
+            LIMIT :sweepLimit
             FOR UPDATE
           ];
           
           if (!matchInsts.isEmpty()) {
             for (Workflow_Instance__c inst : matchInsts) {
-              // Find oldest matching unrouted signal for this instance
-              List<String> instKeys = new List<String>{ String.valueOf(inst.Id) };
-              if (String.isNotBlank(inst.Correlation_Key__c)) {
-                instKeys.add(inst.Correlation_Key__c);
+              Id oldestSigId = keyToOldestSignalId.get(inst.Id);
+              if (oldestSigId == null && String.isNotBlank(inst.Correlation_Key__c)) {
+                oldestSigId = keyToOldestSignalId.get(inst.Correlation_Key__c);
               }
               
-              List<Workflow_Signal__c> oldestMatching = [
-                SELECT Id
-                FROM Workflow_Signal__c
-                WHERE Status__c = 'Unrouted'
-                AND Correlation_Key__c IN :instKeys
-                WITH SYSTEM_MODE
-                ORDER BY CreatedDate ASC, Id ASC
-                LIMIT 1
-              ];
-              
-              if (!oldestMatching.isEmpty()) {
-                redeliverCapturedSignal(oldestMatching[0].Id);
+              if (oldestSigId != null) {
+                try {
+                  redeliverCapturedSignal(oldestSigId);
+                } catch (Exception e) {
+                  System.debug(
+                    LoggingLevel.ERROR,
+                    'WorkflowEngine: watchdog signal sweep failed for instance ' + inst.Id + ': ' + e.getMessage()
+                  );
+                }
               }
             }
           }
@@ -9163,6 +9171,31 @@ public inherited sharing class WorkflowEngine {
     }
 
     return true;
+  }
+
+  @TestVisible
+  private static void redeliverMatchingSignalsForInstance(Id instanceId, String correlationKey) {
+    if (instanceId == null) {
+      return;
+    }
+    List<String> matchKeys = new List<String>{ String.valueOf(instanceId) };
+    if (String.isNotBlank(correlationKey)) {
+      matchKeys.add(correlationKey);
+    }
+
+    List<Workflow_Signal__c> unroutedSignals = [
+      SELECT Id
+      FROM Workflow_Signal__c
+      WHERE Status__c = 'Unrouted'
+      AND Correlation_Key__c IN :matchKeys
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate ASC, Id ASC
+      LIMIT 1
+    ];
+
+    if (!unroutedSignals.isEmpty()) {
+      redeliverCapturedSignal(unroutedSignals[0].Id);
+    }
   }
 
   private static RetryPolicy sanitizePolicy(RetryPolicy policy) {

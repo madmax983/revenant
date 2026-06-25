@@ -822,47 +822,6 @@ public inherited sharing class StepContext {
    * Returns true if any monitored limit (CPU, SOQL, DML statements, DML rows, or Heap size) is > 80% consumed.
    */
   public Boolean shouldYield() {
-    // 1. Scan for matching Unrouted signals if this context has a valid instance ID
-    if (this.workflowInstanceId != null) {
-      List<Workflow_Instance__c> instList = [
-        SELECT Id, Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE Id = :this.workflowInstanceId
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (!instList.isEmpty()) {
-        Workflow_Instance__c inst = instList[0];
-        List<String> matchKeys = new List<String>{ String.valueOf(inst.Id) };
-        if (String.isNotBlank(inst.Correlation_Key__c)) {
-          matchKeys.add(inst.Correlation_Key__c);
-        }
-
-        List<Workflow_Signal__c> unroutedSignals = [
-          SELECT Id
-          FROM Workflow_Signal__c
-          WHERE Status__c = 'Unrouted'
-          AND Correlation_Key__c IN :matchKeys
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate ASC, Id ASC
-          LIMIT 1
-        ];
-
-        if (!unroutedSignals.isEmpty()) {
-          // Deliver the signal
-          if (WorkflowEngine.redeliverCapturedSignal(unroutedSignals[0].Id)) {
-            // Clear step caches so the newly delivered signal is immediately visible
-            this.allSignals = null;
-            this.allLoaded = false;
-            this.allReadCapped = false;
-            this.byNameCache.clear();
-            this.latestByName.clear();
-            return false; // Proceed without yielding
-          }
-        }
-      }
-    }
-
     // CPU Time
     if (
       Limits.getLimitCpuTime() > 0 &&

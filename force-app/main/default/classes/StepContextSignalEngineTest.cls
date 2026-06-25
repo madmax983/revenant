@@ -1766,7 +1766,7 @@ public class StepContextSignalEngineTest {
 
   @isTest
   static void testE2EAutoReplayPreArrivedSignal() {
-    WorkflowEngine.disableQueueableInTest = false;
+    WorkflowEngine.disableQueueableInTest = true;
 
     // Publish signal BEFORE starting the workflow
     WorkflowEngine.signal('E2E-CorrKey-999', 'E2EGo', '{"ready":true}');
@@ -1781,21 +1781,43 @@ public class StepContextSignalEngineTest {
     System.assertEquals('Unrouted', unrouted[0].Status__c);
 
     // Start the workflow
-    Test.startTest();
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.E2EYieldWaitWorkflow',
       'E2E-CorrKey-999',
       null
     );
-    Test.stopTest(); // Drives the initial step execution and background queues
 
-    // Assert that the workflow reaches completion without any operator action
-    Workflow_Instance__c inst = [
+    // Run the orchestrator manually.
+    // The step runs, returns suspend(), and the suspension immediately redelivers the pre-arrived signal, reparents it, and resumes the instance.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Verify the signal is now Received and mapped to the instance
+    Workflow_Signal__c reloadedSig = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :unrouted[0].Id
+    ];
+    System.assertEquals('Received', reloadedSig.Status__c);
+    System.assertEquals(instanceId, reloadedSig.Workflow_Instance__c);
+
+    // And verify the instance was woke up and status is Running
+    Workflow_Instance__c reloadedInst = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Running', reloadedInst.Status__c);
+
+    // Run the orchestrator again to execute the step with the signal present
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Assert that the workflow reaches completion
+    Workflow_Instance__c finalInst = [
       SELECT Status__c, Current_Step__c 
       FROM Workflow_Instance__c 
       WHERE Id = :instanceId
     ];
-    System.assertEquals('Completed', inst.Status__c, 'Workflow should have reached completion automatically');
+    System.assertEquals('Completed', finalInst.Status__c, 'Workflow should have reached completion');
   }
 }
 

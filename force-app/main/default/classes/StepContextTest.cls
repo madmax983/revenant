@@ -1519,10 +1519,21 @@ public class StepContextTest {
     System.assertEquals(false, ctx.getSignal('Go').isPresent());
 
     Test.startTest();
-    Boolean yield = ctx.shouldYield();
+    WorkflowEngine.redeliverMatchingSignalsForInstance(inst.Id, inst.Correlation_Key__c);
+    
+    // Create a new context since the old one cached the empty signal list
+    ctx = new StepContext(
+      inst.Id,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null,
+      1,
+      new WorkflowEngine.PendingSignalSource(inst.Id)
+    );
     Test.stopTest();
-
-    System.assertEquals(false, yield, 'shouldYield must return false when a signal is auto-delivered');
 
     Workflow_Signal__c reloadedSig = [
       SELECT Status__c, Workflow_Instance__c
@@ -1578,10 +1589,8 @@ public class StepContextTest {
     );
 
     Test.startTest();
-    Boolean yield = ctx.shouldYield();
+    WorkflowEngine.redeliverMatchingSignalsForInstance(inst.Id, inst.Correlation_Key__c);
     Test.stopTest();
-
-    System.assertEquals(false, yield);
 
     Workflow_Signal__c reloadedSig1 = [
       SELECT Status__c, Workflow_Instance__c
