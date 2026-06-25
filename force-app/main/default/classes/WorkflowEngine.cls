@@ -8259,59 +8259,81 @@ public inherited sharing class WorkflowEngine {
     if (!WorkflowPauseGate.wildcardPaused()) {
       Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
       
-      // Query Unrouted signals with safety limit
-      List<Workflow_Signal__c> unrouted = [
+      // Query Suspended instances to get candidate active keys first (Codex suggestion 1)
+      List<Workflow_Instance__c> suspended = [
         SELECT Id, Correlation_Key__c
-        FROM Workflow_Signal__c
-        WHERE Status__c = 'Unrouted'
+        FROM Workflow_Instance__c
+        WHERE Status__c = 'Suspended'
+        AND Workflow_Name__c NOT IN :pausedDefNames
         WITH SYSTEM_MODE
-        ORDER BY CreatedDate ASC, Id ASC
         LIMIT 1000
       ];
       
-      if (!unrouted.isEmpty()) {
-        Set<String> keys = new Set<String>();
-        Map<String, Id> keyToOldestSignalId = new Map<String, Id>();
-        
-        for (Workflow_Signal__c sig : unrouted) {
-          if (String.isNotBlank(sig.Correlation_Key__c)) {
-            keys.add(sig.Correlation_Key__c);
-            // Keep only the oldest signal per correlation key (first one found due to ASC sort)
-            if (!keyToOldestSignalId.containsKey(sig.Correlation_Key__c)) {
-              keyToOldestSignalId.put(sig.Correlation_Key__c, sig.Id);
-            }
+      if (!suspended.isEmpty()) {
+        Set<String> activeKeys = new Set<String>();
+        for (Workflow_Instance__c inst : suspended) {
+          activeKeys.add(String.valueOf(inst.Id));
+          if (String.isNotBlank(inst.Correlation_Key__c)) {
+            activeKeys.add(inst.Correlation_Key__c);
           }
         }
         
-        if (!keys.isEmpty()) {
-          // Limit batch size defensively for this non-bulkified redelivery loop
-          Integer sweepLimit = 20; 
-          List<Workflow_Instance__c> matchInsts = [
-            SELECT Id, Correlation_Key__c
-            FROM Workflow_Instance__c
-            WHERE Status__c = 'Suspended'
-            AND (Id IN :keys OR Correlation_Key__c IN :keys)
-            AND Workflow_Name__c NOT IN :pausedDefNames
-            WITH SYSTEM_MODE
-            LIMIT :sweepLimit
-            FOR UPDATE
-          ];
+        // Query Unrouted signals matching active keys with safety limit
+        List<Workflow_Signal__c> unrouted = [
+          SELECT Id, Correlation_Key__c
+          FROM Workflow_Signal__c
+          WHERE Status__c = 'Unrouted'
+          AND Correlation_Key__c IN :activeKeys
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate ASC, Id ASC
+          LIMIT 1000
+        ];
+        
+        if (!unrouted.isEmpty()) {
+          Set<String> keys = new Set<String>();
+          Map<String, Id> keyToOldestSignalId = new Map<String, Id>();
           
-          if (!matchInsts.isEmpty()) {
-            for (Workflow_Instance__c inst : matchInsts) {
-              Id oldestSigId = keyToOldestSignalId.get(inst.Id);
-              if (oldestSigId == null && String.isNotBlank(inst.Correlation_Key__c)) {
-                oldestSigId = keyToOldestSignalId.get(inst.Correlation_Key__c);
+          for (Workflow_Signal__c sig : unrouted) {
+            if (String.isNotBlank(sig.Correlation_Key__c)) {
+              keys.add(sig.Correlation_Key__c);
+              String normKey = normalizeKey(sig.Correlation_Key__c);
+              // Keep only the oldest signal per correlation key (first one found due to ASC sort) (Codex suggestion 2)
+              if (!keyToOldestSignalId.containsKey(normKey)) {
+                keyToOldestSignalId.put(normKey, sig.Id);
               }
-              
-              if (oldestSigId != null) {
-                try {
-                  redeliverCapturedSignal(oldestSigId);
-                } catch (Exception e) {
-                  System.debug(
-                    LoggingLevel.ERROR,
-                    'WorkflowEngine: watchdog signal sweep failed for instance ' + inst.Id + ': ' + e.getMessage()
-                  );
+            }
+          }
+          
+          if (!keys.isEmpty()) {
+            // Limit batch size defensively for this non-bulkified redelivery loop
+            Integer sweepLimit = 20; 
+            List<Workflow_Instance__c> matchInsts = [
+              SELECT Id, Correlation_Key__c
+              FROM Workflow_Instance__c
+              WHERE Status__c = 'Suspended'
+              AND (Id IN :keys OR Correlation_Key__c IN :keys)
+              AND Workflow_Name__c NOT IN :pausedDefNames
+              WITH SYSTEM_MODE
+              LIMIT :sweepLimit
+              FOR UPDATE
+            ];
+            
+            if (!matchInsts.isEmpty()) {
+              for (Workflow_Instance__c inst : matchInsts) {
+                Id oldestSigId = keyToOldestSignalId.get(normalizeKey(String.valueOf(inst.Id)));
+                if (oldestSigId == null && String.isNotBlank(inst.Correlation_Key__c)) {
+                  oldestSigId = keyToOldestSignalId.get(normalizeKey(inst.Correlation_Key__c));
+                }
+                
+                if (oldestSigId != null) {
+                  try {
+                    redeliverCapturedSignal(oldestSigId);
+                  } catch (Exception e) {
+                    System.debug(
+                      LoggingLevel.ERROR,
+                      'WorkflowEngine: watchdog signal sweep failed for instance ' + inst.Id + ': ' + e.getMessage()
+                    );
+                  }
                 }
               }
             }
