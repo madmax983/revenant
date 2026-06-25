@@ -1604,7 +1604,7 @@ public class StepContextTest {
       FROM Workflow_Signal__c
       WHERE Id = :sig2.Id
     ];
-    System.assertEquals('Unrouted', reloadedSig2.Status__c, 'Newer signal must remain Unrouted');
+    System.assertEquals('Received', reloadedSig2.Status__c, 'Newer signal must also be auto-delivered');
   }
 }
 

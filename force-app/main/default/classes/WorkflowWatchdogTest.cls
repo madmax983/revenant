@@ -783,13 +783,14 @@ public class WorkflowWatchdogTest {
     System.assertEquals('Received', reloadedSig1.Status__c);
     System.assertEquals(inst.Id, reloadedSig1.Workflow_Instance__c);
 
-    // Newer signal must remain Unrouted
+    // Newer matching signal must also be auto-delivered in the same sweep
     Workflow_Signal__c reloadedSig2 = [
       SELECT Status__c, Workflow_Instance__c
       FROM Workflow_Signal__c
       WHERE Id = :sig2.Id
     ];
-    System.assertEquals('Unrouted', reloadedSig2.Status__c);
+    System.assertEquals('Received', reloadedSig2.Status__c);
+    System.assertEquals(inst.Id, reloadedSig2.Workflow_Instance__c);
   }
 
   @isTest

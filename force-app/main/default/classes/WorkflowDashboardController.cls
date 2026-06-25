@@ -230,7 +230,14 @@ public inherited sharing class WorkflowDashboardController {
     return payloadFiles;
   }
 
-  private static void resolveMatchingAttributes(String attributesFilterJson) {
+  private static void resolveMatchingAttributes(
+    String attributesFilterJson,
+    Boolean isStalled,
+    String workflowName,
+    String status,
+    String searchTerm,
+    String failureCategory
+  ) {
     attributeFilter0 = null;
     attributeFilter1 = null;
     filterInstanceIds = new Set<Id>();
@@ -254,37 +261,44 @@ public inherited sharing class WorkflowDashboardController {
         attributeFilter1 = targetKeyValues[1];
       }
 
-      // Pre-query instances matching the attributes to bypass SOQL semi-join sub-select limit (max 2)
-      if (attributeFilter0 != null && attributeFilter1 == null) {
-        for (Workflow_Search_Attribute__c attr : [
-          SELECT Workflow_Instance__c 
-          FROM Workflow_Search_Attribute__c 
-          WHERE Key_Value__c = :attributeFilter0
-          WITH SYSTEM_MODE
-        ]) {
-          filterInstanceIds.add(attr.Workflow_Instance__c);
+      // Pre-query the matching instance IDs by querying Workflow_Instance__c with parent filters
+      // and attribute sub-selects. This prevents materializing large attribute tables.
+      String query = 'SELECT Id FROM Workflow_Instance__c';
+      List<String> conditions = new List<String>();
+      if (isStalled) {
+        conditions.add('Status__c = \'Suspended\'');
+        conditions.add('Sleep_Until__c = null');
+        conditions.add('LastModifiedDate <= :stalledCutoff');
+      } else {
+        if (String.isNotBlank(status)) {
+          conditions.add('Status__c = :status');
         }
-      } else if (attributeFilter0 != null && attributeFilter1 != null) {
-        Set<Id> set0 = new Set<Id>();
-        for (Workflow_Search_Attribute__c attr : [
-          SELECT Workflow_Instance__c 
-          FROM Workflow_Search_Attribute__c 
-          WHERE Key_Value__c = :attributeFilter0
-          WITH SYSTEM_MODE
-        ]) {
-          set0.add(attr.Workflow_Instance__c);
-        }
-        if (!set0.isEmpty()) {
-          for (Workflow_Search_Attribute__c attr : [
-            SELECT Workflow_Instance__c 
-            FROM Workflow_Search_Attribute__c 
-            WHERE Key_Value__c = :attributeFilter1
-            AND Workflow_Instance__c IN :set0
-            WITH SYSTEM_MODE
-          ]) {
-            filterInstanceIds.add(attr.Workflow_Instance__c);
-          }
-        }
+      }
+      if (String.isNotBlank(workflowName)) {
+        conditions.add('Workflow_Name__c = :workflowName');
+      }
+      if (String.isNotBlank(failureCategory)) {
+        conditions.add('Failure_Category__c = :failureCategory');
+      }
+      if (String.isNotBlank(searchTerm)) {
+        likeTerm = '%' + searchTerm + '%';
+        conditions.add(
+          '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
+        );
+      }
+      if (attributeFilter0 != null) {
+        conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter0)');
+      }
+      if (attributeFilter1 != null) {
+        conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter1)');
+      }
+      
+      if (!conditions.isEmpty()) {
+        query += ' WHERE ' + String.join(conditions, ' AND ');
+      }
+      
+      for (Workflow_Instance__c inst : Database.query(query, AccessLevel.SYSTEM_MODE)) {
+        filterInstanceIds.add(inst.Id);
       }
     } catch (Exception ex) {
       System.debug(LoggingLevel.WARN, 'Failed to deserialize attributesFilterJson: ' + ex.getMessage());
@@ -415,7 +429,7 @@ public inherited sharing class WorkflowDashboardController {
     String attributesFilterJson
   ) {
     checkAuthorization();
-    resolveMatchingAttributes(attributesFilterJson);
+    resolveMatchingAttributes(attributesFilterJson, false, workflowName, status, searchTerm, failureCategory);
 
     if (limitSize == null || limitSize <= 0) {
       limitSize = 50;
@@ -525,7 +539,12 @@ public inherited sharing class WorkflowDashboardController {
     String attributesFilterJson
   ) {
     checkAuthorization();
-    resolveMatchingAttributes(attributesFilterJson);
+    Integer threshold = (thresholdMinutes == null)
+      ? WorkflowEngine.staleThresholdMinutes
+      : thresholdMinutes;
+    stalledCutoff = Datetime.now().addMinutes(-threshold);
+
+    resolveMatchingAttributes(attributesFilterJson, true, workflowName, null, searchTerm, null);
 
     if (limitSize == null || limitSize <= 0) {
       limitSize = 50;
@@ -535,11 +554,6 @@ public inherited sharing class WorkflowDashboardController {
     if (offsetSize == null || offsetSize < 0) {
       offsetSize = 0;
     }
-
-    Integer threshold = (thresholdMinutes == null)
-      ? WorkflowEngine.staleThresholdMinutes
-      : thresholdMinutes;
-    stalledCutoff = Datetime.now().addMinutes(-threshold);
 
     String query =
       'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c, Deadline_At__c ' +
@@ -636,12 +650,12 @@ public inherited sharing class WorkflowDashboardController {
     String attributesFilterJson
   ) {
     checkAuthorization();
-    resolveMatchingAttributes(attributesFilterJson);
-
     Integer threshold = (thresholdMinutes == null)
       ? WorkflowEngine.staleThresholdMinutes
       : thresholdMinutes;
     stalledCutoff = Datetime.now().addMinutes(-threshold);
+
+    resolveMatchingAttributes(attributesFilterJson, true, workflowName, null, searchTerm, null);
 
     String query =
       'SELECT Id, Async_Job_Id__c, Sleep_Until__c, Status__c, LastModifiedDate ' +
@@ -894,7 +908,7 @@ public inherited sharing class WorkflowDashboardController {
     String attributesFilterJson
   ) {
     checkAuthorization();
-    resolveMatchingAttributes(attributesFilterJson);
+    resolveMatchingAttributes(attributesFilterJson, false, workflowName, status, searchTerm, null);
 
     Map<String, Integer> results = new Map<String, Integer>{
       'total' => 0,
