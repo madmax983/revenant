@@ -9,6 +9,8 @@ public inherited sharing class WorkflowDashboardController {
   // Binding variables for filtering by attributes (up to 2 semi-joins for performance).
   private static String attributeFilter0;
   private static String attributeFilter1;
+  // Binding set for pre-queried search attributes to bypass SOQL semi-join sub-select limit (max 2)
+  private static Set<Id> filterInstanceIds;
 
   private static final Set<String> TERMINAL_STATUSES = new Set<String>{
     'Completed',
@@ -231,6 +233,7 @@ public inherited sharing class WorkflowDashboardController {
   private static void resolveMatchingAttributes(String attributesFilterJson) {
     attributeFilter0 = null;
     attributeFilter1 = null;
+    filterInstanceIds = new Set<Id>();
     if (String.isBlank(attributesFilterJson)) {
       return;
     }
@@ -249,6 +252,39 @@ public inherited sharing class WorkflowDashboardController {
       }
       if (targetKeyValues.size() > 1) {
         attributeFilter1 = targetKeyValues[1];
+      }
+
+      // Pre-query instances matching the attributes to bypass SOQL semi-join sub-select limit (max 2)
+      if (attributeFilter0 != null && attributeFilter1 == null) {
+        for (Workflow_Search_Attribute__c attr : [
+          SELECT Workflow_Instance__c 
+          FROM Workflow_Search_Attribute__c 
+          WHERE Key_Value__c = :attributeFilter0
+          WITH SYSTEM_MODE
+        ]) {
+          filterInstanceIds.add(attr.Workflow_Instance__c);
+        }
+      } else if (attributeFilter0 != null && attributeFilter1 != null) {
+        Set<Id> set0 = new Set<Id>();
+        for (Workflow_Search_Attribute__c attr : [
+          SELECT Workflow_Instance__c 
+          FROM Workflow_Search_Attribute__c 
+          WHERE Key_Value__c = :attributeFilter0
+          WITH SYSTEM_MODE
+        ]) {
+          set0.add(attr.Workflow_Instance__c);
+        }
+        if (!set0.isEmpty()) {
+          for (Workflow_Search_Attribute__c attr : [
+            SELECT Workflow_Instance__c 
+            FROM Workflow_Search_Attribute__c 
+            WHERE Key_Value__c = :attributeFilter1
+            AND Workflow_Instance__c IN :set0
+            WITH SYSTEM_MODE
+          ]) {
+            filterInstanceIds.add(attr.Workflow_Instance__c);
+          }
+        }
       }
     } catch (Exception ex) {
       System.debug(LoggingLevel.WARN, 'Failed to deserialize attributesFilterJson: ' + ex.getMessage());
@@ -285,11 +321,8 @@ public inherited sharing class WorkflowDashboardController {
         '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
     }
-    if (attributeFilter0 != null) {
-      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter0)');
-    }
-    if (attributeFilter1 != null) {
-      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter1)');
+    if (attributeFilter0 != null || attributeFilter1 != null) {
+      conditions.add('Id IN :filterInstanceIds');
     }
     return conditions.isEmpty()
       ? ''
@@ -323,11 +356,8 @@ public inherited sharing class WorkflowDashboardController {
         '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
     }
-    if (attributeFilter0 != null) {
-      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter0)');
-    }
-    if (attributeFilter1 != null) {
-      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter1)');
+    if (attributeFilter0 != null || attributeFilter1 != null) {
+      conditions.add('Id IN :filterInstanceIds');
     }
     return String.join(conditions, ' AND ');
   }

@@ -97,7 +97,8 @@ public class WorkflowSearchAttributesDashboardTest {
       new Map<String, String>{ 'region' => 'EU' }
     );
 
-    // Force status to Suspended
+    // Force status to Suspended and delete any pending step executions so it is considered stalled
+    delete [SELECT Id FROM Workflow_Step_Execution__c WHERE Workflow_Instance__c = :instId];
     Workflow_Instance__c inst = [SELECT Id FROM Workflow_Instance__c WHERE Id = :instId];
     inst.Status__c = 'Suspended';
     update inst;
