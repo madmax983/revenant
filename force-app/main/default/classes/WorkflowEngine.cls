@@ -8331,28 +8331,52 @@ public inherited sharing class WorkflowEngine {
           
           if (!matchInsts.isEmpty()) {
             Map<String, Workflow_Instance__c> keyToInst = new Map<String, Workflow_Instance__c>();
+            Set<String> matchInstKeys = new Set<String>();
             for (Workflow_Instance__c inst : matchInsts) {
-              keyToInst.put(normalizeKey(String.valueOf(inst.Id)), inst);
+              String instIdStr = String.valueOf(inst.Id);
+              keyToInst.put(normalizeKey(instIdStr), inst);
+              matchInstKeys.add(instIdStr);
               if (String.isNotBlank(inst.Correlation_Key__c)) {
                 keyToInst.put(normalizeKey(inst.Correlation_Key__c), inst);
+                matchInstKeys.add(inst.Correlation_Key__c);
               }
             }
 
-            Map<Id, List<Workflow_Signal__c>> instIdToSignals = new Map<Id, List<Workflow_Signal__c>>();
-            for (Workflow_Signal__c sig : unrouted) {
-              if (String.isNotBlank(sig.Correlation_Key__c)) {
-                String normKey = normalizeKey(sig.Correlation_Key__c);
-                Workflow_Instance__c inst = keyToInst.get(normKey);
-                if (inst != null) {
-                  if (!instIdToSignals.containsKey(inst.Id)) {
-                    instIdToSignals.put(inst.Id, new List<Workflow_Signal__c>());
+            while (true) {
+              List<Workflow_Signal__c> matchSignals = [
+                SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c
+                FROM Workflow_Signal__c
+                WHERE Status__c = 'Unrouted'
+                AND Correlation_Key__c IN :matchInstKeys
+                WITH SYSTEM_MODE
+                ORDER BY CreatedDate ASC, Id ASC
+                LIMIT 5000
+              ];
+
+              if (matchSignals.isEmpty()) {
+                break;
+              }
+
+              Map<Id, List<Workflow_Signal__c>> instIdToSignals = new Map<Id, List<Workflow_Signal__c>>();
+              for (Workflow_Signal__c sig : matchSignals) {
+                if (String.isNotBlank(sig.Correlation_Key__c)) {
+                  String normKey = normalizeKey(sig.Correlation_Key__c);
+                  Workflow_Instance__c inst = keyToInst.get(normKey);
+                  if (inst != null) {
+                    if (!instIdToSignals.containsKey(inst.Id)) {
+                      instIdToSignals.put(inst.Id, new List<Workflow_Signal__c>());
+                    }
+                    instIdToSignals.get(inst.Id).add(sig);
                   }
-                  instIdToSignals.get(inst.Id).add(sig);
                 }
               }
-            }
 
-            redeliverCapturedSignalsBulk(matchInsts, instIdToSignals);
+              redeliverCapturedSignalsBulk(matchInsts, instIdToSignals);
+
+              if (matchSignals.size() < 5000) {
+                break;
+              }
+            }
           }
         }
       }
