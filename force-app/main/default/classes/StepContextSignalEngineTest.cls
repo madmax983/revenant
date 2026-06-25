@@ -1739,4 +1739,85 @@ public class StepContextSignalEngineTest {
       stepExec.Output__c
     );
   }
+
+  public class E2EYieldWaitStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (ctx.shouldYield()) {
+        return StepResult.suspend();
+      }
+      if (ctx.getSignal('E2EGo').isPresent()) {
+        return StepResult.complete(null, 'completed');
+      }
+      return StepResult.suspend();
+    }
+  }
+
+  public class E2EYieldWaitWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'StepContextSignalEngineTest.E2EYieldWaitStep' };
+    }
+    public String getInitialStep() {
+      return 'StepContextSignalEngineTest.E2EYieldWaitStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  @isTest
+  static void testE2EAutoReplayPreArrivedSignal() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Publish signal BEFORE starting the workflow
+    WorkflowEngine.signal('E2E-CorrKey-999', 'E2EGo', '{"ready":true}');
+
+    // Verify it is captured as Unrouted
+    List<Workflow_Signal__c> unrouted = [
+      SELECT Status__c, Correlation_Key__c 
+      FROM Workflow_Signal__c 
+      WHERE Correlation_Key__c = 'E2E-CorrKey-999'
+    ];
+    System.assertEquals(1, unrouted.size());
+    System.assertEquals('Unrouted', unrouted[0].Status__c);
+
+    // Start the workflow
+    Id instanceId = WorkflowEngine.start(
+      'StepContextSignalEngineTest.E2EYieldWaitWorkflow',
+      'E2E-CorrKey-999',
+      null
+    );
+
+    // Run the orchestrator manually.
+    // The step runs, returns suspend(), and the suspension immediately redelivers the pre-arrived signal, reparents it, and resumes the instance.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Verify the signal is now Received and mapped to the instance
+    Workflow_Signal__c reloadedSig = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :unrouted[0].Id
+    ];
+    System.assertEquals('Received', reloadedSig.Status__c);
+    System.assertEquals(instanceId, reloadedSig.Workflow_Instance__c);
+
+    // And verify the instance was woke up and status is Running
+    Workflow_Instance__c reloadedInst = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Running', reloadedInst.Status__c);
+
+    // Run the orchestrator again to execute the step with the signal present
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Assert that the workflow reaches completion
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c, Current_Step__c 
+      FROM Workflow_Instance__c 
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', finalInst.Status__c, 'Workflow should have reached completion');
+  }
 }
+

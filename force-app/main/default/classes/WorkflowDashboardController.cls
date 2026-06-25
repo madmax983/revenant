@@ -9,6 +9,8 @@ public inherited sharing class WorkflowDashboardController {
   // Binding variables for filtering by attributes (up to 2 semi-joins for performance).
   private static String attributeFilter0;
   private static String attributeFilter1;
+  // Binding set for pre-queried search attributes to bypass SOQL semi-join sub-select limit (max 2)
+  private static Set<Id> filterInstanceIds;
 
   private static final Set<String> TERMINAL_STATUSES = new Set<String>{
     'Completed',
@@ -228,9 +230,17 @@ public inherited sharing class WorkflowDashboardController {
     return payloadFiles;
   }
 
-  private static void resolveMatchingAttributes(String attributesFilterJson) {
+  private static void resolveMatchingAttributes(
+    String attributesFilterJson,
+    Boolean isStalled,
+    String workflowName,
+    String status,
+    String searchTerm,
+    String failureCategory
+  ) {
     attributeFilter0 = null;
     attributeFilter1 = null;
+    filterInstanceIds = new Set<Id>();
     if (String.isBlank(attributesFilterJson)) {
       return;
     }
@@ -249,6 +259,47 @@ public inherited sharing class WorkflowDashboardController {
       }
       if (targetKeyValues.size() > 1) {
         attributeFilter1 = targetKeyValues[1];
+      }
+
+      // Pre-query the matching instance IDs by querying Workflow_Instance__c with parent filters
+      // and attribute sub-selects. This prevents materializing large attribute tables.
+      String query = 'SELECT Id FROM Workflow_Instance__c';
+      List<String> conditions = new List<String>();
+      if (isStalled) {
+        conditions.add('Status__c = \'Suspended\'');
+        conditions.add('Sleep_Until__c = null');
+        conditions.add('LastModifiedDate <= :stalledCutoff');
+      } else {
+        if (String.isNotBlank(status)) {
+          conditions.add('Status__c = :status');
+        }
+      }
+      if (String.isNotBlank(workflowName)) {
+        conditions.add('Workflow_Name__c = :workflowName');
+      }
+      if (String.isNotBlank(failureCategory)) {
+        conditions.add('Failure_Category__c = :failureCategory');
+      }
+      if (String.isNotBlank(searchTerm)) {
+        likeTerm = '%' + searchTerm + '%';
+        conditions.add(
+          '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
+        );
+      }
+      if (attributeFilter0 != null) {
+        conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter0)');
+      }
+      if (attributeFilter1 != null) {
+        conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter1)');
+      }
+      
+      if (!conditions.isEmpty()) {
+        query += ' WHERE ' + String.join(conditions, ' AND ');
+      }
+      query += ' LIMIT 5000';
+      
+      for (Workflow_Instance__c inst : Database.query(query, AccessLevel.SYSTEM_MODE)) {
+        filterInstanceIds.add(inst.Id);
       }
     } catch (Exception ex) {
       System.debug(LoggingLevel.WARN, 'Failed to deserialize attributesFilterJson: ' + ex.getMessage());
@@ -285,11 +336,8 @@ public inherited sharing class WorkflowDashboardController {
         '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
     }
-    if (attributeFilter0 != null) {
-      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter0)');
-    }
-    if (attributeFilter1 != null) {
-      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter1)');
+    if (attributeFilter0 != null || attributeFilter1 != null) {
+      conditions.add('Id IN :filterInstanceIds');
     }
     return conditions.isEmpty()
       ? ''
@@ -323,11 +371,8 @@ public inherited sharing class WorkflowDashboardController {
         '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
     }
-    if (attributeFilter0 != null) {
-      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter0)');
-    }
-    if (attributeFilter1 != null) {
-      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter1)');
+    if (attributeFilter0 != null || attributeFilter1 != null) {
+      conditions.add('Id IN :filterInstanceIds');
     }
     return String.join(conditions, ' AND ');
   }
@@ -385,7 +430,7 @@ public inherited sharing class WorkflowDashboardController {
     String attributesFilterJson
   ) {
     checkAuthorization();
-    resolveMatchingAttributes(attributesFilterJson);
+    resolveMatchingAttributes(attributesFilterJson, false, workflowName, status, searchTerm, failureCategory);
 
     if (limitSize == null || limitSize <= 0) {
       limitSize = 50;
@@ -495,7 +540,12 @@ public inherited sharing class WorkflowDashboardController {
     String attributesFilterJson
   ) {
     checkAuthorization();
-    resolveMatchingAttributes(attributesFilterJson);
+    Integer threshold = (thresholdMinutes == null)
+      ? WorkflowEngine.staleThresholdMinutes
+      : thresholdMinutes;
+    stalledCutoff = Datetime.now().addMinutes(-threshold);
+
+    resolveMatchingAttributes(attributesFilterJson, true, workflowName, null, searchTerm, null);
 
     if (limitSize == null || limitSize <= 0) {
       limitSize = 50;
@@ -505,11 +555,6 @@ public inherited sharing class WorkflowDashboardController {
     if (offsetSize == null || offsetSize < 0) {
       offsetSize = 0;
     }
-
-    Integer threshold = (thresholdMinutes == null)
-      ? WorkflowEngine.staleThresholdMinutes
-      : thresholdMinutes;
-    stalledCutoff = Datetime.now().addMinutes(-threshold);
 
     String query =
       'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c, Deadline_At__c ' +
@@ -606,12 +651,12 @@ public inherited sharing class WorkflowDashboardController {
     String attributesFilterJson
   ) {
     checkAuthorization();
-    resolveMatchingAttributes(attributesFilterJson);
-
     Integer threshold = (thresholdMinutes == null)
       ? WorkflowEngine.staleThresholdMinutes
       : thresholdMinutes;
     stalledCutoff = Datetime.now().addMinutes(-threshold);
+
+    resolveMatchingAttributes(attributesFilterJson, true, workflowName, null, searchTerm, null);
 
     String query =
       'SELECT Id, Async_Job_Id__c, Sleep_Until__c, Status__c, LastModifiedDate ' +
@@ -864,7 +909,7 @@ public inherited sharing class WorkflowDashboardController {
     String attributesFilterJson
   ) {
     checkAuthorization();
-    resolveMatchingAttributes(attributesFilterJson);
+    resolveMatchingAttributes(attributesFilterJson, false, workflowName, status, searchTerm, null);
 
     Map<String, Integer> results = new Map<String, Integer>{
       'total' => 0,

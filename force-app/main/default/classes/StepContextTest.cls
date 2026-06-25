@@ -1483,4 +1483,167 @@ public class StepContextTest {
       return this.value;
     }
   }
+
+  @isTest
+  static void testAutoReplayAtYieldTime() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'CorrKey-123'
+    );
+    insert inst;
+
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Correlation_Key__c = 'CorrKey-123',
+      Signal_Name__c = 'Go',
+      Payload__c = '{"val":42}',
+      Status__c = 'Unrouted'
+    );
+    insert sig;
+
+    StepContext ctx = new StepContext(
+      inst.Id,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null,
+      1,
+      new WorkflowEngine.PendingSignalSource(inst.Id)
+    );
+
+    // Call getSignal first to populate cache with empty result (no signals present yet in the context cache)
+    System.assertEquals(false, ctx.getSignal('Go').isPresent());
+
+    Test.startTest();
+    WorkflowEngine.redeliverMatchingSignalsForInstance(inst.Id, inst.Correlation_Key__c);
+    
+    // Create a new context since the old one cached the empty signal list
+    ctx = new StepContext(
+      inst.Id,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null,
+      1,
+      new WorkflowEngine.PendingSignalSource(inst.Id)
+    );
+    Test.stopTest();
+
+    Workflow_Signal__c reloadedSig = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig.Id
+    ];
+    System.assertEquals('Received', reloadedSig.Status__c);
+    System.assertEquals(inst.Id, reloadedSig.Workflow_Instance__c);
+
+    // Cache should be cleared and the new signal should be returned
+    StepContext.Signal fetched = ctx.getSignal('Go');
+    System.assertEquals(true, fetched.isPresent());
+    System.assertEquals('{"val":42}', fetched.payload);
+  }
+
+  @isTest
+  static void testAutoReplayAtYieldTimeOldestFirst() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'CorrKey-456'
+    );
+    insert inst;
+
+    Workflow_Signal__c sig1 = new Workflow_Signal__c(
+      Correlation_Key__c = 'CorrKey-456',
+      Signal_Name__c = 'Go',
+      Payload__c = '{"val":1}',
+      Status__c = 'Unrouted'
+    );
+    insert sig1;
+
+    Workflow_Signal__c sig2 = new Workflow_Signal__c(
+      Correlation_Key__c = 'CorrKey-456',
+      Signal_Name__c = 'Go',
+      Payload__c = '{"val":2}',
+      Status__c = 'Unrouted'
+    );
+    insert sig2;
+
+    StepContext ctx = new StepContext(
+      inst.Id,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null,
+      1,
+      new WorkflowEngine.PendingSignalSource(inst.Id)
+    );
+
+    Test.startTest();
+    WorkflowEngine.redeliverMatchingSignalsForInstance(inst.Id, inst.Correlation_Key__c);
+    Test.stopTest();
+
+    Workflow_Signal__c reloadedSig1 = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig1.Id
+    ];
+    System.assertEquals('Received', reloadedSig1.Status__c, 'Oldest signal must be auto-delivered');
+
+    Workflow_Signal__c reloadedSig2 = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig2.Id
+    ];
+    System.assertEquals('Received', reloadedSig2.Status__c, 'Newer signal must also be auto-delivered');
+  }
+
+  @isTest
+  static void testAutoReplayDrainsAllSignals() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'CorrKey-LargeBacklog'
+    );
+    insert inst;
+
+    List<Workflow_Signal__c> signals = new List<Workflow_Signal__c>();
+    // Insert 120 signals to exceed any previous 100-limit cap
+    for (Integer i = 0; i < 120; i++) {
+      signals.add(new Workflow_Signal__c(
+        Correlation_Key__c = 'CorrKey-LargeBacklog',
+        Signal_Name__c = 'Go',
+        Payload__c = '{"val":' + i + '}',
+        Status__c = 'Unrouted'
+      ));
+    }
+    insert signals;
+
+    Test.startTest();
+    WorkflowEngine.redeliverMatchingSignalsForInstance(inst.Id, inst.Correlation_Key__c);
+    Test.stopTest();
+
+    List<Workflow_Signal__c> reloadedSignals = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Correlation_Key__c = 'CorrKey-LargeBacklog'
+    ];
+    System.assertEquals(120, reloadedSignals.size());
+    for (Workflow_Signal__c sig : reloadedSignals) {
+      System.assertEquals('Received', sig.Status__c, 'All signals in the large backlog must be auto-delivered');
+      System.assertEquals(inst.Id, sig.Workflow_Instance__c, 'All signals must be bound to the correct instance');
+    }
+  }
 }
+

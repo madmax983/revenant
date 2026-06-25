@@ -696,4 +696,185 @@ public class WorkflowWatchdogTest {
     Workflow_Instance__c updatedInst = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :sleepingInst.Id];
     System.assertEquals('Running', updatedInst.Status__c, 'Instance should be resumed to Running');
   }
+
+  @isTest
+  static void testWatchdogSweepSignalAutoDelivery() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Create suspended instance waiting indefinitely (Sleep_Until__c is null)
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'WatchdogCorr-123'
+    );
+    insert inst;
+
+    // Create an unrouted signal matching the correlation key
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Correlation_Key__c = 'WatchdogCorr-123',
+      Signal_Name__c = 'WakeMe',
+      Payload__c = '{"data":1}',
+      Status__c = 'Unrouted'
+    );
+    insert sig;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Verify signal is auto-delivered
+    Workflow_Signal__c reloadedSig = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig.Id
+    ];
+    System.assertEquals('Received', reloadedSig.Status__c);
+    System.assertEquals(inst.Id, reloadedSig.Workflow_Instance__c);
+
+    // Verify instance is resumed to Running
+    Workflow_Instance__c reloadedInst = [
+      SELECT Status__c, Sleep_Until__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Running', reloadedInst.Status__c);
+    System.assertEquals(null, reloadedInst.Sleep_Until__c);
+  }
+
+  @isTest
+  static void testWatchdogSweepSignalAutoDeliveryOldestFirst() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'WatchdogCorr-456'
+    );
+    insert inst;
+
+    Workflow_Signal__c sig1 = new Workflow_Signal__c(
+      Correlation_Key__c = 'WatchdogCorr-456',
+      Signal_Name__c = 'WakeMe',
+      Payload__c = '{"val":1}',
+      Status__c = 'Unrouted'
+    );
+    insert sig1;
+
+    Workflow_Signal__c sig2 = new Workflow_Signal__c(
+      Correlation_Key__c = 'WatchdogCorr-456',
+      Signal_Name__c = 'WakeMe',
+      Payload__c = '{"val":2}',
+      Status__c = 'Unrouted'
+    );
+    insert sig2;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Oldest signal must be auto-delivered
+    Workflow_Signal__c reloadedSig1 = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig1.Id
+    ];
+    System.assertEquals('Received', reloadedSig1.Status__c);
+    System.assertEquals(inst.Id, reloadedSig1.Workflow_Instance__c);
+
+    // Newer matching signal must also be auto-delivered in the same sweep
+    Workflow_Signal__c reloadedSig2 = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig2.Id
+    ];
+    System.assertEquals('Received', reloadedSig2.Status__c);
+    System.assertEquals(inst.Id, reloadedSig2.Workflow_Instance__c);
+  }
+
+  @isTest
+  static void testWatchdogSweepSignalKeyNormalization() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Create suspended instance with mixed case key
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'Watchdog-Corr-CASE'
+    );
+    insert inst;
+
+    // Create unrouted signal with lowercase key
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Correlation_Key__c = 'watchdog-corr-case',
+      Signal_Name__c = 'WakeMe',
+      Payload__c = '{"val":1}',
+      Status__c = 'Unrouted'
+    );
+    insert sig;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Verify signal is auto-delivered due to case normalization
+    Workflow_Signal__c reloadedSig = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig.Id
+    ];
+    System.assertEquals('Received', reloadedSig.Status__c, 'Signal should be delivered due to case-normalization');
+    System.assertEquals(inst.Id, reloadedSig.Workflow_Instance__c);
+  }
+
+  @isTest
+  static void testWatchdogSweepSignalFilterOutStale() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Create 50 unmatched unrouted signals
+    List<Workflow_Signal__c> staleSignals = new List<Workflow_Signal__c>();
+    for (Integer i = 0; i < 50; i++) {
+      staleSignals.add(new Workflow_Signal__c(
+        Correlation_Key__c = 'StaleCorr-' + i,
+        Signal_Name__c = 'Unmatched',
+        Payload__c = '{}',
+        Status__c = 'Unrouted'
+      ));
+    }
+    insert staleSignals;
+
+    // Create suspended instance
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'ActiveCorr-1'
+    );
+    insert inst;
+
+    // Create matching unrouted signal
+    Workflow_Signal__c matchingSig = new Workflow_Signal__c(
+      Correlation_Key__c = 'ActiveCorr-1',
+      Signal_Name__c = 'WakeMe',
+      Payload__c = '{}',
+      Status__c = 'Unrouted'
+    );
+    insert matchingSig;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Verify the matching signal is auto-delivered, proving the sweep filtered out the unmatched signals
+    Workflow_Signal__c reloadedSig = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :matchingSig.Id
+    ];
+    System.assertEquals('Received', reloadedSig.Status__c, 'Matching signal should be delivered');
+    System.assertEquals(inst.Id, reloadedSig.Workflow_Instance__c);
+  }
 }
+

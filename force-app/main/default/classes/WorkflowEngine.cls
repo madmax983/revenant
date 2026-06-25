@@ -2941,11 +2941,13 @@ public inherited sharing class WorkflowEngine {
    * accessor calls so the step can never observe (and mark consumed) more rows
    * than the COMPLETE consume pass can handle.
    */
+  @TestVisible
   private class PendingSignalSource implements StepContext.SignalSource {
     private final Id instanceId;
     private Integer rowBudget = SERIAL_SIGNAL_ROW_CAP;
     private Boolean capped = false;
 
+    @TestVisible
     private PendingSignalSource(Id instanceId) {
       this.instanceId = instanceId;
     }
@@ -4072,6 +4074,7 @@ public inherited sharing class WorkflowEngine {
 
       instance.Status__c = 'Suspended';
       update as system instance;
+      redeliverMatchingSignalsForInstance(instance.Id, instance.Correlation_Key__c);
     } else if (result.action == StepResult.ActionType.SLEEP) {
       // Step requested sleep
       if (isParallel) {
@@ -4121,6 +4124,7 @@ public inherited sharing class WorkflowEngine {
 
       instance.Status__c = 'Suspended';
       update as system instance;
+      redeliverMatchingSignalsForInstance(instance.Id, instance.Correlation_Key__c);
 
       startChildWorkflow(
         instance.Id,
@@ -4158,6 +4162,7 @@ public inherited sharing class WorkflowEngine {
 
       instance.Status__c = 'Suspended';
       update as system instance;
+      redeliverMatchingSignalsForInstance(instance.Id, instance.Correlation_Key__c);
     } else if (result.action == StepResult.ActionType.SPLIT) {
       stepExec.Status__c = 'Completed';
       stepExec.Output__c = savePayloadIfNeeded(
@@ -8250,6 +8255,109 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
+    // 2b. Sweep Suspended instances for matching Unrouted signals (safety net)
+    if (!WorkflowPauseGate.wildcardPaused()) {
+      Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
+
+      // 1. Query Suspended instances to get candidate active keys first (ordered deterministically)
+      List<Workflow_Instance__c> suspended = [
+        SELECT Id, Correlation_Key__c
+        FROM Workflow_Instance__c
+        WHERE Status__c = 'Suspended'
+        AND Workflow_Name__c NOT IN :pausedDefNames
+        WITH SYSTEM_MODE
+        ORDER BY LastModifiedDate DESC, Id DESC
+        LIMIT 10000
+      ];
+      
+      List<Workflow_Signal__c> unrouted = new List<Workflow_Signal__c>();
+      if (!suspended.isEmpty()) {
+        Set<String> activeKeys = new Set<String>();
+        for (Workflow_Instance__c inst : suspended) {
+          activeKeys.add(String.valueOf(inst.Id));
+          if (String.isNotBlank(inst.Correlation_Key__c)) {
+            activeKeys.add(inst.Correlation_Key__c);
+          }
+        }
+        
+        // Query Unrouted signals matching active keys with safety limit
+        unrouted = [
+          SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c
+          FROM Workflow_Signal__c
+          WHERE Status__c = 'Unrouted'
+          AND Correlation_Key__c IN :activeKeys
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate ASC, Id ASC
+          LIMIT 1000
+        ];
+      }
+      
+      if (!unrouted.isEmpty()) {
+        Set<String> keys = new Set<String>();
+        for (Workflow_Signal__c sig : unrouted) {
+          if (String.isNotBlank(sig.Correlation_Key__c)) {
+            keys.add(sig.Correlation_Key__c);
+          }
+        }
+        
+        if (!keys.isEmpty()) {
+          // Limit batch size defensively for this non-bulkified redelivery loop
+          Integer sweepLimit = 20; 
+          
+          // Split correlation keys from Id binds to avoid System.QueryException: Invalid ID
+          String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix();
+          Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
+          Set<Id> instIds = new Set<Id>();
+          Set<String> corrKeys = new Set<String>();
+          
+          for (String key : keys) {
+            if (idPattern.matcher(key).matches() && key.startsWith(wflowPrefix)) {
+              instIds.add((Id) key);
+            } else {
+              corrKeys.add(key);
+            }
+          }
+
+          List<Workflow_Instance__c> matchInsts = [
+            SELECT Id, Correlation_Key__c, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
+            FROM Workflow_Instance__c
+            WHERE Status__c = 'Suspended'
+            AND (Id IN :instIds OR Correlation_Key__c IN :corrKeys)
+            AND Workflow_Name__c NOT IN :pausedDefNames
+            WITH SYSTEM_MODE
+            LIMIT :sweepLimit
+            FOR UPDATE
+          ];
+          
+          if (!matchInsts.isEmpty()) {
+            Map<String, Workflow_Instance__c> keyToInst = new Map<String, Workflow_Instance__c>();
+            for (Workflow_Instance__c inst : matchInsts) {
+              keyToInst.put(normalizeKey(String.valueOf(inst.Id)), inst);
+              if (String.isNotBlank(inst.Correlation_Key__c)) {
+                keyToInst.put(normalizeKey(inst.Correlation_Key__c), inst);
+              }
+            }
+
+            Map<Id, List<Workflow_Signal__c>> instIdToSignals = new Map<Id, List<Workflow_Signal__c>>();
+            for (Workflow_Signal__c sig : unrouted) {
+              if (String.isNotBlank(sig.Correlation_Key__c)) {
+                String normKey = normalizeKey(sig.Correlation_Key__c);
+                Workflow_Instance__c inst = keyToInst.get(normKey);
+                if (inst != null) {
+                  if (!instIdToSignals.containsKey(inst.Id)) {
+                    instIdToSignals.put(inst.Id, new List<Workflow_Signal__c>());
+                  }
+                  instIdToSignals.get(inst.Id).add(sig);
+                }
+              }
+            }
+
+            redeliverCapturedSignalsBulk(matchInsts, instIdToSignals);
+          }
+        }
+      }
+    }
+
     // 3. Process due recurring schedules (0-slot: runs inside the watchdog heartbeat,
     // so enabling N Workflow_Schedule__c records adds 0 scheduled-job slots).
     try {
@@ -9101,6 +9209,141 @@ public inherited sharing class WorkflowEngine {
     }
 
     return true;
+  }
+
+  @TestVisible
+  private static void redeliverMatchingSignalsForInstance(Id instanceId, String correlationKey) {
+    if (instanceId == null) {
+      return;
+    }
+    List<Workflow_Instance__c> matchInsts = [
+      SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+      LIMIT 1
+      FOR UPDATE
+    ];
+
+    if (matchInsts.isEmpty()) {
+      return;
+    }
+
+    List<String> matchKeys = new List<String>{ String.valueOf(instanceId) };
+    if (String.isNotBlank(correlationKey)) {
+      matchKeys.add(correlationKey);
+    }
+
+    while (true) {
+      List<Workflow_Signal__c> unroutedSignals = [
+        SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c
+        FROM Workflow_Signal__c
+        WHERE Status__c = 'Unrouted'
+        AND Correlation_Key__c IN :matchKeys
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate ASC, Id ASC
+        LIMIT 5000
+      ];
+
+      if (unroutedSignals.isEmpty()) {
+        break;
+      }
+
+      Map<Id, List<Workflow_Signal__c>> instIdToSignals = new Map<Id, List<Workflow_Signal__c>>{
+        instanceId => unroutedSignals
+      };
+
+      redeliverCapturedSignalsBulk(matchInsts, instIdToSignals);
+
+      if (unroutedSignals.size() < 5000) {
+        break;
+      }
+    }
+  }
+
+  private static void redeliverCapturedSignalsBulk(
+    List<Workflow_Instance__c> matchInsts,
+    Map<Id, List<Workflow_Signal__c>> instIdToSignals
+  ) {
+    List<Workflow_Signal__c> signalsToUpdate = new List<Workflow_Signal__c>();
+    Map<Id, Workflow_Instance__c> instMap = new Map<Id, Workflow_Instance__c>(matchInsts);
+    
+    for (Workflow_Instance__c inst : matchInsts) {
+      List<Workflow_Signal__c> sigs = instIdToSignals.get(inst.Id);
+      if (sigs == null) {
+        continue;
+      }
+      for (Workflow_Signal__c sig : sigs) {
+        sig.Workflow_Instance__c = inst.Id;
+        sig.Status__c = 'Received';
+        if (String.isNotBlank(sig.Idempotency_Key__c)) {
+          sig.Signal_Key__c = deriveSignalDedupKey(inst.Id, sig.Idempotency_Key__c);
+        }
+        signalsToUpdate.add(sig);
+      }
+    }
+
+    if (signalsToUpdate.isEmpty()) {
+      return;
+    }
+
+    Savepoint sp = Database.setSavepoint();
+    try {
+      Database.SaveResult[] srs = Database.update(
+        signalsToUpdate,
+        false,
+        AccessLevel.SYSTEM_MODE
+      );
+      
+      List<Workflow_Signal__c> duplicateSignals = new List<Workflow_Signal__c>();
+      List<Workflow_Signal__c> successfulSignals = new List<Workflow_Signal__c>();
+      
+      for (Integer i = 0; i < srs.size(); i++) {
+        Database.SaveResult sr = srs[i];
+        Workflow_Signal__c sig = signalsToUpdate[i];
+        if (sr.isSuccess()) {
+          successfulSignals.add(sig);
+        } else {
+          Boolean isDup = false;
+          for (Database.Error err : sr.getErrors()) {
+            if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+              isDup = true;
+              break;
+            }
+          }
+          if (isDup) {
+            sig.Workflow_Instance__c = null;
+            sig.Signal_Key__c = null;
+            sig.Status__c = 'Consumed';
+            duplicateSignals.add(sig);
+          } else {
+            throw new DmlException(sr.getErrors()[0].getMessage());
+          }
+        }
+      }
+      
+      if (!duplicateSignals.isEmpty()) {
+        update as system duplicateSignals;
+      }
+      
+      Set<Id> wokenInstanceIds = new Set<Id>();
+      for (Workflow_Signal__c sig : successfulSignals) {
+        if (wokenInstanceIds.add(sig.Workflow_Instance__c)) {
+          Workflow_Instance__c inst = instMap.get(sig.Workflow_Instance__c);
+          if (inst != null) {
+            wakeInstanceForSignal(inst);
+          }
+        }
+      }
+    } catch (Exception e) {
+      Database.rollback(sp);
+      Set<Id> instIdsToClear = new Set<Id>();
+      for (Workflow_Instance__c inst : matchInsts) {
+        instIdsToClear.add(inst.Id);
+      }
+      clearEnqueueGuards(instIdsToClear);
+      throw e;
+    }
   }
 
   private static RetryPolicy sanitizePolicy(RetryPolicy policy) {
