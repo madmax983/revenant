@@ -9216,25 +9216,6 @@ public inherited sharing class WorkflowEngine {
     if (instanceId == null) {
       return;
     }
-    List<String> matchKeys = new List<String>{ String.valueOf(instanceId) };
-    if (String.isNotBlank(correlationKey)) {
-      matchKeys.add(correlationKey);
-    }
-
-    List<Workflow_Signal__c> unroutedSignals = [
-      SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c
-      FROM Workflow_Signal__c
-      WHERE Status__c = 'Unrouted'
-      AND Correlation_Key__c IN :matchKeys
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate ASC, Id ASC
-      LIMIT 100
-    ];
-
-    if (unroutedSignals.isEmpty()) {
-      return;
-    }
-
     List<Workflow_Instance__c> matchInsts = [
       SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
       FROM Workflow_Instance__c
@@ -9248,11 +9229,36 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    Map<Id, List<Workflow_Signal__c>> instIdToSignals = new Map<Id, List<Workflow_Signal__c>>{
-      instanceId => unroutedSignals
-    };
+    List<String> matchKeys = new List<String>{ String.valueOf(instanceId) };
+    if (String.isNotBlank(correlationKey)) {
+      matchKeys.add(correlationKey);
+    }
 
-    redeliverCapturedSignalsBulk(matchInsts, instIdToSignals);
+    while (true) {
+      List<Workflow_Signal__c> unroutedSignals = [
+        SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c
+        FROM Workflow_Signal__c
+        WHERE Status__c = 'Unrouted'
+        AND Correlation_Key__c IN :matchKeys
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate ASC, Id ASC
+        LIMIT 5000
+      ];
+
+      if (unroutedSignals.isEmpty()) {
+        break;
+      }
+
+      Map<Id, List<Workflow_Signal__c>> instIdToSignals = new Map<Id, List<Workflow_Signal__c>>{
+        instanceId => unroutedSignals
+      };
+
+      redeliverCapturedSignalsBulk(matchInsts, instIdToSignals);
+
+      if (unroutedSignals.size() < 5000) {
+        break;
+      }
+    }
   }
 
   private static void redeliverCapturedSignalsBulk(
