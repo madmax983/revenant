@@ -3696,5 +3696,18 @@ public class WorkflowDashboardControllerTest {
         e.getMessage()
       );
     }
+
+    // Test: Reject reserved $attachmentId marker
+    inst.Status__c = 'Failed';
+    update inst;
+    try {
+      WorkflowDashboardController.resumePastStepInstance(inst.Id, 'StepOne', '{"$attachmentId":"069Sv00000KaTSzKAN"}');
+      System.assert(false, 'Should fail on reserved $attachmentId marker');
+    } catch (AuraHandledException e) {
+      System.assert(
+        e.getMessage().contains('cannot contain reserved "$attachmentId" markers'),
+        e.getMessage()
+      );
+    }
   }
 }

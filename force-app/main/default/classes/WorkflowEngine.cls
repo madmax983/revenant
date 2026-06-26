@@ -6313,6 +6313,9 @@ public inherited sharing class WorkflowEngine {
       if (suppliedOutputJson.length() > 250000) {
         throw new WorkflowException('Supplied output size exceeds maximum allowed limit of 250KB.');
       }
+      if (suppliedOutputJson.contains('"$attachmentId"')) {
+        throw new WorkflowException('Operator-supplied payload cannot contain reserved "$attachmentId" markers.');
+      }
       try {
         JSON.deserializeUntyped(suppliedOutputJson);
       } catch (Exception ex) {
@@ -6527,36 +6530,34 @@ public inherited sharing class WorkflowEngine {
           instance.Failure_Category__c = null;
           update as system instance;
 
+          Set<String> stepsToEnqueue = new Set<String>();
           List<Workflow_Step_Execution__c> stepsToReset = new List<Workflow_Step_Execution__c>();
           for (String ps : activeParallelSteps) {
             if (ps.equalsIgnoreCase(stepName)) {
               continue;
             }
             Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
-            if (pe != null && pe.Status__c != 'Completed' && pe.Status__c != 'OperatorSkipped') {
+            if (pe == null) {
+              stepsToEnqueue.add(ps);
+            } else if (pe.Status__c == 'Failed') {
               pe.Status__c = 'Pending';
               pe.Retry_Count__c = 0;
               pe.Error_Details__c = null;
               stepsToReset.add(pe);
+              stepsToEnqueue.add(ps);
             }
           }
           if (!stepsToReset.isEmpty()) {
             update as system stepsToReset;
           }
 
-          for (String ps : activeParallelSteps) {
-            if (ps.equalsIgnoreCase(stepName)) {
-              continue;
-            }
-            Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
-            if (pe == null || (pe.Status__c != 'Completed' && pe.Status__c != 'OperatorSkipped')) {
-              if (Test.isRunningTest()) {
-                if (!disableQueueableInTest) {
-                  System.enqueueJob(new WorkflowOrchestrator(instanceId, ps));
-                }
-              } else {
-                enqueueOrchestrator(instanceId, ps);
+          for (String ps : stepsToEnqueue) {
+            if (Test.isRunningTest()) {
+              if (!disableQueueableInTest) {
+                System.enqueueJob(new WorkflowOrchestrator(instanceId, ps));
               }
+            } else {
+              enqueueOrchestrator(instanceId, ps);
             }
           }
         }
