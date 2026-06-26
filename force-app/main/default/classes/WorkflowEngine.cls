@@ -1205,9 +1205,7 @@ public inherited sharing class WorkflowEngine {
 
     // Enqueue the first step execution
     if (Test.isRunningTest()) {
-      if (!disableQueueableInTest) {
-        System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-      }
+      System.enqueueJob(new WorkflowOrchestrator(instance.Id));
     } else {
       enqueueOrchestrator(instance.Id, null);
     }

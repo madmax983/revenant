@@ -6106,6 +6106,12 @@ public class WorkflowEngineTest {
       parentInst.Status__c,
       'Parent must remain Suspended'
     );
+
+    // Set parent instance status to Failed so its automatically-triggered post-test queueable runs as a no-op
+    update as system new Workflow_Instance__c(
+      Id = parentId,
+      Status__c = 'Failed'
+    );
   }
 
   @isTest
@@ -6150,6 +6156,12 @@ public class WorkflowEngineTest {
           ex.getMessage()
       );
     }
+
+    // Set parent instances status to Failed so their automatically-triggered post-test queueables run as no-ops
+    update as system new List<Workflow_Instance__c>{
+      new Workflow_Instance__c(Id = parentIdA, Status__c = 'Failed'),
+      new Workflow_Instance__c(Id = parentIdB, Status__c = 'Failed')
+    };
   }
 
   @isTest
@@ -6191,5 +6203,11 @@ public class WorkflowEngineTest {
       WHERE Id = :parentId
     ];
     System.assertEquals('Suspended', parentInst.Status__c);
+
+    // Set parent instance status to Failed so its automatically-triggered post-test queueable runs as a no-op
+    update as system new Workflow_Instance__c(
+      Id = parentId,
+      Status__c = 'Failed'
+    );
   }
 }
