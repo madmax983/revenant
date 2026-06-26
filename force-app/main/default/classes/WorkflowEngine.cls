@@ -4004,19 +4004,25 @@ public inherited sharing class WorkflowEngine {
       if (!allDone) {
         if (instanceWasSuspendedOrPendingAtStart) {
           Boolean hasPending = false;
-          Boolean hasRunningOrFailed = false;
+          Boolean hasRunning = false;
+          Boolean hasFailed = false;
           for (String ps : activeParallelSteps) {
             Workflow_Step_Execution__c pe = latestExecByStep.get(ps);
             if (pe == null) {
-              hasRunningOrFailed = true;
-            } else if (pe.Status__c == 'Running' || pe.Status__c == 'Failed') {
-              hasRunningOrFailed = true;
-            } else if (pe.Status__c == 'Pending') {
+              hasRunning = true;
+            } else if (pe.Status__c == 'Running') {
+              hasRunning = true;
+            } else if (pe.Status__c == 'Failed') {
+              hasFailed = true;
+            } else if (pe.Status__c == 'Pending' || pe.Status__c == 'Retrying') {
               hasPending = true;
             }
           }
-          if (hasPending && !hasRunningOrFailed) {
+          if (hasPending && !hasRunning) {
             instance.Status__c = 'Suspended';
+            update as system instance;
+          } else if (!hasPending && !hasRunning && hasFailed) {
+            instance.Status__c = 'Failed';
             update as system instance;
           }
         }
@@ -6443,7 +6449,7 @@ public inherited sharing class WorkflowEngine {
         
         Map<String, Workflow_Step_Execution__c> latestParallelMap = new Map<String, Workflow_Step_Execution__c>();
         for (Workflow_Step_Execution__c pe : [
-          SELECT Step_Name__c, Status__c, Output__c
+          SELECT Step_Name__c, Status__c, Output__c, CPU_Time_Ms__c
           FROM Workflow_Step_Execution__c
           WHERE Workflow_Instance__c = :instanceId AND Step_Name__c IN :activeParallelSteps
           WITH SYSTEM_MODE
@@ -6554,7 +6560,7 @@ public inherited sharing class WorkflowEngine {
               continue;
             }
             Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
-            if (pe != null && pe.Status__c == 'Pending') {
+            if (pe != null && pe.Status__c == 'Pending' && pe.CPU_Time_Ms__c != null) {
               hasParkedSibling = true;
               break;
             }
@@ -6579,6 +6585,9 @@ public inherited sharing class WorkflowEngine {
               pe.Retry_Count__c = 0;
               pe.Error_Details__c = null;
               stepsToReset.add(pe);
+              stepsToEnqueue.add(ps);
+            } else if (pe.Status__c == 'Pending' && pe.CPU_Time_Ms__c == null) {
+              // Initial/undriven pending branch: enqueue it directly
               stepsToEnqueue.add(ps);
             }
           }

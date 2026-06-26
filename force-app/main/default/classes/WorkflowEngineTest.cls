@@ -6457,6 +6457,7 @@ public class WorkflowEngineTest {
     System.assertEquals(1, stepExecs.size());
     stepExecs[0].Status__c = 'Pending';
     stepExecs[0].Retry_Count__c = 3;
+    stepExecs[0].CPU_Time_Ms__c = 1;
     update stepExecs[0];
 
     // 3. Run ParallelB -> fails and fails the workflow instance
@@ -6598,6 +6599,7 @@ public class WorkflowEngineTest {
       WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
     ];
     stepExecsA[0].Status__c = 'Pending';
+    stepExecsA[0].CPU_Time_Ms__c = 1;
     update stepExecsA[0];
 
     // 3. Run ParallelB -> fails and fails the workflow instance
@@ -6628,6 +6630,56 @@ public class WorkflowEngineTest {
       WHERE Id = :instanceId
     ];
     System.assertEquals('Suspended', instFinal.Status__c, 'Parent should be Suspended since A is still parked');
+  }
+
+  @isTest
+  static void testResumePastStepParallelEnqueuesUndrivenPendingSibling() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipThreeParallelWorkflow',
+      'SkipThreeParallelSignalKey2',
+      'InitialInput'
+    );
+
+    // 1. Run split step (SkipThreeParallelSplitStep) -> should create parallel executions
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Sibling A is left as Pending (undriven, CPU_Time_Ms__c is null).
+    // Sibling B fails and fails the workflow instance.
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+
+    // Verify parent is Failed
+    Workflow_Instance__c instFailed = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', instFailed.Status__c);
+
+    // 2. Resume past ParallelB.
+    // Since A is Pending but has never run (CPU_Time_Ms__c is null), it is NOT treated as parked.
+    // So the parent should become 'Running' (not 'Suspended').
+    // And A should be enqueued to run.
+    WorkflowEngineTest.failParallelC = false;
+
+    // Both A and C will be reset/enqueued in memory or as no-ops since disableQueueableInTest is true.
+    // We run them manually to drive their execution synchronously.
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+
+    // Run branch A and branch C manually. Wrap C in startTest/stopTest to execute the enqueued Join step.
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelA').execute(null);
+    Test.startTest();
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelC').execute(null);
+    Test.stopTest();
+
+    // Verify parent is Completed (since all A, B, C completed/skipped)
+    Workflow_Instance__c instFinal = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', instFinal.Status__c);
   }
 
   public class SkipThreeParallelWorkflow implements WorkflowDefinition {
