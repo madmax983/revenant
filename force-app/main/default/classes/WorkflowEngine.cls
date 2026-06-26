@@ -6302,9 +6302,9 @@ public inherited sharing class WorkflowEngine {
       FOR UPDATE
     ];
     Workflow_Step_Execution__c latestExec = stepExecs[0];
-    if (latestExec.Status__c == 'Completed' || latestExec.Status__c == 'OperatorSkipped') {
+    if (latestExec.Status__c != 'Failed') {
       throw new WorkflowException(
-        'Step ' + stepName + ' has already completed or been skipped. Current status: ' + latestExec.Status__c
+        'Step ' + stepName + ' cannot be skipped because it is not in Failed status. Current status: ' + latestExec.Status__c
       );
     }
 
@@ -6525,7 +6525,19 @@ public inherited sharing class WorkflowEngine {
           }
         } else {
           // Resume incomplete parallel branches
-          instance.Status__c = 'Running';
+          Boolean hasParkedSibling = false;
+          for (String ps : activeParallelSteps) {
+            if (ps.equalsIgnoreCase(stepName)) {
+              continue;
+            }
+            Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
+            if (pe != null && pe.Status__c == 'Pending') {
+              hasParkedSibling = true;
+              break;
+            }
+          }
+
+          instance.Status__c = hasParkedSibling ? 'Suspended' : 'Running';
           instance.Error_Message__c = null;
           instance.Failure_Category__c = null;
           update as system instance;

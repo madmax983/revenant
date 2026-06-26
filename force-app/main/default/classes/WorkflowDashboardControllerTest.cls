@@ -3656,7 +3656,7 @@ public class WorkflowDashboardControllerTest {
 
     // Test: malformed JSON
     inst.Status__c = 'Failed';
-    update inst;
+    update as system inst;
     
     // We also need a mock step execution to test invalid step/JSON:
     Workflow_Step_Execution__c se = new Workflow_Step_Execution__c(
@@ -3664,10 +3664,10 @@ public class WorkflowDashboardControllerTest {
       Step_Name__c = 'StepOne',
       Status__c = 'Failed'
     );
-    insert se;
+    insert as system se;
 
     inst.Current_Step__c = 'StepOne';
-    update inst;
+    update as system inst;
 
     try {
       WorkflowDashboardController.resumePastStepInstance(inst.Id, 'StepOne', '{invalid_json}');
@@ -3686,7 +3686,7 @@ public class WorkflowDashboardControllerTest {
 
     // Test: CompensationFailed status (should fail, as there is resumeCompensation)
     inst.Status__c = 'CompensationFailed';
-    update inst;
+    update as system inst;
     try {
       WorkflowDashboardController.resumePastStepInstance(inst.Id, 'StepOne', '{}');
       System.assert(false, 'Should fail for CompensationFailed instance');
@@ -3699,13 +3699,26 @@ public class WorkflowDashboardControllerTest {
 
     // Test: Reject reserved $attachmentId marker
     inst.Status__c = 'Failed';
-    update inst;
+    update as system inst;
     try {
       WorkflowDashboardController.resumePastStepInstance(inst.Id, 'StepOne', '{"$attachmentId":"069Sv00000KaTSzKAN"}');
       System.assert(false, 'Should fail on reserved $attachmentId marker');
     } catch (AuraHandledException e) {
       System.assert(
         e.getMessage().contains('cannot contain reserved "$attachmentId" markers'),
+        e.getMessage()
+      );
+    }
+
+    // Test: Reject skipping a step that is not Failed (e.g. Pending)
+    se.Status__c = 'Pending';
+    update as system se;
+    try {
+      WorkflowDashboardController.resumePastStepInstance(inst.Id, 'StepOne', '{}');
+      System.assert(false, 'Should fail for non-failed step execution');
+    } catch (AuraHandledException e) {
+      System.assert(
+        e.getMessage().contains('cannot be skipped because it is not in Failed status'),
         e.getMessage()
       );
     }

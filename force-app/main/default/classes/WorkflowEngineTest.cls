@@ -6485,6 +6485,14 @@ public class WorkflowEngineTest {
     System.assertEquals('Pending', stepAAfter.Status__c);
     System.assertEquals(3, stepAAfter.Retry_Count__c);
 
+    // Verify that the parent instance transitioned to Suspended (since branch A is still parked)
+    Workflow_Instance__c instAfter = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', instAfter.Status__c, 'Parent instance should stay Suspended when a sibling branch is parked');
+
     // Verify that NO new job was enqueued
     Integer jobsAfter = [SELECT Count() FROM AsyncApexJob WHERE JobType = 'Queueable'];
     System.assertEquals(jobsBefore, jobsAfter, 'No new queueable jobs should have been enqueued for the sleeping branch');
