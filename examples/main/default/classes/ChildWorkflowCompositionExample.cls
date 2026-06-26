@@ -41,7 +41,8 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
     return new List<String>{
       'ChildWorkflowCompositionExample.RequestCreditCheckStep',
       'ChildWorkflowCompositionExample.ApproveLoanStep',
-      'ChildWorkflowCompositionExample.DeclineLoanStep'
+      'ChildWorkflowCompositionExample.DeclineLoanStep',
+      'ChildWorkflowCompositionExample.HandleCreditCheckFailureStep'
     };
   }
 
@@ -91,32 +92,46 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
   public class RequestCreditCheckStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       String childKey = 'CreditCheck_' + ctx.workflowInstanceId;
-      StepContext.Signal done = ctx.getSignal('ChildCompleted:' + childKey);
+      StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
 
-      if (done.isPresent()) {
-        // Resume: the child completed.  Its serialised output is the signal payload.
-        // For large child outputs the payload may be a blob reference; resolve it.
-        String childOutputJson = WorkflowEngine.resolvePayload(done.payload);
-        Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(
-          childOutputJson
-        );
-        Integer creditScore = ((Decimal) childResult.get('creditScore'))
-          .intValue();
-        Boolean approved = creditScore >= APPROVE_THRESHOLD;
+      if (outcome.isPresent()) {
+        if (outcome.isSuccess()) {
+          // Resume: the child completed.  Its serialised output is the signal payload.
+          // For large child outputs the payload may be a blob reference; resolve it.
+          String childOutputJson = WorkflowEngine.resolvePayload(
+            outcome.output
+          );
+          Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(
+            childOutputJson
+          );
+          Integer creditScore = ((Decimal) childResult.get('creditScore'))
+            .intValue();
+          Boolean approved = creditScore >= APPROVE_THRESHOLD;
 
-        Map<String, Object> decision = new Map<String, Object>{
-          'approved' => approved,
-          'creditScore' => creditScore,
-          'applicant' => childResult.get('applicant')
-        };
+          Map<String, Object> decision = new Map<String, Object>{
+            'approved' => approved,
+            'creditScore' => creditScore,
+            'applicant' => childResult.get('applicant')
+          };
 
-        String nextStep = approved
-          ? 'ChildWorkflowCompositionExample.ApproveLoanStep'
-          : 'ChildWorkflowCompositionExample.DeclineLoanStep';
+          String nextStep = approved
+            ? 'ChildWorkflowCompositionExample.ApproveLoanStep'
+            : 'ChildWorkflowCompositionExample.DeclineLoanStep';
 
-        // Returning COMPLETE lets the engine consume all same-name Received signals
-        // (engine-managed idempotency — no manual sig.Status__c='Consumed' needed).
-        return StepResult.complete(nextStep, decision);
+          // Returning COMPLETE lets the engine consume all same-name Received signals
+          // (engine-managed idempotency — no manual sig.Status__c='Consumed' needed).
+          return StepResult.complete(nextStep, decision);
+        } else {
+          // Fallback if child failed/cancelled/timed out
+          Map<String, Object> decision = new Map<String, Object>{
+            'status' => outcome.status,
+            'errorMessage' => outcome.errorMessage
+          };
+          return StepResult.complete(
+            'ChildWorkflowCompositionExample.HandleCreditCheckFailureStep',
+            decision
+          );
+        }
       }
 
       // No completion signal yet.  If we already launched the child on a prior run
@@ -229,6 +244,10 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
         : 0;
       String applicant = (String) input.get('applicant');
 
+      if (applicant == 'FailMe') {
+        throw new IllegalArgumentException('Simulated credit check failure');
+      }
+
       Integer incomeBonus = (Integer) Math.min(income / 1000, 250);
       Integer amountPenalty = (Integer) Math.min(amount / 5000, 150);
       Integer score = 600 + incomeBonus - amountPenalty;
@@ -239,6 +258,23 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
         new Map<String, Object>{
           'creditScore' => score,
           'applicant' => applicant
+        }
+      );
+    }
+  }
+
+  public class HandleCreditCheckFailureStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
+        ctx.inputJson
+      );
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{
+          'decision' => 'failed',
+          'status' => input.get('status'),
+          'errorMessage' => input.get('errorMessage'),
+          'message' => 'Credit check child workflow failed. Applying fallback logic.'
         }
       );
     }

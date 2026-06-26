@@ -14,7 +14,6 @@ public inherited sharing class StepContext {
     return this.attempt >= this.maxAttempts;
   }
 
-
   /**
    * Start time of the predecessor instance (its CreatedDate). Null for the
    * first instance in a chain or non-continuation contexts.
@@ -144,7 +143,6 @@ public inherited sharing class StepContext {
   public Boolean isProgressReported() {
     return this.progressReported;
   }
-
 
   /**
    * Read-only view of an inbound signal that targets this workflow instance.
@@ -970,7 +968,11 @@ public inherited sharing class StepContext {
    * captures to Workflow_Step_Execution__c.Captured_Values__c.
    */
   public String getCapturedValuesJson() {
-    if (capturedValues.isEmpty() && (this.maxAttempts == null || this.maxAttempts <= 1)) {
+    if (
+      capturedValues.isEmpty() &&
+      (this.maxAttempts == null ||
+      this.maxAttempts <= 1)
+    ) {
       return null;
     }
     Map<String, Object> toSerialize = new Map<String, Object>(capturedValues);
@@ -1042,7 +1044,10 @@ public inherited sharing class StepContext {
         return (Map<String, Object>) deserialized;
       }
     } catch (Exception e) {
-      System.debug(LoggingLevel.ERROR, 'Failed to parse captured values JSON: ' + e.getMessage());
+      System.debug(
+        LoggingLevel.ERROR,
+        'Failed to parse captured values JSON: ' + e.getMessage()
+      );
     }
     return new Map<String, Object>();
   }
@@ -1238,9 +1243,14 @@ public inherited sharing class StepContext {
       ctx.capturedValues = capturedValuesMap;
       if (ctx.capturedValues.containsKey('__maxAttempts')) {
         try {
-          ctx.maxAttempts = Integer.valueOf(ctx.capturedValues.get('__maxAttempts'));
+          ctx.maxAttempts = Integer.valueOf(
+            ctx.capturedValues.get('__maxAttempts')
+          );
         } catch (Exception e) {
-          System.debug(LoggingLevel.WARN, 'Failed to parse __maxAttempts: ' + e.getMessage());
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to parse __maxAttempts: ' + e.getMessage()
+          );
         }
         ctx.capturedValues.remove('__maxAttempts');
       }
@@ -1305,5 +1315,71 @@ public inherited sharing class StepContext {
       String.valueOf(stepVisit == null ? 0 : stepVisit);
     Blob digest = Crypto.generateDigest('SHA-256', Blob.valueOf(basis));
     return EncodingUtil.convertToHex(digest);
+  }
+
+  public class ChildOutcome {
+    public String status { get; private set; }
+    public String errorMessage { get; private set; }
+    public String output { get; private set; }
+    private Boolean present = false;
+
+    public ChildOutcome() {
+      this.present = false;
+    }
+
+    public ChildOutcome(String status, String errorMessage, String output) {
+      this.status = status;
+      this.errorMessage = errorMessage;
+      this.output = output;
+      this.present = true;
+    }
+
+    public Boolean isPresent() {
+      return this.present;
+    }
+
+    public Boolean isSuccess() {
+      return this.status == 'Completed';
+    }
+  }
+
+  public ChildOutcome getChildOutcome(String childKey) {
+    String completedName = 'ChildCompleted:' + childKey;
+    String failedName = 'ChildFailed:' + childKey;
+
+    Signal completedSig = this.getSignal(completedName);
+    Signal failedSig = this.getSignal(failedName);
+
+    if (completedSig.isPresent() || failedSig.isPresent()) {
+      // Force both names to be registered in matchedNames so that any duplicate/delayed
+      // sibling signals of either type are consumed/cleaned up by the engine.
+      this.markMatched(new Signal(null, completedName, null));
+      this.markMatched(new Signal(null, failedName, null));
+    }
+
+    if (completedSig.isPresent()) {
+      return new ChildOutcome('Completed', null, completedSig.payload);
+    }
+
+    if (failedSig.isPresent()) {
+      if (String.isNotBlank(failedSig.payload)) {
+        try {
+          Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
+            failedSig.payload
+          );
+          return new ChildOutcome(
+            (String) data.get('status'),
+            (String) data.get('errorMessage'),
+            (String) data.get('output')
+          );
+        } catch (Exception ex) {
+          return new ChildOutcome('Failed', failedSig.payload, null);
+        }
+      } else {
+        return new ChildOutcome('Failed', null, null);
+      }
+    }
+
+    return new ChildOutcome();
   }
 }

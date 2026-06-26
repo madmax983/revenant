@@ -889,7 +889,8 @@ public inherited sharing class WorkflowEngine {
     Object input,
     Map<String, String> attributes
   ) {
-    return doStart(workflowName, correlationKey, input, null, attributes).instanceId;
+    return doStart(workflowName, correlationKey, input, null, attributes)
+      .instanceId;
   }
 
   /**
@@ -913,7 +914,13 @@ public inherited sharing class WorkflowEngine {
     Id parentInstanceId,
     Map<String, String> attributes
   ) {
-    return doStart(workflowName, correlationKey, input, parentInstanceId, attributes)
+    return doStart(
+        workflowName,
+        correlationKey,
+        input,
+        parentInstanceId,
+        attributes
+      )
       .instanceId;
   }
 
@@ -944,7 +951,14 @@ public inherited sharing class WorkflowEngine {
     Object input,
     Id parentInstanceId
   ) {
-    return doStart(workflowName, correlationKey, input, parentInstanceId, true, null);
+    return doStart(
+      workflowName,
+      correlationKey,
+      input,
+      parentInstanceId,
+      true,
+      null
+    );
   }
 
   public static StartResult startOrGet(
@@ -954,7 +968,14 @@ public inherited sharing class WorkflowEngine {
     Id parentInstanceId,
     Map<String, String> attributes
   ) {
-    return doStart(workflowName, correlationKey, input, parentInstanceId, true, attributes);
+    return doStart(
+      workflowName,
+      correlationKey,
+      input,
+      parentInstanceId,
+      true,
+      attributes
+    );
   }
 
   /**
@@ -968,7 +989,8 @@ public inherited sharing class WorkflowEngine {
     String correlationKey,
     Object input
   ) {
-    return doStart(workflowName, correlationKey, input, null, false, null).instanceId;
+    return doStart(workflowName, correlationKey, input, null, false, null)
+      .instanceId;
   }
 
   private static void validateAttributes(Map<String, String> attributes) {
@@ -976,35 +998,53 @@ public inherited sharing class WorkflowEngine {
       return;
     }
     if (attributes.size() > MAX_ATTRIBUTES_PER_INSTANCE) {
-      throw new WorkflowException('Attribute count exceeds maximum limit of ' + MAX_ATTRIBUTES_PER_INSTANCE);
+      throw new WorkflowException(
+        'Attribute count exceeds maximum limit of ' +
+        MAX_ATTRIBUTES_PER_INSTANCE
+      );
     }
     for (String key : attributes.keySet()) {
       if (String.isBlank(key)) {
         throw new WorkflowException('Attribute key cannot be blank');
       }
       if (key.length() > MAX_ATTRIBUTE_KEY_LENGTH) {
-        throw new WorkflowException('Attribute key length exceeds maximum limit of ' + MAX_ATTRIBUTE_KEY_LENGTH + ' characters: ' + key);
+        throw new WorkflowException(
+          'Attribute key length exceeds maximum limit of ' +
+            MAX_ATTRIBUTE_KEY_LENGTH +
+            ' characters: ' +
+            key
+        );
       }
       String val = attributes.get(key);
       if (val != null && val.length() > MAX_ATTRIBUTE_VALUE_LENGTH) {
-        throw new WorkflowException('Attribute value length exceeds maximum limit of ' + MAX_ATTRIBUTE_VALUE_LENGTH + ' characters: ' + val);
+        throw new WorkflowException(
+          'Attribute value length exceeds maximum limit of ' +
+            MAX_ATTRIBUTE_VALUE_LENGTH +
+            ' characters: ' +
+            val
+        );
       }
     }
   }
 
-  private static List<Workflow_Search_Attribute__c> buildAttributes(Id instanceId, Map<String, String> attributes) {
+  private static List<Workflow_Search_Attribute__c> buildAttributes(
+    Id instanceId,
+    Map<String, String> attributes
+  ) {
     List<Workflow_Search_Attribute__c> records = new List<Workflow_Search_Attribute__c>();
     if (attributes == null || attributes.isEmpty()) {
       return records;
     }
     for (String key : attributes.keySet()) {
       String val = attributes.get(key);
-      records.add(new Workflow_Search_Attribute__c(
-        Workflow_Instance__c = instanceId,
-        Key__c = key,
-        Value__c = val,
-        Key_Value__c = key + '=' + (val == null ? '' : val)
-      ));
+      records.add(
+        new Workflow_Search_Attribute__c(
+          Workflow_Instance__c = instanceId,
+          Key__c = key,
+          Value__c = val,
+          Key_Value__c = key + '=' + (val == null ? '' : val)
+        )
+      );
     }
     return records;
   }
@@ -1016,7 +1056,14 @@ public inherited sharing class WorkflowEngine {
     Id parentInstanceId,
     Map<String, String> attributes
   ) {
-    return doStart(workflowName, correlationKey, input, parentInstanceId, true, attributes);
+    return doStart(
+      workflowName,
+      correlationKey,
+      input,
+      parentInstanceId,
+      true,
+      attributes
+    );
   }
 
   private static StartResult doStart(
@@ -1062,7 +1109,10 @@ public inherited sharing class WorkflowEngine {
 
     try {
       insert as system instance;
-      List<Workflow_Search_Attribute__c> attrsToInsert = buildAttributes(instance.Id, attributes);
+      List<Workflow_Search_Attribute__c> attrsToInsert = buildAttributes(
+        instance.Id,
+        attributes
+      );
       if (!attrsToInsert.isEmpty()) {
         insert as system attrsToInsert;
       }
@@ -1177,13 +1227,16 @@ public inherited sharing class WorkflowEngine {
       List<ApexTypeImplementor> impls = [
         SELECT ClassName
         FROM ApexTypeImplementor
-        WHERE ClassName = :req.workflowName
+        WHERE
+          ClassName = :req.workflowName
           AND InterfaceName IN ('WorkflowDefinition', 'VersionedWorkflow')
         WITH SYSTEM_MODE
         LIMIT 1
       ];
       if (impls.isEmpty()) {
-        throw new WorkflowException('Unauthorized or invalid workflow definition: ' + req.workflowName);
+        throw new WorkflowException(
+          'Unauthorized or invalid workflow definition: ' + req.workflowName
+        );
       }
     }
 
@@ -1843,12 +1896,14 @@ public inherited sharing class WorkflowEngine {
         if (req.attributes != null && !req.attributes.isEmpty()) {
           for (String key : req.attributes.keySet()) {
             String val = req.attributes.get(key);
-            attrsToInsert.add(new Workflow_Search_Attribute__c(
-              Workflow_Instance__c = instance.Id,
-              Key__c = key,
-              Value__c = val,
-              Key_Value__c = key + '=' + (val == null ? '' : val)
-            ));
+            attrsToInsert.add(
+              new Workflow_Search_Attribute__c(
+                Workflow_Instance__c = instance.Id,
+                Key__c = key,
+                Value__c = val,
+                Key_Value__c = key + '=' + (val == null ? '' : val)
+              )
+            );
           }
         }
       }
@@ -2842,22 +2897,31 @@ public inherited sharing class WorkflowEngine {
       resolvedState = stripJsonMapKey(resolvedState, '$timeoutStep');
     }
 
-    Integer attempt = stepExec.Retry_Count__c != null ? (Integer) stepExec.Retry_Count__c + 1 : 1;
+    Integer attempt = stepExec.Retry_Count__c != null
+      ? (Integer) stepExec.Retry_Count__c + 1
+      : 1;
     Integer maxAttempts = 1;
     Map<String, Object> capturesMap = new Map<String, Object>();
     if (stepInstance instanceof RetryConfigurable) {
-      RetryPolicy policy = sanitizePolicy(((RetryConfigurable) stepInstance).getRetryPolicy());
+      RetryPolicy policy = sanitizePolicy(
+        ((RetryConfigurable) stepInstance).getRetryPolicy()
+      );
       maxAttempts = policy.maximumAttempts;
     } else if (String.isNotBlank(stepExec.Captured_Values__c)) {
       String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
       if (String.isNotBlank(resolvedCaptures)) {
         try {
-          capturesMap = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+          capturesMap = (Map<String, Object>) JSON.deserializeUntyped(
+            resolvedCaptures
+          );
           if (capturesMap.containsKey('__maxAttempts')) {
             maxAttempts = Integer.valueOf(capturesMap.get('__maxAttempts'));
           }
         } catch (Exception e) {
-          System.debug(LoggingLevel.ERROR, 'Failed to deserialize captured values: ' + e.getMessage());
+          System.debug(
+            LoggingLevel.ERROR,
+            'Failed to deserialize captured values: ' + e.getMessage()
+          );
         }
       }
     }
@@ -3597,7 +3661,10 @@ public inherited sharing class WorkflowEngine {
     update as system toConsume.values();
   }
 
-  private static void populateTelemetry(Workflow_Step_Execution__c stepExec, Boolean isCrash) {
+  private static void populateTelemetry(
+    Workflow_Step_Execution__c stepExec,
+    Boolean isCrash
+  ) {
     if (stepExec != null) {
       if (isCrash) {
         stepExec.CPU_Time_Ms__c = null;
@@ -3615,7 +3682,10 @@ public inherited sharing class WorkflowEngine {
     saveStepExec(stepExec, false);
   }
 
-  private static void saveStepExec(Workflow_Step_Execution__c stepExec, Boolean isCrash) {
+  private static void saveStepExec(
+    Workflow_Step_Execution__c stepExec,
+    Boolean isCrash
+  ) {
     populateTelemetry(stepExec, isCrash);
     if (stepExec.Id == null) {
       insert as system stepExec;
@@ -3721,7 +3791,10 @@ public inherited sharing class WorkflowEngine {
       freshInstance.Progress__c = savePayloadIfNeeded(
         freshInstance.Id,
         progJson,
-        'Progress_' + (stepExec != null && String.isNotBlank(stepExec.Step_Name__c) ? stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_') : 'Default')
+        'Progress_' +
+        (stepExec != null && String.isNotBlank(stepExec.Step_Name__c)
+          ? stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+          : 'Default')
       );
     }
     if (
@@ -4074,7 +4147,10 @@ public inherited sharing class WorkflowEngine {
 
       instance.Status__c = 'Suspended';
       update as system instance;
-      redeliverMatchingSignalsForInstance(instance.Id, instance.Correlation_Key__c);
+      redeliverMatchingSignalsForInstance(
+        instance.Id,
+        instance.Correlation_Key__c
+      );
     } else if (result.action == StepResult.ActionType.SLEEP) {
       // Step requested sleep
       if (isParallel) {
@@ -4124,7 +4200,10 @@ public inherited sharing class WorkflowEngine {
 
       instance.Status__c = 'Suspended';
       update as system instance;
-      redeliverMatchingSignalsForInstance(instance.Id, instance.Correlation_Key__c);
+      redeliverMatchingSignalsForInstance(
+        instance.Id,
+        instance.Correlation_Key__c
+      );
 
       startChildWorkflow(
         instance.Id,
@@ -4162,7 +4241,10 @@ public inherited sharing class WorkflowEngine {
 
       instance.Status__c = 'Suspended';
       update as system instance;
-      redeliverMatchingSignalsForInstance(instance.Id, instance.Correlation_Key__c);
+      redeliverMatchingSignalsForInstance(
+        instance.Id,
+        instance.Correlation_Key__c
+      );
     } else if (result.action == StepResult.ActionType.SPLIT) {
       stepExec.Status__c = 'Completed';
       stepExec.Output__c = savePayloadIfNeeded(
@@ -4236,9 +4318,15 @@ public inherited sharing class WorkflowEngine {
         String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
         if (String.isNotBlank(resolvedCaptures)) {
           try {
-            captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+            captures = (Map<String, Object>) JSON.deserializeUntyped(
+              resolvedCaptures
+            );
           } catch (Exception e) {
-            System.debug(LoggingLevel.ERROR, 'Failed to deserialize captures in retry handler: ' + e.getMessage());
+            System.debug(
+              LoggingLevel.ERROR,
+              'Failed to deserialize captures in retry handler: ' +
+              e.getMessage()
+            );
           }
         }
       }
@@ -4376,7 +4464,9 @@ public inherited sharing class WorkflowEngine {
               Workflow_Instance__c = nextInstance.Id,
               Key__c = attr.Key__c,
               Value__c = attr.Value__c,
-              Key_Value__c = attr.Key__c + '=' + (attr.Value__c == null ? '' : attr.Value__c)
+              Key_Value__c = attr.Key__c +
+                '=' +
+                (attr.Value__c == null ? '' : attr.Value__c)
             )
           );
         }
@@ -4630,7 +4720,12 @@ public inherited sharing class WorkflowEngine {
     String errorMsg =
       'Transaction crashed: ' +
       (ex != null ? ex.getMessage() : 'Unknown governor limit');
-    failWorkflowInstance(instanceId, targetStepName, errorMsg, CAT_STEP_EXCEPTION);
+    failWorkflowInstance(
+      instanceId,
+      targetStepName,
+      errorMsg,
+      CAT_STEP_EXCEPTION
+    );
   }
 
   /**
@@ -4822,6 +4917,7 @@ public inherited sharing class WorkflowEngine {
         errorMessage)
         .left(255);
       update as system instance;
+      notifyParentCompletion(instance);
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       WorkflowLifecyclePublisher.publish(instance);
       return;
@@ -5005,43 +5101,114 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  @TestVisible
   private static void notifyParentCompletion(
     Workflow_Instance__c childInstance
   ) {
-    if (childInstance.Parent_Instance__c != null) {
-      Workflow_Instance__c parent = [
+    notifyParentCompletion(new List<Workflow_Instance__c>{ childInstance });
+  }
+
+  @TestVisible
+  private static void notifyParentCompletion(
+    List<Workflow_Instance__c> childInstances
+  ) {
+    if (childInstances == null || childInstances.isEmpty()) {
+      return;
+    }
+
+    // Query child instances to ensure all fields are loaded (avoids SObjectException)
+    List<Workflow_Instance__c> freshChildren = [
+      SELECT
+        Parent_Instance__c,
+        Correlation_Key__c,
+        Status__c,
+        Error_Message__c,
+        Output__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :childInstances
+      WITH SYSTEM_MODE
+    ];
+
+    List<Workflow_Instance__c> childrenWithParents = new List<Workflow_Instance__c>();
+    Set<Id> parentIds = new Set<Id>();
+    for (Workflow_Instance__c child : freshChildren) {
+      if (child.Parent_Instance__c != null) {
+        childrenWithParents.add(child);
+        parentIds.add(child.Parent_Instance__c);
+      }
+    }
+
+    if (childrenWithParents.isEmpty()) {
+      return;
+    }
+
+    Map<Id, Workflow_Instance__c> parents = new Map<Id, Workflow_Instance__c>(
+      [
         SELECT Correlation_Key__c
         FROM Workflow_Instance__c
-        WHERE Id = :childInstance.Parent_Instance__c
+        WHERE Id IN :parentIds
         WITH SYSTEM_MODE
-      ];
+      ]
+    );
+
+    List<Workflow_Event__e> events = new List<Workflow_Event__e>();
+    for (Workflow_Instance__c child : childrenWithParents) {
+      Workflow_Instance__c parent = parents.get(child.Parent_Instance__c);
+      if (parent == null) {
+        continue;
+      }
 
       String targetKey = String.isNotBlank(parent.Correlation_Key__c)
         ? parent.Correlation_Key__c
         : parent.Id;
 
-      String signalName = 'ChildCompleted';
-      if (String.isNotBlank(childInstance.Correlation_Key__c)) {
-        signalName += ':' + childInstance.Correlation_Key__c;
+      String signalName;
+      String payload;
+      if (child.Status__c == 'Completed') {
+        signalName = 'ChildCompleted';
+        payload = child.Output__c;
       } else {
-        signalName += ':' + childInstance.Id;
+        signalName = 'ChildFailed';
+        Map<String, Object> outcomeData = new Map<String, Object>{
+          'status' => child.Status__c,
+          'errorMessage' => child.Error_Message__c,
+          'output' => child.Output__c
+        };
+        payload = savePayloadIfNeeded(
+          parent.Id,
+          JSON.serialize(outcomeData),
+          'ChildFailedOutcome_' + child.Id
+        );
       }
 
-      Workflow_Event__e event = new Workflow_Event__e(
-        Workflow_Instance_Id__c = targetKey,
-        Event_Type__c = 'SIGNAL:' + signalName,
-        Payload__c = childInstance.Output__c
+      if (String.isNotBlank(child.Correlation_Key__c)) {
+        signalName += ':' + child.Correlation_Key__c;
+      } else {
+        signalName += ':' + child.Id;
+      }
+
+      events.add(
+        new Workflow_Event__e(
+          Workflow_Instance_Id__c = targetKey,
+          Event_Type__c = 'SIGNAL:' + signalName,
+          Payload__c = payload
+        )
       );
-      Database.SaveResult sr = EventBus.publish(event);
-      if (!sr.isSuccess()) {
-        List<String> errMsgs = new List<String>();
-        for (Database.Error err : sr.getErrors()) {
-          errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
+    }
+
+    if (!events.isEmpty()) {
+      List<Database.SaveResult> srs = EventBus.publish(events);
+      for (Database.SaveResult sr : srs) {
+        if (!sr.isSuccess()) {
+          List<String> errMsgs = new List<String>();
+          for (Database.Error err : sr.getErrors()) {
+            errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
+          }
+          throw new WorkflowException(
+            'Failed to publish child completion event: ' +
+            String.join(errMsgs, ', ')
+          );
         }
-        throw new WorkflowException(
-          'Failed to publish child completion event: ' +
-          String.join(errMsgs, ', ')
-        );
       }
     }
   }
@@ -6031,7 +6198,12 @@ public inherited sharing class WorkflowEngine {
    */
   public static void resumeCompensation(Id instanceId) {
     List<Workflow_Instance__c> instances = [
-      SELECT Id, Status__c, Compensation_Stack__c, Error_Message__c, Failure_Category__c
+      SELECT
+        Id,
+        Status__c,
+        Compensation_Stack__c,
+        Error_Message__c,
+        Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId AND Status__c = 'CompensationFailed'
       WITH SYSTEM_MODE
@@ -6212,7 +6384,11 @@ public inherited sharing class WorkflowEngine {
       prevInstId = instance.Previous_Instance__c;
     } catch (SObjectException ex) {
       List<Workflow_Instance__c> temp = [
-        SELECT Previous_Instance__c FROM Workflow_Instance__c WHERE Id = :instance.Id WITH SYSTEM_MODE LIMIT 1
+        SELECT Previous_Instance__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instance.Id
+        WITH SYSTEM_MODE
+        LIMIT 1
       ];
       if (!temp.isEmpty()) {
         prevInstId = temp[0].Previous_Instance__c;
@@ -6220,7 +6396,11 @@ public inherited sharing class WorkflowEngine {
     }
     if (prevInstId != null) {
       List<Workflow_Instance__c> preds = [
-        SELECT Status__c FROM Workflow_Instance__c WHERE Id = :prevInstId WITH SYSTEM_MODE LIMIT 1
+        SELECT Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :prevInstId
+        WITH SYSTEM_MODE
+        LIMIT 1
       ];
       if (!preds.isEmpty() && preds[0].Status__c == 'Completed') {
         forwardSourceInstanceId = prevInstId;
@@ -6234,6 +6414,7 @@ public inherited sharing class WorkflowEngine {
         : 'Compensated';
       instance.Current_Step__c = null;
       update as system instance;
+      notifyParentCompletion(instance);
       // Fire-and-forget outbound lifecycle event on terminal transition.
       WorkflowLifecyclePublisher.publish(instance);
       return;
@@ -6249,6 +6430,7 @@ public inherited sharing class WorkflowEngine {
         : 'Compensated';
       instance.Current_Step__c = null;
       update as system instance;
+      notifyParentCompletion(instance);
       // Fire-and-forget outbound lifecycle event on terminal transition.
       WorkflowLifecyclePublisher.publish(instance);
       return;
@@ -6454,22 +6636,31 @@ public inherited sharing class WorkflowEngine {
       prevOutput = completedBefore[0].Output__c;
     }
 
-    Integer attempt = stepExec.Retry_Count__c != null ? (Integer) stepExec.Retry_Count__c + 1 : 1;
+    Integer attempt = stepExec.Retry_Count__c != null
+      ? (Integer) stepExec.Retry_Count__c + 1
+      : 1;
     Integer maxAttempts = 1;
     Map<String, Object> capturesMap = new Map<String, Object>();
     if (compensatableStepInstance instanceof RetryConfigurable) {
-      RetryPolicy policy = sanitizePolicy(((RetryConfigurable) compensatableStepInstance).getRetryPolicy());
+      RetryPolicy policy = sanitizePolicy(
+        ((RetryConfigurable) compensatableStepInstance).getRetryPolicy()
+      );
       maxAttempts = policy.maximumAttempts;
     } else if (String.isNotBlank(stepExec.Captured_Values__c)) {
       String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
       if (String.isNotBlank(resolvedCaptures)) {
         try {
-          capturesMap = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+          capturesMap = (Map<String, Object>) JSON.deserializeUntyped(
+            resolvedCaptures
+          );
           if (capturesMap.containsKey('__maxAttempts')) {
             maxAttempts = Integer.valueOf(capturesMap.get('__maxAttempts'));
           }
         } catch (Exception e) {
-          System.debug(LoggingLevel.ERROR, 'Failed to deserialize captured values: ' + e.getMessage());
+          System.debug(
+            LoggingLevel.ERROR,
+            'Failed to deserialize captured values: ' + e.getMessage()
+          );
         }
       }
     }
@@ -6601,7 +6792,10 @@ public inherited sharing class WorkflowEngine {
       instance.Progress__c = savePayloadIfNeeded(
         instance.Id,
         progJson,
-        'Progress_' + (stepExec != null && String.isNotBlank(stepExec.Step_Name__c) ? stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_') : 'Default')
+        'Progress_' +
+        (stepExec != null && String.isNotBlank(stepExec.Step_Name__c)
+          ? stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+          : 'Default')
       );
     }
 
@@ -6748,9 +6942,15 @@ public inherited sharing class WorkflowEngine {
         String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
         if (String.isNotBlank(resolvedCaptures)) {
           try {
-            captures = (Map<String, Object>) JSON.deserializeUntyped(resolvedCaptures);
+            captures = (Map<String, Object>) JSON.deserializeUntyped(
+              resolvedCaptures
+            );
           } catch (Exception e) {
-            System.debug(LoggingLevel.ERROR, 'Failed to deserialize captures in compensation retry handler: ' + e.getMessage());
+            System.debug(
+              LoggingLevel.ERROR,
+              'Failed to deserialize captures in compensation retry handler: ' +
+              e.getMessage()
+            );
           }
         }
       }
@@ -6901,7 +7101,11 @@ public inherited sharing class WorkflowEngine {
       prevInstId = instance.Previous_Instance__c;
     } catch (SObjectException ex) {
       List<Workflow_Instance__c> temp = [
-        SELECT Previous_Instance__c FROM Workflow_Instance__c WHERE Id = :instance.Id WITH SYSTEM_MODE LIMIT 1
+        SELECT Previous_Instance__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instance.Id
+        WITH SYSTEM_MODE
+        LIMIT 1
       ];
       if (!temp.isEmpty()) {
         prevInstId = temp[0].Previous_Instance__c;
@@ -6909,7 +7113,11 @@ public inherited sharing class WorkflowEngine {
     }
     if (prevInstId != null) {
       List<Workflow_Instance__c> preds = [
-        SELECT Status__c FROM Workflow_Instance__c WHERE Id = :prevInstId WITH SYSTEM_MODE LIMIT 1
+        SELECT Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :prevInstId
+        WITH SYSTEM_MODE
+        LIMIT 1
       ];
       if (!preds.isEmpty() && preds[0].Status__c == 'Completed') {
         forwardSourceInstanceId = prevInstId;
@@ -6986,7 +7194,8 @@ public inherited sharing class WorkflowEngine {
     List<Workflow_Step_Execution__c> existingCompSteps = [
       SELECT Workflow_Instance__c, Step_Name__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c IN :instanceIds
+      WHERE
+        Workflow_Instance__c IN :instanceIds
         AND Step_Name__c LIKE '%\_Compensate'
       WITH SYSTEM_MODE
     ];
@@ -7081,7 +7290,9 @@ public inherited sharing class WorkflowEngine {
     }
 
     if (String.isBlank(target.Compensation_Stack__c)) {
-      throw new WorkflowException('No compensation stack found on instance: ' + instanceId);
+      throw new WorkflowException(
+        'No compensation stack found on instance: ' + instanceId
+      );
     }
 
     List<String> stack = (List<String>) JSON.deserialize(
@@ -7089,14 +7300,20 @@ public inherited sharing class WorkflowEngine {
       List<String>.class
     );
     if (stack.isEmpty()) {
-      throw new WorkflowException('Compensation stack is empty for instance: ' + instanceId);
+      throw new WorkflowException(
+        'Compensation stack is empty for instance: ' + instanceId
+      );
     }
 
     // Spawn successor compensating instance. Carry the root correlation key forward.
     Workflow_Instance__c compensatingInstance = new Workflow_Instance__c(
       Workflow_Name__c = target.Workflow_Name__c,
       Correlation_Key__c = target.Correlation_Key__c,
-      Root_Correlation_Key__c = String.isNotBlank(target.Root_Correlation_Key__c) ? target.Root_Correlation_Key__c : target.Correlation_Key__c,
+      Root_Correlation_Key__c = String.isNotBlank(
+          target.Root_Correlation_Key__c
+        )
+        ? target.Root_Correlation_Key__c
+        : target.Correlation_Key__c,
       Previous_Instance__c = target.Id,
       Definition_Version__c = target.Definition_Version__c,
       Status__c = 'Compensating',
@@ -7155,6 +7372,7 @@ public inherited sharing class WorkflowEngine {
         terminallyCancelled.add(cancelled);
       }
     }
+    notifyParentCompletion(terminallyCancelled);
     WorkflowLifecyclePublisher.publish(terminallyCancelled);
   }
 
@@ -7388,8 +7606,7 @@ public inherited sharing class WorkflowEngine {
     List<CronTrigger> triggers = [
       SELECT Id
       FROM CronTrigger
-      WHERE
-        CronJobDetail.Name LIKE :nameLikeFilters
+      WHERE CronJobDetail.Name LIKE :nameLikeFilters
       WITH SYSTEM_MODE
     ];
     for (CronTrigger triggerJob : triggers) {
@@ -7962,6 +8179,13 @@ public inherited sharing class WorkflowEngine {
       }
       if (!instancesToUpdate.isEmpty()) {
         update as system instancesToUpdate.values();
+        List<Workflow_Instance__c> terminalUpdated = new List<Workflow_Instance__c>();
+        for (Workflow_Instance__c inst : instancesToUpdate.values()) {
+          if (inst.Status__c == 'Failed') {
+            terminalUpdated.add(inst);
+          }
+        }
+        notifyParentCompletion(terminalUpdated);
       }
 
       for (Workflow_Instance__c parent : instancesToUpdate.values()) {
@@ -8064,6 +8288,13 @@ public inherited sharing class WorkflowEngine {
 
       if (!instancesToFail.isEmpty()) {
         update as system instancesToFail;
+        List<Workflow_Instance__c> terminalUpdated = new List<Workflow_Instance__c>();
+        for (Workflow_Instance__c inst : instancesToFail) {
+          if (inst.Status__c == 'Failed') {
+            terminalUpdated.add(inst);
+          }
+        }
+        notifyParentCompletion(terminalUpdated);
       }
 
       for (Workflow_Instance__c inst : instancesToFail) {
@@ -8263,13 +8494,14 @@ public inherited sharing class WorkflowEngine {
       List<Workflow_Instance__c> suspended = [
         SELECT Id, Correlation_Key__c
         FROM Workflow_Instance__c
-        WHERE Status__c = 'Suspended'
-        AND Workflow_Name__c NOT IN :pausedDefNames
+        WHERE
+          Status__c = 'Suspended'
+          AND Workflow_Name__c NOT IN :pausedDefNames
         WITH SYSTEM_MODE
         ORDER BY LastModifiedDate DESC, Id DESC
         LIMIT 10000
       ];
-      
+
       List<Workflow_Signal__c> unrouted = new List<Workflow_Signal__c>();
       if (!suspended.isEmpty()) {
         Set<String> activeKeys = new Set<String>();
@@ -8279,19 +8511,23 @@ public inherited sharing class WorkflowEngine {
             activeKeys.add(inst.Correlation_Key__c);
           }
         }
-        
+
         // Query Unrouted signals matching active keys with safety limit
         unrouted = [
-          SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c
+          SELECT
+            Id,
+            Correlation_Key__c,
+            Status__c,
+            Idempotency_Key__c,
+            Signal_Key__c
           FROM Workflow_Signal__c
-          WHERE Status__c = 'Unrouted'
-          AND Correlation_Key__c IN :activeKeys
+          WHERE Status__c = 'Unrouted' AND Correlation_Key__c IN :activeKeys
           WITH SYSTEM_MODE
           ORDER BY CreatedDate ASC, Id ASC
           LIMIT 1000
         ];
       }
-      
+
       if (!unrouted.isEmpty()) {
         Set<String> keys = new Set<String>();
         for (Workflow_Signal__c sig : unrouted) {
@@ -8299,19 +8535,24 @@ public inherited sharing class WorkflowEngine {
             keys.add(sig.Correlation_Key__c);
           }
         }
-        
+
         if (!keys.isEmpty()) {
           // Limit batch size defensively for this non-bulkified redelivery loop
-          Integer sweepLimit = 20; 
-          
+          Integer sweepLimit = 20;
+
           // Split correlation keys from Id binds to avoid System.QueryException: Invalid ID
-          String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix();
-          Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
+          String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe()
+            .getKeyPrefix();
+          Pattern idPattern = Pattern.compile(
+            '^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$'
+          );
           Set<Id> instIds = new Set<Id>();
           Set<String> corrKeys = new Set<String>();
-          
+
           for (String key : keys) {
-            if (idPattern.matcher(key).matches() && key.startsWith(wflowPrefix)) {
+            if (
+              idPattern.matcher(key).matches() && key.startsWith(wflowPrefix)
+            ) {
               instIds.add((Id) key);
             } else {
               corrKeys.add(key);
@@ -8319,16 +8560,23 @@ public inherited sharing class WorkflowEngine {
           }
 
           List<Workflow_Instance__c> matchInsts = [
-            SELECT Id, Correlation_Key__c, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
+            SELECT
+              Id,
+              Correlation_Key__c,
+              Status__c,
+              Concurrency_Parked__c,
+              Concurrency_Slot_Held__c
             FROM Workflow_Instance__c
-            WHERE Status__c = 'Suspended'
-            AND (Id IN :instIds OR Correlation_Key__c IN :corrKeys)
-            AND Workflow_Name__c NOT IN :pausedDefNames
+            WHERE
+              Status__c = 'Suspended'
+              AND (Id IN :instIds
+              OR Correlation_Key__c IN :corrKeys)
+              AND Workflow_Name__c NOT IN :pausedDefNames
             WITH SYSTEM_MODE
             LIMIT :sweepLimit
             FOR UPDATE
           ];
-          
+
           if (!matchInsts.isEmpty()) {
             Map<String, Workflow_Instance__c> keyToInst = new Map<String, Workflow_Instance__c>();
             Set<String> matchInstKeys = new Set<String>();
@@ -8343,10 +8591,17 @@ public inherited sharing class WorkflowEngine {
             }
 
             List<Workflow_Signal__c> allMatchSignals = [
-              SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c, CreatedDate
+              SELECT
+                Id,
+                Correlation_Key__c,
+                Status__c,
+                Idempotency_Key__c,
+                Signal_Key__c,
+                CreatedDate
               FROM Workflow_Signal__c
-              WHERE Status__c = 'Unrouted'
-              AND Correlation_Key__c IN :matchInstKeys
+              WHERE
+                Status__c = 'Unrouted'
+                AND Correlation_Key__c IN :matchInstKeys
               WITH SYSTEM_MODE
               ORDER BY CreatedDate ASC, Id ASC
               LIMIT 10000
@@ -8360,7 +8615,10 @@ public inherited sharing class WorkflowEngine {
                   Workflow_Instance__c inst = keyToInst.get(normKey);
                   if (inst != null) {
                     if (!instIdToSignals.containsKey(inst.Id)) {
-                      instIdToSignals.put(inst.Id, new List<Workflow_Signal__c>());
+                      instIdToSignals.put(
+                        inst.Id,
+                        new List<Workflow_Signal__c>()
+                      );
                     }
                     instIdToSignals.get(inst.Id).add(sig);
                   }
@@ -8451,9 +8709,6 @@ public inherited sharing class WorkflowEngine {
     // runs last with no risk of starving a required update/enqueue of its DML budget.
     WorkflowLifecyclePublisher.publish(watchdogTerminalInstances);
   }
-
-
-
 
   private static Integer getStepTimeoutSeconds(String stepName) {
     if (String.isBlank(stepName)) {
@@ -9228,7 +9483,10 @@ public inherited sharing class WorkflowEngine {
   }
 
   @TestVisible
-  private static void redeliverMatchingSignalsForInstance(Id instanceId, String correlationKey) {
+  private static void redeliverMatchingSignalsForInstance(
+    Id instanceId,
+    String correlationKey
+  ) {
     if (instanceId == null) {
       return;
     }
@@ -9251,10 +9509,15 @@ public inherited sharing class WorkflowEngine {
     }
 
     List<Workflow_Signal__c> allSignals = [
-      SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c, CreatedDate
+      SELECT
+        Id,
+        Correlation_Key__c,
+        Status__c,
+        Idempotency_Key__c,
+        Signal_Key__c,
+        CreatedDate
       FROM Workflow_Signal__c
-      WHERE Status__c = 'Unrouted'
-      AND Correlation_Key__c IN :matchKeys
+      WHERE Status__c = 'Unrouted' AND Correlation_Key__c IN :matchKeys
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
       LIMIT 10000
@@ -9273,8 +9536,10 @@ public inherited sharing class WorkflowEngine {
     Map<Id, List<Workflow_Signal__c>> instIdToSignals
   ) {
     List<Workflow_Signal__c> signalsToUpdate = new List<Workflow_Signal__c>();
-    Map<Id, Workflow_Instance__c> instMap = new Map<Id, Workflow_Instance__c>(matchInsts);
-    
+    Map<Id, Workflow_Instance__c> instMap = new Map<Id, Workflow_Instance__c>(
+      matchInsts
+    );
+
     for (Workflow_Instance__c inst : matchInsts) {
       List<Workflow_Signal__c> sigs = instIdToSignals.get(inst.Id);
       if (sigs == null) {
@@ -9284,7 +9549,10 @@ public inherited sharing class WorkflowEngine {
         sig.Workflow_Instance__c = inst.Id;
         sig.Status__c = 'Received';
         if (String.isNotBlank(sig.Idempotency_Key__c)) {
-          sig.Signal_Key__c = deriveSignalDedupKey(inst.Id, sig.Idempotency_Key__c);
+          sig.Signal_Key__c = deriveSignalDedupKey(
+            inst.Id,
+            sig.Idempotency_Key__c
+          );
         }
         signalsToUpdate.add(sig);
       }
@@ -9301,10 +9569,10 @@ public inherited sharing class WorkflowEngine {
         false,
         AccessLevel.SYSTEM_MODE
       );
-      
+
       List<Workflow_Signal__c> duplicateSignals = new List<Workflow_Signal__c>();
       List<Workflow_Signal__c> successfulSignals = new List<Workflow_Signal__c>();
-      
+
       for (Integer i = 0; i < srs.size(); i++) {
         Database.SaveResult sr = srs[i];
         Workflow_Signal__c sig = signalsToUpdate[i];
@@ -9328,11 +9596,11 @@ public inherited sharing class WorkflowEngine {
           }
         }
       }
-      
+
       if (!duplicateSignals.isEmpty()) {
         update as system duplicateSignals;
       }
-      
+
       Set<Id> wokenInstanceIds = new Set<Id>();
       for (Workflow_Signal__c sig : successfulSignals) {
         if (wokenInstanceIds.add(sig.Workflow_Instance__c)) {
@@ -9359,10 +9627,16 @@ public inherited sharing class WorkflowEngine {
       if (policy.maximumAttempts != null && policy.maximumAttempts > 0) {
         clean.maximumAttempts = policy.maximumAttempts;
       }
-      if (policy.initialIntervalSeconds != null && policy.initialIntervalSeconds > 0) {
+      if (
+        policy.initialIntervalSeconds != null &&
+        policy.initialIntervalSeconds > 0
+      ) {
         clean.initialIntervalSeconds = policy.initialIntervalSeconds;
       }
-      if (policy.backoffCoefficient != null && policy.backoffCoefficient >= 1.0) {
+      if (
+        policy.backoffCoefficient != null &&
+        policy.backoffCoefficient >= 1.0
+      ) {
         clean.backoffCoefficient = policy.backoffCoefficient;
       }
     }
