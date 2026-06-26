@@ -6411,6 +6411,7 @@ public inherited sharing class WorkflowEngine {
         if (String.isBlank(nextStepName)) {
           // Workflow is completed
           instance.Status__c = 'Completed';
+          instance.Terminal_At__c = DateTime.now();
           instance.Output__c = savePayloadIfNeeded(instanceId, suppliedOutputJson, 'Output_Final');
           instance.Current_Step__c = null;
           instance.Error_Message__c = null;
@@ -6427,6 +6428,10 @@ public inherited sharing class WorkflowEngine {
         instance.Status__c = 'Running';
         instance.Error_Message__c = null;
         instance.Failure_Category__c = null;
+        Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(instance.Workflow_Name__c);
+        if (deferTimeoutForConcurrency) {
+          instance.Concurrency_Parked__c = true;
+        }
         update as system instance;
 
         Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
@@ -6437,7 +6442,9 @@ public inherited sharing class WorkflowEngine {
         nextStepExec.Retry_Count__c = 0;
         insert as system nextStepExec;
 
-        scheduleTimeoutJobForInstance(instance.Id);
+        if (!deferTimeoutForConcurrency) {
+          scheduleTimeoutJobForInstance(instance.Id);
+        }
         if (Test.isRunningTest() && disableQueueableInTest) {
           System.enqueueJob(new WorkflowOrchestrator(instance.Id));
         } else {
@@ -6517,6 +6524,7 @@ public inherited sharing class WorkflowEngine {
 
           if (String.isBlank(nextStepName)) {
             instance.Status__c = 'Completed';
+            instance.Terminal_At__c = DateTime.now();
             instance.Output__c = savePayloadIfNeeded(instanceId, joinInputJson, 'Output_Join');
             instance.Current_Step__c = null;
             instance.Error_Message__c = null;
@@ -6544,9 +6552,15 @@ public inherited sharing class WorkflowEngine {
           instance.Status__c = 'Running';
           instance.Error_Message__c = null;
           instance.Failure_Category__c = null;
+          Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(instance.Workflow_Name__c);
+          if (deferTimeoutForConcurrency) {
+            instance.Concurrency_Parked__c = true;
+          }
           update as system instance;
 
-          scheduleTimeoutJobForInstance(instance.Id);
+          if (!deferTimeoutForConcurrency) {
+            scheduleTimeoutJobForInstance(instance.Id);
+          }
           if (Test.isRunningTest() && disableQueueableInTest) {
             System.enqueueJob(new WorkflowOrchestrator(instance.Id));
           } else {

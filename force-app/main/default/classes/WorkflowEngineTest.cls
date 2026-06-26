@@ -6682,6 +6682,74 @@ public class WorkflowEngineTest {
     System.assertEquals('Completed', instFinal.Status__c);
   }
 
+  @isTest
+  static void testResumePastStepRestampsTerminalTime() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.TerminalSkipWorkflow',
+      'TerminalSkipKey',
+      'InitialInput'
+    );
+
+    // 1. Run the only step -> fails and transitions instance to Failed
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    Workflow_Instance__c instFailed = [
+      SELECT Status__c, Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', instFailed.Status__c);
+    System.assertNotEquals(null, instFailed.Terminal_At__c);
+
+    // Manually push Terminal_At__c back by 10 minutes so we can distinguish a new stamp
+    Datetime tenMinutesAgo = Datetime.now().addMinutes(-10);
+    instFailed.Terminal_At__c = tenMinutesAgo;
+    update as system instFailed;
+
+    // Verify it was updated in the DB
+    Workflow_Instance__c instPreSkip = [
+      SELECT Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(tenMinutesAgo, instPreSkip.Terminal_At__c);
+
+    // 2. Skip the terminal step. This will transition status to 'Completed'.
+    Test.startTest();
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.TerminalSkipStep', '{"overrideVal": "skippedOutput"}');
+    Test.stopTest();
+
+    // 3. Verify that the parent instance transitioned to Completed and Terminal_At__c was restamped with the new time
+    Workflow_Instance__c instFinal = [
+      SELECT Status__c, Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', instFinal.Status__c);
+    System.assertNotEquals(null, instFinal.Terminal_At__c);
+    System.assert(instFinal.Terminal_At__c > tenMinutesAgo, 'Terminal_At__c should have been restamped to a fresh value');
+  }
+
+  public class TerminalSkipWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.TerminalSkipStep' };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.TerminalSkipStep';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      return null;
+    }
+  }
+
+  public class TerminalSkipStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.fail('Poison terminal step');
+    }
+  }
+
   public class SkipThreeParallelWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
       return new List<String>{
