@@ -5144,7 +5144,7 @@ public inherited sharing class WorkflowEngine {
 
     Map<Id, Workflow_Instance__c> parents = new Map<Id, Workflow_Instance__c>(
       [
-        SELECT Correlation_Key__c
+        SELECT Correlation_Key__c, Status__c
         FROM Workflow_Instance__c
         WHERE Id IN :parentIds
         WITH SYSTEM_MODE
@@ -5155,6 +5155,18 @@ public inherited sharing class WorkflowEngine {
     for (Workflow_Instance__c child : childrenWithParents) {
       Workflow_Instance__c parent = parents.get(child.Parent_Instance__c);
       if (parent == null) {
+        continue;
+      }
+
+      // Skip if the parent is already terminal or inactive (avoids inserting stale Unrouted signals)
+      if (
+        parent.Status__c == 'Completed' ||
+        parent.Status__c == 'Failed' ||
+        parent.Status__c == 'Compensated' ||
+        parent.Status__c == 'Cancelled' ||
+        parent.Status__c == 'ContinuedAsNew' ||
+        parent.Status__c == 'CompensationFailed'
+      ) {
         continue;
       }
 
@@ -6842,7 +6854,9 @@ public inherited sharing class WorkflowEngine {
       }
       update as system instance;
 
-      if (!stack.isEmpty()) {
+      if (stack.isEmpty()) {
+        notifyParentCompletion(instance);
+      } else {
         scheduleTimeoutJobForInstance(instance.Id);
       }
 
