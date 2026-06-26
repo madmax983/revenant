@@ -8342,48 +8342,15 @@ public inherited sharing class WorkflowEngine {
               }
             }
 
-            List<Workflow_Signal__c> allMatchSignals = new List<Workflow_Signal__c>();
-            Datetime lastCreatedDate = null;
-            Id lastId = null;
-
-            while (true) {
-              List<Workflow_Signal__c> matchSignals;
-              if (lastCreatedDate == null) {
-                matchSignals = [
-                  SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c, CreatedDate
-                  FROM Workflow_Signal__c
-                  WHERE Status__c = 'Unrouted'
-                  AND Correlation_Key__c IN :matchInstKeys
-                  WITH SYSTEM_MODE
-                  ORDER BY CreatedDate ASC, Id ASC
-                  LIMIT 5000
-                ];
-              } else {
-                matchSignals = [
-                  SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c, CreatedDate
-                  FROM Workflow_Signal__c
-                  WHERE Status__c = 'Unrouted'
-                  AND Correlation_Key__c IN :matchInstKeys
-                  AND (CreatedDate > :lastCreatedDate OR (CreatedDate = :lastCreatedDate AND Id > :lastId))
-                  WITH SYSTEM_MODE
-                  ORDER BY CreatedDate ASC, Id ASC
-                  LIMIT 5000
-                ];
-              }
-
-              if (matchSignals.isEmpty()) {
-                break;
-              }
-
-              allMatchSignals.addAll(matchSignals);
-              Workflow_Signal__c lastSig = matchSignals[matchSignals.size() - 1];
-              lastCreatedDate = lastSig.CreatedDate;
-              lastId = lastSig.Id;
-
-              if (matchSignals.size() < 5000 || allMatchSignals.size() >= 10000) {
-                break;
-              }
-            }
+            List<Workflow_Signal__c> allMatchSignals = [
+              SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c, CreatedDate
+              FROM Workflow_Signal__c
+              WHERE Status__c = 'Unrouted'
+              AND Correlation_Key__c IN :matchInstKeys
+              WITH SYSTEM_MODE
+              ORDER BY CreatedDate ASC, Id ASC
+              LIMIT 10000
+            ];
 
             if (!allMatchSignals.isEmpty()) {
               Map<Id, List<Workflow_Signal__c>> instIdToSignals = new Map<Id, List<Workflow_Signal__c>>();
@@ -9283,48 +9250,15 @@ public inherited sharing class WorkflowEngine {
       matchKeys.add(correlationKey);
     }
 
-    List<Workflow_Signal__c> allSignals = new List<Workflow_Signal__c>();
-    Datetime lastCreatedDate = null;
-    Id lastId = null;
-
-    while (true) {
-      List<Workflow_Signal__c> unroutedSignals;
-      if (lastCreatedDate == null) {
-        unroutedSignals = [
-          SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c, CreatedDate
-          FROM Workflow_Signal__c
-          WHERE Status__c = 'Unrouted'
-          AND Correlation_Key__c IN :matchKeys
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate ASC, Id ASC
-          LIMIT 5000
-        ];
-      } else {
-        unroutedSignals = [
-          SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c, CreatedDate
-          FROM Workflow_Signal__c
-          WHERE Status__c = 'Unrouted'
-          AND Correlation_Key__c IN :matchKeys
-          AND (CreatedDate > :lastCreatedDate OR (CreatedDate = :lastCreatedDate AND Id > :lastId))
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate ASC, Id ASC
-          LIMIT 5000
-        ];
-      }
-
-      if (unroutedSignals.isEmpty()) {
-        break;
-      }
-
-      allSignals.addAll(unroutedSignals);
-      Workflow_Signal__c lastSig = unroutedSignals[unroutedSignals.size() - 1];
-      lastCreatedDate = lastSig.CreatedDate;
-      lastId = lastSig.Id;
-
-      if (unroutedSignals.size() < 5000 || allSignals.size() >= 10000) {
-        break;
-      }
-    }
+    List<Workflow_Signal__c> allSignals = [
+      SELECT Id, Correlation_Key__c, Status__c, Idempotency_Key__c, Signal_Key__c, CreatedDate
+      FROM Workflow_Signal__c
+      WHERE Status__c = 'Unrouted'
+      AND Correlation_Key__c IN :matchKeys
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate ASC, Id ASC
+      LIMIT 10000
+    ];
 
     if (!allSignals.isEmpty()) {
       Map<Id, List<Workflow_Signal__c>> instIdToSignals = new Map<Id, List<Workflow_Signal__c>>{
