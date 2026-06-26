@@ -1,5 +1,6 @@
 @isTest
 public class WorkflowEngineTest {
+  public static Boolean failParallelC = true;
   // ==========================================
   // MOCK WORKFLOWS & STEPS FOR TESTING
   // ==========================================
@@ -6575,5 +6576,106 @@ public class WorkflowEngineTest {
       WHERE Id = :instanceId
     ];
     System.assertEquals('Completed', finalInst.Status__c);
+  }
+
+  @isTest
+  static void testResumePastStepParallelReParksParkedBranches() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipThreeParallelWorkflow',
+      'SkipThreeParallelSignalKey',
+      'InitialInput'
+    );
+
+    // 1. Run split step (SkipThreeParallelSplitStep) -> should create parallel executions
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 2. Put SkipParallelA in a Pending state simulation (parked)
+    List<Workflow_Step_Execution__c> stepExecsA = [
+      SELECT Id, Status__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
+    ];
+    stepExecsA[0].Status__c = 'Pending';
+    update stepExecsA[0];
+
+    // 3. Run ParallelB -> fails and fails the workflow instance
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+
+    // 4. Run ParallelC -> fails as well
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelC').execute(null);
+
+    // Verify parent is Failed
+    Workflow_Instance__c instFailed = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', instFailed.Status__c);
+
+    // 5. Resume past ParallelB
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+
+    // 6. Sibling C was reset and is now Pending. We set failParallelC to false and run it manually.
+    WorkflowEngineTest.failParallelC = false;
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelC').execute(null);
+
+    // 7. Verify that parent is set back to Suspended because A is still parked
+    Workflow_Instance__c instFinal = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', instFinal.Status__c, 'Parent should be Suspended since A is still parked');
+  }
+
+  public class SkipThreeParallelWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.SkipThreeParallelSplitStep',
+        'WorkflowEngineTest.SkipParallelA',
+        'WorkflowEngineTest.SkipParallelB',
+        'WorkflowEngineTest.SkipParallelC',
+        'WorkflowEngineTest.SkipParallelJoinStep3'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.SkipThreeParallelSplitStep';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      if (currentStepName == 'WorkflowEngineTest.SkipThreeParallelSplitStep') {
+        return 'WorkflowEngineTest.SkipParallelJoinStep3';
+      }
+      return null;
+    }
+  }
+
+  public class SkipThreeParallelSplitStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.split(
+        new List<String>{
+          'WorkflowEngineTest.SkipParallelA',
+          'WorkflowEngineTest.SkipParallelB',
+          'WorkflowEngineTest.SkipParallelC'
+        },
+        null
+      );
+    }
+  }
+
+  public class SkipParallelC implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (WorkflowEngineTest.failParallelC) {
+        return StepResult.fail('Parallel Poison Step C');
+      }
+      return StepResult.complete(null, 'OutputC');
+    }
+  }
+
+  public class SkipParallelJoinStep3 implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'Join3');
+    }
   }
 }
