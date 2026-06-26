@@ -6248,9 +6248,9 @@ public inherited sharing class WorkflowEngine {
     Workflow_Instance__c instance = instances[0];
 
     // 2. Validate status
-    if (instance.Status__c != 'Failed' && instance.Status__c != 'CompensationFailed') {
+    if (instance.Status__c != 'Failed') {
       throw new WorkflowException(
-        'Resume past step is only allowed for instances in Failed or CompensationFailed state. Current status: ' +
+        'Resume past step is only allowed for instances in Failed state. Current status: ' +
         instance.Status__c
       );
     }
@@ -6361,7 +6361,10 @@ public inherited sharing class WorkflowEngine {
       Boolean isParallel = String.isNotBlank(instance.Current_Step__c) && instance.Current_Step__c.contains(',');
 
       if (!isParallel) {
-        StepResult mockResult = StepResult.complete(null, suppliedOutputJson);
+        StepResult mockResult = new StepResult();
+        mockResult.action = StepResult.ActionType.COMPLETE;
+        mockResult.nextStepName = null;
+        mockResult.outputJson = suppliedOutputJson;
         String nextStepName;
         if (def instanceof VersionedWorkflow) {
           nextStepName = ((VersionedWorkflow) def).getNextStep(

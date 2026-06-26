@@ -3683,5 +3683,18 @@ public class WorkflowDashboardControllerTest {
     } catch (AuraHandledException e) {
       System.assert(e.getMessage().contains('exceeds maximum allowed limit'), e.getMessage());
     }
+
+    // Test: CompensationFailed status (should fail, as there is resumeCompensation)
+    inst.Status__c = 'CompensationFailed';
+    update inst;
+    try {
+      WorkflowDashboardController.resumePastStepInstance(inst.Id, 'StepOne', '{}');
+      System.assert(false, 'Should fail for CompensationFailed instance');
+    } catch (AuraHandledException e) {
+      System.assert(
+        e.getMessage().contains('Resume past step is only allowed for instances in Failed state'),
+        e.getMessage()
+      );
+    }
   }
 }

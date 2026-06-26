@@ -986,7 +986,7 @@ export default class WorkflowDashboard extends LightningElement {
               ? "text-red slds-text-title_bold"
               : "slds-text-color_weak",
             isEligibleForSkip:
-              (inst.Status__c === "Failed" || inst.Status__c === "CompensationFailed") &&
+              inst.Status__c === "Failed" &&
               step.Status__c === "Failed",
           };
         });
