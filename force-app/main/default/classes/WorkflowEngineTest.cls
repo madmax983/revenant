@@ -6499,6 +6499,38 @@ public class WorkflowEngineTest {
   }
 
   @isTest
+  static void testResumePastStepParallelSignalSkippedIsNoop() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipParallelWorkflow',
+      'SkipParallelSignalKey',
+      'InitialInput'
+    );
+
+    // 1. Run split step (SkipParallelSplitStep) -> should create parallel executions
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 2. Run ParallelB -> fails and fails the workflow instance
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+
+    // 3. Resume past ParallelB (sets it to OperatorSkipped)
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+
+    // 4. Try executing runStep directly on the skipped step ParallelB (simulating a signal or duplicate orchestrator run)
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.SkipParallelB');
+
+    // Verify status remains OperatorSkipped
+    List<Workflow_Step_Execution__c> stepsAfter = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelB'
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+    System.assertEquals('OperatorSkipped', stepsAfter[0].Status__c, 'Bypassed step should not be re-run');
+  }
+
+  @isTest
   static void testResumePastStepCaseInsensitivity() {
     WorkflowEngine.disableQueueableInTest = true;
 

@@ -2712,7 +2712,7 @@ public inherited sharing class WorkflowEngine {
 
     Integer stepVisit = 0;
     for (Workflow_Step_Execution__c exec : stepExecs) {
-      if (exec.Status__c == 'Completed') {
+      if (exec.Status__c == 'Completed' || exec.Status__c == 'OperatorSkipped') {
         stepVisit++;
       }
     }
@@ -2801,6 +2801,7 @@ public inherited sharing class WorkflowEngine {
       stepExec = stepExecs[0];
       if (
         stepExec.Status__c == 'Completed' ||
+        stepExec.Status__c == 'OperatorSkipped' ||
         stepExec.Status__c == 'Failed' ||
         stepExec.Status__c == 'Cancelled' ||
         stepExec.Status__c == 'Compensated'
@@ -6005,7 +6006,8 @@ public inherited sharing class WorkflowEngine {
     for (Id instId : branchesByInstance.keySet()) {
       for (String b : branchesByInstance.get(instId)) {
         String key = instId + '::' + b;
-        if (latestStatusByKey.get(key) == 'Completed') {
+        String status = latestStatusByKey.get(key);
+        if (status == 'Completed' || status == 'OperatorSkipped') {
           continue; // branch already finished
         }
         if (enqueuedBranchKeys.contains(key)) {
@@ -6136,7 +6138,7 @@ public inherited sharing class WorkflowEngine {
       Workflow_Step_Execution__c stepExec = latestStepByName.get(
         targetStepName
       );
-      if (stepExec != null && stepExec.Status__c != 'Completed') {
+      if (stepExec != null && stepExec.Status__c != 'Completed' && stepExec.Status__c != 'OperatorSkipped') {
         stepExec.Status__c = 'Pending';
         stepExec.Retry_Count__c = 0; // reset retry counter
         stepExec.Error_Details__c = null;
@@ -6179,7 +6181,7 @@ public inherited sharing class WorkflowEngine {
       Workflow_Step_Execution__c stepExec = latestStepByName.get(
         targetStepName
       );
-      if (stepExec == null || stepExec.Status__c != 'Completed') {
+      if (stepExec == null || (stepExec.Status__c != 'Completed' && stepExec.Status__c != 'OperatorSkipped')) {
         if (Test.isRunningTest()) {
           if (!disableQueueableInTest) {
             System.enqueueJob(
