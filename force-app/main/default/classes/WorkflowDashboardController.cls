@@ -261,45 +261,42 @@ public inherited sharing class WorkflowDashboardController {
         attributeFilter1 = targetKeyValues[1];
       }
 
-      // Pre-query the matching instance IDs by querying Workflow_Instance__c with parent filters
-      // and attribute sub-selects. This prevents materializing large attribute tables.
-      String query = 'SELECT Id FROM Workflow_Instance__c';
-      List<String> conditions = new List<String>();
-      if (isStalled) {
-        conditions.add('Status__c = \'Suspended\'');
-        conditions.add('Sleep_Until__c = null');
-        conditions.add('LastModifiedDate <= :stalledCutoff');
-      } else {
-        if (String.isNotBlank(status)) {
-          conditions.add('Status__c = :status');
+      // Populate filterInstanceIds only when we are doing a stalled query (which has SOQL semi-join limits)
+      if (isStalled && (attributeFilter0 != null || attributeFilter1 != null)) {
+        if (attributeFilter0 != null && attributeFilter1 != null) {
+          Set<Id> ids0 = new Set<Id>();
+          for (Workflow_Search_Attribute__c attr : [
+            SELECT Workflow_Instance__c
+            FROM Workflow_Search_Attribute__c
+            WHERE Key_Value__c = :attributeFilter0
+            WITH SYSTEM_MODE
+            LIMIT 10000
+          ]) {
+            ids0.add(attr.Workflow_Instance__c);
+          }
+          for (Workflow_Search_Attribute__c attr : [
+            SELECT Workflow_Instance__c
+            FROM Workflow_Search_Attribute__c
+            WHERE Key_Value__c = :attributeFilter1
+            WITH SYSTEM_MODE
+            LIMIT 10000
+          ]) {
+            if (ids0.contains(attr.Workflow_Instance__c)) {
+              filterInstanceIds.add(attr.Workflow_Instance__c);
+            }
+          }
+        } else {
+          String target = (attributeFilter0 != null) ? attributeFilter0 : attributeFilter1;
+          for (Workflow_Search_Attribute__c attr : [
+            SELECT Workflow_Instance__c
+            FROM Workflow_Search_Attribute__c
+            WHERE Key_Value__c = :target
+            WITH SYSTEM_MODE
+            LIMIT 10000
+          ]) {
+            filterInstanceIds.add(attr.Workflow_Instance__c);
+          }
         }
-      }
-      if (String.isNotBlank(workflowName)) {
-        conditions.add('Workflow_Name__c = :workflowName');
-      }
-      if (String.isNotBlank(failureCategory)) {
-        conditions.add('Failure_Category__c = :failureCategory');
-      }
-      if (String.isNotBlank(searchTerm)) {
-        likeTerm = '%' + searchTerm + '%';
-        conditions.add(
-          '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
-        );
-      }
-      if (attributeFilter0 != null) {
-        conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter0)');
-      }
-      if (attributeFilter1 != null) {
-        conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter1)');
-      }
-      
-      if (!conditions.isEmpty()) {
-        query += ' WHERE ' + String.join(conditions, ' AND ');
-      }
-      query += ' LIMIT 5000';
-      
-      for (Workflow_Instance__c inst : Database.query(query, AccessLevel.SYSTEM_MODE)) {
-        filterInstanceIds.add(inst.Id);
       }
     } catch (Exception ex) {
       System.debug(LoggingLevel.WARN, 'Failed to deserialize attributesFilterJson: ' + ex.getMessage());
@@ -336,8 +333,11 @@ public inherited sharing class WorkflowDashboardController {
         '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
     }
-    if (attributeFilter0 != null || attributeFilter1 != null) {
-      conditions.add('Id IN :filterInstanceIds');
+    if (attributeFilter0 != null) {
+      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter0)');
+    }
+    if (attributeFilter1 != null) {
+      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter1)');
     }
     return conditions.isEmpty()
       ? ''

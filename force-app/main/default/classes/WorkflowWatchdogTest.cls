@@ -876,5 +876,55 @@ public class WorkflowWatchdogTest {
     System.assertEquals('Received', reloadedSig.Status__c, 'Matching signal should be delivered');
     System.assertEquals(inst.Id, reloadedSig.Workflow_Instance__c);
   }
+
+  @isTest
+  static void testWatchdogSweepSignalDrainsAllSignals() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Create suspended instance
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'WatchdogCorr-LargeBacklog'
+    );
+    insert inst;
+
+    // Insert 120 matching unrouted signals
+    List<Workflow_Signal__c> signals = new List<Workflow_Signal__c>();
+    for (Integer i = 0; i < 120; i++) {
+      signals.add(new Workflow_Signal__c(
+        Correlation_Key__c = 'WatchdogCorr-LargeBacklog',
+        Signal_Name__c = 'WakeMe',
+        Payload__c = '{"val":' + i + '}',
+        Status__c = 'Unrouted'
+      ));
+    }
+    insert signals;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Verify all 120 signals are auto-delivered
+    List<Workflow_Signal__c> reloadedSignals = [
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Correlation_Key__c = 'WatchdogCorr-LargeBacklog'
+    ];
+    System.assertEquals(120, reloadedSignals.size());
+    for (Workflow_Signal__c sig : reloadedSignals) {
+      System.assertEquals('Received', sig.Status__c, 'All watchdog sweep signals in the large backlog must be auto-delivered');
+      System.assertEquals(inst.Id, sig.Workflow_Instance__c);
+    }
+
+    // Verify instance is resumed to Running
+    Workflow_Instance__c reloadedInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Running', reloadedInst.Status__c);
+  }
 }
 
