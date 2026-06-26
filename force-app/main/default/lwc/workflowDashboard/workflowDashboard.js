@@ -30,6 +30,8 @@ import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.ge
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
 import compensateWorkflow from "@salesforce/apex/WorkflowDashboardController.compensateWorkflow";
 import injectSignal from "@salesforce/apex/WorkflowDashboardController.injectSignal";
+import resumePastStepInstance from "@salesforce/apex/WorkflowDashboardController.resumePastStepInstance";
+import LightningConfirm from "lightning/confirm";
 
 const FAILURE_CATEGORY_LABELS = {
   STEP_EXCEPTION: "Step Exception",
@@ -477,6 +479,7 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   refreshInstances() {
+    const requestId = ++this._instanceRequestId;
     const currentSize =
       this.instances.length > 0 ? this.instances.length : this.limitSize;
     this.cacheBuster = Date.now().toString();
@@ -535,6 +538,7 @@ export default class WorkflowDashboard extends LightningElement {
       unroutedCountPromise,
     ])
       .then(([result, statsResult, stalledResult, unroutedResult]) => {
+        if (!this._isConnected || requestId !== this._instanceRequestId) return;
         this.instances = result.map((inst) => this.formatInstance(inst));
         this.stats = statsResult;
         this.stalledCountData = stalledResult || { count: 0, capped: false };
@@ -552,6 +556,7 @@ export default class WorkflowDashboard extends LightningElement {
         });
       })
       .catch((error) => {
+        if (!this._isConnected || requestId !== this._instanceRequestId) return;
         console.error("Error refreshing instances:", this.reduceErrors(error));
       });
   }
@@ -980,6 +985,9 @@ export default class WorkflowDashboard extends LightningElement {
             budgetClass: hasLimitPressure
               ? "text-red slds-text-title_bold"
               : "slds-text-color_weak",
+            isEligibleForSkip:
+              (inst.Status__c === "Failed" || inst.Status__c === "CompensationFailed") &&
+              step.Status__c === "Failed",
           };
         });
 
@@ -1414,31 +1422,15 @@ export default class WorkflowDashboard extends LightningElement {
 
     // Validate JSON if provided
     if (this.launchInputJson) {
-      let payload = this.launchInputJson;
-      try {
-        JSON.parse(payload);
-      } catch {
-        // First parse failed. Try normalizing common paste artifacts — but only as
-        // a fallback so valid JSON is never rewritten:
-        //   · typographic (“curly”) quotes from Word / macOS autocorrect
-        //   · non-breaking spaces (\u00A0) from Word / Google Docs / some chat
-        //     renderers; they look identical to spaces but are invalid JSON whitespace
-        const normalized = payload
-          .replace(/[\u201C\u201D]/g, '"')
-          .replace(/[\u2018\u2019]/g, "'")
-          .replace(/\u00A0/g, " ");
-        try {
-          JSON.parse(normalized);
-          payload = normalized;
-        } catch {
-          this.launchError =
-            "Input Payload must be valid JSON. " +
-            "If you pasted from a chat or document, re-type the quote characters — " +
-            "“curly quotes” are not valid JSON.";
-          return;
-        }
+      const normalized = this._normalizeJson(this.launchInputJson);
+      if (normalized === null) {
+        this.launchError =
+          "Input Payload must be valid JSON. " +
+          "If you pasted from a chat or document, re-type the quote characters — " +
+          "“curly quotes” are not valid JSON.";
+        return;
       }
-      this.launchInputJson = payload;
+      this.launchInputJson = normalized;
     }
 
     this.executingLaunch = true;
@@ -1487,6 +1479,70 @@ export default class WorkflowDashboard extends LightningElement {
       .finally(() => {
         this.loadingDetails = false;
       });
+  }
+
+  handleResumePastStep(event) {
+    const stepName = event.target.dataset.stepName;
+    const textarea = this.template.querySelector(`textarea[data-step-name="${stepName}"]`);
+    let payload = textarea ? textarea.value : "";
+
+    if (payload && payload.trim()) {
+      const normalized = this._normalizeJson(payload);
+      if (normalized === null) {
+        if (textarea) {
+          textarea.setCustomValidity("Invalid JSON format. Typographic/curly quotes are not valid JSON.");
+          textarea.reportValidity();
+        }
+        return;
+      }
+      payload = normalized;
+      if (textarea) {
+        textarea.setCustomValidity("");
+        textarea.reportValidity();
+      }
+    } else {
+      if (textarea) {
+        textarea.setCustomValidity("");
+        textarea.reportValidity();
+      }
+    }
+
+    LightningConfirm.open({
+      message: `Are you sure you want to skip step "${stepName}" and resume forward execution using the supplied JSON output?`,
+      variant: "headerless",
+      label: "Confirm Skip Step"
+    }).then((result) => {
+      if (!result) {
+        return;
+      }
+
+      this.loadingDetails = true;
+      resumePastStepInstance({
+        instanceId: this.selectedInstanceId,
+        stepName: stepName,
+        suppliedOutputJson: payload,
+      })
+        .then(() => {
+          this.showToast(
+            "Success",
+            `Workflow resumed past step ${stepName}.`,
+            "success",
+          );
+          this.refreshInstances();
+          this.loadDetails(true);
+          this.startPolling();
+        })
+        .catch((error) => {
+          this.showToast(
+            "Error",
+            "Failed to resume past step: " + this.reduceErrors(error),
+            "error",
+          );
+        })
+        .finally(() => {
+          this.loadingDetails = false;
+        });
+    });
   }
 
   // Enable bulk re-drive only when the current filter actually contains failed
@@ -1776,18 +1832,18 @@ export default class WorkflowDashboard extends LightningElement {
   handleSignalModalConfirm() {
     if (this.signalPayload && this.signalPayload.trim()) {
       const textarea = this.template.querySelector('[data-id="signal-payload-input"]');
-      try {
-        JSON.parse(this.signalPayload);
+      const normalized = this._normalizeJson(this.signalPayload);
+      if (normalized === null) {
         if (textarea) {
-          textarea.setCustomValidity("");
-          textarea.reportValidity();
-        }
-      } catch {
-        if (textarea) {
-          textarea.setCustomValidity("Invalid JSON format.");
+          textarea.setCustomValidity("Invalid JSON format. Typographic/curly quotes are not valid JSON.");
           textarea.reportValidity();
         }
         return;
+      }
+      this.signalPayload = normalized;
+      if (textarea) {
+        textarea.setCustomValidity("");
+        textarea.reportValidity();
       }
     } else {
       const textarea = this.template.querySelector('[data-id="signal-payload-input"]');
@@ -1925,6 +1981,27 @@ export default class WorkflowDashboard extends LightningElement {
       return JSON.stringify(obj, null, 2);
     } catch {
       return str; // Return raw string if not json
+    }
+  }
+
+  _normalizeJson(payload) {
+    if (!payload || !payload.trim()) {
+      return "";
+    }
+    try {
+      JSON.parse(payload);
+      return payload;
+    } catch (e) {
+      const normalized = payload
+        .replace(/[\u201C\u201D]/g, '"')
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/\u00A0/g, " ");
+      try {
+        JSON.parse(normalized);
+        return normalized;
+      } catch (inner) {
+        return null;
+      }
     }
   }
 

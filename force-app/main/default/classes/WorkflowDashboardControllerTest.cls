@@ -1063,6 +1063,17 @@ public class WorkflowDashboardControllerTest {
     );
     insert inst;
 
+    // Link ContentDocuments to the instance to pass ownership checks
+    List<ContentDocumentLink> cdls = new List<ContentDocumentLink>();
+    for (Id docId : cvIdToDocId.values()) {
+      cdls.add(new ContentDocumentLink(
+        ContentDocumentId = docId,
+        LinkedEntityId = inst.Id,
+        ShareType = 'V'
+      ));
+    }
+    insert cdls;
+
     // Create step
     Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
       Workflow_Instance__c = inst.Id,
@@ -1205,6 +1216,13 @@ public class WorkflowDashboardControllerTest {
       Progress__c = offloadedMarker
     );
     insert new List<Workflow_Instance__c>{ instInline, instOffloaded };
+
+    ContentDocumentLink cdl = new ContentDocumentLink(
+      ContentDocumentId = docId,
+      LinkedEntityId = instOffloaded.Id,
+      ShareType = 'V'
+    );
+    insert cdl;
 
     Test.startTest();
     Map<String, Object> inlineDetails = WorkflowDashboardController.getInstanceDetails(instInline.Id);
@@ -3567,6 +3585,103 @@ public class WorkflowDashboardControllerTest {
       System.assert(false, 'Should have thrown AuraHandledException due to oversized payload');
     } catch (AuraHandledException e) {
       System.assert(e.getMessage().contains('Payload size exceeds maximum'), 'Exception message should indicate payload size limit: ' + e.getMessage());
+    }
+  }
+
+  @isTest
+  static void testResumePastStepControllerAuthorization() {
+    Profile stdProfile = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
+    User stdUser = new User(
+      Alias = 'stdno',
+      Email = 'stdno@testorg.com',
+      EmailEncodingKey = 'UTF-8',
+      LastName = 'NoAdmin',
+      LanguageLocaleKey = 'en_US',
+      LocaleSidKey = 'en_US',
+      ProfileId = stdProfile.Id,
+      TimeZoneSidKey = 'America/Los_Angeles',
+      UserName = 'stduser_noadmin_test_' + DateTime.now().getTime() + '@testorg.com'
+    );
+    insert stdUser;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Failed',
+      Correlation_Key__c = 'SkipKeyAuth'
+    );
+    insert inst;
+
+    System.runAs(stdUser) {
+      try {
+        WorkflowDashboardController.resumePastStepInstance(inst.Id, 'StepOne', '{}');
+        System.assert(false, 'Should have thrown AuraHandledException');
+      } catch (AuraHandledException e) {
+        System.assert(e.getMessage().contains('Unauthorized'), e.getMessage());
+      }
+    }
+  }
+
+  @isTest
+  static void testResumePastStepControllerRejections() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'SkipKeyRej'
+    );
+    insert inst;
+
+    // Test: invalid status
+    try {
+      WorkflowDashboardController.resumePastStepInstance(inst.Id, 'StepOne', '{}');
+      System.assert(false, 'Should fail for non-failed instance');
+    } catch (AuraHandledException e) {
+      System.assert(e.getMessage().contains('Resume past step is only allowed'), e.getMessage());
+    }
+
+    // Test: null instance
+    try {
+      WorkflowDashboardController.resumePastStepInstance(null, 'StepOne', '{}');
+      System.assert(false, 'Should fail for null instance');
+    } catch (AuraHandledException e) {
+      System.assert(e.getMessage().contains('Instance ID is required'), e.getMessage());
+    }
+
+    // Test: blank step name
+    try {
+      WorkflowDashboardController.resumePastStepInstance(inst.Id, ' ', '{}');
+      System.assert(false, 'Should fail for blank step name');
+    } catch (AuraHandledException e) {
+      System.assert(e.getMessage().contains('Step name is required'), e.getMessage());
+    }
+
+    // Test: malformed JSON
+    inst.Status__c = 'Failed';
+    update inst;
+    
+    // We also need a mock step execution to test invalid step/JSON:
+    Workflow_Step_Execution__c se = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'StepOne',
+      Status__c = 'Failed'
+    );
+    insert se;
+
+    inst.Current_Step__c = 'StepOne';
+    update inst;
+
+    try {
+      WorkflowDashboardController.resumePastStepInstance(inst.Id, 'StepOne', '{invalid_json}');
+      System.assert(false, 'Should fail on invalid JSON');
+    } catch (AuraHandledException e) {
+      System.assert(e.getMessage().contains('valid JSON'), e.getMessage());
+    }
+
+    // Test: oversized payload
+    try {
+      WorkflowDashboardController.resumePastStepInstance(inst.Id, 'StepOne', 'A'.repeat(250001));
+      System.assert(false, 'Should fail on oversized payload');
+    } catch (AuraHandledException e) {
+      System.assert(e.getMessage().contains('exceeds maximum allowed limit'), e.getMessage());
     }
   }
 }

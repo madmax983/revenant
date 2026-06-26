@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomPermission xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Grants permission to skip a failed step in a stalled workflow instance and supply its output payload.</description>
+    <label>Workflow Step Skip</label>
+</CustomPermission>

@@ -61,6 +61,11 @@
                 <default>false</default>
                 <label>ContinuedAsNew</label>
             </value>
+            <value>
+                <fullName>OperatorSkipped</fullName>
+                <default>false</default>
+                <label>OperatorSkipped</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

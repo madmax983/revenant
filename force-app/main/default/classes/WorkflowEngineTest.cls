@@ -6210,4 +6210,274 @@ public class WorkflowEngineTest {
       Status__c = 'Failed'
     );
   }
+
+  // ==========================================
+  // RESUME PAST STEP TEST CLASSES
+  // ==========================================
+
+  public class SkipTestWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.SkipTestStep1',
+        'WorkflowEngineTest.SkipTestStep2',
+        'WorkflowEngineTest.SkipTestStep3'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.SkipTestStep1';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      if (currentStepName == 'WorkflowEngineTest.SkipTestStep1') {
+        return 'WorkflowEngineTest.SkipTestStep2';
+      }
+      if (currentStepName == 'WorkflowEngineTest.SkipTestStep2') {
+        return 'WorkflowEngineTest.SkipTestStep3';
+      }
+      return null;
+    }
+  }
+
+  public class SkipTestStep1 implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'InputToTwo');
+    }
+  }
+
+  public class SkipTestStep2 implements CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.fail('Poison step: failed permanently');
+    }
+    public StepResult compensate(StepContext ctx) {
+      return StepResult.complete(null, 'CompensatedTwo');
+    }
+  }
+
+  public class SkipTestStep3 implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      Map<String, Object> outputMap = (Map<String, Object>) JSON.deserializeUntyped(ctx.previousStepOutput);
+      String val = (String) outputMap.get('overrideVal');
+      return StepResult.complete(null, 'StepThreeReceived_' + val);
+    }
+  }
+
+  public class SkipParallelWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.SkipParallelSplitStep',
+        'WorkflowEngineTest.SkipParallelA',
+        'WorkflowEngineTest.SkipParallelB',
+        'WorkflowEngineTest.SkipParallelJoinStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.SkipParallelSplitStep';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      if (currentStepName == 'WorkflowEngineTest.SkipParallelSplitStep') {
+        return 'WorkflowEngineTest.SkipParallelJoinStep';
+      }
+      return null;
+    }
+  }
+
+  public class SkipParallelSplitStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.split(
+        new List<String>{
+          'WorkflowEngineTest.SkipParallelA',
+          'WorkflowEngineTest.SkipParallelB'
+        },
+        null
+      );
+    }
+  }
+
+  public class SkipParallelA implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'OutputA');
+    }
+  }
+
+  public class SkipParallelB implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.fail('Parallel Poison Step');
+    }
+  }
+
+  public class SkipParallelJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      Map<String, Object> outputs = (Map<String, Object>) JSON.deserializeUntyped(ctx.inputJson);
+      String outA = (String) outputs.get('WorkflowEngineTest.SkipParallelA');
+      Map<String, Object> outBMap = (Map<String, Object>) outputs.get('WorkflowEngineTest.SkipParallelB');
+      String valB = (String) outBMap.get('val');
+      return StepResult.complete(null, 'Join_' + outA + '_' + valB);
+    }
+  }
+
+  @isTest
+  static void testResumePastStepSuccess() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipTestWorkflow',
+      'SkipSerialKey',
+      'InitialInput'
+    );
+
+    // 1. Run step 1 (SkipTestStep1) -> should complete and transition current step to SkipTestStep2
+    new WorkflowOrchestrator(instanceId).execute(null);
+    Workflow_Instance__c inst1 = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Running', inst1.Status__c);
+    System.assertEquals('WorkflowEngineTest.SkipTestStep2', inst1.Current_Step__c);
+
+    // 2. Run step 2 (SkipTestStep2) -> throws exception, transitions instance to Failed
+    new WorkflowOrchestrator(instanceId).execute(null);
+    Workflow_Instance__c inst2 = [
+      SELECT Status__c, Current_Step__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', inst2.Status__c);
+    System.assertEquals('WorkflowEngineTest.SkipTestStep2', inst2.Current_Step__c);
+
+    // 3. Skip Step 2 by supplying JSON output output
+    Test.startTest();
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipTestStep2', '{"overrideVal": "skippedOutput"}');
+    Test.stopTest();
+
+    // 4. Verify step 2 execution is recorded as OperatorSkipped
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipTestStep2'
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+    // There should be 2 execs: the failed one and the OperatorSkipped one
+    System.assertEquals(2, stepExecs.size());
+    System.assertEquals('OperatorSkipped', stepExecs[0].Status__c);
+    System.assertEquals('{"overrideVal": "skippedOutput"}', stepExecs[0].Output__c);
+
+    // Verify operator intervention log was recorded
+    List<Workflow_Log__c> logs = [
+      SELECT Log_Type__c, Message__c
+      FROM Workflow_Log__c
+      WHERE Workflow_Instance__c = :instanceId AND Log_Type__c = 'OperatorIntervention'
+    ];
+    System.assertEquals(1, logs.size());
+    System.assert(logs[0].Message__c.contains('skipped step WorkflowEngineTest.SkipTestStep2'));
+
+    // 5. Run next step execution (should resume from SkipTestStep3 because WorkflowEngine.resumePastStep enqueued it)
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c, Output__c, Compensation_Stack__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', finalInst.Status__c);
+    System.assertEquals('"StepThreeReceived_skippedOutput"', finalInst.Output__c);
+
+    // Check that the skipped step was NOT added to the compensation stack
+    Boolean isStackEmpty = String.isBlank(finalInst.Compensation_Stack__c) ||
+      ((List<String>) JSON.deserialize(finalInst.Compensation_Stack__c, List<String>.class)).isEmpty();
+    System.assert(isStackEmpty, 'Compensation stack should be empty because SkipTestStep2 was skipped');
+  }
+
+  @isTest
+  static void testResumePastStepParallelSuccess() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipParallelWorkflow',
+      'SkipParallelKey',
+      'InitialInput'
+    );
+
+    // 1. Run split step (SkipParallelSplitStep) -> should create parallel executions
+    new WorkflowOrchestrator(instanceId).execute(null);
+    Workflow_Instance__c inst1 = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Running', inst1.Status__c);
+    System.assert(inst1.Current_Step__c.contains('WorkflowEngineTest.SkipParallelA'));
+    System.assert(inst1.Current_Step__c.contains('WorkflowEngineTest.SkipParallelB'));
+
+    // 2. Run ParallelA -> completes successfully
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelA').execute(null);
+    
+    // 3. Run ParallelB -> fails and fails the workflow instance
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+
+    Workflow_Instance__c inst2 = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', inst2.Status__c);
+
+    // 4. Resume past ParallelB
+    Test.startTest();
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+    Test.stopTest();
+
+    // 5. Verify workflow finishes successfully after join step runs
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', finalInst.Status__c);
+    System.assertEquals('"Join_OutputA_skippedParallelB"', finalInst.Output__c);
+  }
+
+  @isTest
+  static void testResumePastStepCaseInsensitivity() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipTestWorkflow',
+      'SkipCaseInsensitivityKey',
+      'InitialInput'
+    );
+
+    // 1. Run step 1 (SkipTestStep1) -> should complete and transition current step to SkipTestStep2
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 2. Run step 2 (SkipTestStep2) -> throws exception, transitions instance to Failed
+    new WorkflowOrchestrator(instanceId).execute(null);
+    Workflow_Instance__c inst2 = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', inst2.Status__c);
+    System.assertEquals('WorkflowEngineTest.SkipTestStep2', inst2.Current_Step__c);
+
+    // 3. Skip Step 2 by supplying JSON output with lowercase casing
+    Test.startTest();
+    WorkflowEngine.resumePastStep(instanceId, 'workflowenginetest.skipteststep2', '{"overrideVal": "skippedOutput"}');
+    Test.stopTest();
+
+    // 4. Verify step 2 execution is recorded as OperatorSkipped (using exact casing)
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipTestStep2'
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+    System.assertEquals(2, stepExecs.size());
+    System.assertEquals('OperatorSkipped', stepExecs[0].Status__c);
+
+    // 5. Run next step execution (should resume and complete)
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', finalInst.Status__c);
+  }
 }
