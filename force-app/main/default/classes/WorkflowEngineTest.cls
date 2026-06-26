@@ -6732,6 +6732,71 @@ public class WorkflowEngineTest {
     System.assert(instFinal.Terminal_At__c > tenMinutesAgo, 'Terminal_At__c should have been restamped to a fresh value');
   }
 
+  @isTest
+  static void testResumePastStepParallelPreservesRetrying() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipParallelWorkflow',
+      'SkipParallelRetryingKey',
+      'InitialInput'
+    );
+
+    // 1. Run split step (SkipParallelSplitStep) -> should create parallel executions
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 2. Put SkipParallelA in a Retrying state simulation (representing a retry backoff)
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Id, Status__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
+    ];
+    System.assertEquals(1, stepExecs.size());
+    stepExecs[0].Status__c = 'Retrying';
+    stepExecs[0].Retry_Count__c = 1;
+    stepExecs[0].CPU_Time_Ms__c = 10;
+    update stepExecs[0];
+
+    // 3. Run ParallelB -> fails and fails the workflow instance
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+
+    Workflow_Instance__c inst2 = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', inst2.Status__c);
+
+    // Count existing queueable jobs
+    Integer jobsBefore = [SELECT Count() FROM AsyncApexJob WHERE JobType = 'Queueable'];
+
+    // 4. Resume past ParallelB
+    Test.startTest();
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+    Test.stopTest();
+
+    // Verify that SkipParallelA's execution remains Retrying and was NOT reset (retry count is still 1)
+    Workflow_Step_Execution__c stepAAfter = [
+      SELECT Status__c, Retry_Count__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :stepExecs[0].Id
+    ];
+    System.assertEquals('Retrying', stepAAfter.Status__c);
+    System.assertEquals(1, stepAAfter.Retry_Count__c);
+
+    // Verify that the parent instance transitioned to Suspended (since branch A is in Retrying state, which counts as parked)
+    Workflow_Instance__c instAfter = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', instAfter.Status__c, 'Parent instance should stay Suspended when a sibling branch is retrying');
+
+    // Verify that NO new job was enqueued
+    Integer jobsAfter = [SELECT Count() FROM AsyncApexJob WHERE JobType = 'Queueable'];
+    System.assertEquals(jobsBefore, jobsAfter, 'No new queueable jobs should have been enqueued for the retrying branch');
+  }
+
   public class TerminalSkipWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowEngineTest.TerminalSkipStep' };

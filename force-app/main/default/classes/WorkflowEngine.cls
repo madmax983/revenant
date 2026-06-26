@@ -6574,7 +6574,7 @@ public inherited sharing class WorkflowEngine {
               continue;
             }
             Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
-            if (pe != null && pe.Status__c == 'Pending' && pe.CPU_Time_Ms__c != null) {
+            if (pe != null && (pe.Status__c == 'Retrying' || (pe.Status__c == 'Pending' && pe.CPU_Time_Ms__c != null))) {
               hasParkedSibling = true;
               break;
             }
