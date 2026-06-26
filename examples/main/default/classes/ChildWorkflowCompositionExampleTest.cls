@@ -11,8 +11,7 @@
  *        (ApproveLoanStep fires exactly once; both signals end up Consumed).
  */
 @isTest
-private class ChildWorkflowCompositionExampleTest {
-
+public class ChildWorkflowCompositionExampleTest {
   // High-score applicant: income=100 000, amount=50 000 → score=690 (≥680, approved)
   private static final Map<String, Object> HIGH_SCORE_INPUT = new Map<String, Object>{
     'applicant' => 'Alice',
@@ -67,19 +66,17 @@ private class ChildWorkflowCompositionExampleTest {
       'Output must carry the approved decision, got: ' + result.output
     );
     System.assert(
-      result.output.contains('690') || result.output.contains('"creditScore":690'),
-      'Output must carry the child-produced credit score (690), got: ' + result.output
+      result.output.contains('690') ||
+      result.output.contains('"creditScore":690'),
+      'Output must carry the child-produced credit score (690), got: ' +
+      result.output
     );
     System.assert(
-      result.reachedStep(
-        'ChildWorkflowCompositionExample.ApproveLoanStep'
-      ),
+      result.reachedStep('ChildWorkflowCompositionExample.ApproveLoanStep'),
       'ApproveLoanStep must have run for high-score applicant'
     );
     System.assert(
-      !result.reachedStep(
-        'ChildWorkflowCompositionExample.DeclineLoanStep'
-      ),
+      !result.reachedStep('ChildWorkflowCompositionExample.DeclineLoanStep'),
       'DeclineLoanStep must NOT run for high-score applicant'
     );
 
@@ -125,15 +122,11 @@ private class ChildWorkflowCompositionExampleTest {
       'Output must carry the declined decision, got: ' + result2.output
     );
     System.assert(
-      result2.reachedStep(
-        'ChildWorkflowCompositionExample.DeclineLoanStep'
-      ),
+      result2.reachedStep('ChildWorkflowCompositionExample.DeclineLoanStep'),
       'DeclineLoanStep must have run for low-score applicant'
     );
     System.assert(
-      !result2.reachedStep(
-        'ChildWorkflowCompositionExample.ApproveLoanStep'
-      ),
+      !result2.reachedStep('ChildWorkflowCompositionExample.ApproveLoanStep'),
       'ApproveLoanStep must NOT run for low-score applicant'
     );
   }
@@ -370,9 +363,7 @@ private class ChildWorkflowCompositionExampleTest {
       [
         SELECT COUNT()
         FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :parentId
-          AND Status__c = 'Received'
+        WHERE Workflow_Instance__c = :parentId AND Status__c = 'Received'
       ],
       'No signals must remain Received after COMPLETE transition'
     );
@@ -381,11 +372,410 @@ private class ChildWorkflowCompositionExampleTest {
       [
         SELECT COUNT()
         FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :parentId
-          AND Status__c = 'Consumed'
+        WHERE Workflow_Instance__c = :parentId AND Status__c = 'Consumed'
       ],
       'Both the original and duplicate ChildCompleted signals must be Consumed'
     );
+  }
+
+  @isTest
+  static void testParentHandlesFailedChild() {
+    Map<String, Object> input = new Map<String, Object>{
+      'applicant' => 'FailMe',
+      'annualIncome' => 100000,
+      'requestedAmount' => 50000
+    };
+
+    Test.startTest();
+    Id parentId = WorkflowEngine.start(
+      'ChildWorkflowCompositionExample',
+      'LoanApp_FailMe',
+      input
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(parentId);
+    WorkflowTestHarness.Result result = harness.drive();
+    Test.stopTest();
+
+    System.assertEquals('Completed', result.status, 'Parent must complete');
+    System.assert(
+      result.reachedStep(
+        'ChildWorkflowCompositionExample.HandleCreditCheckFailureStep'
+      ),
+      'Parent must branch to HandleCreditCheckFailureStep fallback'
+    );
+
+    // Verify child instance is failed
+    Workflow_Instance__c childInst = [
+      SELECT Status__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentId
+      LIMIT 1
+    ];
+    System.assertEquals(
+      'Failed',
+      childInst.Status__c,
+      'Child must have failed'
+    );
+    System.assert(
+      childInst.Error_Message__c.contains('Simulated credit check failure'),
+      'Child error message must carry exception details, got: ' +
+      childInst.Error_Message__c
+    );
+  }
+
+  @isTest
+  static void testParentHandlesCancelledChild() {
+    Test.startTest();
+    Id parentId = WorkflowEngine.start(
+      'ChildWorkflowCompositionExample',
+      'LoanApp_CancelChild',
+      HIGH_SCORE_INPUT
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(parentId);
+    // Step once to start the child and suspend the parent
+    harness.step();
+    Test.stopTest();
+
+    Workflow_Instance__c childInst = [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentId
+      LIMIT 1
+    ];
+    System.assertEquals('Pending', childInst.Status__c);
+
+    // Cancel the child directly
+    WorkflowEngine.cancel(childInst.Id, false);
+
+    // Deliver events and drive the parent
+    WorkflowTestHarness.Result result = harness.drive();
+
+    System.assertEquals('Completed', result.status, 'Parent must complete');
+    System.assert(
+      result.reachedStep(
+        'ChildWorkflowCompositionExample.HandleCreditCheckFailureStep'
+      ),
+      'Parent must branch to HandleCreditCheckFailureStep fallback'
+    );
+  }
+
+  @isTest
+  static void testParentHandlesTimedOutChild() {
+    Test.startTest();
+    Id parentId = WorkflowEngine.start(
+      'ChildWorkflowCompositionExample',
+      'LoanApp_TimeoutChild',
+      HIGH_SCORE_INPUT
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(parentId);
+    // Step once to start the child and suspend the parent
+    harness.step();
+    Test.stopTest();
+
+    Workflow_Instance__c childInst = [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentId
+      LIMIT 1
+    ];
+
+    // Simulate timeout on child step execution
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Id, Status__c, Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :childInst.Id
+    ];
+    System.assert(!stepExecs.isEmpty());
+    Workflow_Step_Execution__c exec = stepExecs[0];
+    exec.Status__c = 'Running';
+    exec.Timeout_At__c = DateTime.now().addSeconds(-10);
+    update as system exec;
+
+    // Force watchdog heartbeat to process timeout
+    WorkflowEngine.processWatchdogHeartbeat();
+
+    // Deliver events and drive parent
+    WorkflowTestHarness.Result result = harness.drive();
+
+    System.assertEquals('Completed', result.status, 'Parent must complete');
+    System.assert(
+      result.reachedStep(
+        'ChildWorkflowCompositionExample.HandleCreditCheckFailureStep'
+      ),
+      'Parent must branch to HandleCreditCheckFailureStep fallback'
+    );
+  }
+
+  @isTest
+  static void testParentHandlesFailedChildWithLargePayload() {
+    Test.startTest();
+    Id parentId = WorkflowEngine.start(
+      'ChildWorkflowCompositionExample',
+      'LoanApp_LargeFailChild',
+      HIGH_SCORE_INPUT
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(parentId);
+    harness.step();
+    Test.stopTest();
+
+    Workflow_Instance__c childInst = [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentId
+      LIMIT 1
+    ];
+
+    childInst.Status__c = 'Failed';
+    String largeError = '';
+    for (Integer i = 0; i < 10000; i++) {
+      largeError += 'LargeError ';
+    }
+    childInst.Error_Message__c = largeError.left(255);
+    childInst.Output__c = largeError;
+    update as system childInst;
+
+    WorkflowEngine.notifyParentCompletion(childInst);
+
+    WorkflowTestHarness.Result result = harness.drive();
+
+    System.assertEquals('Completed', result.status, 'Parent must complete');
+    System.assert(
+      result.reachedStep(
+        'ChildWorkflowCompositionExample.HandleCreditCheckFailureStep'
+      ),
+      'Parent must branch to HandleCreditCheckFailureStep fallback'
+    );
+
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :parentId
+        AND Step_Name__c = 'ChildWorkflowCompositionExample.HandleCreditCheckFailureStep'
+      LIMIT 1
+    ];
+    System.assert(!stepExecs.isEmpty());
+    Map<String, Object> outputMap = (Map<String, Object>) JSON.deserializeUntyped(
+      stepExecs[0].Output__c
+    );
+    String rehydratedError = (String) outputMap.get('errorMessage');
+    System.assertEquals(
+      childInst.Error_Message__c,
+      rehydratedError,
+      'Large error message must be successfully rehydrated'
+    );
+  }
+
+  @isTest
+  static void testParentNotifiedWhenChildCompensationStackDrains() {
+    Test.startTest();
+    Id parentId = WorkflowEngine.start(
+      'ChildWorkflowCompositionExampleTest.CompensatingParentWorkflow',
+      'Parent_Compensate_Test',
+      null
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(parentId);
+    WorkflowTestHarness.Result result = harness.drive();
+    Test.stopTest();
+
+    // Verify parent has resumed and completed, meaning it received the child status update
+    System.assertEquals(
+      'Completed',
+      result.status,
+      'Parent should have completed after child compensation drained'
+    );
+    System.assert(
+      result.reachedStep(
+        'ChildWorkflowCompositionExampleTest.HandleCompensatedOutcomeStep'
+      ),
+      'Parent should have run the HandleCompensatedOutcomeStep step'
+    );
+
+    // Verify child outcome status is Compensated
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :parentId
+        AND Step_Name__c = 'ChildWorkflowCompositionExampleTest.HandleCompensatedOutcomeStep'
+      LIMIT 1
+    ];
+    System.assert(!stepExecs.isEmpty());
+    Map<String, Object> outputMap = (Map<String, Object>) JSON.deserializeUntyped(
+      stepExecs[0].Output__c
+    );
+    System.assertEquals('Compensated', (String) outputMap.get('childStatus'));
+    System.assertEquals(
+      'Failed at step ChildWorkflowCompositionExampleTest.FailingStep: Simulated failure after compensatable work',
+      (String) outputMap.get('childErrorMessage')
+    );
+  }
+
+  @isTest
+  static void testCancellingParentDoesNotCreateUnroutedSignals() {
+    Test.startTest();
+    Id parentId = WorkflowEngine.start(
+      'ChildWorkflowCompositionExample',
+      'LoanApp_CancelNoSignals',
+      HIGH_SCORE_INPUT
+    );
+    WorkflowTestHarness parentHarness = new WorkflowTestHarness(parentId);
+    parentHarness.step();
+    Test.stopTest();
+
+    // Verify parent is suspended and child exists
+    Workflow_Instance__c childInst = [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentId
+      LIMIT 1
+    ];
+    System.assertEquals('Pending', childInst.Status__c);
+
+    // Cancel the parent - this will cancel both parent and child
+    WorkflowEngine.cancel(parentId, false);
+    Test.getEventBus().deliver();
+
+    // Verify both are cancelled
+    Workflow_Instance__c parentInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals('Cancelled', parentInst.Status__c);
+
+    Workflow_Instance__c cancelledChild = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childInst.Id
+    ];
+    System.assertEquals('Cancelled', cancelledChild.Status__c);
+
+    // Verify that NO signals were created on the parent
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE Correlation_Key__c = 'LoanApp_CancelNoSignals'
+      ],
+      'No signals should be created on the parent after tree cancellation'
+    );
+  }
+
+  // Helper Workflows for compensation stack drain test
+  public class CompensatingParentWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'ChildWorkflowCompositionExampleTest.LaunchCompensatingChildStep',
+        'ChildWorkflowCompositionExampleTest.HandleCompensatedOutcomeStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'ChildWorkflowCompositionExampleTest.LaunchCompensatingChildStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (
+        currentStepName ==
+        'ChildWorkflowCompositionExampleTest.LaunchCompensatingChildStep'
+      ) {
+        return stepResult.nextStepName;
+      }
+      return null;
+    }
+  }
+
+  public class LaunchCompensatingChildStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      String childKey = 'CompensateCheck_' + ctx.workflowInstanceId;
+      StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
+
+      if (outcome.isPresent()) {
+        return StepResult.complete(
+          'ChildWorkflowCompositionExampleTest.HandleCompensatedOutcomeStep',
+          new Map<String, Object>{
+            'status' => outcome.status,
+            'errorMessage' => outcome.errorMessage
+          }
+        );
+      }
+
+      List<Workflow_Instance__c> alreadyLaunched = [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE
+          Parent_Instance__c = :ctx.workflowInstanceId
+          AND Correlation_Key__c = :childKey
+        WITH USER_MODE
+        LIMIT 1
+      ];
+      if (!alreadyLaunched.isEmpty()) {
+        return StepResult.suspend();
+      }
+
+      return StepResult.startChild(
+        'ChildWorkflowCompositionExampleTest.CompensatingChildWorkflow',
+        childKey,
+        null
+      );
+    }
+  }
+
+  public class HandleCompensatedOutcomeStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
+        ctx.inputJson
+      );
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{
+          'parentDecision' => 'handled',
+          'childStatus' => input.get('status'),
+          'childErrorMessage' => input.get('errorMessage')
+        }
+      );
+    }
+  }
+
+  public class CompensatingChildWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'ChildWorkflowCompositionExampleTest.CompensatingStep',
+        'ChildWorkflowCompositionExampleTest.FailingStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'ChildWorkflowCompositionExampleTest.CompensatingStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (
+        currentStepName ==
+        'ChildWorkflowCompositionExampleTest.CompensatingStep'
+      ) {
+        return 'ChildWorkflowCompositionExampleTest.FailingStep';
+      }
+      return null;
+    }
+  }
+
+  public class CompensatingStep implements CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{ 'value' => 42 }
+      );
+    }
+    public StepResult compensate(StepContext ctx) {
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{ 'compensated' => true }
+      );
+    }
+  }
+
+  public class FailingStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.fail('Simulated failure after compensatable work');
+    }
   }
 }

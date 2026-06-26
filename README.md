@@ -285,14 +285,13 @@ The engine ships full parent→child orchestration: `StepResult.startChild()` su
 | Concern               | Rule                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Suspend**           | Return `StepResult.startChild(childWorkflowName, childKey, input)` from the step that launches the child. The engine suspends the parent automatically — do **not** also return `StepResult.suspend()`.                                                                                                                                                                                                                |
-| **Child output**      | The child's final output arrives as the payload of the `ChildCompleted:<childKey>` signal. Read it with `ctx.getSignal("ChildCompleted:" + childKey).payload` — no hand-rolled SOQL against `Workflow_Signal__c`.                                                                                                                                                                                                      |
-| **Idempotent resume** | The step that launched the child also handles the resume: check for the completion signal first, then act on it. Return `StepResult.complete()` (not `suspend()`) on the resume path — returning COMPLETE triggers engine-managed signal consumption, so an at-least-once redelivered duplicate `ChildCompleted` event cannot double-advance the parent.                                                               |
+| **Child output**      | The child's final outcome (status, error message, and output) can be read with `ctx.getChildOutcome(childKey)`. This is the preferred way to distinguish a successful child from a failed, compensated, or cancelled one without hand-rolled SOQL. For backward compatibility, the successful child's final output still arrives as the payload of the `ChildCompleted:<childKey>` signal (read with `ctx.getSignal("ChildCompleted:" + childKey).payload`). |
+| **Idempotent resume** | The step that launched the child also handles the resume: check for the child outcome first, then act on it. Return `StepResult.complete()` (not `suspend()`) on the resume path — returning COMPLETE triggers engine-managed signal consumption, so an at-least-once redelivered duplicate completion or failure event cannot double-advance the parent. |
 | **Idempotent launch** | The engine re-runs the current step on stray orchestrator hops / watchdog re-checks while the parent is `Suspended`. Before calling `startChild()` again, check whether the child already exists (query `Workflow_Instance__c` by `Parent_Instance__c` + `Correlation_Key__c`) and re-suspend if so — a second `startChild()` with the same key hits the engine's duplicate-active-key guard and **fails** the parent. |
 | **Cancellation**      | `WorkflowEngine.cancel(parentId, false)` cancels the parent and all of its active descendants (root-first traversal over `Parent_Instance__c`), so explicitly cancelling a parent reaps its in-flight children.                                                                                                                                                                                                        |
 
-**Caveats (failure paths are not auto-handled).** This contract covers the _successful_ child path. Two failure modes need explicit handling in a production composite:
+**Caveats (failure paths are not auto-handled).** This contract covers parent→child composition. One failure mode still needs explicit handling in a production composite:
 
-- **A child that fails or times out never publishes `ChildCompleted`** (`notifyParentCompletion()` runs only on the child's Completed transition), so the parent stays `Suspended` indefinitely. Add your own child-failure/timeout signal — or a watchdog timeout on the launcher step — if you must react to a failed child.
 - **A parent that _fails_ does not cascade to its children.** `failWorkflowInstance()` does not traverse `Parent_Instance__c`; only explicit `WorkflowEngine.cancel()` reaps descendants. A failing parent leaves its in-flight children running unless you cancel them.
 
 **Minimal launcher + resume step**
@@ -301,17 +300,22 @@ The engine ships full parent→child orchestration: `StepResult.startChild()` su
 public class RequestCreditCheckStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
         String childKey = 'CreditCheck_' + ctx.workflowInstanceId;
-        StepContext.Signal done = ctx.getSignal('ChildCompleted:' + childKey);
+        StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
 
-        if (done.isPresent()) {
-            // Resume: read the child's output from the signal payload.
-            Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(
-                WorkflowEngine.resolvePayload(done.payload)
-            );
-            // ... inspect childResult and return StepResult.complete(nextStep, output)
+        if (outcome.isPresent()) {
+            if (outcome.isSuccess()) {
+                // Resume: read the child's output.
+                Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(
+                    WorkflowEngine.resolvePayload(outcome.output)
+                );
+                // ... inspect childResult and return StepResult.complete(nextStep, output)
+            } else {
+                // Fallback: child failed, compensated, or was cancelled.
+                // ... handle failure (e.g. route to a fallback step)
+            }
         }
 
-        // No completion signal yet. If the child already exists (a re-entrant hop),
+        // No completion/failure signal yet. If the child already exists (a re-entrant hop),
         // re-suspend rather than launching a duplicate (see "Idempotent launch").
         List<Workflow_Instance__c> alreadyLaunched = [
             SELECT Id FROM Workflow_Instance__c

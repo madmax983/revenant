@@ -1308,7 +1308,10 @@ public class StepContextTest {
     );
     System.assertEquals(1, ctx.attempt, 'Default attempt should be 1');
     System.assertEquals(1, ctx.maxAttempts, 'Default maxAttempts should be 1');
-    System.assert(ctx.isFinalAttempt(), 'Default context should be final attempt');
+    System.assert(
+      ctx.isFinalAttempt(),
+      'Default context should be final attempt'
+    );
   }
 
   @isTest
@@ -1359,7 +1362,11 @@ public class StepContextTest {
     System.assertEquals(3, ctx.maxAttempts);
     System.assert(!ctx.isFinalAttempt());
     // Verify that '__maxAttempts' was stripped from the in-memory captured values map (so a once() check executes the producer)
-    System.assertEquals(5, Integer.valueOf(ctx.once('__maxAttempts', new ObjectProducer(5))), 'Should strip __maxAttempts from in-memory captured values');
+    System.assertEquals(
+      5,
+      Integer.valueOf(ctx.once('__maxAttempts', new ObjectProducer(5))),
+      'Should strip __maxAttempts from in-memory captured values'
+    );
   }
 
   @isTest
@@ -1383,29 +1390,31 @@ public class StepContextTest {
       null,
       priorJson,
       1, // attempt
-      3  // maxAttempts
+      3 // maxAttempts
     );
     System.assertEquals(3, ctx.maxAttempts);
-    
+
     // Simulate step execution yielding and capturing a new value
     ctx.once('newValue', new ObjectProducer('val'));
     System.assert(ctx.hasNewCaptures());
-    
+
     // Get serialized JSON to write back to db
     String outputJson = ctx.getCapturedValuesJson();
     System.assert(outputJson.contains('newValue'));
     System.assert(outputJson.contains('REF-001'));
     System.assert(outputJson.contains('__maxAttempts')); // MUST contain max attempts!
-    
+
     // De-serialize and verify
-    Map<String, Object> deserialized = (Map<String, Object>) JSON.deserializeUntyped(outputJson);
+    Map<String, Object> deserialized = (Map<String, Object>) JSON.deserializeUntyped(
+      outputJson
+    );
     System.assertEquals(3, Integer.valueOf(deserialized.get('__maxAttempts')));
   }
 
   @isTest
   static void testRetryRobustnessDecimalAndMalformedJson() {
     Id instanceId = '00D000000000001EAA';
-    
+
     // 1. Double/Decimal value parsed from JSON
     String decimalJson = '{"__maxAttempts":3.0}';
     StepContext ctx = StepContext.withCapturedValues(
@@ -1422,8 +1431,12 @@ public class StepContextTest {
       null,
       decimalJson
     );
-    System.assertEquals(3, ctx.maxAttempts, 'Should parse double/decimal attempts safely');
-    
+    System.assertEquals(
+      3,
+      ctx.maxAttempts,
+      'Should parse double/decimal attempts safely'
+    );
+
     // 2. Malformed JSON should not crash
     StepContext ctx2 = StepContext.withCapturedValues(
       instanceId,
@@ -1439,7 +1452,11 @@ public class StepContextTest {
       null,
       '{"__maxAttempts":'
     );
-    System.assertEquals(1, ctx2.maxAttempts, 'Should fallback to default 1 on malformed JSON');
+    System.assertEquals(
+      1,
+      ctx2.maxAttempts,
+      'Should fallback to default 1 on malformed JSON'
+    );
   }
 
   @isTest
@@ -1460,13 +1477,17 @@ public class StepContextTest {
 
     ctx.reportProgress(42.5, 'Processing batch 3');
     System.assertEquals(true, ctx.isProgressReported());
-    Map<String, Object> progress = (Map<String, Object>) JSON.deserializeUntyped(ctx.getProgressJson());
+    Map<String, Object> progress = (Map<String, Object>) JSON.deserializeUntyped(
+      ctx.getProgressJson()
+    );
     System.assertEquals(42.5, (Decimal) progress.get('percentComplete'));
     System.assertEquals('Processing batch 3', (String) progress.get('message'));
 
     ctx.reportProgress(new Map<String, Object>{ 'custom' => 'data' });
     System.assertEquals(true, ctx.isProgressReported());
-    Map<String, Object> customProgress = (Map<String, Object>) JSON.deserializeUntyped(ctx.getProgressJson());
+    Map<String, Object> customProgress = (Map<String, Object>) JSON.deserializeUntyped(
+      ctx.getProgressJson()
+    );
     System.assertEquals('data', (String) customProgress.get('custom'));
 
     ctx.reportProgress(null);
@@ -1519,8 +1540,11 @@ public class StepContextTest {
     System.assertEquals(false, ctx.getSignal('Go').isPresent());
 
     Test.startTest();
-    WorkflowEngine.redeliverMatchingSignalsForInstance(inst.Id, inst.Correlation_Key__c);
-    
+    WorkflowEngine.redeliverMatchingSignalsForInstance(
+      inst.Id,
+      inst.Correlation_Key__c
+    );
+
     // Create a new context since the old one cached the empty signal list
     ctx = new StepContext(
       inst.Id,
@@ -1589,7 +1613,10 @@ public class StepContextTest {
     );
 
     Test.startTest();
-    WorkflowEngine.redeliverMatchingSignalsForInstance(inst.Id, inst.Correlation_Key__c);
+    WorkflowEngine.redeliverMatchingSignalsForInstance(
+      inst.Id,
+      inst.Correlation_Key__c
+    );
     Test.stopTest();
 
     Workflow_Signal__c reloadedSig1 = [
@@ -1597,14 +1624,22 @@ public class StepContextTest {
       FROM Workflow_Signal__c
       WHERE Id = :sig1.Id
     ];
-    System.assertEquals('Received', reloadedSig1.Status__c, 'Oldest signal must be auto-delivered');
+    System.assertEquals(
+      'Received',
+      reloadedSig1.Status__c,
+      'Oldest signal must be auto-delivered'
+    );
 
     Workflow_Signal__c reloadedSig2 = [
       SELECT Status__c, Workflow_Instance__c
       FROM Workflow_Signal__c
       WHERE Id = :sig2.Id
     ];
-    System.assertEquals('Received', reloadedSig2.Status__c, 'Newer signal must also be auto-delivered');
+    System.assertEquals(
+      'Received',
+      reloadedSig2.Status__c,
+      'Newer signal must also be auto-delivered'
+    );
   }
 
   @isTest
@@ -1621,17 +1656,22 @@ public class StepContextTest {
     List<Workflow_Signal__c> signals = new List<Workflow_Signal__c>();
     // Insert 120 signals to exceed any previous 100-limit cap
     for (Integer i = 0; i < 120; i++) {
-      signals.add(new Workflow_Signal__c(
-        Correlation_Key__c = 'CorrKey-LargeBacklog',
-        Signal_Name__c = 'Go',
-        Payload__c = '{"val":' + i + '}',
-        Status__c = 'Unrouted'
-      ));
+      signals.add(
+        new Workflow_Signal__c(
+          Correlation_Key__c = 'CorrKey-LargeBacklog',
+          Signal_Name__c = 'Go',
+          Payload__c = '{"val":' + i + '}',
+          Status__c = 'Unrouted'
+        )
+      );
     }
     insert signals;
 
     Test.startTest();
-    WorkflowEngine.redeliverMatchingSignalsForInstance(inst.Id, inst.Correlation_Key__c);
+    WorkflowEngine.redeliverMatchingSignalsForInstance(
+      inst.Id,
+      inst.Correlation_Key__c
+    );
     Test.stopTest();
 
     List<Workflow_Signal__c> reloadedSignals = [
@@ -1641,9 +1681,262 @@ public class StepContextTest {
     ];
     System.assertEquals(120, reloadedSignals.size());
     for (Workflow_Signal__c sig : reloadedSignals) {
-      System.assertEquals('Received', sig.Status__c, 'All signals in the large backlog must be auto-delivered');
-      System.assertEquals(inst.Id, sig.Workflow_Instance__c, 'All signals must be bound to the correct instance');
+      System.assertEquals(
+        'Received',
+        sig.Status__c,
+        'All signals in the large backlog must be auto-delivered'
+      );
+      System.assertEquals(
+        inst.Id,
+        sig.Workflow_Instance__c,
+        'All signals must be bound to the correct instance'
+      );
     }
   }
-}
 
+  private class MapSignalSource implements StepContext.SignalSource {
+    private final Map<String, StepContext.Signal> signals;
+    private MapSignalSource(Map<String, StepContext.Signal> signals) {
+      this.signals = signals;
+    }
+    public List<StepContext.Signal> getPendingSignals(String name) {
+      StepContext.Signal s = signals.get(name.toLowerCase());
+      return s != null
+        ? new List<StepContext.Signal>{ s }
+        : new List<StepContext.Signal>();
+    }
+    public StepContext.Signal getLatestSignal(String name) {
+      return signals.get(name.toLowerCase());
+    }
+    public Boolean readWasCapped() {
+      return false;
+    }
+  }
+
+  @isTest
+  static void testGetChildOutcomeNotPresent() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    MapSignalSource fakeSource = new MapSignalSource(
+      new Map<String, StepContext.Signal>()
+    );
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      fakeSource
+    );
+
+    StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+    System.assertEquals(false, outcome.isPresent());
+    System.assertEquals(false, outcome.isSuccess());
+    System.assertEquals(null, outcome.status);
+    System.assertEquals(null, outcome.errorMessage);
+    System.assertEquals(null, outcome.output);
+  }
+
+  @isTest
+  static void testGetChildOutcomeCompleted() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    Map<String, StepContext.Signal> sigs = new Map<String, StepContext.Signal>{
+      'childcompleted:cc_1' => new StepContext.Signal(
+        null,
+        'ChildCompleted:CC_1',
+        '{"score":700}'
+      )
+    };
+    MapSignalSource fakeSource = new MapSignalSource(sigs);
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      fakeSource
+    );
+
+    StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+    System.assertEquals(true, outcome.isPresent());
+    System.assertEquals(true, outcome.isSuccess());
+    System.assertEquals('Completed', outcome.status);
+    System.assertEquals(null, outcome.errorMessage);
+    System.assertEquals('{"score":700}', outcome.output);
+  }
+
+  @isTest
+  static void testGetChildOutcomeFailedStructured() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    Map<String, StepContext.Signal> sigs = new Map<String, StepContext.Signal>{
+      'childfailed:cc_1' => new StepContext.Signal(
+        null,
+        'ChildFailed:CC_1',
+        '{"status":"Failed","errorMessage":"Step crashed","output":"partialData"}'
+      )
+    };
+    MapSignalSource fakeSource = new MapSignalSource(sigs);
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      fakeSource
+    );
+
+    StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+    System.assertEquals(true, outcome.isPresent());
+    System.assertEquals(false, outcome.isSuccess());
+    System.assertEquals('Failed', outcome.status);
+    System.assertEquals('Step crashed', outcome.errorMessage);
+    System.assertEquals('partialData', outcome.output);
+  }
+
+  @isTest
+  static void testGetChildOutcomeFailedMalformed() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    Map<String, StepContext.Signal> sigs = new Map<String, StepContext.Signal>{
+      'childfailed:cc_1' => new StepContext.Signal(
+        null,
+        'ChildFailed:CC_1',
+        'Raw error message string'
+      )
+    };
+    MapSignalSource fakeSource = new MapSignalSource(sigs);
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      fakeSource
+    );
+
+    StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+    System.assertEquals(true, outcome.isPresent());
+    System.assertEquals(false, outcome.isSuccess());
+    System.assertEquals('Failed', outcome.status);
+    System.assertEquals('Raw error message string', outcome.errorMessage);
+    System.assertEquals(null, outcome.output);
+  }
+
+  @isTest
+  static void testGetChildOutcomeConsumesBothSignals() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    Map<String, StepContext.Signal> sigs = new Map<String, StepContext.Signal>{
+      'childcompleted:cc_1' => new StepContext.Signal(
+        null,
+        'ChildCompleted:CC_1',
+        '{"score":700}'
+      )
+    };
+    MapSignalSource fakeSource = new MapSignalSource(sigs);
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      fakeSource
+    );
+
+    StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+    System.assertEquals(true, outcome.isPresent());
+    System.assertEquals(true, outcome.isSuccess());
+
+    Set<String> consumedNames = ctx.getConsumedSignalNames();
+    System.assert(
+      consumedNames.contains('ChildCompleted:CC_1'),
+      'Must consume ChildCompleted signal name'
+    );
+    System.assert(
+      consumedNames.contains('ChildFailed:CC_1'),
+      'Must consume ChildFailed signal name unconditionally to clean up duplicate/delayed sibling signals'
+    );
+  }
+
+  @isTest
+  static void testGetChildOutcomeConsumesBothSignalsWhenFailed() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    Map<String, StepContext.Signal> sigs = new Map<String, StepContext.Signal>{
+      'childfailed:cc_1' => new StepContext.Signal(
+        null,
+        'ChildFailed:CC_1',
+        '{"status":"Failed"}'
+      )
+    };
+    MapSignalSource fakeSource = new MapSignalSource(sigs);
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      fakeSource
+    );
+
+    StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+    System.assertEquals(true, outcome.isPresent());
+    System.assertEquals(false, outcome.isSuccess());
+
+    Set<String> consumedNames = ctx.getConsumedSignalNames();
+    System.assert(
+      consumedNames.contains('ChildCompleted:CC_1'),
+      'Must consume ChildCompleted signal name unconditionally'
+    );
+    System.assert(
+      consumedNames.contains('ChildFailed:CC_1'),
+      'Must consume ChildFailed signal name'
+    );
+  }
+
+  @isTest
+  static void testGetChildOutcomeDoesNotConsumeWhenAbsent() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    MapSignalSource fakeSource = new MapSignalSource(
+      new Map<String, StepContext.Signal>()
+    );
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'W',
+      'S',
+      null,
+      null,
+      null,
+      null,
+      1,
+      fakeSource
+    );
+
+    StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+    System.assertEquals(false, outcome.isPresent());
+
+    Set<String> consumedNames = ctx.getConsumedSignalNames();
+    System.assert(
+      !consumedNames.contains('ChildCompleted:CC_1'),
+      'Must not consume ChildCompleted signal name when absent'
+    );
+    System.assert(
+      !consumedNames.contains('ChildFailed:CC_1'),
+      'Must not consume ChildFailed signal name when absent'
+    );
+  }
+}
