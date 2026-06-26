@@ -81,9 +81,8 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
    * Re-entry  — no signal yet, but a child with this correlation key already
    *              exists → re-suspend.  The engine re-runs the current step on any
    *              stray orchestrator hop / watchdog re-check / redelivered resume
-   *              while the instance is Suspended; calling startChild() a second time
-   *              with the same key would hit the engine's duplicate-active-key guard
-   *              and FAIL the parent, so we must idempotently wait instead.
+   *              while the instance is Suspended. Calling startChild() a second time
+   *              with the same key resolves to a native idempotent re-suspend.
    *
    * First run — no signal and no child yet → startChild.  The engine suspends the
    *              parent and starts the child's own Queueable chain.  This same step
@@ -134,20 +133,8 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
         }
       }
 
-      // No completion signal yet.  If we already launched the child on a prior run
-      // of this step, re-suspend idempotently rather than starting a duplicate.
-      List<Workflow_Instance__c> alreadyLaunched = [
-        SELECT Id
-        FROM Workflow_Instance__c
-        WHERE
-          Parent_Instance__c = :ctx.workflowInstanceId
-          AND Correlation_Key__c = :childKey
-        WITH USER_MODE
-        LIMIT 1
-      ];
-      if (!alreadyLaunched.isEmpty()) {
-        return StepResult.suspend();
-      }
+      // No completion signal yet. First run or re-entrant hop: delegate credit scoring
+      // to the child workflow and suspend. The engine handles re-entrancy idempotently.
 
       // First run: delegate credit scoring to the child workflow and suspend.
       Map<String, Object> applicantData = (Map<String, Object>) JSON.deserializeUntyped(

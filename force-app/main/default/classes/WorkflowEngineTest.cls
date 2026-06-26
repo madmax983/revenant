@@ -1320,9 +1320,7 @@ public class WorkflowEngineTest {
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
       Status__c = 'Compensating',
       Compensation_Stack__c = JSON.serialize(
-        new List<String>{
-          'WorkflowEngineTest.PreviousRunAtCompensatableStep'
-        }
+        new List<String>{ 'WorkflowEngineTest.PreviousRunAtCompensatableStep' }
       ),
       Input__c = '{"test": true}',
       Previous_Run_At__c = priorRun
@@ -1685,7 +1683,12 @@ public class WorkflowEngineTest {
     Test.stopTest();
 
     Workflow_Instance__c failedInst = [
-      SELECT Status__c, Error_Message__c, Sleep_Until__c, Async_Job_Id__c, Failure_Category__c
+      SELECT
+        Status__c,
+        Error_Message__c,
+        Sleep_Until__c,
+        Async_Job_Id__c,
+        Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
@@ -2210,14 +2213,24 @@ public class WorkflowEngineTest {
 
     // Find and run Run 2
     Workflow_Instance__c run2 = [
-      SELECT Id, Status__c, Correlation_Key__c, Input__c, Previous_Instance__c, Previous_Run_At__c
+      SELECT
+        Id,
+        Status__c,
+        Correlation_Key__c,
+        Input__c,
+        Previous_Instance__c,
+        Previous_Run_At__c
       FROM Workflow_Instance__c
       WHERE Previous_Instance__c = :run1.Id
     ];
     System.assertEquals('Pending', run2.Status__c);
     System.assertEquals('DaemonKey_run2', run2.Correlation_Key__c);
     System.assertEquals('1', run2.Input__c);
-    System.assertNotEquals(null, run2.Previous_Run_At__c, 'Successor instance must carry the predecessor run timestamp');
+    System.assertNotEquals(
+      null,
+      run2.Previous_Run_At__c,
+      'Successor instance must carry the predecessor run timestamp'
+    );
 
     // Execute Run 2 (counter 1 -> continueAsNew 2)
     new WorkflowOrchestrator(run2.Id).execute(null);
@@ -3015,13 +3028,20 @@ public class WorkflowEngineTest {
 
     // Verify instance status transitions to Failed and does not get stuck in Compensating
     Workflow_Instance__c timedOutInst = [
-      SELECT Status__c, Error_Message__c, Compensation_Stack__c, Failure_Category__c
+      SELECT
+        Status__c,
+        Error_Message__c,
+        Compensation_Stack__c,
+        Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
     System.assertEquals('CompensationFailed', timedOutInst.Status__c);
     System.assert(timedOutInst.Error_Message__c.contains('timed out'));
-    System.assertEquals('COMPENSATION_FAILED', timedOutInst.Failure_Category__c);
+    System.assertEquals(
+      'COMPENSATION_FAILED',
+      timedOutInst.Failure_Category__c
+    );
     // Compensation stack should NOT be popped
     List<String> stack = (List<String>) JSON.deserialize(
       timedOutInst.Compensation_Stack__c,
@@ -3051,7 +3071,11 @@ public class WorkflowEngineTest {
 
     // Verify instance transitions to Failed and does not pop the stack
     Workflow_Instance__c failedInst = [
-      SELECT Status__c, Error_Message__c, Compensation_Stack__c, Failure_Category__c
+      SELECT
+        Status__c,
+        Error_Message__c,
+        Compensation_Stack__c,
+        Failure_Category__c
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
     ];
@@ -3101,7 +3125,7 @@ public class WorkflowEngineTest {
     System.assert(
       stalled.Error_Message__c.contains('Cancelled'),
       'Stalled cancel rollback must retain its Cancelled marker: ' +
-        stalled.Error_Message__c
+      stalled.Error_Message__c
     );
 
     // The transient failure clears; the operator resumes the rollback.
@@ -3121,7 +3145,7 @@ public class WorkflowEngineTest {
       resumed.Error_Message__c != null &&
       resumed.Error_Message__c.contains('Cancelled'),
       'Resumed cancel rollback must retain the Cancelled phase marker: ' +
-        resumed.Error_Message__c
+      resumed.Error_Message__c
     );
 
     WorkflowEngine.runStep(inst.Id, null); // compensate succeeds -> stack drains
@@ -3473,7 +3497,7 @@ public class WorkflowEngineTest {
     System.assert(
       fresh.Output__c != null && fresh.Output__c.contains('checkpoint'),
       'Resume attempt must be seeded from the compensation checkpoint, got: ' +
-        fresh.Output__c
+      fresh.Output__c
     );
   }
 
@@ -3661,7 +3685,9 @@ public class WorkflowEngineTest {
     Test.startTest();
     WorkflowEngine.handleCrash(
       inst.Id,
-      new WorkflowEngine.WorkflowException('Crash resuming sleeping compensation')
+      new WorkflowEngine.WorkflowException(
+        'Crash resuming sleeping compensation'
+      )
     );
 
     Workflow_Step_Execution__c crashedComp = [
@@ -3748,7 +3774,9 @@ public class WorkflowEngineTest {
     Test.startTest();
     WorkflowEngine.handleCrash(
       inst.Id,
-      new WorkflowEngine.WorkflowException('Crash resuming sleeping cancel compensation')
+      new WorkflowEngine.WorkflowException(
+        'Crash resuming sleeping cancel compensation'
+      )
     );
 
     Workflow_Instance__c stalled = [
@@ -4275,14 +4303,22 @@ public class WorkflowEngineTest {
       WHERE Id = :run1Id
     ];
     System.assertEquals('ContinuedAsNew', run1.Status__c);
-    System.assertEquals(null, run1.Previous_Run_At__c, 'First instance must not have Previous_Run_At__c set');
+    System.assertEquals(
+      null,
+      run1.Previous_Run_At__c,
+      'First instance must not have Previous_Run_At__c set'
+    );
 
     Workflow_Instance__c run2 = [
       SELECT Id, Previous_Run_At__c
       FROM Workflow_Instance__c
       WHERE Previous_Instance__c = :run1Id
     ];
-    System.assertNotEquals(null, run2.Previous_Run_At__c, 'Continuation instance must have Previous_Run_At__c set');
+    System.assertNotEquals(
+      null,
+      run2.Previous_Run_At__c,
+      'Continuation instance must have Previous_Run_At__c set'
+    );
 
     new WorkflowOrchestrator(run2.Id).execute(null);
 
@@ -4294,7 +4330,11 @@ public class WorkflowEngineTest {
     System.assertEquals('Completed', run2Final.Status__c);
     Long outputTime = Long.valueOf(run2Final.Output__c);
     Long fieldTime = run2.Previous_Run_At__c.getTime();
-    System.assertEquals(fieldTime, outputTime, 'StepContext.previousRunAt must equal Previous_Run_At__c on the instance');
+    System.assertEquals(
+      fieldTime,
+      outputTime,
+      'StepContext.previousRunAt must equal Previous_Run_At__c on the instance'
+    );
   }
 
   // ── Unrouted-signal capture & re-delivery tests ────────────────────────────
@@ -4310,20 +4350,43 @@ public class WorkflowEngineTest {
     Test.stopTest();
 
     List<Workflow_Signal__c> captured = [
-      SELECT Id, Status__c, Correlation_Key__c, Signal_Name__c, Payload__c, Workflow_Instance__c
+      SELECT
+        Id,
+        Status__c,
+        Correlation_Key__c,
+        Signal_Name__c,
+        Payload__c,
+        Workflow_Instance__c
       FROM Workflow_Signal__c
       WHERE Correlation_Key__c = 'NoSuchKey-Single'
     ];
-    System.assertEquals(1, captured.size(), 'Unmatched signal must be captured as one row');
-    System.assertEquals('Unrouted', captured[0].Status__c, 'Captured signal must have Unrouted status');
+    System.assertEquals(
+      1,
+      captured.size(),
+      'Unmatched signal must be captured as one row'
+    );
+    System.assertEquals(
+      'Unrouted',
+      captured[0].Status__c,
+      'Captured signal must have Unrouted status'
+    );
     System.assertEquals('WakeUp', captured[0].Signal_Name__c);
     System.assertEquals('{"x":1}', captured[0].Payload__c);
-    System.assertEquals(null, captured[0].Workflow_Instance__c, 'Unrouted signal must have no parent instance');
+    System.assertEquals(
+      null,
+      captured[0].Workflow_Instance__c,
+      'Unrouted signal must have no parent instance'
+    );
 
     List<Workflow_Step_Execution__c> steps = [
-      SELECT Id FROM Workflow_Step_Execution__c
+      SELECT Id
+      FROM Workflow_Step_Execution__c
     ];
-    System.assertEquals(0, steps.size(), 'Signal capture must never write step-execution rows');
+    System.assertEquals(
+      0,
+      steps.size(),
+      'Signal capture must never write step-execution rows'
+    );
   }
 
   @isTest
@@ -4345,7 +4408,11 @@ public class WorkflowEngineTest {
       WHERE Correlation_Key__c IN ('BulkKey-A', 'BulkKey-B')
       ORDER BY Correlation_Key__c ASC
     ];
-    System.assertEquals(2, captured.size(), 'Both unmatched bulk signals must be captured');
+    System.assertEquals(
+      2,
+      captured.size(),
+      'Both unmatched bulk signals must be captured'
+    );
     System.assertEquals('Unrouted', captured[0].Status__c);
     System.assertEquals('Unrouted', captured[1].Status__c);
     System.assertEquals('BulkKey-A', captured[0].Correlation_Key__c);
@@ -4363,17 +4430,32 @@ public class WorkflowEngineTest {
     Test.startTest();
     WorkflowEngine.signal(
       new List<WorkflowEngine.SignalRequest>{
-        new WorkflowEngine.SignalRequest('IdempKey', 'Arrive', '{"n":1}', dedupKey)
+        new WorkflowEngine.SignalRequest(
+          'IdempKey',
+          'Arrive',
+          '{"n":1}',
+          dedupKey
+        )
       }
     );
     WorkflowEngine.signal(
       new List<WorkflowEngine.SignalRequest>{
-        new WorkflowEngine.SignalRequest('IdempKey', 'Arrive', '{"n":1}', dedupKey)
+        new WorkflowEngine.SignalRequest(
+          'IdempKey',
+          'Arrive',
+          '{"n":1}',
+          dedupKey
+        )
       }
     );
     WorkflowEngine.signal(
       new List<WorkflowEngine.SignalRequest>{
-        new WorkflowEngine.SignalRequest('IdempKey', 'Arrive', '{"n":1}', dedupKey)
+        new WorkflowEngine.SignalRequest(
+          'IdempKey',
+          'Arrive',
+          '{"n":1}',
+          dedupKey
+        )
       }
     );
     Test.stopTest();
@@ -4416,20 +4498,38 @@ public class WorkflowEngineTest {
     Boolean matched = WorkflowEngine.redeliverCapturedSignal(sig.Id);
     Test.stopTest();
 
-    System.assertEquals(true, matched, 'Re-delivery must return true when a match is found');
+    System.assertEquals(
+      true,
+      matched,
+      'Re-delivery must return true when a match is found'
+    );
 
     Workflow_Signal__c reloaded = [
       SELECT Id, Status__c, Workflow_Instance__c
       FROM Workflow_Signal__c
       WHERE Id = :sig.Id
     ];
-    System.assertEquals('Received', reloaded.Status__c, 'Re-delivered signal must have Received status');
-    System.assertEquals(inst.Id, reloaded.Workflow_Instance__c, 'Re-delivered signal must be parented to the matched instance');
+    System.assertEquals(
+      'Received',
+      reloaded.Status__c,
+      'Re-delivered signal must have Received status'
+    );
+    System.assertEquals(
+      inst.Id,
+      reloaded.Workflow_Instance__c,
+      'Re-delivered signal must be parented to the matched instance'
+    );
 
     Workflow_Instance__c reloadedInst = [
-      SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
     ];
-    System.assertEquals('Running', reloadedInst.Status__c, 'Suspended instance must be set to Running on re-delivery');
+    System.assertEquals(
+      'Running',
+      reloadedInst.Status__c,
+      'Suspended instance must be set to Running on re-delivery'
+    );
   }
 
   @isTest
@@ -4448,12 +4548,22 @@ public class WorkflowEngineTest {
     Boolean matched = WorkflowEngine.redeliverCapturedSignal(sig.Id);
     Test.stopTest();
 
-    System.assertEquals(false, matched, 'Re-delivery must return false when no active instance exists');
+    System.assertEquals(
+      false,
+      matched,
+      'Re-delivery must return false when no active instance exists'
+    );
 
     Workflow_Signal__c reloaded = [
-      SELECT Status__c, Workflow_Instance__c FROM Workflow_Signal__c WHERE Id = :sig.Id
+      SELECT Status__c, Workflow_Instance__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig.Id
     ];
-    System.assertEquals('Unrouted', reloaded.Status__c, 'Unmatched re-delivery must leave the row Unrouted');
+    System.assertEquals(
+      'Unrouted',
+      reloaded.Status__c,
+      'Unmatched re-delivery must leave the row Unrouted'
+    );
     System.assertEquals(null, reloaded.Workflow_Instance__c);
   }
 
@@ -4472,12 +4582,21 @@ public class WorkflowEngineTest {
     }
     Test.stopTest();
 
-    System.assert(threw, 'An unmatched Cancel signal must still throw, not be captured');
+    System.assert(
+      threw,
+      'An unmatched Cancel signal must still throw, not be captured'
+    );
 
     List<Workflow_Signal__c> captured = [
-      SELECT Id FROM Workflow_Signal__c WHERE Correlation_Key__c = 'NonExistentCancel'
+      SELECT Id
+      FROM Workflow_Signal__c
+      WHERE Correlation_Key__c = 'NonExistentCancel'
     ];
-    System.assertEquals(0, captured.size(), 'No Unrouted row must be created for an unmatched Cancel');
+    System.assertEquals(
+      0,
+      captured.size(),
+      'No Unrouted row must be created for an unmatched Cancel'
+    );
   }
 
   @isTest
@@ -4502,17 +4621,38 @@ public class WorkflowEngineTest {
       FROM Workflow_Signal__c
       WHERE Workflow_Instance__c = :inst.Id
     ];
-    System.assertEquals(1, signals.size(), 'Matched signal must produce exactly one Workflow_Signal__c row');
-    System.assertEquals('Received', signals[0].Status__c, 'Matched signal must have Received status (not Unrouted)');
+    System.assertEquals(
+      1,
+      signals.size(),
+      'Matched signal must produce exactly one Workflow_Signal__c row'
+    );
+    System.assertEquals(
+      'Received',
+      signals[0].Status__c,
+      'Matched signal must have Received status (not Unrouted)'
+    );
     System.assertEquals(inst.Id, signals[0].Workflow_Instance__c);
 
     Workflow_Instance__c reloaded = [
-      SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
     ];
-    System.assertEquals('Running', reloaded.Status__c, 'Matched suspended instance must be woken to Running');
+    System.assertEquals(
+      'Running',
+      reloaded.Status__c,
+      'Matched suspended instance must be woken to Running'
+    );
 
-    List<Workflow_Step_Execution__c> steps = [SELECT Id FROM Workflow_Step_Execution__c];
-    System.assertEquals(0, steps.size(), 'Signal delivery must not write step-execution rows');
+    List<Workflow_Step_Execution__c> steps = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+    ];
+    System.assertEquals(
+      0,
+      steps.size(),
+      'Signal delivery must not write step-execution rows'
+    );
   }
 
   // ==========================================
@@ -4615,10 +4755,7 @@ public class WorkflowEngineTest {
           'signaled'
         );
       }
-      return StepResult.suspend(
-        60,
-        'WorkflowEngineTest.TimeoutFallbackStep'
-      );
+      return StepResult.suspend(60, 'WorkflowEngineTest.TimeoutFallbackStep');
     }
   }
 
@@ -4746,7 +4883,11 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
-    System.assertEquals('Running', inst.Status__c, 'Should be Running after timeout');
+    System.assertEquals(
+      'Running',
+      inst.Status__c,
+      'Should be Running after timeout'
+    );
     System.assertEquals(
       'WorkflowEngineTest.TimeoutFallbackStep',
       inst.Current_Step__c,
@@ -4762,7 +4903,11 @@ public class WorkflowEngineTest {
         Workflow_Instance__c = :instanceId
         AND Step_Name__c = 'WorkflowEngineTest.TimeoutFallbackStep'
     ];
-    System.assertEquals(1, fallbackExecs.size(), 'Should have exactly one fallback exec');
+    System.assertEquals(
+      1,
+      fallbackExecs.size(),
+      'Should have exactly one fallback exec'
+    );
     System.assertEquals('Pending', fallbackExecs[0].Status__c);
 
     // Assert the original wait exec is UNMUTATED (append-only)
@@ -4808,7 +4953,7 @@ public class WorkflowEngineTest {
     ];
     System.assert(
       fallbackExec.Input__c == null ||
-        !fallbackExec.Input__c.contains('$timeoutResume'),
+      !fallbackExec.Input__c.contains('$timeoutResume'),
       'Engine marker $timeoutResume should not be visible in stored Input: ' +
       fallbackExec.Input__c
     );
@@ -4843,7 +4988,11 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
-    System.assertEquals('Running', inst.Status__c, 'Should be Running after signal');
+    System.assertEquals(
+      'Running',
+      inst.Status__c,
+      'Should be Running after signal'
+    );
     System.assertEquals(
       null,
       inst.Sleep_Until__c,
@@ -5054,9 +5203,9 @@ public class WorkflowEngineTest {
     );
     System.assert(
       waitExec.Output__c.contains('"$timeoutStep"') &&
-        waitExec.Output__c.contains(
-          'WorkflowEngineTest.ApprovalTimeoutFallbackStep'
-        ),
+      waitExec.Output__c.contains(
+        'WorkflowEngineTest.ApprovalTimeoutFallbackStep'
+      ),
       'Should contain $timeoutStep: ' + waitExec.Output__c
     );
 
@@ -5119,7 +5268,11 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
-    System.assertEquals('Running', inst.Status__c, 'Should be Running after resume');
+    System.assertEquals(
+      'Running',
+      inst.Status__c,
+      'Should be Running after resume'
+    );
     System.assertEquals(
       null,
       inst.Sleep_Until__c,
@@ -5153,9 +5306,15 @@ public class WorkflowEngineTest {
 
     try {
       WorkflowEngine.compensate(inst1.Id);
-      System.assert(false, 'Should have thrown exception for non-completed status');
+      System.assert(
+        false,
+        'Should have thrown exception for non-completed status'
+      );
     } catch (Exception ex) {
-      System.assert(ex.getMessage().contains('Only Completed'), 'Expected "Only Completed" error message: ' + ex.getMessage());
+      System.assert(
+        ex.getMessage().contains('Only Completed'),
+        'Expected "Only Completed" error message: ' + ex.getMessage()
+      );
     }
 
     // 2. Create a completed instance without compensation stack
@@ -5170,7 +5329,11 @@ public class WorkflowEngineTest {
       WorkflowEngine.compensate(inst2.Id);
       System.assert(false, 'Should have thrown exception for missing stack');
     } catch (Exception ex) {
-      System.assert(ex.getMessage().contains('No compensation stack found'), 'Expected "No compensation stack found" error message: ' + ex.getMessage());
+      System.assert(
+        ex.getMessage().contains('No compensation stack found'),
+        'Expected "No compensation stack found" error message: ' +
+        ex.getMessage()
+      );
     }
   }
 
@@ -5207,26 +5370,65 @@ public class WorkflowEngineTest {
     Id compensatingId = WorkflowEngine.compensate(target.Id);
     Test.stopTest();
 
-    System.assertNotEquals(null, compensatingId, 'Compensating run ID should be returned');
+    System.assertNotEquals(
+      null,
+      compensatingId,
+      'Compensating run ID should be returned'
+    );
 
     // Verify original target instance is linked to the new compensating instance
     Workflow_Instance__c targetReload = [
-      SELECT Compensated_By__c, Status__c FROM Workflow_Instance__c WHERE Id = :target.Id
+      SELECT Compensated_By__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :target.Id
     ];
-    System.assertEquals(compensatingId, targetReload.Compensated_By__c, 'Compensated_By__c should link to compensating run');
-    System.assertEquals('Completed', targetReload.Status__c, 'Original instance status must stay Completed');
+    System.assertEquals(
+      compensatingId,
+      targetReload.Compensated_By__c,
+      'Compensated_By__c should link to compensating run'
+    );
+    System.assertEquals(
+      'Completed',
+      targetReload.Status__c,
+      'Original instance status must stay Completed'
+    );
 
     // Verify the new compensating instance details
     Workflow_Instance__c compInst = [
-      SELECT Status__c, Previous_Instance__c, Correlation_Key__c, Root_Correlation_Key__c, Compensation_Stack__c
+      SELECT
+        Status__c,
+        Previous_Instance__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c,
+        Compensation_Stack__c
       FROM Workflow_Instance__c
       WHERE Id = :compensatingId
     ];
-    System.assertEquals('Compensating', compInst.Status__c, 'New run status must start as Compensating');
-    System.assertEquals(target.Id, compInst.Previous_Instance__c, 'Previous_Instance__c should link to the original target run');
-    System.assertEquals(target.Correlation_Key__c, compInst.Correlation_Key__c, 'Correlation key should carry forward');
-    System.assertEquals(target.Correlation_Key__c, compInst.Root_Correlation_Key__c, 'Root correlation key should carry forward');
-    System.assertEquals(target.Compensation_Stack__c, compInst.Compensation_Stack__c, 'Compensation stack should be copied');
+    System.assertEquals(
+      'Compensating',
+      compInst.Status__c,
+      'New run status must start as Compensating'
+    );
+    System.assertEquals(
+      target.Id,
+      compInst.Previous_Instance__c,
+      'Previous_Instance__c should link to the original target run'
+    );
+    System.assertEquals(
+      target.Correlation_Key__c,
+      compInst.Correlation_Key__c,
+      'Correlation key should carry forward'
+    );
+    System.assertEquals(
+      target.Correlation_Key__c,
+      compInst.Root_Correlation_Key__c,
+      'Root correlation key should carry forward'
+    );
+    System.assertEquals(
+      target.Compensation_Stack__c,
+      compInst.Compensation_Stack__c,
+      'Compensation stack should be copied'
+    );
 
     // Drive the compensation execution
     WorkflowEngine.runStep(compensatingId, null); // Runs CompensatableHappyStep
@@ -5234,9 +5436,15 @@ public class WorkflowEngineTest {
     WorkflowEngine.runStep(compensatingId, null); // Stack empty -> transition status to Compensated
 
     compInst = [
-      SELECT Status__c FROM Workflow_Instance__c WHERE Id = :compensatingId
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :compensatingId
     ];
-    System.assertEquals('Compensated', compInst.Status__c, 'Spawned compensating run should end in Compensated status');
+    System.assertEquals(
+      'Compensated',
+      compInst.Status__c,
+      'Spawned compensating run should end in Compensated status'
+    );
 
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Step_Name__c, Status__c, Output__c
@@ -5244,7 +5452,11 @@ public class WorkflowEngineTest {
       WHERE Workflow_Instance__c = :compensatingId
       ORDER BY CreatedDate ASC, Id ASC
     ];
-    System.assertEquals(2, stepExecs.size(), 'Should have created step execution logs on compensating run');
+    System.assertEquals(
+      2,
+      stepExecs.size(),
+      'Should have created step execution logs on compensating run'
+    );
     System.assertEquals(
       'WorkflowEngineTest.CompensatableHappyStep_Compensate',
       stepExecs[0].Step_Name__c
@@ -5256,7 +5468,7 @@ public class WorkflowEngineTest {
   // ==========================================
   // RETRY ATTEMPT EXPOSE TESTS
   // ==========================================
-  
+
   public static List<Map<String, Object>> observedAttemptStates = new List<Map<String, Object>>();
 
   public class RetryExposeWorkflow implements WorkflowDefinition {
@@ -5273,11 +5485,13 @@ public class WorkflowEngineTest {
 
   public class RetryExposeStep implements WorkflowStep, RetryConfigurable {
     public StepResult execute(StepContext ctx) {
-      observedAttemptStates.add(new Map<String, Object>{
-        'attempt' => ctx.attempt,
-        'maxAttempts' => ctx.maxAttempts,
-        'isFinalAttempt' => ctx.isFinalAttempt()
-      });
+      observedAttemptStates.add(
+        new Map<String, Object>{
+          'attempt' => ctx.attempt,
+          'maxAttempts' => ctx.maxAttempts,
+          'isFinalAttempt' => ctx.isFinalAttempt()
+        }
+      );
       RetryPolicy policy = getRetryPolicy();
       if (ctx.isFinalAttempt()) {
         return StepResult.complete(null, 'FallbackComplete');
@@ -5306,11 +5520,13 @@ public class WorkflowEngineTest {
 
   public class DynamicRetryStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      dynamicObservedStates.add(new Map<String, Object>{
-        'attempt' => ctx.attempt,
-        'maxAttempts' => ctx.maxAttempts,
-        'isFinalAttempt' => ctx.isFinalAttempt()
-      });
+      dynamicObservedStates.add(
+        new Map<String, Object>{
+          'attempt' => ctx.attempt,
+          'maxAttempts' => ctx.maxAttempts,
+          'isFinalAttempt' => ctx.isFinalAttempt()
+        }
+      );
       if (ctx.attempt >= 3) {
         return StepResult.complete(null, 'DynamicComplete');
       }
@@ -5344,11 +5560,13 @@ public class WorkflowEngineTest {
     }
 
     public StepResult compensate(StepContext ctx) {
-      compensationObservedStates.add(new Map<String, Object>{
-        'attempt' => ctx.attempt,
-        'maxAttempts' => ctx.maxAttempts,
-        'isFinalAttempt' => ctx.isFinalAttempt()
-      });
+      compensationObservedStates.add(
+        new Map<String, Object>{
+          'attempt' => ctx.attempt,
+          'maxAttempts' => ctx.maxAttempts,
+          'isFinalAttempt' => ctx.isFinalAttempt()
+        }
+      );
       if (ctx.isFinalAttempt()) {
         return StepResult.complete(null, 'Compensated');
       }
@@ -5383,15 +5601,20 @@ public class WorkflowEngineTest {
 
   public class LoopExposeStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      loopObservedStates.add(new Map<String, Object>{
-        'attempt' => ctx.attempt,
-        'maxAttempts' => ctx.maxAttempts
-      });
+      loopObservedStates.add(
+        new Map<String, Object>{
+          'attempt' => ctx.attempt,
+          'maxAttempts' => ctx.maxAttempts
+        }
+      );
       loopCounter++;
       if (loopCounter == 1) {
         return StepResult.retry(new RetryPolicy(1, (Double) 1.0, 2));
       } else if (loopCounter == 2) {
-        return StepResult.complete('WorkflowEngineTest.LoopExposeStep', 'TransitionSelf');
+        return StepResult.complete(
+          'WorkflowEngineTest.LoopExposeStep',
+          'TransitionSelf'
+        );
       }
       return StepResult.complete(null, 'LoopFinished');
     }
@@ -5436,7 +5659,11 @@ public class WorkflowEngineTest {
       LIMIT 1
     ];
     System.assertEquals('Completed', step.Status__c);
-    System.assertEquals(2, step.Retry_Count__c, 'Persisted Retry Count must be 2 (0-based retry count)');
+    System.assertEquals(
+      2,
+      step.Retry_Count__c,
+      'Persisted Retry Count must be 2 (0-based retry count)'
+    );
   }
 
   @isTest
@@ -5487,12 +5714,18 @@ public class WorkflowEngineTest {
     // Compensation Attempt 1
     System.assertEquals(1, compensationObservedStates[0].get('attempt'));
     System.assertEquals(2, compensationObservedStates[0].get('maxAttempts'));
-    System.assertEquals(false, compensationObservedStates[0].get('isFinalAttempt'));
+    System.assertEquals(
+      false,
+      compensationObservedStates[0].get('isFinalAttempt')
+    );
 
     // Compensation Attempt 2 (Final attempt)
     System.assertEquals(2, compensationObservedStates[1].get('attempt'));
     System.assertEquals(2, compensationObservedStates[1].get('maxAttempts'));
-    System.assertEquals(true, compensationObservedStates[1].get('isFinalAttempt'));
+    System.assertEquals(
+      true,
+      compensationObservedStates[1].get('isFinalAttempt')
+    );
   }
 
   @isTest
@@ -5514,7 +5747,7 @@ public class WorkflowEngineTest {
 
     // First visit: attempt 1
     System.assertEquals(1, loopObservedStates[0].get('attempt'));
-    
+
     // First visit: attempt 2 (retry)
     System.assertEquals(2, loopObservedStates[1].get('attempt'));
 
@@ -5556,10 +5789,15 @@ public class WorkflowEngineTest {
 
   public class ProgressStep2 implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      ctx.reportProgress(new Map<String, Object>{ 'stage' => 'Step 2 final', 'percent' => 90.0 });
+      ctx.reportProgress(
+        new Map<String, Object>{ 'stage' => 'Step 2 final', 'percent' => 90.0 }
+      );
       String inputStr = ctx.workflowInputJson;
       if (String.isBlank(inputStr) || !inputStr.contains('isSuccessor')) {
-        return StepResult.continueAsNew('{"isSuccessor": true}', 'key_successor');
+        return StepResult.continueAsNew(
+          '{"isSuccessor": true}',
+          'key_successor'
+        );
       }
       ctx.reportProgress(100.0, 'Workflow Complete');
       return StepResult.complete(null, 'Done');
@@ -5578,26 +5816,47 @@ public class WorkflowEngineTest {
 
     // 1. Run first step execution -> Should Yield and save progress (20%, Step 1: Yielding first)
     new WorkflowOrchestrator(instanceId).execute(null);
-    Workflow_Instance__c inst1 = [SELECT Status__c, Progress__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+    Workflow_Instance__c inst1 = [
+      SELECT Status__c, Progress__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
     System.assertEquals('Running', inst1.Status__c);
     System.assertNotEquals(null, inst1.Progress__c);
-    Map<String, Object> progress1 = (Map<String, Object>) JSON.deserializeUntyped(inst1.Progress__c);
+    Map<String, Object> progress1 = (Map<String, Object>) JSON.deserializeUntyped(
+      inst1.Progress__c
+    );
     System.assertEquals(20.0, (Decimal) progress1.get('percentComplete'));
-    System.assertEquals('Step 1: Yielding first', (String) progress1.get('message'));
+    System.assertEquals(
+      'Step 1: Yielding first',
+      (String) progress1.get('message')
+    );
 
     // 2. Run next step execution -> Should Complete Step 1 and update progress (50%, Step 1: Done)
     new WorkflowOrchestrator(instanceId).execute(null);
-    Workflow_Instance__c inst2 = [SELECT Status__c, Progress__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+    Workflow_Instance__c inst2 = [
+      SELECT Status__c, Progress__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
     System.assertEquals('Running', inst2.Status__c);
-    Map<String, Object> progress2 = (Map<String, Object>) JSON.deserializeUntyped(inst2.Progress__c);
+    Map<String, Object> progress2 = (Map<String, Object>) JSON.deserializeUntyped(
+      inst2.Progress__c
+    );
     System.assertEquals(50.0, (Decimal) progress2.get('percentComplete'));
     System.assertEquals('Step 1: Done', (String) progress2.get('message'));
 
     // 3. Run Step 2 execution -> Should ContinueAsNew and set progress (stage: Step 2 final, percent: 90%)
     new WorkflowOrchestrator(instanceId).execute(null);
-    Workflow_Instance__c inst3 = [SELECT Status__c, Progress__c FROM Workflow_Instance__c WHERE Id = :instanceId];
+    Workflow_Instance__c inst3 = [
+      SELECT Status__c, Progress__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
     System.assertEquals('ContinuedAsNew', inst3.Status__c);
-    Map<String, Object> progress3 = (Map<String, Object>) JSON.deserializeUntyped(inst3.Progress__c);
+    Map<String, Object> progress3 = (Map<String, Object>) JSON.deserializeUntyped(
+      inst3.Progress__c
+    );
     System.assertEquals(90.0, (Decimal) progress3.get('percent'));
     System.assertEquals('Step 2 final', (String) progress3.get('stage'));
 
@@ -5609,30 +5868,53 @@ public class WorkflowEngineTest {
     ];
     System.assertEquals('Pending', successor.Status__c);
     System.assertNotEquals(null, successor.Progress__c);
-    Map<String, Object> progressSucc = (Map<String, Object>) JSON.deserializeUntyped(successor.Progress__c);
+    Map<String, Object> progressSucc = (Map<String, Object>) JSON.deserializeUntyped(
+      successor.Progress__c
+    );
     System.assertEquals(90.0, (Decimal) progressSucc.get('percent'));
 
     // 4. Run successor (first run) -> runs ProgressStep1 (first yield)
     new WorkflowOrchestrator(successor.Id).execute(null);
-    Workflow_Instance__c finalInst1 = [SELECT Status__c, Progress__c FROM Workflow_Instance__c WHERE Id = :successor.Id];
+    Workflow_Instance__c finalInst1 = [
+      SELECT Status__c, Progress__c
+      FROM Workflow_Instance__c
+      WHERE Id = :successor.Id
+    ];
     System.assertEquals('Running', finalInst1.Status__c);
-    Map<String, Object> progressFinal1 = (Map<String, Object>) JSON.deserializeUntyped(finalInst1.Progress__c);
+    Map<String, Object> progressFinal1 = (Map<String, Object>) JSON.deserializeUntyped(
+      finalInst1.Progress__c
+    );
     System.assertEquals(20.0, (Decimal) progressFinal1.get('percentComplete'));
 
     // 5. Run successor (second run) -> completes ProgressStep1
     new WorkflowOrchestrator(successor.Id).execute(null);
-    Workflow_Instance__c finalInst2 = [SELECT Status__c, Progress__c FROM Workflow_Instance__c WHERE Id = :successor.Id];
+    Workflow_Instance__c finalInst2 = [
+      SELECT Status__c, Progress__c
+      FROM Workflow_Instance__c
+      WHERE Id = :successor.Id
+    ];
     System.assertEquals('Running', finalInst2.Status__c);
-    Map<String, Object> progressFinal2 = (Map<String, Object>) JSON.deserializeUntyped(finalInst2.Progress__c);
+    Map<String, Object> progressFinal2 = (Map<String, Object>) JSON.deserializeUntyped(
+      finalInst2.Progress__c
+    );
     System.assertEquals(50.0, (Decimal) progressFinal2.get('percentComplete'));
 
     // 6. Run successor (third run) -> runs ProgressStep2 and completes
     new WorkflowOrchestrator(successor.Id).execute(null);
-    Workflow_Instance__c finalInst = [SELECT Status__c, Progress__c FROM Workflow_Instance__c WHERE Id = :successor.Id];
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c, Progress__c
+      FROM Workflow_Instance__c
+      WHERE Id = :successor.Id
+    ];
     System.assertEquals('Completed', finalInst.Status__c);
-    Map<String, Object> progressFinal = (Map<String, Object>) JSON.deserializeUntyped(finalInst.Progress__c);
+    Map<String, Object> progressFinal = (Map<String, Object>) JSON.deserializeUntyped(
+      finalInst.Progress__c
+    );
     System.assertEquals(100.0, (Decimal) progressFinal.get('percentComplete'));
-    System.assertEquals('Workflow Complete', (String) progressFinal.get('message'));
+    System.assertEquals(
+      'Workflow Complete',
+      (String) progressFinal.get('message')
+    );
   }
 
   @isTest
@@ -5657,12 +5939,33 @@ public class WorkflowEngineTest {
     System.assert(!stepExecs.isEmpty(), 'Should have recorded step executions');
     for (Workflow_Step_Execution__c step : stepExecs) {
       if (step.Status__c == 'Completed') {
-        System.assertNotEquals(null, step.CPU_Time_Ms__c, 'CPU time telemetry should be captured');
-        System.assertNotEquals(null, step.SOQL_Query_Count__c, 'SOQL queries telemetry should be captured');
-        System.assertNotEquals(null, step.Heap_Size_Bytes__c, 'Heap size telemetry should be captured');
-        System.assert(step.CPU_Time_Ms__c >= 0, 'CPU time should be non-negative');
-        System.assert(step.SOQL_Query_Count__c >= 0, 'SOQL query count should be non-negative');
-        System.assert(step.Heap_Size_Bytes__c >= 0, 'Heap size should be non-negative');
+        System.assertNotEquals(
+          null,
+          step.CPU_Time_Ms__c,
+          'CPU time telemetry should be captured'
+        );
+        System.assertNotEquals(
+          null,
+          step.SOQL_Query_Count__c,
+          'SOQL queries telemetry should be captured'
+        );
+        System.assertNotEquals(
+          null,
+          step.Heap_Size_Bytes__c,
+          'Heap size telemetry should be captured'
+        );
+        System.assert(
+          step.CPU_Time_Ms__c >= 0,
+          'CPU time should be non-negative'
+        );
+        System.assert(
+          step.SOQL_Query_Count__c >= 0,
+          'SOQL query count should be non-negative'
+        );
+        System.assert(
+          step.Heap_Size_Bytes__c >= 0,
+          'Heap size should be non-negative'
+        );
       }
     }
   }
@@ -5690,15 +5993,34 @@ public class WorkflowEngineTest {
     for (Workflow_Step_Execution__c step : stepExecs) {
       if (step.Status__c == 'Pending') {
         foundPending = true;
-        System.assertNotEquals(null, step.CPU_Time_Ms__c, 'CPU time telemetry should be captured on Pending/sleep status');
-        System.assertNotEquals(null, step.SOQL_Query_Count__c, 'SOQL queries telemetry should be captured on Pending/sleep status');
-        System.assertNotEquals(null, step.Heap_Size_Bytes__c, 'Heap size telemetry should be captured on Pending/sleep status');
+        System.assertNotEquals(
+          null,
+          step.CPU_Time_Ms__c,
+          'CPU time telemetry should be captured on Pending/sleep status'
+        );
+        System.assertNotEquals(
+          null,
+          step.SOQL_Query_Count__c,
+          'SOQL queries telemetry should be captured on Pending/sleep status'
+        );
+        System.assertNotEquals(
+          null,
+          step.Heap_Size_Bytes__c,
+          'Heap size telemetry should be captured on Pending/sleep status'
+        );
       }
     }
-    System.assert(foundPending, 'Should have found a Pending step execution for sleep');
+    System.assert(
+      foundPending,
+      'Should have found a Pending step execution for sleep'
+    );
 
     // Trigger handleCrash to verify telemetry is cleared/skipped during crashes
-    WorkflowEngine.handleCrash(instanceId, 'WorkflowEngineTest.SleepingStep', new WorkflowEngine.WorkflowException('Test Exception'));
+    WorkflowEngine.handleCrash(
+      instanceId,
+      'WorkflowEngineTest.SleepingStep',
+      new WorkflowEngine.WorkflowException('Test Exception')
+    );
     List<Workflow_Step_Execution__c> crashedExecs = [
       SELECT Status__c, CPU_Time_Ms__c, SOQL_Query_Count__c, Heap_Size_Bytes__c
       FROM Workflow_Step_Execution__c
@@ -5706,10 +6028,168 @@ public class WorkflowEngineTest {
       ORDER BY CreatedDate DESC
       LIMIT 1
     ];
-    System.assert(!crashedExecs.isEmpty(), 'Should have recorded failed step execution from handleCrash');
+    System.assert(
+      !crashedExecs.isEmpty(),
+      'Should have recorded failed step execution from handleCrash'
+    );
     Workflow_Step_Execution__c failedStep = crashedExecs[0];
-    System.assertEquals(null, failedStep.CPU_Time_Ms__c, 'CPU time telemetry should be null on crash');
-    System.assertEquals(null, failedStep.SOQL_Query_Count__c, 'SOQL queries telemetry should be null on crash');
-    System.assertEquals(null, failedStep.Heap_Size_Bytes__c, 'Heap size telemetry should be null on crash');
+    System.assertEquals(
+      null,
+      failedStep.CPU_Time_Ms__c,
+      'CPU time telemetry should be null on crash'
+    );
+    System.assertEquals(
+      null,
+      failedStep.SOQL_Query_Count__c,
+      'SOQL queries telemetry should be null on crash'
+    );
+    System.assertEquals(
+      null,
+      failedStep.Heap_Size_Bytes__c,
+      'Heap size telemetry should be null on crash'
+    );
+  }
+
+  @isTest
+  static void testParentChildWorkflowReentrancy() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.ParentWorkflow',
+      'ParentKey_Reentry',
+      null
+    );
+    // Runs ParentStep once: returns startChild which sets status to Suspended and calls startChildWorkflow
+    new WorkflowOrchestrator(parentId).execute(null);
+
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE Parent_Instance__c = :parentId
+      ],
+      'Exactly one child must exist after the first launcher run'
+    );
+
+    // Now, run the parent step again (re-entrant hop)
+    // ParentStep will run execute() again. Since no ChildCompleted:SubKey signal exists,
+    // it will call StepResult.startChild() again with correlationKey = 'SubKey'.
+    // The engine must handle this idempotently (return early from startChildWorkflow, no exception, no duplicate child).
+    try {
+      new WorkflowOrchestrator(parentId).execute(null);
+    } catch (Exception ex) {
+      System.assert(
+        false,
+        'Should not throw an exception on re-entrant startChild: ' +
+        ex.getMessage()
+      );
+    }
+
+    System.assertEquals(
+      1,
+      [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE Parent_Instance__c = :parentId
+      ],
+      'Re-entry must NOT start a duplicate child'
+    );
+
+    Workflow_Instance__c parentInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals(
+      'Suspended',
+      parentInst.Status__c,
+      'Parent must remain Suspended'
+    );
+  }
+
+  @isTest
+  static void testParentChildWorkflowForeignCollision() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id parentIdA = WorkflowEngine.start(
+      'WorkflowEngineTest.ParentWorkflow',
+      'ParentKey_A',
+      null
+    );
+    new WorkflowOrchestrator(parentIdA).execute(null);
+
+    Id parentIdB = WorkflowEngine.start(
+      'WorkflowEngineTest.ParentWorkflow',
+      'ParentKey_B',
+      null
+    );
+
+    // Executing ParentStep for parentIdB will return StepResult.startChild with key 'SubKey'.
+    // Since 'SubKey' is already active and belongs to parentIdA, this must throw a WorkflowException.
+    try {
+      new WorkflowOrchestrator(parentIdB).execute(null);
+      System.assert(
+        false,
+        'Should have thrown WorkflowException on foreign correlation key collision'
+      );
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assert(
+        ex.getMessage()
+          .contains(
+            'An active workflow already exists with correlation key: SubKey'
+          ),
+        'Expected duplicate correlation key message, got: ' + ex.getMessage()
+      );
+    } catch (Exception ex) {
+      System.assert(
+        false,
+        'Expected WorkflowException, got: ' +
+          ex.getTypeName() +
+          ': ' +
+          ex.getMessage()
+      );
+    }
+  }
+
+  @isTest
+  static void testParentChildWorkflowReentrancyWithPausedChild() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.ParentWorkflow',
+      'ParentKey_Reentry_Paused',
+      null
+    );
+    new WorkflowOrchestrator(parentId).execute(null);
+
+    // Locate child and pause it manually
+    Workflow_Instance__c child = [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentId
+      LIMIT 1
+    ];
+    child.Status__c = 'Paused';
+    update as system child;
+
+    // Execute parent re-entrant hop
+    try {
+      new WorkflowOrchestrator(parentId).execute(null);
+    } catch (Exception ex) {
+      System.assert(
+        false,
+        'Should not throw on re-entrant startChild with paused child: ' +
+        ex.getMessage()
+      );
+    }
+
+    // Verify parent remains Suspended
+    Workflow_Instance__c parentInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals('Suspended', parentInst.Status__c);
   }
 }

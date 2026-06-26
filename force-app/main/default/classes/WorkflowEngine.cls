@@ -1205,7 +1205,9 @@ public inherited sharing class WorkflowEngine {
 
     // Enqueue the first step execution
     if (Test.isRunningTest()) {
-      System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+      if (!disableQueueableInTest) {
+        System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+      }
     } else {
       enqueueOrchestrator(instance.Id, null);
     }
@@ -4992,20 +4994,17 @@ public inherited sharing class WorkflowEngine {
     validateCorrelationKey(correlationKey);
     if (String.isNotBlank(correlationKey)) {
       List<Workflow_Instance__c> existing = [
-        SELECT Id
+        SELECT Id, Parent_Instance__c
         FROM Workflow_Instance__c
-        WHERE
-          Correlation_Key__c = :correlationKey
-          AND Status__c IN (
-            'Pending',
-            'Running',
-            'Suspended',
-            'CompensationFailed'
-          )
+        WHERE Active_Correlation_Key__c = :correlationKey
         WITH SYSTEM_MODE
         LIMIT 1
       ];
       if (!existing.isEmpty()) {
+        if (existing[0].Parent_Instance__c == parentId) {
+          // Idempotent re-suspend: this child is already active for this parent
+          return;
+        }
         throw new WorkflowException(
           'An active workflow already exists with correlation key: ' +
           correlationKey
@@ -5041,6 +5040,17 @@ public inherited sharing class WorkflowEngine {
       insert as system instance;
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
+        // Concurrency backstop: check if the sibling that won the insert race belongs to the same parent.
+        List<Workflow_Instance__c> sibling = [
+          SELECT Id, Parent_Instance__c
+          FROM Workflow_Instance__c
+          WHERE Active_Correlation_Key__c = :correlationKey
+          WITH SYSTEM_MODE
+          LIMIT 1
+        ];
+        if (!sibling.isEmpty() && sibling[0].Parent_Instance__c == parentId) {
+          return; // Sibling won the insert race, and it belongs to this parent; resolve idempotently.
+        }
         throw new WorkflowException(
           'An active workflow already exists with correlation key: ' +
           correlationKey

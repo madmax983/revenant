@@ -287,7 +287,7 @@ The engine ships full parent→child orchestration: `StepResult.startChild()` su
 | **Suspend**           | Return `StepResult.startChild(childWorkflowName, childKey, input)` from the step that launches the child. The engine suspends the parent automatically — do **not** also return `StepResult.suspend()`.                                                                                                                                                                                                                |
 | **Child output**      | The child's final outcome (status, error message, and output) can be read with `ctx.getChildOutcome(childKey)`. This is the preferred way to distinguish a successful child from a failed, compensated, or cancelled one without hand-rolled SOQL. For backward compatibility, the successful child's final output still arrives as the payload of the `ChildCompleted:<childKey>` signal (read with `ctx.getSignal("ChildCompleted:" + childKey).payload`). |
 | **Idempotent resume** | The step that launched the child also handles the resume: check for the child outcome first, then act on it. Return `StepResult.complete()` (not `suspend()`) on the resume path — returning COMPLETE triggers engine-managed signal consumption, so an at-least-once redelivered duplicate completion or failure event cannot double-advance the parent. |
-| **Idempotent launch** | The engine re-runs the current step on stray orchestrator hops / watchdog re-checks while the parent is `Suspended`. Before calling `startChild()` again, check whether the child already exists (query `Workflow_Instance__c` by `Parent_Instance__c` + `Correlation_Key__c`) and re-suspend if so — a second `startChild()` with the same key hits the engine's duplicate-active-key guard and **fails** the parent. |
+| **Idempotent launch** | The engine automatically dedupes child launches against the deterministic `(Parent_Instance__c, Correlation_Key__c)` pair. If `startChild()` is called again during a re-entrant hop or watchdog re-check, and the active child already exists, the engine resolves to an idempotent re-suspend without starting a duplicate or failing the parent. |
 | **Cancellation**      | `WorkflowEngine.cancel(parentId, false)` cancels the parent and all of its active descendants (root-first traversal over `Parent_Instance__c`), so explicitly cancelling a parent reaps its in-flight children.                                                                                                                                                                                                        |
 
 **Caveats (failure paths are not auto-handled).** This contract covers parent→child composition. One failure mode still needs explicit handling in a production composite:
@@ -315,19 +315,8 @@ public class RequestCreditCheckStep implements WorkflowStep {
             }
         }
 
-        // No completion/failure signal yet. If the child already exists (a re-entrant hop),
-        // re-suspend rather than launching a duplicate (see "Idempotent launch").
-        List<Workflow_Instance__c> alreadyLaunched = [
-            SELECT Id FROM Workflow_Instance__c
-            WHERE Parent_Instance__c = :ctx.workflowInstanceId
-              AND Correlation_Key__c = :childKey
-            LIMIT 1
-        ];
-        if (!alreadyLaunched.isEmpty()) {
-            return StepResult.suspend();
-        }
-
-        // First run: start the child and suspend.
+        // First run or re-entrant hop: start the child and suspend.
+        // The engine handles re-entrancy idempotently (no duplicate is started).
         Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(ctx.workflowInputJson);
         return StepResult.startChild('MyChildWorkflow', childKey, input);
     }
