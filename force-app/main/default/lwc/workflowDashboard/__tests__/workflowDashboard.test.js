@@ -373,7 +373,7 @@ describe("c-workflow-dashboard failure breakdown panel", () => {
     expect(panelText).toContain("System.NullPointerException");
 
     const exampleLink = element.shadowRoot.querySelector(
-      "a[data-id='a0G000000000001']",
+      "button[data-id='a0G000000000001']",
     );
     expect(exampleLink).not.toBeNull();
     expect(exampleLink.textContent).toBe("WI-0001");
@@ -1591,7 +1591,9 @@ describe("c-workflow-dashboard operator signal injection", () => {
     expect(injectSignal).not.toHaveBeenCalled();
 
     // Verify validation is checked and reported
-    expect(setCustomValidityMock).toHaveBeenCalledWith("Invalid JSON format.");
+    expect(setCustomValidityMock).toHaveBeenCalledWith(
+      "Invalid JSON format. Typographic/curly quotes are not valid JSON.",
+    );
     expect(reportValidityMock).toHaveBeenCalled();
   });
 
@@ -1686,7 +1688,6 @@ describe("c-workflow-dashboard business attributes filters", () => {
     return element;
   }
 
-
   it("handles adding and removing business attribute filters", async () => {
     getFilteredInstances.mockResolvedValue([
       {
@@ -1697,18 +1698,27 @@ describe("c-workflow-dashboard business attributes filters", () => {
         CreatedDate: "2026-06-24T12:00:00.000Z",
       },
     ]);
-    getWorkflowStats.mockResolvedValue({ total: 1, active: 1, completed: 0, failed: 0 });
+    getWorkflowStats.mockResolvedValue({
+      total: 1,
+      active: 1,
+      completed: 0,
+      failed: 0,
+    });
 
     const element = createComponent();
     await flushPromises();
 
     // Query key & value inputs and add button using their properties
-    const inputs = Array.from(element.shadowRoot.querySelectorAll('lightning-input'));
-    const keyInput = inputs.find(i => i.name === 'attrKey');
-    const valueInput = inputs.find(i => i.name === 'attrValue');
+    const inputs = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-input"),
+    );
+    const keyInput = inputs.find((i) => i.name === "attrKey");
+    const valueInput = inputs.find((i) => i.name === "attrValue");
 
-    const btns = Array.from(element.shadowRoot.querySelectorAll('lightning-button-icon'));
-    const addBtn = btns.find(b => b.alternativeText === 'Add Attribute');
+    const btns = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button-icon"),
+    );
+    const addBtn = btns.find((b) => b.alternativeText === "Add Attribute");
 
     expect(keyInput).toBeDefined();
     expect(valueInput).toBeDefined();
@@ -1716,22 +1726,30 @@ describe("c-workflow-dashboard business attributes filters", () => {
 
     // Add filter: region = EU
     keyInput.value = "region";
-    keyInput.dispatchEvent(new CustomEvent("change", { target: { value: "region" } }));
+    keyInput.dispatchEvent(
+      new CustomEvent("change", { target: { value: "region" } }),
+    );
     valueInput.value = "EU";
-    valueInput.dispatchEvent(new CustomEvent("change", { target: { value: "EU" } }));
+    valueInput.dispatchEvent(
+      new CustomEvent("change", { target: { value: "EU" } }),
+    );
 
     addBtn.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
     // Verify getFilteredInstances was called with region=EU
-    expect(getFilteredInstances).toHaveBeenCalledWith(expect.objectContaining({
-      attributesFilterJson: JSON.stringify({ region: "EU" })
-    }));
+    expect(getFilteredInstances).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attributesFilterJson: JSON.stringify({ region: "EU" }),
+      }),
+    );
 
     // Verify active pill is rendered
     const pills = element.shadowRoot.querySelectorAll(".slds-pill");
     expect(pills.length).toBe(1);
-    expect(pills[0].querySelector(".slds-pill__label").textContent).toBe("region=EU");
+    expect(pills[0].querySelector(".slds-pill__label").textContent).toBe(
+      "region=EU",
+    );
 
     // Remove the attribute filter
     const removeBtn = pills[0].querySelector(".slds-pill__remove");
@@ -1739,9 +1757,11 @@ describe("c-workflow-dashboard business attributes filters", () => {
     await flushPromises();
 
     // Verify getFilteredInstances was called with empty attributesFilterJson
-    expect(getFilteredInstances).toHaveBeenLastCalledWith(expect.objectContaining({
-      attributesFilterJson: ""
-    }));
+    expect(getFilteredInstances).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        attributesFilterJson: "",
+      }),
+    );
 
     // Verify pill is removed
     const postPills = element.shadowRoot.querySelectorAll(".slds-pill");
@@ -1770,8 +1790,8 @@ describe("c-workflow-dashboard business attributes filters", () => {
       payloadFiles: {},
       attributes: [
         { Id: "attr1", Key__c: "region", Value__c: "EU" },
-        { Id: "attr2", Key__c: "tier", Value__c: "enterprise" }
-      ]
+        { Id: "attr2", Key__c: "tier", Value__c: "enterprise" },
+      ],
     });
 
     const element = createComponent();
@@ -1793,16 +1813,25 @@ describe("c-workflow-dashboard business attributes filters", () => {
 
   it("enforces maximum limit of 2 attribute filters and shows a toast warning on the 3rd", async () => {
     getFilteredInstances.mockResolvedValue([]);
-    getWorkflowStats.mockResolvedValue({ total: 0, active: 0, completed: 0, failed: 0 });
+    getWorkflowStats.mockResolvedValue({
+      total: 0,
+      active: 0,
+      completed: 0,
+      failed: 0,
+    });
 
     const element = createComponent();
     await flushPromises();
 
-    const inputs = Array.from(element.shadowRoot.querySelectorAll('lightning-input'));
-    const keyInput = inputs.find(i => i.name === 'attrKey');
-    const valueInput = inputs.find(i => i.name === 'attrValue');
-    const btns = Array.from(element.shadowRoot.querySelectorAll('lightning-button-icon'));
-    const addBtn = btns.find(b => b.alternativeText === 'Add Attribute');
+    const inputs = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-input"),
+    );
+    const keyInput = inputs.find((i) => i.name === "attrKey");
+    const valueInput = inputs.find((i) => i.name === "attrValue");
+    const btns = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button-icon"),
+    );
+    const addBtn = btns.find((b) => b.alternativeText === "Add Attribute");
 
     // Mock showToast event listener
     const toastHandler = jest.fn();
@@ -1810,17 +1839,25 @@ describe("c-workflow-dashboard business attributes filters", () => {
 
     // 1. Add filter 1: a=1
     keyInput.value = "a";
-    keyInput.dispatchEvent(new CustomEvent("change", { target: { value: "a" } }));
+    keyInput.dispatchEvent(
+      new CustomEvent("change", { target: { value: "a" } }),
+    );
     valueInput.value = "1";
-    valueInput.dispatchEvent(new CustomEvent("change", { target: { value: "1" } }));
+    valueInput.dispatchEvent(
+      new CustomEvent("change", { target: { value: "1" } }),
+    );
     addBtn.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
     // 2. Add filter 2: b=2
     keyInput.value = "b";
-    keyInput.dispatchEvent(new CustomEvent("change", { target: { value: "b" } }));
+    keyInput.dispatchEvent(
+      new CustomEvent("change", { target: { value: "b" } }),
+    );
     valueInput.value = "2";
-    valueInput.dispatchEvent(new CustomEvent("change", { target: { value: "2" } }));
+    valueInput.dispatchEvent(
+      new CustomEvent("change", { target: { value: "2" } }),
+    );
     addBtn.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
@@ -1830,9 +1867,13 @@ describe("c-workflow-dashboard business attributes filters", () => {
 
     // 3. Attempt to add filter 3: c=3
     keyInput.value = "c";
-    keyInput.dispatchEvent(new CustomEvent("change", { target: { value: "c" } }));
+    keyInput.dispatchEvent(
+      new CustomEvent("change", { target: { value: "c" } }),
+    );
     valueInput.value = "3";
-    valueInput.dispatchEvent(new CustomEvent("change", { target: { value: "3" } }));
+    valueInput.dispatchEvent(
+      new CustomEvent("change", { target: { value: "3" } }),
+    );
     addBtn.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
@@ -1840,7 +1881,9 @@ describe("c-workflow-dashboard business attributes filters", () => {
     expect(toastHandler).toHaveBeenCalled();
     const toastEvent = toastHandler.mock.calls[0][0];
     expect(toastEvent.detail.variant).toBe("warning");
-    expect(toastEvent.detail.message).toContain("A maximum of 2 active attribute filters is allowed");
+    expect(toastEvent.detail.message).toContain(
+      "A maximum of 2 active attribute filters is allowed",
+    );
 
     pills = element.shadowRoot.querySelectorAll(".slds-pill");
     expect(pills.length).toBe(2);
