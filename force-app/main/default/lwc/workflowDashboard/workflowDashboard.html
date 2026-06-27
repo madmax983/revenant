@@ -1,12 +1,12 @@
 <template>
     <div class="slds-card slds-p-around_medium dashboard-container">
         <!-- Header & Stats -->
-        <div class="slds-grid slds-grid_align-spread slds-m-bottom_medium slds-grid_vertical-align-center">
+        <div class="slds-grid slds-wrap slds-grid_align-spread slds-m-bottom_medium slds-grid_vertical-align-center">
             <div>
                 <h1 class="slds-text-heading_large slds-m-bottom_xx-small font-outfit">Workflow Orchestrator</h1>
                 <p class="slds-text-color_weak">Monitor and trigger native database-backed durable workflows</p>
             </div>
-            <div>
+            <div class="header-buttons">
                 <lightning-button 
                     label="Run Workflow" 
                     icon-name="utility:play" 
@@ -76,37 +76,37 @@
         <template if:false={viewingSchedules}>
         <!-- Summary Stats Card Row -->
         <div class="slds-grid slds-wrap slds-gutters slds-m-bottom_large">
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-5">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-6 slds-m-bottom_small">
                 <div class="stat-card border-left-blue">
                     <div class="slds-text-title_caps slds-text-color_weak">Total Runs</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small">{stats.total}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-5">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-6 slds-m-bottom_small">
                 <div class="stat-card border-left-orange">
                     <div class="slds-text-title_caps slds-text-color_weak">Running / Suspended</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-orange">{stats.active}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-5">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-6 slds-m-bottom_small">
                 <div class="stat-card border-left-green">
                     <div class="slds-text-title_caps slds-text-color_weak">Completed</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-green">{stats.completed}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-5">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-6 slds-m-bottom_small">
                 <div class="stat-card border-left-red">
                     <div class="slds-text-title_caps slds-text-color_weak">Failed</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-red">{stats.failed}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-5">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-6 slds-m-bottom_small">
                 <div class="stat-card border-left-purple">
                     <div class="slds-text-title_caps slds-text-color_weak">Stalled</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-purple">{stalledCountDisplay}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-5">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-6 slds-m-bottom_small">
                 <div class="stat-card border-left-orange">
                     <div class="slds-text-title_caps slds-text-color_weak">Unrouted Signals</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-orange">{unroutedCountDisplay}</div>
@@ -306,7 +306,7 @@
                                 <template if:false={loadingMore}>
                                     <template if:true={hasMore}>
                                         <div class="slds-p-around_small slds-text-align_center">
-                                            <a href="javascript:void(0);" onclick={loadMoreInstances} class="slds-text-link">Load More</a>
+                                            <button type="button" onclick={loadMoreInstances} class="slds-button slds-text-link">Load More</button>
                                         </div>
                                     </template>
                                 </template>
@@ -873,14 +873,14 @@
                                                                         <div class="slds-m-top_x-small">
                                                                             <span class="slds-text-title slds-m-right_x-small">Representative Examples:</span>
                                                                             <template for:each={sig.examples} for:item="ex">
-                                                                                <a 
+                                                                                <button 
                                                                                     key={ex.id} 
-                                                                                    href="javascript:void(0);" 
+                                                                                    type="button"
                                                                                     data-id={ex.id} 
                                                                                     onclick={handleSelectRelatedInstance} 
-                                                                                    class="slds-text-link slds-m-right_medium">
+                                                                                    class="slds-button slds-text-link slds-m-right_medium">
                                                                                     {ex.name}
-                                                                                </a>
+                                                                                </button>
                                                                             </template>
                                                                         </div>
                                                                     </template>
@@ -1031,9 +1031,9 @@
                                         <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
                                             <div class="slds-text-title slds-text-color_weak">Parent Workflow</div>
                                             <div class="slds-text-body_regular">
-                                                <a href="javascript:void(0);" data-id={selectedInst.Parent_Instance__c} onclick={handleSelectRelatedInstance} class="slds-text-link">
+                                                <button type="button" data-id={selectedInst.Parent_Instance__c} onclick={handleSelectRelatedInstance} class="slds-button slds-text-link">
                                                     {selectedInst.Parent_Instance__r.Name}
-                                                </a>
+                                                </button>
                                             </div>
                                         </div>
                                     </template>
@@ -1041,9 +1041,9 @@
                                         <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
                                             <div class="slds-text-title slds-text-color_weak">Previous Run</div>
                                             <div class="slds-text-body_regular">
-                                                <a href="javascript:void(0);" data-id={selectedInst.Previous_Instance__c} onclick={handleSelectRelatedInstance} class="slds-text-link">
+                                                <button type="button" data-id={selectedInst.Previous_Instance__c} onclick={handleSelectRelatedInstance} class="slds-button slds-text-link">
                                                     {selectedInst.Previous_Instance__r.Name}
-                                                </a>
+                                                </button>
                                             </div>
                                         </div>
                                     </template>
@@ -1051,9 +1051,9 @@
                                         <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
                                             <div class="slds-text-title slds-text-color_weak">Next Run</div>
                                             <div class="slds-text-body_regular">
-                                                <a href="javascript:void(0);" data-id={successor.Id} onclick={handleSelectRelatedInstance} class="slds-text-link">
+                                                <button type="button" data-id={successor.Id} onclick={handleSelectRelatedInstance} class="slds-button slds-text-link">
                                                     {successor.Name}
-                                                </a>
+                                                </button>
                                             </div>
                                         </div>
                                     </template>
@@ -1061,9 +1061,9 @@
                                         <div class="slds-col slds-size_1-of-2 slds-p-bottom_small">
                                             <div class="slds-text-title slds-text-color_weak">Compensated By</div>
                                             <div class="slds-text-body_regular">
-                                                <a href="javascript:void(0);" data-id={selectedInst.Compensated_By__c} onclick={handleSelectRelatedInstance} class="slds-text-link">
+                                                <button type="button" data-id={selectedInst.Compensated_By__c} onclick={handleSelectRelatedInstance} class="slds-button slds-text-link">
                                                     {selectedInst.Compensated_By__r.Name}
-                                                </a>
+                                                </button>
                                             </div>
                                         </div>
                                     </template>
@@ -1197,9 +1197,9 @@
                                                                         <lightning-icon icon-name="utility:link" size="xx-small" class="slds-m-right_xx-small"></lightning-icon>
                                                                         <span class="slds-text-body_small">
                                                                             Sub-Workflow: 
-                                                                            <a href="javascript:void(0);" data-id={step.childInstanceId} onclick={handleSelectRelatedInstance} class="slds-text-link slds-m-left_xx-small">
+                                                                            <button type="button" data-id={step.childInstanceId} onclick={handleSelectRelatedInstance} class="slds-button slds-text-link slds-m-left_xx-small">
                                                                                 {step.childInstanceName}
-                                                                            </a>
+                                                                            </button>
                                                                         </span>
                                                                     </div>
                                                                 </template>
@@ -1237,6 +1237,31 @@
                                                                             <template if:true={step.Error_Details__c}>
                                                                                 <div class="slds-text-title text-red slds-m-bottom_xx-small">Step Error Details</div>
                                                                                 <pre class="code-block error-block">{step.Error_Details__c}</pre>
+                                                                            </template>
+
+                                                                            <template if:true={step.isEligibleForSkip}>
+                                                                                <div class="slds-m-top_small slds-p-top_small border-top">
+                                                                                    <div class="slds-text-title slds-text-color_weak slds-m-bottom_x-small">Resume past this failed step</div>
+                                                                                    <div class="slds-form-element">
+                                                                                        <label class="slds-form-element__label slds-text-body_small">
+                                                                                            JSON Output Payload (supplied result for skip)
+                                                                                            <div class="slds-form-element__control slds-m-bottom_small slds-m-top_xx-small">
+                                                                                                <textarea 
+                                                                                                    class="slds-textarea code-block" 
+                                                                                                    placeholder='e.g. {"success": true}' 
+                                                                                                    data-step-name={step.Step_Name__c}></textarea>
+                                                                                            </div>
+                                                                                        </label>
+                                                                                        <lightning-button
+                                                                                            label="Resume Past This Step"
+                                                                                            icon-name="utility:forward"
+                                                                                            variant="brand"
+                                                                                            data-step-name={step.Step_Name__c}
+                                                                                            onclick={handleResumePastStep}
+                                                                                            class="brand-button">
+                                                                                        </lightning-button>
+                                                                                    </div>
+                                                                                </div>
                                                                             </template>
                                                                         </div>
                                                                     </template>

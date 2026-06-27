@@ -1,5 +1,6 @@
 @isTest
 public class WorkflowEngineTest {
+  public static Boolean failParallelC = true;
   // ==========================================
   // MOCK WORKFLOWS & STEPS FOR TESTING
   // ==========================================
@@ -6209,5 +6210,835 @@ public class WorkflowEngineTest {
       Id = parentId,
       Status__c = 'Failed'
     );
+  }
+
+  // ==========================================
+  // RESUME PAST STEP TEST CLASSES
+  // ==========================================
+
+  public class SkipTestWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.SkipTestStep1',
+        'WorkflowEngineTest.SkipTestStep2',
+        'WorkflowEngineTest.SkipTestStep3'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.SkipTestStep1';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      if (currentStepName == 'WorkflowEngineTest.SkipTestStep1') {
+        return 'WorkflowEngineTest.SkipTestStep2';
+      }
+      if (currentStepName == 'WorkflowEngineTest.SkipTestStep2') {
+        return 'WorkflowEngineTest.SkipTestStep3';
+      }
+      return null;
+    }
+  }
+
+  public class SkipTestStep1 implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'InputToTwo');
+    }
+  }
+
+  public class SkipTestStep2 implements CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.fail('Poison step: failed permanently');
+    }
+    public StepResult compensate(StepContext ctx) {
+      return StepResult.complete(null, 'CompensatedTwo');
+    }
+  }
+
+  public class SkipTestStep3 implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      Map<String, Object> outputMap = (Map<String, Object>) JSON.deserializeUntyped(ctx.previousStepOutput);
+      String val = (String) outputMap.get('overrideVal');
+      return StepResult.complete(null, 'StepThreeReceived_' + val);
+    }
+  }
+
+  public class SkipParallelWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.SkipParallelSplitStep',
+        'WorkflowEngineTest.SkipParallelA',
+        'WorkflowEngineTest.SkipParallelB',
+        'WorkflowEngineTest.SkipParallelJoinStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.SkipParallelSplitStep';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      if (currentStepName == 'WorkflowEngineTest.SkipParallelSplitStep') {
+        return 'WorkflowEngineTest.SkipParallelJoinStep';
+      }
+      return null;
+    }
+  }
+
+  public class SkipParallelSplitStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.split(
+        new List<String>{
+          'WorkflowEngineTest.SkipParallelA',
+          'WorkflowEngineTest.SkipParallelB'
+        },
+        null
+      );
+    }
+  }
+
+  public class SkipParallelA implements WorkflowStep, TimeoutConfigurable {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'OutputA');
+    }
+    public Integer getTimeoutSeconds() {
+      return 60;
+    }
+  }
+
+  public class SkipParallelB implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.fail('Parallel Poison Step');
+    }
+  }
+
+  public class SkipParallelJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      Map<String, Object> outputs = (Map<String, Object>) JSON.deserializeUntyped(ctx.inputJson);
+      String outA = (String) outputs.get('WorkflowEngineTest.SkipParallelA');
+      Map<String, Object> outBMap = (Map<String, Object>) outputs.get('WorkflowEngineTest.SkipParallelB');
+      String valB = (String) outBMap.get('val');
+      return StepResult.complete(null, 'Join_' + outA + '_' + valB);
+    }
+  }
+
+  @isTest
+  static void testResumePastStepSuccess() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipTestWorkflow',
+      'SkipSerialKey',
+      'InitialInput'
+    );
+
+    // 1. Run step 1 (SkipTestStep1) -> should complete and transition current step to SkipTestStep2
+    new WorkflowOrchestrator(instanceId).execute(null);
+    Workflow_Instance__c inst1 = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Running', inst1.Status__c);
+    System.assertEquals('WorkflowEngineTest.SkipTestStep2', inst1.Current_Step__c);
+
+    // 2. Run step 2 (SkipTestStep2) -> throws exception, transitions instance to Failed
+    new WorkflowOrchestrator(instanceId).execute(null);
+    Workflow_Instance__c inst2 = [
+      SELECT Status__c, Current_Step__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', inst2.Status__c);
+    System.assertEquals('WorkflowEngineTest.SkipTestStep2', inst2.Current_Step__c);
+
+    // 3. Skip Step 2 by supplying JSON output output
+    Test.startTest();
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipTestStep2', '{"overrideVal": "skippedOutput"}');
+    Test.stopTest();
+
+    // 4. Verify step 2 execution is recorded as OperatorSkipped
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipTestStep2'
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+    // There should be 2 execs: the failed one and the OperatorSkipped one
+    System.assertEquals(2, stepExecs.size());
+    System.assertEquals('OperatorSkipped', stepExecs[0].Status__c);
+    System.assertEquals('{"overrideVal": "skippedOutput"}', stepExecs[0].Output__c);
+
+    // Verify operator intervention log was recorded
+    List<Workflow_Log__c> logs = [
+      SELECT Log_Type__c, Message__c
+      FROM Workflow_Log__c
+      WHERE Workflow_Instance__c = :instanceId AND Log_Type__c = 'OperatorIntervention'
+    ];
+    System.assertEquals(1, logs.size());
+    System.assert(logs[0].Message__c.contains('skipped step WorkflowEngineTest.SkipTestStep2'));
+
+    // 5. Run next step execution (should resume from SkipTestStep3 because WorkflowEngine.resumePastStep enqueued it)
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c, Output__c, Compensation_Stack__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', finalInst.Status__c);
+    System.assertEquals('"StepThreeReceived_skippedOutput"', finalInst.Output__c);
+
+    // Check that the skipped step was NOT added to the compensation stack
+    Boolean isStackEmpty = String.isBlank(finalInst.Compensation_Stack__c) ||
+      ((List<String>) JSON.deserialize(finalInst.Compensation_Stack__c, List<String>.class)).isEmpty();
+    System.assert(isStackEmpty, 'Compensation stack should be empty because SkipTestStep2 was skipped');
+  }
+
+  @isTest
+  static void testResumePastStepParallelSuccess() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipParallelWorkflow',
+      'SkipParallelKey',
+      'InitialInput'
+    );
+
+    // 1. Run split step (SkipParallelSplitStep) -> should create parallel executions
+    new WorkflowOrchestrator(instanceId).execute(null);
+    Workflow_Instance__c inst1 = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Running', inst1.Status__c);
+    System.assert(inst1.Current_Step__c.contains('WorkflowEngineTest.SkipParallelA'));
+    System.assert(inst1.Current_Step__c.contains('WorkflowEngineTest.SkipParallelB'));
+
+    // 2. Run ParallelA -> completes successfully
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelA').execute(null);
+    
+    // 3. Run ParallelB -> fails and fails the workflow instance
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+
+    Workflow_Instance__c inst2 = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', inst2.Status__c);
+
+    // 4. Resume past ParallelB
+    Test.startTest();
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+    Test.stopTest();
+
+    // 5. Verify workflow finishes successfully after join step runs
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', finalInst.Status__c);
+    System.assertEquals('"Join_OutputA_skippedParallelB"', finalInst.Output__c);
+  }
+
+  @isTest
+  static void testResumePastStepParallelPreservesSleeping() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipParallelWorkflow',
+      'SkipParallelSleepKey',
+      'InitialInput'
+    );
+
+    // 1. Run split step (SkipParallelSplitStep) -> should create parallel executions
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 2. Put SkipParallelA in a Pending state simulation
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Id, Status__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
+    ];
+    System.assertEquals(1, stepExecs.size());
+    stepExecs[0].Status__c = 'Pending';
+    stepExecs[0].Retry_Count__c = 3;
+    stepExecs[0].CPU_Time_Ms__c = 1;
+    update stepExecs[0];
+
+    // 3. Run ParallelB -> fails and fails the workflow instance
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+
+    Workflow_Instance__c inst2 = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', inst2.Status__c);
+
+    // Count existing queueable jobs
+    Integer jobsBefore = [SELECT Count() FROM AsyncApexJob WHERE JobType = 'Queueable'];
+
+    // 4. Resume past ParallelB
+    Test.startTest();
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+    Test.stopTest();
+
+    // Verify that SkipParallelA's execution remains Pending and was NOT reset (retry count is still 3, not reset to 0)
+    Workflow_Step_Execution__c stepAAfter = [
+      SELECT Status__c, Retry_Count__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :stepExecs[0].Id
+    ];
+    System.assertEquals('Pending', stepAAfter.Status__c);
+    System.assertEquals(3, stepAAfter.Retry_Count__c);
+
+    // Verify that the parent instance transitioned to Suspended (since branch A is still parked)
+    Workflow_Instance__c instAfter = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', instAfter.Status__c, 'Parent instance should stay Suspended when a sibling branch is parked');
+
+    // Verify that NO new job was enqueued
+    Integer jobsAfter = [SELECT Count() FROM AsyncApexJob WHERE JobType = 'Queueable'];
+    System.assertEquals(jobsBefore, jobsAfter, 'No new queueable jobs should have been enqueued for the sleeping branch');
+  }
+
+  @isTest
+  static void testResumePastStepParallelSignalSkippedIsNoop() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipParallelWorkflow',
+      'SkipParallelSignalKey',
+      'InitialInput'
+    );
+
+    // 1. Run split step (SkipParallelSplitStep) -> should create parallel executions
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 2. Run ParallelB -> fails and fails the workflow instance
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+
+    // 3. Resume past ParallelB (sets it to OperatorSkipped)
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+
+    // 4. Try executing runStep directly on the skipped step ParallelB (simulating a signal or duplicate orchestrator run)
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.SkipParallelB');
+
+    // Verify status remains OperatorSkipped
+    List<Workflow_Step_Execution__c> stepsAfter = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelB'
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+    System.assertEquals('OperatorSkipped', stepsAfter[0].Status__c, 'Bypassed step should not be re-run');
+  }
+
+  @isTest
+  static void testResumePastStepCaseInsensitivity() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipTestWorkflow',
+      'SkipCaseInsensitivityKey',
+      'InitialInput'
+    );
+
+    // 1. Run step 1 (SkipTestStep1) -> should complete and transition current step to SkipTestStep2
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 2. Run step 2 (SkipTestStep2) -> throws exception, transitions instance to Failed
+    new WorkflowOrchestrator(instanceId).execute(null);
+    Workflow_Instance__c inst2 = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', inst2.Status__c);
+    System.assertEquals('WorkflowEngineTest.SkipTestStep2', inst2.Current_Step__c);
+
+    // 3. Skip Step 2 by supplying JSON output with lowercase casing
+    Test.startTest();
+    WorkflowEngine.resumePastStep(instanceId, 'workflowenginetest.skipteststep2', '{"overrideVal": "skippedOutput"}');
+    Test.stopTest();
+
+    // 4. Verify step 2 execution is recorded as OperatorSkipped (using exact casing)
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipTestStep2'
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+    System.assertEquals(2, stepExecs.size());
+    System.assertEquals('OperatorSkipped', stepExecs[0].Status__c);
+
+    // 5. Run next step execution (should resume and complete)
+    Workflow_Instance__c finalInst = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', finalInst.Status__c);
+  }
+
+  @isTest
+  static void testResumePastStepParallelReParksParkedBranches() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipThreeParallelWorkflow',
+      'SkipThreeParallelSignalKey',
+      'InitialInput'
+    );
+
+    // 1. Run split step (SkipThreeParallelSplitStep) -> should create parallel executions
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 2. Put SkipParallelA in a Pending state simulation (parked)
+    List<Workflow_Step_Execution__c> stepExecsA = [
+      SELECT Id, Status__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
+    ];
+    stepExecsA[0].Status__c = 'Pending';
+    stepExecsA[0].CPU_Time_Ms__c = 1;
+    update stepExecsA[0];
+
+    // 3. Run ParallelB -> fails and fails the workflow instance
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+
+    // 4. Run ParallelC -> fails as well
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelC').execute(null);
+
+    // Verify parent is Failed
+    Workflow_Instance__c instFailed = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', instFailed.Status__c);
+
+    // 5. Resume past ParallelB
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+
+    // 6. Sibling C was reset and is now Pending. We set failParallelC to false and run it manually.
+    WorkflowEngineTest.failParallelC = false;
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelC').execute(null);
+
+    // 7. Verify that parent is set back to Suspended because A is still parked
+    Workflow_Instance__c instFinal = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', instFinal.Status__c, 'Parent should be Suspended since A is still parked');
+  }
+
+  @isTest
+  static void testResumePastStepParallelEnqueuesUndrivenPendingSibling() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipThreeParallelWorkflow',
+      'SkipThreeParallelSignalKey2',
+      'InitialInput'
+    );
+
+    // 1. Run split step (SkipThreeParallelSplitStep) -> should create parallel executions
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // Sibling A is left as Pending (undriven, CPU_Time_Ms__c is null).
+    // Sibling B fails and fails the workflow instance.
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+
+    // Verify parent is Failed
+    Workflow_Instance__c instFailed = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', instFailed.Status__c);
+
+    // 2. Resume past ParallelB.
+    // Since A is Pending but has never run (CPU_Time_Ms__c is null), it is NOT treated as parked.
+    // So the parent should become 'Running' (not 'Suspended').
+    // And A should be enqueued to run.
+    WorkflowEngineTest.failParallelC = false;
+
+    // Both A and C will be reset/enqueued in memory or as no-ops since disableQueueableInTest is true.
+    // We run them manually to drive their execution synchronously.
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+
+    // Run branch A and branch C manually. Wrap C in startTest/stopTest to execute the enqueued Join step.
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelA').execute(null);
+    Test.startTest();
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelC').execute(null);
+    Test.stopTest();
+
+    // Verify parent is Completed (since all A, B, C completed/skipped)
+    Workflow_Instance__c instFinal = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', instFinal.Status__c);
+  }
+
+  @isTest
+  static void testResumePastStepRestampsTerminalTime() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.TerminalSkipWorkflow',
+      'TerminalSkipKey',
+      'InitialInput'
+    );
+
+    // 1. Run the only step -> fails and transitions instance to Failed
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    Workflow_Instance__c instFailed = [
+      SELECT Status__c, Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', instFailed.Status__c);
+    System.assertNotEquals(null, instFailed.Terminal_At__c);
+
+    // Manually push Terminal_At__c back by 10 minutes so we can distinguish a new stamp
+    Datetime tenMinutesAgo = Datetime.now().addMinutes(-10);
+    instFailed.Terminal_At__c = tenMinutesAgo;
+    update as system instFailed;
+
+    // Verify it was updated in the DB
+    Workflow_Instance__c instPreSkip = [
+      SELECT Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(tenMinutesAgo, instPreSkip.Terminal_At__c);
+
+    // 2. Skip the terminal step. This will transition status to 'Completed'.
+    Test.startTest();
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.TerminalSkipStep', '{"overrideVal": "skippedOutput"}');
+    Test.stopTest();
+
+    // 3. Verify that the parent instance transitioned to Completed and Terminal_At__c was restamped with the new time
+    Workflow_Instance__c instFinal = [
+      SELECT Status__c, Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Completed', instFinal.Status__c);
+    System.assertNotEquals(null, instFinal.Terminal_At__c);
+    System.assert(instFinal.Terminal_At__c > tenMinutesAgo, 'Terminal_At__c should have been restamped to a fresh value');
+  }
+
+  @isTest
+  static void testResumePastStepParallelPreservesRetrying() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipParallelWorkflow',
+      'SkipParallelRetryingKey',
+      'InitialInput'
+    );
+
+    // 1. Run split step (SkipParallelSplitStep) -> should create parallel executions
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 2. Put SkipParallelA in a Retrying state simulation (representing a retry backoff)
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Id, Status__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
+    ];
+    System.assertEquals(1, stepExecs.size());
+    stepExecs[0].Status__c = 'Retrying';
+    stepExecs[0].Retry_Count__c = 1;
+    stepExecs[0].CPU_Time_Ms__c = 10;
+    update stepExecs[0];
+
+    // 3. Run ParallelB -> fails and fails the workflow instance
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+
+    Workflow_Instance__c inst2 = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', inst2.Status__c);
+
+    // Count existing queueable jobs
+    Integer jobsBefore = [SELECT Count() FROM AsyncApexJob WHERE JobType = 'Queueable'];
+
+    // 4. Resume past ParallelB
+    Test.startTest();
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+    Test.stopTest();
+
+    // Verify that SkipParallelA's execution remains Retrying and was NOT reset (retry count is still 1)
+    Workflow_Step_Execution__c stepAAfter = [
+      SELECT Status__c, Retry_Count__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :stepExecs[0].Id
+    ];
+    System.assertEquals('Retrying', stepAAfter.Status__c);
+    System.assertEquals(1, stepAAfter.Retry_Count__c);
+
+    // Verify that the parent instance transitioned to Suspended (since branch A is in Retrying state, which counts as parked)
+    Workflow_Instance__c instAfter = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', instAfter.Status__c, 'Parent instance should stay Suspended when a sibling branch is retrying');
+
+    // Verify that NO new job was enqueued
+    Integer jobsAfter = [SELECT Count() FROM AsyncApexJob WHERE JobType = 'Queueable'];
+    System.assertEquals(jobsBefore, jobsAfter, 'No new queueable jobs should have been enqueued for the retrying branch');
+  }
+
+  @isTest
+  static void testResumePastStepDynamicNextThrowsException() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Insert a Failed instance of LoopExposeWorkflow
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.LoopExposeWorkflow',
+      Status__c = 'Failed',
+      Current_Step__c = 'WorkflowEngineTest.LoopExposeStep',
+      Correlation_Key__c = 'dynamic-skip-1'
+    );
+    insert inst;
+
+    // 2. Insert a Failed step execution for LoopExposeStep
+    Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.LoopExposeStep',
+      Status__c = 'Failed',
+      Retry_Count__c = 0
+    );
+    insert stepExec;
+
+    // 3. Try to skip the step
+    try {
+      WorkflowEngine.resumePastStep(inst.Id, 'WorkflowEngineTest.LoopExposeStep', '{}');
+      System.assert(false, 'Should have thrown a WorkflowException');
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assertEquals('Skip is not supported for dynamic-next step definitions.', ex.getMessage());
+    }
+  }
+
+  @isTest
+  static void testResumePastStepRearmsPendingSiblingTimeout() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipThreeParallelWorkflow',
+      'SkipThreeParallelSignalKey3',
+      'InitialInput'
+    );
+
+    // 1. Run split step -> creates parallel executions A, B, C.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 2. Fetch the initial pending Sibling A step execution.
+    Workflow_Step_Execution__c sibA = [
+      SELECT Id, Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
+      LIMIT 1
+    ];
+    System.assertNotEquals(null, sibA.Timeout_At__c, 'Sibling A should have an initial timeout set');
+    
+    // Artificially modify Timeout_At__c to be in the past to simulate delay/stale timeout.
+    Datetime pastTime = Datetime.now().addMinutes(-10);
+    sibA.Timeout_At__c = pastTime;
+    update sibA;
+
+    // Fail Sibling B to fail the workflow instance.
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+
+    // 3. Resume past ParallelB (the skip).
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+
+    // 4. Fetch Sibling A again to verify Timeout_At__c was re-armed (set to a future time, i.e., > pastTime)
+    Workflow_Step_Execution__c sibAAfter = [
+      SELECT Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :sibA.Id
+    ];
+    System.assertNotEquals(null, sibAAfter.Timeout_At__c, 'Sibling A should have its timeout set');
+    System.assert(sibAAfter.Timeout_At__c > pastTime, 'Sibling A timeout should have been re-armed/advanced: ' + sibAAfter.Timeout_At__c);
+  }
+
+  public class TerminalSkipWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.TerminalSkipStep' };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.TerminalSkipStep';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      return null;
+    }
+  }
+
+  public class TerminalSkipStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.fail('Poison terminal step');
+    }
+  }
+
+  public class SkipThreeParallelWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.SkipThreeParallelSplitStep',
+        'WorkflowEngineTest.SkipParallelA',
+        'WorkflowEngineTest.SkipParallelB',
+        'WorkflowEngineTest.SkipParallelC',
+        'WorkflowEngineTest.SkipParallelJoinStep3'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.SkipThreeParallelSplitStep';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      if (currentStepName == 'WorkflowEngineTest.SkipThreeParallelSplitStep') {
+        return 'WorkflowEngineTest.SkipParallelJoinStep3';
+      }
+      return null;
+    }
+  }
+
+  public class SkipThreeParallelSplitStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.split(
+        new List<String>{
+          'WorkflowEngineTest.SkipParallelA',
+          'WorkflowEngineTest.SkipParallelB',
+          'WorkflowEngineTest.SkipParallelC'
+        },
+        null
+      );
+    }
+  }
+
+  public class SkipParallelC implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (WorkflowEngineTest.failParallelC) {
+        return StepResult.fail('Parallel Poison Step C');
+      }
+      return StepResult.complete(null, 'OutputC');
+    }
+  }
+
+  public class SkipParallelJoinStep3 implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'Join3');
+    }
+  }
+
+  @isTest
+  static void testRunStepParallelReparksWithAlreadyRunningSibling() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.CompensatableParallelWorkflow',
+      'CompensatableParallelSignalKey',
+      'InitialInput'
+    );
+
+    // 1. Run split step -> creates parallel executions A and B
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 2. Put A in a Pending state simulation with CPU_Time_Ms__c = 10.0 (representing a parked branch)
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Id, Status__c, CPU_Time_Ms__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.CompensatableParallelA'
+      LIMIT 1
+    ];
+    System.assertEquals(1, stepExecs.size());
+    stepExecs[0].Status__c = 'Pending';
+    stepExecs[0].CPU_Time_Ms__c = 10.0;
+    update stepExecs;
+
+    // 3. Mark the parent instance as Running to simulate that Sibling B is already running (or transaction entered in Running state)
+    Workflow_Instance__c inst = [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    inst.Status__c = 'Running';
+    update inst;
+
+    // 4. Run Sibling B (which is CompensatableParallelB).
+    // Because it is compensatable, it will execute `update as system instance;` during compensation-stack update.
+    // At the end, in the `if (!allDone)` block, it should repark the instance as 'Suspended' since Sibling A is parked.
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.CompensatableParallelB').execute(null);
+
+    // 5. Verify the parent instance was correctly updated to 'Suspended'
+    Workflow_Instance__c instAfter = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', instAfter.Status__c, 'Parent instance should be Suspended since Sibling A is parked');
+  }
+
+  public class CompensatableParallelWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.CompensatableParallelSplitStep',
+        'WorkflowEngineTest.CompensatableParallelA',
+        'WorkflowEngineTest.CompensatableParallelB',
+        'WorkflowEngineTest.CompensatableParallelJoinStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.CompensatableParallelSplitStep';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      if (currentStepName == 'WorkflowEngineTest.CompensatableParallelSplitStep') {
+        return 'WorkflowEngineTest.CompensatableParallelJoinStep';
+      }
+      return null;
+    }
+  }
+
+  public class CompensatableParallelSplitStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.split(
+        new List<String>{
+          'WorkflowEngineTest.CompensatableParallelA',
+          'WorkflowEngineTest.CompensatableParallelB'
+        },
+        null
+      );
+    }
+  }
+
+  public class CompensatableParallelA implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'OutputA');
+    }
+  }
+
+  public class CompensatableParallelB implements WorkflowStep, CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'OutputB');
+    }
+    public StepResult compensate(StepContext ctx) {
+      return StepResult.complete(null, 'CompensatedB');
+    }
+  }
+
+  public class CompensatableParallelJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'JoinDone');
+    }
   }
 }

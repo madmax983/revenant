@@ -316,3 +316,24 @@ lightning-button.slds-button_stretch {
   font-weight: bold;
 }
 
+button.slds-text-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+button.slds-text-link:hover,
+button.slds-text-link:focus {
+  text-decoration: underline;
+  color: var(--slds-c-button-text-color-hover, #005fb2);
+}
+
+@media (max-width: 768px) {
+  .header-buttons {
+    margin-top: 12px;
+  }
+}
+

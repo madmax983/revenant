@@ -179,17 +179,29 @@ public inherited sharing class WorkflowDashboardController {
 
     Map<Id, String> attachmentIdToData = new Map<Id, String>();
     if (!attachmentIds.isEmpty()) {
-      for (ContentVersion cv : [
-        SELECT ContentDocumentId, VersionData
-        FROM ContentVersion
-        WHERE ContentDocumentId IN :attachmentIds AND IsLatest = TRUE
+      Set<Id> verifiedAttachmentIds = new Set<Id>();
+      for (ContentDocumentLink cdl : [
+        SELECT ContentDocumentId
+        FROM ContentDocumentLink
+        WHERE ContentDocumentId IN :attachmentIds AND LinkedEntityId = :instance.Id
         WITH SYSTEM_MODE
       ]) {
-        if (cv.VersionData != null) {
-          attachmentIdToData.put(
-            cv.ContentDocumentId,
-            cv.VersionData.toString()
-          );
+        verifiedAttachmentIds.add(cdl.ContentDocumentId);
+      }
+
+      if (!verifiedAttachmentIds.isEmpty()) {
+        for (ContentVersion cv : [
+          SELECT ContentDocumentId, VersionData
+          FROM ContentVersion
+          WHERE ContentDocumentId IN :verifiedAttachmentIds AND IsLatest = TRUE
+          WITH SYSTEM_MODE
+        ]) {
+          if (cv.VersionData != null) {
+            attachmentIdToData.put(
+              cv.ContentDocumentId,
+              cv.VersionData.toString()
+            );
+          }
         }
       }
     }
@@ -1654,6 +1666,41 @@ public inherited sharing class WorkflowDashboardController {
           ex.getStackTraceString()
       );
       throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  /**
+   * Operator action to resume a failed instance past a failed step by supplying
+   * that step's resolved output and resuming forward execution.
+   */
+  @AuraEnabled
+  public static void resumePastStepInstance(Id instanceId, String stepName, String suppliedOutputJson) {
+    checkAuthorization();
+    if (
+      !FeatureManagement.checkPermission('Workflow_Step_Skip') &&
+      !currentUserHasModifyAllData()
+    ) {
+      AuraHandledException ex = new AuraHandledException(
+        'Unauthorized: skipping a step requires the "Workflow_Step_Skip" permission.'
+      );
+      ex.setMessage(
+        'Unauthorized: skipping a step requires the "Workflow_Step_Skip" permission.'
+      );
+      throw ex;
+    }
+    try {
+      WorkflowEngine.resumePastStep(instanceId, stepName, suppliedOutputJson);
+    } catch (Exception ex) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Aura resumePastStepInstance failed: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
+      AuraHandledException aex = new AuraHandledException(ex.getMessage());
+      aex.setMessage(ex.getMessage());
+      throw aex;
     }
   }
 

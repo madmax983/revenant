@@ -1194,4 +1194,98 @@ public class WorkflowConcurrencyTest {
       'The Running parent is left as-is by the orphaned-retry sweep'
     );
   }
+
+  public class MultiStepConcurrencyWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowConcurrencyTest.WaitStep',
+        'WorkflowConcurrencyTest.TimeoutWaitStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowConcurrencyTest.WaitStep';
+    }
+    public String getNextStep(String current, StepResult result) {
+      if (current == 'WorkflowConcurrencyTest.WaitStep') {
+        return 'WorkflowConcurrencyTest.TimeoutWaitStep';
+      }
+      return null;
+    }
+  }
+
+  @isTest
+  static void testResumePastStepDefersTimeoutForConcurrency() {
+    WorkflowEngine.disableQueueableInTest = true;
+    
+    // 1. Mock concurrency configuration
+    ConcurrencyGate.mockConfigs.put(
+      'WorkflowConcurrencyTest_MultiStepConcurrencyWorkflow',
+      (Concurrency_Config__mdt) JSON.deserialize(
+        '{"DeveloperName":"WorkflowConcurrencyTest_MultiStepConcurrencyWorkflow","Max_Concurrent_Instances__c":1}',
+        Concurrency_Config__mdt.class
+      )
+    );
+
+    // 2. Insert a Failed instance of MultiStepConcurrencyWorkflow
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowConcurrencyTest.MultiStepConcurrencyWorkflow',
+      Status__c = 'Failed',
+      Current_Step__c = 'WorkflowConcurrencyTest.WaitStep',
+      Correlation_Key__c = 'defer-skip-2'
+    );
+    insert inst;
+
+    // 3. Insert a Failed step execution for WaitStep
+    Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowConcurrencyTest.WaitStep',
+      Status__c = 'Failed',
+      Retry_Count__c = 0
+    );
+    insert stepExec;
+
+    // 4. Count scheduled cron/jobs before skip
+    Integer jobsBefore = [SELECT Count() FROM AsyncApexJob WHERE JobType = 'ScheduledApex'];
+
+    // 5. Execute skip/resume
+    Test.startTest();
+    WorkflowEngine.resumePastStep(inst.Id, 'WorkflowConcurrencyTest.WaitStep', '{}');
+
+    // 6. Verify that Concurrency_Parked__c is set to true on the instance before admission runs
+    Workflow_Instance__c instMid = [
+      SELECT Status__c, Concurrency_Parked__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Running', instMid.Status__c, 'Parent instance should be set to Running');
+    System.assertEquals('WorkflowConcurrencyTest.TimeoutWaitStep', instMid.Current_Step__c, 'Should advance to next step');
+    System.assertEquals(true, instMid.Concurrency_Parked__c, 'Concurrency_Parked__c should be set to true before admission');
+
+    // Verify no timeout job was scheduled yet
+    Integer jobsAfterMid = [SELECT Count() FROM AsyncApexJob WHERE JobType = 'ScheduledApex'];
+    System.assertEquals(jobsBefore, jobsAfterMid, 'No timeout job should have been scheduled during the skip');
+
+    // Verify the newly inserted step execution is Pending and has NULL Timeout_At__c
+    Workflow_Step_Execution__c nextExecMid = [
+      SELECT Status__c, Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :inst.Id AND Step_Name__c = 'WorkflowConcurrencyTest.TimeoutWaitStep'
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    System.assertEquals('Pending', nextExecMid.Status__c);
+    System.assertEquals(null, nextExecMid.Timeout_At__c, 'Timeout_At__c should remain null while parked');
+
+    Test.stopTest();
+
+    // 7. Verify that once stopTest finishes (meaning the enqueued orchestrator has run), the instance gets admitted
+    Workflow_Instance__c instFinal = [
+      SELECT Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Running', instFinal.Status__c);
+    System.assertEquals(false, instFinal.Concurrency_Parked__c, 'Concurrency_Parked__c should be cleared once admitted');
+    System.assertEquals(true, instFinal.Concurrency_Slot_Held__c, 'Concurrency_Slot_Held__c should be set once admitted');
+  }
 }

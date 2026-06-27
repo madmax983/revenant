@@ -2712,7 +2712,7 @@ public inherited sharing class WorkflowEngine {
 
     Integer stepVisit = 0;
     for (Workflow_Step_Execution__c exec : stepExecs) {
-      if (exec.Status__c == 'Completed') {
+      if (exec.Status__c == 'Completed' || exec.Status__c == 'OperatorSkipped') {
         stepVisit++;
       }
     }
@@ -2789,7 +2789,7 @@ public inherited sharing class WorkflowEngine {
       List<Workflow_Step_Execution__c> completedSteps = [
         SELECT Output__c
         FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Completed'
+        WHERE Workflow_Instance__c = :instanceId AND Status__c IN ('Completed', 'OperatorSkipped')
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
         LIMIT 1
@@ -2801,6 +2801,7 @@ public inherited sharing class WorkflowEngine {
       stepExec = stepExecs[0];
       if (
         stepExec.Status__c == 'Completed' ||
+        stepExec.Status__c == 'OperatorSkipped' ||
         stepExec.Status__c == 'Failed' ||
         stepExec.Status__c == 'Cancelled' ||
         stepExec.Status__c == 'Compensated'
@@ -2824,7 +2825,7 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Status__c = 'Completed'
+          AND Status__c IN ('Completed', 'OperatorSkipped')
           AND Step_Name__c NOT IN :activeParallelSteps
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
@@ -2836,7 +2837,7 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Status__c = 'Completed'
+          AND Status__c IN ('Completed', 'OperatorSkipped')
           AND Step_Name__c != :activeStepName
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
@@ -3972,30 +3973,60 @@ public inherited sharing class WorkflowEngine {
       // Parallel logic (which was under if (isParallel))
       List<String> activeParallelSteps = instance.Current_Step__c.split(',');
       List<Workflow_Step_Execution__c> parallelExecs = [
-        SELECT Step_Name__c, Status__c, Output__c
+        SELECT Step_Name__c, Status__c, Output__c, CPU_Time_Ms__c
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instance.Id
           AND Step_Name__c IN :activeParallelSteps
         WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC, Id DESC
       ];
+
+      Map<String, Workflow_Step_Execution__c> latestExecByStep = new Map<String, Workflow_Step_Execution__c>();
+      for (Workflow_Step_Execution__c pe : parallelExecs) {
+        if (!latestExecByStep.containsKey(pe.Step_Name__c)) {
+          latestExecByStep.put(pe.Step_Name__c, pe);
+        }
+      }
 
       Boolean allDone = true;
       for (String ps : activeParallelSteps) {
-        Boolean found = false;
-        for (Workflow_Step_Execution__c pe : parallelExecs) {
-          if (pe.Step_Name__c == ps && pe.Status__c == 'Completed') {
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
+        Workflow_Step_Execution__c pe = latestExecByStep.get(ps);
+        if (pe == null || (pe.Status__c != 'Completed' && pe.Status__c != 'OperatorSkipped')) {
           allDone = false;
           break;
         }
       }
 
       if (!allDone) {
+        Boolean hasPending = false;
+        Boolean hasRunning = false;
+        Boolean hasFailed = false;
+        for (String ps : activeParallelSteps) {
+          Workflow_Step_Execution__c pe = latestExecByStep.get(ps);
+          if (pe == null) {
+            hasRunning = true;
+          } else if (pe.Status__c == 'Running') {
+            hasRunning = true;
+          } else if (pe.Status__c == 'Failed') {
+            hasFailed = true;
+          } else if (pe.Status__c == 'Retrying') {
+            hasPending = true;
+          } else if (pe.Status__c == 'Pending') {
+            if (pe.CPU_Time_Ms__c != null) {
+              hasPending = true;
+            } else {
+              hasRunning = true;
+            }
+          }
+        }
+        if (hasPending && !hasRunning) {
+          instance.Status__c = 'Suspended';
+          update as system instance;
+        } else if (!hasPending && !hasRunning && hasFailed) {
+          instance.Status__c = 'Failed';
+          update as system instance;
+        }
         return;
       }
 
@@ -4005,7 +4036,7 @@ public inherited sharing class WorkflowEngine {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instance.Id
-          AND Status__c = 'Completed'
+          AND Status__c IN ('Completed', 'OperatorSkipped')
           AND Step_Name__c NOT IN :activeParallelSteps
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
@@ -4038,22 +4069,25 @@ public inherited sharing class WorkflowEngine {
       }
 
       Map<String, Object> joinInput = new Map<String, Object>();
-      for (Workflow_Step_Execution__c pe : parallelExecs) {
-        Object outputVal = null;
-        String resolvedOutput = resolvePayload(pe.Output__c);
-        if (String.isNotBlank(resolvedOutput)) {
-          try {
-            outputVal = JSON.deserializeUntyped(resolvedOutput);
-          } catch (Exception ex) {
-            System.debug(
-              LoggingLevel.FINE,
-              'Parallel step output was not JSON, falling back to raw string: ' +
-              ex.getMessage()
-            );
-            outputVal = resolvedOutput;
+      for (String ps : activeParallelSteps) {
+        Workflow_Step_Execution__c pe = latestExecByStep.get(ps);
+        if (pe != null) {
+          Object outputVal = null;
+          String resolvedOutput = resolvePayload(pe.Output__c);
+          if (String.isNotBlank(resolvedOutput)) {
+            try {
+              outputVal = JSON.deserializeUntyped(resolvedOutput);
+            } catch (Exception ex) {
+              System.debug(
+                LoggingLevel.FINE,
+                'Parallel step output was not JSON, falling back to raw string: ' +
+                ex.getMessage()
+              );
+              outputVal = resolvedOutput;
+            }
           }
+          joinInput.put(ps, outputVal);
         }
-        joinInput.put(pe.Step_Name__c, outputVal);
       }
       String joinInputJson = JSON.serialize(joinInput);
 
@@ -4703,7 +4737,7 @@ public inherited sharing class WorkflowEngine {
           List<Workflow_Step_Execution__c> completedSteps = [
             SELECT Output__c
             FROM Workflow_Step_Execution__c
-            WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Completed'
+            WHERE Workflow_Instance__c = :instanceId AND Status__c IN ('Completed', 'OperatorSkipped')
             WITH SYSTEM_MODE
             ORDER BY CreatedDate DESC, Id DESC
             LIMIT 1
@@ -6000,7 +6034,8 @@ public inherited sharing class WorkflowEngine {
     for (Id instId : branchesByInstance.keySet()) {
       for (String b : branchesByInstance.get(instId)) {
         String key = instId + '::' + b;
-        if (latestStatusByKey.get(key) == 'Completed') {
+        String status = latestStatusByKey.get(key);
+        if (status == 'Completed' || status == 'OperatorSkipped') {
           continue; // branch already finished
         }
         if (enqueuedBranchKeys.contains(key)) {
@@ -6131,7 +6166,7 @@ public inherited sharing class WorkflowEngine {
       Workflow_Step_Execution__c stepExec = latestStepByName.get(
         targetStepName
       );
-      if (stepExec != null && stepExec.Status__c != 'Completed') {
+      if (stepExec != null && stepExec.Status__c != 'Completed' && stepExec.Status__c != 'OperatorSkipped') {
         stepExec.Status__c = 'Pending';
         stepExec.Retry_Count__c = 0; // reset retry counter
         stepExec.Error_Details__c = null;
@@ -6174,7 +6209,7 @@ public inherited sharing class WorkflowEngine {
       Workflow_Step_Execution__c stepExec = latestStepByName.get(
         targetStepName
       );
-      if (stepExec == null || stepExec.Status__c != 'Completed') {
+      if (stepExec == null || (stepExec.Status__c != 'Completed' && stepExec.Status__c != 'OperatorSkipped')) {
         if (Test.isRunningTest()) {
           if (!disableQueueableInTest) {
             System.enqueueJob(
@@ -6202,6 +6237,409 @@ public inherited sharing class WorkflowEngine {
     String detail
   ) {
     return (wasCancelling ? 'Cancelled by user. ' : '') + detail;
+  }
+
+  /**
+   * Operator action to resume a failed instance past a failed step by supplying
+   * that step's resolved output and resuming forward execution.
+   */
+  public static void resumePastStep(Id instanceId, String stepName, String suppliedOutputJson) {
+    if (instanceId == null) {
+      throw new WorkflowException('Instance ID is required.');
+    }
+    if (String.isBlank(stepName)) {
+      throw new WorkflowException('Step name is required.');
+    }
+
+    // 1. Fetch and lock instance state
+    List<Workflow_Instance__c> instances = [
+      SELECT
+        Id,
+        Name,
+        Workflow_Name__c,
+        Status__c,
+        Current_Step__c,
+        Input__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c,
+        Parent_Instance__c,
+        Compensation_Stack__c,
+        Definition_Version__c,
+        Previous_Run_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+
+    if (instances.isEmpty()) {
+      throw new WorkflowException('Workflow instance not found: ' + instanceId);
+    }
+    Workflow_Instance__c instance = instances[0];
+
+    // 2. Validate status
+    if (instance.Status__c != 'Failed') {
+      throw new WorkflowException(
+        'Resume past step is only allowed for instances in Failed state. Current status: ' +
+        instance.Status__c
+      );
+    }
+
+    // 3. Validate step is currently active and normalize casing to match definition exactly
+    Boolean stepIsValid = false;
+    if (String.isNotBlank(instance.Current_Step__c)) {
+      if (instance.Current_Step__c.contains(',')) {
+        for (String s : instance.Current_Step__c.split(',')) {
+          if (s.trim().equalsIgnoreCase(stepName)) {
+            stepIsValid = true;
+            stepName = s.trim();
+            break;
+          }
+        }
+      } else {
+        if (instance.Current_Step__c.equalsIgnoreCase(stepName)) {
+          stepIsValid = true;
+          stepName = instance.Current_Step__c;
+        }
+      }
+    }
+    if (!stepIsValid) {
+      throw new WorkflowException(
+        'Step ' + stepName + ' is not the active/expected step for this instance: ' +
+        instance.Current_Step__c
+      );
+    }
+
+    // 4. Retrieve latest step execution with row lock (FOR UPDATE)
+    List<Workflow_Step_Execution__c> stepExecsWithoutLock = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = :stepName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    if (stepExecsWithoutLock.isEmpty()) {
+      throw new WorkflowException('No execution record found for step: ' + stepName);
+    }
+    Id latestStepExecId = stepExecsWithoutLock[0].Id;
+
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Id, Status__c, Input__c, Retry_Count__c, Transient_Retry_Count__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :latestStepExecId
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+    Workflow_Step_Execution__c latestExec = stepExecs[0];
+    if (latestExec.Status__c != 'Failed') {
+      throw new WorkflowException(
+        'Step ' + stepName + ' cannot be skipped because it is not in Failed status. Current status: ' + latestExec.Status__c
+      );
+    }
+
+    // 5. Parse and validate supplied output JSON
+    if (String.isNotBlank(suppliedOutputJson)) {
+      if (suppliedOutputJson.length() > 250000) {
+        throw new WorkflowException('Supplied output size exceeds maximum allowed limit of 250KB.');
+      }
+      if (suppliedOutputJson.contains('"$attachmentId"')) {
+        throw new WorkflowException('Operator-supplied payload cannot contain reserved "$attachmentId" markers.');
+      }
+      try {
+        JSON.deserializeUntyped(suppliedOutputJson);
+      } catch (Exception ex) {
+        throw new WorkflowException('Supplied output is not valid JSON: ' + ex.getMessage());
+      }
+    }
+
+    Savepoint sp = Database.setSavepoint();
+    try {
+      // 6. Record skip as a new Step Execution row
+      Workflow_Step_Execution__c skipExec = new Workflow_Step_Execution__c();
+      skipExec.Workflow_Instance__c = instanceId;
+      skipExec.Step_Name__c = stepName;
+      skipExec.Status__c = 'OperatorSkipped';
+      skipExec.Retry_Count__c = 0;
+      skipExec.Transient_Retry_Count__c = 0;
+      skipExec.Input__c = latestExec.Input__c;
+      skipExec.Output__c = savePayloadIfNeeded(
+        instanceId,
+        suppliedOutputJson,
+        'Output_' + stepName.replaceAll('[^a-zA-Z0-9]', '_')
+      );
+      insert as system skipExec;
+
+      // 7. Log operator intervention
+      String msg = 'User ' + UserInfo.getUserName() + ' (' + UserInfo.getName() + ') skipped step ' + stepName + 
+        ' on instance ' + instance.Name + ' (Correlation Key: ' + instance.Correlation_Key__c + ') providing output: ' + 
+        (suppliedOutputJson != null && suppliedOutputJson.length() > 500 ? suppliedOutputJson.substring(0, 500) + '...' : suppliedOutputJson);
+      
+      Workflow_Log__c interventionLog = new Workflow_Log__c(
+        Workflow_Instance__c = instanceId,
+        Workflow_Name__c = instance.Workflow_Name__c,
+        Correlation_Key__c = instance.Correlation_Key__c,
+        Log_Type__c = 'OperatorIntervention',
+        Message__c = msg.left(131072),
+        Outcome__c = 'Success',
+        Level__c = 'INFO',
+        Fire_Time__c = DateTime.now()
+      );
+      insert as system interventionLog;
+
+      // 8. Determine Next Step
+      Type wflowType = Type.forName(instance.Workflow_Name__c);
+      WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
+
+      Boolean isParallel = String.isNotBlank(instance.Current_Step__c) && instance.Current_Step__c.contains(',');
+
+      if (!isParallel) {
+        StepResult mockResult = new StepResult();
+        mockResult.action = StepResult.ActionType.COMPLETE;
+        mockResult.nextStepName = 'SENTINEL_NEXT_STEP';
+        mockResult.outputJson = suppliedOutputJson;
+        String nextStepName;
+        if (def instanceof VersionedWorkflow) {
+          nextStepName = ((VersionedWorkflow) def).getNextStep(
+            stepName,
+            mockResult,
+            instance.Definition_Version__c != null ? (Integer) instance.Definition_Version__c : 1
+          );
+        } else {
+          nextStepName = def.getNextStep(stepName, mockResult);
+        }
+
+        if (nextStepName == 'SENTINEL_NEXT_STEP') {
+          throw new WorkflowException('Skip is not supported for dynamic-next step definitions.');
+        }
+
+        if (String.isBlank(nextStepName)) {
+          // Workflow is completed
+          instance.Status__c = 'Completed';
+          instance.Terminal_At__c = DateTime.now();
+          instance.Output__c = savePayloadIfNeeded(instanceId, suppliedOutputJson, 'Output_Final');
+          instance.Current_Step__c = null;
+          instance.Error_Message__c = null;
+          instance.Failure_Category__c = null;
+          update as system instance;
+
+          notifyParentCompletion(instance);
+          WorkflowLifecyclePublisher.publish(instance);
+          return;
+        }
+
+        // Advance to next step
+        instance.Current_Step__c = nextStepName;
+        instance.Status__c = 'Running';
+        instance.Error_Message__c = null;
+        instance.Failure_Category__c = null;
+        Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(instance.Workflow_Name__c);
+        if (deferTimeoutForConcurrency) {
+          instance.Concurrency_Parked__c = true;
+        }
+        update as system instance;
+
+        Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
+        nextStepExec.Workflow_Instance__c = instance.Id;
+        nextStepExec.Step_Name__c = nextStepName;
+        nextStepExec.Status__c = 'Pending';
+        nextStepExec.Input__c = skipExec.Output__c;
+        nextStepExec.Retry_Count__c = 0;
+        insert as system nextStepExec;
+
+        if (!deferTimeoutForConcurrency) {
+          scheduleTimeoutJobForInstance(instance.Id);
+        }
+        if (Test.isRunningTest() && disableQueueableInTest) {
+          System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+        } else {
+          enqueueOrchestrator(instance.Id, null);
+        }
+      } else {
+        // Parallel branches: load all parallel step executions to see if we can join
+        List<String> activeParallelSteps = instance.Current_Step__c.split(',');
+        
+        Map<String, Workflow_Step_Execution__c> latestParallelMap = new Map<String, Workflow_Step_Execution__c>();
+        for (Workflow_Step_Execution__c pe : [
+          SELECT Step_Name__c, Status__c, Output__c, CPU_Time_Ms__c, Timeout_At__c
+          FROM Workflow_Step_Execution__c
+          WHERE Workflow_Instance__c = :instanceId AND Step_Name__c IN :activeParallelSteps
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate DESC, Id DESC
+        ]) {
+          if (!latestParallelMap.containsKey(pe.Step_Name__c)) {
+            latestParallelMap.put(pe.Step_Name__c, pe);
+          }
+        }
+
+        Boolean allDone = true;
+        for (String ps : activeParallelSteps) {
+          Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
+          if (pe == null || (pe.Status__c != 'Completed' && pe.Status__c != 'OperatorSkipped')) {
+            allDone = false;
+            break;
+          }
+        }
+
+        // Spawning step
+        List<Workflow_Step_Execution__c> spawningSteps = [
+          SELECT Step_Name__c, Output__c
+          FROM Workflow_Step_Execution__c
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Status__c IN ('Completed', 'OperatorSkipped')
+            AND Step_Name__c NOT IN :activeParallelSteps
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate DESC, Id DESC
+          LIMIT 1
+        ];
+        String spawningStepName = !spawningSteps.isEmpty() ? spawningSteps[0].Step_Name__c : '';
+        StepResult mockSpawningResult = StepResult.complete(
+          'SENTINEL_NEXT_STEP',
+          !spawningSteps.isEmpty() ? spawningSteps[0].Output__c : null
+        );
+
+        String nextStepName;
+        if (def instanceof VersionedWorkflow) {
+          nextStepName = ((VersionedWorkflow) def).getNextStep(
+            spawningStepName,
+            mockSpawningResult,
+            instance.Definition_Version__c != null ? (Integer) instance.Definition_Version__c : 1
+          );
+        } else {
+          nextStepName = def.getNextStep(spawningStepName, mockSpawningResult);
+        }
+
+        if (nextStepName == 'SENTINEL_NEXT_STEP') {
+          throw new WorkflowException('Skip is not supported for dynamic-next step definitions.');
+        }
+
+        if (allDone) {
+          Map<String, Object> joinInput = new Map<String, Object>();
+          for (String ps : latestParallelMap.keySet()) {
+            Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
+            Object outputVal = null;
+            String resolvedOutput = resolvePayload(pe.Output__c);
+            if (String.isNotBlank(resolvedOutput)) {
+              try {
+                outputVal = JSON.deserializeUntyped(resolvedOutput);
+              } catch (Exception ex) {
+                outputVal = resolvedOutput;
+              }
+            }
+            joinInput.put(pe.Step_Name__c, outputVal);
+          }
+          String joinInputJson = JSON.serialize(joinInput);
+
+          if (String.isBlank(nextStepName)) {
+            instance.Status__c = 'Completed';
+            instance.Terminal_At__c = DateTime.now();
+            instance.Output__c = savePayloadIfNeeded(instanceId, joinInputJson, 'Output_Join');
+            instance.Current_Step__c = null;
+            instance.Error_Message__c = null;
+            instance.Failure_Category__c = null;
+            update as system instance;
+
+            notifyParentCompletion(instance);
+            WorkflowLifecyclePublisher.publish(instance);
+            return;
+          }
+
+          Workflow_Step_Execution__c joinStepExec = new Workflow_Step_Execution__c();
+          joinStepExec.Workflow_Instance__c = instance.Id;
+          joinStepExec.Step_Name__c = nextStepName;
+          joinStepExec.Status__c = 'Pending';
+          joinStepExec.Input__c = savePayloadIfNeeded(
+            instance.Id,
+            joinInputJson,
+            'Input_' + nextStepName.replaceAll('[^a-zA-Z0-9]', '_')
+          );
+          joinStepExec.Retry_Count__c = 0;
+          insert as system joinStepExec;
+
+          instance.Current_Step__c = nextStepName;
+          instance.Status__c = 'Running';
+          instance.Error_Message__c = null;
+          instance.Failure_Category__c = null;
+          Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(instance.Workflow_Name__c);
+          if (deferTimeoutForConcurrency) {
+            instance.Concurrency_Parked__c = true;
+          }
+          update as system instance;
+
+          if (!deferTimeoutForConcurrency) {
+            scheduleTimeoutJobForInstance(instance.Id);
+          }
+          if (Test.isRunningTest() && disableQueueableInTest) {
+            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+          } else {
+            enqueueOrchestrator(instance.Id, null);
+          }
+        } else {
+          // Resume incomplete parallel branches
+          Boolean hasParkedSibling = false;
+          for (String ps : activeParallelSteps) {
+            if (ps.equalsIgnoreCase(stepName)) {
+              continue;
+            }
+            Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
+            if (pe != null && (pe.Status__c == 'Retrying' || (pe.Status__c == 'Pending' && pe.CPU_Time_Ms__c != null))) {
+              hasParkedSibling = true;
+              break;
+            }
+          }
+
+          instance.Status__c = hasParkedSibling ? 'Suspended' : 'Running';
+          instance.Error_Message__c = null;
+          instance.Failure_Category__c = null;
+          update as system instance;
+
+          Set<String> stepsToEnqueue = new Set<String>();
+          List<Workflow_Step_Execution__c> stepsToReset = new List<Workflow_Step_Execution__c>();
+          for (String ps : activeParallelSteps) {
+            if (ps.equalsIgnoreCase(stepName)) {
+              continue;
+            }
+            Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
+            if (pe == null) {
+              stepsToEnqueue.add(ps);
+            } else if (pe.Status__c == 'Failed') {
+              pe.Status__c = 'Pending';
+              pe.Retry_Count__c = 0;
+              pe.Error_Details__c = null;
+              stepsToReset.add(pe);
+              stepsToEnqueue.add(ps);
+            } else if (pe.Status__c == 'Pending' && pe.CPU_Time_Ms__c == null) {
+              // Initial/undriven pending branch: enqueue it directly after re-arming/clearing timeout
+              Integer timeout = getStepTimeoutSeconds(ps);
+              if (timeout != null && timeout > 0) {
+                pe.Timeout_At__c = DateTime.now().addSeconds(timeout);
+              } else {
+                pe.Timeout_At__c = null;
+              }
+              stepsToReset.add(pe);
+              stepsToEnqueue.add(ps);
+            }
+          }
+          if (!stepsToReset.isEmpty()) {
+            update as system stepsToReset;
+          }
+
+          for (String ps : stepsToEnqueue) {
+            if (Test.isRunningTest()) {
+              if (!disableQueueableInTest) {
+                System.enqueueJob(new WorkflowOrchestrator(instanceId, ps));
+              }
+            } else {
+              enqueueOrchestrator(instanceId, ps);
+            }
+          }
+        }
+      }
+    } catch (Exception ex) {
+      Database.rollback(sp);
+      throw ex;
+    }
   }
 
   /**
@@ -6645,7 +7083,7 @@ public inherited sharing class WorkflowEngine {
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :forwardSourceInstanceId
-        AND Status__c = 'Completed'
+        AND Status__c IN ('Completed', 'OperatorSkipped')
         AND Step_Name__c != :activeStepName
         AND Step_Name__c != :compensationStepLogName
       WITH SYSTEM_MODE

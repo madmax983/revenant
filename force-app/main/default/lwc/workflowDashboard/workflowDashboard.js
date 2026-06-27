@@ -30,6 +30,8 @@ import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.ge
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
 import compensateWorkflow from "@salesforce/apex/WorkflowDashboardController.compensateWorkflow";
 import injectSignal from "@salesforce/apex/WorkflowDashboardController.injectSignal";
+import resumePastStepInstance from "@salesforce/apex/WorkflowDashboardController.resumePastStepInstance";
+import LightningConfirm from "lightning/confirm";
 
 const FAILURE_CATEGORY_LABELS = {
   STEP_EXCEPTION: "Step Exception",
@@ -43,7 +45,7 @@ const FAILURE_CATEGORY_LABELS = {
 const ASYNC_LIMITS = {
   CPU: 60000,
   SOQL: 200,
-  HEAP: 12000000
+  HEAP: 12000000,
 };
 
 export default class WorkflowDashboard extends LightningElement {
@@ -339,7 +341,7 @@ export default class WorkflowDashboard extends LightningElement {
       this.cacheBuster = Date.now().toString();
     }
 
-    const currentOffset = isAppend ? (targetOffset || this.offsetSize) : 0;
+    const currentOffset = isAppend ? targetOffset || this.offsetSize : 0;
     const currentLimit = this.limitSize;
 
     if (isAppend) {
@@ -350,29 +352,30 @@ export default class WorkflowDashboard extends LightningElement {
 
     const instancesPromise = this.showingStalled
       ? getStalledInstances({
-        workflowName: this.selectedWorkflow,
-        searchTerm: this.searchTerm,
-        thresholdMinutes: null,
-        limitSize: currentLimit,
-        offsetSize: currentOffset,
-        cacheBuster: this.cacheBuster,
-        attributesFilterJson: this.attributesFilterJson,
-      })
+          workflowName: this.selectedWorkflow,
+          searchTerm: this.searchTerm,
+          thresholdMinutes: null,
+          limitSize: currentLimit,
+          offsetSize: currentOffset,
+          cacheBuster: this.cacheBuster,
+          attributesFilterJson: this.attributesFilterJson,
+        })
       : getFilteredInstances({
-        workflowName: this.selectedWorkflow,
-        status: this.selectedStatus,
-        searchTerm: this.searchTerm,
-        failureCategory: this.selectedFailureCategory,
-        limitSize: currentLimit,
-        offsetSize: currentOffset,
-        cacheBuster: this.cacheBuster,
-        attributesFilterJson: this.attributesFilterJson,
-      });
+          workflowName: this.selectedWorkflow,
+          status: this.selectedStatus,
+          searchTerm: this.searchTerm,
+          failureCategory: this.selectedFailureCategory,
+          limitSize: currentLimit,
+          offsetSize: currentOffset,
+          cacheBuster: this.cacheBuster,
+          attributesFilterJson: this.attributesFilterJson,
+        });
 
     if (isAppend) {
       return instancesPromise
         .then((result) => {
-          if (!this._isConnected || requestId !== this._instanceRequestId) return;
+          if (!this._isConnected || requestId !== this._instanceRequestId)
+            return;
           const formatted = result.map((inst) => this.formatInstance(inst));
           this.instances = [...this.instances, ...formatted];
 
@@ -391,10 +394,12 @@ export default class WorkflowDashboard extends LightningElement {
           this.filterInstancesList();
         })
         .catch((error) => {
-          if (!this._isConnected || requestId !== this._instanceRequestId) return;
+          if (!this._isConnected || requestId !== this._instanceRequestId)
+            return;
           this.showToast(
             "Error",
-            "Failed to retrieve workflow instances: " + this.reduceErrors(error),
+            "Failed to retrieve workflow instances: " +
+              this.reduceErrors(error),
             "error",
           );
         })
@@ -423,11 +428,12 @@ export default class WorkflowDashboard extends LightningElement {
       return { count: 0, capped: false };
     });
 
-    const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null })
-      .catch((error) => {
-        console.error("Unrouted signal count query failed:", error);
-        return { count: 0, capped: false };
-      });
+    const unroutedCountPromise = getUnroutedSignalCount({
+      searchTerm: null,
+    }).catch((error) => {
+      console.error("Unrouted signal count query failed:", error);
+      return { count: 0, capped: false };
+    });
 
     return Promise.all([
       instancesPromise,
@@ -477,6 +483,7 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   refreshInstances() {
+    const requestId = ++this._instanceRequestId;
     const currentSize =
       this.instances.length > 0 ? this.instances.length : this.limitSize;
     this.cacheBuster = Date.now().toString();
@@ -486,24 +493,24 @@ export default class WorkflowDashboard extends LightningElement {
 
     const instancesPromise = this.showingStalled
       ? getStalledInstances({
-        workflowName: this.selectedWorkflow,
-        searchTerm: this.searchTerm,
-        thresholdMinutes: null,
-        limitSize: currentSize,
-        offsetSize: 0,
-        cacheBuster: this.cacheBuster,
-        attributesFilterJson: this.attributesFilterJson,
-      })
+          workflowName: this.selectedWorkflow,
+          searchTerm: this.searchTerm,
+          thresholdMinutes: null,
+          limitSize: currentSize,
+          offsetSize: 0,
+          cacheBuster: this.cacheBuster,
+          attributesFilterJson: this.attributesFilterJson,
+        })
       : getFilteredInstances({
-        workflowName: this.selectedWorkflow,
-        status: this.selectedStatus,
-        searchTerm: this.searchTerm,
-        failureCategory: this.selectedFailureCategory,
-        limitSize: currentSize,
-        offsetSize: 0,
-        cacheBuster: this.cacheBuster,
-        attributesFilterJson: this.attributesFilterJson,
-      });
+          workflowName: this.selectedWorkflow,
+          status: this.selectedStatus,
+          searchTerm: this.searchTerm,
+          failureCategory: this.selectedFailureCategory,
+          limitSize: currentSize,
+          offsetSize: 0,
+          cacheBuster: this.cacheBuster,
+          attributesFilterJson: this.attributesFilterJson,
+        });
 
     const statsPromise = getWorkflowStats({
       workflowName: this.selectedWorkflow,
@@ -522,11 +529,12 @@ export default class WorkflowDashboard extends LightningElement {
       return { count: 0, capped: false };
     });
 
-    const unroutedCountPromise = getUnroutedSignalCount({ searchTerm: null })
-      .catch((error) => {
-        console.error("Unrouted signal count query failed:", error);
-        return { count: 0, capped: false };
-      });
+    const unroutedCountPromise = getUnroutedSignalCount({
+      searchTerm: null,
+    }).catch((error) => {
+      console.error("Unrouted signal count query failed:", error);
+      return { count: 0, capped: false };
+    });
 
     return Promise.all([
       instancesPromise,
@@ -535,6 +543,7 @@ export default class WorkflowDashboard extends LightningElement {
       unroutedCountPromise,
     ])
       .then(([result, statsResult, stalledResult, unroutedResult]) => {
+        if (!this._isConnected || requestId !== this._instanceRequestId) return;
         this.instances = result.map((inst) => this.formatInstance(inst));
         this.stats = statsResult;
         this.stalledCountData = stalledResult || { count: 0, capped: false };
@@ -552,6 +561,7 @@ export default class WorkflowDashboard extends LightningElement {
         });
       })
       .catch((error) => {
+        if (!this._isConnected || requestId !== this._instanceRequestId) return;
         console.error("Error refreshing instances:", this.reduceErrors(error));
       });
   }
@@ -613,7 +623,9 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleAddAttribute() {
     const keyInput = this.template.querySelector('[data-id="attr-key-input"]');
-    const valueInput = this.template.querySelector('[data-id="attr-val-input"]');
+    const valueInput = this.template.querySelector(
+      '[data-id="attr-val-input"]',
+    );
 
     const key = this.newAttrKey ? this.newAttrKey.trim() : "";
     const value = this.newAttrValue ? this.newAttrValue.trim() : "";
@@ -643,13 +655,13 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Warning",
           "A maximum of 2 active attribute filters is allowed to ensure query performance.",
-          "warning"
+          "warning",
         );
         return;
       }
       this.attributeFilters = {
         ...this.attributeFilters,
-        [key]: value
+        [key]: value,
       };
       this.newAttrKey = "";
       this.newAttrValue = "";
@@ -673,10 +685,10 @@ export default class WorkflowDashboard extends LightningElement {
 
   get attributeFiltersList() {
     return Object.entries(this.attributeFilters).map(([key, val]) => {
-      return { 
-        id: key, 
+      return {
+        id: key,
         display: `${key}=${val}`,
-        removeAriaLabel: `Remove filter for ${key} equals ${val}`
+        removeAriaLabel: `Remove filter for ${key} equals ${val}`,
       };
     });
   }
@@ -869,7 +881,9 @@ export default class WorkflowDashboard extends LightningElement {
           Progress__c: this.formatJson(inst.Progress__c),
           inputFile: this.buildPayloadFile(payloadFiles["instance.Input"]),
           outputFile: this.buildPayloadFile(payloadFiles["instance.Output"]),
-          progressFile: this.buildPayloadFile(payloadFiles["instance.Progress"]),
+          progressFile: this.buildPayloadFile(
+            payloadFiles["instance.Progress"],
+          ),
           waitingOn: result.waitingOn,
           isWatchdogWaiting: result.waitingOn === "Watchdog",
           waitingOnBadgeClass:
@@ -976,10 +990,15 @@ export default class WorkflowDashboard extends LightningElement {
             hasTelemetry,
             telemetryString,
             hasLimitPressure,
-            formattedRetryCount: step.Retry_Count__c !== undefined && step.Retry_Count__c !== null ? step.Retry_Count__c : "—",
+            formattedRetryCount:
+              step.Retry_Count__c !== undefined && step.Retry_Count__c !== null
+                ? step.Retry_Count__c
+                : "—",
             budgetClass: hasLimitPressure
               ? "text-red slds-text-title_bold"
               : "slds-text-color_weak",
+            isEligibleForSkip:
+              inst.Status__c === "Failed" && step.Status__c === "Failed",
           };
         });
 
@@ -1322,13 +1341,15 @@ export default class WorkflowDashboard extends LightningElement {
             ),
           };
         }
-        this.doctorData = result ? {
-          ...result,
-          latestJob: latestJobVal,
-          latestJobCreatedDate: result.latestJob
-            ? this.formatDateTime(result.latestJob.CreatedDate)
-            : null,
-        } : { config: {} };
+        this.doctorData = result
+          ? {
+              ...result,
+              latestJob: latestJobVal,
+              latestJobCreatedDate: result.latestJob
+                ? this.formatDateTime(result.latestJob.CreatedDate)
+                : null,
+            }
+          : { config: {} };
       })
       .catch((error) => {
         this.showToast(
@@ -1356,7 +1377,10 @@ export default class WorkflowDashboard extends LightningElement {
       .catch((error) => {
         // Concurrency panel is best-effort; never block the System Doctor view.
         this.concurrencyRows = [];
-        console.error("Failed to load concurrency status:", this.reduceErrors(error));
+        console.error(
+          "Failed to load concurrency status:",
+          this.reduceErrors(error),
+        );
       });
   }
 
@@ -1414,31 +1438,15 @@ export default class WorkflowDashboard extends LightningElement {
 
     // Validate JSON if provided
     if (this.launchInputJson) {
-      let payload = this.launchInputJson;
-      try {
-        JSON.parse(payload);
-      } catch {
-        // First parse failed. Try normalizing common paste artifacts — but only as
-        // a fallback so valid JSON is never rewritten:
-        //   · typographic (“curly”) quotes from Word / macOS autocorrect
-        //   · non-breaking spaces (\u00A0) from Word / Google Docs / some chat
-        //     renderers; they look identical to spaces but are invalid JSON whitespace
-        const normalized = payload
-          .replace(/[\u201C\u201D]/g, '"')
-          .replace(/[\u2018\u2019]/g, "'")
-          .replace(/\u00A0/g, " ");
-        try {
-          JSON.parse(normalized);
-          payload = normalized;
-        } catch {
-          this.launchError =
-            "Input Payload must be valid JSON. " +
-            "If you pasted from a chat or document, re-type the quote characters — " +
-            "“curly quotes” are not valid JSON.";
-          return;
-        }
+      const normalized = this._normalizeJson(this.launchInputJson);
+      if (normalized === null) {
+        this.launchError =
+          "Input Payload must be valid JSON. " +
+          "If you pasted from a chat or document, re-type the quote characters — " +
+          "“curly quotes” are not valid JSON.";
+        return;
       }
-      this.launchInputJson = payload;
+      this.launchInputJson = normalized;
     }
 
     this.executingLaunch = true;
@@ -1457,7 +1465,8 @@ export default class WorkflowDashboard extends LightningElement {
         this.refreshInstances();
       })
       .catch((error) => {
-        this.launchError = "Failed to execute workflow: " + this.reduceErrors(error);
+        this.launchError =
+          "Failed to execute workflow: " + this.reduceErrors(error);
       })
       .finally(() => {
         this.executingLaunch = false;
@@ -1489,11 +1498,84 @@ export default class WorkflowDashboard extends LightningElement {
       });
   }
 
+  handleResumePastStep(event) {
+    const stepName = event.target.dataset.stepName;
+    const textarea = this.template.querySelector(
+      `textarea[data-step-name="${stepName}"]`,
+    );
+    let payload = textarea ? textarea.value : "";
+
+    if (payload && payload.trim()) {
+      const normalized = this._normalizeJson(payload);
+      if (normalized === null) {
+        if (textarea) {
+          textarea.setCustomValidity(
+            "Invalid JSON format. Typographic/curly quotes are not valid JSON.",
+          );
+          textarea.reportValidity();
+        }
+        return;
+      }
+      payload = normalized;
+      if (textarea) {
+        textarea.setCustomValidity("");
+        textarea.reportValidity();
+      }
+    } else {
+      if (textarea) {
+        textarea.setCustomValidity("");
+        textarea.reportValidity();
+      }
+    }
+
+    LightningConfirm.open({
+      message: `Are you sure you want to skip step "${stepName}" and resume forward execution using the supplied JSON output?`,
+      variant: "headerless",
+      label: "Confirm Skip Step",
+    }).then((result) => {
+      if (!result) {
+        return;
+      }
+
+      this.loadingDetails = true;
+      resumePastStepInstance({
+        instanceId: this.selectedInstanceId,
+        stepName: stepName,
+        suppliedOutputJson: payload,
+      })
+        .then(() => {
+          this.showToast(
+            "Success",
+            `Workflow resumed past step ${stepName}.`,
+            "success",
+          );
+          this.refreshInstances();
+          this.loadDetails(true);
+          this.startPolling();
+        })
+        .catch((error) => {
+          this.showToast(
+            "Error",
+            "Failed to resume past step: " + this.reduceErrors(error),
+            "error",
+          );
+        })
+        .finally(() => {
+          this.loadingDetails = false;
+        });
+    });
+  }
+
   // Enable bulk re-drive only when the current filter actually contains failed
   // (recoverable) instances and the stalled view is not active (stalled rows are
   // Suspended, not Failed; showing the button there would re-drive hidden failures).
   get isRedriveDisabled() {
-    return !this.stats || this.stats.failed === 0 || this.redriving || this.showingStalled;
+    return (
+      !this.stats ||
+      this.stats.failed === 0 ||
+      this.redriving ||
+      this.showingStalled
+    );
   }
 
   get redriveButtonLabel() {
@@ -1501,11 +1583,18 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   get isCancelDisabled() {
-    return !this.stats || this.stats.active === 0 || this.cancellingMatching || this.showingStalled;
+    return (
+      !this.stats ||
+      this.stats.active === 0 ||
+      this.cancellingMatching ||
+      this.showingStalled
+    );
   }
 
   get cancelButtonLabel() {
-    return this.cancellingMatching ? "Counting..." : `Cancel (${this.stats ? this.stats.active : 0})`;
+    return this.cancellingMatching
+      ? "Counting..."
+      : `Cancel (${this.stats ? this.stats.active : 0})`;
   }
 
   handleRedriveMatching() {
@@ -1568,7 +1657,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.showToast(
             "Re-drive started",
             `Re-driving ${outcome.eligibleCount} failed instance${outcome.eligibleCount === 1 ? "" : "s"}. ` +
-            "Progress is shown in the detail panel below.",
+              "Progress is shown in the detail panel below.",
             "success",
           );
           this.selectedInstanceId = outcome.redriveInstanceId;
@@ -1653,7 +1742,7 @@ export default class WorkflowDashboard extends LightningElement {
           this.showToast(
             "Success",
             `Cancellation requested for ${outcome.eligibleCount} active instance${outcome.eligibleCount === 1 ? "" : "s"}. ` +
-            "Progress is shown in the detail panel below.",
+              "Progress is shown in the detail panel below.",
             "success",
           );
           this.selectedInstanceId = outcome.cancelInstanceId;
@@ -1775,22 +1864,28 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleSignalModalConfirm() {
     if (this.signalPayload && this.signalPayload.trim()) {
-      const textarea = this.template.querySelector('[data-id="signal-payload-input"]');
-      try {
-        JSON.parse(this.signalPayload);
+      const textarea = this.template.querySelector(
+        '[data-id="signal-payload-input"]',
+      );
+      const normalized = this._normalizeJson(this.signalPayload);
+      if (normalized === null) {
         if (textarea) {
-          textarea.setCustomValidity("");
-          textarea.reportValidity();
-        }
-      } catch {
-        if (textarea) {
-          textarea.setCustomValidity("Invalid JSON format.");
+          textarea.setCustomValidity(
+            "Invalid JSON format. Typographic/curly quotes are not valid JSON.",
+          );
           textarea.reportValidity();
         }
         return;
       }
+      this.signalPayload = normalized;
+      if (textarea) {
+        textarea.setCustomValidity("");
+        textarea.reportValidity();
+      }
     } else {
-      const textarea = this.template.querySelector('[data-id="signal-payload-input"]');
+      const textarea = this.template.querySelector(
+        '[data-id="signal-payload-input"]',
+      );
       if (textarea) {
         textarea.setCustomValidity("");
         textarea.reportValidity();
@@ -1801,14 +1896,14 @@ export default class WorkflowDashboard extends LightningElement {
     injectSignal({
       instanceId: this.selectedInstanceId,
       signalName: this.signalName,
-      payloadJson: this.signalPayload
+      payloadJson: this.signalPayload,
     })
       .then(() => {
         this.signalModalOpen = false;
         this.showToast(
           "Signal Sent",
           "Signal injected successfully.",
-          "success"
+          "success",
         );
         this.loadDetails(true);
       })
@@ -1816,7 +1911,7 @@ export default class WorkflowDashboard extends LightningElement {
         this.showToast(
           "Error",
           "Failed to inject signal: " + this.reduceErrors(error),
-          "error"
+          "error",
         );
       })
       .finally(() => {
@@ -1928,6 +2023,27 @@ export default class WorkflowDashboard extends LightningElement {
     }
   }
 
+  _normalizeJson(payload) {
+    if (!payload || !payload.trim()) {
+      return "";
+    }
+    try {
+      JSON.parse(payload);
+      return payload;
+    } catch {
+      const normalized = payload
+        .replace(/[\u201C\u201D]/g, '"')
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/\u00A0/g, " ");
+      try {
+        JSON.parse(normalized);
+        return normalized;
+      } catch {
+        return null;
+      }
+    }
+  }
+
   // Turns a server payloadFiles descriptor into a render-ready download link, or null.
   // Present only for attachment-backed payloads whose full content was truncated above.
   buildPayloadFile(file) {
@@ -2016,16 +2132,16 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   reduceErrors(error) {
-    if (!error) return 'Unknown error';
+    if (!error) return "Unknown error";
     if (error.body) {
       if (Array.isArray(error.body)) {
-        return error.body.map(e => e.message).join(', ');
+        return error.body.map((e) => e.message).join(", ");
       }
-      if (typeof error.body.message === 'string') {
+      if (typeof error.body.message === "string") {
         return error.body.message;
       }
     }
-    if (typeof error.message === 'string') {
+    if (typeof error.message === "string") {
       return error.message;
     }
     return JSON.stringify(error);
