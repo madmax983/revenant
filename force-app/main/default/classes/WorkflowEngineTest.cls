@@ -6797,6 +6797,37 @@ public class WorkflowEngineTest {
     System.assertEquals(jobsBefore, jobsAfter, 'No new queueable jobs should have been enqueued for the retrying branch');
   }
 
+  @isTest
+  static void testResumePastStepDynamicNextThrowsException() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Insert a Failed instance of LoopExposeWorkflow
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.LoopExposeWorkflow',
+      Status__c = 'Failed',
+      Current_Step__c = 'WorkflowEngineTest.LoopExposeStep',
+      Correlation_Key__c = 'dynamic-skip-1'
+    );
+    insert inst;
+
+    // 2. Insert a Failed step execution for LoopExposeStep
+    Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.LoopExposeStep',
+      Status__c = 'Failed',
+      Retry_Count__c = 0
+    );
+    insert stepExec;
+
+    // 3. Try to skip the step
+    try {
+      WorkflowEngine.resumePastStep(inst.Id, 'WorkflowEngineTest.LoopExposeStep', '{}');
+      System.assert(false, 'Should have thrown a WorkflowException');
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assertEquals('Skip is not supported for dynamic-next step definitions.', ex.getMessage());
+    }
+  }
+
   public class TerminalSkipWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowEngineTest.TerminalSkipStep' };

@@ -6395,7 +6395,7 @@ public inherited sharing class WorkflowEngine {
       if (!isParallel) {
         StepResult mockResult = new StepResult();
         mockResult.action = StepResult.ActionType.COMPLETE;
-        mockResult.nextStepName = null;
+        mockResult.nextStepName = 'SENTINEL_NEXT_STEP';
         mockResult.outputJson = suppliedOutputJson;
         String nextStepName;
         if (def instanceof VersionedWorkflow) {
@@ -6406,6 +6406,10 @@ public inherited sharing class WorkflowEngine {
           );
         } else {
           nextStepName = def.getNextStep(stepName, mockResult);
+        }
+
+        if (nextStepName == 'SENTINEL_NEXT_STEP') {
+          throw new WorkflowException('Skip is not supported for dynamic-next step definitions.');
         }
 
         if (String.isBlank(nextStepName)) {
@@ -6490,7 +6494,7 @@ public inherited sharing class WorkflowEngine {
         ];
         String spawningStepName = !spawningSteps.isEmpty() ? spawningSteps[0].Step_Name__c : '';
         StepResult mockSpawningResult = StepResult.complete(
-          null,
+          'SENTINEL_NEXT_STEP',
           !spawningSteps.isEmpty() ? spawningSteps[0].Output__c : null
         );
 
@@ -6503,6 +6507,10 @@ public inherited sharing class WorkflowEngine {
           );
         } else {
           nextStepName = def.getNextStep(spawningStepName, mockSpawningResult);
+        }
+
+        if (nextStepName == 'SENTINEL_NEXT_STEP') {
+          throw new WorkflowException('Skip is not supported for dynamic-next step definitions.');
         }
 
         if (allDone) {
