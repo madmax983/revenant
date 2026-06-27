@@ -6460,7 +6460,7 @@ public inherited sharing class WorkflowEngine {
         
         Map<String, Workflow_Step_Execution__c> latestParallelMap = new Map<String, Workflow_Step_Execution__c>();
         for (Workflow_Step_Execution__c pe : [
-          SELECT Step_Name__c, Status__c, Output__c, CPU_Time_Ms__c
+          SELECT Step_Name__c, Status__c, Output__c, CPU_Time_Ms__c, Timeout_At__c
           FROM Workflow_Step_Execution__c
           WHERE Workflow_Instance__c = :instanceId AND Step_Name__c IN :activeParallelSteps
           WITH SYSTEM_MODE
@@ -6609,7 +6609,14 @@ public inherited sharing class WorkflowEngine {
               stepsToReset.add(pe);
               stepsToEnqueue.add(ps);
             } else if (pe.Status__c == 'Pending' && pe.CPU_Time_Ms__c == null) {
-              // Initial/undriven pending branch: enqueue it directly
+              // Initial/undriven pending branch: enqueue it directly after re-arming/clearing timeout
+              Integer timeout = getStepTimeoutSeconds(ps);
+              if (timeout != null && timeout > 0) {
+                pe.Timeout_At__c = DateTime.now().addSeconds(timeout);
+              } else {
+                pe.Timeout_At__c = null;
+              }
+              stepsToReset.add(pe);
               stepsToEnqueue.add(ps);
             }
           }

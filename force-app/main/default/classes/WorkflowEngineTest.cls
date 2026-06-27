@@ -6293,9 +6293,12 @@ public class WorkflowEngineTest {
     }
   }
 
-  public class SkipParallelA implements WorkflowStep {
+  public class SkipParallelA implements WorkflowStep, TimeoutConfigurable {
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'OutputA');
+    }
+    public Integer getTimeoutSeconds() {
+      return 60;
     }
   }
 
@@ -6826,6 +6829,49 @@ public class WorkflowEngineTest {
     } catch (WorkflowEngine.WorkflowException ex) {
       System.assertEquals('Skip is not supported for dynamic-next step definitions.', ex.getMessage());
     }
+  }
+
+  @isTest
+  static void testResumePastStepRearmsPendingSiblingTimeout() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.SkipThreeParallelWorkflow',
+      'SkipThreeParallelSignalKey3',
+      'InitialInput'
+    );
+
+    // 1. Run split step -> creates parallel executions A, B, C.
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 2. Fetch the initial pending Sibling A step execution.
+    Workflow_Step_Execution__c sibA = [
+      SELECT Id, Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
+      LIMIT 1
+    ];
+    System.assertNotEquals(null, sibA.Timeout_At__c, 'Sibling A should have an initial timeout set');
+    
+    // Artificially modify Timeout_At__c to be in the past to simulate delay/stale timeout.
+    Datetime pastTime = Datetime.now().addMinutes(-10);
+    sibA.Timeout_At__c = pastTime;
+    update sibA;
+
+    // Fail Sibling B to fail the workflow instance.
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+
+    // 3. Resume past ParallelB (the skip).
+    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+
+    // 4. Fetch Sibling A again to verify Timeout_At__c was re-armed (set to a future time, i.e., > pastTime)
+    Workflow_Step_Execution__c sibAAfter = [
+      SELECT Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :sibA.Id
+    ];
+    System.assertNotEquals(null, sibAAfter.Timeout_At__c, 'Sibling A should have its timeout set');
+    System.assert(sibAAfter.Timeout_At__c > pastTime, 'Sibling A timeout should have been re-armed/advanced: ' + sibAAfter.Timeout_At__c);
   }
 
   public class TerminalSkipWorkflow implements WorkflowDefinition {
