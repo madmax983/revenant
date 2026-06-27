@@ -138,7 +138,6 @@ public inherited sharing class WorkflowEngine {
   // wake each branch by name without the instance-level dedup blocking siblings.
   @TestVisible
   private static Set<String> enqueuedBranchKeys = new Set<String>();
-  private static Boolean instanceWasSuspendedOrPendingAtStart = false;
   public class WorkflowException extends Exception {
   }
 
@@ -2369,7 +2368,6 @@ public inherited sharing class WorkflowEngine {
   }
 
   public static void runStep(Id instanceId, String stepName) {
-    instanceWasSuspendedOrPendingAtStart = false;
     // 1. Fetch instance state (NO FOR UPDATE lock to allow parallel execution and direct callouts)
     List<Workflow_Instance__c> instances = [
       SELECT
@@ -2646,7 +2644,6 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c == 'Suspended' ||
       instance.Status__c == 'Pending'
     ) {
-      instanceWasSuspendedOrPendingAtStart = true;
       instance.Status__c = 'Running';
       instance.Async_Job_Id__c = null;
     }
@@ -3976,7 +3973,7 @@ public inherited sharing class WorkflowEngine {
       // Parallel logic (which was under if (isParallel))
       List<String> activeParallelSteps = instance.Current_Step__c.split(',');
       List<Workflow_Step_Execution__c> parallelExecs = [
-        SELECT Step_Name__c, Status__c, Output__c
+        SELECT Step_Name__c, Status__c, Output__c, CPU_Time_Ms__c
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instance.Id
@@ -4002,29 +3999,33 @@ public inherited sharing class WorkflowEngine {
       }
 
       if (!allDone) {
-        if (instanceWasSuspendedOrPendingAtStart) {
-          Boolean hasPending = false;
-          Boolean hasRunning = false;
-          Boolean hasFailed = false;
-          for (String ps : activeParallelSteps) {
-            Workflow_Step_Execution__c pe = latestExecByStep.get(ps);
-            if (pe == null) {
-              hasRunning = true;
-            } else if (pe.Status__c == 'Running') {
-              hasRunning = true;
-            } else if (pe.Status__c == 'Failed') {
-              hasFailed = true;
-            } else if (pe.Status__c == 'Pending' || pe.Status__c == 'Retrying') {
+        Boolean hasPending = false;
+        Boolean hasRunning = false;
+        Boolean hasFailed = false;
+        for (String ps : activeParallelSteps) {
+          Workflow_Step_Execution__c pe = latestExecByStep.get(ps);
+          if (pe == null) {
+            hasRunning = true;
+          } else if (pe.Status__c == 'Running') {
+            hasRunning = true;
+          } else if (pe.Status__c == 'Failed') {
+            hasFailed = true;
+          } else if (pe.Status__c == 'Retrying') {
+            hasPending = true;
+          } else if (pe.Status__c == 'Pending') {
+            if (pe.CPU_Time_Ms__c != null) {
               hasPending = true;
+            } else {
+              hasRunning = true;
             }
           }
-          if (hasPending && !hasRunning) {
-            instance.Status__c = 'Suspended';
-            update as system instance;
-          } else if (!hasPending && !hasRunning && hasFailed) {
-            instance.Status__c = 'Failed';
-            update as system instance;
-          }
+        }
+        if (hasPending && !hasRunning) {
+          instance.Status__c = 'Suspended';
+          update as system instance;
+        } else if (!hasPending && !hasRunning && hasFailed) {
+          instance.Status__c = 'Failed';
+          update as system instance;
         }
         return;
       }

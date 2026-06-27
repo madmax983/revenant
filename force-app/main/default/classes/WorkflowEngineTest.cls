@@ -6940,4 +6940,105 @@ public class WorkflowEngineTest {
       return StepResult.complete(null, 'Join3');
     }
   }
+
+  @isTest
+  static void testRunStepParallelReparksWithAlreadyRunningSibling() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.CompensatableParallelWorkflow',
+      'CompensatableParallelSignalKey',
+      'InitialInput'
+    );
+
+    // 1. Run split step -> creates parallel executions A and B
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    // 2. Put A in a Pending state simulation with CPU_Time_Ms__c = 10.0 (representing a parked branch)
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Id, Status__c, CPU_Time_Ms__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.CompensatableParallelA'
+      LIMIT 1
+    ];
+    System.assertEquals(1, stepExecs.size());
+    stepExecs[0].Status__c = 'Pending';
+    stepExecs[0].CPU_Time_Ms__c = 10.0;
+    update stepExecs;
+
+    // 3. Mark the parent instance as Running to simulate that Sibling B is already running (or transaction entered in Running state)
+    Workflow_Instance__c inst = [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    inst.Status__c = 'Running';
+    update inst;
+
+    // 4. Run Sibling B (which is CompensatableParallelB).
+    // Because it is compensatable, it will execute `update as system instance;` during compensation-stack update.
+    // At the end, in the `if (!allDone)` block, it should repark the instance as 'Suspended' since Sibling A is parked.
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.CompensatableParallelB').execute(null);
+
+    // 5. Verify the parent instance was correctly updated to 'Suspended'
+    Workflow_Instance__c instAfter = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', instAfter.Status__c, 'Parent instance should be Suspended since Sibling A is parked');
+  }
+
+  public class CompensatableParallelWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.CompensatableParallelSplitStep',
+        'WorkflowEngineTest.CompensatableParallelA',
+        'WorkflowEngineTest.CompensatableParallelB',
+        'WorkflowEngineTest.CompensatableParallelJoinStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.CompensatableParallelSplitStep';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      if (currentStepName == 'WorkflowEngineTest.CompensatableParallelSplitStep') {
+        return 'WorkflowEngineTest.CompensatableParallelJoinStep';
+      }
+      return null;
+    }
+  }
+
+  public class CompensatableParallelSplitStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.split(
+        new List<String>{
+          'WorkflowEngineTest.CompensatableParallelA',
+          'WorkflowEngineTest.CompensatableParallelB'
+        },
+        null
+      );
+    }
+  }
+
+  public class CompensatableParallelA implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'OutputA');
+    }
+  }
+
+  public class CompensatableParallelB implements WorkflowStep, CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'OutputB');
+    }
+    public StepResult compensate(StepContext ctx) {
+      return StepResult.complete(null, 'CompensatedB');
+    }
+  }
+
+  public class CompensatableParallelJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'JoinDone');
+    }
+  }
 }
