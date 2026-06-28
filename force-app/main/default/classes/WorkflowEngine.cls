@@ -5218,10 +5218,8 @@ public inherited sharing class WorkflowEngine {
 
     Set<String> correlationKeys = new Set<String>();
     for (StepResult.ChildRequest req : requests) {
-      if (String.isNotBlank(req.correlationKey)) {
-        validateCorrelationKey(req.correlationKey);
-        correlationKeys.add(req.correlationKey);
-      }
+      validateCorrelationKey(req.correlationKey);
+      correlationKeys.add(req.correlationKey);
 
       if (String.isBlank(req.workflowName)) {
         throw new WorkflowException('Workflow name is required.');
@@ -5364,6 +5362,7 @@ public inherited sharing class WorkflowEngine {
       insert as system stepExecsToInsert;
     }
 
+    List<Workflow_Instance__c> instancesToSchedule = new List<Workflow_Instance__c>();
     List<Workflow_Instance__c> instancesToPause = new List<Workflow_Instance__c>();
     Boolean checkPause = WorkflowPauseGate.anyPaused();
 
@@ -5376,7 +5375,7 @@ public inherited sharing class WorkflowEngine {
         instancesToPause.add(inst);
       } else {
         if (!ConcurrencyGate.isConfigured(inst.Workflow_Name__c)) {
-          scheduleTimeoutJobForInstance(inst.Id);
+          instancesToSchedule.add(inst);
         } else {
           inst.Concurrency_Parked__c = true;
           instancesToPause.add(inst);
@@ -5388,11 +5387,19 @@ public inherited sharing class WorkflowEngine {
       update as system instancesToPause;
     }
 
+    if (!instancesToSchedule.isEmpty()) {
+      scheduleTimeoutJobsForInstances(instancesToSchedule);
+    }
+
     if (!Test.isRunningTest()) {
+      List<Id> instanceIdsToEnqueue = new List<Id>();
       for (Workflow_Instance__c inst : instancesToUpdate) {
         if (inst.Status__c != 'Paused' && inst.Concurrency_Parked__c != true) {
-          enqueueOrchestrator(inst.Id, null);
+          instanceIdsToEnqueue.add(inst.Id);
         }
+      }
+      if (!instanceIdsToEnqueue.isEmpty()) {
+        enqueueOrchestrators(instanceIdsToEnqueue);
       }
     }
   }
