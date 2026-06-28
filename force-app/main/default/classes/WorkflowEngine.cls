@@ -6011,11 +6011,18 @@ public inherited sharing class WorkflowEngine {
     List<Id> keyedSignalInstIds = new List<Id>(); // parallel: instance for each keyed signal
     Map<Id, Workflow_Instance__c> activeInstById = new Map<Id, Workflow_Instance__c>();
     Set<Id> instancesWithUnkeyedSignal = new Set<Id>();
+    Map<Id, Set<String>> signalsByInstanceId = new Map<Id, Set<String>>();
 
     for (SignalRequest req : requests) {
       Workflow_Instance__c inst = instById.get(req.keyOrId);
       if (inst == null) {
         inst = instByKey.get(normalizeKey(req.keyOrId));
+      }
+      if (inst != null) {
+        if (!signalsByInstanceId.containsKey(inst.Id)) {
+          signalsByInstanceId.put(inst.Id, new Set<String>());
+        }
+        signalsByInstanceId.get(inst.Id).add(req.signalName);
       }
 
       // A cancel earlier in this batch already drove this instance terminal; the
@@ -6275,6 +6282,29 @@ public inherited sharing class WorkflowEngine {
         }
       }
 
+      Set<Id> gatedNonReadyParents = new Set<Id>();
+      for (Id parentId : nonReadyParents) {
+        Set<String> sigNames = signalsByInstanceId.get(parentId);
+        Boolean allChildSignals = true;
+        if (sigNames != null) {
+          for (String name : sigNames) {
+            if (String.isNotBlank(name)) {
+              String lower = name.toLowerCase();
+              if (
+                !lower.startsWith('childcompleted:') &&
+                !lower.startsWith('childfailed:')
+              ) {
+                allChildSignals = false;
+                break;
+              }
+            }
+          }
+        }
+        if (allChildSignals) {
+          gatedNonReadyParents.add(parentId);
+        }
+      }
+
       // Only wake an instance if it received at least one fresh signal this call:
       // unkeyed signals always qualify; keyed signals only if the insert won the race.
       List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
@@ -6311,7 +6341,7 @@ public inherited sharing class WorkflowEngine {
           ) {
             continue;
           }
-          if (nonReadyParents.contains(inst.Id)) {
+          if (gatedNonReadyParents.contains(inst.Id)) {
             continue;
           }
           inst.Status__c = 'Running';
@@ -6323,7 +6353,7 @@ public inherited sharing class WorkflowEngine {
           inst.Sleep_Until__c = null;
           instancesToUpdate.add(inst);
         }
-        if (!nonReadyParents.contains(inst.Id)) {
+        if (!gatedNonReadyParents.contains(inst.Id)) {
           activeInstances.add(inst);
         }
       }

@@ -80,6 +80,88 @@ public class StepResultFanOutTest {
     }
   }
 
+  public class SuspendingChildWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'StepResultFanOutTest.SuspendingChildStep' };
+    }
+    public String getInitialStep() {
+      return 'StepResultFanOutTest.SuspendingChildStep';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      return null;
+    }
+  }
+
+  public class SuspendingChildStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.suspend();
+    }
+  }
+
+  public class ParallelGatingWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'StepResultFanOutTest.ParallelSplitStep',
+        'StepResultFanOutTest.FanOutStep',
+        'StepResultFanOutTest.SignalStep',
+        'StepResultFanOutTest.ParallelJoinStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'StepResultFanOutTest.ParallelSplitStep';
+    }
+    public String getNextStep(String currentStepName, StepResult result) {
+      if (currentStepName == 'StepResultFanOutTest.ParallelSplitStep') {
+        return 'StepResultFanOutTest.ParallelJoinStep';
+      }
+      return null;
+    }
+  }
+
+  public class ParallelSplitStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.split(
+        new List<String>{
+          'StepResultFanOutTest.FanOutStep',
+          'StepResultFanOutTest.SignalStep'
+        }
+      );
+    }
+  }
+
+  public class FanOutStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      String key1 = 'ChildKey1_' + ctx.workflowInstanceId;
+      StepContext.ChildOutcome outcome1 = ctx.getChildOutcome(key1);
+      if (outcome1.isPresent()) {
+        return StepResult.complete(null, null);
+      }
+      List<StepResult.ChildRequest> reqs = new List<StepResult.ChildRequest>{
+        new StepResult.ChildRequest(
+          'StepResultFanOutTest.SuspendingChildWorkflow',
+          key1,
+          new Map<String, Object>{ 'val' => 10 }
+        )
+      };
+      return StepResult.startChildren(reqs);
+    }
+  }
+
+  public class SignalStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (ctx.getSignal('MyExternalSignal').isPresent()) {
+        return StepResult.complete(null, 'SignalReceived');
+      }
+      return StepResult.suspend();
+    }
+  }
+
+  public class ParallelJoinStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, null);
+    }
+  }
+
   // ==========================================
   // UNIT TESTS
   // ==========================================
@@ -349,5 +431,49 @@ public class StepResultFanOutTest {
         'Child should have completed'
       );
     }
+  }
+
+  @isTest
+  static void testParallelBranchSignalNotGatedByChildFanOut() {
+    Test.startTest();
+    Id parentId = WorkflowEngine.start(
+      'StepResultFanOutTest.ParallelGatingWorkflow',
+      'ParentKey_' + Crypto.getRandomInteger(),
+      null
+    );
+
+    // Split step runs and both branches are executed, suspending parent.
+    WorkflowTestHarness harness = new WorkflowTestHarness(parentId);
+    WorkflowTestHarness.Result r1 = harness.drive();
+
+    System.assertEquals('Suspended', r1.status);
+
+    // Let's verify that the child workflow is active/pending.
+    List<Workflow_Instance__c> children = [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentId
+    ];
+    System.assertEquals(1, children.size());
+    System.assertEquals('Suspended', children[0].Status__c);
+
+    // Now, send the external signal "MyExternalSignal" to the parent workflow.
+    // Because it is an unrelated signal, it must NOT be gated by the child-readiness barrier.
+    // It should wake the parent to 'Running'.
+    WorkflowEngine.signal(parentId, 'MyExternalSignal', 'SomePayload');
+
+    // Reload the parent.
+    Workflow_Instance__c parentReloaded = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals(
+      'Running',
+      parentReloaded.Status__c,
+      'Parent must be woken to Running by the sibling signal'
+    );
+
+    Test.stopTest();
   }
 }
