@@ -2712,7 +2712,10 @@ public inherited sharing class WorkflowEngine {
 
     Integer stepVisit = 0;
     for (Workflow_Step_Execution__c exec : stepExecs) {
-      if (exec.Status__c == 'Completed' || exec.Status__c == 'OperatorSkipped') {
+      if (
+        exec.Status__c == 'Completed' ||
+        exec.Status__c == 'OperatorSkipped'
+      ) {
         stepVisit++;
       }
     }
@@ -2789,7 +2792,9 @@ public inherited sharing class WorkflowEngine {
       List<Workflow_Step_Execution__c> completedSteps = [
         SELECT Output__c
         FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c = :instanceId AND Status__c IN ('Completed', 'OperatorSkipped')
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Status__c IN ('Completed', 'OperatorSkipped')
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
         LIMIT 1
@@ -3992,7 +3997,11 @@ public inherited sharing class WorkflowEngine {
       Boolean allDone = true;
       for (String ps : activeParallelSteps) {
         Workflow_Step_Execution__c pe = latestExecByStep.get(ps);
-        if (pe == null || (pe.Status__c != 'Completed' && pe.Status__c != 'OperatorSkipped')) {
+        if (
+          pe == null ||
+          (pe.Status__c != 'Completed' &&
+          pe.Status__c != 'OperatorSkipped')
+        ) {
           allDone = false;
           break;
         }
@@ -4245,6 +4254,39 @@ public inherited sharing class WorkflowEngine {
         result.childCorrelationKey,
         result.childInputJson
       );
+    } else if (result.action == StepResult.ActionType.START_CHILDREN) {
+      if (result.childRequests == null || result.childRequests.isEmpty()) {
+        throw new WorkflowException(
+          'START_CHILDREN action requires at least one child request.'
+        );
+      }
+      if (isParallel) {
+        rollbackClaimedSignals(context);
+      }
+      stepExec.Status__c = 'Pending';
+      List<String> childKeys = new List<String>();
+      for (StepResult.ChildRequest req : result.childRequests) {
+        childKeys.add(req.correlationKey);
+      }
+      Map<String, Object> state = new Map<String, Object>{
+        'childCorrelationKeys' => childKeys
+      };
+      stepExec.Output__c = savePayloadIfNeeded(
+        instance.Id,
+        JSON.serialize(state),
+        'State_ChildKeys_' +
+        stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+      );
+      saveStepExec(stepExec);
+
+      instance.Status__c = 'Suspended';
+      update as system instance;
+      redeliverMatchingSignalsForInstance(
+        instance.Id,
+        instance.Correlation_Key__c
+      );
+
+      startChildWorkflows(instance.Id, result.childRequests);
     } else if (result.action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
       if (isParallel) {
         rollbackClaimedSignals(context);
@@ -4737,7 +4779,9 @@ public inherited sharing class WorkflowEngine {
           List<Workflow_Step_Execution__c> completedSteps = [
             SELECT Output__c
             FROM Workflow_Step_Execution__c
-            WHERE Workflow_Instance__c = :instanceId AND Status__c IN ('Completed', 'OperatorSkipped')
+            WHERE
+              Workflow_Instance__c = :instanceId
+              AND Status__c IN ('Completed', 'OperatorSkipped')
             WITH SYSTEM_MODE
             ORDER BY CreatedDate DESC, Id DESC
             LIMIT 1
@@ -5017,6 +5061,7 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  @TestVisible
   private static void startChildWorkflow(
     Id parentId,
     String workflowName,
@@ -5025,22 +5070,37 @@ public inherited sharing class WorkflowEngine {
   ) {
     validateCorrelationKey(correlationKey);
     if (String.isNotBlank(correlationKey)) {
-      List<Workflow_Instance__c> existing = [
-        SELECT Id, Parent_Instance__c
+      // 1. Check for active globally unique key
+      List<Workflow_Instance__c> existingActive = [
+        SELECT Id, Parent_Instance__c, Status__c
         FROM Workflow_Instance__c
         WHERE Active_Correlation_Key__c = :correlationKey
         WITH SYSTEM_MODE
         LIMIT 1
       ];
-      if (!existing.isEmpty()) {
-        if (existing[0].Parent_Instance__c == parentId) {
-          // Idempotent re-suspend: this child is already active for this parent
+      if (!existingActive.isEmpty()) {
+        if (existingActive[0].Parent_Instance__c == parentId) {
+          // Idempotent re-suspend
           return;
         }
         throw new WorkflowException(
           'An active workflow already exists with correlation key: ' +
           correlationKey
         );
+      }
+
+      // 2. Check for sibling terminal key under same parent
+      List<Workflow_Instance__c> existingSibling = [
+        SELECT Id, Parent_Instance__c, Status__c
+        FROM Workflow_Instance__c
+        WHERE
+          Correlation_Key__c = :correlationKey
+          AND Parent_Instance__c = :parentId
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      if (!existingSibling.isEmpty()) {
+        return; // Idempotent re-suspend
       }
     }
 
@@ -5050,23 +5110,29 @@ public inherited sharing class WorkflowEngine {
     instance.Correlation_Key__c = correlationKey;
     instance.Parent_Instance__c = parentId;
 
-    // Resolve child version
+    if (String.isBlank(workflowName)) {
+      throw new WorkflowException('Workflow name is required.');
+    }
     Type wflowType = Type.forName(workflowName);
-    if (wflowType != null) {
-      Object defObj = wflowType.newInstance();
-      if (defObj instanceof VersionedWorkflow) {
-        instance.Definition_Version__c = ((VersionedWorkflow) defObj)
-          .getLatestVersion();
-      } else {
-        instance.Definition_Version__c = 1;
-      }
-      if (defObj instanceof WorkflowDefinition) {
-        instance.Current_Step__c = ((WorkflowDefinition) defObj)
-          .getInitialStep();
-      }
+    if (wflowType == null) {
+      throw new WorkflowException(
+        'Workflow definition not found for name: ' + workflowName
+      );
+    }
+    Object defObj = wflowType.newInstance();
+    if (!(defObj instanceof WorkflowDefinition)) {
+      throw new WorkflowException(
+        'Class ' + workflowName + ' must implement WorkflowDefinition'
+      );
+    }
+
+    if (defObj instanceof VersionedWorkflow) {
+      instance.Definition_Version__c = ((VersionedWorkflow) defObj)
+        .getLatestVersion();
     } else {
       instance.Definition_Version__c = 1;
     }
+    instance.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
 
     try {
       insert as system instance;
@@ -5140,6 +5206,208 @@ public inherited sharing class WorkflowEngine {
 
     if (!Test.isRunningTest()) {
       enqueueOrchestrator(instance.Id, null);
+    }
+  }
+
+  private static void startChildWorkflows(
+    Id parentId,
+    List<StepResult.ChildRequest> requests
+  ) {
+    if (requests == null || requests.isEmpty()) {
+      return;
+    }
+
+    Set<String> correlationKeys = new Set<String>();
+    for (StepResult.ChildRequest req : requests) {
+      validateCorrelationKey(req.correlationKey);
+      correlationKeys.add(req.correlationKey);
+
+      if (String.isBlank(req.workflowName)) {
+        throw new WorkflowException('Workflow name is required.');
+      }
+      Type wflowType = Type.forName(req.workflowName);
+      if (wflowType == null) {
+        throw new WorkflowException(
+          'Workflow definition not found for name: ' + req.workflowName
+        );
+      }
+      Object defObj = wflowType.newInstance();
+      if (!(defObj instanceof WorkflowDefinition)) {
+        throw new WorkflowException(
+          'Class ' + req.workflowName + ' must implement WorkflowDefinition'
+        );
+      }
+    }
+
+    Map<String, Workflow_Instance__c> existingByCorrKey = new Map<String, Workflow_Instance__c>();
+    if (!correlationKeys.isEmpty()) {
+      List<Workflow_Instance__c> existingActive = [
+        SELECT Id, Parent_Instance__c, Status__c, Active_Correlation_Key__c
+        FROM Workflow_Instance__c
+        WHERE Active_Correlation_Key__c IN :correlationKeys
+        WITH SYSTEM_MODE
+      ];
+      for (Workflow_Instance__c existing : existingActive) {
+        if (existing.Parent_Instance__c == parentId) {
+          existingByCorrKey.put(
+            normalizeKey(existing.Active_Correlation_Key__c),
+            existing
+          );
+        } else {
+          throw new WorkflowException(
+            'An active workflow already exists with correlation key: ' +
+            existing.Active_Correlation_Key__c
+          );
+        }
+      }
+
+      List<Workflow_Instance__c> existingSiblings = [
+        SELECT Id, Parent_Instance__c, Status__c, Correlation_Key__c
+        FROM Workflow_Instance__c
+        WHERE
+          Correlation_Key__c IN :correlationKeys
+          AND Parent_Instance__c = :parentId
+        WITH SYSTEM_MODE
+      ];
+      for (Workflow_Instance__c existing : existingSiblings) {
+        existingByCorrKey.put(
+          normalizeKey(existing.Correlation_Key__c),
+          existing
+        );
+      }
+    }
+
+    List<Workflow_Instance__c> instancesToInsert = new List<Workflow_Instance__c>();
+    List<StepResult.ChildRequest> requestsToProcess = new List<StepResult.ChildRequest>();
+
+    for (StepResult.ChildRequest req : requests) {
+      if (
+        String.isNotBlank(req.correlationKey) &&
+        existingByCorrKey.containsKey(normalizeKey(req.correlationKey))
+      ) {
+        continue;
+      }
+
+      Workflow_Instance__c instance = new Workflow_Instance__c();
+      instance.Workflow_Name__c = req.workflowName;
+      instance.Status__c = 'Pending';
+      instance.Correlation_Key__c = req.correlationKey;
+      instance.Parent_Instance__c = parentId;
+
+      Type wflowType = Type.forName(req.workflowName);
+      Object defObj = wflowType.newInstance();
+      if (defObj instanceof VersionedWorkflow) {
+        instance.Definition_Version__c = ((VersionedWorkflow) defObj)
+          .getLatestVersion();
+      } else {
+        instance.Definition_Version__c = 1;
+      }
+      instance.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
+
+      instancesToInsert.add(instance);
+      requestsToProcess.add(req);
+    }
+
+    if (instancesToInsert.isEmpty()) {
+      return;
+    }
+
+    try {
+      insert as system instancesToInsert;
+    } catch (DmlException ex) {
+      if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
+        for (Workflow_Instance__c inst : instancesToInsert) {
+          if (String.isNotBlank(inst.Correlation_Key__c)) {
+            List<Workflow_Instance__c> sibling = [
+              SELECT Id, Parent_Instance__c
+              FROM Workflow_Instance__c
+              WHERE Active_Correlation_Key__c = :inst.Correlation_Key__c
+              WITH SYSTEM_MODE
+              LIMIT 1
+            ];
+            if (
+              sibling.isEmpty() || sibling[0].Parent_Instance__c != parentId
+            ) {
+              throw new WorkflowException(
+                'An active workflow already exists with correlation key: ' +
+                inst.Correlation_Key__c
+              );
+            }
+          }
+        }
+        return;
+      }
+      throw ex;
+    }
+
+    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < instancesToInsert.size(); i++) {
+      Workflow_Instance__c inst = instancesToInsert[i];
+      StepResult.ChildRequest req = requestsToProcess[i];
+      inst.Input__c = savePayloadIfNeeded(
+        inst.Id,
+        req.inputJson,
+        'Input_Child_' + inst.Id
+      );
+      instancesToUpdate.add(inst);
+    }
+    update as system instancesToUpdate;
+
+    List<Workflow_Step_Execution__c> stepExecsToInsert = new List<Workflow_Step_Execution__c>();
+    for (Workflow_Instance__c inst : instancesToUpdate) {
+      if (String.isNotBlank(inst.Current_Step__c)) {
+        Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
+        stepExec.Workflow_Instance__c = inst.Id;
+        stepExec.Step_Name__c = inst.Current_Step__c;
+        stepExec.Status__c = 'Pending';
+        stepExec.Input__c = inst.Input__c;
+        stepExec.Retry_Count__c = 0;
+        stepExecsToInsert.add(stepExec);
+      }
+    }
+    if (!stepExecsToInsert.isEmpty()) {
+      insert as system stepExecsToInsert;
+    }
+
+    List<Workflow_Instance__c> instancesToSchedule = new List<Workflow_Instance__c>();
+    List<Workflow_Instance__c> instancesToPause = new List<Workflow_Instance__c>();
+    Boolean checkPause = WorkflowPauseGate.anyPaused();
+
+    for (Workflow_Instance__c inst : instancesToUpdate) {
+      if (
+        checkPause &&
+        WorkflowPauseGate.isDefinitionPaused(inst.Workflow_Name__c)
+      ) {
+        inst.Status__c = 'Paused';
+        instancesToPause.add(inst);
+      } else {
+        if (!ConcurrencyGate.isConfigured(inst.Workflow_Name__c)) {
+          instancesToSchedule.add(inst);
+        } else {
+          inst.Concurrency_Parked__c = true;
+          instancesToPause.add(inst);
+        }
+      }
+    }
+
+    if (!instancesToPause.isEmpty()) {
+      update as system instancesToPause;
+    }
+
+    if (!instancesToSchedule.isEmpty()) {
+      scheduleTimeoutJobsForInstances(instancesToSchedule);
+    }
+
+    if (!Test.isRunningTest()) {
+      List<Id> instanceIdsToEnqueue = new List<Id>();
+      for (Workflow_Instance__c inst : instancesToUpdate) {
+        if (inst.Status__c != 'Paused') {
+          instanceIdsToEnqueue.add(inst.Id);
+        }
+      }
+      if (!instanceIdsToEnqueue.isEmpty()) {
+        enqueueOrchestrators(instanceIdsToEnqueue);
+      }
     }
   }
 
@@ -5743,11 +6011,18 @@ public inherited sharing class WorkflowEngine {
     List<Id> keyedSignalInstIds = new List<Id>(); // parallel: instance for each keyed signal
     Map<Id, Workflow_Instance__c> activeInstById = new Map<Id, Workflow_Instance__c>();
     Set<Id> instancesWithUnkeyedSignal = new Set<Id>();
+    Map<Id, Set<String>> signalsByInstanceId = new Map<Id, Set<String>>();
 
     for (SignalRequest req : requests) {
       Workflow_Instance__c inst = instById.get(req.keyOrId);
       if (inst == null) {
         inst = instByKey.get(normalizeKey(req.keyOrId));
+      }
+      if (inst != null) {
+        if (!signalsByInstanceId.containsKey(inst.Id)) {
+          signalsByInstanceId.put(inst.Id, new Set<String>());
+        }
+        signalsByInstanceId.get(inst.Id).add(req.signalName);
       }
 
       // A cancel earlier in this batch already drove this instance terminal; the
@@ -5895,6 +6170,141 @@ public inherited sharing class WorkflowEngine {
     // Received rows and consumed idempotency keys, so retrying the same batch
     // would silently no-op and never wake the still-Suspended instances.
     try {
+      // JOIN-READINESS BARRIER PRE-COMPUTATION
+      Set<Id> parentIdsToCheck = new Set<Id>();
+      for (Workflow_Instance__c inst : activeInstById.values()) {
+        if (inst.Status__c == 'Suspended') {
+          parentIdsToCheck.add(inst.Id);
+        }
+      }
+
+      Map<Id, Workflow_Step_Execution__c> pendingStepExecs = new Map<Id, Workflow_Step_Execution__c>();
+      if (!parentIdsToCheck.isEmpty()) {
+        for (Workflow_Step_Execution__c se : [
+          SELECT Id, Workflow_Instance__c, Step_Name__c, Output__c
+          FROM Workflow_Step_Execution__c
+          WHERE
+            Workflow_Instance__c IN :parentIdsToCheck
+            AND Status__c = 'Pending'
+          WITH SYSTEM_MODE
+        ]) {
+          pendingStepExecs.put(se.Workflow_Instance__c, se);
+        }
+      }
+
+      Map<Id, String> resolvedOutputsByParentId = new Map<Id, String>();
+      if (!pendingStepExecs.isEmpty()) {
+        List<Id> parentIds = new List<Id>();
+        List<String> rawOutputs = new List<String>();
+        for (Workflow_Step_Execution__c se : pendingStepExecs.values()) {
+          parentIds.add(se.Workflow_Instance__c);
+          rawOutputs.add(se.Output__c);
+        }
+        List<String> resolved = resolvePayloads(rawOutputs);
+        for (Integer i = 0; i < parentIds.size(); i++) {
+          resolvedOutputsByParentId.put(parentIds[i], resolved[i]);
+        }
+      }
+
+      Map<Id, List<Workflow_Instance__c>> childrenByParentId = new Map<Id, List<Workflow_Instance__c>>();
+      if (!parentIdsToCheck.isEmpty()) {
+        for (Workflow_Instance__c child : [
+          SELECT Id, Parent_Instance__c, Correlation_Key__c, Status__c
+          FROM Workflow_Instance__c
+          WHERE Parent_Instance__c IN :parentIdsToCheck
+          WITH SYSTEM_MODE
+        ]) {
+          if (!childrenByParentId.containsKey(child.Parent_Instance__c)) {
+            childrenByParentId.put(
+              child.Parent_Instance__c,
+              new List<Workflow_Instance__c>()
+            );
+          }
+          childrenByParentId.get(child.Parent_Instance__c).add(child);
+        }
+      }
+
+      Set<Id> nonReadyParents = new Set<Id>();
+      for (Id parentId : parentIdsToCheck) {
+        Workflow_Step_Execution__c se = pendingStepExecs.get(parentId);
+        if (se == null) {
+          continue;
+        }
+        String resolvedOutput = resolvedOutputsByParentId.get(parentId);
+        if (String.isBlank(resolvedOutput)) {
+          continue;
+        }
+        try {
+          Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
+            resolvedOutput
+          );
+          if (data.containsKey('childCorrelationKeys')) {
+            List<Object> keysObj = (List<Object>) data.get(
+              'childCorrelationKeys'
+            );
+            if (keysObj != null) {
+              Set<String> expectedKeys = new Set<String>();
+              for (Object o : keysObj) {
+                if (o != null) {
+                  expectedKeys.add(normalizeKey(String.valueOf(o)));
+                }
+              }
+
+              List<Workflow_Instance__c> children = childrenByParentId.get(
+                parentId
+              );
+              if (children == null) {
+                children = new List<Workflow_Instance__c>();
+              }
+
+              Set<String> finishedKeys = new Set<String>();
+              for (Workflow_Instance__c child : children) {
+                if (String.isNotBlank(child.Correlation_Key__c)) {
+                  String normChildKey = normalizeKey(child.Correlation_Key__c);
+                  if (expectedKeys.contains(normChildKey)) {
+                    if (
+                      child.Status__c != null &&
+                      !ACTIVE_STATUSES.contains(child.Status__c)
+                    ) {
+                      finishedKeys.add(normChildKey);
+                    }
+                  }
+                }
+              }
+
+              if (!finishedKeys.containsAll(expectedKeys)) {
+                nonReadyParents.add(parentId);
+              }
+            }
+          }
+        } catch (Exception ex) {
+          // If JSON parse fails or does not contain childCorrelationKeys, treat as ready
+        }
+      }
+
+      Set<Id> gatedNonReadyParents = new Set<Id>();
+      for (Id parentId : nonReadyParents) {
+        Set<String> sigNames = signalsByInstanceId.get(parentId);
+        Boolean allChildSignals = true;
+        if (sigNames != null) {
+          for (String name : sigNames) {
+            if (String.isNotBlank(name)) {
+              String lower = name.toLowerCase();
+              if (
+                !lower.startsWith('childcompleted:') &&
+                !lower.startsWith('childfailed:')
+              ) {
+                allChildSignals = false;
+                break;
+              }
+            }
+          }
+        }
+        if (allChildSignals) {
+          gatedNonReadyParents.add(parentId);
+        }
+      }
+
       // Only wake an instance if it received at least one fresh signal this call:
       // unkeyed signals always qualify; keyed signals only if the insert won the race.
       List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
@@ -5931,6 +6341,9 @@ public inherited sharing class WorkflowEngine {
           ) {
             continue;
           }
+          if (gatedNonReadyParents.contains(inst.Id)) {
+            continue;
+          }
           inst.Status__c = 'Running';
           // Disarm the wait deadline (issue #35): a signal-wake ends the current
           // wait, so any armed Sleep_Until__c (timed-wait timeout, or a plain
@@ -5940,7 +6353,9 @@ public inherited sharing class WorkflowEngine {
           inst.Sleep_Until__c = null;
           instancesToUpdate.add(inst);
         }
-        activeInstances.add(inst);
+        if (!gatedNonReadyParents.contains(inst.Id)) {
+          activeInstances.add(inst);
+        }
       }
 
       if (!instancesToUpdate.isEmpty()) {
@@ -6166,7 +6581,11 @@ public inherited sharing class WorkflowEngine {
       Workflow_Step_Execution__c stepExec = latestStepByName.get(
         targetStepName
       );
-      if (stepExec != null && stepExec.Status__c != 'Completed' && stepExec.Status__c != 'OperatorSkipped') {
+      if (
+        stepExec != null &&
+        stepExec.Status__c != 'Completed' &&
+        stepExec.Status__c != 'OperatorSkipped'
+      ) {
         stepExec.Status__c = 'Pending';
         stepExec.Retry_Count__c = 0; // reset retry counter
         stepExec.Error_Details__c = null;
@@ -6209,7 +6628,11 @@ public inherited sharing class WorkflowEngine {
       Workflow_Step_Execution__c stepExec = latestStepByName.get(
         targetStepName
       );
-      if (stepExec == null || (stepExec.Status__c != 'Completed' && stepExec.Status__c != 'OperatorSkipped')) {
+      if (
+        stepExec == null ||
+        (stepExec.Status__c != 'Completed' &&
+        stepExec.Status__c != 'OperatorSkipped')
+      ) {
         if (Test.isRunningTest()) {
           if (!disableQueueableInTest) {
             System.enqueueJob(
@@ -6243,7 +6666,11 @@ public inherited sharing class WorkflowEngine {
    * Operator action to resume a failed instance past a failed step by supplying
    * that step's resolved output and resuming forward execution.
    */
-  public static void resumePastStep(Id instanceId, String stepName, String suppliedOutputJson) {
+  public static void resumePastStep(
+    Id instanceId,
+    String stepName,
+    String suppliedOutputJson
+  ) {
     if (instanceId == null) {
       throw new WorkflowException('Instance ID is required.');
     }
@@ -6305,8 +6732,10 @@ public inherited sharing class WorkflowEngine {
     }
     if (!stepIsValid) {
       throw new WorkflowException(
-        'Step ' + stepName + ' is not the active/expected step for this instance: ' +
-        instance.Current_Step__c
+        'Step ' +
+          stepName +
+          ' is not the active/expected step for this instance: ' +
+          instance.Current_Step__c
       );
     }
 
@@ -6320,7 +6749,9 @@ public inherited sharing class WorkflowEngine {
       LIMIT 1
     ];
     if (stepExecsWithoutLock.isEmpty()) {
-      throw new WorkflowException('No execution record found for step: ' + stepName);
+      throw new WorkflowException(
+        'No execution record found for step: ' + stepName
+      );
     }
     Id latestStepExecId = stepExecsWithoutLock[0].Id;
 
@@ -6334,22 +6765,31 @@ public inherited sharing class WorkflowEngine {
     Workflow_Step_Execution__c latestExec = stepExecs[0];
     if (latestExec.Status__c != 'Failed') {
       throw new WorkflowException(
-        'Step ' + stepName + ' cannot be skipped because it is not in Failed status. Current status: ' + latestExec.Status__c
+        'Step ' +
+          stepName +
+          ' cannot be skipped because it is not in Failed status. Current status: ' +
+          latestExec.Status__c
       );
     }
 
     // 5. Parse and validate supplied output JSON
     if (String.isNotBlank(suppliedOutputJson)) {
       if (suppliedOutputJson.length() > 250000) {
-        throw new WorkflowException('Supplied output size exceeds maximum allowed limit of 250KB.');
+        throw new WorkflowException(
+          'Supplied output size exceeds maximum allowed limit of 250KB.'
+        );
       }
       if (suppliedOutputJson.contains('"$attachmentId"')) {
-        throw new WorkflowException('Operator-supplied payload cannot contain reserved "$attachmentId" markers.');
+        throw new WorkflowException(
+          'Operator-supplied payload cannot contain reserved "$attachmentId" markers.'
+        );
       }
       try {
         JSON.deserializeUntyped(suppliedOutputJson);
       } catch (Exception ex) {
-        throw new WorkflowException('Supplied output is not valid JSON: ' + ex.getMessage());
+        throw new WorkflowException(
+          'Supplied output is not valid JSON: ' + ex.getMessage()
+        );
       }
     }
 
@@ -6371,10 +6811,23 @@ public inherited sharing class WorkflowEngine {
       insert as system skipExec;
 
       // 7. Log operator intervention
-      String msg = 'User ' + UserInfo.getUserName() + ' (' + UserInfo.getName() + ') skipped step ' + stepName + 
-        ' on instance ' + instance.Name + ' (Correlation Key: ' + instance.Correlation_Key__c + ') providing output: ' + 
-        (suppliedOutputJson != null && suppliedOutputJson.length() > 500 ? suppliedOutputJson.substring(0, 500) + '...' : suppliedOutputJson);
-      
+      String msg =
+        'User ' +
+        UserInfo.getUserName() +
+        ' (' +
+        UserInfo.getName() +
+        ') skipped step ' +
+        stepName +
+        ' on instance ' +
+        instance.Name +
+        ' (Correlation Key: ' +
+        instance.Correlation_Key__c +
+        ') providing output: ' +
+        (suppliedOutputJson != null &&
+          suppliedOutputJson.length() > 500
+          ? suppliedOutputJson.substring(0, 500) + '...'
+          : suppliedOutputJson);
+
       Workflow_Log__c interventionLog = new Workflow_Log__c(
         Workflow_Instance__c = instanceId,
         Workflow_Name__c = instance.Workflow_Name__c,
@@ -6391,7 +6844,9 @@ public inherited sharing class WorkflowEngine {
       Type wflowType = Type.forName(instance.Workflow_Name__c);
       WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
 
-      Boolean isParallel = String.isNotBlank(instance.Current_Step__c) && instance.Current_Step__c.contains(',');
+      Boolean isParallel =
+        String.isNotBlank(instance.Current_Step__c) &&
+        instance.Current_Step__c.contains(',');
 
       if (!isParallel) {
         StepResult mockResult = new StepResult();
@@ -6400,24 +6855,33 @@ public inherited sharing class WorkflowEngine {
         mockResult.outputJson = suppliedOutputJson;
         String nextStepName;
         if (def instanceof VersionedWorkflow) {
-          nextStepName = ((VersionedWorkflow) def).getNextStep(
-            stepName,
-            mockResult,
-            instance.Definition_Version__c != null ? (Integer) instance.Definition_Version__c : 1
-          );
+          nextStepName = ((VersionedWorkflow) def)
+            .getNextStep(
+              stepName,
+              mockResult,
+              instance.Definition_Version__c != null
+                ? (Integer) instance.Definition_Version__c
+                : 1
+            );
         } else {
           nextStepName = def.getNextStep(stepName, mockResult);
         }
 
         if (nextStepName == 'SENTINEL_NEXT_STEP') {
-          throw new WorkflowException('Skip is not supported for dynamic-next step definitions.');
+          throw new WorkflowException(
+            'Skip is not supported for dynamic-next step definitions.'
+          );
         }
 
         if (String.isBlank(nextStepName)) {
           // Workflow is completed
           instance.Status__c = 'Completed';
           instance.Terminal_At__c = DateTime.now();
-          instance.Output__c = savePayloadIfNeeded(instanceId, suppliedOutputJson, 'Output_Final');
+          instance.Output__c = savePayloadIfNeeded(
+            instanceId,
+            suppliedOutputJson,
+            'Output_Final'
+          );
           instance.Current_Step__c = null;
           instance.Error_Message__c = null;
           instance.Failure_Category__c = null;
@@ -6433,7 +6897,9 @@ public inherited sharing class WorkflowEngine {
         instance.Status__c = 'Running';
         instance.Error_Message__c = null;
         instance.Failure_Category__c = null;
-        Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(instance.Workflow_Name__c);
+        Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(
+          instance.Workflow_Name__c
+        );
         if (deferTimeoutForConcurrency) {
           instance.Concurrency_Parked__c = true;
         }
@@ -6458,12 +6924,19 @@ public inherited sharing class WorkflowEngine {
       } else {
         // Parallel branches: load all parallel step executions to see if we can join
         List<String> activeParallelSteps = instance.Current_Step__c.split(',');
-        
+
         Map<String, Workflow_Step_Execution__c> latestParallelMap = new Map<String, Workflow_Step_Execution__c>();
         for (Workflow_Step_Execution__c pe : [
-          SELECT Step_Name__c, Status__c, Output__c, CPU_Time_Ms__c, Timeout_At__c
+          SELECT
+            Step_Name__c,
+            Status__c,
+            Output__c,
+            CPU_Time_Ms__c,
+            Timeout_At__c
           FROM Workflow_Step_Execution__c
-          WHERE Workflow_Instance__c = :instanceId AND Step_Name__c IN :activeParallelSteps
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Step_Name__c IN :activeParallelSteps
           WITH SYSTEM_MODE
           ORDER BY CreatedDate DESC, Id DESC
         ]) {
@@ -6475,7 +6948,11 @@ public inherited sharing class WorkflowEngine {
         Boolean allDone = true;
         for (String ps : activeParallelSteps) {
           Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
-          if (pe == null || (pe.Status__c != 'Completed' && pe.Status__c != 'OperatorSkipped')) {
+          if (
+            pe == null ||
+            (pe.Status__c != 'Completed' &&
+            pe.Status__c != 'OperatorSkipped')
+          ) {
             allDone = false;
             break;
           }
@@ -6493,7 +6970,9 @@ public inherited sharing class WorkflowEngine {
           ORDER BY CreatedDate DESC, Id DESC
           LIMIT 1
         ];
-        String spawningStepName = !spawningSteps.isEmpty() ? spawningSteps[0].Step_Name__c : '';
+        String spawningStepName = !spawningSteps.isEmpty()
+          ? spawningSteps[0].Step_Name__c
+          : '';
         StepResult mockSpawningResult = StepResult.complete(
           'SENTINEL_NEXT_STEP',
           !spawningSteps.isEmpty() ? spawningSteps[0].Output__c : null
@@ -6501,17 +6980,22 @@ public inherited sharing class WorkflowEngine {
 
         String nextStepName;
         if (def instanceof VersionedWorkflow) {
-          nextStepName = ((VersionedWorkflow) def).getNextStep(
-            spawningStepName,
-            mockSpawningResult,
-            instance.Definition_Version__c != null ? (Integer) instance.Definition_Version__c : 1
-          );
+          nextStepName = ((VersionedWorkflow) def)
+            .getNextStep(
+              spawningStepName,
+              mockSpawningResult,
+              instance.Definition_Version__c != null
+                ? (Integer) instance.Definition_Version__c
+                : 1
+            );
         } else {
           nextStepName = def.getNextStep(spawningStepName, mockSpawningResult);
         }
 
         if (nextStepName == 'SENTINEL_NEXT_STEP') {
-          throw new WorkflowException('Skip is not supported for dynamic-next step definitions.');
+          throw new WorkflowException(
+            'Skip is not supported for dynamic-next step definitions.'
+          );
         }
 
         if (allDone) {
@@ -6534,7 +7018,11 @@ public inherited sharing class WorkflowEngine {
           if (String.isBlank(nextStepName)) {
             instance.Status__c = 'Completed';
             instance.Terminal_At__c = DateTime.now();
-            instance.Output__c = savePayloadIfNeeded(instanceId, joinInputJson, 'Output_Join');
+            instance.Output__c = savePayloadIfNeeded(
+              instanceId,
+              joinInputJson,
+              'Output_Join'
+            );
             instance.Current_Step__c = null;
             instance.Error_Message__c = null;
             instance.Failure_Category__c = null;
@@ -6561,7 +7049,9 @@ public inherited sharing class WorkflowEngine {
           instance.Status__c = 'Running';
           instance.Error_Message__c = null;
           instance.Failure_Category__c = null;
-          Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(instance.Workflow_Name__c);
+          Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(
+            instance.Workflow_Name__c
+          );
           if (deferTimeoutForConcurrency) {
             instance.Concurrency_Parked__c = true;
           }
@@ -6583,7 +7073,12 @@ public inherited sharing class WorkflowEngine {
               continue;
             }
             Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
-            if (pe != null && (pe.Status__c == 'Retrying' || (pe.Status__c == 'Pending' && pe.CPU_Time_Ms__c != null))) {
+            if (
+              pe != null &&
+              (pe.Status__c == 'Retrying' ||
+              (pe.Status__c == 'Pending' &&
+              pe.CPU_Time_Ms__c != null))
+            ) {
               hasParkedSibling = true;
               break;
             }
@@ -8270,7 +8765,7 @@ public inherited sharing class WorkflowEngine {
    * (non-marker) payloads and unresolved markers pass through unchanged, index
    * for index with the input.
    */
-  private static List<String> resolvePayloads(List<String> rawValues) {
+  public static List<String> resolvePayloads(List<String> rawValues) {
     Map<Integer, Id> markerDocByIndex = new Map<Integer, Id>();
     Set<Id> docIds = new Set<Id>();
     for (Integer i = 0; i < rawValues.size(); i++) {
