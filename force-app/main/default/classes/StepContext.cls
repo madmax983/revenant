@@ -1410,6 +1410,11 @@ public inherited sharing class StepContext {
             }
           } catch (Exception ex) {
             // Deserialization failure will be handled during outcome construction
+            System.debug(
+              LoggingLevel.FINE,
+              'Ignoring deserialization failure during bulk payload lookup: ' +
+              ex.getMessage()
+            );
           }
         }
       }
