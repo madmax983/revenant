@@ -35,9 +35,20 @@ public inherited sharing class ChildWorkflowFanOutExample implements WorkflowDef
           'Workflow input is required.'
         );
       }
-      List<Object> items = (List<Object>) JSON.deserializeUntyped(
-        ctx.workflowInputJson
-      );
+      Object deserialized = JSON.deserializeUntyped(ctx.workflowInputJson);
+      List<Object> items = null;
+      if (deserialized instanceof List<Object>) {
+        items = (List<Object>) deserialized;
+      } else if (deserialized instanceof Map<String, Object>) {
+        Map<String, Object> inputMap = (Map<String, Object>) deserialized;
+        items = (List<Object>) inputMap.get('items');
+      }
+
+      if (items == null) {
+        throw new WorkflowEngine.WorkflowException(
+          'Workflow input must be a list of items or an object containing an "items" list.'
+        );
+      }
 
       List<String> childKeys = new List<String>();
       for (Object obj : items) {
