@@ -1700,12 +1700,18 @@ public class StepContextTest {
       this.signals = signals;
     }
     public List<StepContext.Signal> getPendingSignals(String name) {
+      if (String.isBlank(name)) {
+        return signals.values();
+      }
       StepContext.Signal s = signals.get(name.toLowerCase());
       return s != null
         ? new List<StepContext.Signal>{ s }
         : new List<StepContext.Signal>();
     }
     public StepContext.Signal getLatestSignal(String name) {
+      if (String.isBlank(name)) {
+        return null;
+      }
       return signals.get(name.toLowerCase());
     }
     public Boolean readWasCapped() {

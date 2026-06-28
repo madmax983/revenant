@@ -1348,71 +1348,145 @@ public inherited sharing class StepContext {
   }
 
   public ChildOutcome getChildOutcome(String childKey) {
-    if (String.isBlank(childKey)) {
+    List<ChildOutcome> outcomes = this.getChildOutcomes(
+      new List<String>{ childKey }
+    );
+    if (outcomes.isEmpty()) {
       return new ChildOutcome();
     }
-    String completedName = 'ChildCompleted:' + childKey;
-    String failedName = 'ChildFailed:' + childKey;
-
-    Signal completedSig = this.getSignal(completedName);
-    Signal failedSig = this.getSignal(failedName);
-
-    if (completedSig.isPresent() || failedSig.isPresent()) {
-      // Force both names to be registered in matchedNames so that any duplicate/delayed
-      // sibling signals of either type are consumed/cleaned up by the engine.
-      this.markMatched(new Signal(null, completedName, null));
-      this.markMatched(new Signal(null, failedName, null));
-    }
-
-    if (completedSig.isPresent()) {
-      return new ChildOutcome(
-        'Completed',
-        null,
-        WorkflowEngine.resolvePayload(completedSig.payload)
-      );
-    }
-
-    if (failedSig.isPresent()) {
-      if (String.isNotBlank(failedSig.payload)) {
-        try {
-          Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
-            failedSig.payload
-          );
-          String status = data.get('status') != null
-            ? String.valueOf(data.get('status'))
-            : null;
-          String errorMessage = data.get('errorMessage') != null
-            ? String.valueOf(data.get('errorMessage'))
-            : null;
-          Object outputObj = data.get('output');
-          String outputVal = null;
-          if (outputObj != null) {
-            if (outputObj instanceof String) {
-              outputVal = WorkflowEngine.resolvePayload((String) outputObj);
-            } else {
-              outputVal = JSON.serialize(outputObj);
-            }
-          }
-          return new ChildOutcome(status, errorMessage, outputVal);
-        } catch (Exception ex) {
-          return new ChildOutcome('Failed', failedSig.payload, null);
-        }
-      } else {
-        return new ChildOutcome('Failed', null, null);
-      }
-    }
-
-    return new ChildOutcome();
+    return outcomes[0];
   }
 
   public List<ChildOutcome> getChildOutcomes(List<String> childKeys) {
     this.loadAll(); // Pre-load all pending signals to bulkify and avoid N+1 queries
     List<ChildOutcome> outcomes = new List<ChildOutcome>();
-    if (childKeys != null) {
-      for (String key : childKeys) {
-        outcomes.add(this.getChildOutcome(key));
+    if (childKeys == null || childKeys.isEmpty()) {
+      return outcomes;
+    }
+
+    // Step 1: Pre-process each key to check signals and collect raw payloads to resolve.
+    // We will associate each raw payload index with its target.
+    List<String> rawPayloads = new List<String>();
+    List<Integer> targetKeyIndex = new List<Integer>();
+    List<String> targetType = new List<String>(); // 'completed' or 'failedOutput'
+
+    // We'll also store pre-deserialized maps for failed signals so we don't deserialize twice
+    Map<Integer, Map<String, Object>> failedDataMap = new Map<Integer, Map<String, Object>>();
+
+    for (Integer i = 0; i < childKeys.size(); i++) {
+      String childKey = childKeys[i];
+      if (String.isBlank(childKey)) {
+        continue;
+      }
+      String completedName = 'ChildCompleted:' + childKey;
+      String failedName = 'ChildFailed:' + childKey;
+
+      Signal completedSig = this.getSignal(completedName);
+      Signal failedSig = this.getSignal(failedName);
+
+      if (completedSig.isPresent() || failedSig.isPresent()) {
+        this.markMatched(new Signal(null, completedName, null));
+        this.markMatched(new Signal(null, failedName, null));
+      }
+
+      if (completedSig.isPresent()) {
+        if (String.isNotBlank(completedSig.payload)) {
+          rawPayloads.add(completedSig.payload);
+          targetKeyIndex.add(i);
+          targetType.add('completed');
+        }
+      } else if (failedSig.isPresent()) {
+        if (String.isNotBlank(failedSig.payload)) {
+          try {
+            Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
+              failedSig.payload
+            );
+            failedDataMap.put(i, data);
+            Object outputObj = data.get('output');
+            if (outputObj instanceof String) {
+              rawPayloads.add((String) outputObj);
+              targetKeyIndex.add(i);
+              targetType.add('failedOutput');
+            }
+          } catch (Exception ex) {
+            // Deserialization failure will be handled during outcome construction
+          }
+        }
       }
     }
+
+    // Step 2: Bulk resolve the payloads
+    List<String> resolvedPayloads = new List<String>();
+    if (!rawPayloads.isEmpty()) {
+      resolvedPayloads = WorkflowEngine.resolvePayloads(rawPayloads);
+    }
+
+    // Map the resolved payloads back
+    Map<Integer, String> resolvedCompletedByKeyIndex = new Map<Integer, String>();
+    Map<Integer, String> resolvedFailedOutputByKeyIndex = new Map<Integer, String>();
+
+    for (Integer j = 0; j < resolvedPayloads.size(); j++) {
+      Integer keyIdx = targetKeyIndex[j];
+      String type = targetType[j];
+      String val = resolvedPayloads[j];
+      if (type == 'completed') {
+        resolvedCompletedByKeyIndex.put(keyIdx, val);
+      } else if (type == 'failedOutput') {
+        resolvedFailedOutputByKeyIndex.put(keyIdx, val);
+      }
+    }
+
+    // Step 3: Construct the ChildOutcome list
+    for (Integer i = 0; i < childKeys.size(); i++) {
+      String childKey = childKeys[i];
+      if (String.isBlank(childKey)) {
+        outcomes.add(new ChildOutcome());
+        continue;
+      }
+      String completedName = 'ChildCompleted:' + childKey;
+      String failedName = 'ChildFailed:' + childKey;
+
+      Signal completedSig = this.getSignal(completedName);
+      Signal failedSig = this.getSignal(failedName);
+
+      if (completedSig.isPresent()) {
+        String resolvedVal = resolvedCompletedByKeyIndex.containsKey(i)
+          ? resolvedCompletedByKeyIndex.get(i)
+          : completedSig.payload;
+        outcomes.add(new ChildOutcome('Completed', null, resolvedVal));
+      } else if (failedSig.isPresent()) {
+        if (String.isNotBlank(failedSig.payload)) {
+          if (failedDataMap.containsKey(i)) {
+            Map<String, Object> data = failedDataMap.get(i);
+            String status = data.get('status') != null
+              ? String.valueOf(data.get('status'))
+              : null;
+            String errorMessage = data.get('errorMessage') != null
+              ? String.valueOf(data.get('errorMessage'))
+              : null;
+            Object outputObj = data.get('output');
+            String outputVal = null;
+            if (outputObj != null) {
+              if (outputObj instanceof String) {
+                outputVal = resolvedFailedOutputByKeyIndex.containsKey(i)
+                  ? resolvedFailedOutputByKeyIndex.get(i)
+                  : (String) outputObj;
+              } else {
+                outputVal = JSON.serialize(outputObj);
+              }
+            }
+            outcomes.add(new ChildOutcome(status, errorMessage, outputVal));
+          } else {
+            outcomes.add(new ChildOutcome('Failed', failedSig.payload, null));
+          }
+        } else {
+          outcomes.add(new ChildOutcome('Failed', null, null));
+        }
+      } else {
+        outcomes.add(new ChildOutcome());
+      }
+    }
+
     return outcomes;
   }
 }

@@ -257,4 +257,45 @@ public class StepResultFanOutTest {
     }
     Test.stopTest();
   }
+
+  @isTest
+  static void testCaseInsensitiveChildKeyMatching() {
+    Test.startTest();
+    Id parentId = WorkflowEngine.start(
+      'StepResultFanOutTest.ParentWorkflow',
+      'ParentKey_' + Crypto.getRandomInteger(),
+      null
+    );
+
+    // We manually insert an active sibling child instance with mixed case.
+    Workflow_Instance__c child = new Workflow_Instance__c();
+    child.Workflow_Name__c = 'StepResultFanOutTest.SimpleChildWorkflow';
+    child.Status__c = 'Pending';
+    child.Correlation_Key__c = 'child1_' + parentId; // lowercase child1
+    child.Parent_Instance__c = parentId;
+    child.Current_Step__c = 'StepResultFanOutTest.ChildStep';
+    insert as system child;
+
+    // Call WorkflowEngine.startChildWorkflow with the matching correlation key in mixed case (e.g. 'Child1_')
+    // Under our case-insensitive check, this call should resolve to a no-op (idempotent re-suspend)
+    // rather than throwing a duplicate key exception or trying to insert a new row.
+    try {
+      WorkflowEngine.startChildWorkflow(
+        parentId,
+        'StepResultFanOutTest.SimpleChildWorkflow',
+        'Child1_' + parentId,
+        '{}'
+      );
+      System.assert(
+        true,
+        'Should have resolved idempotently without throwing a duplicate exception'
+      );
+    } catch (Exception ex) {
+      System.assert(
+        false,
+        'Should not have thrown exception: ' + ex.getMessage()
+      );
+    }
+    Test.stopTest();
+  }
 }

@@ -5061,6 +5061,7 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  @TestVisible
   private static void startChildWorkflow(
     Id parentId,
     String workflowName,
@@ -5248,7 +5249,10 @@ public inherited sharing class WorkflowEngine {
       ];
       for (Workflow_Instance__c existing : existingActive) {
         if (existing.Parent_Instance__c == parentId) {
-          existingByCorrKey.put(existing.Active_Correlation_Key__c, existing);
+          existingByCorrKey.put(
+            normalizeKey(existing.Active_Correlation_Key__c),
+            existing
+          );
         } else {
           throw new WorkflowException(
             'An active workflow already exists with correlation key: ' +
@@ -5266,7 +5270,10 @@ public inherited sharing class WorkflowEngine {
         WITH SYSTEM_MODE
       ];
       for (Workflow_Instance__c existing : existingSiblings) {
-        existingByCorrKey.put(existing.Correlation_Key__c, existing);
+        existingByCorrKey.put(
+          normalizeKey(existing.Correlation_Key__c),
+          existing
+        );
       }
     }
 
@@ -5276,7 +5283,7 @@ public inherited sharing class WorkflowEngine {
     for (StepResult.ChildRequest req : requests) {
       if (
         String.isNotBlank(req.correlationKey) &&
-        existingByCorrKey.containsKey(req.correlationKey)
+        existingByCorrKey.containsKey(normalizeKey(req.correlationKey))
       ) {
         continue;
       }
@@ -8728,7 +8735,7 @@ public inherited sharing class WorkflowEngine {
    * (non-marker) payloads and unresolved markers pass through unchanged, index
    * for index with the input.
    */
-  private static List<String> resolvePayloads(List<String> rawValues) {
+  public static List<String> resolvePayloads(List<String> rawValues) {
     Map<Integer, Id> markerDocByIndex = new Map<Integer, Id>();
     Set<Id> docIds = new Set<Id>();
     for (Integer i = 0; i < rawValues.size(); i++) {
