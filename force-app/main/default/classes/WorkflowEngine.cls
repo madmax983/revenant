@@ -5401,7 +5401,7 @@ public inherited sharing class WorkflowEngine {
     if (!Test.isRunningTest()) {
       List<Id> instanceIdsToEnqueue = new List<Id>();
       for (Workflow_Instance__c inst : instancesToUpdate) {
-        if (inst.Status__c != 'Paused' && inst.Concurrency_Parked__c != true) {
+        if (inst.Status__c != 'Paused') {
           instanceIdsToEnqueue.add(inst.Id);
         }
       }

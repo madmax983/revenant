@@ -298,4 +298,56 @@ public class StepResultFanOutTest {
     }
     Test.stopTest();
   }
+
+  @isTest
+  static void testParallelChildFanOutWithConcurrencyGate() {
+    // Mock the child workflow to have a ConcurrencyGate configured with ceiling = 1
+    ConcurrencyGate.mockConfigs.put(
+      'StepResultFanOutTest.SimpleChildWorkflow',
+      new Concurrency_Config__mdt(
+        Label = 'StepResultFanOutTest.SimpleChildWorkflow',
+        DeveloperName = 'SimpleChildWorkflow',
+        Max_Concurrent_Instances__c = 1
+      )
+    );
+
+    Test.startTest();
+    Id parentId = WorkflowEngine.start(
+      'StepResultFanOutTest.ParentWorkflow',
+      'ParentKey_' + Crypto.getRandomInteger(),
+      null
+    );
+
+    // Drive parent to start children. Under the hood, this will spawn Child1 and Child2.
+    // Both will be marked concurrency parked, but must still be advanceable and complete.
+    WorkflowTestHarness harness = new WorkflowTestHarness(parentId);
+    WorkflowTestHarness.Result result = harness.drive();
+    Test.stopTest();
+
+    // Verify parent completes successfully
+    System.assertEquals(
+      'Completed',
+      result.status,
+      'Parent workflow should complete'
+    );
+
+    // Verify child instances exist and completed
+    List<Workflow_Instance__c> children = [
+      SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentId
+    ];
+    System.assertEquals(
+      2,
+      children.size(),
+      'Should have started 2 child instances'
+    );
+    for (Workflow_Instance__c child : children) {
+      System.assertEquals(
+        'Completed',
+        child.Status__c,
+        'Child should have completed'
+      );
+    }
+  }
 }
