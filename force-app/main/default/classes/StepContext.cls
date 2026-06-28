@@ -47,6 +47,7 @@ public inherited sharing class StepContext {
   // completed) visit, and increments only when the engine loops back to the same
   // step for a fresh visit. Populated by the engine; defaults to 0.
   private Integer stepVisit = 0;
+  private static Double cachedAsyncFraction = null;
 
   /**
    * A stable, read-only idempotency key for this logical step execution.
@@ -866,7 +867,9 @@ public inherited sharing class StepContext {
       return true;
     }
     // Daily Async Apex Executions Limit (accounts for Beta Elastic Limits if enabled)
-    Double asyncFraction = mockAsyncExecutionsFraction;
+    Double asyncFraction = mockAsyncExecutionsFraction != null
+      ? mockAsyncExecutionsFraction
+      : cachedAsyncFraction;
     if (asyncFraction == null) {
       Map<String, System.OrgLimit> limitsMap = System.OrgLimits.getMap();
       if (limitsMap.containsKey('DailyAsyncApexExecutions')) {
@@ -885,6 +888,7 @@ public inherited sharing class StepContext {
 
         if (maxLimit > 0) {
           asyncFraction = (Double) limitValue / maxLimit;
+          cachedAsyncFraction = asyncFraction;
         }
       }
     }
@@ -1344,6 +1348,9 @@ public inherited sharing class StepContext {
   }
 
   public ChildOutcome getChildOutcome(String childKey) {
+    if (String.isBlank(childKey)) {
+      return new ChildOutcome();
+    }
     String completedName = 'ChildCompleted:' + childKey;
     String failedName = 'ChildFailed:' + childKey;
 
@@ -1358,7 +1365,11 @@ public inherited sharing class StepContext {
     }
 
     if (completedSig.isPresent()) {
-      return new ChildOutcome('Completed', null, completedSig.payload);
+      return new ChildOutcome(
+        'Completed',
+        null,
+        WorkflowEngine.resolvePayload(completedSig.payload)
+      );
     }
 
     if (failedSig.isPresent()) {
@@ -1367,11 +1378,22 @@ public inherited sharing class StepContext {
           Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
             failedSig.payload
           );
-          return new ChildOutcome(
-            (String) data.get('status'),
-            (String) data.get('errorMessage'),
-            (String) data.get('output')
-          );
+          String status = data.get('status') != null
+            ? String.valueOf(data.get('status'))
+            : null;
+          String errorMessage = data.get('errorMessage') != null
+            ? String.valueOf(data.get('errorMessage'))
+            : null;
+          Object outputObj = data.get('output');
+          String outputVal = null;
+          if (outputObj != null) {
+            if (outputObj instanceof String) {
+              outputVal = WorkflowEngine.resolvePayload((String) outputObj);
+            } else {
+              outputVal = JSON.serialize(outputObj);
+            }
+          }
+          return new ChildOutcome(status, errorMessage, outputVal);
         } catch (Exception ex) {
           return new ChildOutcome('Failed', failedSig.payload, null);
         }
@@ -1381,5 +1403,16 @@ public inherited sharing class StepContext {
     }
 
     return new ChildOutcome();
+  }
+
+  public List<ChildOutcome> getChildOutcomes(List<String> childKeys) {
+    this.loadAll(); // Pre-load all pending signals to bulkify and avoid N+1 queries
+    List<ChildOutcome> outcomes = new List<ChildOutcome>();
+    if (childKeys != null) {
+      for (String key : childKeys) {
+        outcomes.add(this.getChildOutcome(key));
+      }
+    }
+    return outcomes;
   }
 }

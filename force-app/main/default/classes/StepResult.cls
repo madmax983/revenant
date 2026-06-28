@@ -9,7 +9,8 @@ public inherited sharing class StepResult {
     WAIT_FOR_APPROVAL,
     SPLIT,
     CONTINUE_AS_NEW,
-    FAIL
+    FAIL,
+    START_CHILDREN
   }
 
   public ActionType action { get; set; }
@@ -28,6 +29,7 @@ public inherited sharing class StepResult {
   public String parallelInputJson { get; set; }
   public String nextInputJson { get; set; }
   public String newCorrelationKey { get; set; }
+  public List<ChildRequest> childRequests { get; set; }
 
   /**
    * Author-owned Platform Event records the engine publishes effectively-once,
@@ -150,14 +152,42 @@ public inherited sharing class StepResult {
 
   public static StepResult startChild(
     String childWorkflowName,
-    String correlationKey,
+    String childCorrelationKey,
     Object input
   ) {
     StepResult r = new StepResult();
     r.action = ActionType.START_CHILD;
     r.childWorkflowName = childWorkflowName;
-    r.childCorrelationKey = correlationKey;
-    r.childInputJson = (input != null) ? JSON.serialize(input) : null;
+    r.childCorrelationKey = childCorrelationKey;
+    r.childInputJson = serializeInputIfNeeded(input);
+    return r;
+  }
+
+  public class ChildRequest {
+    public String workflowName { get; set; }
+    public String correlationKey { get; set; }
+    public String inputJson { get; set; }
+
+    public ChildRequest(
+      String workflowName,
+      String correlationKey,
+      Object input
+    ) {
+      this.workflowName = workflowName;
+      this.correlationKey = correlationKey;
+      this.inputJson = serializeInputIfNeeded(input);
+    }
+  }
+
+  public static StepResult startChildren(List<ChildRequest> children) {
+    if (children == null || children.isEmpty()) {
+      throw new IllegalArgumentException(
+        'StepResult.startChildren: children list must not be null or empty'
+      );
+    }
+    StepResult r = new StepResult();
+    r.action = ActionType.START_CHILDREN;
+    r.childRequests = children;
     return r;
   }
 
@@ -195,6 +225,11 @@ public inherited sharing class StepResult {
   }
 
   public static StepResult split(List<String> stepNames) {
+    if (stepNames == null || stepNames.isEmpty()) {
+      throw new IllegalArgumentException(
+        'StepResult.split: stepNames list must not be null or empty'
+      );
+    }
     StepResult r = new StepResult();
     r.action = ActionType.SPLIT;
     r.parallelStepNames = stepNames;
@@ -202,35 +237,22 @@ public inherited sharing class StepResult {
   }
 
   public static StepResult split(List<String> stepNames, Object input) {
+    if (stepNames == null || stepNames.isEmpty()) {
+      throw new IllegalArgumentException(
+        'StepResult.split: stepNames list must not be null or empty'
+      );
+    }
     StepResult r = new StepResult();
     r.action = ActionType.SPLIT;
     r.parallelStepNames = stepNames;
-    if (input == null) {
-      r.parallelInputJson = null;
-      return r;
-    }
-    if (input instanceof String) {
-      String strInput = (String) input;
-      try {
-        JSON.deserializeUntyped(strInput);
-        r.parallelInputJson = strInput;
-      } catch (Exception e) {
-        System.debug(
-          LoggingLevel.FINE,
-          'Parallel input is not a JSON string, serializing: ' + e.getMessage()
-        );
-        r.parallelInputJson = JSON.serialize(strInput);
-      }
-      return r;
-    }
-    r.parallelInputJson = JSON.serialize(input);
+    r.parallelInputJson = serializeInputIfNeeded(input);
     return r;
   }
 
   public static StepResult continueAsNew(Object nextInput) {
     StepResult r = new StepResult();
     r.action = ActionType.CONTINUE_AS_NEW;
-    r.nextInputJson = (nextInput != null) ? JSON.serialize(nextInput) : null;
+    r.nextInputJson = serializeInputIfNeeded(nextInput);
     r.newCorrelationKey = null;
     return r;
   }
@@ -238,7 +260,7 @@ public inherited sharing class StepResult {
   public static StepResult continueAsNew(Object nextInput, String customKey) {
     StepResult r = new StepResult();
     r.action = ActionType.CONTINUE_AS_NEW;
-    r.nextInputJson = (nextInput != null) ? JSON.serialize(nextInput) : null;
+    r.nextInputJson = serializeInputIfNeeded(nextInput);
     r.newCorrelationKey = customKey;
     return r;
   }
@@ -274,5 +296,21 @@ public inherited sharing class StepResult {
       ? JSON.serialize(failureData)
       : null;
     return r;
+  }
+
+  private static String serializeInputIfNeeded(Object input) {
+    if (input == null) {
+      return null;
+    }
+    if (input instanceof String) {
+      String strInput = (String) input;
+      try {
+        JSON.deserializeUntyped(strInput);
+        return strInput;
+      } catch (Exception e) {
+        return JSON.serialize(strInput);
+      }
+    }
+    return JSON.serialize(input);
   }
 }
