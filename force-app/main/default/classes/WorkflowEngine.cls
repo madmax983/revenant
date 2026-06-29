@@ -3588,6 +3588,11 @@ public inherited sharing class WorkflowEngine {
   @TestVisible
   private static Integer SERIAL_SIGNAL_ROW_CAP = 8000;
 
+  @TestVisible
+  private static Integer BREADCRUMB_DML_STATEMENT_RESERVE = 10;
+  @TestVisible
+  private static Integer BREADCRUMB_DML_ROW_RESERVE = 20;
+
   /**
    * Lazily supplies the pending (unconsumed) signals targeting an instance so a
    * step that never reads signals pays no query/heap cost for unrelated
@@ -11065,12 +11070,37 @@ public inherited sharing class WorkflowEngine {
     if (crumbs == null || crumbs.isEmpty()) {
       return;
     }
+
+    // Keep breadcrumbs from exhausting checkpoint DML (best-effort observability log drop)
+    if (
+      Limits.getDmlStatements() + 1 + BREADCRUMB_DML_STATEMENT_RESERVE > Limits.getLimitDmlStatements() ||
+      Limits.getDmlRows() + crumbs.size() + BREADCRUMB_DML_ROW_RESERVE > Limits.getLimitDmlRows()
+    ) {
+      System.debug(
+        LoggingLevel.WARN,
+        'Skipping step breadcrumbs persist: DML budget exhausted (statements=' +
+          Limits.getDmlStatements() +
+          '/' +
+          Limits.getLimitDmlStatements() +
+          ', rows=' +
+          Limits.getDmlRows() +
+          '/' +
+          Limits.getLimitDmlRows() +
+          ').'
+      );
+      return;
+    }
+
+    if (stepExec.Id == null) {
+      saveStepExec(stepExec);
+    }
+
     List<Workflow_Log__c> logsToInsert = new List<Workflow_Log__c>();
     for (StepContext.Breadcrumb b : crumbs) {
       logsToInsert.add(new Workflow_Log__c(
         Workflow_Instance__c = instance.Id,
         Workflow_Name__c = instance.Workflow_Name__c,
-        Correlation_Key__c = stepExec.Step_Name__c,
+        Correlation_Key__c = stepExec.Id,
         Log_Type__c = StepContext.LOG_TYPE_BREADCRUMB,
         Level__c = b.level.name(),
         Message__c = b.message,

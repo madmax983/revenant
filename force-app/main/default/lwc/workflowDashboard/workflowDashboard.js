@@ -971,7 +971,7 @@ export default class WorkflowDashboard extends LightningElement {
             hasLimitPressure = cpuPct >= 80 || soqlPct >= 80 || heapPct >= 80;
           }
 
-          const stepBreadcrumbs = (breadcrumbsByStep[step.Step_Name__c] || [])
+          const stepBreadcrumbs = (breadcrumbsByStep[step.Id] || [])
             .map((b) => {
               let badgeClass = "terminal-badge";
               const lvl = (b.Level__c || "").toUpperCase();

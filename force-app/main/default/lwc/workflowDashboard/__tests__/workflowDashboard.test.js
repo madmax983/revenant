@@ -1133,21 +1133,21 @@ describe("c-workflow-dashboard details panel", () => {
       breadcrumbs: [
         {
           Id: "bc1",
-          Correlation_Key__c: "ChargeCard",
+          Correlation_Key__c: "step1",
           Level__c: "INFO",
           Message__c: "Starting credit card charge",
           Fire_Time__c: "2026-06-24T12:00:01.000Z",
         },
         {
           Id: "bc2",
-          Correlation_Key__c: "ChargeCard",
+          Correlation_Key__c: "step1",
           Level__c: "WARN",
           Message__c: "Retrying card charge due to network timeout",
           Fire_Time__c: "2026-06-24T12:00:05.000Z",
         },
         {
           Id: "bc3",
-          Correlation_Key__c: "SendEmail",
+          Correlation_Key__c: "step2",
           Level__c: "ERROR",
           Message__c: "Failed to send email receipt",
           Fire_Time__c: "2026-06-24T12:05:02.000Z",

@@ -7128,18 +7128,25 @@ public class WorkflowEngineTest {
       ORDER BY Fire_Time__c ASC, Id ASC
     ];
 
+    Workflow_Step_Execution__c stepExec = [
+      SELECT Id 
+      FROM Workflow_Step_Execution__c 
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.BreadcrumbStep'
+      LIMIT 1
+    ];
+
     System.assertEquals(2, logs.size(), 'Should have saved 2 breadcrumbs');
     
     System.assertEquals(StepContext.LOG_TYPE_BREADCRUMB, logs[0].Log_Type__c);
     System.assertEquals('INFO', logs[0].Level__c);
     System.assert(logs[0].Message__c.contains('Step 1 execution started'), 'Message mismatch: ' + logs[0].Message__c);
     System.assert(logs[0].Message__c.contains('"status":"init"'), 'Message mismatch: ' + logs[0].Message__c);
-    System.assertEquals('WorkflowEngineTest.BreadcrumbStep', logs[0].Correlation_Key__c);
+    System.assertEquals(stepExec.Id, logs[0].Correlation_Key__c);
 
     System.assertEquals(StepContext.LOG_TYPE_BREADCRUMB, logs[1].Log_Type__c);
     System.assertEquals('WARN', logs[1].Level__c);
     System.assertEquals('Step 1 warning encountered', logs[1].Message__c);
-    System.assertEquals('WorkflowEngineTest.BreadcrumbStep', logs[1].Correlation_Key__c);
+    System.assertEquals(stepExec.Id, logs[1].Correlation_Key__c);
   }
 
   @isTest
