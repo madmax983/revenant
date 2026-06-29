@@ -4357,7 +4357,7 @@ public inherited sharing class WorkflowEngine {
     StepResult result,
     StepContext context
   ) {
-    persistStepBreadcrumbs(instance, stepExec, context);
+    persistStepBreadcrumbs(instance, stepExec, result, context);
     // Re-query to avoid overwriting a timeout or finalizer crash status and race conditions
     Workflow_Instance__c freshInstance = [
       SELECT
@@ -8135,7 +8135,7 @@ public inherited sharing class WorkflowEngine {
     try {
       result = compensatableStepInstance.compensate(context);
     } catch (Exception ex) {
-      persistStepBreadcrumbs(instance, stepExec, context);
+      persistStepBreadcrumbs(instance, stepExec, null, context);
       stepExec.Status__c = 'Failed';
       stepExec.Error_Details__c =
         ex.getMessage() +
@@ -8166,7 +8166,7 @@ public inherited sharing class WorkflowEngine {
     List<String> stack,
     StepContext context
   ) {
-    persistStepBreadcrumbs(instance, stepExec, context);
+    persistStepBreadcrumbs(instance, stepExec, result, context);
     Workflow_Instance__c freshInstance = [
       SELECT
         Id,
@@ -11061,6 +11061,7 @@ public inherited sharing class WorkflowEngine {
   private static void persistStepBreadcrumbs(
     Workflow_Instance__c instance,
     Workflow_Step_Execution__c stepExec,
+    StepResult result,
     StepContext context
   ) {
     if (context == null || stepExec == null || instance == null) {
@@ -11071,10 +11072,23 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
+    Integer dynamicRowReserve = 0;
+    if (result != null) {
+      if (result.childRequests != null) {
+        dynamicRowReserve += 3 * result.childRequests.size();
+      }
+      if (result.parallelStepNames != null) {
+        dynamicRowReserve += result.parallelStepNames.size();
+      }
+      if (result.outboundEvents != null) {
+        dynamicRowReserve += result.outboundEvents.size();
+      }
+    }
+
     // Keep breadcrumbs from exhausting checkpoint DML (best-effort observability log drop)
     if (
       Limits.getDmlStatements() + 1 + BREADCRUMB_DML_STATEMENT_RESERVE > Limits.getLimitDmlStatements() ||
-      Limits.getDmlRows() + crumbs.size() + BREADCRUMB_DML_ROW_RESERVE > Limits.getLimitDmlRows()
+      Limits.getDmlRows() + crumbs.size() + BREADCRUMB_DML_ROW_RESERVE + dynamicRowReserve > Limits.getLimitDmlRows()
     ) {
       System.debug(
         LoggingLevel.WARN,
