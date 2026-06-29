@@ -1945,4 +1945,138 @@ public class StepContextTest {
       'Must not consume ChildFailed signal name when absent'
     );
   }
+
+  @isTest
+  static void testLogApiBuffering() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null
+    );
+
+    ctx.log(StepContext.Level.INFO, 'Info message');
+    Map<String, Object> context = new Map<String, Object>{'foo' => 'bar', 'count' => 42};
+    ctx.log(StepContext.Level.WARN, 'Warning message', context);
+    ctx.log(StepContext.Level.ERROR, 'Error message');
+
+    List<StepContext.Breadcrumb> crumbs = ctx.getBreadcrumbs();
+    System.assertEquals(3, crumbs.size(), 'Should store exactly 3 breadcrumbs');
+
+    System.assertEquals(StepContext.Level.INFO, crumbs[0].level);
+    System.assertEquals('Info message', crumbs[0].message);
+    System.assertNotEquals(null, crumbs[0].timestamp);
+
+    System.assertEquals(StepContext.Level.WARN, crumbs[1].level);
+    // context map serialized to JSON
+    System.assert(crumbs[1].message.startsWith('Warning message | Context: '), 'Should append context json');
+    System.assert(crumbs[1].message.contains('"foo":"bar"'), 'Serialized JSON should contain foo');
+    System.assert(crumbs[1].message.contains('"count":42'), 'Serialized JSON should contain count');
+    System.assertNotEquals(null, crumbs[1].timestamp);
+
+    System.assertEquals(StepContext.Level.ERROR, crumbs[2].level);
+    System.assertEquals('Error message', crumbs[2].message);
+    System.assertNotEquals(null, crumbs[2].timestamp);
+  }
+
+  @isTest
+  static void testLogCharacterTruncation() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null
+    );
+
+    String message4000 = 'a'.repeat(4000);
+    ctx.log(StepContext.Level.INFO, message4000);
+    List<StepContext.Breadcrumb> crumbs = ctx.getBreadcrumbs();
+    System.assertEquals(1, crumbs.size());
+    System.assertEquals(4000, crumbs[0].message.length(), 'Exact 4000 char message should not be truncated');
+    System.assertEquals(message4000, crumbs[0].message);
+
+    ctx = new StepContext(dummyInstanceId, 'W', 'S', null, null, null, null);
+    String message4001 = 'b'.repeat(4001);
+    ctx.log(StepContext.Level.INFO, message4001);
+    crumbs = ctx.getBreadcrumbs();
+    System.assertEquals(1, crumbs.size());
+    System.assertEquals(4000, crumbs[0].message.length(), 'Should be truncated to 4000 characters total');
+    System.assertEquals('b'.repeat(3984) + '... [TRUNCATED]', crumbs[0].message);
+
+    // Test with context
+    ctx = new StepContext(dummyInstanceId, 'W', 'S', null, null, null, null);
+    Map<String, Object> context = new Map<String, Object>{'k' => 'v'};
+    // base message + ' | Context: {"k":"v"}' has length: 3980 + 21 = 4001
+    String msg3980 = 'c'.repeat(3980);
+    ctx.log(StepContext.Level.INFO, msg3980, context);
+    crumbs = ctx.getBreadcrumbs();
+    System.assertEquals(1, crumbs.size());
+    String expectedBase = msg3980 + ' | Context: {"k":"v"}';
+    System.assertEquals(expectedBase.substring(0, 3984) + '... [TRUNCATED]', crumbs[0].message);
+  }
+
+  @isTest
+  static void testLogEntriesTruncation() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null
+    );
+
+    for (Integer i = 0; i < 100; i++) {
+      ctx.log(StepContext.Level.INFO, 'Entry ' + i);
+    }
+    List<StepContext.Breadcrumb> crumbs = ctx.getBreadcrumbs();
+    System.assertEquals(100, crumbs.size(), 'Should allow exactly 100 entries');
+
+    // 101st log triggers single warning and discards the log
+    ctx.log(StepContext.Level.INFO, 'Entry 100');
+    crumbs = ctx.getBreadcrumbs();
+    System.assertEquals(101, crumbs.size(), 'Should have appended a warning and discarded entry 100');
+    System.assertEquals(StepContext.Level.WARN, crumbs[100].level);
+    System.assertEquals('[TRUNCATED] Log limit of 100 entries reached. Subsequent step logs are discarded.', crumbs[100].message);
+
+    // 102nd log is discarded, count remains 101, no second warning
+    ctx.log(StepContext.Level.INFO, 'Entry 101');
+    crumbs = ctx.getBreadcrumbs();
+    System.assertEquals(101, crumbs.size(), 'Should not append more logs or warnings');
+  }
+
+  @isTest
+  static void testLogNullOrEmptyMessage() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(
+      dummyInstanceId,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null
+    );
+
+    ctx.log(StepContext.Level.INFO, null);
+    ctx.log(StepContext.Level.WARN, '');
+    ctx.log(StepContext.Level.ERROR, null, new Map<String, Object>{'x' => 1});
+
+    List<StepContext.Breadcrumb> crumbs = ctx.getBreadcrumbs();
+    System.assertEquals(3, crumbs.size());
+
+    System.assertEquals(null, crumbs[0].message);
+    System.assertEquals('', crumbs[1].message);
+    System.assertEquals('null | Context: {"x":1}', crumbs[2].message);
+  }
 }

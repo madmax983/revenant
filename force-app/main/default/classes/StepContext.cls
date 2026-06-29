@@ -1,4 +1,78 @@
 public inherited sharing class StepContext {
+  /**
+   * Logging severity levels for step breadcrumbs.
+   */
+  public enum Level { INFO, WARN, ERROR }
+
+  /**
+   * Represents an individual step log entry.
+   */
+  public class Breadcrumb {
+    /** The timestamp when this breadcrumb was created. */
+    public Datetime timestamp { get; private set; }
+    /** The severity level of this breadcrumb. */
+    public Level level { get; private set; }
+    /** The formatted log message (with serialized context, if any, and truncation applied). */
+    public String message { get; private set; }
+
+    public Breadcrumb(Level level, String message) {
+      this.timestamp = Datetime.now();
+      this.level = level;
+      this.message = message;
+    }
+  }
+
+  private List<Breadcrumb> breadcrumbs = new List<Breadcrumb>();
+
+  /**
+   * Logs a message at the specified level without any context.
+   *
+   * @param level The severity level (INFO, WARN, or ERROR).
+   * @param message The log message.
+   */
+  public void log(Level level, String message) {
+    this.log(level, message, null);
+  }
+
+  /**
+   * Logs a message at the specified level with a context map, which will be serialized as JSON.
+   * Enforces log volume caps (up to 100 entries, with a truncation warning on the 101st log)
+   * and character length limits (entries are truncated to exactly 4000 characters).
+   *
+   * @param level The severity level (INFO, WARN, or ERROR).
+   * @param message The log message.
+   * @param logContext Context data as key-value pairs to be appended to the log.
+   */
+  public void log(Level level, String message, Map<String, Object> logContext) {
+    if (this.breadcrumbs.size() > 100) {
+      return;
+    }
+    if (this.breadcrumbs.size() == 100) {
+      this.breadcrumbs.add(new Breadcrumb(Level.WARN, '[TRUNCATED] Log limit of 100 entries reached. Subsequent step logs are discarded.'));
+      return;
+    }
+
+    String formattedMessage = message;
+    if (logContext != null) {
+      formattedMessage = (message != null ? message : 'null') + ' | Context: ' + JSON.serialize(logContext);
+    }
+
+    if (formattedMessage != null && formattedMessage.length() > 4000) {
+      formattedMessage = formattedMessage.substring(0, 3984) + '... [TRUNCATED]';
+    }
+
+    this.breadcrumbs.add(new Breadcrumb(level, formattedMessage));
+  }
+
+  /**
+   * Retrieves the buffered log entries (breadcrumbs) for this step execution.
+   *
+   * @return The list of Breadcrumb logs.
+   */
+  public List<Breadcrumb> getBreadcrumbs() {
+    return this.breadcrumbs;
+  }
+
   public Id workflowInstanceId { get; private set; }
   public String workflowName { get; private set; }
   public String stepName { get; private set; }
