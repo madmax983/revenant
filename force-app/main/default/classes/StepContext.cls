@@ -17,7 +17,7 @@ public inherited sharing class StepContext {
 
     public Breadcrumb(Level level, String message) {
       this.timestamp = Datetime.now();
-      this.level = level;
+      this.level = (level != null) ? level : StepContext.Level.INFO;
       this.message = message;
     }
   }

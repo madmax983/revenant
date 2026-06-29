@@ -11075,10 +11075,21 @@ public inherited sharing class WorkflowEngine {
     Integer dynamicRowReserve = 0;
     if (result != null) {
       if (result.childRequests != null) {
-        dynamicRowReserve += 3 * result.childRequests.size();
+        for (StepResult.ChildRequest req : result.childRequests) {
+          dynamicRowReserve += 3;
+          if (String.isNotBlank(req.inputJson) && req.inputJson.length() > 100000) {
+            dynamicRowReserve += 2; // ContentVersion + ContentDocumentLink
+          }
+        }
       }
       if (result.parallelStepNames != null) {
-        dynamicRowReserve += result.parallelStepNames.size();
+        for (String ps : result.parallelStepNames) {
+          dynamicRowReserve += 1;
+          String inputPayload = result.parallelInputJson != null ? result.parallelInputJson : stepExec.Output__c;
+          if (String.isNotBlank(inputPayload) && inputPayload.length() > 100000) {
+            dynamicRowReserve += 2; // ContentVersion + ContentDocumentLink
+          }
+        }
       }
       if (result.outboundEvents != null) {
         dynamicRowReserve += result.outboundEvents.size();
@@ -11116,7 +11127,7 @@ public inherited sharing class WorkflowEngine {
         Workflow_Name__c = instance.Workflow_Name__c,
         Correlation_Key__c = stepExec.Id,
         Log_Type__c = StepContext.LOG_TYPE_BREADCRUMB,
-        Level__c = b.level.name(),
+        Level__c = (b.level != null) ? b.level.name() : 'INFO',
         Message__c = b.message,
         Fire_Time__c = b.timestamp
       ));
