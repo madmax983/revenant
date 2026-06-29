@@ -10117,6 +10117,115 @@ public inherited sharing class WorkflowEngine {
       );
     }
 
+    // 6. Auto-reclaim orphaned instances. Sweeps for instances stuck in a self-driving status
+    // (Pending/Running/Compensating/Cancelling) whose referenced async job is no longer alive,
+    // and re-enqueues them at their last durable step.
+    try {
+      if (reclaimThresholdMinutes != null && reclaimThresholdMinutes > 0 && !WorkflowPauseGate.wildcardPaused()) {
+        Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
+        List<Workflow_Instance__c> candidates = [
+          SELECT Id, Name, Status__c, Current_Step__c, Compensation_Stack__c, Async_Job_Id__c, Workflow_Name__c, Correlation_Key__c
+          FROM Workflow_Instance__c
+          WHERE Status__c IN ('Pending', 'Running', 'Compensating', 'Cancelling')
+            AND LastModifiedDate <= :now.addMinutes(-reclaimThresholdMinutes)
+            AND Workflow_Name__c NOT IN :pausedDefNames
+          WITH SYSTEM_MODE
+          ORDER BY LastModifiedDate ASC, Id ASC
+          LIMIT 50
+        ];
+
+        if (!candidates.isEmpty()) {
+          Set<Id> jobIds = new Set<Id>();
+          for (Workflow_Instance__c inst : candidates) {
+            if (String.isNotBlank(inst.Async_Job_Id__c)) {
+              String jobIdStr = inst.Async_Job_Id__c;
+              if ((jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
+                  (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))) {
+                try {
+                  jobIds.add((Id) jobIdStr);
+                } catch (Exception e) {}
+              }
+            }
+          }
+
+          Set<Id> activeCronIds = new Set<Id>();
+          Set<Id> activeAsyncIds = new Set<Id>();
+          
+          Set<Id> cronIds = new Set<Id>();
+          Set<Id> asyncIds = new Set<Id>();
+          for (Id jobId : jobIds) {
+            if (jobId.getSobjectType() == CronTrigger.SObjectType) {
+              cronIds.add(jobId);
+            } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
+              asyncIds.add(jobId);
+            }
+          }
+
+          if (!cronIds.isEmpty()) {
+            for (CronTrigger ct : [
+              SELECT Id FROM CronTrigger
+              WHERE Id IN :cronIds AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING')
+              WITH SYSTEM_MODE
+            ]) {
+              activeCronIds.add(ct.Id);
+            }
+          }
+
+          if (!asyncIds.isEmpty()) {
+            for (AsyncApexJob aaj : [
+              SELECT Id FROM AsyncApexJob
+              WHERE Id IN :asyncIds AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing')
+              WITH SYSTEM_MODE
+            ]) {
+              activeAsyncIds.add(aaj.Id);
+            }
+          }
+
+          List<Workflow_Instance__c> orphanedInstances = new List<Workflow_Instance__c>();
+          for (Workflow_Instance__c inst : candidates) {
+            Boolean isOrphaned = false;
+            if (String.isBlank(inst.Async_Job_Id__c)) {
+              isOrphaned = true;
+            } else {
+              String jobIdStr = inst.Async_Job_Id__c;
+              if ((jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
+                  (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))) {
+                try {
+                  Id jobId = (Id) jobIdStr;
+                  Boolean jobIsAlive = false;
+                  if (jobId.getSobjectType() == CronTrigger.SObjectType && activeCronIds.contains(jobId)) {
+                    jobIsAlive = true;
+                  } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType && activeAsyncIds.contains(jobId)) {
+                    jobIsAlive = true;
+                  }
+                  if (!jobIsAlive) {
+                    isOrphaned = true;
+                  }
+                } catch (Exception ex) {
+                  isOrphaned = true;
+                }
+              } else {
+                isOrphaned = true;
+              }
+            }
+
+            if (isOrphaned) {
+              orphanedInstances.add(inst);
+            }
+          }
+
+          if (!orphanedInstances.isEmpty()) {
+            reclaimOrphanedInstances(orphanedInstances);
+          }
+        }
+      }
+    } catch (Exception reclaimEx) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'WorkflowEngine: auto-reclaim sweep failed: ' + reclaimEx.getMessage()
+      );
+    }
+
     // Run proactive stall detection and alerting hook
     try {
       WorkflowAlertManager.detectAndAlertStalls();
@@ -11196,5 +11305,160 @@ public inherited sharing class WorkflowEngine {
       ));
     }
     insert as system logsToInsert;
+  }
+
+  private static void reclaimOrphanedInstances(List<Workflow_Instance__c> orphanedInstances) {
+    Set<Id> instanceIds = new Set<Id>();
+    Set<String> allTargetStepNames = new Set<String>();
+    Map<Id, List<String>> targetStepsByInstanceId = new Map<Id, List<String>>();
+
+    for (Workflow_Instance__c inst : orphanedInstances) {
+      instanceIds.add(inst.Id);
+      Boolean hasCompensations = false;
+      List<String> stack = new List<String>();
+      if (String.isNotBlank(inst.Compensation_Stack__c)) {
+        try {
+          stack = (List<String>) JSON.deserialize(
+            inst.Compensation_Stack__c,
+            List<String>.class
+          );
+          hasCompensations = !stack.isEmpty();
+        } catch (Exception ex) {}
+      }
+
+      List<String> targetStepNames = new List<String>();
+      if (hasCompensations) {
+        targetStepNames.add(stack[stack.size() - 1] + '_Compensate');
+      } else if (String.isNotBlank(inst.Current_Step__c)) {
+        if (inst.Current_Step__c.contains(',')) {
+          for (String pStep : inst.Current_Step__c.split(',')) {
+            targetStepNames.add(pStep.trim());
+          }
+        } else {
+          targetStepNames.add(inst.Current_Step__c);
+        }
+      }
+
+      if (String.isBlank(inst.Current_Step__c) && !hasCompensations) {
+        Type wflowType = Type.forName(inst.Workflow_Name__c);
+        if (wflowType != null) {
+          try {
+            Object defObj = wflowType.newInstance();
+            if (defObj instanceof WorkflowDefinition) {
+              inst.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
+              targetStepNames.add(inst.Current_Step__c);
+            }
+          } catch (Exception ex) {}
+        }
+      }
+
+      targetStepsByInstanceId.put(inst.Id, targetStepNames);
+      allTargetStepNames.addAll(targetStepNames);
+    }
+
+    // Query step executions to reset
+    Map<String, Workflow_Step_Execution__c> latestStepByName = new Map<String, Workflow_Step_Execution__c>();
+    if (!allTargetStepNames.isEmpty()) {
+      for (Workflow_Step_Execution__c se : [
+        SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Retry_Count__c, Error_Details__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c IN :instanceIds
+          AND Step_Name__c IN :allTargetStepNames
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC, Id DESC
+      ]) {
+        String key = se.Workflow_Instance__c + ':' + se.Step_Name__c;
+        if (!latestStepByName.containsKey(key)) {
+          latestStepByName.put(key, se);
+        }
+      }
+    }
+
+    List<Workflow_Step_Execution__c> stepsToReset = new List<Workflow_Step_Execution__c>();
+    for (Workflow_Instance__c inst : orphanedInstances) {
+      List<String> targetStepNames = targetStepsByInstanceId.get(inst.Id);
+      for (String targetStepName : targetStepNames) {
+        String key = inst.Id + ':' + targetStepName;
+        Workflow_Step_Execution__c stepExec = latestStepByName.get(key);
+        if (
+          stepExec != null &&
+          stepExec.Status__c != 'Completed' &&
+          stepExec.Status__c != 'OperatorSkipped'
+        ) {
+          stepExec.Status__c = 'Pending';
+          stepExec.Retry_Count__c = 0;
+          stepExec.Error_Details__c = null;
+          stepsToReset.add(stepExec);
+        }
+      }
+    }
+
+    if (!stepsToReset.isEmpty()) {
+      update as system stepsToReset;
+    }
+
+    // Write audit logs
+    List<Workflow_Log__c> auditLogs = new List<Workflow_Log__c>();
+    for (Workflow_Instance__c inst : orphanedInstances) {
+      String stepDetail = String.isNotBlank(inst.Current_Step__c) ? inst.Current_Step__c : '(initial step)';
+      auditLogs.add(new Workflow_Log__c(
+        Workflow_Instance__c = inst.Id,
+        Workflow_Name__c = inst.Workflow_Name__c,
+        Correlation_Key__c = inst.Correlation_Key__c,
+        Log_Type__c = 'OperatorIntervention',
+        Message__c = 'Auto-reclaimed orphaned instance from step: ' + stepDetail,
+        Outcome__c = 'Success',
+        Level__c = 'INFO',
+        Fire_Time__c = DateTime.now()
+      ));
+      inst.Async_Job_Id__c = null;
+    }
+    update as system orphanedInstances;
+    insert as system auditLogs;
+
+    // Enqueue fresh orchestrators
+    List<Id> singleHopInstanceIds = new List<Id>();
+    for (Workflow_Instance__c inst : orphanedInstances) {
+      List<String> targetStepNames = targetStepsByInstanceId.get(inst.Id);
+      Boolean hasCompensations = false;
+      if (String.isNotBlank(inst.Compensation_Stack__c)) {
+        try {
+          List<String> stack = (List<String>) JSON.deserialize(
+            inst.Compensation_Stack__c,
+            List<String>.class
+          );
+          hasCompensations = !stack.isEmpty();
+        } catch (Exception ex) {}
+      }
+
+      if (
+        hasCompensations ||
+        String.isBlank(inst.Current_Step__c) ||
+        !inst.Current_Step__c.contains(',')
+      ) {
+        singleHopInstanceIds.add(inst.Id);
+      } else {
+        for (String targetStepName : targetStepNames) {
+          String key = inst.Id + ':' + targetStepName;
+          Workflow_Step_Execution__c stepExec = latestStepByName.get(key);
+          if (
+            stepExec == null ||
+            (stepExec.Status__c != 'Completed' &&
+            stepExec.Status__c != 'OperatorSkipped')
+          ) {
+            if (!(Test.isRunningTest() && disableQueueableInTest)) {
+              enqueueOrchestrator(inst.Id, targetStepName);
+            }
+          }
+        }
+      }
+    }
+
+    if (!singleHopInstanceIds.isEmpty()) {
+      if (!(Test.isRunningTest() && disableQueueableInTest)) {
+        enqueueOrchestrators(singleHopInstanceIds);
+      }
+    }
   }
 }
