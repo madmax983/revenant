@@ -2079,4 +2079,29 @@ public class StepContextTest {
     System.assertEquals('', crumbs[1].message);
     System.assertEquals('null | Context: {"x":1}', crumbs[2].message);
   }
+
+  @isTest
+  static void testLogContextSerializationSafety() {
+    Id dummyInstanceId = '00D000000000001EAA';
+    StepContext ctx = new StepContext(dummyInstanceId, 'W', 'S', null, null, null, null);
+
+    // Test circular reference catch
+    Map<String, Object> circularMap = new Map<String, Object>();
+    circularMap.put('self', circularMap);
+    ctx.log(StepContext.Level.INFO, 'circular', circularMap);
+
+    List<StepContext.Breadcrumb> crumbs = ctx.getBreadcrumbs();
+    System.assertEquals(1, crumbs.size());
+    System.assert(crumbs[0].message.contains('[TRUNCATED] JSON serialization failed'), 'Error mismatch: ' + crumbs[0].message);
+
+    // Test oversized value pre-check
+    ctx = new StepContext(dummyInstanceId, 'W', 'S', null, null, null, null);
+    Map<String, Object> oversizedMap = new Map<String, Object>{
+      'payload' => 'x'.repeat(4001)
+    };
+    ctx.log(StepContext.Level.INFO, 'oversized', oversizedMap);
+    crumbs = ctx.getBreadcrumbs();
+    System.assertEquals(1, crumbs.size());
+    System.assert(crumbs[0].message.contains('[TRUNCATED] JSON serialization bypassed due to oversized string value'), 'Message mismatch: ' + crumbs[0].message);
+  }
 }

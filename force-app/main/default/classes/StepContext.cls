@@ -63,7 +63,26 @@ public inherited sharing class StepContext {
       } else if (Limits.getHeapSize() > Limits.getLimitHeapSize() * 0.85) {
         formattedMessage = (message != null ? message : 'null') + ' | Context: [TRUNCATED] JSON serialization bypassed due to heap pressure.';
       } else {
-        formattedMessage = (message != null ? message : 'null') + ' | Context: ' + JSON.serialize(logContext);
+        Boolean hasHugeValue = false;
+        for (Object val : logContext.values()) {
+          if (val instanceof String && ((String) val).length() > MAX_MESSAGE_LENGTH) {
+            hasHugeValue = true;
+            break;
+          }
+        }
+        if (hasHugeValue) {
+          formattedMessage = (message != null ? message : 'null') + ' | Context: [TRUNCATED] JSON serialization bypassed due to oversized string value.';
+        } else {
+          try {
+            String serializedContext = JSON.serialize(logContext);
+            if (serializedContext.length() > MAX_MESSAGE_LENGTH) {
+              serializedContext = serializedContext.substring(0, MAX_MESSAGE_LENGTH) + '... [TRUNCATED]';
+            }
+            formattedMessage = (message != null ? message : 'null') + ' | Context: ' + serializedContext;
+          } catch (Exception ex) {
+            formattedMessage = (message != null ? message : 'null') + ' | Context: [TRUNCATED] JSON serialization failed: ' + ex.getMessage();
+          }
+        }
       }
     }
 
