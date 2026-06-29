@@ -1297,12 +1297,14 @@ public inherited sharing class WorkflowDashboardController {
         Level__c,
         Message__c,
         Correlation_Key__c,
-        Fire_Time__c
+        Fire_Time__c,
+        CreatedDate
       FROM Workflow_Log__c
       WHERE Workflow_Instance__c = :instanceId
-        AND Log_Type__c = 'StepBreadcrumb'
+        AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
       WITH SYSTEM_MODE
       ORDER BY Fire_Time__c ASC, CreatedDate ASC
+      LIMIT 1000
     ];
 
     return new Map<String, Object>{

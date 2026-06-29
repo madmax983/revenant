@@ -11071,7 +11071,7 @@ public inherited sharing class WorkflowEngine {
         Workflow_Instance__c = instance.Id,
         Workflow_Name__c = instance.Workflow_Name__c,
         Correlation_Key__c = stepExec.Step_Name__c,
-        Log_Type__c = 'StepBreadcrumb',
+        Log_Type__c = StepContext.LOG_TYPE_BREADCRUMB,
         Level__c = b.level.name(),
         Message__c = b.message,
         Fire_Time__c = b.timestamp

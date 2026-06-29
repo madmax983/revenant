@@ -51,9 +51,6 @@
 .border-left-purple {
   border-left: 4px solid hsl(270, 75%, 60%);
 }
-.border-left-indigo {
-  border-left: 4px solid hsl(240, 75%, 60%);
-}
 
 .text-orange {
   color: hsl(30, 95%, 45%);

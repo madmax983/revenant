@@ -2009,7 +2009,7 @@ public class StepContextTest {
     crumbs = ctx.getBreadcrumbs();
     System.assertEquals(1, crumbs.size());
     System.assertEquals(4000, crumbs[0].message.length(), 'Should be truncated to 4000 characters total');
-    System.assertEquals('b'.repeat(3984) + '... [TRUNCATED]', crumbs[0].message);
+    System.assertEquals('b'.repeat(3985) + '... [TRUNCATED]', crumbs[0].message);
 
     // Test with context
     ctx = new StepContext(dummyInstanceId, 'W', 'S', null, null, null, null);
@@ -2020,7 +2020,7 @@ public class StepContextTest {
     crumbs = ctx.getBreadcrumbs();
     System.assertEquals(1, crumbs.size());
     String expectedBase = msg3980 + ' | Context: {"k":"v"}';
-    System.assertEquals(expectedBase.substring(0, 3984) + '... [TRUNCATED]', crumbs[0].message);
+    System.assertEquals(expectedBase.substring(0, 3985) + '... [TRUNCATED]', crumbs[0].message);
   }
 
   @isTest

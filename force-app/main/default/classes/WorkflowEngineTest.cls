@@ -7124,19 +7124,19 @@ public class WorkflowEngineTest {
     List<Workflow_Log__c> logs = [
       SELECT Log_Type__c, Level__c, Message__c, Correlation_Key__c, Workflow_Instance__c, Workflow_Name__c
       FROM Workflow_Log__c
-      WHERE Workflow_Instance__c = :instanceId AND Log_Type__c = 'StepBreadcrumb'
+      WHERE Workflow_Instance__c = :instanceId AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
       ORDER BY Fire_Time__c ASC, Id ASC
     ];
 
     System.assertEquals(2, logs.size(), 'Should have saved 2 breadcrumbs');
     
-    System.assertEquals('StepBreadcrumb', logs[0].Log_Type__c);
+    System.assertEquals(StepContext.LOG_TYPE_BREADCRUMB, logs[0].Log_Type__c);
     System.assertEquals('INFO', logs[0].Level__c);
     System.assert(logs[0].Message__c.contains('Step 1 execution started'), 'Message mismatch: ' + logs[0].Message__c);
     System.assert(logs[0].Message__c.contains('"status":"init"'), 'Message mismatch: ' + logs[0].Message__c);
     System.assertEquals('WorkflowEngineTest.BreadcrumbStep', logs[0].Correlation_Key__c);
 
-    System.assertEquals('StepBreadcrumb', logs[1].Log_Type__c);
+    System.assertEquals(StepContext.LOG_TYPE_BREADCRUMB, logs[1].Log_Type__c);
     System.assertEquals('WARN', logs[1].Level__c);
     System.assertEquals('Step 1 warning encountered', logs[1].Message__c);
     System.assertEquals('WorkflowEngineTest.BreadcrumbStep', logs[1].Correlation_Key__c);
@@ -7163,7 +7163,7 @@ public class WorkflowEngineTest {
     List<Workflow_Log__c> logs = [
       SELECT Log_Type__c, Level__c, Message__c
       FROM Workflow_Log__c
-      WHERE Workflow_Instance__c = :instanceId AND Log_Type__c = 'StepBreadcrumb'
+      WHERE Workflow_Instance__c = :instanceId AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
     ];
     System.assertEquals(0, logs.size(), 'Should not have saved any breadcrumbs because of rollback');
   }
@@ -7189,7 +7189,7 @@ public class WorkflowEngineTest {
     List<Workflow_Log__c> logs = [
       SELECT Log_Type__c, Level__c, Message__c, Correlation_Key__c
       FROM Workflow_Log__c
-      WHERE Workflow_Instance__c = :instanceId AND Log_Type__c = 'StepBreadcrumb'
+      WHERE Workflow_Instance__c = :instanceId AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
       ORDER BY CreatedDate ASC, Id ASC
     ];
 

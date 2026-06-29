@@ -3740,7 +3740,7 @@ public class WorkflowDashboardControllerTest {
       new Workflow_Log__c(
         Workflow_Instance__c = inst.Id,
         Workflow_Name__c = inst.Workflow_Name__c,
-        Log_Type__c = 'StepBreadcrumb',
+        Log_Type__c = StepContext.LOG_TYPE_BREADCRUMB,
         Level__c = 'INFO',
         Message__c = 'Second Breadcrumb',
         Fire_Time__c = now.addSeconds(10)
@@ -3748,7 +3748,7 @@ public class WorkflowDashboardControllerTest {
       new Workflow_Log__c(
         Workflow_Instance__c = inst.Id,
         Workflow_Name__c = inst.Workflow_Name__c,
-        Log_Type__c = 'StepBreadcrumb',
+        Log_Type__c = StepContext.LOG_TYPE_BREADCRUMB,
         Level__c = 'INFO',
         Message__c = 'First Breadcrumb',
         Fire_Time__c = now

@@ -911,6 +911,15 @@ export default class WorkflowDashboard extends LightningElement {
         const showDetailsMap = new Map();
         this.steps.forEach((s) => showDetailsMap.set(s.Id, s.showDetails));
 
+        const breadcrumbsByStep = {};
+        for (const b of breadcrumbs) {
+          const key = b.Correlation_Key__c;
+          if (!breadcrumbsByStep[key]) {
+            breadcrumbsByStep[key] = [];
+          }
+          breadcrumbsByStep[key].push(b);
+        }
+
         this.steps = result.steps.map((step) => {
           let approvalInfo = null;
           let childWorkflowLink = null;
@@ -962,8 +971,7 @@ export default class WorkflowDashboard extends LightningElement {
             hasLimitPressure = cpuPct >= 80 || soqlPct >= 80 || heapPct >= 80;
           }
 
-          const stepBreadcrumbs = breadcrumbs
-            .filter((b) => b.Correlation_Key__c === step.Step_Name__c)
+          const stepBreadcrumbs = (breadcrumbsByStep[step.Step_Name__c] || [])
             .map((b) => {
               let badgeClass = "terminal-badge";
               const lvl = (b.Level__c || "").toUpperCase();

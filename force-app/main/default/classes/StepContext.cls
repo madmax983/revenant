@@ -22,6 +22,10 @@ public inherited sharing class StepContext {
     }
   }
 
+  public static final Integer MAX_LOG_ENTRIES = 100;
+  public static final Integer MAX_MESSAGE_LENGTH = 4000;
+  public static final String LOG_TYPE_BREADCRUMB = 'StepBreadcrumb';
+
   private List<Breadcrumb> breadcrumbs = new List<Breadcrumb>();
 
   /**
@@ -44,21 +48,27 @@ public inherited sharing class StepContext {
    * @param logContext Context data as key-value pairs to be appended to the log.
    */
   public void log(Level level, String message, Map<String, Object> logContext) {
-    if (this.breadcrumbs.size() > 100) {
+    if (this.breadcrumbs.size() > MAX_LOG_ENTRIES) {
       return;
     }
-    if (this.breadcrumbs.size() == 100) {
-      this.breadcrumbs.add(new Breadcrumb(StepContext.Level.WARN, '[TRUNCATED] Log limit of 100 entries reached. Subsequent step logs are discarded.'));
+    if (this.breadcrumbs.size() == MAX_LOG_ENTRIES) {
+      this.breadcrumbs.add(new Breadcrumb(StepContext.Level.WARN, '[TRUNCATED] Log limit of ' + MAX_LOG_ENTRIES + ' entries reached. Subsequent step logs are discarded.'));
       return;
     }
 
     String formattedMessage = message;
-    if (logContext != null) {
-      formattedMessage = (message != null ? message : 'null') + ' | Context: ' + JSON.serialize(logContext);
+    if (logContext != null && !logContext.isEmpty()) {
+      if (logContext.size() > 50) {
+        formattedMessage = (message != null ? message : 'null') + ' | Context: [TRUNCATED] Map size limit of 50 entries exceeded.';
+      } else if (Limits.getHeapSize() > Limits.getLimitHeapSize() * 0.85) {
+        formattedMessage = (message != null ? message : 'null') + ' | Context: [TRUNCATED] JSON serialization bypassed due to heap pressure.';
+      } else {
+        formattedMessage = (message != null ? message : 'null') + ' | Context: ' + JSON.serialize(logContext);
+      }
     }
 
-    if (formattedMessage != null && formattedMessage.length() > 4000) {
-      formattedMessage = formattedMessage.substring(0, 3984) + '... [TRUNCATED]';
+    if (formattedMessage != null && formattedMessage.length() > MAX_MESSAGE_LENGTH) {
+      formattedMessage = formattedMessage.substring(0, MAX_MESSAGE_LENGTH - 15) + '... [TRUNCATED]';
     }
 
     this.breadcrumbs.add(new Breadcrumb(level, formattedMessage));
