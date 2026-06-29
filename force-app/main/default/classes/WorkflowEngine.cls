@@ -3592,6 +3592,8 @@ public inherited sharing class WorkflowEngine {
   private static Integer BREADCRUMB_DML_STATEMENT_RESERVE = 10;
   @TestVisible
   private static Integer BREADCRUMB_DML_ROW_RESERVE = 20;
+  @TestVisible
+  private static Integer BREADCRUMB_SOQL_RESERVE = 5;
 
   /**
    * Lazily supplies the pending (unconsumed) signals targeting an instance so a
@@ -11069,6 +11071,19 @@ public inherited sharing class WorkflowEngine {
     }
     List<StepContext.Breadcrumb> crumbs = context.getBreadcrumbs();
     if (crumbs == null || crumbs.isEmpty()) {
+      return;
+    }
+
+    // Keep breadcrumbs from exhausting checkpoint SOQL (best-effort observability log drop)
+    if (Limits.getQueries() + BREADCRUMB_SOQL_RESERVE > Limits.getLimitQueries()) {
+      System.debug(
+        LoggingLevel.WARN,
+        'Skipping step breadcrumbs persist: SOQL query budget exhausted (queries=' +
+          Limits.getQueries() +
+          '/' +
+          Limits.getLimitQueries() +
+          ').'
+      );
       return;
     }
 
