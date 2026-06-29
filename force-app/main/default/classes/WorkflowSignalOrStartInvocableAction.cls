@@ -1,5 +1,5 @@
-public inherited sharing class WorkflowStartInvocableAction {
-  public class StartRequest {
+public inherited sharing class WorkflowSignalOrStartInvocableAction {
+  public class SignalOrStartRequest {
     @InvocableVariable(label='Workflow Name' required=true)
     public String workflowName;
 
@@ -11,31 +11,40 @@ public inherited sharing class WorkflowStartInvocableAction {
 
     @InvocableVariable(label='Attributes JSON')
     public String attributesJson;
+
+    @InvocableVariable(label='Signal Name' required=true)
+    public String signalName;
+
+    @InvocableVariable(label='Payload JSON')
+    public String payloadJson;
+
+    @InvocableVariable(label='Idempotency Key')
+    public String idempotencyKey;
   }
 
-  public class StartResult {
+  public class SignalOrStartResult {
     @InvocableVariable(label='Workflow Instance ID')
     public Id workflowInstanceId;
 
     @InvocableVariable(
       label='Is New'
-      description='True if a new instance was started; false if an existing instance was returned for a deduplicated (already-seen) correlation key.'
+      description='True if a new instance was started; false if an existing instance was resolved.'
     )
     public Boolean isNew;
   }
 
   @InvocableMethod(
-    label='Start Workflow'
+    label='Signal or Start Workflow'
     category='Revenant Workflows'
-    description='Initiates a Revenant durable workflow instance'
+    description='Idempotently starts a workflow and/or signals it in one transaction'
   )
-  public static List<StartResult> startWorkflow(List<StartRequest> requests) {
+  public static List<SignalOrStartResult> signalOrStartWorkflow(List<SignalOrStartRequest> requests) {
     if (requests == null || requests.isEmpty()) {
-      return new List<StartResult>();
+      return new List<SignalOrStartResult>();
     }
 
-    List<WorkflowEngine.StartRequest> engineRequests = new List<WorkflowEngine.StartRequest>();
-    for (StartRequest req : requests) {
+    List<WorkflowEngine.SignalOrStartRequest> engineRequests = new List<WorkflowEngine.SignalOrStartRequest>();
+    for (SignalOrStartRequest req : requests) {
       Object input = null;
       if (String.isNotBlank(req.inputJson)) {
         try {
@@ -67,6 +76,7 @@ public inherited sharing class WorkflowStartInvocableAction {
           );
         }
       }
+
       WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
         req.workflowName,
         req.correlationKey,
@@ -74,16 +84,24 @@ public inherited sharing class WorkflowStartInvocableAction {
         attributes
       );
       startReq.inputJson = req.inputJson;
-      engineRequests.add(startReq);
+
+      WorkflowEngine.SignalOrStartRequest engineReq = new WorkflowEngine.SignalOrStartRequest(
+        startReq,
+        req.signalName,
+        req.payloadJson,
+        req.idempotencyKey
+      );
+
+      engineRequests.add(engineReq);
     }
 
-    List<WorkflowEngine.StartResult> engineResults = WorkflowEngine.startOrGet(
+    List<WorkflowEngine.StartResult> engineResults = WorkflowEngine.signalOrStart(
       engineRequests
     );
 
-    List<StartResult> results = new List<StartResult>();
+    List<SignalOrStartResult> results = new List<SignalOrStartResult>();
     for (WorkflowEngine.StartResult engineResult : engineResults) {
-      StartResult res = new StartResult();
+      SignalOrStartResult res = new SignalOrStartResult();
       res.workflowInstanceId = engineResult == null
         ? null
         : engineResult.instanceId;

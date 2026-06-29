@@ -6,6 +6,7 @@ public inherited sharing class WorkflowEngine {
   // Operator toggle (Revenant_Config__mdt.Publish_Lifecycle_Events__c): when true
   // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
   public static Boolean publishLifecycleEvents = true;
+  private static Map<String, Boolean> validatedWorkflows = new Map<String, Boolean>();
 
   // Failure Category picklist API values
   public static final String CAT_STEP_EXCEPTION = 'STEP_EXCEPTION';
@@ -1224,19 +1225,23 @@ public inherited sharing class WorkflowEngine {
     instance.Parent_Instance__c = req.parentInstanceId;
 
     if (String.isNotBlank(req.workflowName)) {
-      List<ApexTypeImplementor> impls = [
-        SELECT ClassName
-        FROM ApexTypeImplementor
-        WHERE
-          ClassName = :req.workflowName
-          AND InterfaceName IN ('WorkflowDefinition', 'VersionedWorkflow')
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (impls.isEmpty()) {
-        throw new WorkflowException(
-          'Unauthorized or invalid workflow definition: ' + req.workflowName
-        );
+      String wflowKey = req.workflowName.toLowerCase();
+      if (!validatedWorkflows.containsKey(wflowKey)) {
+        List<ApexTypeImplementor> impls = [
+          SELECT ClassName
+          FROM ApexTypeImplementor
+          WHERE
+            ClassName = :req.workflowName
+            AND InterfaceName IN ('WorkflowDefinition', 'VersionedWorkflow')
+          WITH SYSTEM_MODE
+          LIMIT 1
+        ];
+        if (impls.isEmpty()) {
+          throw new WorkflowException(
+            'Unauthorized or invalid workflow definition: ' + req.workflowName
+          );
+        }
+        validatedWorkflows.put(wflowKey, true);
       }
     }
 
@@ -1659,6 +1664,7 @@ public inherited sharing class WorkflowEngine {
     public String workflowName;
     public String correlationKey;
     public Object input;
+    public String inputJson;
     public Id parentInstanceId;
     public Map<String, String> attributes;
 
@@ -1767,6 +1773,35 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  public class SignalOrStartRequest {
+    public StartRequest start;
+    public String signalName;
+    public String payload;
+    public String idempotencyKey;
+
+    public SignalOrStartRequest(
+      StartRequest start,
+      String signalName,
+      String payload
+    ) {
+      this.start = start;
+      this.signalName = signalName;
+      this.payload = payload;
+    }
+
+    public SignalOrStartRequest(
+      StartRequest start,
+      String signalName,
+      String payload,
+      String idempotencyKey
+    ) {
+      this.start = start;
+      this.signalName = signalName;
+      this.payload = payload;
+      this.idempotencyKey = idempotencyKey;
+    }
+  }
+
   /**
    * Starts multiple durable workflow instances in a bulk-friendly transaction
    * (get-or-start). A duplicate correlation key resolves to the existing
@@ -1790,13 +1825,32 @@ public inherited sharing class WorkflowEngine {
       return results;
     }
 
-    // 1. Validate and gather correlation keys
+    // 1. Validate and gather correlation keys, and pre-validate workflow names in bulk
     Set<String> correlationKeys = new Set<String>();
+    Set<String> workflowNamesToQuery = new Set<String>();
     for (StartRequest req : requests) {
       validateCorrelationKey(req.correlationKey);
       validateAttributes(req.attributes);
       if (String.isNotBlank(req.correlationKey)) {
         correlationKeys.add(req.correlationKey);
+      }
+      if (String.isNotBlank(req.workflowName)) {
+        String wflowKey = req.workflowName.toLowerCase();
+        if (!validatedWorkflows.containsKey(wflowKey)) {
+          workflowNamesToQuery.add(req.workflowName);
+        }
+      }
+    }
+
+    if (!workflowNamesToQuery.isEmpty()) {
+      for (ApexTypeImplementor impl : [
+        SELECT ClassName
+        FROM ApexTypeImplementor
+        WHERE ClassName IN :workflowNamesToQuery
+          AND InterfaceName IN ('WorkflowDefinition', 'VersionedWorkflow')
+        WITH SYSTEM_MODE
+      ]) {
+        validatedWorkflows.put(impl.ClassName.toLowerCase(), true);
       }
     }
 
@@ -1971,7 +2025,7 @@ public inherited sharing class WorkflowEngine {
     for (Integer j = 0; j < insertedInstances.size(); j++) {
       StartRequest req = requests[insertedReqIndexes[j]];
       Workflow_Instance__c instance = insertedInstances[j];
-      String inputJson = (req.input != null) ? JSON.serialize(req.input) : null;
+      String inputJson = (req.inputJson != null) ? req.inputJson : ((req.input != null) ? JSON.serialize(req.input) : null);
       instance.Input__c = savePayloadIfNeeded(
         instance.Id,
         inputJson,
@@ -2086,6 +2140,237 @@ public inherited sharing class WorkflowEngine {
     }
 
     return results;
+  }
+
+  public static StartResult signalOrStart(
+    StartRequest start,
+    String signalName,
+    String payloadJson,
+    String idempotencyKey
+  ) {
+    SignalOrStartRequest req = new SignalOrStartRequest(
+      start,
+      signalName,
+      payloadJson,
+      idempotencyKey
+    );
+    List<StartResult> results = signalOrStart(new List<SignalOrStartRequest>{ req });
+    return results[0];
+  }
+
+  public static List<StartResult> signalOrStart(List<SignalOrStartRequest> requests) {
+    if (requests == null || requests.isEmpty()) {
+      return new List<StartResult>();
+    }
+
+    System.Savepoint sp = Database.setSavepoint();
+    Set<Id> activeInstIdsToWake = new Set<Id>();
+
+    try {
+      // 1. Gather all start requests and call startOrGet bulk
+      List<StartRequest> startReqs = new List<StartRequest>();
+      for (SignalOrStartRequest req : requests) {
+        if (req.start == null) {
+          throw new WorkflowException('StartRequest cannot be null in SignalOrStartRequest');
+        }
+        startReqs.add(req.start);
+      }
+
+      List<StartResult> startResults = startOrGet(startReqs);
+
+      // 2. Query details of existing instances (where isNew = false) to determine if they are active vs terminal
+      Set<Id> existingIds = new Set<Id>();
+      for (Integer i = 0; i < requests.size(); i++) {
+        StartResult res = startResults[i];
+        if (res != null && !res.isNew) {
+          existingIds.add(res.instanceId);
+        }
+      }
+
+      Map<Id, Workflow_Instance__c> existingInstances = new Map<Id, Workflow_Instance__c>();
+      if (!existingIds.isEmpty()) {
+        existingInstances = new Map<Id, Workflow_Instance__c>([
+          SELECT Id, Status__c, Current_Step__c, Concurrency_Parked__c, Concurrency_Slot_Held__c, Sleep_Until__c
+          FROM Workflow_Instance__c
+          WHERE Id IN :existingIds
+          WITH SYSTEM_MODE
+          FOR UPDATE
+        ]);
+      }
+
+      // 3. Prepare signal records to insert and identify active instances to wake
+      List<Workflow_Signal__c> signalsToInsert = new List<Workflow_Signal__c>();
+      List<Id> signalsInstIds = new List<Id>(); // Parallel list for identifying instance of each signal
+      Set<String> seenCompositeKeys = new Set<String>();
+
+      for (Integer i = 0; i < requests.size(); i++) {
+        SignalOrStartRequest req = requests[i];
+        StartResult res = startResults[i];
+        if (res == null) {
+          continue;
+        }
+
+        Id instanceId = res.instanceId;
+        Boolean isNew = res.isNew;
+
+        Boolean isTerminal = false;
+        Workflow_Instance__c existingInst = null;
+
+        if (!isNew) {
+          existingInst = existingInstances.get(instanceId);
+          if (existingInst != null) {
+            isTerminal = TERMINAL_GETSTATUS_STATUSES.contains(existingInst.Status__c);
+          }
+        }
+
+        if (isTerminal) {
+          // Discard/swallow signal for terminal instances (idempotent no-op)
+          continue;
+        }
+
+        // Build signal record
+        Workflow_Signal__c sig = new Workflow_Signal__c(
+          Workflow_Instance__c = instanceId,
+          Signal_Name__c = req.signalName,
+          Payload__c = req.payload,
+          Status__c = 'Received'
+        );
+
+        if (String.isNotBlank(req.idempotencyKey)) {
+          String compositeKey = deriveSignalDedupKey(instanceId, req.idempotencyKey);
+          if (seenCompositeKeys.contains(compositeKey)) {
+            // In-batch duplicate: skip insertion of this signal
+            continue;
+          }
+          seenCompositeKeys.add(compositeKey);
+          sig.Signal_Key__c = compositeKey;
+        }
+
+        signalsToInsert.add(sig);
+        signalsInstIds.add(instanceId);
+
+        // If it's an existing active instance, we may need to wake it.
+        // Brand-new instances are already enqueued to run by startOrGet, so we don't wake them.
+        if (!isNew && existingInst != null) {
+          // Check if wakeable
+          Boolean isWakeable =
+            existingInst.Status__c == 'Suspended' ||
+            existingInst.Status__c == 'Running' ||
+            existingInst.Status__c == 'Compensating' ||
+            existingInst.Status__c == 'Cancelling';
+
+          if (isWakeable) {
+            activeInstIdsToWake.add(instanceId);
+          }
+        }
+      }
+
+      // 4. Insert signals.
+      Set<Id> instancesWithFreshSignal = new Set<Id>();
+
+      if (!signalsToInsert.isEmpty()) {
+        // Insert signals using allOrNone=false so concurrent duplicates are swallowed as no-ops,
+        // but genuine errors are rolled back and thrown.
+        Database.SaveResult[] srs = Database.insert(
+          signalsToInsert,
+          false,
+          AccessLevel.SYSTEM_MODE
+        );
+
+        String genuineError = null;
+        for (Integer i = 0; i < srs.size(); i++) {
+          Database.SaveResult sr = srs[i];
+          if (sr.isSuccess()) {
+            instancesWithFreshSignal.add(signalsInstIds[i]);
+          } else {
+            Boolean isDup = false;
+            for (Database.Error err : sr.getErrors()) {
+              if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+                isDup = true;
+                break;
+              }
+            }
+            if (!isDup && genuineError == null) {
+              genuineError = sr.getErrors()[0].getMessage();
+            }
+          }
+        }
+
+        if (genuineError != null) {
+          Database.rollback(sp);
+          throw new WorkflowException('Failed to insert signal: ' + genuineError);
+        }
+      }
+
+      // 5. Wake active instances that received a fresh signal
+      List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+      List<Workflow_Instance__c> instancesToWake = new List<Workflow_Instance__c>();
+
+      for (Id instId : activeInstIdsToWake) {
+        // Only wake if a fresh signal actually landed (i.e. not a duplicate signal)
+        if (!instancesWithFreshSignal.contains(instId)) {
+          continue;
+        }
+
+        Workflow_Instance__c inst = existingInstances.get(instId);
+        if (inst == null) {
+          continue;
+        }
+
+        // If the instance is suspended, change status to Running and clear Sleep_Until__c
+        if (inst.Status__c == 'Suspended') {
+          // Skip if concurrency-parked and doesn't hold slot
+          if (inst.Concurrency_Parked__c == true && inst.Concurrency_Slot_Held__c != true) {
+            continue;
+          }
+          inst.Status__c = 'Running';
+          inst.Sleep_Until__c = null;
+          instancesToUpdate.add(inst);
+        }
+        instancesToWake.add(inst);
+      }
+
+      if (!instancesToUpdate.isEmpty()) {
+        update as system instancesToUpdate;
+      }
+
+      // Enqueue the woken instances exactly once
+      List<Id> instanceIdsToEnqueue = new List<Id>();
+      List<Workflow_Instance__c> parallelInstances = new List<Workflow_Instance__c>();
+
+      for (Workflow_Instance__c inst : instancesToWake) {
+        Boolean isCompensatingInst =
+          inst.Status__c == 'Compensating' ||
+          inst.Status__c == 'Cancelling';
+
+        if (
+          !isCompensatingInst &&
+          String.isNotBlank(inst.Current_Step__c) &&
+          inst.Current_Step__c.contains(',')
+        ) {
+          parallelInstances.add(inst);
+        } else {
+          if (!enqueuedInstanceIds.contains(inst.Id)) {
+            enqueuedInstanceIds.add(inst.Id);
+            instanceIdsToEnqueue.add(inst.Id);
+          }
+        }
+      }
+
+      if (!instanceIdsToEnqueue.isEmpty()) {
+        enqueueOrchestrators(instanceIdsToEnqueue);
+      }
+      if (!parallelInstances.isEmpty()) {
+        enqueueResumeBulk(parallelInstances);
+      }
+
+      return startResults;
+
+    } catch (Exception e) {
+      Database.rollback(sp);
+      clearEnqueueGuards(activeInstIdsToWake);
+      throw e;
+    }
   }
 
   /**
