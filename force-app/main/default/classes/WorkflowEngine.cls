@@ -2198,7 +2198,101 @@ public inherited sharing class WorkflowEngine {
         ]);
       }
 
-      // 3. Prepare signal records to insert and identify active instances to wake
+      // 3. Prepare keyed cancel claims and run cancellations
+      List<Workflow_Signal__c> cancelClaims = new List<Workflow_Signal__c>();
+      List<Id> cancelClaimInstIds = new List<Id>();
+      List<Boolean> cancelClaimRunComp = new List<Boolean>();
+      Set<String> seenCancelKeys = new Set<String>();
+      Set<Id> cancelledInstanceIds = new Set<Id>();
+
+      for (Integer i = 0; i < requests.size(); i++) {
+        SignalOrStartRequest req = requests[i];
+        StartResult res = startResults[i];
+        if (res == null) {
+          continue;
+        }
+
+        Id instanceId = res.instanceId;
+        Boolean isNew = res.isNew;
+
+        Boolean isCancel =
+          String.isNotBlank(req.signalName) &&
+          (req.signalName.equalsIgnoreCase('Cancel') ||
+          req.signalName.equalsIgnoreCase('CancelWorkflow'));
+
+        if (!isCancel) {
+          continue;
+        }
+
+        Boolean isTerminal = false;
+        if (!isNew) {
+          Workflow_Instance__c existingInst = existingInstances.get(instanceId);
+          if (existingInst != null) {
+            isTerminal = TERMINAL_GETSTATUS_STATUSES.contains(existingInst.Status__c);
+          }
+        }
+
+        if (isTerminal) {
+          continue; // Terminal instance: cancel is an idempotent no-op
+        }
+
+        Boolean runCompensations = parseRunCompensations(req.payload);
+
+        if (String.isNotBlank(req.idempotencyKey)) {
+          String claimKey = deriveSignalDedupKey(instanceId, req.idempotencyKey);
+          if (seenCancelKeys.contains(claimKey)) {
+            continue; // in-batch duplicate keyed cancel
+          }
+          seenCancelKeys.add(claimKey);
+          cancelClaims.add(
+            new Workflow_Signal__c(
+              Workflow_Instance__c = instanceId,
+              Signal_Name__c = req.signalName,
+              Status__c = 'Consumed',
+              Signal_Key__c = claimKey
+            )
+          );
+          cancelClaimInstIds.add(instanceId);
+          cancelClaimRunComp.add(runCompensations);
+        } else {
+          // Unkeyed cancel: execute immediately
+          cancel(instanceId, runCompensations);
+          cancelledInstanceIds.add(instanceId);
+        }
+      }
+
+      if (!cancelClaims.isEmpty()) {
+        Database.SaveResult[] claimResults = Database.insert(
+          cancelClaims,
+          false,
+          AccessLevel.SYSTEM_MODE
+        );
+        String claimError = null;
+        for (Integer i = 0; i < claimResults.size(); i++) {
+          Database.SaveResult sr = claimResults[i];
+          if (sr.isSuccess()) {
+            cancel(cancelClaimInstIds[i], cancelClaimRunComp[i]);
+            cancelledInstanceIds.add(cancelClaimInstIds[i]);
+          } else {
+            Boolean isDup = false;
+            for (Database.Error err : sr.getErrors()) {
+              if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+                isDup = true;
+                break;
+              }
+            }
+            if (!isDup && claimError == null) {
+              claimError = sr.getErrors()[0].getMessage();
+            }
+          }
+        }
+        if (claimError != null) {
+          Database.rollback(sp);
+          throw new WorkflowException('Failed to claim cancel: ' + claimError);
+        }
+      }
+
+      // 4. Prepare ordinary signal records to insert and identify active instances to wake
       List<Workflow_Signal__c> signalsToInsert = new List<Workflow_Signal__c>();
       List<Id> signalsInstIds = new List<Id>(); // Parallel list for identifying instance of each signal
       Set<String> seenCompositeKeys = new Set<String>();
@@ -2212,6 +2306,16 @@ public inherited sharing class WorkflowEngine {
 
         Id instanceId = res.instanceId;
         Boolean isNew = res.isNew;
+
+        Boolean isCancel =
+          String.isNotBlank(req.signalName) &&
+          (req.signalName.equalsIgnoreCase('Cancel') ||
+          req.signalName.equalsIgnoreCase('CancelWorkflow'));
+
+        // Skip cancellation signals (already handled above) or instances that were cancelled in this batch
+        if (isCancel || cancelledInstanceIds.contains(instanceId)) {
+          continue;
+        }
 
         Boolean isTerminal = false;
         Workflow_Instance__c existingInst = null;
@@ -2265,7 +2369,7 @@ public inherited sharing class WorkflowEngine {
         }
       }
 
-      // 4. Insert signals.
+      // 5. Insert signals.
       Set<Id> instancesWithFreshSignal = new Set<Id>();
 
       if (!signalsToInsert.isEmpty()) {

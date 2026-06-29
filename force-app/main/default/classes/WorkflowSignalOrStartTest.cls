@@ -336,4 +336,62 @@ public class WorkflowSignalOrStartTest {
     System.assertEquals('"SignalInput"', signals[0].Payload__c);
     System.assertEquals('Received', signals[0].Status__c);
   }
+
+  @isTest
+  static void testSignalOrStartCancel() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start instance
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowSignalOrStartTest.TestAggregationWorkflow',
+      'Key-CancelInstance',
+      'InitialInput'
+    );
+
+    // Run step to suspend
+    WorkflowEngine.runStep(instanceId);
+
+    Workflow_Instance__c instBefore = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Suspended', instBefore.Status__c);
+
+    WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
+      'WorkflowSignalOrStartTest.TestAggregationWorkflow',
+      'Key-CancelInstance',
+      'InitialInput'
+    );
+
+    Test.startTest();
+    WorkflowEngine.StartResult result = WorkflowEngine.signalOrStart(
+      startReq,
+      'Cancel',
+      'false', // runCompensations = false
+      'Idemp-Cancel-Key'
+    );
+    Test.stopTest();
+
+    System.assertEquals(instanceId, result.instanceId);
+    System.assertEquals(false, result.isNew);
+
+    // Verify status is Cancelled
+    Workflow_Instance__c instAfter = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Cancelled', instAfter.Status__c);
+
+    // Verify no unconsumed or Received signal is left in the DB for the Cancel signal
+    List<Workflow_Signal__c> signals = [
+      SELECT Status__c, Signal_Name__c
+      FROM Workflow_Signal__c
+      WHERE Workflow_Instance__c = :instanceId AND Signal_Name__c = 'Cancel'
+    ];
+    // Keyed cancel creates a 'Consumed' signal record to claim idempotency, but NOT a 'Received' record.
+    System.assertEquals(1, signals.size());
+    System.assertEquals('Consumed', signals[0].Status__c);
+  }
 }
