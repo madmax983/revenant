@@ -394,4 +394,49 @@ public class WorkflowSignalOrStartTest {
     System.assertEquals(1, signals.size());
     System.assertEquals('Consumed', signals[0].Status__c);
   }
+
+  @isTest
+  static void testSignalOrStartCompensationFailed() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start instance
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowSignalOrStartTest.TestAggregationWorkflow',
+      'Key-CompFailedInstance',
+      'InitialInput'
+    );
+
+    // Forcefully update the status to CompensationFailed
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Id = instanceId,
+      Status__c = 'CompensationFailed'
+    );
+    update as system inst;
+
+    WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
+      'WorkflowSignalOrStartTest.TestAggregationWorkflow',
+      'Key-CompFailedInstance',
+      'InitialInput'
+    );
+
+    Test.startTest();
+    WorkflowEngine.StartResult result = WorkflowEngine.signalOrStart(
+      startReq,
+      'Approve:MySignal',
+      '"SignalPayload"',
+      'Idemp-CompFailed-1'
+    );
+    Test.stopTest();
+
+    System.assertEquals(instanceId, result.instanceId);
+    System.assertEquals(false, result.isNew);
+
+    // Verify no signal record is created in the DB
+    List<Workflow_Signal__c> signals = [
+      SELECT Status__c, Signal_Name__c
+      FROM Workflow_Signal__c
+      WHERE Workflow_Instance__c = :instanceId AND Signal_Name__c = 'Approve:MySignal'
+    ];
+    System.assertEquals(0, signals.size());
+  }
 }

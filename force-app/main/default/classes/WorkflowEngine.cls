@@ -2336,17 +2336,19 @@ public inherited sharing class WorkflowEngine {
         }
 
         Boolean isTerminal = false;
+        Boolean isCompensationFailed = false;
         Workflow_Instance__c existingInst = null;
 
         if (!isNew) {
           existingInst = existingInstances.get(instanceId);
           if (existingInst != null) {
             isTerminal = TERMINAL_GETSTATUS_STATUSES.contains(existingInst.Status__c);
+            isCompensationFailed = (existingInst.Status__c == 'CompensationFailed');
           }
         }
 
-        if (isTerminal) {
-          // Discard/swallow signal for terminal instances (idempotent no-op)
+        if (isTerminal || isCompensationFailed) {
+          // Discard/swallow signal for terminal or stalled rollback instances (idempotent no-op)
           continue;
         }
 
