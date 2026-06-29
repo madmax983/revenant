@@ -11324,9 +11324,10 @@ public inherited sharing class WorkflowEngine {
 
     for (Workflow_Instance__c inst : orphanedInstances) {
       instanceIds.add(inst.Id);
+      Boolean isCompensatingOrCancelling = (inst.Status__c == 'Compensating' || inst.Status__c == 'Cancelling');
       Boolean hasCompensations = false;
       List<String> stack = new List<String>();
-      if (String.isNotBlank(inst.Compensation_Stack__c)) {
+      if (isCompensatingOrCancelling && String.isNotBlank(inst.Compensation_Stack__c)) {
         try {
           stack = (List<String>) JSON.deserialize(
             inst.Compensation_Stack__c,
@@ -11338,7 +11339,7 @@ public inherited sharing class WorkflowEngine {
       hasCompensationsByInstanceId.put(inst.Id, hasCompensations);
 
       List<String> targetStepNames = new List<String>();
-      if (hasCompensations) {
+      if (isCompensatingOrCancelling && hasCompensations) {
         targetStepNames.add(stack[stack.size() - 1] + '_Compensate');
       } else if (String.isNotBlank(inst.Current_Step__c)) {
         if (inst.Current_Step__c.contains(',')) {

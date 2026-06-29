@@ -1097,6 +1097,49 @@ public class WorkflowWatchdogTest {
     ];
     System.assertEquals('Completed', updatedStep.Status__c);
   }
+
+  @isTest
+  static void testWatchdogAutoReclaimParallelForwardWithCompensation() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.reclaimThresholdMinutes = 10;
+    WorkflowEngine.mockNow = DateTime.now().addMinutes(15);
+
+    // Create candidate forward running instance with completed compensation step in stack
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowEngineTest.HappyStep1,WorkflowEngineTest.HappyStep2',
+      Compensation_Stack__c = '["WorkflowEngineTest.HappyStep0"]',
+      Async_Job_Id__c = '707Sv00001rOraj' // Dead/mock job ID
+    );
+    insert inst;
+    Test.setCreatedDate(inst.Id, DateTime.now().addMinutes(-15));
+
+    // Two running parallel step executions
+    Workflow_Step_Execution__c step1 = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.HappyStep1',
+      Status__c = 'Running'
+    );
+    Workflow_Step_Execution__c step2 = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.HappyStep2',
+      Status__c = 'Running'
+    );
+    insert new List<Workflow_Step_Execution__c>{ step1, step2 };
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Verify both step executions are reset to Pending (proving they were targeted and reset)
+    Map<Id, Workflow_Step_Execution__c> reloadedSteps = new Map<Id, Workflow_Step_Execution__c>([
+      SELECT Id, Status__c FROM Workflow_Step_Execution__c WHERE Id IN (:step1.Id, :step2.Id)
+    ]);
+    System.assertEquals('Pending', reloadedSteps.get(step1.Id).Status__c);
+    System.assertEquals('Pending', reloadedSteps.get(step2.Id).Status__c);
+  }
 }
 
 
