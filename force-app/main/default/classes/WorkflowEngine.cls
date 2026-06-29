@@ -2204,6 +2204,7 @@ public inherited sharing class WorkflowEngine {
       List<Boolean> cancelClaimRunComp = new List<Boolean>();
       Set<String> seenCancelKeys = new Set<String>();
       Set<Id> cancelledInstanceIds = new Set<Id>();
+      Set<Id> attemptedCancelIds = new Set<Id>();
 
       for (Integer i = 0; i < requests.size(); i++) {
         SignalOrStartRequest req = requests[i];
@@ -2257,7 +2258,7 @@ public inherited sharing class WorkflowEngine {
         } else {
           // Unkeyed cancel: execute immediately
           cancel(instanceId, runCompensations);
-          cancelledInstanceIds.add(instanceId);
+          attemptedCancelIds.add(instanceId);
         }
       }
 
@@ -2272,7 +2273,7 @@ public inherited sharing class WorkflowEngine {
           Database.SaveResult sr = claimResults[i];
           if (sr.isSuccess()) {
             cancel(cancelClaimInstIds[i], cancelClaimRunComp[i]);
-            cancelledInstanceIds.add(cancelClaimInstIds[i]);
+            attemptedCancelIds.add(cancelClaimInstIds[i]);
           } else {
             Boolean isDup = false;
             for (Database.Error err : sr.getErrors()) {
@@ -2289,6 +2290,23 @@ public inherited sharing class WorkflowEngine {
         if (claimError != null) {
           Database.rollback(sp);
           throw new WorkflowException('Failed to claim cancel: ' + claimError);
+        }
+      }
+
+      if (!attemptedCancelIds.isEmpty()) {
+        for (Workflow_Instance__c refreshed : [
+          SELECT Id, Status__c
+          FROM Workflow_Instance__c
+          WHERE Id IN :attemptedCancelIds
+          WITH SYSTEM_MODE
+        ]) {
+          Workflow_Instance__c cached = existingInstances.get(refreshed.Id);
+          if (cached != null) {
+            cached.Status__c = refreshed.Status__c;
+          }
+          if (!isWakeableStatus(refreshed.Status__c)) {
+            cancelledInstanceIds.add(refreshed.Id);
+          }
         }
       }
 
