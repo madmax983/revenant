@@ -1291,6 +1291,20 @@ public inherited sharing class WorkflowDashboardController {
       ORDER BY Key__c ASC
     ];
 
+    List<Workflow_Log__c> breadcrumbs = [
+      SELECT
+        Id,
+        Level__c,
+        Message__c,
+        Correlation_Key__c,
+        Fire_Time__c
+      FROM Workflow_Log__c
+      WHERE Workflow_Instance__c = :instanceId
+        AND Log_Type__c = 'StepBreadcrumb'
+      WITH SYSTEM_MODE
+      ORDER BY Fire_Time__c ASC, CreatedDate ASC
+    ];
+
     return new Map<String, Object>{
       'instance' => instance,
       'steps' => steps,
@@ -1300,8 +1314,10 @@ public inherited sharing class WorkflowDashboardController {
       'pendingCompensationCount' => pendingCompensations.size(),
       'pendingCompensations' => pendingCompensations,
       'payloadFiles' => payloadFiles,
-      'attributes' => attributes
+      'attributes' => attributes,
+      'breadcrumbs' => breadcrumbs
     };
+
   }
 
   /**

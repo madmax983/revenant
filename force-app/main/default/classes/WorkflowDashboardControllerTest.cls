@@ -3725,4 +3725,56 @@ public class WorkflowDashboardControllerTest {
       );
     }
   }
+
+  @isTest
+  static void testGetInstanceDetailsIncludesBreadcrumbs() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running'
+    );
+    insert inst;
+
+    Datetime now = Datetime.now();
+
+    List<Workflow_Log__c> logs = new List<Workflow_Log__c>{
+      new Workflow_Log__c(
+        Workflow_Instance__c = inst.Id,
+        Workflow_Name__c = inst.Workflow_Name__c,
+        Log_Type__c = 'StepBreadcrumb',
+        Level__c = 'INFO',
+        Message__c = 'Second Breadcrumb',
+        Fire_Time__c = now.addSeconds(10)
+      ),
+      new Workflow_Log__c(
+        Workflow_Instance__c = inst.Id,
+        Workflow_Name__c = inst.Workflow_Name__c,
+        Log_Type__c = 'StepBreadcrumb',
+        Level__c = 'INFO',
+        Message__c = 'First Breadcrumb',
+        Fire_Time__c = now
+      ),
+      new Workflow_Log__c(
+        Workflow_Instance__c = inst.Id,
+        Workflow_Name__c = inst.Workflow_Name__c,
+        Log_Type__c = 'SomeOtherType', // should not be returned
+        Level__c = 'INFO',
+        Message__c = 'Not a breadcrumb',
+        Fire_Time__c = now.addSeconds(5)
+      )
+    };
+    insert logs;
+
+    Test.startTest();
+    Map<String, Object> result = WorkflowDashboardController.getInstanceDetails(inst.Id);
+    Test.stopTest();
+
+    System.assertNotEquals(null, result, 'Result should not be null');
+    System.assert(result.containsKey('breadcrumbs'), 'Result should contain breadcrumbs key');
+    
+    List<Workflow_Log__c> breadcrumbs = (List<Workflow_Log__c>) result.get('breadcrumbs');
+    System.assertEquals(2, breadcrumbs.size(), 'Should only return StepBreadcrumb logs');
+    System.assertEquals('First Breadcrumb', breadcrumbs[0].Message__c, 'Chronological ordering by Fire_Time__c ASC failed');
+    System.assertEquals('Second Breadcrumb', breadcrumbs[1].Message__c, 'Chronological ordering by Fire_Time__c ASC failed');
+  }
 }
+
