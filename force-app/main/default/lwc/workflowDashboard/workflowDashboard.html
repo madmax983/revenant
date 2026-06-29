@@ -1239,6 +1239,19 @@
                                                                                 <pre class="code-block error-block">{step.Error_Details__c}</pre>
                                                                             </template>
 
+                                                                            <template if:true={step.hasBreadcrumbs}>
+                                                                                <div class="slds-text-title slds-text-color_weak slds-m-bottom_xx-small">Step Logs</div>
+                                                                                <div class="terminal-panel slds-m-bottom_small">
+                                                                                    <template for:each={step.breadcrumbs} for:item="b">
+                                                                                        <div key={b.Id} class="terminal-line">
+                                                                                            <span class="terminal-timestamp">[{b.formattedFireTime}]</span>
+                                                                                            <span class={b.badgeClass}>{b.Level__c}</span>
+                                                                                            <span class="terminal-message">{b.Message__c}</span>
+                                                                                        </div>
+                                                                                    </template>
+                                                                                </div>
+                                                                            </template>
+
                                                                             <template if:true={step.isEligibleForSkip}>
                                                                                 <div class="slds-m-top_small slds-p-top_small border-top">
                                                                                     <div class="slds-text-title slds-text-color_weak slds-m-bottom_x-small">Resume past this failed step</div>

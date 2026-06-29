@@ -865,6 +865,7 @@ export default class WorkflowDashboard extends LightningElement {
         }
         const inst = result.instance;
         const payloadFiles = result.payloadFiles || {};
+        const breadcrumbs = result.breadcrumbs || [];
         this.successor = result.successor;
         this.selectedInst = {
           ...inst,
@@ -961,6 +962,27 @@ export default class WorkflowDashboard extends LightningElement {
             hasLimitPressure = cpuPct >= 80 || soqlPct >= 80 || heapPct >= 80;
           }
 
+          const stepBreadcrumbs = breadcrumbs
+            .filter((b) => b.Correlation_Key__c === step.Step_Name__c)
+            .map((b) => {
+              let badgeClass = "terminal-badge";
+              const lvl = (b.Level__c || "").toUpperCase();
+              if (lvl === "WARN") {
+                badgeClass += " terminal-badge-warn";
+              } else if (lvl === "ERROR") {
+                badgeClass += " terminal-badge-error";
+              } else {
+                badgeClass += " terminal-badge-info";
+              }
+              return {
+                ...b,
+                formattedFireTime: b.Fire_Time__c
+                  ? this.formatDateTime(b.Fire_Time__c)
+                  : this.formatDateTime(b.CreatedDate),
+                badgeClass,
+              };
+            });
+
           return {
             ...step,
             formattedDate: this.formatDateTime(step.CreatedDate),
@@ -999,6 +1021,8 @@ export default class WorkflowDashboard extends LightningElement {
               : "slds-text-color_weak",
             isEligibleForSkip:
               inst.Status__c === "Failed" && step.Status__c === "Failed",
+            breadcrumbs: stepBreadcrumbs,
+            hasBreadcrumbs: stepBreadcrumbs.length > 0,
           };
         });
 

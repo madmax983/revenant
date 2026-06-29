@@ -1096,6 +1096,128 @@ describe("c-workflow-dashboard details panel", () => {
     );
     expect(usageText).toContain("Retries: —");
   });
+
+  it("renders step breadcrumbs in a terminal panel when details are loaded and expanded", async () => {
+    // 1. Mock getFilteredInstances to return at least one instance so it shows up in list
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+      },
+    ]);
+
+    // 2. Mock getInstanceDetails to return step details and breadcrumbs
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Running",
+      },
+      steps: [
+        {
+          Id: "step1",
+          Step_Name__c: "ChargeCard",
+          Status__c: "Completed",
+          CreatedDate: "2026-06-24T12:00:00.000Z",
+        },
+        {
+          Id: "step2",
+          Step_Name__c: "SendEmail",
+          Status__c: "Completed",
+          CreatedDate: "2026-06-24T12:05:00.000Z",
+        },
+      ],
+      breadcrumbs: [
+        {
+          Id: "bc1",
+          Correlation_Key__c: "ChargeCard",
+          Level__c: "INFO",
+          Message__c: "Starting credit card charge",
+          Fire_Time__c: "2026-06-24T12:00:01.000Z",
+        },
+        {
+          Id: "bc2",
+          Correlation_Key__c: "ChargeCard",
+          Level__c: "WARN",
+          Message__c: "Retrying card charge due to network timeout",
+          Fire_Time__c: "2026-06-24T12:00:05.000Z",
+        },
+        {
+          Id: "bc3",
+          Correlation_Key__c: "SendEmail",
+          Level__c: "ERROR",
+          Message__c: "Failed to send email receipt",
+          Fire_Time__c: "2026-06-24T12:05:02.000Z",
+        },
+      ],
+      children: [],
+      payloadFiles: {},
+    });
+
+    const element = createComponent();
+    await flushPromises();
+
+    // 3. Click list item to load details
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    // 4. Click the show details button for ChargeCard step to expand it
+    const toggleButtons = element.shadowRoot.querySelectorAll(
+      "lightning-button-stateful.text-button",
+    );
+    expect(toggleButtons.length).toBe(2);
+    toggleButtons[0].dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // 5. Verify that the terminal panel exists and contains the correct breadcrumbs
+    const terminalPanels = element.shadowRoot.querySelectorAll(".terminal-panel");
+    expect(terminalPanels.length).toBe(1);
+
+    const terminalLines = terminalPanels[0].querySelectorAll(".terminal-line");
+    expect(terminalLines.length).toBe(2);
+
+    // Verify first line details
+    const timestamp1 = terminalLines[0].querySelector(".terminal-timestamp");
+    const badge1 = terminalLines[0].querySelector(".terminal-badge");
+    const message1 = terminalLines[0].querySelector(".terminal-message");
+
+    const expectedTime1 = new Date("2026-06-24T12:00:01.000Z").toLocaleString();
+    expect(timestamp1.textContent).toBe(`[${expectedTime1}]`);
+    expect(badge1.textContent).toBe("INFO");
+    expect(badge1.className).toContain("terminal-badge-info");
+    expect(message1.textContent).toBe("Starting credit card charge");
+
+    // Verify second line details
+    const timestamp2 = terminalLines[1].querySelector(".terminal-timestamp");
+    const badge2 = terminalLines[1].querySelector(".terminal-badge");
+    const message2 = terminalLines[1].querySelector(".terminal-message");
+
+    const expectedTime2 = new Date("2026-06-24T12:00:05.000Z").toLocaleString();
+    expect(timestamp2.textContent).toBe(`[${expectedTime2}]`);
+    expect(badge2.textContent).toBe("WARN");
+    expect(badge2.className).toContain("terminal-badge-warn");
+    expect(message2.textContent).toBe("Retrying card charge due to network timeout");
+
+    // 6. Click the show details button for SendEmail step to expand it
+    toggleButtons[1].dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    const terminalPanelsAfter = element.shadowRoot.querySelectorAll(".terminal-panel");
+    expect(terminalPanelsAfter.length).toBe(2);
+
+    const emailTerminalLines = terminalPanelsAfter[1].querySelectorAll(".terminal-line");
+    expect(emailTerminalLines.length).toBe(1);
+
+    const badgeEmail = emailTerminalLines[0].querySelector(".terminal-badge");
+    expect(badgeEmail.textContent).toBe("ERROR");
+    expect(badgeEmail.className).toContain("terminal-badge-error");
+  });
 });
 
 describe("c-workflow-dashboard operator signal injection", () => {

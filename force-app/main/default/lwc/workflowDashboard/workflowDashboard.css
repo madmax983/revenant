@@ -337,3 +337,66 @@ button.slds-text-link:focus {
   }
 }
 
+/* Terminal panel for Step Logs */
+.terminal-panel {
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+  font-family: 'Space Mono', Consolas, Monaco, monospace;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #333333;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.terminal-line {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 6px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.terminal-line:last-child {
+  margin-bottom: 0;
+}
+
+.terminal-timestamp {
+  color: #858585;
+  margin-right: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.terminal-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-right: 8px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.terminal-badge-info {
+  background-color: #007acc;
+  color: #ffffff;
+}
+
+.terminal-badge-warn {
+  background-color: #d7ba7d;
+  color: #1e1e1e;
+}
+
+.terminal-badge-error {
+  background-color: #f48771;
+  color: #ffffff;
+}
+
+.terminal-message {
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
