@@ -54,6 +54,7 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
               parsedPayload = (String) JSON.deserialize(sig.payload, String.class);
             } catch (Exception ex) {
               // Use raw payload if it fails to deserialize
+              System.debug(LoggingLevel.FINE, 'Failed to deserialize signal payload, using raw payload: ' + ex.getMessage());
             }
           }
           accumulatedMap.put(String.valueOf(sig.signalId), parsedPayload);
@@ -82,6 +83,7 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
           );
         } catch (Exception ex) {
           // Handle/ignore malformed input
+          System.debug(LoggingLevel.WARN, 'Failed to deserialize previous step output: ' + ex.getMessage());
         }
       }
       if (processed == null) {
