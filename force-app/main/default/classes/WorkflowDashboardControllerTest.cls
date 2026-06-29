@@ -1590,12 +1590,14 @@ public class WorkflowDashboardControllerTest {
     seedFailed('RdA');
     seedFailed('RdB');
 
+    WorkflowEngine.disableQueueableInTest = false;
     Test.startTest();
     Map<String, Object> outcome = WorkflowDashboardController.redriveMatchingInstances(
       'WorkflowEngineTest.HappyWorkflow',
       'Failed',
       ''
     );
+    WorkflowEngine.disableQueueableInTest = true;
     Test.stopTest();
 
     System.assertEquals(

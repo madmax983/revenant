@@ -6,6 +6,7 @@ public inherited sharing class WorkflowEngine {
   // Operator toggle (Revenant_Config__mdt.Publish_Lifecycle_Events__c): when true
   // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
   public static Boolean publishLifecycleEvents = true;
+  private static Map<String, Boolean> validatedWorkflows = new Map<String, Boolean>();
 
   // Failure Category picklist API values
   public static final String CAT_STEP_EXCEPTION = 'STEP_EXCEPTION';
@@ -1204,11 +1205,7 @@ public inherited sharing class WorkflowEngine {
     }
 
     // Enqueue the first step execution
-    if (Test.isRunningTest()) {
-      System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-    } else {
-      enqueueOrchestrator(instance.Id, null);
-    }
+    enqueueOrchestrators(new List<Id>{instance.Id});
     return new StartResult(instance.Id, true);
   }
 
@@ -1224,19 +1221,23 @@ public inherited sharing class WorkflowEngine {
     instance.Parent_Instance__c = req.parentInstanceId;
 
     if (String.isNotBlank(req.workflowName)) {
-      List<ApexTypeImplementor> impls = [
-        SELECT ClassName
-        FROM ApexTypeImplementor
-        WHERE
-          ClassName = :req.workflowName
-          AND InterfaceName IN ('WorkflowDefinition', 'VersionedWorkflow')
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (impls.isEmpty()) {
-        throw new WorkflowException(
-          'Unauthorized or invalid workflow definition: ' + req.workflowName
-        );
+      String wflowKey = req.workflowName.toLowerCase();
+      if (!validatedWorkflows.containsKey(wflowKey)) {
+        List<ApexTypeImplementor> impls = [
+          SELECT ClassName
+          FROM ApexTypeImplementor
+          WHERE
+            ClassName = :req.workflowName
+            AND InterfaceName IN ('WorkflowDefinition', 'VersionedWorkflow')
+          WITH SYSTEM_MODE
+          LIMIT 1
+        ];
+        if (impls.isEmpty()) {
+          throw new WorkflowException(
+            'Unauthorized or invalid workflow definition: ' + req.workflowName
+          );
+        }
+        validatedWorkflows.put(wflowKey, true);
       }
     }
 
@@ -1303,6 +1304,154 @@ public inherited sharing class WorkflowEngine {
     if (cached != null) {
       cached.Status__c = refreshed.Status__c;
     }
+  }
+
+  private static Set<Id> getGatedNonReadyParents(
+    List<Workflow_Instance__c> instances,
+    Map<Id, Set<String>> signalsByInstanceId
+  ) {
+    Set<Id> gatedNonReadyParents = new Set<Id>();
+    if (instances == null || instances.isEmpty()) {
+      return gatedNonReadyParents;
+    }
+
+    Set<Id> parentIdsToCheck = new Set<Id>();
+    for (Workflow_Instance__c inst : instances) {
+      if (inst != null && inst.Status__c == 'Suspended') {
+        parentIdsToCheck.add(inst.Id);
+      }
+    }
+
+    if (parentIdsToCheck.isEmpty()) {
+      return gatedNonReadyParents;
+    }
+
+    Map<Id, Workflow_Step_Execution__c> pendingStepExecs = new Map<Id, Workflow_Step_Execution__c>();
+    for (Workflow_Step_Execution__c se : [
+      SELECT Id, Workflow_Instance__c, Step_Name__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c IN :parentIdsToCheck
+        AND Status__c = 'Pending'
+      WITH SYSTEM_MODE
+    ]) {
+      pendingStepExecs.put(se.Workflow_Instance__c, se);
+    }
+
+    Map<Id, String> resolvedOutputsByParentId = new Map<Id, String>();
+    if (!pendingStepExecs.isEmpty()) {
+      List<Id> parentIds = new List<Id>();
+      List<String> rawOutputs = new List<String>();
+      for (Workflow_Step_Execution__c se : pendingStepExecs.values()) {
+        parentIds.add(se.Workflow_Instance__c);
+        rawOutputs.add(se.Output__c);
+      }
+      List<String> resolved = resolvePayloads(rawOutputs);
+      for (Integer i = 0; i < parentIds.size(); i++) {
+        resolvedOutputsByParentId.put(parentIds[i], resolved[i]);
+      }
+    }
+
+    Map<Id, List<Workflow_Instance__c>> childrenByParentId = new Map<Id, List<Workflow_Instance__c>>();
+    for (Workflow_Instance__c child : [
+      SELECT Id, Parent_Instance__c, Correlation_Key__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c IN :parentIdsToCheck
+      WITH SYSTEM_MODE
+    ]) {
+      if (!childrenByParentId.containsKey(child.Parent_Instance__c)) {
+        childrenByParentId.put(
+          child.Parent_Instance__c,
+          new List<Workflow_Instance__c>()
+        );
+      }
+      childrenByParentId.get(child.Parent_Instance__c).add(child);
+    }
+
+    Set<Id> nonReadyParents = new Set<Id>();
+    for (Id parentId : parentIdsToCheck) {
+      Workflow_Step_Execution__c se = pendingStepExecs.get(parentId);
+      if (se == null) {
+        continue;
+      }
+      String resolvedOutput = resolvedOutputsByParentId.get(parentId);
+      if (String.isBlank(resolvedOutput)) {
+        continue;
+      }
+      try {
+        Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
+          resolvedOutput
+        );
+        if (data.containsKey('childCorrelationKeys')) {
+          List<Object> keysObj = (List<Object>) data.get(
+            'childCorrelationKeys'
+          );
+          if (keysObj != null) {
+            Set<String> expectedKeys = new Set<String>();
+            for (Object o : keysObj) {
+              if (o != null) {
+                expectedKeys.add(normalizeKey(String.valueOf(o)));
+              }
+            }
+
+            List<Workflow_Instance__c> children = childrenByParentId.get(
+              parentId
+            );
+            if (children == null) {
+              children = new List<Workflow_Instance__c>();
+            }
+
+            Set<String> finishedKeys = new Set<String>();
+            for (Workflow_Instance__c child : children) {
+              if (String.isNotBlank(child.Correlation_Key__c)) {
+                String normChildKey = normalizeKey(child.Correlation_Key__c);
+                if (expectedKeys.contains(normChildKey)) {
+                  if (
+                    child.Status__c != null &&
+                    !ACTIVE_STATUSES.contains(child.Status__c)
+                  ) {
+                    finishedKeys.add(normChildKey);
+                  }
+                }
+              }
+            }
+
+            System.debug('--- Parent ' + parentId + ' expectedKeys: ' + expectedKeys);
+            System.debug('--- Parent ' + parentId + ' finishedKeys: ' + finishedKeys);
+            if (!finishedKeys.containsAll(expectedKeys)) {
+              System.debug('--- Parent ' + parentId + ' is GATED (not ready)');
+              nonReadyParents.add(parentId);
+            }
+          }
+        }
+      } catch (Exception ex) {
+        // If JSON parse fails or does not contain childCorrelationKeys, treat as ready
+      }
+    }
+
+    for (Id parentId : nonReadyParents) {
+      Set<String> sigNames = signalsByInstanceId.get(parentId);
+      Boolean allChildSignals = true;
+      if (sigNames != null) {
+        for (String name : sigNames) {
+          if (String.isNotBlank(name)) {
+            String lower = name.toLowerCase();
+            if (
+              !lower.startsWith('childcompleted:') &&
+              !lower.startsWith('childfailed:')
+            ) {
+              allChildSignals = false;
+              break;
+            }
+          }
+        }
+      }
+      if (allChildSignals) {
+        gatedNonReadyParents.add(parentId);
+      }
+    }
+
+    return gatedNonReadyParents;
   }
 
   /**
@@ -1659,6 +1808,7 @@ public inherited sharing class WorkflowEngine {
     public String workflowName;
     public String correlationKey;
     public Object input;
+    public String inputJson;
     public Id parentInstanceId;
     public Map<String, String> attributes;
 
@@ -1767,6 +1917,35 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  public class SignalOrStartRequest {
+    public StartRequest start;
+    public String signalName;
+    public String payload;
+    public String idempotencyKey;
+
+    public SignalOrStartRequest(
+      StartRequest start,
+      String signalName,
+      String payload
+    ) {
+      this.start = start;
+      this.signalName = signalName;
+      this.payload = payload;
+    }
+
+    public SignalOrStartRequest(
+      StartRequest start,
+      String signalName,
+      String payload,
+      String idempotencyKey
+    ) {
+      this.start = start;
+      this.signalName = signalName;
+      this.payload = payload;
+      this.idempotencyKey = idempotencyKey;
+    }
+  }
+
   /**
    * Starts multiple durable workflow instances in a bulk-friendly transaction
    * (get-or-start). A duplicate correlation key resolves to the existing
@@ -1790,13 +1969,32 @@ public inherited sharing class WorkflowEngine {
       return results;
     }
 
-    // 1. Validate and gather correlation keys
+    // 1. Validate and gather correlation keys, and pre-validate workflow names in bulk
     Set<String> correlationKeys = new Set<String>();
+    Set<String> workflowNamesToQuery = new Set<String>();
     for (StartRequest req : requests) {
       validateCorrelationKey(req.correlationKey);
       validateAttributes(req.attributes);
       if (String.isNotBlank(req.correlationKey)) {
         correlationKeys.add(req.correlationKey);
+      }
+      if (String.isNotBlank(req.workflowName)) {
+        String wflowKey = req.workflowName.toLowerCase();
+        if (!validatedWorkflows.containsKey(wflowKey)) {
+          workflowNamesToQuery.add(req.workflowName);
+        }
+      }
+    }
+
+    if (!workflowNamesToQuery.isEmpty()) {
+      for (ApexTypeImplementor impl : [
+        SELECT ClassName
+        FROM ApexTypeImplementor
+        WHERE ClassName IN :workflowNamesToQuery
+          AND InterfaceName IN ('WorkflowDefinition', 'VersionedWorkflow')
+        WITH SYSTEM_MODE
+      ]) {
+        validatedWorkflows.put(impl.ClassName.toLowerCase(), true);
       }
     }
 
@@ -1971,7 +2169,7 @@ public inherited sharing class WorkflowEngine {
     for (Integer j = 0; j < insertedInstances.size(); j++) {
       StartRequest req = requests[insertedReqIndexes[j]];
       Workflow_Instance__c instance = insertedInstances[j];
-      String inputJson = (req.input != null) ? JSON.serialize(req.input) : null;
+      String inputJson = (req.inputJson != null) ? req.inputJson : ((req.input != null) ? JSON.serialize(req.input) : null);
       instance.Input__c = savePayloadIfNeeded(
         instance.Id,
         inputJson,
@@ -2086,6 +2284,392 @@ public inherited sharing class WorkflowEngine {
     }
 
     return results;
+  }
+
+  public static StartResult signalOrStart(
+    StartRequest start,
+    String signalName,
+    String payloadJson,
+    String idempotencyKey
+  ) {
+    SignalOrStartRequest req = new SignalOrStartRequest(
+      start,
+      signalName,
+      payloadJson,
+      idempotencyKey
+    );
+    List<StartResult> results = signalOrStart(new List<SignalOrStartRequest>{ req });
+    return results[0];
+  }
+
+  public static List<StartResult> signalOrStart(List<SignalOrStartRequest> requests) {
+    if (requests == null || requests.isEmpty()) {
+      return new List<StartResult>();
+    }
+
+    System.Savepoint sp = Database.setSavepoint();
+    Set<Id> activeInstIdsToWake = new Set<Id>();
+
+    try {
+      // 1. Gather all start requests and call startOrGet bulk
+      List<StartRequest> startReqs = new List<StartRequest>();
+      for (SignalOrStartRequest req : requests) {
+        if (req.start == null) {
+          throw new WorkflowException('StartRequest cannot be null in SignalOrStartRequest');
+        }
+        startReqs.add(req.start);
+      }
+
+      List<StartResult> startResults = startOrGet(startReqs);
+
+      // 2. Query details of existing instances (where isNew = false) to determine if they are active vs terminal
+      Set<Id> existingIds = new Set<Id>();
+      for (Integer i = 0; i < requests.size(); i++) {
+        StartResult res = startResults[i];
+        if (res != null && !res.isNew) {
+          existingIds.add(res.instanceId);
+        }
+      }
+
+      Map<Id, Workflow_Instance__c> existingInstances = new Map<Id, Workflow_Instance__c>();
+      if (!existingIds.isEmpty()) {
+        existingInstances = new Map<Id, Workflow_Instance__c>([
+          SELECT Id, Status__c, Current_Step__c, Concurrency_Parked__c, Concurrency_Slot_Held__c, Sleep_Until__c
+          FROM Workflow_Instance__c
+          WHERE Id IN :existingIds
+          WITH SYSTEM_MODE
+          FOR UPDATE
+        ]);
+      }
+
+      // 3. Prepare keyed cancel claims and run cancellations
+      List<Workflow_Signal__c> cancelClaims = new List<Workflow_Signal__c>();
+      List<Id> cancelClaimInstIds = new List<Id>();
+      List<Boolean> cancelClaimRunComp = new List<Boolean>();
+      Set<String> seenCancelKeys = new Set<String>();
+      Set<Id> cancelledInstanceIds = new Set<Id>();
+      Set<Id> attemptedCancelIds = new Set<Id>();
+
+      for (Integer i = 0; i < requests.size(); i++) {
+        SignalOrStartRequest req = requests[i];
+        StartResult res = startResults[i];
+        if (res == null) {
+          continue;
+        }
+
+        Id instanceId = res.instanceId;
+        Boolean isNew = res.isNew;
+
+        Boolean isCancel =
+          String.isNotBlank(req.signalName) &&
+          (req.signalName.equalsIgnoreCase('Cancel') ||
+          req.signalName.equalsIgnoreCase('CancelWorkflow'));
+
+        if (!isCancel) {
+          continue;
+        }
+
+        Boolean isTerminal = false;
+        if (!isNew) {
+          Workflow_Instance__c existingInst = existingInstances.get(instanceId);
+          if (existingInst != null) {
+            isTerminal = TERMINAL_GETSTATUS_STATUSES.contains(existingInst.Status__c) ||
+                         existingInst.Status__c == 'ContinuedAsNew';
+          }
+        }
+
+        if (isTerminal) {
+          continue; // Terminal or continued-as-new instance: cancel is an idempotent no-op
+        }
+
+        Boolean runCompensations = parseRunCompensations(req.payload);
+
+        if (String.isNotBlank(req.idempotencyKey)) {
+          String claimKey = deriveSignalDedupKey(instanceId, req.idempotencyKey);
+          if (seenCancelKeys.contains(claimKey)) {
+            continue; // in-batch duplicate keyed cancel
+          }
+          seenCancelKeys.add(claimKey);
+          cancelClaims.add(
+            new Workflow_Signal__c(
+              Workflow_Instance__c = instanceId,
+              Signal_Name__c = req.signalName,
+              Status__c = 'Consumed',
+              Signal_Key__c = claimKey
+            )
+          );
+          cancelClaimInstIds.add(instanceId);
+          cancelClaimRunComp.add(runCompensations);
+        } else {
+          // Unkeyed cancel: execute immediately
+          cancel(instanceId, runCompensations);
+          attemptedCancelIds.add(instanceId);
+        }
+      }
+
+      if (!cancelClaims.isEmpty()) {
+        Database.SaveResult[] claimResults = Database.insert(
+          cancelClaims,
+          false,
+          AccessLevel.SYSTEM_MODE
+        );
+        String claimError = null;
+        for (Integer i = 0; i < claimResults.size(); i++) {
+          Database.SaveResult sr = claimResults[i];
+          if (sr.isSuccess()) {
+            cancel(cancelClaimInstIds[i], cancelClaimRunComp[i]);
+            attemptedCancelIds.add(cancelClaimInstIds[i]);
+          } else {
+            Boolean isDup = false;
+            for (Database.Error err : sr.getErrors()) {
+              if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+                isDup = true;
+                break;
+              }
+            }
+            if (!isDup && claimError == null) {
+              claimError = sr.getErrors()[0].getMessage();
+            }
+          }
+        }
+        if (claimError != null) {
+          Database.rollback(sp);
+          throw new WorkflowException('Failed to claim cancel: ' + claimError);
+        }
+      }
+
+      if (!attemptedCancelIds.isEmpty()) {
+        for (Workflow_Instance__c refreshed : [
+          SELECT Id, Status__c
+          FROM Workflow_Instance__c
+          WHERE Id IN :attemptedCancelIds
+          WITH SYSTEM_MODE
+        ]) {
+          Workflow_Instance__c cached = existingInstances.get(refreshed.Id);
+          if (cached != null) {
+            cached.Status__c = refreshed.Status__c;
+          }
+          if (!isWakeableStatus(refreshed.Status__c)) {
+            cancelledInstanceIds.add(refreshed.Id);
+          }
+        }
+      }
+
+      // 4. Prepare ordinary signal records to insert and identify active instances to wake
+      List<Workflow_Signal__c> signalsToInsert = new List<Workflow_Signal__c>();
+      List<Id> signalsInstIds = new List<Id>(); // Parallel list for identifying instance of each signal
+      Set<String> seenCompositeKeys = new Set<String>();
+
+      for (Integer i = 0; i < requests.size(); i++) {
+        SignalOrStartRequest req = requests[i];
+        StartResult res = startResults[i];
+        if (res == null) {
+          continue;
+        }
+
+        Id instanceId = res.instanceId;
+        Boolean isNew = res.isNew;
+
+        Boolean isCancel =
+          String.isNotBlank(req.signalName) &&
+          (req.signalName.equalsIgnoreCase('Cancel') ||
+          req.signalName.equalsIgnoreCase('CancelWorkflow'));
+
+        // Skip cancellation signals (already handled above) or instances that were cancelled in this batch
+        if (isCancel || cancelledInstanceIds.contains(instanceId)) {
+          continue;
+        }
+
+        Boolean isTerminal = false;
+        Boolean isCompensationFailed = false;
+        Workflow_Instance__c existingInst = null;
+
+        if (!isNew) {
+          existingInst = existingInstances.get(instanceId);
+          if (existingInst != null) {
+            isTerminal = TERMINAL_GETSTATUS_STATUSES.contains(existingInst.Status__c) ||
+                         existingInst.Status__c == 'ContinuedAsNew';
+            isCompensationFailed = (existingInst.Status__c == 'CompensationFailed');
+          }
+        }
+
+        if (isTerminal || isCompensationFailed) {
+          // Discard/swallow signal for terminal, stalled rollback, or continued-as-new instances (idempotent no-op)
+          continue;
+        }
+
+        // Build signal record
+        Workflow_Signal__c sig = new Workflow_Signal__c(
+          Workflow_Instance__c = instanceId,
+          Signal_Name__c = req.signalName,
+          Payload__c = req.payload,
+          Status__c = 'Received'
+        );
+
+        if (String.isNotBlank(req.idempotencyKey)) {
+          String compositeKey = deriveSignalDedupKey(instanceId, req.idempotencyKey);
+          if (seenCompositeKeys.contains(compositeKey)) {
+            // In-batch duplicate: skip insertion of this signal
+            continue;
+          }
+          seenCompositeKeys.add(compositeKey);
+          sig.Signal_Key__c = compositeKey;
+        }
+
+        signalsToInsert.add(sig);
+        signalsInstIds.add(instanceId);
+
+        // If it's an existing active instance, we may need to wake it.
+        // Brand-new instances are already enqueued to run by startOrGet, so we don't wake them.
+        if (!isNew && existingInst != null) {
+          // Check if wakeable
+          Boolean isWakeable =
+            existingInst.Status__c == 'Suspended' ||
+            existingInst.Status__c == 'Running' ||
+            existingInst.Status__c == 'Compensating' ||
+            existingInst.Status__c == 'Cancelling';
+
+          if (isWakeable) {
+            activeInstIdsToWake.add(instanceId);
+          }
+        }
+      }
+
+      // 5. Insert signals.
+      Set<Id> instancesWithFreshSignal = new Set<Id>();
+
+      if (!signalsToInsert.isEmpty()) {
+        // Insert signals using allOrNone=false so concurrent duplicates are swallowed as no-ops,
+        // but genuine errors are rolled back and thrown.
+        Database.SaveResult[] srs = Database.insert(
+          signalsToInsert,
+          false,
+          AccessLevel.SYSTEM_MODE
+        );
+
+        String genuineError = null;
+        for (Integer i = 0; i < srs.size(); i++) {
+          Database.SaveResult sr = srs[i];
+          if (sr.isSuccess()) {
+            instancesWithFreshSignal.add(signalsInstIds[i]);
+          } else {
+            Boolean isDup = false;
+            for (Database.Error err : sr.getErrors()) {
+              if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+                isDup = true;
+                break;
+              }
+            }
+            if (!isDup && genuineError == null) {
+              genuineError = sr.getErrors()[0].getMessage();
+            }
+          }
+        }
+
+        if (genuineError != null) {
+          Database.rollback(sp);
+          throw new WorkflowException('Failed to insert signal: ' + genuineError);
+        }
+      }
+
+      // 5. Wake active instances that received a fresh signal
+      Map<Id, Set<String>> signalsByInstanceId = new Map<Id, Set<String>>();
+      for (Integer i = 0; i < requests.size(); i++) {
+        SignalOrStartRequest req = requests[i];
+        StartResult res = startResults[i];
+        if (res != null) {
+          Id instanceId = res.instanceId;
+          if (!signalsByInstanceId.containsKey(instanceId)) {
+            signalsByInstanceId.put(instanceId, new Set<String>());
+          }
+          if (String.isNotBlank(req.signalName)) {
+            signalsByInstanceId.get(instanceId).add(req.signalName);
+          }
+        }
+      }
+
+      List<Workflow_Instance__c> activeInstancesList = new List<Workflow_Instance__c>();
+      for (Id instId : activeInstIdsToWake) {
+        Workflow_Instance__c inst = existingInstances.get(instId);
+        if (inst != null) {
+          activeInstancesList.add(inst);
+        }
+      }
+      Set<Id> gatedNonReadyParents = getGatedNonReadyParents(activeInstancesList, signalsByInstanceId);
+
+      List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+      List<Workflow_Instance__c> instancesToWake = new List<Workflow_Instance__c>();
+
+      for (Id instId : activeInstIdsToWake) {
+        // Only wake if a fresh signal actually landed (i.e. not a duplicate signal)
+        if (!instancesWithFreshSignal.contains(instId)) {
+          continue;
+        }
+
+        Workflow_Instance__c inst = existingInstances.get(instId);
+        if (inst == null) {
+          continue;
+        }
+
+        // If the instance is suspended, change status to Running and clear Sleep_Until__c
+        if (inst.Status__c == 'Suspended') {
+          // Skip if concurrency-parked and doesn't hold slot
+          if (inst.Concurrency_Parked__c == true && inst.Concurrency_Slot_Held__c != true) {
+            continue;
+          }
+          if (gatedNonReadyParents.contains(instId)) {
+            continue;
+          }
+          inst.Status__c = 'Running';
+          inst.Sleep_Until__c = null;
+          instancesToUpdate.add(inst);
+        }
+        if (!gatedNonReadyParents.contains(instId)) {
+          instancesToWake.add(inst);
+        }
+      }
+
+      if (!instancesToUpdate.isEmpty()) {
+        update as system instancesToUpdate;
+      }
+
+      // Enqueue the woken instances exactly once
+      List<Id> instanceIdsToEnqueue = new List<Id>();
+      List<Workflow_Instance__c> parallelInstances = new List<Workflow_Instance__c>();
+
+      for (Workflow_Instance__c inst : instancesToWake) {
+        Boolean isCompensatingInst =
+          inst.Status__c == 'Compensating' ||
+          inst.Status__c == 'Cancelling';
+
+        if (
+          !isCompensatingInst &&
+          String.isNotBlank(inst.Current_Step__c) &&
+          inst.Current_Step__c.contains(',')
+        ) {
+          parallelInstances.add(inst);
+        } else {
+          if (!enqueuedInstanceIds.contains(inst.Id)) {
+            enqueuedInstanceIds.add(inst.Id);
+            instanceIdsToEnqueue.add(inst.Id);
+          }
+        }
+      }
+
+      if (!instanceIdsToEnqueue.isEmpty()) {
+        enqueueOrchestrators(instanceIdsToEnqueue);
+      }
+      if (!parallelInstances.isEmpty()) {
+        enqueueResumeBulk(parallelInstances);
+      }
+
+      return startResults;
+
+    } catch (Exception e) {
+      Database.rollback(sp);
+      clearEnqueueGuards(activeInstIdsToWake);
+      throw e;
+    }
   }
 
   /**
@@ -6171,139 +6755,7 @@ public inherited sharing class WorkflowEngine {
     // would silently no-op and never wake the still-Suspended instances.
     try {
       // JOIN-READINESS BARRIER PRE-COMPUTATION
-      Set<Id> parentIdsToCheck = new Set<Id>();
-      for (Workflow_Instance__c inst : activeInstById.values()) {
-        if (inst.Status__c == 'Suspended') {
-          parentIdsToCheck.add(inst.Id);
-        }
-      }
-
-      Map<Id, Workflow_Step_Execution__c> pendingStepExecs = new Map<Id, Workflow_Step_Execution__c>();
-      if (!parentIdsToCheck.isEmpty()) {
-        for (Workflow_Step_Execution__c se : [
-          SELECT Id, Workflow_Instance__c, Step_Name__c, Output__c
-          FROM Workflow_Step_Execution__c
-          WHERE
-            Workflow_Instance__c IN :parentIdsToCheck
-            AND Status__c = 'Pending'
-          WITH SYSTEM_MODE
-        ]) {
-          pendingStepExecs.put(se.Workflow_Instance__c, se);
-        }
-      }
-
-      Map<Id, String> resolvedOutputsByParentId = new Map<Id, String>();
-      if (!pendingStepExecs.isEmpty()) {
-        List<Id> parentIds = new List<Id>();
-        List<String> rawOutputs = new List<String>();
-        for (Workflow_Step_Execution__c se : pendingStepExecs.values()) {
-          parentIds.add(se.Workflow_Instance__c);
-          rawOutputs.add(se.Output__c);
-        }
-        List<String> resolved = resolvePayloads(rawOutputs);
-        for (Integer i = 0; i < parentIds.size(); i++) {
-          resolvedOutputsByParentId.put(parentIds[i], resolved[i]);
-        }
-      }
-
-      Map<Id, List<Workflow_Instance__c>> childrenByParentId = new Map<Id, List<Workflow_Instance__c>>();
-      if (!parentIdsToCheck.isEmpty()) {
-        for (Workflow_Instance__c child : [
-          SELECT Id, Parent_Instance__c, Correlation_Key__c, Status__c
-          FROM Workflow_Instance__c
-          WHERE Parent_Instance__c IN :parentIdsToCheck
-          WITH SYSTEM_MODE
-        ]) {
-          if (!childrenByParentId.containsKey(child.Parent_Instance__c)) {
-            childrenByParentId.put(
-              child.Parent_Instance__c,
-              new List<Workflow_Instance__c>()
-            );
-          }
-          childrenByParentId.get(child.Parent_Instance__c).add(child);
-        }
-      }
-
-      Set<Id> nonReadyParents = new Set<Id>();
-      for (Id parentId : parentIdsToCheck) {
-        Workflow_Step_Execution__c se = pendingStepExecs.get(parentId);
-        if (se == null) {
-          continue;
-        }
-        String resolvedOutput = resolvedOutputsByParentId.get(parentId);
-        if (String.isBlank(resolvedOutput)) {
-          continue;
-        }
-        try {
-          Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
-            resolvedOutput
-          );
-          if (data.containsKey('childCorrelationKeys')) {
-            List<Object> keysObj = (List<Object>) data.get(
-              'childCorrelationKeys'
-            );
-            if (keysObj != null) {
-              Set<String> expectedKeys = new Set<String>();
-              for (Object o : keysObj) {
-                if (o != null) {
-                  expectedKeys.add(normalizeKey(String.valueOf(o)));
-                }
-              }
-
-              List<Workflow_Instance__c> children = childrenByParentId.get(
-                parentId
-              );
-              if (children == null) {
-                children = new List<Workflow_Instance__c>();
-              }
-
-              Set<String> finishedKeys = new Set<String>();
-              for (Workflow_Instance__c child : children) {
-                if (String.isNotBlank(child.Correlation_Key__c)) {
-                  String normChildKey = normalizeKey(child.Correlation_Key__c);
-                  if (expectedKeys.contains(normChildKey)) {
-                    if (
-                      child.Status__c != null &&
-                      !ACTIVE_STATUSES.contains(child.Status__c)
-                    ) {
-                      finishedKeys.add(normChildKey);
-                    }
-                  }
-                }
-              }
-
-              if (!finishedKeys.containsAll(expectedKeys)) {
-                nonReadyParents.add(parentId);
-              }
-            }
-          }
-        } catch (Exception ex) {
-          // If JSON parse fails or does not contain childCorrelationKeys, treat as ready
-        }
-      }
-
-      Set<Id> gatedNonReadyParents = new Set<Id>();
-      for (Id parentId : nonReadyParents) {
-        Set<String> sigNames = signalsByInstanceId.get(parentId);
-        Boolean allChildSignals = true;
-        if (sigNames != null) {
-          for (String name : sigNames) {
-            if (String.isNotBlank(name)) {
-              String lower = name.toLowerCase();
-              if (
-                !lower.startsWith('childcompleted:') &&
-                !lower.startsWith('childfailed:')
-              ) {
-                allChildSignals = false;
-                break;
-              }
-            }
-          }
-        }
-        if (allChildSignals) {
-          gatedNonReadyParents.add(parentId);
-        }
-      }
+      Set<Id> gatedNonReadyParents = getGatedNonReadyParents(activeInstById.values(), signalsByInstanceId);
 
       // Only wake an instance if it received at least one fresh signal this call:
       // unkeyed signals always qualify; keyed signals only if the insert won the race.
