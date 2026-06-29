@@ -2229,12 +2229,13 @@ public inherited sharing class WorkflowEngine {
         if (!isNew) {
           Workflow_Instance__c existingInst = existingInstances.get(instanceId);
           if (existingInst != null) {
-            isTerminal = TERMINAL_GETSTATUS_STATUSES.contains(existingInst.Status__c);
+            isTerminal = TERMINAL_GETSTATUS_STATUSES.contains(existingInst.Status__c) ||
+                         existingInst.Status__c == 'ContinuedAsNew';
           }
         }
 
         if (isTerminal) {
-          continue; // Terminal instance: cancel is an idempotent no-op
+          continue; // Terminal or continued-as-new instance: cancel is an idempotent no-op
         }
 
         Boolean runCompensations = parseRunCompensations(req.payload);
@@ -2342,13 +2343,14 @@ public inherited sharing class WorkflowEngine {
         if (!isNew) {
           existingInst = existingInstances.get(instanceId);
           if (existingInst != null) {
-            isTerminal = TERMINAL_GETSTATUS_STATUSES.contains(existingInst.Status__c);
+            isTerminal = TERMINAL_GETSTATUS_STATUSES.contains(existingInst.Status__c) ||
+                         existingInst.Status__c == 'ContinuedAsNew';
             isCompensationFailed = (existingInst.Status__c == 'CompensationFailed');
           }
         }
 
         if (isTerminal || isCompensationFailed) {
-          // Discard/swallow signal for terminal or stalled rollback instances (idempotent no-op)
+          // Discard/swallow signal for terminal, stalled rollback, or continued-as-new instances (idempotent no-op)
           continue;
         }
 

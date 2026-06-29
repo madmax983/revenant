@@ -439,4 +439,49 @@ public class WorkflowSignalOrStartTest {
     ];
     System.assertEquals(0, signals.size());
   }
+
+  @isTest
+  static void testSignalOrStartContinuedAsNew() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start instance
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowSignalOrStartTest.TestAggregationWorkflow',
+      'Key-ContinuedAsNewInstance',
+      'InitialInput'
+    );
+
+    // Forcefully update the status to ContinuedAsNew
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Id = instanceId,
+      Status__c = 'ContinuedAsNew'
+    );
+    update as system inst;
+
+    WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
+      'WorkflowSignalOrStartTest.TestAggregationWorkflow',
+      'Key-ContinuedAsNewInstance',
+      'InitialInput'
+    );
+
+    Test.startTest();
+    WorkflowEngine.StartResult result = WorkflowEngine.signalOrStart(
+      startReq,
+      'Approve:MySignal',
+      '"SignalPayload"',
+      'Idemp-ContNew-1'
+    );
+    Test.stopTest();
+
+    System.assertEquals(instanceId, result.instanceId);
+    System.assertEquals(false, result.isNew);
+
+    // Verify no signal record is created in the DB
+    List<Workflow_Signal__c> signals = [
+      SELECT Status__c, Signal_Name__c
+      FROM Workflow_Signal__c
+      WHERE Workflow_Instance__c = :instanceId AND Signal_Name__c = 'Approve:MySignal'
+    ];
+    System.assertEquals(0, signals.size());
+  }
 }
