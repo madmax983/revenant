@@ -27,6 +27,8 @@ public inherited sharing class WorkflowEngine {
   // Revenant_Config__mdt.Stale_Threshold_Minutes__c; default 60 minutes.
   public static Integer staleThresholdMinutes = 60;
   public static Integer reclaimThresholdMinutes = null;
+  @TestVisible
+  private static Datetime mockNow = null;
 
   // Base + jitter (seconds) before a concurrency-parked instance re-attempts
   // admission. Precise scheduling drives it promptly when slots free; under a large
@@ -9327,7 +9329,7 @@ public inherited sharing class WorkflowEngine {
    * and terminates active steps that have exceeded their timeout limits.
    */
   public static void processWatchdogHeartbeat() {
-    Datetime now = System.now();
+    Datetime now = mockNow != null ? mockNow : System.now();
 
     // Terminal instances finalized by the timed-out-steps section below. Their
     // lifecycle events are published once at the very END of the heartbeat, after

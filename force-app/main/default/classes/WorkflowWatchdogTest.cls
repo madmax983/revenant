@@ -928,5 +928,175 @@ public class WorkflowWatchdogTest {
     ];
     System.assertEquals('Running', reloadedInst.Status__c);
   }
+
+  @isTest
+  static void testWatchdogAutoReclaimOrphanedInstance() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.reclaimThresholdMinutes = 10;
+    WorkflowEngine.mockNow = DateTime.now().addMinutes(15);
+
+    // Create candidate instance stuck in Running with a dead job ID
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running',
+      Async_Job_Id__c = '707Sv00001rOraj' // Dead/mock job ID
+    );
+    insert inst;
+
+    // Set LastModifiedDate to past threshold by updating via test
+    Test.setCreatedDate(inst.Id, DateTime.now().addMinutes(-15));
+
+    // Insert a running step execution log that got orphaned
+    Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.HappyStep1',
+      Status__c = 'Running',
+      Retry_Count__c = 2,
+      Error_Details__c = 'Stuck error'
+    );
+    insert stepExec;
+
+    Test.startTest();
+    // Run watchdog heartbeat to trigger reclaim
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Verify step execution was reset to Pending
+    Workflow_Step_Execution__c updatedStep = [
+      SELECT Status__c, Retry_Count__c, Error_Details__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :stepExec.Id
+    ];
+    System.assertEquals('Pending', updatedStep.Status__c);
+    System.assertEquals(0, updatedStep.Retry_Count__c);
+    System.assertEquals(null, updatedStep.Error_Details__c);
+
+    // Verify instance remains Running and Async_Job_Id__c was cleared
+    Workflow_Instance__c updatedInst = [
+      SELECT Status__c, Async_Job_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals('Running', updatedInst.Status__c);
+    System.assertEquals(null, updatedInst.Async_Job_Id__c);
+
+    // Verify audit log of type OperatorIntervention was written
+    List<Workflow_Log__c> logs = [
+      SELECT Message__c, Log_Type__c
+      FROM Workflow_Log__c
+      WHERE Workflow_Instance__c = :inst.Id AND Log_Type__c = 'OperatorIntervention'
+    ];
+    System.assertEquals(1, logs.size());
+    System.assert(logs[0].Message__c.contains('Auto-reclaimed orphaned instance'));
+  }
+
+  @isTest
+  static void testWatchdogAutoReclaimBypassesHealthyInstance() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.reclaimThresholdMinutes = 10;
+    WorkflowEngine.mockNow = DateTime.now();
+
+    // Healthy in-flight Running instance (recently modified)
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running'
+    );
+    insert inst;
+
+    // Running step execution log
+    Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.HappyStep1',
+      Status__c = 'Running'
+    );
+    insert stepExec;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Verify step was NOT reset
+    Workflow_Step_Execution__c updatedStep = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :stepExec.Id
+    ];
+    System.assertEquals('Running', updatedStep.Status__c);
+  }
+
+  @isTest
+  static void testWatchdogAutoReclaimBypassesSuspendedInstance() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.reclaimThresholdMinutes = 10;
+    WorkflowEngine.mockNow = DateTime.now().addMinutes(15);
+
+    // Suspended instance waiting on signal/approval/timer
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended'
+    );
+    insert inst;
+    Test.setCreatedDate(inst.Id, DateTime.now().addMinutes(-15));
+
+    // Pending step execution log waiting on signal
+    Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.HappyStep1',
+      Status__c = 'Pending'
+    );
+    insert stepExec;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Verify step was NOT reset
+    Workflow_Step_Execution__c updatedStep = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :stepExec.Id
+    ];
+    System.assertEquals('Pending', updatedStep.Status__c);
+  }
+
+  @isTest
+  static void testWatchdogAutoReclaimBypassesCompletedStep() {
+    WorkflowWatchdog.forceBootstrapInTest = true;
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.reclaimThresholdMinutes = 10;
+    WorkflowEngine.mockNow = DateTime.now().addMinutes(15);
+
+    // Candidate instance stuck in Running
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running'
+    );
+    insert inst;
+    Test.setCreatedDate(inst.Id, DateTime.now().addMinutes(-15));
+
+    // Completed step execution log
+    Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'WorkflowEngineTest.HappyStep1',
+      Status__c = 'Completed'
+    );
+    insert stepExec;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    // Verify completed step is untouched
+    Workflow_Step_Execution__c updatedStep = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :stepExec.Id
+    ];
+    System.assertEquals('Completed', updatedStep.Status__c);
+  }
 }
+
 
