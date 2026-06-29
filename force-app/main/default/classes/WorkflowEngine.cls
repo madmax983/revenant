@@ -9046,17 +9046,24 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
-  public static void enqueueOrchestrators(List<Id> instanceIds) {
+  public class OrchestratorRequest {
+    public Id instanceId;
+    public String stepName;
+    public OrchestratorRequest(Id instanceId, String stepName) {
+      this.instanceId = instanceId;
+      this.stepName = stepName;
+    }
+  }
+
+  public static void enqueueOrchestrators(List<OrchestratorRequest> requests) {
     WorkflowWatchdog.bootstrap();
     if (Test.isRunningTest()) {
-      // Honor the manual-drive switch: a test that sets disableQueueableInTest is
-      // driving steps itself and must observe the pre-execution state (e.g. a
-      // bounded bulk start whose initial timeout is deferred until admission).
-      // The scalar enqueueOrchestrator already returns early in tests; without
-      // this, the bulk path's auto-run at Test.stopTest() would admit/advance the
-      // very instances the test froze, defeating the assertion.
       if (disableQueueableInTest) {
         return;
+      }
+      Set<Id> instanceIds = new Set<Id>();
+      for (OrchestratorRequest req : requests) {
+        instanceIds.add(req.instanceId);
       }
       for (Id instId : instanceIds) {
         try {
@@ -9076,12 +9083,12 @@ public inherited sharing class WorkflowEngine {
       return;
     }
     List<Workflow_Event__e> events = new List<Workflow_Event__e>();
-    for (Id instId : instanceIds) {
+    for (OrchestratorRequest req : requests) {
       events.add(
         new Workflow_Event__e(
-          Workflow_Instance_Id__c = instId,
+          Workflow_Instance_Id__c = req.instanceId,
           Event_Type__c = 'RUN_STEP',
-          Payload__c = null
+          Payload__c = req.stepName
         )
       );
     }
@@ -9102,26 +9109,16 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  public static void enqueueOrchestrators(List<Id> instanceIds) {
+    List<OrchestratorRequest> requests = new List<OrchestratorRequest>();
+    for (Id instId : instanceIds) {
+      requests.add(new OrchestratorRequest(instId, null));
+    }
+    enqueueOrchestrators(requests);
+  }
+
   public static void enqueueOrchestrator(Id instanceId, String stepName) {
-    WorkflowWatchdog.bootstrap();
-    if (Test.isRunningTest()) {
-      return;
-    }
-    Workflow_Event__e event = new Workflow_Event__e(
-      Workflow_Instance_Id__c = instanceId,
-      Event_Type__c = 'RUN_STEP',
-      Payload__c = stepName
-    );
-    Database.SaveResult sr = EventBus.publish(event);
-    if (!sr.isSuccess()) {
-      List<String> errMsgs = new List<String>();
-      for (Database.Error err : sr.getErrors()) {
-        errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
-      }
-      throw new WorkflowException(
-        'Failed to publish orchestrator event: ' + String.join(errMsgs, ', ')
-      );
-    }
+    enqueueOrchestrators(new List<OrchestratorRequest>{ new OrchestratorRequest(instanceId, stepName) });
   }
 
   private static void validateCorrelationKey(String correlationKey) {
@@ -10183,7 +10180,7 @@ public inherited sharing class WorkflowEngine {
             }
           }
 
-          List<Workflow_Instance__c> orphanedInstances = new List<Workflow_Instance__c>();
+          Set<Id> orphanIds = new Set<Id>();
           for (Workflow_Instance__c inst : candidates) {
             Boolean isOrphaned = false;
             if (String.isBlank(inst.Async_Job_Id__c)) {
@@ -10212,12 +10209,21 @@ public inherited sharing class WorkflowEngine {
             }
 
             if (isOrphaned) {
-              orphanedInstances.add(inst);
+              orphanIds.add(inst.Id);
             }
           }
 
-          if (!orphanedInstances.isEmpty()) {
-            reclaimOrphanedInstances(orphanedInstances);
+          if (!orphanIds.isEmpty()) {
+            List<Workflow_Instance__c> lockedOrphans = [
+              SELECT Id, Name, Status__c, Current_Step__c, Compensation_Stack__c, Async_Job_Id__c, Workflow_Name__c, Correlation_Key__c
+              FROM Workflow_Instance__c
+              WHERE Id IN :orphanIds AND Status__c IN ('Pending', 'Running', 'Compensating', 'Cancelling')
+              WITH SYSTEM_MODE
+              FOR UPDATE
+            ];
+            if (!lockedOrphans.isEmpty()) {
+              reclaimOrphanedInstances(lockedOrphans);
+            }
           }
         }
       }
@@ -11313,6 +11319,8 @@ public inherited sharing class WorkflowEngine {
     Set<Id> instanceIds = new Set<Id>();
     Set<String> allTargetStepNames = new Set<String>();
     Map<Id, List<String>> targetStepsByInstanceId = new Map<Id, List<String>>();
+    Map<Id, Boolean> hasCompensationsByInstanceId = new Map<Id, Boolean>();
+    Map<String, String> initialStepByWorkflowName = new Map<String, String>();
 
     for (Workflow_Instance__c inst : orphanedInstances) {
       instanceIds.add(inst.Id);
@@ -11327,6 +11335,7 @@ public inherited sharing class WorkflowEngine {
           hasCompensations = !stack.isEmpty();
         } catch (Exception ex) {}
       }
+      hasCompensationsByInstanceId.put(inst.Id, hasCompensations);
 
       List<String> targetStepNames = new List<String>();
       if (hasCompensations) {
@@ -11342,15 +11351,24 @@ public inherited sharing class WorkflowEngine {
       }
 
       if (String.isBlank(inst.Current_Step__c) && !hasCompensations) {
-        Type wflowType = Type.forName(inst.Workflow_Name__c);
-        if (wflowType != null) {
-          try {
-            Object defObj = wflowType.newInstance();
-            if (defObj instanceof WorkflowDefinition) {
-              inst.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
-              targetStepNames.add(inst.Current_Step__c);
-            }
-          } catch (Exception ex) {}
+        String wflowName = inst.Workflow_Name__c;
+        if (!initialStepByWorkflowName.containsKey(wflowName)) {
+          String initialStep = null;
+          Type wflowType = Type.forName(wflowName);
+          if (wflowType != null) {
+            try {
+              Object defObj = wflowType.newInstance();
+              if (defObj instanceof WorkflowDefinition) {
+                initialStep = ((WorkflowDefinition) defObj).getInitialStep();
+              }
+            } catch (Exception ex) {}
+          }
+          initialStepByWorkflowName.put(wflowName, initialStep);
+        }
+        String initialStep = initialStepByWorkflowName.get(wflowName);
+        if (initialStep != null) {
+          inst.Current_Step__c = initialStep;
+          targetStepNames.add(initialStep);
         }
       }
 
@@ -11358,7 +11376,7 @@ public inherited sharing class WorkflowEngine {
       allTargetStepNames.addAll(targetStepNames);
     }
 
-    // Query step executions to reset
+    // Query step executions to reset: first identify latest step execution IDs
     Map<String, Workflow_Step_Execution__c> latestStepByName = new Map<String, Workflow_Step_Execution__c>();
     if (!allTargetStepNames.isEmpty()) {
       for (Workflow_Step_Execution__c se : [
@@ -11375,9 +11393,27 @@ public inherited sharing class WorkflowEngine {
           latestStepByName.put(key, se);
         }
       }
+
+      // Then lock those specific records using FOR UPDATE
+      Set<Id> stepIdsToLock = new Set<Id>();
+      for (Workflow_Step_Execution__c se : latestStepByName.values()) {
+        stepIdsToLock.add(se.Id);
+      }
+      if (!stepIdsToLock.isEmpty()) {
+        for (Workflow_Step_Execution__c se : [
+          SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Retry_Count__c, Error_Details__c
+          FROM Workflow_Step_Execution__c
+          WHERE Id IN :stepIdsToLock
+          WITH SYSTEM_MODE
+          FOR UPDATE
+        ]) {
+          String key = se.Workflow_Instance__c + ':' + se.Step_Name__c;
+          latestStepByName.put(key, se);
+        }
+      }
     }
 
-    List<Workflow_Step_Execution__c> stepsToReset = new List<Workflow_Step_Execution__c>();
+    Map<Id, Workflow_Step_Execution__c> stepsToResetMap = new Map<Id, Workflow_Step_Execution__c>();
     for (Workflow_Instance__c inst : orphanedInstances) {
       List<String> targetStepNames = targetStepsByInstanceId.get(inst.Id);
       for (String targetStepName : targetStepNames) {
@@ -11391,75 +11427,98 @@ public inherited sharing class WorkflowEngine {
           stepExec.Status__c = 'Pending';
           stepExec.Retry_Count__c = 0;
           stepExec.Error_Details__c = null;
-          stepsToReset.add(stepExec);
+          stepsToResetMap.put(stepExec.Id, stepExec);
         }
       }
     }
 
-    if (!stepsToReset.isEmpty()) {
-      update as system stepsToReset;
+    Set<Id> failedInstanceIds = new Set<Id>();
+    if (!stepsToResetMap.isEmpty()) {
+      List<Workflow_Step_Execution__c> stepsList = stepsToResetMap.values();
+      Database.SaveResult[] stepSRs = Database.update(stepsList, false, AccessLevel.SYSTEM_MODE);
+      for (Integer i = 0; i < stepSRs.size(); i++) {
+        if (!stepSRs[i].isSuccess()) {
+          failedInstanceIds.add(stepsList[i].Workflow_Instance__c);
+          System.debug(LoggingLevel.WARN, 'Auto-reclaim failed to reset step ' + stepsList[i].Step_Name__c + ': ' + stepSRs[i].getErrors()[0].getMessage());
+        }
+      }
+    }
+
+    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+    for (Workflow_Instance__c inst : orphanedInstances) {
+      if (!failedInstanceIds.contains(inst.Id)) {
+        inst.Async_Job_Id__c = null;
+        instancesToUpdate.add(inst);
+      }
+    }
+
+    Set<Id> succeededInstanceIds = new Set<Id>();
+    if (!instancesToUpdate.isEmpty()) {
+      Database.SaveResult[] instSRs = Database.update(instancesToUpdate, false, AccessLevel.SYSTEM_MODE);
+      for (Integer i = 0; i < instSRs.size(); i++) {
+        if (instSRs[i].isSuccess()) {
+          succeededInstanceIds.add(instancesToUpdate[i].Id);
+        } else {
+          System.debug(LoggingLevel.WARN, 'Auto-reclaim failed to update instance ' + instancesToUpdate[i].Id + ': ' + instSRs[i].getErrors()[0].getMessage());
+        }
+      }
     }
 
     // Write audit logs
     List<Workflow_Log__c> auditLogs = new List<Workflow_Log__c>();
     for (Workflow_Instance__c inst : orphanedInstances) {
-      String stepDetail = String.isNotBlank(inst.Current_Step__c) ? inst.Current_Step__c : '(initial step)';
-      auditLogs.add(new Workflow_Log__c(
-        Workflow_Instance__c = inst.Id,
-        Workflow_Name__c = inst.Workflow_Name__c,
-        Correlation_Key__c = inst.Correlation_Key__c,
-        Log_Type__c = 'OperatorIntervention',
-        Message__c = 'Auto-reclaimed orphaned instance from step: ' + stepDetail,
-        Outcome__c = 'Success',
-        Level__c = 'INFO',
-        Fire_Time__c = DateTime.now()
-      ));
-      inst.Async_Job_Id__c = null;
-    }
-    update as system orphanedInstances;
-    insert as system auditLogs;
-
-    // Enqueue fresh orchestrators
-    List<Id> singleHopInstanceIds = new List<Id>();
-    for (Workflow_Instance__c inst : orphanedInstances) {
-      List<String> targetStepNames = targetStepsByInstanceId.get(inst.Id);
-      Boolean hasCompensations = false;
-      if (String.isNotBlank(inst.Compensation_Stack__c)) {
-        try {
-          List<String> stack = (List<String>) JSON.deserialize(
-            inst.Compensation_Stack__c,
-            List<String>.class
-          );
-          hasCompensations = !stack.isEmpty();
-        } catch (Exception ex) {}
+      if (succeededInstanceIds.contains(inst.Id)) {
+        String stepDetail = String.isNotBlank(inst.Current_Step__c) ? inst.Current_Step__c : '(initial step)';
+        auditLogs.add(new Workflow_Log__c(
+          Workflow_Instance__c = inst.Id,
+          Workflow_Name__c = inst.Workflow_Name__c,
+          Correlation_Key__c = inst.Correlation_Key__c,
+          Log_Type__c = 'OperatorIntervention',
+          Message__c = 'Auto-reclaimed orphaned instance from step: ' + stepDetail,
+          Outcome__c = 'Success',
+          Level__c = 'INFO',
+          Fire_Time__c = DateTime.now()
+        ));
       }
+    }
+    if (!auditLogs.isEmpty()) {
+      Database.insert(auditLogs, false, AccessLevel.SYSTEM_MODE);
+    }
 
-      if (
-        hasCompensations ||
-        String.isBlank(inst.Current_Step__c) ||
-        !inst.Current_Step__c.contains(',')
-      ) {
-        singleHopInstanceIds.add(inst.Id);
-      } else {
-        for (String targetStepName : targetStepNames) {
-          String key = inst.Id + ':' + targetStepName;
-          Workflow_Step_Execution__c stepExec = latestStepByName.get(key);
-          if (
-            stepExec == null ||
-            (stepExec.Status__c != 'Completed' &&
-            stepExec.Status__c != 'OperatorSkipped')
-          ) {
-            if (!(Test.isRunningTest() && disableQueueableInTest)) {
-              enqueueOrchestrator(inst.Id, targetStepName);
+    // Enqueue fresh orchestrators in a bulk fashion
+    List<OrchestratorRequest> requests = new List<OrchestratorRequest>();
+    for (Workflow_Instance__c inst : orphanedInstances) {
+      if (succeededInstanceIds.contains(inst.Id)) {
+        List<String> targetStepNames = targetStepsByInstanceId.get(inst.Id);
+        Boolean hasCompensations = hasCompensationsByInstanceId.get(inst.Id);
+
+        if (
+          hasCompensations ||
+          String.isBlank(inst.Current_Step__c) ||
+          !inst.Current_Step__c.contains(',')
+        ) {
+          requests.add(new OrchestratorRequest(inst.Id, null));
+        } else {
+          for (String targetStepName : targetStepNames) {
+            String key = inst.Id + ':' + targetStepName;
+            Workflow_Step_Execution__c stepExec = latestStepByName.get(key);
+            if (
+              stepExec == null ||
+              (stepExec.Status__c != 'Completed' &&
+              stepExec.Status__c != 'OperatorSkipped')
+            ) {
+              requests.add(new OrchestratorRequest(inst.Id, targetStepName));
             }
           }
         }
       }
     }
 
-    if (!singleHopInstanceIds.isEmpty()) {
-      if (!(Test.isRunningTest() && disableQueueableInTest)) {
-        enqueueOrchestrators(singleHopInstanceIds);
+    if (!requests.isEmpty()) {
+      try {
+        enqueueOrchestrators(requests);
+      } catch (Exception publishEx) {
+        System.debug(LoggingLevel.ERROR, 'Auto-reclaim orchestrator enqueue failed: ' + publishEx.getMessage());
       }
     }
   }
