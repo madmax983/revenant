@@ -865,6 +865,7 @@ export default class WorkflowDashboard extends LightningElement {
         }
         const inst = result.instance;
         const payloadFiles = result.payloadFiles || {};
+        const breadcrumbs = result.breadcrumbs || [];
         this.successor = result.successor;
         this.selectedInst = {
           ...inst,
@@ -909,6 +910,15 @@ export default class WorkflowDashboard extends LightningElement {
         // Preserve showDetails toggle state if steps were already loaded
         const showDetailsMap = new Map();
         this.steps.forEach((s) => showDetailsMap.set(s.Id, s.showDetails));
+
+        const breadcrumbsByStep = {};
+        for (const b of breadcrumbs) {
+          const key = b.Correlation_Key__c;
+          if (!breadcrumbsByStep[key]) {
+            breadcrumbsByStep[key] = [];
+          }
+          breadcrumbsByStep[key].push(b);
+        }
 
         this.steps = result.steps.map((step) => {
           let approvalInfo = null;
@@ -961,6 +971,26 @@ export default class WorkflowDashboard extends LightningElement {
             hasLimitPressure = cpuPct >= 80 || soqlPct >= 80 || heapPct >= 80;
           }
 
+          const stepBreadcrumbs = (breadcrumbsByStep[step.Id] || [])
+            .map((b) => {
+              let badgeClass = "terminal-badge";
+              const lvl = (b.Level__c || "").toUpperCase();
+              if (lvl === "WARN") {
+                badgeClass += " terminal-badge-warn";
+              } else if (lvl === "ERROR") {
+                badgeClass += " terminal-badge-error";
+              } else {
+                badgeClass += " terminal-badge-info";
+              }
+              return {
+                ...b,
+                formattedFireTime: b.Fire_Time__c
+                  ? this.formatDateTime(b.Fire_Time__c)
+                  : this.formatDateTime(b.CreatedDate),
+                badgeClass,
+              };
+            });
+
           return {
             ...step,
             formattedDate: this.formatDateTime(step.CreatedDate),
@@ -999,6 +1029,8 @@ export default class WorkflowDashboard extends LightningElement {
               : "slds-text-color_weak",
             isEligibleForSkip:
               inst.Status__c === "Failed" && step.Status__c === "Failed",
+            breadcrumbs: stepBreadcrumbs,
+            hasBreadcrumbs: stepBreadcrumbs.length > 0,
           };
         });
 

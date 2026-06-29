@@ -25,6 +25,7 @@ public inherited sharing class SagaWorkflowExample {
 
   public class ChargeCreditCardStep implements CompensatableStep {
     public StepResult execute(StepContext ctx) {
+      ctx.log(StepContext.Level.INFO, 'Charging credit card', new Map<String, Object>{'amount' => 150});
       return StepResult.complete(
         null,
         new Map<String, Object>{ 'chargeId' => 'ch_12345', 'amount' => 150 }
@@ -50,6 +51,7 @@ public inherited sharing class SagaWorkflowExample {
         }
       }
 
+      ctx.log(StepContext.Level.WARN, 'Refunding credit card charge', new Map<String, Object>{'chargeId' => chargeId});
       // Mock refund logic
       return StepResult.complete(
         null,
@@ -63,6 +65,7 @@ public inherited sharing class SagaWorkflowExample {
 
   public class ProvisionServiceStep implements CompensatableStep {
     public StepResult execute(StepContext ctx) {
+      ctx.log(StepContext.Level.INFO, 'Provisioning service...');
       return StepResult.complete(
         null,
         new Map<String, Object>{ 'serviceId' => 'srv_98765' }
@@ -70,6 +73,7 @@ public inherited sharing class SagaWorkflowExample {
     }
 
     public StepResult compensate(StepContext ctx) {
+      ctx.log(StepContext.Level.INFO, 'Deprovisioning service...');
       // Mock deprovision logic
       return StepResult.complete(
         null,

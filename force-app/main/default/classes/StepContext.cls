@@ -1,4 +1,107 @@
 public inherited sharing class StepContext {
+  /**
+   * Logging severity levels for step breadcrumbs.
+   */
+  public enum Level { INFO, WARN, ERROR }
+
+  /**
+   * Represents an individual step log entry.
+   */
+  public class Breadcrumb {
+    /** The timestamp when this breadcrumb was created. */
+    public Datetime timestamp { get; private set; }
+    /** The severity level of this breadcrumb. */
+    public Level level { get; private set; }
+    /** The formatted log message (with serialized context, if any, and truncation applied). */
+    public String message { get; private set; }
+
+    public Breadcrumb(Level level, String message) {
+      this.timestamp = Datetime.now();
+      this.level = (level != null) ? level : StepContext.Level.INFO;
+      this.message = message;
+    }
+  }
+
+  public static final Integer MAX_LOG_ENTRIES = 100;
+  public static final Integer MAX_MESSAGE_LENGTH = 4000;
+  public static final String LOG_TYPE_BREADCRUMB = 'StepBreadcrumb';
+
+  private List<Breadcrumb> breadcrumbs = new List<Breadcrumb>();
+
+  /**
+   * Logs a message at the specified level without any context.
+   *
+   * @param level The severity level (INFO, WARN, or ERROR).
+   * @param message The log message.
+   */
+  public void log(Level level, String message) {
+    this.log(level, message, null);
+  }
+
+  /**
+   * Logs a message at the specified level with a context map, which will be serialized as JSON.
+   * Enforces log volume caps (up to 100 entries, with a truncation warning on the 101st log)
+   * and character length limits (entries are truncated to exactly 4000 characters).
+   *
+   * @param level The severity level (INFO, WARN, or ERROR).
+   * @param message The log message.
+   * @param logContext Context data as key-value pairs to be appended to the log.
+   */
+  public void log(Level level, String message, Map<String, Object> logContext) {
+    if (this.breadcrumbs.size() > MAX_LOG_ENTRIES) {
+      return;
+    }
+    if (this.breadcrumbs.size() == MAX_LOG_ENTRIES) {
+      this.breadcrumbs.add(new Breadcrumb(StepContext.Level.WARN, '[TRUNCATED] Log limit of ' + MAX_LOG_ENTRIES + ' entries reached. Subsequent step logs are discarded.'));
+      return;
+    }
+
+    String formattedMessage = message;
+    if (logContext != null && !logContext.isEmpty()) {
+      if (logContext.size() > 50) {
+        formattedMessage = (message != null ? message : 'null') + ' | Context: [TRUNCATED] Map size limit of 50 entries exceeded.';
+      } else if (Limits.getHeapSize() > Limits.getLimitHeapSize() * 0.85) {
+        formattedMessage = (message != null ? message : 'null') + ' | Context: [TRUNCATED] JSON serialization bypassed due to heap pressure.';
+      } else {
+        Boolean hasHugeValue = false;
+        for (Object val : logContext.values()) {
+          if (val instanceof String && ((String) val).length() > MAX_MESSAGE_LENGTH) {
+            hasHugeValue = true;
+            break;
+          }
+        }
+        if (hasHugeValue) {
+          formattedMessage = (message != null ? message : 'null') + ' | Context: [TRUNCATED] JSON serialization bypassed due to oversized string value.';
+        } else {
+          try {
+            String serializedContext = JSON.serialize(logContext);
+            if (serializedContext.length() > MAX_MESSAGE_LENGTH) {
+              serializedContext = serializedContext.substring(0, MAX_MESSAGE_LENGTH) + '... [TRUNCATED]';
+            }
+            formattedMessage = (message != null ? message : 'null') + ' | Context: ' + serializedContext;
+          } catch (Exception ex) {
+            formattedMessage = (message != null ? message : 'null') + ' | Context: [TRUNCATED] JSON serialization failed: ' + ex.getMessage();
+          }
+        }
+      }
+    }
+
+    if (formattedMessage != null && formattedMessage.length() > MAX_MESSAGE_LENGTH) {
+      formattedMessage = formattedMessage.substring(0, MAX_MESSAGE_LENGTH - 15) + '... [TRUNCATED]';
+    }
+
+    this.breadcrumbs.add(new Breadcrumb(level, formattedMessage));
+  }
+
+  /**
+   * Retrieves the buffered log entries (breadcrumbs) for this step execution.
+   *
+   * @return The list of Breadcrumb logs.
+   */
+  public List<Breadcrumb> getBreadcrumbs() {
+    return this.breadcrumbs;
+  }
+
   public Id workflowInstanceId { get; private set; }
   public String workflowName { get; private set; }
   public String stepName { get; private set; }

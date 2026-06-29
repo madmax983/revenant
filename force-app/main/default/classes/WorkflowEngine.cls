@@ -3588,6 +3588,13 @@ public inherited sharing class WorkflowEngine {
   @TestVisible
   private static Integer SERIAL_SIGNAL_ROW_CAP = 8000;
 
+  @TestVisible
+  private static Integer BREADCRUMB_DML_STATEMENT_RESERVE = 10;
+  @TestVisible
+  private static Integer BREADCRUMB_DML_ROW_RESERVE = 20;
+  @TestVisible
+  private static Integer BREADCRUMB_SOQL_RESERVE = 5;
+
   /**
    * Lazily supplies the pending (unconsumed) signals targeting an instance so a
    * step that never reads signals pays no query/heap cost for unrelated
@@ -4352,6 +4359,7 @@ public inherited sharing class WorkflowEngine {
     StepResult result,
     StepContext context
   ) {
+    persistStepBreadcrumbs(instance, stepExec, result, context);
     // Re-query to avoid overwriting a timeout or finalizer crash status and race conditions
     Workflow_Instance__c freshInstance = [
       SELECT
@@ -8129,6 +8137,7 @@ public inherited sharing class WorkflowEngine {
     try {
       result = compensatableStepInstance.compensate(context);
     } catch (Exception ex) {
+      persistStepBreadcrumbs(instance, stepExec, null, context);
       stepExec.Status__c = 'Failed';
       stepExec.Error_Details__c =
         ex.getMessage() +
@@ -8159,6 +8168,7 @@ public inherited sharing class WorkflowEngine {
     List<String> stack,
     StepContext context
   ) {
+    persistStepBreadcrumbs(instance, stepExec, result, context);
     Workflow_Instance__c freshInstance = [
       SELECT
         Id,
@@ -11048,5 +11058,137 @@ public inherited sharing class WorkflowEngine {
       }
     }
     return clean;
+  }
+
+  private static void persistStepBreadcrumbs(
+    Workflow_Instance__c instance,
+    Workflow_Step_Execution__c stepExec,
+    StepResult result,
+    StepContext context
+  ) {
+    if (context == null || stepExec == null || instance == null) {
+      return;
+    }
+    List<StepContext.Breadcrumb> crumbs = context.getBreadcrumbs();
+    if (crumbs == null || crumbs.isEmpty()) {
+      return;
+    }
+
+    // Keep breadcrumbs from exhausting checkpoint SOQL (best-effort observability log drop)
+    if (Limits.getQueries() + BREADCRUMB_SOQL_RESERVE > Limits.getLimitQueries()) {
+      System.debug(
+        LoggingLevel.WARN,
+        'Skipping step breadcrumbs persist: SOQL query budget exhausted (queries=' +
+          Limits.getQueries() +
+          '/' +
+          Limits.getLimitQueries() +
+          ').'
+      );
+      return;
+    }
+
+    Integer dynamicRowReserve = 0;
+    if (result != null) {
+      if (result.childRequests != null) {
+        for (StepResult.ChildRequest req : result.childRequests) {
+          dynamicRowReserve += 3;
+          if (String.isNotBlank(req.inputJson) && req.inputJson.length() > 100000) {
+            dynamicRowReserve += 2; // ContentVersion + ContentDocumentLink
+          }
+        }
+      }
+      if (result.parallelStepNames != null) {
+        for (String ps : result.parallelStepNames) {
+          dynamicRowReserve += 1;
+          String inputPayload = result.parallelInputJson != null ? result.parallelInputJson : stepExec.Output__c;
+          if (String.isNotBlank(inputPayload) && inputPayload.length() > 100000) {
+            dynamicRowReserve += 2; // ContentVersion + ContentDocumentLink
+          }
+        }
+      }
+      if (result.outboundEvents != null) {
+        dynamicRowReserve += result.outboundEvents.size();
+      }
+
+      Boolean willConsumeSignals = (result.action == StepResult.ActionType.COMPLETE ||
+                                    result.action == StepResult.ActionType.SPLIT ||
+                                    result.action == StepResult.ActionType.FAIL);
+      if (willConsumeSignals) {
+        Set<String> matchedNames = context.getConsumedSignalNames();
+        if (matchedNames != null && !matchedNames.isEmpty()) {
+          Boolean isParallel = String.isNotBlank(instance.Current_Step__c) && instance.Current_Step__c.contains(',');
+          Boolean runDuplicateCleanup = !isParallel && !context.signalReadWasCapped();
+          if (runDuplicateCleanup) {
+            dynamicRowReserve += [
+              SELECT COUNT()
+              FROM Workflow_Signal__c
+              WHERE Workflow_Instance__c = :instance.Id AND Status__c = 'Received' AND Signal_Name__c IN :matchedNames
+              WITH SYSTEM_MODE
+            ];
+            Set<Id> claimedIds = context.getClaimedSignalIds();
+            if (claimedIds != null && !claimedIds.isEmpty()) {
+              dynamicRowReserve += [
+                SELECT COUNT()
+                FROM Workflow_Signal__c
+                WHERE Id IN :claimedIds AND Status__c = 'Processing'
+                WITH SYSTEM_MODE
+              ];
+            }
+          } else {
+            Set<Id> consumedIds = context.getConsumedSignalIds();
+            Set<Id> claimedIds = context.getClaimedSignalIds();
+            Set<Id> allIds = new Set<Id>();
+            if (consumedIds != null) allIds.addAll(consumedIds);
+            if (claimedIds != null) allIds.addAll(claimedIds);
+            if (!allIds.isEmpty()) {
+              dynamicRowReserve += [
+                SELECT COUNT()
+                FROM Workflow_Signal__c
+                WHERE Id IN :allIds AND Status__c IN ('Received', 'Processing')
+                WITH SYSTEM_MODE
+              ];
+            }
+          }
+        }
+      }
+    }
+
+    // Keep breadcrumbs from exhausting checkpoint DML (best-effort observability log drop)
+    if (
+      Limits.getDmlStatements() + 1 + BREADCRUMB_DML_STATEMENT_RESERVE > Limits.getLimitDmlStatements() ||
+      Limits.getDmlRows() + crumbs.size() + BREADCRUMB_DML_ROW_RESERVE + dynamicRowReserve > Limits.getLimitDmlRows()
+    ) {
+      System.debug(
+        LoggingLevel.WARN,
+        'Skipping step breadcrumbs persist: DML budget exhausted (statements=' +
+          Limits.getDmlStatements() +
+          '/' +
+          Limits.getLimitDmlStatements() +
+          ', rows=' +
+          Limits.getDmlRows() +
+          '/' +
+          Limits.getLimitDmlRows() +
+          ').'
+      );
+      return;
+    }
+
+    if (stepExec.Id == null) {
+      saveStepExec(stepExec);
+    }
+
+    List<Workflow_Log__c> logsToInsert = new List<Workflow_Log__c>();
+    for (StepContext.Breadcrumb b : crumbs) {
+      logsToInsert.add(new Workflow_Log__c(
+        Workflow_Instance__c = instance.Id,
+        Workflow_Name__c = instance.Workflow_Name__c,
+        Correlation_Key__c = stepExec.Id,
+        Log_Type__c = StepContext.LOG_TYPE_BREADCRUMB,
+        Level__c = (b.level != null) ? b.level.name() : 'INFO',
+        Message__c = b.message,
+        Fire_Time__c = b.timestamp
+      ));
+    }
+    insert as system logsToInsert;
   }
 }

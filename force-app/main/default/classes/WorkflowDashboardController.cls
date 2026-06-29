@@ -1291,6 +1291,28 @@ public inherited sharing class WorkflowDashboardController {
       ORDER BY Key__c ASC
     ];
 
+    List<Workflow_Log__c> breadcrumbs = [
+      SELECT
+        Id,
+        Level__c,
+        Message__c,
+        Correlation_Key__c,
+        Fire_Time__c,
+        CreatedDate
+      FROM Workflow_Log__c
+      WHERE Workflow_Instance__c = :instanceId
+        AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
+      WITH SYSTEM_MODE
+      ORDER BY Fire_Time__c DESC, CreatedDate DESC
+      LIMIT 1000
+    ];
+    // Reverse back to ascending order for chronological UI presentation
+    List<Workflow_Log__c> chronologicalBreadcrumbs = new List<Workflow_Log__c>();
+    for (Integer i = breadcrumbs.size() - 1; i >= 0; i--) {
+      chronologicalBreadcrumbs.add(breadcrumbs[i]);
+    }
+    breadcrumbs = chronologicalBreadcrumbs;
+
     return new Map<String, Object>{
       'instance' => instance,
       'steps' => steps,
@@ -1300,8 +1322,10 @@ public inherited sharing class WorkflowDashboardController {
       'pendingCompensationCount' => pendingCompensations.size(),
       'pendingCompensations' => pendingCompensations,
       'payloadFiles' => payloadFiles,
-      'attributes' => attributes
+      'attributes' => attributes,
+      'breadcrumbs' => breadcrumbs
     };
+
   }
 
   /**
