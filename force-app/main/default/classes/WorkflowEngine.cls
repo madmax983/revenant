@@ -1205,11 +1205,7 @@ public inherited sharing class WorkflowEngine {
     }
 
     // Enqueue the first step execution
-    if (Test.isRunningTest()) {
-      System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-    } else {
-      enqueueOrchestrator(instance.Id, null);
-    }
+    enqueueOrchestrators(new List<Id>{instance.Id});
     return new StartResult(instance.Id, true);
   }
 
@@ -1420,7 +1416,10 @@ public inherited sharing class WorkflowEngine {
               }
             }
 
+            System.debug('--- Parent ' + parentId + ' expectedKeys: ' + expectedKeys);
+            System.debug('--- Parent ' + parentId + ' finishedKeys: ' + finishedKeys);
             if (!finishedKeys.containsAll(expectedKeys)) {
+              System.debug('--- Parent ' + parentId + ' is GATED (not ready)');
               nonReadyParents.add(parentId);
             }
           }

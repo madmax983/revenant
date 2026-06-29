@@ -85,6 +85,7 @@ public class WorkflowSignalOrStartTest {
       'InitialInput'
     );
 
+    WorkflowEngine.disableQueueableInTest = false;
     Test.startTest();
     WorkflowEngine.StartResult result = WorkflowEngine.signalOrStart(
       startReq,
@@ -250,6 +251,7 @@ public class WorkflowSignalOrStartTest {
     // Request 3: Duplicate of Request 1 in same batch (in-batch duplicate)
     requests.add(new WorkflowEngine.SignalOrStartRequest(startNew, 'Approve:MySignal', '"PayloadNew"', 'Idemp-Bulk-1'));
 
+    WorkflowEngine.disableQueueableInTest = false;
     Test.startTest();
     List<WorkflowEngine.StartResult> results = WorkflowEngine.signalOrStart(requests);
 
