@@ -1310,6 +1310,151 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  private static Set<Id> getGatedNonReadyParents(
+    List<Workflow_Instance__c> instances,
+    Map<Id, Set<String>> signalsByInstanceId
+  ) {
+    Set<Id> gatedNonReadyParents = new Set<Id>();
+    if (instances == null || instances.isEmpty()) {
+      return gatedNonReadyParents;
+    }
+
+    Set<Id> parentIdsToCheck = new Set<Id>();
+    for (Workflow_Instance__c inst : instances) {
+      if (inst != null && inst.Status__c == 'Suspended') {
+        parentIdsToCheck.add(inst.Id);
+      }
+    }
+
+    if (parentIdsToCheck.isEmpty()) {
+      return gatedNonReadyParents;
+    }
+
+    Map<Id, Workflow_Step_Execution__c> pendingStepExecs = new Map<Id, Workflow_Step_Execution__c>();
+    for (Workflow_Step_Execution__c se : [
+      SELECT Id, Workflow_Instance__c, Step_Name__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c IN :parentIdsToCheck
+        AND Status__c = 'Pending'
+      WITH SYSTEM_MODE
+    ]) {
+      pendingStepExecs.put(se.Workflow_Instance__c, se);
+    }
+
+    Map<Id, String> resolvedOutputsByParentId = new Map<Id, String>();
+    if (!pendingStepExecs.isEmpty()) {
+      List<Id> parentIds = new List<Id>();
+      List<String> rawOutputs = new List<String>();
+      for (Workflow_Step_Execution__c se : pendingStepExecs.values()) {
+        parentIds.add(se.Workflow_Instance__c);
+        rawOutputs.add(se.Output__c);
+      }
+      List<String> resolved = resolvePayloads(rawOutputs);
+      for (Integer i = 0; i < parentIds.size(); i++) {
+        resolvedOutputsByParentId.put(parentIds[i], resolved[i]);
+      }
+    }
+
+    Map<Id, List<Workflow_Instance__c>> childrenByParentId = new Map<Id, List<Workflow_Instance__c>>();
+    for (Workflow_Instance__c child : [
+      SELECT Id, Parent_Instance__c, Correlation_Key__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c IN :parentIdsToCheck
+      WITH SYSTEM_MODE
+    ]) {
+      if (!childrenByParentId.containsKey(child.Parent_Instance__c)) {
+        childrenByParentId.put(
+          child.Parent_Instance__c,
+          new List<Workflow_Instance__c>()
+        );
+      }
+      childrenByParentId.get(child.Parent_Instance__c).add(child);
+    }
+
+    Set<Id> nonReadyParents = new Set<Id>();
+    for (Id parentId : parentIdsToCheck) {
+      Workflow_Step_Execution__c se = pendingStepExecs.get(parentId);
+      if (se == null) {
+        continue;
+      }
+      String resolvedOutput = resolvedOutputsByParentId.get(parentId);
+      if (String.isBlank(resolvedOutput)) {
+        continue;
+      }
+      try {
+        Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
+          resolvedOutput
+        );
+        if (data.containsKey('childCorrelationKeys')) {
+          List<Object> keysObj = (List<Object>) data.get(
+            'childCorrelationKeys'
+          );
+          if (keysObj != null) {
+            Set<String> expectedKeys = new Set<String>();
+            for (Object o : keysObj) {
+              if (o != null) {
+                expectedKeys.add(normalizeKey(String.valueOf(o)));
+              }
+            }
+
+            List<Workflow_Instance__c> children = childrenByParentId.get(
+              parentId
+            );
+            if (children == null) {
+              children = new List<Workflow_Instance__c>();
+            }
+
+            Set<String> finishedKeys = new Set<String>();
+            for (Workflow_Instance__c child : children) {
+              if (String.isNotBlank(child.Correlation_Key__c)) {
+                String normChildKey = normalizeKey(child.Correlation_Key__c);
+                if (expectedKeys.contains(normChildKey)) {
+                  if (
+                    child.Status__c != null &&
+                    !ACTIVE_STATUSES.contains(child.Status__c)
+                  ) {
+                    finishedKeys.add(normChildKey);
+                  }
+                }
+              }
+            }
+
+            if (!finishedKeys.containsAll(expectedKeys)) {
+              nonReadyParents.add(parentId);
+            }
+          }
+        }
+      } catch (Exception ex) {
+        // If JSON parse fails or does not contain childCorrelationKeys, treat as ready
+      }
+    }
+
+    for (Id parentId : nonReadyParents) {
+      Set<String> sigNames = signalsByInstanceId.get(parentId);
+      Boolean allChildSignals = true;
+      if (sigNames != null) {
+        for (String name : sigNames) {
+          if (String.isNotBlank(name)) {
+            String lower = name.toLowerCase();
+            if (
+              !lower.startsWith('childcompleted:') &&
+              !lower.startsWith('childfailed:')
+            ) {
+              allChildSignals = false;
+              break;
+            }
+          }
+        }
+      }
+      if (allChildSignals) {
+        gatedNonReadyParents.add(parentId);
+      }
+    }
+
+    return gatedNonReadyParents;
+  }
+
   /**
    * Removes the given instances (and their parallel branch keys) from the static
    * enqueue guards. Called after a wake-up failure is rolled back so a caller
@@ -2429,6 +2574,30 @@ public inherited sharing class WorkflowEngine {
       }
 
       // 5. Wake active instances that received a fresh signal
+      Map<Id, Set<String>> signalsByInstanceId = new Map<Id, Set<String>>();
+      for (Integer i = 0; i < requests.size(); i++) {
+        SignalOrStartRequest req = requests[i];
+        StartResult res = startResults[i];
+        if (res != null) {
+          Id instanceId = res.instanceId;
+          if (!signalsByInstanceId.containsKey(instanceId)) {
+            signalsByInstanceId.put(instanceId, new Set<String>());
+          }
+          if (String.isNotBlank(req.signalName)) {
+            signalsByInstanceId.get(instanceId).add(req.signalName);
+          }
+        }
+      }
+
+      List<Workflow_Instance__c> activeInstancesList = new List<Workflow_Instance__c>();
+      for (Id instId : activeInstIdsToWake) {
+        Workflow_Instance__c inst = existingInstances.get(instId);
+        if (inst != null) {
+          activeInstancesList.add(inst);
+        }
+      }
+      Set<Id> gatedNonReadyParents = getGatedNonReadyParents(activeInstancesList, signalsByInstanceId);
+
       List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
       List<Workflow_Instance__c> instancesToWake = new List<Workflow_Instance__c>();
 
@@ -2449,11 +2618,16 @@ public inherited sharing class WorkflowEngine {
           if (inst.Concurrency_Parked__c == true && inst.Concurrency_Slot_Held__c != true) {
             continue;
           }
+          if (gatedNonReadyParents.contains(instId)) {
+            continue;
+          }
           inst.Status__c = 'Running';
           inst.Sleep_Until__c = null;
           instancesToUpdate.add(inst);
         }
-        instancesToWake.add(inst);
+        if (!gatedNonReadyParents.contains(instId)) {
+          instancesToWake.add(inst);
+        }
       }
 
       if (!instancesToUpdate.isEmpty()) {
@@ -6582,139 +6756,7 @@ public inherited sharing class WorkflowEngine {
     // would silently no-op and never wake the still-Suspended instances.
     try {
       // JOIN-READINESS BARRIER PRE-COMPUTATION
-      Set<Id> parentIdsToCheck = new Set<Id>();
-      for (Workflow_Instance__c inst : activeInstById.values()) {
-        if (inst.Status__c == 'Suspended') {
-          parentIdsToCheck.add(inst.Id);
-        }
-      }
-
-      Map<Id, Workflow_Step_Execution__c> pendingStepExecs = new Map<Id, Workflow_Step_Execution__c>();
-      if (!parentIdsToCheck.isEmpty()) {
-        for (Workflow_Step_Execution__c se : [
-          SELECT Id, Workflow_Instance__c, Step_Name__c, Output__c
-          FROM Workflow_Step_Execution__c
-          WHERE
-            Workflow_Instance__c IN :parentIdsToCheck
-            AND Status__c = 'Pending'
-          WITH SYSTEM_MODE
-        ]) {
-          pendingStepExecs.put(se.Workflow_Instance__c, se);
-        }
-      }
-
-      Map<Id, String> resolvedOutputsByParentId = new Map<Id, String>();
-      if (!pendingStepExecs.isEmpty()) {
-        List<Id> parentIds = new List<Id>();
-        List<String> rawOutputs = new List<String>();
-        for (Workflow_Step_Execution__c se : pendingStepExecs.values()) {
-          parentIds.add(se.Workflow_Instance__c);
-          rawOutputs.add(se.Output__c);
-        }
-        List<String> resolved = resolvePayloads(rawOutputs);
-        for (Integer i = 0; i < parentIds.size(); i++) {
-          resolvedOutputsByParentId.put(parentIds[i], resolved[i]);
-        }
-      }
-
-      Map<Id, List<Workflow_Instance__c>> childrenByParentId = new Map<Id, List<Workflow_Instance__c>>();
-      if (!parentIdsToCheck.isEmpty()) {
-        for (Workflow_Instance__c child : [
-          SELECT Id, Parent_Instance__c, Correlation_Key__c, Status__c
-          FROM Workflow_Instance__c
-          WHERE Parent_Instance__c IN :parentIdsToCheck
-          WITH SYSTEM_MODE
-        ]) {
-          if (!childrenByParentId.containsKey(child.Parent_Instance__c)) {
-            childrenByParentId.put(
-              child.Parent_Instance__c,
-              new List<Workflow_Instance__c>()
-            );
-          }
-          childrenByParentId.get(child.Parent_Instance__c).add(child);
-        }
-      }
-
-      Set<Id> nonReadyParents = new Set<Id>();
-      for (Id parentId : parentIdsToCheck) {
-        Workflow_Step_Execution__c se = pendingStepExecs.get(parentId);
-        if (se == null) {
-          continue;
-        }
-        String resolvedOutput = resolvedOutputsByParentId.get(parentId);
-        if (String.isBlank(resolvedOutput)) {
-          continue;
-        }
-        try {
-          Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
-            resolvedOutput
-          );
-          if (data.containsKey('childCorrelationKeys')) {
-            List<Object> keysObj = (List<Object>) data.get(
-              'childCorrelationKeys'
-            );
-            if (keysObj != null) {
-              Set<String> expectedKeys = new Set<String>();
-              for (Object o : keysObj) {
-                if (o != null) {
-                  expectedKeys.add(normalizeKey(String.valueOf(o)));
-                }
-              }
-
-              List<Workflow_Instance__c> children = childrenByParentId.get(
-                parentId
-              );
-              if (children == null) {
-                children = new List<Workflow_Instance__c>();
-              }
-
-              Set<String> finishedKeys = new Set<String>();
-              for (Workflow_Instance__c child : children) {
-                if (String.isNotBlank(child.Correlation_Key__c)) {
-                  String normChildKey = normalizeKey(child.Correlation_Key__c);
-                  if (expectedKeys.contains(normChildKey)) {
-                    if (
-                      child.Status__c != null &&
-                      !ACTIVE_STATUSES.contains(child.Status__c)
-                    ) {
-                      finishedKeys.add(normChildKey);
-                    }
-                  }
-                }
-              }
-
-              if (!finishedKeys.containsAll(expectedKeys)) {
-                nonReadyParents.add(parentId);
-              }
-            }
-          }
-        } catch (Exception ex) {
-          // If JSON parse fails or does not contain childCorrelationKeys, treat as ready
-        }
-      }
-
-      Set<Id> gatedNonReadyParents = new Set<Id>();
-      for (Id parentId : nonReadyParents) {
-        Set<String> sigNames = signalsByInstanceId.get(parentId);
-        Boolean allChildSignals = true;
-        if (sigNames != null) {
-          for (String name : sigNames) {
-            if (String.isNotBlank(name)) {
-              String lower = name.toLowerCase();
-              if (
-                !lower.startsWith('childcompleted:') &&
-                !lower.startsWith('childfailed:')
-              ) {
-                allChildSignals = false;
-                break;
-              }
-            }
-          }
-        }
-        if (allChildSignals) {
-          gatedNonReadyParents.add(parentId);
-        }
-      }
+      Set<Id> gatedNonReadyParents = getGatedNonReadyParents(activeInstById.values(), signalsByInstanceId);
 
       // Only wake an instance if it received at least one fresh signal this call:
       // unkeyed signals always qualify; keyed signals only if the insert won the race.

@@ -484,4 +484,84 @@ public class WorkflowSignalOrStartTest {
     ];
     System.assertEquals(0, signals.size());
   }
+
+  @isTest
+  static void testSignalOrStartChildWakeGating() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Create a parent workflow instance and set its status to Suspended
+    Id parentId = WorkflowEngine.start(
+      'WorkflowSignalOrStartTest.TestAggregationWorkflow',
+      'Parent-Key',
+      'InitialInput'
+    );
+    Workflow_Instance__c parent = new Workflow_Instance__c(
+      Id = parentId,
+      Status__c = 'Suspended'
+    );
+    update as system parent;
+
+    // 2. Create a pending step execution for the parent with childCorrelationKeys in output
+    Workflow_Step_Execution__c step = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = parentId,
+      Step_Name__c = 'WaitForChildren',
+      Status__c = 'Pending',
+      Output__c = '{"childCorrelationKeys":["ChildKey1","ChildKey2"]}'
+    );
+    insert step;
+
+    // 3. Create two child workflow instances under this parent:
+    // Child 1 (active/Pending) and Child 2 (terminal/Completed)
+    Workflow_Instance__c child1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowSignalOrStartTest.TestAggregationWorkflow',
+      Status__c = 'Pending',
+      Parent_Instance__c = parentId,
+      Correlation_Key__c = 'ChildKey1',
+      Input__c = '"Child1Input"'
+    );
+    Workflow_Instance__c child2 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowSignalOrStartTest.TestAggregationWorkflow',
+      Status__c = 'Completed',
+      Parent_Instance__c = parentId,
+      Correlation_Key__c = 'ChildKey2',
+      Input__c = '"Child2Input"'
+    );
+    insert new List<Workflow_Instance__c>{child1, child2};
+
+    WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
+      'WorkflowSignalOrStartTest.TestAggregationWorkflow',
+      'Parent-Key',
+      'InitialInput'
+    );
+
+    // 4. Send child completed signal for Child 2 (terminal, but Child 1 is still Pending)
+    Test.startTest();
+    WorkflowEngine.StartResult result1 = WorkflowEngine.signalOrStart(
+      startReq,
+      'ChildCompleted:ChildKey2',
+      '{}',
+      'Idemp-Child2'
+    );
+
+    // Verify parent is still Suspended (gated)
+    Workflow_Instance__c parentRefreshed1 = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :parentId];
+    System.assertEquals('Suspended', parentRefreshed1.Status__c);
+
+    // 5. Force Child 1 to be Completed (terminal)
+    child1.Status__c = 'Completed';
+    update as system child1;
+
+    // Send child completed signal for Child 1 (all children are now terminal/ready)
+    WorkflowEngine.StartResult result2 = WorkflowEngine.signalOrStart(
+      startReq,
+      'ChildCompleted:ChildKey1',
+      '{}',
+      'Idemp-Child1'
+    );
+    Test.stopTest();
+
+    // Verify parent is now Running (woken)
+    Workflow_Instance__c parentRefreshed2 = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :parentId];
+    System.assertEquals('Running', parentRefreshed2.Status__c);
+  }
 }
