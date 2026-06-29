@@ -26,6 +26,7 @@ public inherited sharing class WorkflowEngine {
   // mechanism is classified as stalled on the dashboard. Configurable via
   // Revenant_Config__mdt.Stale_Threshold_Minutes__c; default 60 minutes.
   public static Integer staleThresholdMinutes = 60;
+  public static Integer reclaimThresholdMinutes = null;
 
   // Base + jitter (seconds) before a concurrency-parked instance re-attempts
   // admission. Precise scheduling drives it promptly when slots free; under a large
@@ -100,7 +101,8 @@ public inherited sharing class WorkflowEngine {
           Use_Dynamic_Scheduling__c,
           Publish_Lifecycle_Events__c,
           Dedup_Window_Minutes__c,
-          Stale_Threshold_Minutes__c
+          Stale_Threshold_Minutes__c,
+          Reclaim_Threshold_Minutes__c
         FROM Revenant_Config__mdt
         WHERE DeveloperName = 'Default'
         WITH SYSTEM_MODE
@@ -123,6 +125,10 @@ public inherited sharing class WorkflowEngine {
         if (configs[0].Stale_Threshold_Minutes__c != null) {
           staleThresholdMinutes = configs[0]
             .Stale_Threshold_Minutes__c.intValue();
+        }
+        if (configs[0].Reclaim_Threshold_Minutes__c != null) {
+          reclaimThresholdMinutes = configs[0]
+            .Reclaim_Threshold_Minutes__c.intValue();
         }
       }
     } catch (Exception ex) {
