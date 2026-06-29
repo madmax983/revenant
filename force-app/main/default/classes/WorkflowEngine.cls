@@ -11094,6 +11094,48 @@ public inherited sharing class WorkflowEngine {
       if (result.outboundEvents != null) {
         dynamicRowReserve += result.outboundEvents.size();
       }
+
+      Boolean willConsumeSignals = (result.action == StepResult.ActionType.COMPLETE ||
+                                    result.action == StepResult.ActionType.SPLIT ||
+                                    result.action == StepResult.ActionType.FAIL);
+      if (willConsumeSignals) {
+        Set<String> matchedNames = context.getConsumedSignalNames();
+        if (matchedNames != null && !matchedNames.isEmpty()) {
+          Boolean isParallel = String.isNotBlank(instance.Current_Step__c) && instance.Current_Step__c.contains(',');
+          Boolean runDuplicateCleanup = !isParallel && !context.signalReadWasCapped();
+          if (runDuplicateCleanup) {
+            dynamicRowReserve += [
+              SELECT COUNT()
+              FROM Workflow_Signal__c
+              WHERE Workflow_Instance__c = :instance.Id AND Status__c = 'Received' AND Signal_Name__c IN :matchedNames
+              WITH SYSTEM_MODE
+            ];
+            Set<Id> claimedIds = context.getClaimedSignalIds();
+            if (claimedIds != null && !claimedIds.isEmpty()) {
+              dynamicRowReserve += [
+                SELECT COUNT()
+                FROM Workflow_Signal__c
+                WHERE Id IN :claimedIds AND Status__c = 'Processing'
+                WITH SYSTEM_MODE
+              ];
+            }
+          } else {
+            Set<Id> consumedIds = context.getConsumedSignalIds();
+            Set<Id> claimedIds = context.getClaimedSignalIds();
+            Set<Id> allIds = new Set<Id>();
+            if (consumedIds != null) allIds.addAll(consumedIds);
+            if (claimedIds != null) allIds.addAll(claimedIds);
+            if (!allIds.isEmpty()) {
+              dynamicRowReserve += [
+                SELECT COUNT()
+                FROM Workflow_Signal__c
+                WHERE Id IN :allIds AND Status__c IN ('Received', 'Processing')
+                WITH SYSTEM_MODE
+              ];
+            }
+          }
+        }
+      }
     }
 
     // Keep breadcrumbs from exhausting checkpoint DML (best-effort observability log drop)
