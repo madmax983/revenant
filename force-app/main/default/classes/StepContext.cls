@@ -48,7 +48,7 @@ public inherited sharing class StepContext {
       return;
     }
     if (this.breadcrumbs.size() == 100) {
-      this.breadcrumbs.add(new Breadcrumb(Level.WARN, '[TRUNCATED] Log limit of 100 entries reached. Subsequent step logs are discarded.'));
+      this.breadcrumbs.add(new Breadcrumb(StepContext.Level.WARN, '[TRUNCATED] Log limit of 100 entries reached. Subsequent step logs are discarded.'));
       return;
     }
 

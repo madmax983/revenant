@@ -4352,6 +4352,7 @@ public inherited sharing class WorkflowEngine {
     StepResult result,
     StepContext context
   ) {
+    persistStepBreadcrumbs(instance, stepExec, context);
     // Re-query to avoid overwriting a timeout or finalizer crash status and race conditions
     Workflow_Instance__c freshInstance = [
       SELECT
@@ -8129,6 +8130,7 @@ public inherited sharing class WorkflowEngine {
     try {
       result = compensatableStepInstance.compensate(context);
     } catch (Exception ex) {
+      persistStepBreadcrumbs(instance, stepExec, context);
       stepExec.Status__c = 'Failed';
       stepExec.Error_Details__c =
         ex.getMessage() +
@@ -8159,6 +8161,7 @@ public inherited sharing class WorkflowEngine {
     List<String> stack,
     StepContext context
   ) {
+    persistStepBreadcrumbs(instance, stepExec, context);
     Workflow_Instance__c freshInstance = [
       SELECT
         Id,
@@ -11048,5 +11051,32 @@ public inherited sharing class WorkflowEngine {
       }
     }
     return clean;
+  }
+
+  private static void persistStepBreadcrumbs(
+    Workflow_Instance__c instance,
+    Workflow_Step_Execution__c stepExec,
+    StepContext context
+  ) {
+    if (context == null || stepExec == null || instance == null) {
+      return;
+    }
+    List<StepContext.Breadcrumb> crumbs = context.getBreadcrumbs();
+    if (crumbs == null || crumbs.isEmpty()) {
+      return;
+    }
+    List<Workflow_Log__c> logsToInsert = new List<Workflow_Log__c>();
+    for (StepContext.Breadcrumb b : crumbs) {
+      logsToInsert.add(new Workflow_Log__c(
+        Workflow_Instance__c = instance.Id,
+        Workflow_Name__c = instance.Workflow_Name__c,
+        Correlation_Key__c = stepExec.Step_Name__c,
+        Log_Type__c = 'StepBreadcrumb',
+        Level__c = b.level.name(),
+        Message__c = b.message,
+        Fire_Time__c = b.timestamp
+      ));
+    }
+    insert as system logsToInsert;
   }
 }
