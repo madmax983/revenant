@@ -40,6 +40,7 @@ public class WorkflowWatchdogTest {
     );
     insert dummyInst;
 
+    WorkflowEngine.disableQueueableInTest = false;
     Test.startTest();
     // Start the WatchdogWorkflow (Pending status initially)
     Id watchdogId = WorkflowEngine.start(
@@ -47,6 +48,7 @@ public class WorkflowWatchdogTest {
       'SystemWatchdog',
       null
     );
+    WorkflowEngine.disableQueueableInTest = true;
     Test.stopTest(); // Runs heartbeat step asynchronously, transitions to sleep step (Pending)
 
     // Verify dummy instance is no longer suspended (resumed by processWatchdogHeartbeat during stopTest)

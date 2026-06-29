@@ -6637,13 +6637,13 @@ public class WorkflowEngineTest {
 
   @isTest
   static void testResumePastStepParallelEnqueuesUndrivenPendingSibling() {
-    WorkflowEngine.disableQueueableInTest = true;
-
+    WorkflowEngine.disableQueueableInTest = false;
     Id instanceId = WorkflowEngine.start(
       'WorkflowEngineTest.SkipThreeParallelWorkflow',
       'SkipThreeParallelSignalKey2',
       'InitialInput'
     );
+    WorkflowEngine.disableQueueableInTest = true;
 
     // 1. Run split step (SkipThreeParallelSplitStep) -> should create parallel executions
     new WorkflowOrchestrator(instanceId).execute(null);
