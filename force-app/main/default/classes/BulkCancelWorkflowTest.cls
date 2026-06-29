@@ -309,6 +309,7 @@ public class BulkCancelWorkflowTest {
     makeInstance('E2E_A', 'Running', 'WorkflowEngineTest.HappyWorkflow', null);
     makeInstance('E2E_B', 'Running', 'WorkflowEngineTest.HappyWorkflow', null);
 
+    WorkflowEngine.disableQueueableInTest = false;
     Test.startTest();
     Id cancelId = WorkflowEngine.start(
       'BulkCancelWorkflow',
@@ -320,6 +321,7 @@ public class BulkCancelWorkflowTest {
         'runCompensations' => false
       }
     );
+    WorkflowEngine.disableQueueableInTest = true;
     Test.stopTest();
 
     Workflow_Instance__c runner = [

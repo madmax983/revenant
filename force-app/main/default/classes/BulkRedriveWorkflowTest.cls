@@ -381,6 +381,7 @@ public class BulkRedriveWorkflowTest {
     makeFailedInstance('E2E_A');
     makeFailedInstance('E2E_B');
 
+    WorkflowEngine.disableQueueableInTest = false;
     Test.startTest();
     Id redriverId = WorkflowEngine.start(
       'BulkRedriveWorkflow',
@@ -391,6 +392,7 @@ public class BulkRedriveWorkflowTest {
         'searchTerm' => ''
       }
     );
+    WorkflowEngine.disableQueueableInTest = true;
     Test.stopTest();
 
     // The orchestrator runs BulkRedriveStep at stopTest.
