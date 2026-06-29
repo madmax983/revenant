@@ -1303,9 +1303,15 @@ public inherited sharing class WorkflowDashboardController {
       WHERE Workflow_Instance__c = :instanceId
         AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
       WITH SYSTEM_MODE
-      ORDER BY Fire_Time__c ASC, CreatedDate ASC
+      ORDER BY Fire_Time__c DESC, CreatedDate DESC
       LIMIT 1000
     ];
+    // Reverse back to ascending order for chronological UI presentation
+    List<Workflow_Log__c> chronologicalBreadcrumbs = new List<Workflow_Log__c>();
+    for (Integer i = breadcrumbs.size() - 1; i >= 0; i--) {
+      chronologicalBreadcrumbs.add(breadcrumbs[i]);
+    }
+    breadcrumbs = chronologicalBreadcrumbs;
 
     return new Map<String, Object>{
       'instance' => instance,
