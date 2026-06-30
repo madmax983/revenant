@@ -219,6 +219,7 @@ public inherited sharing class StepResult {
           SundayEndTime
         FROM BusinessHours
         WHERE IsActive = TRUE AND IsDefault = TRUE
+        WITH USER_MODE
         LIMIT 1
       ];
     } else {
@@ -245,6 +246,7 @@ public inherited sharing class StepResult {
           SundayEndTime
         FROM BusinessHours
         WHERE IsActive = TRUE AND Name = :trimmedName
+        WITH USER_MODE
         LIMIT 1
       ];
     }
@@ -752,8 +754,11 @@ public inherited sharing class StepResult {
         try {
           JSON.deserializeUntyped(trimmed);
           return strInput;
-        } catch (Exception e) {
-          // Fall through
+        } catch (Exception ignored) {
+          System.debug(
+            LoggingLevel.FINEST,
+            'Scalar string is not valid JSON, fallback to standard serialization'
+          );
         }
       }
       return JSON.serialize(strInput);
