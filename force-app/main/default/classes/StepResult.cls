@@ -121,6 +121,9 @@ public inherited sharing class StepResult {
   }
 
   public static StepResult retry(RetryPolicy policy) {
+    if (policy == null) {
+      throw new IllegalArgumentException('StepResult.retry: policy must not be null');
+    }
     StepResult r = new StepResult();
     r.action = ActionType.RETRY;
     r.retryPolicy = policy;
@@ -136,6 +139,9 @@ public inherited sharing class StepResult {
   }
 
   public static StepResult sleep(Integer seconds) {
+    if (seconds == null || seconds < 0) {
+      throw new IllegalArgumentException('StepResult.sleep: seconds must be a non-negative integer');
+    }
     StepResult r = new StepResult();
     r.action = ActionType.SLEEP;
     r.sleepDurationSeconds = seconds;
@@ -143,6 +149,9 @@ public inherited sharing class StepResult {
   }
 
   public static StepResult sleep(Integer seconds, String stepStateJson) {
+    if (seconds == null || seconds < 0) {
+      throw new IllegalArgumentException('StepResult.sleep: seconds must be a non-negative integer');
+    }
     StepResult r = new StepResult();
     r.action = ActionType.SLEEP;
     r.sleepDurationSeconds = seconds;
@@ -150,11 +159,225 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  @TestVisible
+  private static DateTime mockCurrentDateTime = null;
+
+  private static final Long MILLISECONDS_IN_SECOND = 1000L;
+  private static final Long MILLISECONDS_IN_MINUTE = 60000L;
+  private static final Long MILLISECONDS_IN_HOUR = 3600000L;
+  private static final Long MILLISECONDS_IN_DAY = 86400000L;
+
+  private static final Integer MAX_INTEGER = 2147483647;
+  private static final Long MAX_LONG = 9223372036854775807L;
+
+  private static final Map<String, BusinessHours> businessHoursByName = new Map<String, BusinessHours>();
+  private static final Map<Id, Long> msPerBusinessDayByBhId = new Map<Id, Long>();
+
+  private static DateTime getCurrentDateTime() {
+    return mockCurrentDateTime != null ? mockCurrentDateTime : DateTime.now();
+  }
+
+  private static BusinessHours getBusinessHours(String name) {
+    if (String.isBlank(name)) {
+      return null;
+    }
+    String trimmedName = name.trim();
+    String cacheKey = trimmedName.toLowerCase();
+    if (businessHoursByName.containsKey(cacheKey)) {
+      return businessHoursByName.get(cacheKey);
+    }
+
+    Boolean queryDefault = (cacheKey == 'default');
+    List<BusinessHours> matchingBusinessHours;
+    if (queryDefault) {
+      matchingBusinessHours = [
+        SELECT
+          Id,
+          Name,
+          IsActive,
+          IsDefault,
+          MondayStartTime,
+          MondayEndTime,
+          TuesdayStartTime,
+          TuesdayEndTime,
+          WednesdayStartTime,
+          WednesdayEndTime,
+          ThursdayStartTime,
+          ThursdayEndTime,
+          FridayStartTime,
+          FridayEndTime,
+          SaturdayStartTime,
+          SaturdayEndTime,
+          SundayStartTime,
+          SundayEndTime
+        FROM BusinessHours
+        WHERE IsActive = TRUE AND IsDefault = TRUE
+        LIMIT 1
+      ];
+    } else {
+      matchingBusinessHours = [
+        SELECT
+          Id,
+          Name,
+          IsActive,
+          IsDefault,
+          MondayStartTime,
+          MondayEndTime,
+          TuesdayStartTime,
+          TuesdayEndTime,
+          WednesdayStartTime,
+          WednesdayEndTime,
+          ThursdayStartTime,
+          ThursdayEndTime,
+          FridayStartTime,
+          FridayEndTime,
+          SaturdayStartTime,
+          SaturdayEndTime,
+          SundayStartTime,
+          SundayEndTime
+        FROM BusinessHours
+        WHERE IsActive = TRUE AND Name = :trimmedName
+        LIMIT 1
+      ];
+    }
+
+    if (matchingBusinessHours.isEmpty()) {
+      throw new IllegalArgumentException('Unknown Business Hours name: ' + name);
+    }
+
+    businessHoursByName.put(cacheKey, matchingBusinessHours[0]);
+    if (matchingBusinessHours[0].Name != null) {
+      businessHoursByName.put(matchingBusinessHours[0].Name.toLowerCase(), matchingBusinessHours[0]);
+    }
+    return matchingBusinessHours[0];
+  }
+
+  @TestVisible
+  private static Long getMillisecondsInBusinessDay(BusinessHours selectedBusinessHours) {
+    if (msPerBusinessDayByBhId.containsKey(selectedBusinessHours.Id)) {
+      return msPerBusinessDayByBhId.get(selectedBusinessHours.Id);
+    }
+
+    List<Time> starts = new List<Time>{
+      selectedBusinessHours.SundayStartTime,
+      selectedBusinessHours.MondayStartTime,
+      selectedBusinessHours.TuesdayStartTime,
+      selectedBusinessHours.WednesdayStartTime,
+      selectedBusinessHours.ThursdayStartTime,
+      selectedBusinessHours.FridayStartTime,
+      selectedBusinessHours.SaturdayStartTime
+    };
+    List<Time> ends = new List<Time>{
+      selectedBusinessHours.SundayEndTime,
+      selectedBusinessHours.MondayEndTime,
+      selectedBusinessHours.TuesdayEndTime,
+      selectedBusinessHours.WednesdayEndTime,
+      selectedBusinessHours.ThursdayEndTime,
+      selectedBusinessHours.FridayEndTime,
+      selectedBusinessHours.SaturdayEndTime
+    };
+
+    Long totalMs = 0;
+    Integer activeDays = 0;
+    for (Integer i = 0; i < 7; i++) {
+      Time startTime = starts[i];
+      Time endTime = ends[i];
+      if (startTime != null && endTime != null) {
+        activeDays++;
+        if (startTime == endTime) {
+          totalMs += MILLISECONDS_IN_DAY;
+        } else {
+          Long startMs = getMillisecondsSinceMidnight(startTime);
+          Long endMs = getMillisecondsSinceMidnight(endTime);
+          totalMs += (endMs - startMs);
+        }
+      }
+    }
+    Long result = MILLISECONDS_IN_DAY;
+    if (activeDays > 0) {
+      result = totalMs / activeDays;
+    }
+    msPerBusinessDayByBhId.put(selectedBusinessHours.Id, result);
+    return result;
+  }
+
+  private static Long getMillisecondsSinceMidnight(Time t) {
+    if (t == null) {
+      return 0;
+    }
+    return t.hour() * MILLISECONDS_IN_HOUR +
+      t.minute() * MILLISECONDS_IN_MINUTE +
+      t.second() * MILLISECONDS_IN_SECOND +
+      t.millisecond();
+  }
+
+  public static StepResult sleep(Integer amount, String unit, String businessHoursName) {
+    return sleep(amount, unit, businessHoursName, null);
+  }
+
+  public static StepResult sleep(Integer amount, String unit, String businessHoursName, String stepStateJson) {
+    if (amount == null || amount < 0) {
+      throw new IllegalArgumentException('StepResult.sleep: amount must be a non-negative integer');
+    }
+    if (String.isBlank(unit)) {
+      throw new IllegalArgumentException('StepResult.sleep: unit must not be blank');
+    }
+    if (String.isBlank(businessHoursName)) {
+      throw new IllegalArgumentException('StepResult.sleep: businessHoursName must not be blank');
+    }
+
+    BusinessHours selectedBusinessHours = getBusinessHours(businessHoursName);
+
+    Long intervalMs;
+    String unitLower = unit.toLowerCase().trim();
+    switch on unitLower {
+      when 'days', 'business days', 'day', 'business day' {
+        intervalMs = (Long) amount * getMillisecondsInBusinessDay(selectedBusinessHours);
+      }
+      when 'hours', 'business hours', 'hour', 'business hour' {
+        intervalMs = (Long) amount * MILLISECONDS_IN_HOUR;
+      }
+      when 'minutes', 'business minutes', 'minute', 'business minute' {
+        intervalMs = (Long) amount * MILLISECONDS_IN_MINUTE;
+      }
+      when 'seconds', 'business seconds', 'second', 'business second' {
+        intervalMs = (Long) amount * MILLISECONDS_IN_SECOND;
+      }
+      when else {
+        throw new IllegalArgumentException('StepResult.sleep: unsupported unit: ' + unit);
+      }
+    }
+
+    // Safety checks against overflow in intervalMs
+    if (intervalMs < 0) {
+      intervalMs = MAX_LONG; // Cap at max value if it wrapped
+    }
+
+    DateTime now = getCurrentDateTime();
+    DateTime wakeTime = BusinessHours.add(selectedBusinessHours.Id, now, intervalMs);
+
+    Long diffMs = wakeTime.getTime() - now.getTime();
+    if (diffMs < 0) {
+      diffMs = 0L;
+    }
+    Long sleepSecondsLong = diffMs / 1000L;
+    Integer sleepSeconds = sleepSecondsLong > MAX_INTEGER ? MAX_INTEGER : (Integer) sleepSecondsLong;
+
+    StepResult result = new StepResult();
+    result.action = ActionType.SLEEP;
+    result.sleepDurationSeconds = sleepSeconds;
+    result.stepStateJson = stepStateJson;
+    return result;
+  }
+
   public static StepResult startChild(
     String childWorkflowName,
     String childCorrelationKey,
     Object input
   ) {
+    if (String.isBlank(childWorkflowName)) {
+      throw new IllegalArgumentException('StepResult.startChild: childWorkflowName must not be blank');
+    }
     StepResult r = new StepResult();
     r.action = ActionType.START_CHILD;
     r.childWorkflowName = childWorkflowName;
@@ -173,6 +396,9 @@ public inherited sharing class StepResult {
       String correlationKey,
       Object input
     ) {
+      if (String.isBlank(workflowName)) {
+        throw new IllegalArgumentException('ChildRequest: workflowName must not be blank');
+      }
       this.workflowName = workflowName;
       this.correlationKey = correlationKey;
       this.inputJson = serializeInputIfNeeded(input);
@@ -185,6 +411,11 @@ public inherited sharing class StepResult {
         'StepResult.startChildren: children list must not be null or empty'
       );
     }
+    for (ChildRequest child : children) {
+      if (child == null) {
+        throw new IllegalArgumentException('StepResult.startChildren: children list must not contain null values');
+      }
+    }
     StepResult r = new StepResult();
     r.action = ActionType.START_CHILDREN;
     r.childRequests = children;
@@ -192,6 +423,9 @@ public inherited sharing class StepResult {
   }
 
   public static StepResult waitForApproval(String key, String role) {
+    if (String.isBlank(key)) {
+      throw new IllegalArgumentException('StepResult.waitForApproval: key must not be blank');
+    }
     StepResult r = new StepResult();
     r.action = ActionType.WAIT_FOR_APPROVAL;
     r.approvalKey = key;
@@ -205,6 +439,9 @@ public inherited sharing class StepResult {
     Integer timeoutSeconds,
     String timeoutStep
   ) {
+    if (String.isBlank(key)) {
+      throw new IllegalArgumentException('StepResult.waitForApproval: key must not be blank');
+    }
     if (String.isBlank(timeoutStep)) {
       throw new IllegalArgumentException(
         'StepResult.waitForApproval: timeoutStep must not be blank'
@@ -230,6 +467,11 @@ public inherited sharing class StepResult {
         'StepResult.split: stepNames list must not be null or empty'
       );
     }
+    for (String stepName : stepNames) {
+      if (String.isBlank(stepName)) {
+        throw new IllegalArgumentException('StepResult.split: stepNames list must not contain null or blank values');
+      }
+    }
     StepResult r = new StepResult();
     r.action = ActionType.SPLIT;
     r.parallelStepNames = stepNames;
@@ -241,6 +483,11 @@ public inherited sharing class StepResult {
       throw new IllegalArgumentException(
         'StepResult.split: stepNames list must not be null or empty'
       );
+    }
+    for (String stepName : stepNames) {
+      if (String.isBlank(stepName)) {
+        throw new IllegalArgumentException('StepResult.split: stepNames list must not contain null or blank values');
+      }
     }
     StepResult r = new StepResult();
     r.action = ActionType.SPLIT;
@@ -304,12 +551,19 @@ public inherited sharing class StepResult {
     }
     if (input instanceof String) {
       String strInput = (String) input;
-      try {
-        JSON.deserializeUntyped(strInput);
-        return strInput;
-      } catch (Exception e) {
-        return JSON.serialize(strInput);
+      String trimmed = strInput.trim();
+      if (
+        (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+        (trimmed.startsWith('[') && trimmed.endsWith(']'))
+      ) {
+        try {
+          JSON.deserializeUntyped(trimmed);
+          return strInput;
+        } catch (Exception e) {
+          // Fall through
+        }
       }
+      return JSON.serialize(strInput);
     }
     return JSON.serialize(input);
   }
