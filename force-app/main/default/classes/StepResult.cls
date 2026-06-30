@@ -385,7 +385,7 @@ public inherited sharing class StepResult {
         : 'GMT';
       Date localDate = Date.valueOf(dt.format('yyyy-MM-dd', tz));
       DateTime dayStart = getLocalMidnight(localDate, tz);
-      DateTime dayEnd = dayStart.addDays(1);
+      DateTime dayEnd = getLocalMidnight(localDate.addDays(1), tz);
       return BusinessHours.diff(selectedBusinessHours.Id, dayStart, dayEnd);
     }
 
