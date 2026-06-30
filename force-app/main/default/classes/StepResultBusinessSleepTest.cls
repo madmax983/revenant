@@ -377,4 +377,50 @@ private class StepResultBusinessSleepTest {
       'Sleeping on Saturday should walk starting from the aligned Monday start and return Monday day length'
     );
   }
+
+  @isTest
+  static void testBusinessHoursHolidaySpanningWithVariableLengthDays() {
+    List<BusinessHours> standardBhs = [
+      SELECT
+        Id,
+        Name,
+        TimeZoneSidKey,
+        MondayStartTime,
+        MondayEndTime,
+        TuesdayStartTime,
+        TuesdayEndTime,
+        WednesdayStartTime,
+        WednesdayEndTime,
+        ThursdayStartTime,
+        ThursdayEndTime,
+        FridayStartTime,
+        FridayEndTime,
+        SaturdayStartTime,
+        SaturdayEndTime,
+        SundayStartTime,
+        SundayEndTime
+      FROM BusinessHours
+      WHERE IsActive = TRUE AND IsDefault = TRUE
+      LIMIT 1
+    ];
+    if (standardBhs.isEmpty()) {
+      return;
+    }
+    BusinessHours standardBh = standardBhs[0];
+
+    // Friday June 26, 2026. Monday June 29, 2026 is a holiday (configured in examples settings metadata).
+    DateTime startFriday = DateTime.newInstance(2026, 6, 26, 9, 0, 0);
+
+    // Sum of Friday's working ms + Tuesday's working ms (skipping the Monday holiday)
+    Long expectedMs = StepResult.getWorkingMsForDay(standardBh, startFriday) +
+      StepResult.getWorkingMsForDay(standardBh, DateTime.newInstance(2026, 6, 30, 9, 0, 0)); // Tuesday
+
+    Long actualMs = StepResult.getMillisecondsForDays(standardBh, startFriday, 2);
+
+    Assert.areEqual(
+      expectedMs,
+      actualMs,
+      'Holiday Monday must be skipped in sizing, summing Friday + Tuesday working hours instead'
+    );
+  }
 }

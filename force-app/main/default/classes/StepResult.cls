@@ -352,6 +352,16 @@ public inherited sharing class StepResult {
     return totalMs;
   }
 
+  @TestVisible
+  private static DateTime getLocalMidnight(Date d, String tz) {
+    DateTime gmtMidnight = DateTime.newInstanceGmt(d.year(), d.month(), d.day(), 0, 0, 0);
+    if (String.isBlank(tz)) {
+      return gmtMidnight;
+    }
+    Integer offsetMs = Timezone.getTimeZone(tz).getOffset(gmtMidnight);
+    return gmtMidnight.addSeconds(-offsetMs / 1000);
+  }
+
   private static Integer getDayOfWeek(DateTime dt, String tz) {
     String dateStr = dt.format('yyyy-MM-dd', tz);
     Date localDate = Date.valueOf(dateStr);
@@ -364,10 +374,22 @@ public inherited sharing class StepResult {
     return dayOfWeekNum; // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
   }
 
+  @TestVisible
   private static Long getWorkingMsForDay(
     BusinessHours selectedBusinessHours,
     DateTime dt
   ) {
+    if (selectedBusinessHours.Id != null) {
+      String tz = String.isNotBlank(selectedBusinessHours.TimeZoneSidKey)
+        ? selectedBusinessHours.TimeZoneSidKey
+        : 'GMT';
+      Date localDate = Date.valueOf(dt.format('yyyy-MM-dd', tz));
+      DateTime dayStart = getLocalMidnight(localDate, tz);
+      DateTime dayEnd = dayStart.addDays(1);
+      return BusinessHours.diff(selectedBusinessHours.Id, dayStart, dayEnd);
+    }
+
+    // Fallback for mock BusinessHours with null ID in unit tests
     String tz = String.isNotBlank(selectedBusinessHours.TimeZoneSidKey)
       ? selectedBusinessHours.TimeZoneSidKey
       : 'GMT';

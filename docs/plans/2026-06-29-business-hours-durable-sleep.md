@@ -1,42 +1,36 @@
-# Codex PR Review Round 2 Fixes Implementation Plan
+# Codex PR Review Round 3 Fixes Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Address and fix the two P2 findings raised in the second Codex Pull Request review:
-1. **Use locale-independent weekday keys** (ensure user locales like French do not break the day-of-week switch matching).
-2. **Base business-day length on the next open day** (ensure start times falling after business hours or on holidays base their duration on the next active day).
+**Goal:** Address and fix the P2 finding raised in the third Codex Pull Request review:
+1. **Skip holidays while sizing business-day sleeps** (ensure that intermediate holidays are correctly skipped during day walks).
 
 ---
 
 ## Proposed Changes
 
 ### 1. Refactor StepResult.cls
-Modify the day-walking alignment and day-of-week lookup methods.
+Modify the day-walking calculation to use native `BusinessHours.diff` for database-backed records.
 
 **Files:**
 - Modify: [StepResult.cls](file:///c:/Users/markm/revenant/force-app/main/default/classes/StepResult.cls)
 
 #### Code Changes:
-- **Aligned Walk Start**: In `getMillisecondsForDays(selectedBusinessHours, start, days)`, align the starting DateTime `current` using:
-  ```java
-  DateTime current = BusinessHours.isWithin(selectedBusinessHours.Id, start)
-    ? start
-    : BusinessHours.nextStartDate(selectedBusinessHours.Id, start);
-  ```
-- **Locale-Independent Day of Week**: Create a private helper method `getDayOfWeek(DateTime dt, String tz)`:
-  - Formats `dt` into a locale-independent `'yyyy-MM-dd'` string in the target timezone.
-  - Converts that to a local `Date` object.
-  - Uses mathematically sound day-difference against a known Sunday reference date (`Date.newInstance(1900, 1, 7)`) to calculate the integer day of the week (0 = Sunday, 1 = Monday, ..., 6 = Saturday).
-- **Match switch on Integer**: Update `getWorkingMsForDay` to switch on the integer `dayOfWeekNum` (0 to 6) instead of the localized day string `'Monday'`, `'Tuesday'`.
+- **Local Midnight Helper**: Add `@TestVisible private static DateTime getLocalMidnight(Date d, String tz)`:
+  - Computes the GMT DateTime representing midnight of date `d` in the local timezone `tz`.
+- **Integrate BusinessHours.diff**: Update `@TestVisible private static Long getWorkingMsForDay(BusinessHours selectedBusinessHours, DateTime dt)`:
+  - If `selectedBusinessHours.Id != null` (database record), compute the 24-hour day boundaries using `getLocalMidnight()` and return `BusinessHours.diff(Id, dayStart, dayEnd)`.
+  - This natively handles holidays, weekends, and variable day lengths.
+  - If `Id` is null (in-memory mock SObject for unit tests), fallback to the raw weekday field switch.
 
 ### 2. Refactor StepResultBusinessSleepTest.cls
-Add unit tests for the specific Codex edge cases.
+Add the requested holiday-skipping regression test.
 
 **Files:**
 - Modify: [StepResultBusinessSleepTest.cls](file:///c:/Users/markm/revenant/force-app/main/default/classes/StepResultBusinessSleepTest.cls)
 
 #### Code Changes:
-- **Walk After Hours Test**: Add a test simulating a sleep starting after business hours on Friday (Friday 18:00) with a 4-hour Friday and 8-hour Monday to verify it correctly wakes on Monday at 17:00.
+- **Holiday Variable Spanning Test**: Add `testBusinessHoursHolidaySpanningWithVariableLengthDays` checking that sleeping `2 business days` starting on a Friday skips the holiday Monday and sums only Friday + Tuesday working hours.
 
 ---
 
