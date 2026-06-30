@@ -337,10 +337,14 @@ public inherited sharing class StepResult {
     Date currentDate = Date.valueOf(current.format('yyyy-MM-dd', tz));
     Long totalMs = 0;
     Integer daysAdded = 0;
+    Integer maxDays = Math.min(3650, days * 7 + 366);
 
-    for (Integer i = 0; i < 365 && daysAdded < days; i++) {
+    for (Integer i = 0; i < maxDays && daysAdded < days; i++) {
       DateTime currentInstant = getLocalMidnight(currentDate, tz).addHours(12);
-      Long workingMs = getWorkingMsForDay(selectedBusinessHours, currentInstant);
+      Long workingMs = getWorkingMsForDay(
+        selectedBusinessHours,
+        currentInstant
+      );
       if (workingMs > 0) {
         totalMs += workingMs;
         daysAdded++;

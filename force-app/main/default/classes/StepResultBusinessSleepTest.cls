@@ -490,4 +490,36 @@ private class StepResultBusinessSleepTest {
       'Should walk from Sunday (8h) to Monday (10h) instead of repeating Sunday due to DST fall-back'
     );
   }
+
+  @isTest
+  static void testUnequalDayWalkLargeDurationRegression() {
+    // Mock a BusinessHours record. Monday = 8h, Tuesday = 10h, all others closed.
+    BusinessHours mockBh = new BusinessHours(
+      TimeZoneSidKey = 'America/Chicago',
+      MondayStartTime = Time.newInstance(9, 0, 0, 0),
+      MondayEndTime = Time.newInstance(17, 0, 0, 0),
+      TuesdayStartTime = Time.newInstance(8, 0, 0, 0),
+      TuesdayEndTime = Time.newInstance(18, 0, 0, 0)
+    );
+
+    // Monday November 5, 2018 (start of walk)
+    DateTime startDateTime = DateTime.newInstanceGmt(2018, 11, 5, 12, 0, 0);
+
+    // 106 business days = 53 Mondays (53 * 8h) and 53 Tuesdays (53 * 10h)
+    // 53 * 8 = 424h. 53 * 10 = 530h. Total = 954h = 3,434,400,000 ms.
+    // If the 365 cap was active, it would stop at 105 days and estimate day 106 as 8.99h instead of 10h.
+    Long actualMs = StepResult.getMillisecondsForDays(
+      mockBh,
+      startDateTime,
+      106
+    );
+
+    Long expectedMs = 3434400000L;
+
+    Assert.areEqual(
+      expectedMs,
+      actualMs,
+      'Should walk all 106 business days exactly without falling back to averaged day lengths'
+    );
+  }
 }

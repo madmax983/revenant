@@ -1,42 +1,40 @@
-# Codex PR Review Round 6 Fixes Implementation Plan
+# Codex PR Review Round 7 Fixes Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Address and fix the DST fall-back day walking loop finding raised in the sixth Codex Pull Request review:
-1. **Rebuild the next day in the business-hours zone** (advance the day walk using calendar Date additions and reconstruct the next local midday DateTime rather than using GMT `DateTime.addDays(1)`).
-2. **Add a regression test** covering this specific DST fall-back scenario.
+**Goal:** Address and fix the 365-day walk cap limitation raised in the seventh Codex Pull Request review:
+1. **Continue walking remaining business days exactly** (make the calendar walk loop limit dynamic based on the requested duration rather than a static 365-day cap, avoiding incorrect averaging fallbacks).
+2. **Add a regression test** covering the 106 business days walk on a Monday (8h) / Tuesday (16h) calendar.
 
 ---
 
 ## Proposed Changes
 
 ### 1. Refactor StepResult.cls
-Modify the day-walking logic in `getMillisecondsForDays`.
+Modify the loop limit in `getMillisecondsForDays`.
 
 **Files:**
 - Modify: [StepResult.cls](file:///c:/Users/markm/revenant/force-app/main/default/classes/StepResult.cls)
 
 #### Code Changes:
-- **Calendar Date-based Walk**: In `getMillisecondsForDays`:
-  - Convert `alignedStart` to a local `Date currentDate` using timezone `tz`.
-  - Loop and advance using `currentDate = currentDate.addDays(1)`.
-  - Inside the loop, construct a representative midday local DateTime `currentInstant`:
+- **Dynamic Walk Limit**: In `getMillisecondsForDays`:
+  - Calculate `maxDays = Math.min(3650, days * 7 + 366)`.
+  - Update the loop condition to use `maxDays` instead of `365`:
     ```java
-    DateTime currentInstant = getLocalMidnight(currentDate, tz).addHours(12);
+    for (Integer i = 0; i < maxDays && daysAdded < days; i++) {
     ```
-    This ensures that day walking is completely immune to DST-induced hour shifts (which typically occur at 02:00 local time).
 
 ### 2. Refactor StepResultBusinessSleepTest.cls
-Add the requested DST fall-back regression test.
+Add the requested 106 business days regression test.
 
 **Files:**
 - Modify: [StepResultBusinessSleepTest.cls](file:///c:/Users/markm/revenant/force-app/main/default/classes/StepResultBusinessSleepTest.cls)
 
 #### Code Changes:
-- **America/Chicago DST Fallback Test**: Add `testDstFallbackDayWalkingRegression`:
-  - Instantiates a mock `BusinessHours` record with `TimeZoneSidKey = 'America/Chicago'`, Sunday having 8 hours, and Monday having 10 hours.
-  - Starts the day walk on Sunday, Nov 4, 2018 at 00:30:00 local time (before the DST transition).
-  - Asserts that a 2-day walk correctly advances to Monday and returns 18 hours total (Sunday + Monday) rather than double-counting Sunday's 8 hours.
+- **Unequal Day Walk Regression Test**: Add `testUnequalDayWalkLargeDurationRegression`:
+  - Instantiates a mock `BusinessHours` record with `TimeZoneSidKey = 'America/Chicago'`, Monday having 8 hours, Tuesday having 16 hours, and all other days closed.
+  - Walks 106 business days starting on a Monday.
+  - Asserts that it returns exactly the sum of 53 Mondays and 53 Tuesdays (4,579,200,000 ms) instead of using the average daily working milliseconds fallback.
 
 ---
 
