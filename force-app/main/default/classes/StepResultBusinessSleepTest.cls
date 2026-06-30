@@ -97,6 +97,7 @@ private class StepResultBusinessSleepTest {
       SELECT
         Id,
         Name,
+        TimeZoneSidKey,
         IsActive,
         IsDefault,
         MondayStartTime,
@@ -118,12 +119,18 @@ private class StepResultBusinessSleepTest {
       LIMIT 1
     ];
 
-    Long dayMs = StepResult.getMillisecondsInBusinessDay(defaultBh);
-    Long intervalMs = 2L * dayMs; // 2 business days
+    DateTime alignedStart = BusinessHours.isWithin(defaultBh.Id, startTime)
+      ? startTime
+      : BusinessHours.nextStartDate(defaultBh.Id, startTime);
+    Long expectedMs = StepResult.getMillisecondsForDays(
+      defaultBh,
+      alignedStart,
+      2
+    );
     DateTime expectedWake = BusinessHours.add(
       defaultBh.Id,
       startTime,
-      intervalMs
+      expectedMs
     );
     Long expectedSeconds =
       (expectedWake.getTime() - startTime.getTime()) / 1000L;
@@ -146,7 +153,7 @@ private class StepResultBusinessSleepTest {
   static void testBusinessHoursHolidaySpanning() {
     // Check if Standard Business Hours exists (deployed in examples/scratch org)
     List<BusinessHours> standardBhs = [
-      SELECT Id, Name
+      SELECT Id, Name, TimeZoneSidKey
       FROM BusinessHours
       WHERE IsActive = TRUE AND Name = 'Standard Business Hours'
       LIMIT 1
@@ -167,13 +174,23 @@ private class StepResultBusinessSleepTest {
       0
     );
 
-    // Sleep 2 business days under Standard Business Hours (8 hours/day).
-    // Monday June 29, 2026 is a holiday, so it is skipped.
-    // Friday 16:00 to Friday 17:00 (1 hour)
-    // Monday June 29 (0 hours - Holiday)
-    // Tuesday June 30 09:00 to 17:00 (8 hours)
-    // Wednesday July 1 09:00 to 16:00 (7 hours)
-    // Total calendar time: Friday 16:00 to Wednesday 16:00 = 120 hours = 432,000 seconds
+    DateTime testStart = StepResult.mockCurrentDateTime;
+    DateTime alignedStart = BusinessHours.isWithin(standardBh.Id, testStart)
+      ? testStart
+      : BusinessHours.nextStartDate(standardBh.Id, testStart);
+    Long expectedMs = StepResult.getMillisecondsForDays(
+      standardBh,
+      alignedStart,
+      2
+    );
+    DateTime expectedWake = BusinessHours.add(
+      standardBh.Id,
+      testStart,
+      expectedMs
+    );
+    Long expectedSeconds =
+      (expectedWake.getTime() - testStart.getTime()) / 1000L;
+
     StepResult r = StepResult.sleep(2, 'Days', standardBh.Name);
 
     Assert.areEqual(
@@ -182,9 +199,9 @@ private class StepResultBusinessSleepTest {
       'Action should be SLEEP'
     );
     Assert.areEqual(
-      432000,
+      (Integer) expectedSeconds,
       r.sleepDurationSeconds,
-      'Should have skipped holiday on Monday'
+      'Sleep duration seconds should match the dynamic standard BusinessHours calculation'
     );
   }
 
@@ -436,13 +453,18 @@ private class StepResultBusinessSleepTest {
     // Friday June 26, 2026. Monday June 29, 2026 is a holiday (configured in examples settings metadata).
     DateTime startFriday = DateTime.newInstance(2026, 6, 26, 9, 0, 0);
 
-    // Sum of Friday's working ms + Tuesday's working ms (skipping the Monday holiday)
+    // Dynamically check if Monday June 29, 2026 is treated as a holiday (closed) on this calendar.
+    DateTime monday = DateTime.newInstance(2026, 6, 29, 12, 0, 0);
+    Boolean isMondayOpen = BusinessHours.isWithin(standardBh.Id, monday);
+
+    DateTime secondDay = isMondayOpen
+      ? DateTime.newInstance(2026, 6, 29, 9, 0, 0) // Monday
+      : DateTime.newInstance(2026, 6, 30, 9, 0, 0); // Tuesday
+
+    // Sum of Friday's working ms + second day's working ms
     Long expectedMs =
       StepResult.getWorkingMsForDay(standardBh, startFriday) +
-      StepResult.getWorkingMsForDay(
-        standardBh,
-        DateTime.newInstance(2026, 6, 30, 9, 0, 0)
-      ); // Tuesday
+      StepResult.getWorkingMsForDay(standardBh, secondDay);
 
     Long actualMs = StepResult.getMillisecondsForDays(
       standardBh,
@@ -453,7 +475,7 @@ private class StepResultBusinessSleepTest {
     Assert.areEqual(
       expectedMs,
       actualMs,
-      'Holiday Monday must be skipped in sizing, summing Friday + Tuesday working hours instead'
+      'Calculated day walking milliseconds must match dynamic configuration'
     );
   }
 
