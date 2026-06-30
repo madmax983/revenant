@@ -955,7 +955,8 @@ public class WorkflowWatchdogTest {
       Status__c = 'Running',
       Retry_Count__c = 2,
       Error_Details__c = 'Stuck error',
-      Timeout_At__c = DateTime.now().addMinutes(-5)
+      Timeout_At__c = DateTime.now().addMinutes(-5),
+      CPU_Time_Ms__c = 100
     );
     insert stepExec;
 
@@ -966,7 +967,7 @@ public class WorkflowWatchdogTest {
 
     // Verify step execution was reset to Pending
     Workflow_Step_Execution__c updatedStep = [
-      SELECT Status__c, Retry_Count__c, Error_Details__c, Timeout_At__c
+      SELECT Status__c, Retry_Count__c, Error_Details__c, Timeout_At__c, CPU_Time_Ms__c
       FROM Workflow_Step_Execution__c
       WHERE Id = :stepExec.Id
     ];
@@ -974,6 +975,7 @@ public class WorkflowWatchdogTest {
     System.assertEquals(0, updatedStep.Retry_Count__c);
     System.assertEquals(null, updatedStep.Error_Details__c);
     System.assertEquals(null, updatedStep.Timeout_At__c);
+    System.assertEquals(null, updatedStep.CPU_Time_Ms__c);
 
     // Verify instance remains Running and Async_Job_Id__c was cleared
     Workflow_Instance__c updatedInst = [

@@ -11468,7 +11468,7 @@ public inherited sharing class WorkflowEngine {
     Map<String, Workflow_Step_Execution__c> latestStepByName = new Map<String, Workflow_Step_Execution__c>();
     if (!allTargetStepNames.isEmpty()) {
       for (Workflow_Step_Execution__c se : [
-        SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Retry_Count__c, Error_Details__c, Timeout_At__c
+        SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Retry_Count__c, Error_Details__c, Timeout_At__c, CPU_Time_Ms__c
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c IN :instanceIds
@@ -11489,7 +11489,7 @@ public inherited sharing class WorkflowEngine {
       }
       if (!stepIdsToLock.isEmpty()) {
         for (Workflow_Step_Execution__c se : [
-          SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Retry_Count__c, Error_Details__c, Timeout_At__c
+          SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Retry_Count__c, Error_Details__c, Timeout_At__c, CPU_Time_Ms__c
           FROM Workflow_Step_Execution__c
           WHERE Id IN :stepIdsToLock
           WITH SYSTEM_MODE
@@ -11516,6 +11516,7 @@ public inherited sharing class WorkflowEngine {
           stepExec.Retry_Count__c = 0;
           stepExec.Error_Details__c = null;
           stepExec.Timeout_At__c = null;
+          stepExec.CPU_Time_Ms__c = null;
           stepsToResetMap.put(stepExec.Id, stepExec);
         }
       }
