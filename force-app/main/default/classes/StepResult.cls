@@ -356,7 +356,9 @@ public inherited sharing class StepResult {
       return (Long) days * MILLISECONDS_IN_DAY;
     }
     if (daysAdded < days) {
-      totalMs += (days - daysAdded) * (totalMs / daysAdded);
+      throw new IllegalArgumentException(
+        'StepResult.sleep: requested business duration exceeds the maximum calendar scan limit (3650 days)'
+      );
     }
     return totalMs;
   }

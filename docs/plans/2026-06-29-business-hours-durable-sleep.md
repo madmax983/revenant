@@ -1,27 +1,40 @@
-# Codex PR Review Round 9 Fixes Implementation Plan
+# Codex PR Review Round 10 Fixes Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Address and fix the standard BusinessHours calendar expectation failures raised in the ninth Codex Pull Request review:
-1. **Derive standard business-hours expectation dynamically** (change the hard-coded `432000` seconds assertion in `testBusinessHoursHolidaySpanning` and holiday skipping assertions to be calculated dynamically from the queried standard `BusinessHours` configuration and holiday treatment).
+**Goal:** Address and fix the averaging fallback issue raised in the tenth Codex Pull Request review:
+1. **Reject durations exceeding exact scan limit**: Replace the averaging fallback with an `IllegalArgumentException` if the day walk hits the loop cap before the requested business days are fully accumulated.
 
 ---
 
 ## Proposed Changes
 
-### 1. Refactor StepResultBusinessSleepTest.cls
-Modify the standard and default BusinessHours tests to derive expectations dynamically.
+### 1. Refactor StepResult.cls
+Modify `getMillisecondsForDays` to reject walks that cannot complete exactly.
+
+**Files:**
+- Modify: [StepResult.cls](file:///c:/Users/markm/revenant/force-app/main/default/classes/StepResult.cls)
+
+#### Code Changes:
+- **Throw Exception**: If `daysAdded < days` (and `daysAdded > 0`), throw an `IllegalArgumentException`:
+  ```java
+  if (daysAdded < days) {
+      throw new IllegalArgumentException(
+          'StepResult.sleep: requested business duration exceeds the maximum calendar scan limit of 10 years or the calendar has insufficient open days'
+      );
+  }
+  ```
+
+### 2. Add Regression Test in StepResultBusinessSleepTest.cls
+Add a unit test verifying that the exception is thrown.
 
 **Files:**
 - Modify: [StepResultBusinessSleepTest.cls](file:///c:/Users/markm/revenant/force-app/main/default/classes/StepResultBusinessSleepTest.cls)
 
 #### Code Changes:
-- **Dynamic expectation in `testBusinessHoursDaysSleep`**:
-  - Recompute the expected sleep duration seconds using `StepResult.getMillisecondsForDays` instead of assuming equal daily working lengths.
-- **Dynamic expectation in `testBusinessHoursHolidaySpanning`**:
-  - Recompute the expected sleep duration seconds dynamically via `StepResult.getMillisecondsForDays` and `BusinessHours.add` for standard business hours, avoiding the hardcoded `432000` seconds.
-- **Dynamic holiday logic in `testBusinessHoursHolidaySpanningWithVariableLengthDays`**:
-  - Query if Monday June 29, 2026 is actually open or closed on the default BusinessHours calendar, and dynamically configure the expected milliseconds as Friday + Tuesday (if closed/holiday) or Friday + Monday (if open/normal day).
+- **`testLargeDurationExceedingScanLimitThrows`**:
+  - Mock a `BusinessHours` record with only Monday open.
+  - Call `StepResult.sleep(600, 'Days', 'mock_monday_only')` and assert that it throws an `IllegalArgumentException`.
 
 ---
 

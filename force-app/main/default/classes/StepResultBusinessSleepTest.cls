@@ -569,4 +569,38 @@ private class StepResultBusinessSleepTest {
       'Should walk all 106 business days exactly without falling back to averaged day lengths'
     );
   }
+
+  @isTest
+  static void testLargeDurationExceedingScanLimitThrows() {
+    // Mock a BusinessHours record. Monday = 8h, all others closed.
+    BusinessHours mockBh = new BusinessHours(
+      TimeZoneSidKey = 'America/Chicago',
+      MondayStartTime = Time.newInstance(9, 0, 0, 0),
+      MondayEndTime = Time.newInstance(17, 0, 0, 0)
+    );
+
+    // Monday November 5, 2018 (start of walk)
+    DateTime startDateTime = DateTime.newInstanceGmt(2018, 11, 5, 12, 0, 0);
+
+    // Requesting 600 business days on a Monday-only calendar requires 600 * 7 = 4200 calendar days.
+    // Since 4200 exceeds the 3650 calendar days limit, it should throw an IllegalArgumentException.
+    Boolean threwException = false;
+    try {
+      StepResult.getMillisecondsForDays(mockBh, startDateTime, 600);
+    } catch (IllegalArgumentException e) {
+      Assert.isTrue(
+        e.getMessage()
+          .contains(
+            'requested business duration exceeds the maximum calendar scan limit'
+          ),
+        'Exception message should specify the calendar scan limit exceedance'
+      );
+      threwException = true;
+    }
+
+    Assert.isTrue(
+      threwException,
+      'Should have thrown IllegalArgumentException for duration exceeding maximum scan limit'
+    );
+  }
 }
