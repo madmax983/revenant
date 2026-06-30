@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Reclaim_Threshold_Minutes__c</fullName>
+    <description>Minutes of inactivity after which an active self-driving instance (Pending/Running/Compensating/Cancelling) whose async job is dead is automatically reclaimed by the watchdog. Leave blank or set to 0 to disable automatic reclaim.</description>
+    <externalId>false</externalId>
+    <fieldManageability>DeveloperControlled</fieldManageability>
+    <label>Reclaim Threshold Minutes</label>
+    <precision>9</precision>
+    <required>false</required>
+    <scale>0</scale>
+    <type>Number</type>
+</CustomField>
