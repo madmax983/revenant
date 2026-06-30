@@ -325,22 +325,27 @@ public inherited sharing class StepResult {
     if (days == null || days <= 0) {
       return 0L;
     }
-    Long totalMs = 0;
+    String tz = String.isNotBlank(selectedBusinessHours.TimeZoneSidKey)
+      ? selectedBusinessHours.TimeZoneSidKey
+      : 'GMT';
     DateTime current = start;
     if (selectedBusinessHours.Id != null) {
       current = BusinessHours.isWithin(selectedBusinessHours.Id, start)
         ? start
         : BusinessHours.nextStartDate(selectedBusinessHours.Id, start);
     }
+    Date currentDate = Date.valueOf(current.format('yyyy-MM-dd', tz));
+    Long totalMs = 0;
     Integer daysAdded = 0;
 
     for (Integer i = 0; i < 365 && daysAdded < days; i++) {
-      Long workingMs = getWorkingMsForDay(selectedBusinessHours, current);
+      DateTime currentInstant = getLocalMidnight(currentDate, tz).addHours(12);
+      Long workingMs = getWorkingMsForDay(selectedBusinessHours, currentInstant);
       if (workingMs > 0) {
         totalMs += workingMs;
         daysAdded++;
       }
-      current = current.addDays(1);
+      currentDate = currentDate.addDays(1);
     }
 
     if (daysAdded == 0) {

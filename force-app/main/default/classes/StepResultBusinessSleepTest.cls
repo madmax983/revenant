@@ -458,4 +458,36 @@ private class StepResultBusinessSleepTest {
       'Local midnight for Sydney on transition day must use pre-transition offset (UTC+10) and equal 14:00:00 GMT'
     );
   }
+
+  @isTest
+  static void testDstFallbackDayWalkingRegression() {
+    // Mock a BusinessHours record with America/Chicago timezone.
+    // Sunday: 8 hours (28,800,000 ms)
+    // Monday: 10 hours (36,000,000 ms)
+    // All other days closed.
+    BusinessHours mockBh = new BusinessHours(
+      TimeZoneSidKey = 'America/Chicago',
+      SundayStartTime = Time.newInstance(9, 0, 0, 0),
+      SundayEndTime = Time.newInstance(17, 0, 0, 0),
+      MondayStartTime = Time.newInstance(8, 0, 0, 0),
+      MondayEndTime = Time.newInstance(18, 0, 0, 0)
+    );
+
+    // America/Chicago DST Fall-back: Sunday, November 4, 2018.
+    // Start at 00:30:00 local time on Sunday (before the DST transition).
+    // The offset before DST end is UTC-5, so local 00:30:00 Sunday is 05:30:00 Sunday GMT.
+    DateTime startDateTime = DateTime.newInstanceGmt(2018, 11, 4, 5, 30, 0);
+
+    // Walk 2 business days. If the bug is present, Sunday will be processed twice, returning 16 hours.
+    // If correct, it walks Sunday (8h) + Monday (10h), returning 18 hours (64,800,000 ms).
+    Long actualMs = StepResult.getMillisecondsForDays(mockBh, startDateTime, 2);
+
+    Long expectedMs = 64800000L; // 8 hours + 10 hours
+
+    Assert.areEqual(
+      expectedMs,
+      actualMs,
+      'Should walk from Sunday (8h) to Monday (10h) instead of repeating Sunday due to DST fall-back'
+    );
+  }
 }
