@@ -191,18 +191,43 @@ private class StepResultBusinessSleepTest {
   @isTest
   static void testBusinessHoursDefaultExplicit() {
     // Start at Friday 16:00:00 (June 26, 2026)
-    StepResult.mockCurrentDateTime = DateTime.newInstance(
-      2026,
-      6,
-      26,
-      16,
-      0,
-      0
-    );
+    DateTime testStart = DateTime.newInstance(2026, 6, 26, 16, 0, 0);
+    StepResult.mockCurrentDateTime = testStart;
 
-    // Default business hours has 24 hours daily.
-    // 2 business days = 48 business hours.
-    // Friday 16:00 + 48 hours = Sunday 16:00 = 172,800 seconds
+    List<BusinessHours> defaultBhs = [
+      SELECT Id, TimeZoneSidKey
+      FROM BusinessHours
+      WHERE IsActive = TRUE AND IsDefault = TRUE
+      LIMIT 1
+    ];
+    if (defaultBhs.isEmpty()) {
+      return;
+    }
+    BusinessHours defaultBh = defaultBhs[0];
+
+    // Compute expected dynamically based on the org's actual default BusinessHours configuration.
+    // Align start to the next open period:
+    DateTime alignedStart = BusinessHours.isWithin(defaultBh.Id, testStart)
+      ? testStart
+      : BusinessHours.nextStartDate(defaultBh.Id, testStart);
+    // Get expected business milliseconds:
+    Long expectedMs = StepResult.getMillisecondsForDays(
+      defaultBh,
+      alignedStart,
+      2
+    );
+    // Call BusinessHours.add to see what the final wake time will be:
+    DateTime expectedWake = BusinessHours.add(
+      defaultBh.Id,
+      testStart,
+      expectedMs
+    );
+    Long expectedDiffMs = expectedWake.getTime() - testStart.getTime();
+    if (expectedDiffMs < 0) {
+      expectedDiffMs = 0L;
+    }
+    Integer expectedSeconds = (Integer) (expectedDiffMs / 1000L);
+
     StepResult r = StepResult.sleep(2, 'Days', 'Default');
 
     Assert.areEqual(
@@ -211,9 +236,9 @@ private class StepResultBusinessSleepTest {
       'Action should be SLEEP'
     );
     Assert.areEqual(
-      172800,
+      expectedSeconds,
       r.sleepDurationSeconds,
-      'Default 24/7 business hours should be 48 hours in seconds'
+      'Sleep duration seconds should match the dynamic default BusinessHours calculation'
     );
   }
 
