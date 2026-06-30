@@ -354,12 +354,25 @@ public inherited sharing class StepResult {
 
   @TestVisible
   private static DateTime getLocalMidnight(Date d, String tz) {
-    DateTime gmtMidnight = DateTime.newInstanceGmt(d.year(), d.month(), d.day(), 0, 0, 0);
+    DateTime gmtMidnight = DateTime.newInstanceGmt(
+      d.year(),
+      d.month(),
+      d.day(),
+      0,
+      0,
+      0
+    );
     if (String.isBlank(tz)) {
       return gmtMidnight;
     }
-    Integer offsetMs = Timezone.getTimeZone(tz).getOffset(gmtMidnight);
-    return gmtMidnight.addSeconds(-offsetMs / 1000);
+    Timezone timezoneObj = Timezone.getTimeZone(tz);
+    Integer offsetMs1 = timezoneObj.getOffset(gmtMidnight);
+    DateTime candidate = gmtMidnight.addSeconds(-offsetMs1 / 1000);
+    Integer offsetMs2 = timezoneObj.getOffset(candidate);
+    if (offsetMs1 != offsetMs2) {
+      candidate = gmtMidnight.addSeconds(-offsetMs2 / 1000);
+    }
+    return candidate;
   }
 
   private static Integer getDayOfWeek(DateTime dt, String tz) {

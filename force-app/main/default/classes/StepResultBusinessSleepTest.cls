@@ -412,15 +412,50 @@ private class StepResultBusinessSleepTest {
     DateTime startFriday = DateTime.newInstance(2026, 6, 26, 9, 0, 0);
 
     // Sum of Friday's working ms + Tuesday's working ms (skipping the Monday holiday)
-    Long expectedMs = StepResult.getWorkingMsForDay(standardBh, startFriday) +
-      StepResult.getWorkingMsForDay(standardBh, DateTime.newInstance(2026, 6, 30, 9, 0, 0)); // Tuesday
+    Long expectedMs =
+      StepResult.getWorkingMsForDay(standardBh, startFriday) +
+      StepResult.getWorkingMsForDay(
+        standardBh,
+        DateTime.newInstance(2026, 6, 30, 9, 0, 0)
+      ); // Tuesday
 
-    Long actualMs = StepResult.getMillisecondsForDays(standardBh, startFriday, 2);
+    Long actualMs = StepResult.getMillisecondsForDays(
+      standardBh,
+      startFriday,
+      2
+    );
 
     Assert.areEqual(
       expectedMs,
       actualMs,
       'Holiday Monday must be skipped in sizing, summing Friday + Tuesday working hours instead'
+    );
+  }
+
+  @isTest
+  static void testPositiveOffsetDstMidnightRefinement() {
+    // Australia/Sydney DST start: Sunday, October 4, 2026
+    Date targetDate = Date.newInstance(2026, 10, 4);
+    String tz = 'Australia/Sydney';
+
+    // Call getLocalMidnight
+    DateTime midnight = StepResult.getLocalMidnight(targetDate, tz);
+
+    // In Australia/Sydney, the offset at 00:00:00 Sunday Oct 4, 2026 is UTC+10.
+    // So the GMT time of local midnight should be exactly Saturday Oct 3, 14:00:00 GMT.
+    DateTime expectedGmtMidnight = DateTime.newInstanceGmt(
+      2026,
+      10,
+      3,
+      14,
+      0,
+      0
+    );
+
+    Assert.areEqual(
+      expectedGmtMidnight.getTime(),
+      midnight.getTime(),
+      'Local midnight for Sydney on transition day must use pre-transition offset (UTC+10) and equal 14:00:00 GMT'
     );
   }
 }
