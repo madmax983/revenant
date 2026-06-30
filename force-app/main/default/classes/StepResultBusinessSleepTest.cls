@@ -291,4 +291,39 @@ private class StepResultBusinessSleepTest {
       'Named lookup for the default record must hit the cache'
     );
   }
+
+  @isTest
+  static void testUnequalBusinessDayLengthsDoNotAverage() {
+    BusinessHours mockBh = new BusinessHours(
+      MondayStartTime = Time.newInstance(9, 0, 0, 0),
+      MondayEndTime = Time.newInstance(17, 0, 0, 0), // 8 hours
+      TuesdayStartTime = Time.newInstance(9, 0, 0, 0),
+      TuesdayEndTime = Time.newInstance(17, 0, 0, 0), // 8 hours
+      WednesdayStartTime = Time.newInstance(9, 0, 0, 0),
+      WednesdayEndTime = Time.newInstance(17, 0, 0, 0), // 8 hours
+      ThursdayStartTime = Time.newInstance(9, 0, 0, 0),
+      ThursdayEndTime = Time.newInstance(17, 0, 0, 0), // 8 hours
+      FridayStartTime = Time.newInstance(9, 0, 0, 0),
+      FridayEndTime = Time.newInstance(13, 0, 0, 0), // 4 hours
+      TimeZoneSidKey = 'GMT'
+    );
+
+    // 1. Sleep 1 business day starting on Monday morning (July 6, 2026) -> should equal 8 working hours
+    DateTime mondayStart = DateTime.newInstance(2026, 7, 6, 9, 0, 0);
+    Long mondayMs = StepResult.getMillisecondsForDays(mockBh, mondayStart, 1);
+    Assert.areEqual(
+      8L * 3600000L,
+      mondayMs,
+      'Monday business day should be 8 working hours'
+    );
+
+    // 2. Sleep 1 business day starting on Friday morning (July 3, 2026) -> should equal 4 working hours
+    DateTime fridayStart = DateTime.newInstance(2026, 7, 3, 9, 0, 0);
+    Long fridayMs = StepResult.getMillisecondsForDays(mockBh, fridayStart, 1);
+    Assert.areEqual(
+      4L * 3600000L,
+      fridayMs,
+      'Friday business day should be 4 working hours'
+    );
+  }
 }

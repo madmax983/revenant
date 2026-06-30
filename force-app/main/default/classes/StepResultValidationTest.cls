@@ -223,6 +223,7 @@ private class StepResultValidationTest {
       );
     }
 
+    // 3. Named query matching default's actual name (hits cache)
     try {
       StepResult.split(new List<String>{ 'StepA', ' ' }, 'input');
       Assert.fail(
@@ -235,5 +236,64 @@ private class StepResultValidationTest {
         'Error message should match'
       );
     }
+  }
+
+  @isTest
+  static void testScalarJsonPreservation() {
+    // 1. Pre-serialized boolean scalar
+    StepResult r1 = StepResult.startChild('ChildWF', 'key', 'true');
+    Assert.areEqual(
+      'true',
+      r1.childInputJson,
+      'Should preserve boolean scalar JSON string'
+    );
+
+    // 2. Pre-serialized number scalar
+    StepResult r2 = StepResult.startChild('ChildWF', 'key', '123.45');
+    Assert.areEqual(
+      '123.45',
+      r2.childInputJson,
+      'Should preserve number scalar JSON string'
+    );
+
+    // 3. Pre-serialized null scalar
+    StepResult r3 = StepResult.startChild('ChildWF', 'key', 'null');
+    Assert.areEqual(
+      'null',
+      r3.childInputJson,
+      'Should preserve null scalar JSON string'
+    );
+
+    // 4. Pre-serialized string scalar
+    StepResult r4 = StepResult.startChild('ChildWF', 'key', '"hello"');
+    Assert.areEqual(
+      '"hello"',
+      r4.childInputJson,
+      'Should preserve quoted string scalar JSON string'
+    );
+
+    // 5. Pre-serialized object
+    StepResult r5 = StepResult.startChild('ChildWF', 'key', '{"foo":"bar"}');
+    Assert.areEqual(
+      '{"foo":"bar"}',
+      r5.childInputJson,
+      'Should preserve object JSON string'
+    );
+
+    // 6. Pre-serialized array
+    StepResult r6 = StepResult.startChild('ChildWF', 'key', '[1, 2, 3]');
+    Assert.areEqual(
+      '[1, 2, 3]',
+      r6.childInputJson,
+      'Should preserve array JSON string'
+    );
+
+    // 7. Non-JSON plain string (should be serialized)
+    StepResult r7 = StepResult.startChild('ChildWF', 'key', 'plain string');
+    Assert.areEqual(
+      '"plain string"',
+      r7.childInputJson,
+      'Plain string should be serialized'
+    );
   }
 }

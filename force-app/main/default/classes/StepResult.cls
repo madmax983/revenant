@@ -122,7 +122,9 @@ public inherited sharing class StepResult {
 
   public static StepResult retry(RetryPolicy policy) {
     if (policy == null) {
-      throw new IllegalArgumentException('StepResult.retry: policy must not be null');
+      throw new IllegalArgumentException(
+        'StepResult.retry: policy must not be null'
+      );
     }
     StepResult r = new StepResult();
     r.action = ActionType.RETRY;
@@ -140,7 +142,9 @@ public inherited sharing class StepResult {
 
   public static StepResult sleep(Integer seconds) {
     if (seconds == null || seconds < 0) {
-      throw new IllegalArgumentException('StepResult.sleep: seconds must be a non-negative integer');
+      throw new IllegalArgumentException(
+        'StepResult.sleep: seconds must be a non-negative integer'
+      );
     }
     StepResult r = new StepResult();
     r.action = ActionType.SLEEP;
@@ -150,7 +154,9 @@ public inherited sharing class StepResult {
 
   public static StepResult sleep(Integer seconds, String stepStateJson) {
     if (seconds == null || seconds < 0) {
-      throw new IllegalArgumentException('StepResult.sleep: seconds must be a non-negative integer');
+      throw new IllegalArgumentException(
+        'StepResult.sleep: seconds must be a non-negative integer'
+      );
     }
     StepResult r = new StepResult();
     r.action = ActionType.SLEEP;
@@ -194,6 +200,7 @@ public inherited sharing class StepResult {
         SELECT
           Id,
           Name,
+          TimeZoneSidKey,
           IsActive,
           IsDefault,
           MondayStartTime,
@@ -219,6 +226,7 @@ public inherited sharing class StepResult {
         SELECT
           Id,
           Name,
+          TimeZoneSidKey,
           IsActive,
           IsDefault,
           MondayStartTime,
@@ -242,18 +250,25 @@ public inherited sharing class StepResult {
     }
 
     if (matchingBusinessHours.isEmpty()) {
-      throw new IllegalArgumentException('Unknown Business Hours name: ' + name);
+      throw new IllegalArgumentException(
+        'Unknown Business Hours name: ' + name
+      );
     }
 
     businessHoursByName.put(cacheKey, matchingBusinessHours[0]);
     if (matchingBusinessHours[0].Name != null) {
-      businessHoursByName.put(matchingBusinessHours[0].Name.toLowerCase(), matchingBusinessHours[0]);
+      businessHoursByName.put(
+        matchingBusinessHours[0].Name.toLowerCase(),
+        matchingBusinessHours[0]
+      );
     }
     return matchingBusinessHours[0];
   }
 
   @TestVisible
-  private static Long getMillisecondsInBusinessDay(BusinessHours selectedBusinessHours) {
+  private static Long getMillisecondsInBusinessDay(
+    BusinessHours selectedBusinessHours
+  ) {
     if (msPerBusinessDayByBhId.containsKey(selectedBusinessHours.Id)) {
       return msPerBusinessDayByBhId.get(selectedBusinessHours.Id);
     }
@@ -301,6 +316,87 @@ public inherited sharing class StepResult {
     return result;
   }
 
+  @TestVisible
+  private static Long getMillisecondsForDays(
+    BusinessHours selectedBusinessHours,
+    DateTime start,
+    Integer days
+  ) {
+    if (days == null || days <= 0) {
+      return 0L;
+    }
+    Long totalMs = 0;
+    DateTime current = start;
+    Integer daysAdded = 0;
+
+    for (Integer i = 0; i < 365 && daysAdded < days; i++) {
+      Long workingMs = getWorkingMsForDay(selectedBusinessHours, current);
+      if (workingMs > 0) {
+        totalMs += workingMs;
+        daysAdded++;
+      }
+      current = current.addDays(1);
+    }
+
+    if (daysAdded == 0) {
+      return (Long) days * MILLISECONDS_IN_DAY;
+    }
+    if (daysAdded < days) {
+      totalMs += (days - daysAdded) * (totalMs / daysAdded);
+    }
+    return totalMs;
+  }
+
+  private static Long getWorkingMsForDay(
+    BusinessHours selectedBusinessHours,
+    DateTime dt
+  ) {
+    String tz = String.isNotBlank(selectedBusinessHours.TimeZoneSidKey)
+      ? selectedBusinessHours.TimeZoneSidKey
+      : 'GMT';
+    String dayOfWeek = dt.format('EEEE', tz);
+    Time startTime;
+    Time endTime;
+    switch on dayOfWeek {
+      when 'Sunday' {
+        startTime = selectedBusinessHours.SundayStartTime;
+        endTime = selectedBusinessHours.SundayEndTime;
+      }
+      when 'Monday' {
+        startTime = selectedBusinessHours.MondayStartTime;
+        endTime = selectedBusinessHours.MondayEndTime;
+      }
+      when 'Tuesday' {
+        startTime = selectedBusinessHours.TuesdayStartTime;
+        endTime = selectedBusinessHours.TuesdayEndTime;
+      }
+      when 'Wednesday' {
+        startTime = selectedBusinessHours.WednesdayStartTime;
+        endTime = selectedBusinessHours.WednesdayEndTime;
+      }
+      when 'Thursday' {
+        startTime = selectedBusinessHours.ThursdayStartTime;
+        endTime = selectedBusinessHours.ThursdayEndTime;
+      }
+      when 'Friday' {
+        startTime = selectedBusinessHours.FridayStartTime;
+        endTime = selectedBusinessHours.FridayEndTime;
+      }
+      when 'Saturday' {
+        startTime = selectedBusinessHours.SaturdayStartTime;
+        endTime = selectedBusinessHours.SaturdayEndTime;
+      }
+    }
+    if (startTime == null || endTime == null) {
+      return 0L;
+    }
+    if (startTime == endTime) {
+      return MILLISECONDS_IN_DAY;
+    }
+    return getMillisecondsSinceMidnight(endTime) -
+      getMillisecondsSinceMidnight(startTime);
+  }
+
   private static Long getMillisecondsSinceMidnight(Time t) {
     if (t == null) {
       return 0;
@@ -311,28 +407,44 @@ public inherited sharing class StepResult {
       t.millisecond();
   }
 
-  public static StepResult sleep(Integer amount, String unit, String businessHoursName) {
+  public static StepResult sleep(
+    Integer amount,
+    String unit,
+    String businessHoursName
+  ) {
     return sleep(amount, unit, businessHoursName, null);
   }
 
-  public static StepResult sleep(Integer amount, String unit, String businessHoursName, String stepStateJson) {
+  public static StepResult sleep(
+    Integer amount,
+    String unit,
+    String businessHoursName,
+    String stepStateJson
+  ) {
     if (amount == null || amount < 0) {
-      throw new IllegalArgumentException('StepResult.sleep: amount must be a non-negative integer');
+      throw new IllegalArgumentException(
+        'StepResult.sleep: amount must be a non-negative integer'
+      );
     }
     if (String.isBlank(unit)) {
-      throw new IllegalArgumentException('StepResult.sleep: unit must not be blank');
+      throw new IllegalArgumentException(
+        'StepResult.sleep: unit must not be blank'
+      );
     }
     if (String.isBlank(businessHoursName)) {
-      throw new IllegalArgumentException('StepResult.sleep: businessHoursName must not be blank');
+      throw new IllegalArgumentException(
+        'StepResult.sleep: businessHoursName must not be blank'
+      );
     }
 
     BusinessHours selectedBusinessHours = getBusinessHours(businessHoursName);
 
+    DateTime now = getCurrentDateTime();
     Long intervalMs;
     String unitLower = unit.toLowerCase().trim();
     switch on unitLower {
       when 'days', 'business days', 'day', 'business day' {
-        intervalMs = (Long) amount * getMillisecondsInBusinessDay(selectedBusinessHours);
+        intervalMs = getMillisecondsForDays(selectedBusinessHours, now, amount);
       }
       when 'hours', 'business hours', 'hour', 'business hour' {
         intervalMs = (Long) amount * MILLISECONDS_IN_HOUR;
@@ -344,7 +456,9 @@ public inherited sharing class StepResult {
         intervalMs = (Long) amount * MILLISECONDS_IN_SECOND;
       }
       when else {
-        throw new IllegalArgumentException('StepResult.sleep: unsupported unit: ' + unit);
+        throw new IllegalArgumentException(
+          'StepResult.sleep: unsupported unit: ' + unit
+        );
       }
     }
 
@@ -353,15 +467,20 @@ public inherited sharing class StepResult {
       intervalMs = MAX_LONG; // Cap at max value if it wrapped
     }
 
-    DateTime now = getCurrentDateTime();
-    DateTime wakeTime = BusinessHours.add(selectedBusinessHours.Id, now, intervalMs);
+    DateTime wakeTime = BusinessHours.add(
+      selectedBusinessHours.Id,
+      now,
+      intervalMs
+    );
 
     Long diffMs = wakeTime.getTime() - now.getTime();
     if (diffMs < 0) {
       diffMs = 0L;
     }
     Long sleepSecondsLong = diffMs / 1000L;
-    Integer sleepSeconds = sleepSecondsLong > MAX_INTEGER ? MAX_INTEGER : (Integer) sleepSecondsLong;
+    Integer sleepSeconds = sleepSecondsLong > MAX_INTEGER
+      ? MAX_INTEGER
+      : (Integer) sleepSecondsLong;
 
     StepResult result = new StepResult();
     result.action = ActionType.SLEEP;
@@ -376,7 +495,9 @@ public inherited sharing class StepResult {
     Object input
   ) {
     if (String.isBlank(childWorkflowName)) {
-      throw new IllegalArgumentException('StepResult.startChild: childWorkflowName must not be blank');
+      throw new IllegalArgumentException(
+        'StepResult.startChild: childWorkflowName must not be blank'
+      );
     }
     StepResult r = new StepResult();
     r.action = ActionType.START_CHILD;
@@ -397,7 +518,9 @@ public inherited sharing class StepResult {
       Object input
     ) {
       if (String.isBlank(workflowName)) {
-        throw new IllegalArgumentException('ChildRequest: workflowName must not be blank');
+        throw new IllegalArgumentException(
+          'ChildRequest: workflowName must not be blank'
+        );
       }
       this.workflowName = workflowName;
       this.correlationKey = correlationKey;
@@ -413,7 +536,9 @@ public inherited sharing class StepResult {
     }
     for (ChildRequest child : children) {
       if (child == null) {
-        throw new IllegalArgumentException('StepResult.startChildren: children list must not contain null values');
+        throw new IllegalArgumentException(
+          'StepResult.startChildren: children list must not contain null values'
+        );
       }
     }
     StepResult r = new StepResult();
@@ -424,7 +549,9 @@ public inherited sharing class StepResult {
 
   public static StepResult waitForApproval(String key, String role) {
     if (String.isBlank(key)) {
-      throw new IllegalArgumentException('StepResult.waitForApproval: key must not be blank');
+      throw new IllegalArgumentException(
+        'StepResult.waitForApproval: key must not be blank'
+      );
     }
     StepResult r = new StepResult();
     r.action = ActionType.WAIT_FOR_APPROVAL;
@@ -440,7 +567,9 @@ public inherited sharing class StepResult {
     String timeoutStep
   ) {
     if (String.isBlank(key)) {
-      throw new IllegalArgumentException('StepResult.waitForApproval: key must not be blank');
+      throw new IllegalArgumentException(
+        'StepResult.waitForApproval: key must not be blank'
+      );
     }
     if (String.isBlank(timeoutStep)) {
       throw new IllegalArgumentException(
@@ -469,7 +598,9 @@ public inherited sharing class StepResult {
     }
     for (String stepName : stepNames) {
       if (String.isBlank(stepName)) {
-        throw new IllegalArgumentException('StepResult.split: stepNames list must not contain null or blank values');
+        throw new IllegalArgumentException(
+          'StepResult.split: stepNames list must not contain null or blank values'
+        );
       }
     }
     StepResult r = new StepResult();
@@ -486,7 +617,9 @@ public inherited sharing class StepResult {
     }
     for (String stepName : stepNames) {
       if (String.isBlank(stepName)) {
-        throw new IllegalArgumentException('StepResult.split: stepNames list must not contain null or blank values');
+        throw new IllegalArgumentException(
+          'StepResult.split: stepNames list must not contain null or blank values'
+        );
       }
     }
     StepResult r = new StepResult();
@@ -552,10 +685,7 @@ public inherited sharing class StepResult {
     if (input instanceof String) {
       String strInput = (String) input;
       String trimmed = strInput.trim();
-      if (
-        (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-        (trimmed.startsWith('[') && trimmed.endsWith(']'))
-      ) {
+      if (isJsonLike(trimmed)) {
         try {
           JSON.deserializeUntyped(trimmed);
           return strInput;
@@ -566,5 +696,23 @@ public inherited sharing class StepResult {
       return JSON.serialize(strInput);
     }
     return JSON.serialize(input);
+  }
+
+  private static Boolean isJsonLike(String trimmed) {
+    if (
+      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+      (trimmed.startsWith('"') && trimmed.endsWith('"'))
+    ) {
+      return true;
+    }
+    if (trimmed == 'true' || trimmed == 'false' || trimmed == 'null') {
+      return true;
+    }
+    // Match standard integer or float patterns in JSON
+    if (Pattern.matches('^-?\\d+(\\.\\d+)?([eE][+-]?\\d+)?$', trimmed)) {
+      return true;
+    }
+    return false;
   }
 }
