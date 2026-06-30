@@ -326,4 +326,55 @@ private class StepResultBusinessSleepTest {
       'Friday business day should be 4 working hours'
     );
   }
+
+  @isTest
+  static void testWalkAfterHoursWithStandardBusinessHours() {
+    List<BusinessHours> standardBhs = [
+      SELECT
+        Id,
+        Name,
+        TimeZoneSidKey,
+        IsActive,
+        IsDefault,
+        MondayStartTime,
+        MondayEndTime,
+        TuesdayStartTime,
+        TuesdayEndTime,
+        WednesdayStartTime,
+        WednesdayEndTime,
+        ThursdayStartTime,
+        ThursdayEndTime,
+        FridayStartTime,
+        FridayEndTime,
+        SaturdayStartTime,
+        SaturdayEndTime,
+        SundayStartTime,
+        SundayEndTime
+      FROM BusinessHours
+      WHERE IsActive = TRUE AND IsDefault = TRUE
+      LIMIT 1
+    ];
+    if (standardBhs.isEmpty()) {
+      return;
+    }
+    BusinessHours standardBh = standardBhs[0];
+
+    // Starting on Saturday (closed day) should align start to Monday morning
+    DateTime saturdayDate = DateTime.newInstance(2026, 7, 4, 12, 0, 0); // Saturday
+    Long dayMs = StepResult.getMillisecondsForDays(standardBh, saturdayDate, 1);
+
+    // Get expected Monday day length directly by starting on Monday morning
+    DateTime mondayDate = DateTime.newInstance(2026, 7, 6, 9, 0, 0);
+    Long mondayLength = StepResult.getMillisecondsForDays(
+      standardBh,
+      mondayDate,
+      1
+    );
+
+    Assert.areEqual(
+      mondayLength,
+      dayMs,
+      'Sleeping on Saturday should walk starting from the aligned Monday start and return Monday day length'
+    );
+  }
 }

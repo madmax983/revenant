@@ -327,6 +327,11 @@ public inherited sharing class StepResult {
     }
     Long totalMs = 0;
     DateTime current = start;
+    if (selectedBusinessHours.Id != null) {
+      current = BusinessHours.isWithin(selectedBusinessHours.Id, start)
+        ? start
+        : BusinessHours.nextStartDate(selectedBusinessHours.Id, start);
+    }
     Integer daysAdded = 0;
 
     for (Integer i = 0; i < 365 && daysAdded < days; i++) {
@@ -347,6 +352,18 @@ public inherited sharing class StepResult {
     return totalMs;
   }
 
+  private static Integer getDayOfWeek(DateTime dt, String tz) {
+    String dateStr = dt.format('yyyy-MM-dd', tz);
+    Date localDate = Date.valueOf(dateStr);
+    Date refDate = Date.newInstance(1900, 1, 7); // A Sunday
+    Integer daysBetween = refDate.daysBetween(localDate);
+    Integer dayOfWeekNum = Math.mod(daysBetween, 7);
+    if (dayOfWeekNum < 0) {
+      dayOfWeekNum += 7;
+    }
+    return dayOfWeekNum; // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+  }
+
   private static Long getWorkingMsForDay(
     BusinessHours selectedBusinessHours,
     DateTime dt
@@ -354,35 +371,35 @@ public inherited sharing class StepResult {
     String tz = String.isNotBlank(selectedBusinessHours.TimeZoneSidKey)
       ? selectedBusinessHours.TimeZoneSidKey
       : 'GMT';
-    String dayOfWeek = dt.format('EEEE', tz);
+    Integer dayOfWeek = getDayOfWeek(dt, tz);
     Time startTime;
     Time endTime;
     switch on dayOfWeek {
-      when 'Sunday' {
+      when 0 {
         startTime = selectedBusinessHours.SundayStartTime;
         endTime = selectedBusinessHours.SundayEndTime;
       }
-      when 'Monday' {
+      when 1 {
         startTime = selectedBusinessHours.MondayStartTime;
         endTime = selectedBusinessHours.MondayEndTime;
       }
-      when 'Tuesday' {
+      when 2 {
         startTime = selectedBusinessHours.TuesdayStartTime;
         endTime = selectedBusinessHours.TuesdayEndTime;
       }
-      when 'Wednesday' {
+      when 3 {
         startTime = selectedBusinessHours.WednesdayStartTime;
         endTime = selectedBusinessHours.WednesdayEndTime;
       }
-      when 'Thursday' {
+      when 4 {
         startTime = selectedBusinessHours.ThursdayStartTime;
         endTime = selectedBusinessHours.ThursdayEndTime;
       }
-      when 'Friday' {
+      when 5 {
         startTime = selectedBusinessHours.FridayStartTime;
         endTime = selectedBusinessHours.FridayEndTime;
       }
-      when 'Saturday' {
+      when 6 {
         startTime = selectedBusinessHours.SaturdayStartTime;
         endTime = selectedBusinessHours.SaturdayEndTime;
       }
