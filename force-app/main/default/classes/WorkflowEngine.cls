@@ -10215,14 +10215,101 @@ public inherited sharing class WorkflowEngine {
 
           if (!orphanIds.isEmpty()) {
             List<Workflow_Instance__c> lockedOrphans = [
-              SELECT Id, Name, Status__c, Current_Step__c, Compensation_Stack__c, Async_Job_Id__c, Workflow_Name__c, Correlation_Key__c
+              SELECT Id, Name, Status__c, Current_Step__c, Compensation_Stack__c, Async_Job_Id__c, Workflow_Name__c, Correlation_Key__c, LastModifiedDate
               FROM Workflow_Instance__c
               WHERE Id IN :orphanIds AND Status__c IN ('Pending', 'Running', 'Compensating', 'Cancelling')
               WITH SYSTEM_MODE
               FOR UPDATE
             ];
+
             if (!lockedOrphans.isEmpty()) {
-              reclaimOrphanedInstances(lockedOrphans);
+              // Re-check liveness of the locked candidates to make sure they didn't progress in the race window.
+              Set<Id> newJobIds = new Set<Id>();
+              for (Workflow_Instance__c inst : lockedOrphans) {
+                if (String.isNotBlank(inst.Async_Job_Id__c)) {
+                  String jobIdStr = inst.Async_Job_Id__c;
+                  if ((jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
+                      (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))) {
+                    try {
+                      newJobIds.add((Id) jobIdStr);
+                    } catch (Exception e) {}
+                  }
+                }
+              }
+
+              Set<Id> lockedActiveCronIds = new Set<Id>();
+              Set<Id> lockedActiveAsyncIds = new Set<Id>();
+              
+              Set<Id> newCronIds = new Set<Id>();
+              Set<Id> newAsyncIds = new Set<Id>();
+              for (Id jobId : newJobIds) {
+                if (jobId.getSobjectType() == CronTrigger.SObjectType) {
+                  newCronIds.add(jobId);
+                } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
+                  newAsyncIds.add(jobId);
+                }
+              }
+
+              if (!newCronIds.isEmpty()) {
+                for (CronTrigger ct : [
+                  SELECT Id FROM CronTrigger
+                  WHERE Id IN :newCronIds AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING')
+                  WITH SYSTEM_MODE
+                ]) {
+                  lockedActiveCronIds.add(ct.Id);
+                }
+              }
+
+              if (!newAsyncIds.isEmpty()) {
+                for (AsyncApexJob aaj : [
+                  SELECT Id FROM AsyncApexJob
+                  WHERE Id IN :newAsyncIds AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing')
+                  WITH SYSTEM_MODE
+                ]) {
+                  lockedActiveAsyncIds.add(aaj.Id);
+                }
+              }
+
+              List<Workflow_Instance__c> confirmedOrphans = new List<Workflow_Instance__c>();
+              for (Workflow_Instance__c inst : lockedOrphans) {
+                if (inst.LastModifiedDate > now.addMinutes(-reclaimThresholdMinutes)) {
+                  continue; // legitimately progressed/touched recently
+                }
+
+                Boolean isOrphaned = false;
+                if (String.isBlank(inst.Async_Job_Id__c)) {
+                  isOrphaned = true;
+                } else {
+                  String jobIdStr = inst.Async_Job_Id__c;
+                  if ((jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
+                      (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))) {
+                    try {
+                      Id jobId = (Id) jobIdStr;
+                      Boolean jobIsAlive = false;
+                      if (jobId.getSobjectType() == CronTrigger.SObjectType && lockedActiveCronIds.contains(jobId)) {
+                        jobIsAlive = true;
+                      } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType && lockedActiveAsyncIds.contains(jobId)) {
+                        jobIsAlive = true;
+                      }
+                      if (!jobIsAlive) {
+                        isOrphaned = true;
+                      }
+                    } catch (Exception ex) {
+                      isOrphaned = true;
+                    }
+                  } else {
+                    isOrphaned = true;
+                  }
+                }
+
+                if (isOrphaned) {
+                  confirmedOrphans.add(inst);
+                }
+              }
+
+              if (!confirmedOrphans.isEmpty()) {
+                reclaimOrphanedInstances(confirmedOrphans);
+              }
             }
           }
         }
@@ -11381,7 +11468,7 @@ public inherited sharing class WorkflowEngine {
     Map<String, Workflow_Step_Execution__c> latestStepByName = new Map<String, Workflow_Step_Execution__c>();
     if (!allTargetStepNames.isEmpty()) {
       for (Workflow_Step_Execution__c se : [
-        SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Retry_Count__c, Error_Details__c
+        SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Retry_Count__c, Error_Details__c, Timeout_At__c
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c IN :instanceIds
@@ -11402,7 +11489,7 @@ public inherited sharing class WorkflowEngine {
       }
       if (!stepIdsToLock.isEmpty()) {
         for (Workflow_Step_Execution__c se : [
-          SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Retry_Count__c, Error_Details__c
+          SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Retry_Count__c, Error_Details__c, Timeout_At__c
           FROM Workflow_Step_Execution__c
           WHERE Id IN :stepIdsToLock
           WITH SYSTEM_MODE
@@ -11428,6 +11515,7 @@ public inherited sharing class WorkflowEngine {
           stepExec.Status__c = 'Pending';
           stepExec.Retry_Count__c = 0;
           stepExec.Error_Details__c = null;
+          stepExec.Timeout_At__c = null;
           stepsToResetMap.put(stepExec.Id, stepExec);
         }
       }

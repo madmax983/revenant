@@ -935,6 +935,7 @@ public class WorkflowWatchdogTest {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.reclaimThresholdMinutes = 10;
     WorkflowEngine.mockNow = DateTime.now().addMinutes(15);
+    WorkflowEngine.WATCHDOG_TIMEOUT_BATCH_SIZE = 0;
 
     // Create candidate instance stuck in Running with a dead job ID
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -953,7 +954,8 @@ public class WorkflowWatchdogTest {
       Step_Name__c = 'WorkflowEngineTest.HappyStep1',
       Status__c = 'Running',
       Retry_Count__c = 2,
-      Error_Details__c = 'Stuck error'
+      Error_Details__c = 'Stuck error',
+      Timeout_At__c = DateTime.now().addMinutes(-5)
     );
     insert stepExec;
 
@@ -964,13 +966,14 @@ public class WorkflowWatchdogTest {
 
     // Verify step execution was reset to Pending
     Workflow_Step_Execution__c updatedStep = [
-      SELECT Status__c, Retry_Count__c, Error_Details__c
+      SELECT Status__c, Retry_Count__c, Error_Details__c, Timeout_At__c
       FROM Workflow_Step_Execution__c
       WHERE Id = :stepExec.Id
     ];
     System.assertEquals('Pending', updatedStep.Status__c);
     System.assertEquals(0, updatedStep.Retry_Count__c);
     System.assertEquals(null, updatedStep.Error_Details__c);
+    System.assertEquals(null, updatedStep.Timeout_At__c);
 
     // Verify instance remains Running and Async_Job_Id__c was cleared
     Workflow_Instance__c updatedInst = [
