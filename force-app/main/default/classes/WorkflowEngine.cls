@@ -1005,8 +1005,10 @@ public inherited sharing class WorkflowEngine {
     DateTime earliest = inst.CreatedDate;
     Id prevId = inst.Previous_Instance__c;
     Set<Id> visited = new Set<Id>{ inst.Id };
-    while (prevId != null && !visited.contains(prevId)) {
+    Integer hops = 0;
+    while (prevId != null && !visited.contains(prevId) && hops < 5) {
       visited.add(prevId);
+      hops++;
       List<Workflow_Instance__c> prevs = [
         SELECT Id, Previous_Instance__c, CreatedDate
         FROM Workflow_Instance__c

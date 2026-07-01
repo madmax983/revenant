@@ -8048,4 +8048,38 @@ public class WorkflowEngineTest {
       'Must resolve to original parent and not newer parent with reused key'
     );
   }
+
+  @isTest
+  static void testCausationIdInheritedOnContinueAsNewReusedKeyTimeBoundCapped() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Create a chain of 7 instances linked by Previous_Instance__c
+    List<Workflow_Instance__c> chain = new List<Workflow_Instance__c>();
+    Id prevId = null;
+    for (Integer i = 0; i < 7; i++) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+        Correlation_Key__c = 'ChainKey-' + i,
+        Causation_Id__c = 'ParentKey',
+        Previous_Instance__c = prevId
+      );
+      insert inst;
+      prevId = inst.Id;
+      chain.add(inst);
+    }
+
+    // Run getCausationLineage on the last item.
+    // It should not throw any exceptions (governor limits) and should complete successfully.
+    Test.startTest();
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      chain[6].Id
+    );
+    Test.stopTest();
+
+    System.assertNotEquals(
+      null,
+      lineage,
+      'Lineage must be returned successfully'
+    );
+  }
 }
