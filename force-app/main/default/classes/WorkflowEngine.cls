@@ -939,8 +939,22 @@ public inherited sharing class WorkflowEngine {
         break;
       }
 
+      Id resolvedId = null;
       if (isValidId(cause)) {
-        currentId = (Id) cause;
+        List<Workflow_Instance__c> directRecords = [
+          SELECT Id
+          FROM Workflow_Instance__c
+          WHERE Id = :cause
+          WITH SYSTEM_MODE
+          LIMIT 1
+        ];
+        if (!directRecords.isEmpty()) {
+          resolvedId = directRecords[0].Id;
+        }
+      }
+
+      if (resolvedId != null) {
+        currentId = resolvedId;
       } else {
         List<Workflow_Instance__c> parents = [
           SELECT Id

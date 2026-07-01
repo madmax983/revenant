@@ -7926,4 +7926,48 @@ public class WorkflowEngineTest {
       'Parent must remain Suspended; compensation run completion must be isolated'
     );
   }
+
+  @isTest
+  static void testCausationIdLooksLikeIdFallback() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Get key prefix for Workflow_Instance__c (usually 'a01' or 'a00')
+    String prefix = Workflow_Instance__c.SObjectType.getDescribe()
+      .getKeyPrefix();
+    // Pad to 15 characters to make it look like a valid Salesforce ID
+    String lookalikeId = prefix + '000000000000';
+
+    // 1. Create parent with this lookalike correlation key
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      lookalikeId,
+      null
+    );
+
+    // 2. Start child caused by the lookalike correlation key
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ChildKey',
+      null
+    );
+    childReq.causationId = lookalikeId;
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Get causation lineage on Child.
+    // Even though lookalikeId is a valid ID syntax, it does not exist in the database,
+    // so getCausationLineage should fall back to key-based query and resolve to parentId.
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(
+      2,
+      lineage.size(),
+      'Must walk up to parent via fallback key lookup'
+    );
+    System.assertEquals(childId, lineage[0].instanceId);
+    System.assertEquals(parentId, lineage[1].instanceId);
+  }
 }
