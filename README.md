@@ -359,6 +359,16 @@ The action is **strictly read-only** (no transition, enqueue, signal, schedule, 
 
 The autolaunched Flow `Revenant_Read_Workflow_Status_Example` (`examples/main/default/flows/`) implements step 2–3 verbatim.
 
+**Executing Flows as Steps.** The engine provides a bundled step class `WorkflowFlowStep` to execute standard Autolaunched Flows as steps within a workflow:
+- The step's input JSON is expected to be a JSON object with:
+  - `flowName` (String, required): The developer name of the Autolaunched Flow to invoke.
+  - `variables` (Map, optional): Key-value pairs representing the input variables passed to the Flow.
+- The step returns a `StepResult.complete` with the Flow's output parameters as its JSON output.
+
+**At-Most-Once Flow Execution Guarantee.** Because step bodies are executed under an *at-least-once* contract, the engine guards `WorkflowFlowStep` using its capture-once (`once()`) idempotency machinery. The first time a Flow is executed for a given step visit, its output parameters are durably recorded in the step's audit log (`Captured_Values__c`). On any subsequent sequential re-execution (due to a watchdog sweep or stray orchestrator hop), the engine retrieves the original Flow outputs directly from the audit log without re-invoking the Flow, preventing duplicate Flow-driven DML, emails, or callouts.
+
+*Honest Boundary:* The guard is best-effort under concurrent re-hops (mirroring the engine's general terminal-window deduplication boundary). Flow Builders whose Flows interact with external systems should still design their Flow logic to tolerate at-least-once invocation where possible.
+
 ### 8. Read a Workflow's Result (Apex)
 
 For Apex callers — ISVs, trigger handlers, batch jobs, invocable wrappers — `WorkflowEngine.getStatus` is the **supported read contract**. Do not query `Workflow_Instance__c` fields directly: the field names are internal, and `Output__c` silently holds a storage pointer (not the real value) when the output exceeds 100k characters.

@@ -263,4 +263,182 @@ public class WorkflowFlowStepTest {
       'outputVal should be HelloFlow'
     );
   }
+
+  @isTest
+  static void testWorkflowFlowStepGuardedAgainstDoubleFire() {
+    // 1. Create a StepContext for first execution
+    Id instanceId = '00D000000000001EAA';
+    StepContext ctx1 = new StepContext(
+      instanceId,
+      'MyWorkflow',
+      'MyStep',
+      '{"flowName": "Test_Side_Effect_Flow", "variables": {"accountName": "TDD_Flow_Guard_Test"}}',
+      null,
+      null,
+      null
+    );
+
+    // Verify initial count of Accounts with that name
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM Account WHERE Name = 'TDD_Flow_Guard_Test']
+    );
+
+    Test.startTest();
+    // 2. First execution
+    WorkflowFlowStep step = new WorkflowFlowStep();
+    StepResult result1 = step.execute(ctx1);
+    System.assertEquals(StepResult.ActionType.COMPLETE, result1.action);
+
+    // Verify 1 Account was inserted
+    System.assertEquals(
+      1,
+      [SELECT COUNT() FROM Account WHERE Name = 'TDD_Flow_Guard_Test']
+    );
+
+    // 3. Serialize captured values from first run
+    String capturedJson = ctx1.getCapturedValuesJson();
+    System.assertNotEquals(null, capturedJson);
+
+    // 4. Create StepContext for second execution, seeded with the captured values from the first execution
+    StepContext ctx2 = StepContext.withCapturedValues(
+      instanceId,
+      'MyWorkflow',
+      'MyStep',
+      '{"flowName": "Test_Side_Effect_Flow", "variables": {"accountName": "TDD_Flow_Guard_Test"}}',
+      null,
+      null,
+      null,
+      1,
+      0,
+      null,
+      null,
+      capturedJson
+    );
+
+    // 5. Second execution
+    StepResult result2 = step.execute(ctx2);
+    System.assertEquals(StepResult.ActionType.COMPLETE, result2.action);
+    Test.stopTest();
+
+    // Verify that NO second Account was inserted! Count remains 1.
+    System.assertEquals(
+      1,
+      [SELECT COUNT() FROM Account WHERE Name = 'TDD_Flow_Guard_Test']
+    );
+  }
+
+  @isTest
+  static void testWorkflowFlowStepNullContext() {
+    WorkflowFlowStep step = new WorkflowFlowStep();
+    Test.startTest();
+    Boolean caught = false;
+    try {
+      step.execute(null);
+    } catch (WorkflowEngine.WorkflowException ex) {
+      caught = true;
+      Assert.isTrue(
+        ex.getMessage().contains('Input is null'),
+        'Exception message should contain Input is null'
+      );
+    }
+    Test.stopTest();
+    Assert.isTrue(caught, 'Expected WorkflowException for null context');
+  }
+
+  @isTest
+  static void testWorkflowFlowStepInvalidVariablesType() {
+    WorkflowFlowStep step = new WorkflowFlowStep();
+    StepContext ctx = new StepContext(
+      null,
+      'MyWorkflow',
+      'MyStep',
+      '{"flowName": "Test_Autolaunched_Flow", "variables": "invalid_string_type"}',
+      null,
+      null,
+      null
+    );
+
+    Test.startTest();
+    Boolean caught = false;
+    try {
+      step.execute(ctx);
+    } catch (WorkflowEngine.WorkflowException ex) {
+      caught = true;
+      Assert.isTrue(
+        ex.getMessage().contains('variables must be a JSON object'),
+        'Expected variables validation error, got: ' + ex.getMessage()
+      );
+    }
+    Test.stopTest();
+    Assert.isTrue(
+      caught,
+      'Expected WorkflowException for invalid variables structure'
+    );
+  }
+
+  @isTest
+  static void testWorkflowFlowStepOmittedVariables() {
+    WorkflowFlowStep step = new WorkflowFlowStep();
+    StepContext ctx = new StepContext(
+      null,
+      'MyWorkflow',
+      'MyStep',
+      '{"flowName": "Test_Autolaunched_Flow"}',
+      null,
+      null,
+      null
+    );
+
+    Test.startTest();
+    StepResult result = step.execute(ctx);
+    Test.stopTest();
+
+    Assert.areEqual(StepResult.ActionType.COMPLETE, result.action);
+  }
+
+  @isTest
+  static void testWorkflowFlowStepBypassesMetadataCheckOnReplay() {
+    Id instanceId = '00D000000000001EAA';
+
+    // Seed captured values with a cached output for a non-existent/deactivated flow.
+    Map<String, Object> cachedOutputs = new Map<String, Object>{
+      'outputVal' => 'CachedValue'
+    };
+    Map<String, Object> capturesMap = new Map<String, Object>{
+      'flow_output_nonexistent_or_deactivated_flow' => cachedOutputs
+    };
+    String capturedJson = JSON.serialize(capturesMap);
+
+    // Create a context for the re-execution with the non-existent flow name in the input JSON,
+    // pre-seeded with the captured values.
+    StepContext ctx = StepContext.withCapturedValues(
+      instanceId,
+      'MyWorkflow',
+      'MyStep',
+      '{"flowName": "NonExistent_Or_Deactivated_Flow"}',
+      null,
+      null,
+      null,
+      1,
+      0,
+      null,
+      null,
+      capturedJson
+    );
+
+    WorkflowFlowStep step = new WorkflowFlowStep();
+
+    Test.startTest();
+    // This should complete successfully by returning the cached output, bypassing the FlowDefinitionView SOQL check.
+    StepResult result = step.execute(ctx);
+    Test.stopTest();
+
+    Assert.areEqual(StepResult.ActionType.COMPLETE, result.action);
+    Assert.isNotNull(result.outputJson);
+    Map<String, Object> outputMap = (Map<String, Object>) JSON.deserializeUntyped(
+      result.outputJson
+    );
+    Assert.areEqual('CachedValue', outputMap.get('outputVal'));
+  }
 }
