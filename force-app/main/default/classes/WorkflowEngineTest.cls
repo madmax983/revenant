@@ -7643,7 +7643,7 @@ public class WorkflowEngineTest {
       WHERE Id = :childId
     ];
     childInst.Causation_Id__c =
-      'key:ReusedKey#' +
+      'key:ReusedKey::ts::' +
       String.valueOf(DateTime.now().addMinutes(-5).getTime());
     update childInst;
 
@@ -8043,7 +8043,7 @@ public class WorkflowEngineTest {
 
     // Update run2's Causation_Id__c timestamp to match predecessor's mocked CreatedDate
     run2.Causation_Id__c =
-      'key:ParentKeyReused#' +
+      'key:ParentKeyReused::ts::' +
       String.valueOf(DateTime.now().addMinutes(-5).getTime());
     update run2;
 
@@ -8129,7 +8129,7 @@ public class WorkflowEngineTest {
       Workflow_Instance__c inst = new Workflow_Instance__c(
         Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
         Correlation_Key__c = 'ChainDaemonKey-' + i,
-        Causation_Id__c = 'key:ParentKeyReusedLong#' +
+        Causation_Id__c = 'key:ParentKeyReusedLong::ts::' +
           String.valueOf(DateTime.now().addMinutes(-5).getTime()),
         Previous_Instance__c = prevId
       );
@@ -8200,7 +8200,9 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Id = :childId
     ];
-    System.assert(childInst.Causation_Id__c.startsWith('key:MyRealParentKey#'));
+    System.assert(
+      childInst.Causation_Id__c.startsWith('key:MyRealParentKey::ts::')
+    );
 
     // 3. Resolve lineage and verify it correctly parses and matches to parentId,
     // and returns the clean causationId in the DTO.
@@ -8241,7 +8243,7 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Id = :childId
     ];
-    System.assert(childInst.Causation_Id__c.startsWith('key:order#123#'));
+    System.assert(childInst.Causation_Id__c.startsWith('key:order#123::ts::'));
 
     // 3. Resolve lineage and verify it correctly parses 'order#123' (preserving the '#' character) and resolves to parentId
     List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
@@ -8285,7 +8287,7 @@ public class WorkflowEngineTest {
       WHERE Id = :childId
     ];
     childInst.Causation_Id__c =
-      'key:BulkParentKey#' +
+      'key:BulkParentKey::ts::' +
       String.valueOf(DateTime.now().addSeconds(-2).getTime());
     update childInst;
 
@@ -8299,5 +8301,94 @@ public class WorkflowEngineTest {
     );
     System.assertEquals(2, lineage.size());
     System.assertEquals(parentId, lineage[1].instanceId);
+  }
+
+  @isTest
+  static void testCausationIdResolveThroughChainRoot() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Insert parent run 1 (stale ContinuedAsNew)
+    Workflow_Instance__c run1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Correlation_Key__c = 'ParentKeyRoot',
+      Root_Correlation_Key__c = 'ParentKeyRoot',
+      Status__c = 'ContinuedAsNew'
+    );
+    insert run1;
+    Test.setCreatedDate(run1.Id, DateTime.now().addMinutes(-10));
+
+    // 2. Insert parent run 2 (live completed successor)
+    Workflow_Instance__c run2 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Correlation_Key__c = 'ParentKeyRoot-1',
+      Root_Correlation_Key__c = 'ParentKeyRoot',
+      Previous_Instance__c = run1.Id,
+      Status__c = 'Completed'
+    );
+    insert run2;
+    Test.setCreatedDate(run2.Id, DateTime.now().addMinutes(-5));
+
+    // 3. Start a child caused by the root key 'ParentKeyRoot'
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ChildKey',
+      null
+    );
+    childReq.causationId = 'key:ParentKeyRoot';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+    Test.setCreatedDate(childId, DateTime.now());
+
+    // Resolve lineage. It should trace back to the terminal successor (run2) and NOT the stale predecessor (run1)
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(run2.Id, lineage[1].instanceId);
+    System.assertEquals('key:ParentKeyRoot', lineage[0].causationId);
+  }
+
+  @isTest
+  static void testCausationIdWithNumericHashSuffixInKey() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Start a parent workflow with a key containing '#' followed by 13 digits
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'order#1234567890123',
+      null
+    );
+
+    // 2. Start a child with a key-based causation ID referencing 'order#1234567890123'
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'MyChildKeyNumericHash',
+      null
+    );
+    childReq.causationId = 'key:order#1234567890123';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Verify child instance contains the causationId with the ::ts:: suffix appended after the full key
+    Workflow_Instance__c childInst = [
+      SELECT Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    System.assert(
+      childInst.Causation_Id__c.startsWith('key:order#1234567890123::ts::')
+    );
+
+    // 3. Resolve lineage and verify it correctly parses 'order#1234567890123' (preserving the '#' and 13 digits) and resolves to parentId
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(parentId, lineage[1].instanceId);
+    System.assertEquals('key:order#1234567890123', lineage[0].causationId);
   }
 }
