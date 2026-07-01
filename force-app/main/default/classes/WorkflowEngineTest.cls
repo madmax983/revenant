@@ -7806,4 +7806,124 @@ public class WorkflowEngineTest {
       'Must resolve to the parent and not self'
     );
   }
+
+  @isTest
+  static void testManualCompensationLineageAndParentIsolation() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Start Parent
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.ParentWorkflow',
+      'ParentKey',
+      null
+    );
+
+    // Execute ParentStep once to spawn child and suspend parent
+    new WorkflowOrchestrator(parentId).execute(null);
+
+    // Find the spawned child
+    Workflow_Instance__c child = [
+      SELECT
+        Id,
+        Status__c,
+        Parent_Instance__c,
+        Correlation_Key__c,
+        Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentId
+      LIMIT 1
+    ];
+    Id childId = child.Id;
+
+    System.assertEquals('Pending', child.Status__c);
+    System.assertEquals(parentId, child.Parent_Instance__c);
+    System.assertEquals(parentId, child.Causation_Id__c);
+
+    // Complete the Child by running it
+    new WorkflowOrchestrator(childId).execute(null);
+
+    // Verify Child completed
+    child = [
+      SELECT Status__c, Compensation_Stack__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    System.assertEquals('Completed', child.Status__c);
+
+    // Manually stamp compensation stack on completed child so it can be compensated
+    child.Compensation_Stack__c = JSON.serialize(
+      new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+    );
+    update child;
+
+    // Set up a mock completed step execution so compensation has something to run
+    Workflow_Step_Execution__c origExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = childId,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep',
+      Status__c = 'Completed',
+      Input__c = '"Input"',
+      Output__c = '"Output"'
+    );
+    insert origExec;
+
+    // 3. Compensate the completed child
+    Id compensatingId = WorkflowEngine.compensate(childId);
+    System.assertNotEquals(null, compensatingId);
+
+    // Verify the compensating run has NO Parent_Instance__c but DOES have Causation_Id__c!
+    Workflow_Instance__c compInst = [
+      SELECT Status__c, Parent_Instance__c, Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :compensatingId
+    ];
+    System.assertEquals(
+      null,
+      compInst.Parent_Instance__c,
+      'Must NOT set Parent_Instance__c on manual compensation run'
+    );
+    System.assertEquals(
+      parentId,
+      compInst.Causation_Id__c,
+      'Must preserve Causation_Id__c'
+    );
+
+    // Verify lineage walk from the compensating run successfully reaches the parent
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      compensatingId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(compensatingId, lineage[0].instanceId);
+    System.assertEquals(parentId, lineage[1].instanceId);
+
+    // Parent is currently Suspended (waiting for child completions). Verify this.
+    Workflow_Instance__c parentReload = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals('Suspended', parentReload.Status__c);
+
+    // 4. Drive the compensating run to completion
+    new WorkflowOrchestrator(compensatingId).execute(null);
+
+    // Verify compensating run is Compensated
+    compInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :compensatingId
+    ];
+    System.assertEquals('Compensated', compInst.Status__c);
+
+    // Verify Parent is STILL Suspended (its state was NOT corrupted/altered by notifications from the compensating run)
+    parentReload = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals(
+      'Suspended',
+      parentReload.Status__c,
+      'Parent must remain Suspended; compensation run completion must be isolated'
+    );
+  }
 }

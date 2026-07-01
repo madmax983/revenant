@@ -9060,7 +9060,6 @@ public inherited sharing class WorkflowEngine {
       Status__c = 'Compensating',
       Compensation_Stack__c = target.Compensation_Stack__c,
       Input__c = target.Input__c,
-      Parent_Instance__c = target.Parent_Instance__c,
       Causation_Id__c = String.isNotBlank(target.Causation_Id__c)
         ? target.Causation_Id__c
         : target.Parent_Instance__c
