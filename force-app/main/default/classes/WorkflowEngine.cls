@@ -6005,6 +6005,7 @@ public inherited sharing class WorkflowEngine {
     instance.Status__c = 'Pending';
     instance.Correlation_Key__c = correlationKey;
     instance.Parent_Instance__c = parentId;
+    instance.Causation_Id__c = parentId;
 
     if (String.isBlank(workflowName)) {
       throw new WorkflowException('Workflow name is required.');
@@ -6189,6 +6190,7 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c = 'Pending';
       instance.Correlation_Key__c = req.correlationKey;
       instance.Parent_Instance__c = parentId;
+      instance.Causation_Id__c = parentId;
 
       Type wflowType = Type.forName(req.workflowName);
       Object defObj = wflowType.newInstance();

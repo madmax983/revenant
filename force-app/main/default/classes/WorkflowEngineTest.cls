@@ -877,13 +877,32 @@ public class WorkflowEngineTest {
     System.assertEquals('SubKey', childInfo.get('childCorrelationKey'));
 
     Workflow_Instance__c childInst = [
-      SELECT Id, Status__c, Parent_Instance__c, Correlation_Key__c
+      SELECT
+        Id,
+        Status__c,
+        Parent_Instance__c,
+        Correlation_Key__c,
+        Causation_Id__c
       FROM Workflow_Instance__c
       WHERE Parent_Instance__c = :parentId
       LIMIT 1
     ];
     System.assertEquals('SubKey', childInst.Correlation_Key__c);
     System.assertEquals('Pending', childInst.Status__c);
+    System.assertEquals(
+      parentId,
+      childInst.Causation_Id__c,
+      'Child must have parent Id as Causation_Id__c'
+    );
+
+    WorkflowEngine.WorkflowStatus status = WorkflowEngine.getStatus(
+      childInst.Id
+    );
+    System.assertEquals(
+      parentId,
+      status.causationId,
+      'WorkflowStatus must return parent Id as causationId'
+    );
 
     // Execute child workflow synchronously
     new WorkflowOrchestrator(childInst.Id).execute(null); // ChildStep completes, triggers child completion event
