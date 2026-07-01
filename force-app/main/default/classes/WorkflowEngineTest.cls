@@ -7528,4 +7528,105 @@ public class WorkflowEngineTest {
       'Successor must inherit causation ID'
     );
   }
+
+  @isTest
+  static void testCausationIdParentFallback() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start Parent
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKey',
+      null
+    );
+
+    // Start Child under Parent
+    Id childId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ChildKey',
+      null,
+      parentId
+    );
+
+    Workflow_Instance__c child = [
+      SELECT Causation_Id__c, Parent_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    System.assertEquals(
+      parentId,
+      child.Causation_Id__c,
+      'Causation ID must fallback to Parent Instance ID on build'
+    );
+
+    // Verify lineage walk follows Parent_Instance__c fallback even if Causation_Id__c was blank (test by manually nulling it)
+    child.Causation_Id__c = null;
+    update child;
+
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(childId, lineage[0].instanceId);
+    System.assertEquals(parentId, lineage[1].instanceId);
+  }
+
+  @isTest
+  static void testCausationIdReusedKeyTimeBound() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Create original parent
+    Id originalParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ReusedKey',
+      null
+    );
+
+    // Start Child using correlation key of parent
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ChildKeyReused',
+      null
+    );
+    childReq.causationId = 'ReusedKey';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // 2. Create a new, later run with the same correlation key
+    // Since Correlation_Key__c unique index prevents multiple active runs, we make the original parent complete first.
+    Workflow_Instance__c origParent = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :originalParentId
+    ];
+    origParent.Status__c = 'Completed';
+    update origParent;
+    origParent.Terminal_At__c = DateTime.now().addDays(-2);
+    update origParent;
+
+    Id newerParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ReusedKey',
+      null
+    );
+
+    // Explicitly set CreatedDates to bound them
+    Test.setCreatedDate(originalParentId, DateTime.now().addMinutes(-10));
+    Test.setCreatedDate(childId, DateTime.now().addMinutes(-5));
+    Test.setCreatedDate(newerParentId, DateTime.now());
+
+    // Assert that getCausationLineage on child resolves to originalParentId (older) and NOT newerParentId (newer)
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(childId, lineage[0].instanceId);
+    System.assertEquals(
+      originalParentId,
+      lineage[1].instanceId,
+      'Must resolve to the parent that existed at child creation time'
+    );
+  }
 }

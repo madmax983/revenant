@@ -915,6 +915,7 @@ public inherited sharing class WorkflowEngine {
           Error_Message__c,
           Causation_Id__c,
           Previous_Instance__c,
+          Parent_Instance__c,
           CreatedDate
         FROM Workflow_Instance__c
         WHERE Id = :currentId
@@ -940,6 +941,10 @@ public inherited sharing class WorkflowEngine {
 
       String cause = inst.Causation_Id__c;
       if (String.isBlank(cause)) {
+        if (inst.Parent_Instance__c != null) {
+          currentId = inst.Parent_Instance__c;
+          continue;
+        }
         break;
       }
 
@@ -949,11 +954,15 @@ public inherited sharing class WorkflowEngine {
         List<Workflow_Instance__c> parents = [
           SELECT Id
           FROM Workflow_Instance__c
-          WHERE Correlation_Key__c = :cause OR Active_Correlation_Key__c = :cause
+          WHERE
+            (Correlation_Key__c = :cause
+            OR Active_Correlation_Key__c = :cause)
+            AND CreatedDate <= :inst.CreatedDate
           WITH SYSTEM_MODE
           ORDER BY CreatedDate DESC
           LIMIT 1
         ];
+
         if (!parents.isEmpty()) {
           currentId = parents[0].Id;
         } else {
@@ -975,7 +984,6 @@ public inherited sharing class WorkflowEngine {
       return false;
     }
   }
-
 
   /**
    * Starts a new durable workflow instance (get-or-start). If an instance with
@@ -1454,7 +1462,9 @@ public inherited sharing class WorkflowEngine {
     instance.Status__c = 'Pending';
     instance.Correlation_Key__c = req.correlationKey;
     instance.Parent_Instance__c = req.parentInstanceId;
-    instance.Causation_Id__c = req.causationId;
+    instance.Causation_Id__c = String.isNotBlank(req.causationId)
+      ? req.causationId
+      : req.parentInstanceId;
 
     if (String.isNotBlank(req.workflowName)) {
       String wflowKey = req.workflowName.toLowerCase();
@@ -2265,7 +2275,6 @@ public inherited sharing class WorkflowEngine {
       String key = req.correlationKey;
       String normKey = normalizeKey(key);
 
-
       if (String.isNotBlank(key) && existingByKey.containsKey(normKey)) {
         results[i] = new StartResult(existingByKey.get(normKey).Id, false);
         continue;
@@ -2597,7 +2606,6 @@ public inherited sharing class WorkflowEngine {
           existingIds.add(res.instanceId);
         }
       }
-
 
       Map<Id, Workflow_Instance__c> existingInstances = new Map<Id, Workflow_Instance__c>();
       if (!existingIds.isEmpty()) {
