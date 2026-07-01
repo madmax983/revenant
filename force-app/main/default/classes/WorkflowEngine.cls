@@ -975,7 +975,12 @@ public inherited sharing class WorkflowEngine {
             }
           }
         }
-        if (earliestCreatedDate == null) {
+        if (earliestCreatedDate != null) {
+          // Add a 5-second buffer to the parsed pre-insert timestamp to safeguard
+          // against bulk-inserted parent/child workflows where the parent's actual
+          // database CreatedDate is assigned slightly after the pre-insert timestamp.
+          earliestCreatedDate = earliestCreatedDate.addSeconds(5);
+        } else {
           earliestCreatedDate = getEarliestPredecessorCreatedDate(inst);
         }
 

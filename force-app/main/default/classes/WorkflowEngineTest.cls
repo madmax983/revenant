@@ -8251,4 +8251,53 @@ public class WorkflowEngineTest {
     System.assertEquals(parentId, lineage[1].instanceId);
     System.assertEquals('key:order#123', lineage[0].causationId);
   }
+
+  @isTest
+  static void testCausationIdBulkStartRaceCondition() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Prepare a bulk start request containing both parent and child
+    WorkflowEngine.StartRequest parentReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'BulkParentKey',
+      null
+    );
+
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'BulkChildKey',
+      null
+    );
+    childReq.causationId = 'key:BulkParentKey';
+
+    // Start both workflows in the same bulk transaction
+    List<WorkflowEngine.StartResult> results = WorkflowEngine.startOrGet(
+      new List<WorkflowEngine.StartRequest>{ parentReq, childReq }
+    );
+    Id parentId = results[0].instanceId;
+    Id childId = results[1].instanceId;
+
+    // Simulate bulk CreatedDate behavior by mocking parent's CreatedDate to be slightly AFTER the pre-insert timestamp.
+    // We update parent's CreatedDate to be now, and set child's timestamp suffix to be 2 seconds ago.
+    Workflow_Instance__c childInst = [
+      SELECT Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    childInst.Causation_Id__c =
+      'key:BulkParentKey#' +
+      String.valueOf(DateTime.now().addSeconds(-2).getTime());
+    update childInst;
+
+    Test.setCreatedDate(parentId, DateTime.now());
+    Test.setCreatedDate(childId, DateTime.now());
+
+    // Resolve lineage. Even though the parent's mocked CreatedDate (now) is 2 seconds after the child's
+    // causation timestamp (2 seconds ago), the 5-second buffer ensures the parent is correctly resolved.
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(parentId, lineage[1].instanceId);
+  }
 }
