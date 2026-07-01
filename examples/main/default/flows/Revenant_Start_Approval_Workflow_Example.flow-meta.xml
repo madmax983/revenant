@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>67.0</apiVersion>
+    <description>Reference example for issue #125: starts NativeApprovalWorkflowExample when an Approval_Request__c is created, using the record's Correlation_Key__c (falling back to its Id when blank) as the workflow correlation key. Zero custom Apex is required for this half of the bridge -- the Start Workflow invocable action is already shipped by the framework.</description>
+    <formulas>
+        <name>ResolvedCorrelationKey</name>
+        <dataType>String</dataType>
+        <expression>IF(ISBLANK({!$Record.Correlation_Key__c}), {!$Record.Id}, {!$Record.Correlation_Key__c})</expression>
+    </formulas>
+    <formulas>
+        <name>StartInputJson</name>
+        <dataType>String</dataType>
+        <expression>&apos;{&quot;amount&quot;:&apos; &amp; TEXT(BLANKVALUE({!$Record.Amount__c}, 0)) &amp; &apos;}&apos;</expression>
+    </formulas>
+    <actionCalls>
+        <name>Start_Workflow</name>
+        <label>Start Workflow</label>
+        <locationX>176</locationX>
+        <locationY>134</locationY>
+        <actionName>WorkflowStartInvocableAction</actionName>
+        <actionType>apex</actionType>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
+        <inputParameters>
+            <name>workflowName</name>
+            <value>
+                <stringValue>NativeApprovalWorkflowExample</stringValue>
+            </value>
+        </inputParameters>
+        <inputParameters>
+            <name>correlationKey</name>
+            <value>
+                <elementReference>ResolvedCorrelationKey</elementReference>
+            </value>
+        </inputParameters>
+        <inputParameters>
+            <name>inputJson</name>
+            <value>
+                <elementReference>StartInputJson</elementReference>
+            </value>
+        </inputParameters>
+        <nameSegment>WorkflowStartInvocableAction</nameSegment>
+        <storeOutputAutomatically>true</storeOutputAutomatically>
+    </actionCalls>
+    <environments>Default</environments>
+    <interviewLabel>Revenant Start Approval Workflow Example {!$Flow.CurrentDateTime}</interviewLabel>
+    <label>Revenant Start Approval Workflow Example</label>
+    <processMetadataValues>
+        <name>BuilderType</name>
+        <value>
+            <stringValue>LightningFlowBuilder</stringValue>
+        </value>
+    </processMetadataValues>
+    <processType>AutoLaunchedFlow</processType>
+    <start>
+        <locationX>50</locationX>
+        <locationY>0</locationY>
+        <connector>
+            <targetReference>Start_Workflow</targetReference>
+        </connector>
+        <object>Approval_Request__c</object>
+        <recordTriggerType>Create</recordTriggerType>
+        <triggerType>RecordAfterSave</triggerType>
+    </start>
+    <status>Draft</status>
+</Flow>

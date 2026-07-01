@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>67.0</apiVersion>
+    <description>Reference example for issue #125: the outbound half of the native-Approval-Process bridge. Fires only when Approval_Status__c changes away from Pending -- i.e. when the native Approval Process's final approval/rejection field-update action lands -- and publishes the exact Approve: signal NativeApprovalWorkflowExample.RequestApprovalStep is waiting on, via the already-shipped Signal Workflow invocable action. This action path performs no DML of its own against Workflow_Instance__c or Workflow_Step_Execution__c; it only publishes the signal the engine already knows how to consume.</description>
+    <formulas>
+        <name>ResolvedCorrelationKey</name>
+        <dataType>String</dataType>
+        <expression>IF(ISBLANK({!$Record.Correlation_Key__c}), {!$Record.Id}, {!$Record.Correlation_Key__c})</expression>
+    </formulas>
+    <formulas>
+        <name>DecisionPayloadJson</name>
+        <dataType>String</dataType>
+        <expression>&apos;{&quot;approved&quot;:&apos; &amp; IF(ISPICKVAL({!$Record.Approval_Status__c}, &apos;Approved&apos;), &apos;true&apos;, &apos;false&apos;) &amp; &apos;,&quot;comments&quot;:&quot;&apos; &amp; SUBSTITUTE(SUBSTITUTE(BLANKVALUE({!$Record.Approval_Comments__c}, &apos;&apos;), &apos;\&apos;, &apos;\\&apos;), &apos;&quot;&apos;, &apos;\&quot;&apos;) &amp; &apos;&quot;,&quot;approver&quot;:&quot;&apos; &amp; $User.FirstName &amp; &apos; &apos; &amp; $User.LastName &amp; &apos;&quot;}&apos;</expression>
+    </formulas>
+    <actionCalls>
+        <name>Signal_Workflow</name>
+        <label>Signal Workflow</label>
+        <locationX>176</locationX>
+        <locationY>134</locationY>
+        <actionName>WorkflowSignalInvocableAction</actionName>
+        <actionType>apex</actionType>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
+        <inputParameters>
+            <name>targetKey</name>
+            <value>
+                <elementReference>ResolvedCorrelationKey</elementReference>
+            </value>
+        </inputParameters>
+        <inputParameters>
+            <name>signalName</name>
+            <value>
+                <stringValue>Approve:NativeApprovalRequest</stringValue>
+            </value>
+        </inputParameters>
+        <inputParameters>
+            <name>payloadJson</name>
+            <value>
+                <elementReference>DecisionPayloadJson</elementReference>
+            </value>
+        </inputParameters>
+        <inputParameters>
+            <name>idempotencyKey</name>
+            <value>
+                <elementReference>$Record.Id</elementReference>
+            </value>
+        </inputParameters>
+        <nameSegment>WorkflowSignalInvocableAction</nameSegment>
+        <storeOutputAutomatically>true</storeOutputAutomatically>
+    </actionCalls>
+    <environments>Default</environments>
+    <interviewLabel>Revenant Approval Decision To Signal Example {!$Flow.CurrentDateTime}</interviewLabel>
+    <label>Revenant Approval Decision To Signal Example</label>
+    <processMetadataValues>
+        <name>BuilderType</name>
+        <value>
+            <stringValue>LightningFlowBuilder</stringValue>
+        </value>
+    </processMetadataValues>
+    <processType>AutoLaunchedFlow</processType>
+    <start>
+        <locationX>50</locationX>
+        <locationY>0</locationY>
+        <connector>
+            <targetReference>Signal_Workflow</targetReference>
+        </connector>
+        <filterLogic>1 AND 2</filterLogic>
+        <filters>
+            <field>Approval_Status__c</field>
+            <operator>IsChanged</operator>
+            <value>
+                <booleanValue>true</booleanValue>
+            </value>
+        </filters>
+        <filters>
+            <field>Approval_Status__c</field>
+            <operator>NotEqualTo</operator>
+            <value>
+                <stringValue>Pending</stringValue>
+            </value>
+        </filters>
+        <object>Approval_Request__c</object>
+        <recordTriggerType>Update</recordTriggerType>
+        <triggerType>RecordAfterSave</triggerType>
+    </start>
+    <status>Draft</status>
+</Flow>

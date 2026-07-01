@@ -276,6 +276,18 @@ public StepResult execute(StepContext ctx) {
 }
 ```
 
+### 5b. Bridging a native Approval Process
+
+Issue #125 asked for a bespoke "pending approvals inbox" LWC and a least-privilege permission set so a business approver could clear a gate without holding `Workflow_Admin`. Salesforce's **native Approval Process** already ships exactly that surface — a least-privilege approver inbox (Approvals Home, the Approvals related list), mobile approve/reject, and delegation — so Revenant leans on it instead of rebuilding it. [`NativeApprovalWorkflowExample`](examples/main/default/classes/NativeApprovalWorkflowExample.cls) is the copyable reference for wiring the two together with **zero custom Apex bridge and zero new UI**:
+
+1. A record-triggered Flow ([`Revenant_Start_Approval_Workflow_Example`](examples/main/default/flows/Revenant_Start_Approval_Workflow_Example.flow-meta.xml)) starts the workflow when an `Approval_Request__c` is created, calling the already-shipped `WorkflowStartInvocableAction`.
+2. The same record is separately submitted to the native Approval Process ([`Revenant_Native_Approval_Example`](examples/main/default/approvalProcesses/Approval_Request__c.Revenant_Native_Approval_Example.approvalProcess-meta.xml)). Its final approval/rejection actions are plain field updates to `Approval_Status__c` — no code.
+3. A second record-triggered Flow ([`Revenant_Approval_Decision_To_Signal_Example`](examples/main/default/flows/Revenant_Approval_Decision_To_Signal_Example.flow-meta.xml)) fires when that field update lands and calls `WorkflowSignalInvocableAction` to publish the workflow's `Approve:` signal, resuming the suspended gate exactly as described in §5.
+
+The gate is left unrestricted (`waitForApproval(APPROVAL_KEY, null)`): the native Approval Process's assigned approver is this example's least-privilege boundary, so there is nothing further to gate on the Revenant side, and no new Custom Permission or permission set ships with this example. Pass a shipped permission (e.g. `Workflow_Admin`) as `waitForApproval`'s second argument if you also want `WorkflowDashboardController.enforceApprovalRole` to gate an *alternate* dashboard decision path alongside the native one.
+
+Revenant still contributes what a native Approval Process cannot express on its own: durable multi-step orchestration and saga rollback on rejection (`ReserveBudgetStep` unwinds via `Compensation_Stack__c` exactly as in `ApprovalWorkflowExample`). The Approval Process metadata ships `active=false` (as all Approval Processes must) and the approver assignment (`relatedUserField`/`Manager`) is a placeholder — adjust it for your org before activating. `NativeApprovalWorkflowExampleTest` proves the durable round-trip in pure Apex by injecting the exact signal payload the bridge Flow publishes, so the suite has no dependency on the Approval Process being active.
+
 ### 6. Parent→Child Workflow Composition
 
 The engine ships full parent→child orchestration: `StepResult.startChild()` suspends the parent, runs the child in its own durable Queueable chain, and resumes the parent via a `ChildCompleted:<childKey>` Platform Event when the child **successfully completes**. [`ChildWorkflowCompositionExample`](examples/main/default/classes/ChildWorkflowCompositionExample.cls) is the copyable reference — a loan-application parent that delegates credit scoring to a child and then branches on the child's score.
