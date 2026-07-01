@@ -7629,4 +7629,61 @@ public class WorkflowEngineTest {
       'Must resolve to the parent that existed at child creation time'
     );
   }
+
+  @isTest
+  static void testCausationIdInheritedOnContinueAsNewFallback() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start Parent
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKey',
+      null
+    );
+
+    // Start Child under Parent with blank causationId (so it has only Parent_Instance__c)
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.DaemonWorkflow',
+      'ChildDaemonKey',
+      0,
+      parentId
+    );
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Verify child has blank Causation_Id__c but non-blank Parent_Instance__c
+    Workflow_Instance__c child = [
+      SELECT Causation_Id__c, Parent_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    child.Causation_Id__c = null;
+    update child;
+
+    // Execute run -> triggers continueAsNew
+    new WorkflowOrchestrator(childId).execute(null);
+
+    // Find Run 2 of Child (the successor)
+    Workflow_Instance__c run2 = [
+      SELECT Id, Status__c, Causation_Id__c, Previous_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :childId
+    ];
+    // successor must inherit parentId as causationId since predecessor's Causation_Id__c was blank but Parent_Instance__c was parentId
+    System.assertEquals(
+      parentId,
+      run2.Causation_Id__c,
+      'Successor must inherit parentId as causationId'
+    );
+
+    // Verify lineage walk from Run 2 correctly resolves to Parent
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      run2.Id
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(run2.Id, lineage[0].instanceId);
+    System.assertEquals(parentId, lineage[1].instanceId);
+  }
 }

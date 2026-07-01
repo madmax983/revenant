@@ -5402,7 +5402,9 @@ public inherited sharing class WorkflowEngine {
         Current_Step__c = initialStep,
         Deadline_At__c = nextDeadline,
         Progress__c = instance.Progress__c,
-        Causation_Id__c = instance.Causation_Id__c,
+        Causation_Id__c = String.isNotBlank(instance.Causation_Id__c)
+          ? instance.Causation_Id__c
+          : instance.Parent_Instance__c,
         // Use the predecessor's CreatedDate (when it started) rather than
         // System.now() (when it finished). This prevents a gap: records
         // modified during the predecessor's execution window are covered by
@@ -9005,7 +9007,9 @@ public inherited sharing class WorkflowEngine {
         Root_Correlation_Key__c,
         Definition_Version__c,
         Previous_Run_At__c,
-        Input__c
+        Input__c,
+        Parent_Instance__c,
+        Causation_Id__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -9054,7 +9058,11 @@ public inherited sharing class WorkflowEngine {
       Definition_Version__c = target.Definition_Version__c,
       Status__c = 'Compensating',
       Compensation_Stack__c = target.Compensation_Stack__c,
-      Input__c = target.Input__c
+      Input__c = target.Input__c,
+      Parent_Instance__c = target.Parent_Instance__c,
+      Causation_Id__c = String.isNotBlank(target.Causation_Id__c)
+        ? target.Causation_Id__c
+        : target.Parent_Instance__c
     );
 
     insert as system compensatingInstance;
