@@ -813,6 +813,15 @@ public inherited sharing class WorkflowEngine {
         output = '';
       }
     }
+    String cleanCausationId = inst.Causation_Id__c;
+    if (
+      String.isNotBlank(cleanCausationId) && cleanCausationId.startsWith('key:')
+    ) {
+      Integer hashIndex = cleanCausationId.indexOf('#');
+      if (hashIndex != -1) {
+        cleanCausationId = cleanCausationId.substring(0, hashIndex);
+      }
+    }
     return new WorkflowStatus(
       inst.Id,
       inst.Workflow_Name__c,
@@ -821,7 +830,7 @@ public inherited sharing class WorkflowEngine {
       terminal,
       inst.Error_Message__c,
       output,
-      inst.Causation_Id__c
+      cleanCausationId
     );
   }
 
@@ -960,7 +969,22 @@ public inherited sharing class WorkflowEngine {
         currentId = resolvedId;
       } else if (cause.startsWith('key:')) {
         String correlationKey = cause.substring(4);
-        DateTime earliestCreatedDate = getEarliestPredecessorCreatedDate(inst);
+        DateTime earliestCreatedDate = null;
+        Integer hashIndex = correlationKey.indexOf('#');
+        if (hashIndex != -1) {
+          String tsStr = correlationKey.substring(hashIndex + 1);
+          correlationKey = correlationKey.substring(0, hashIndex);
+          try {
+            Long ms = Long.valueOf(tsStr);
+            earliestCreatedDate = DateTime.newInstance(ms);
+          } catch (Exception ex) {
+            // fallback
+          }
+        }
+        if (earliestCreatedDate == null) {
+          earliestCreatedDate = getEarliestPredecessorCreatedDate(inst);
+        }
+
         List<Workflow_Instance__c> parents = [
           SELECT Id
           FROM Workflow_Instance__c
@@ -1478,9 +1502,18 @@ public inherited sharing class WorkflowEngine {
     instance.Status__c = 'Pending';
     instance.Correlation_Key__c = req.correlationKey;
     instance.Parent_Instance__c = req.parentInstanceId;
-    instance.Causation_Id__c = String.isNotBlank(req.causationId)
-      ? req.causationId
-      : req.parentInstanceId;
+    String finalCausationId = null;
+    if (String.isNotBlank(req.causationId)) {
+      finalCausationId = req.causationId;
+      if (
+        finalCausationId.startsWith('key:') && !finalCausationId.contains('#')
+      ) {
+        finalCausationId += '#' + String.valueOf(System.now().getTime());
+      }
+    } else {
+      finalCausationId = req.parentInstanceId;
+    }
+    instance.Causation_Id__c = finalCausationId;
 
     if (String.isNotBlank(req.workflowName)) {
       String wflowKey = req.workflowName.toLowerCase();
