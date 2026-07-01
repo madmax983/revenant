@@ -7970,4 +7970,82 @@ public class WorkflowEngineTest {
     System.assertEquals(childId, lineage[0].instanceId);
     System.assertEquals(parentId, lineage[1].instanceId);
   }
+
+  @isTest
+  static void testCausationIdInheritedOnContinueAsNewReusedKeyTimeBound() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Create original parent
+    Id originalParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKeyReused',
+      null
+    );
+
+    // Make original parent complete to release the key
+    Workflow_Instance__c origParent = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :originalParentId
+    ];
+    origParent.Status__c = 'Completed';
+    update origParent;
+    origParent.Terminal_At__c = DateTime.now().addDays(-2);
+    update origParent;
+
+    // 2. Start Child caused by 'ParentKeyReused'
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.DaemonWorkflow',
+      'ChildDaemonKey',
+      (Object) 0
+    );
+    childReq.causationId = 'ParentKeyReused';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Execute run -> triggers continueAsNew, spawning successor
+    new WorkflowOrchestrator(childId).execute(null);
+
+    // Find Run 2 of Child (successor)
+    Workflow_Instance__c run2 = [
+      SELECT Id, Status__c, Causation_Id__c, Previous_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :childId
+    ];
+    System.assertEquals('ParentKeyReused', run2.Causation_Id__c);
+
+    // 3. Create a NEW parent run with the same key AFTER the child was created
+    Id newerParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKeyReused',
+      null
+    );
+
+    // Explicitly set CreatedDates to order them:
+    // originalParent (10 mins ago) -> child/predecessor (5 mins ago) -> newParent (now) -> run2 (now + 1 min)
+    Test.setCreatedDate(originalParentId, DateTime.now().addMinutes(-10));
+    Test.setCreatedDate(childId, DateTime.now().addMinutes(-5));
+    Test.setCreatedDate(newerParentId, DateTime.now());
+    Test.setCreatedDate(run2.Id, DateTime.now().addMinutes(1));
+
+    // Get causation lineage on successor (run2).
+    // Because lineage lookup bounds key resolution by the earliest predecessor creation time (5 mins ago),
+    // it should resolve to originalParentId (10 mins ago) and NOT newerParentId (now).
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      run2.Id
+    );
+    System.assertEquals(
+      2,
+      lineage.size(),
+      'Lineage walk must resolve to the original parent'
+    );
+    System.assertEquals(run2.Id, lineage[0].instanceId);
+    System.assertEquals(
+      originalParentId,
+      lineage[1].instanceId,
+      'Must resolve to original parent and not newer parent with reused key'
+    );
+  }
 }

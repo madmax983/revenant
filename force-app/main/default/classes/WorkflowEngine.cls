@@ -956,13 +956,14 @@ public inherited sharing class WorkflowEngine {
       if (resolvedId != null) {
         currentId = resolvedId;
       } else {
+        DateTime earliestCreatedDate = getEarliestPredecessorCreatedDate(inst);
         List<Workflow_Instance__c> parents = [
           SELECT Id
           FROM Workflow_Instance__c
           WHERE
             (Correlation_Key__c = :cause
             OR Active_Correlation_Key__c = :cause)
-            AND CreatedDate <= :inst.CreatedDate
+            AND CreatedDate <= :earliestCreatedDate
             AND Id NOT IN :visitedIds
           WITH SYSTEM_MODE
           ORDER BY CreatedDate DESC
@@ -996,6 +997,30 @@ public inherited sharing class WorkflowEngine {
     } catch (Exception ex) {
       return false;
     }
+  }
+
+  private static DateTime getEarliestPredecessorCreatedDate(
+    Workflow_Instance__c inst
+  ) {
+    DateTime earliest = inst.CreatedDate;
+    Id prevId = inst.Previous_Instance__c;
+    Set<Id> visited = new Set<Id>{ inst.Id };
+    while (prevId != null && !visited.contains(prevId)) {
+      visited.add(prevId);
+      List<Workflow_Instance__c> prevs = [
+        SELECT Id, Previous_Instance__c, CreatedDate
+        FROM Workflow_Instance__c
+        WHERE Id = :prevId
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      if (prevs.isEmpty()) {
+        break;
+      }
+      earliest = prevs[0].CreatedDate;
+      prevId = prevs[0].Previous_Instance__c;
+    }
+    return earliest;
   }
 
   /**
