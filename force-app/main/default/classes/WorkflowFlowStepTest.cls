@@ -396,4 +396,49 @@ public class WorkflowFlowStepTest {
 
     Assert.areEqual(StepResult.ActionType.COMPLETE, result.action);
   }
+
+  @isTest
+  static void testWorkflowFlowStepBypassesMetadataCheckOnReplay() {
+    Id instanceId = '00D000000000001EAA';
+
+    // Seed captured values with a cached output for a non-existent/deactivated flow.
+    Map<String, Object> cachedOutputs = new Map<String, Object>{
+      'outputVal' => 'CachedValue'
+    };
+    Map<String, Object> capturesMap = new Map<String, Object>{
+      'flow_output_nonexistent_or_deactivated_flow' => cachedOutputs
+    };
+    String capturedJson = JSON.serialize(capturesMap);
+
+    // Create a context for the re-execution with the non-existent flow name in the input JSON,
+    // pre-seeded with the captured values.
+    StepContext ctx = StepContext.withCapturedValues(
+      instanceId,
+      'MyWorkflow',
+      'MyStep',
+      '{"flowName": "NonExistent_Or_Deactivated_Flow"}',
+      null,
+      null,
+      null,
+      1,
+      0,
+      null,
+      null,
+      capturedJson
+    );
+
+    WorkflowFlowStep step = new WorkflowFlowStep();
+
+    Test.startTest();
+    // This should complete successfully by returning the cached output, bypassing the FlowDefinitionView SOQL check.
+    StepResult result = step.execute(ctx);
+    Test.stopTest();
+
+    Assert.areEqual(StepResult.ActionType.COMPLETE, result.action);
+    Assert.isNotNull(result.outputJson);
+    Map<String, Object> outputMap = (Map<String, Object>) JSON.deserializeUntyped(
+      result.outputJson
+    );
+    Assert.areEqual('CachedValue', outputMap.get('outputVal'));
+  }
 }

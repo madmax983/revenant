@@ -37,25 +37,6 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
     }
     String flowName = (String) flowNameObj;
 
-    // Security: Validate that the Flow exists, is active, and is an Autolaunched Flow
-    List<FlowDefinitionView> flows = [
-      SELECT ApiName, ProcessType
-      FROM FlowDefinitionView
-      WHERE ApiName = :flowName AND IsActive = TRUE
-      WITH USER_MODE
-      LIMIT 1
-    ];
-    if (flows.isEmpty()) {
-      throw new WorkflowEngine.WorkflowException(
-        'Flow not found or not active: ' + flowName
-      );
-    }
-    if (flows[0].ProcessType != 'AutoLaunchedFlow') {
-      throw new WorkflowEngine.WorkflowException(
-        'Unsupported flow type: ' + flows[0].ProcessType
-      );
-    }
-
     Map<String, Object> variables = null;
     if (inputMap.containsKey('variables')) {
       Object varsObj = inputMap.get('variables');
@@ -105,6 +86,25 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
     }
 
     public Object produce() {
+      // Security: Validate that the Flow exists, is active, and is an Autolaunched Flow
+      List<FlowDefinitionView> flows = [
+        SELECT ApiName, ProcessType
+        FROM FlowDefinitionView
+        WHERE ApiName = :this.flowName AND IsActive = TRUE
+        WITH USER_MODE
+        LIMIT 1
+      ];
+      if (flows.isEmpty()) {
+        throw new WorkflowEngine.WorkflowException(
+          'Flow not found or not active: ' + this.flowName
+        );
+      }
+      if (flows[0].ProcessType != 'AutoLaunchedFlow') {
+        throw new WorkflowEngine.WorkflowException(
+          'Unsupported flow type: ' + flows[0].ProcessType
+        );
+      }
+
       // Dynamic invocation via modern Invocable.Action API
       Invocable.Action action = Invocable.Action.createCustomAction(
         ACTION_TYPE_FLOW,
