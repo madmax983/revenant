@@ -899,6 +899,7 @@ public inherited sharing class WorkflowEngine {
     Id currentId = instanceId;
     Set<Id> visitedIds = new Set<Id>();
     Integer maxHops = 12;
+    List<Workflow_Instance__c> ancestors = new List<Workflow_Instance__c>();
 
     for (Integer hop = 0; hop < maxHops; hop++) {
       if (currentId == null || visitedIds.contains(currentId)) {
@@ -916,6 +917,7 @@ public inherited sharing class WorkflowEngine {
           Causation_Id__c,
           Previous_Instance__c,
           Parent_Instance__c,
+          Output__c,
           CreatedDate
         FROM Workflow_Instance__c
         WHERE Id = :currentId
@@ -926,18 +928,7 @@ public inherited sharing class WorkflowEngine {
         break;
       }
       Workflow_Instance__c inst = records[0];
-
-      WorkflowStatus status = new WorkflowStatus(
-        inst.Id,
-        inst.Workflow_Name__c,
-        inst.Correlation_Key__c,
-        inst.Status__c,
-        TERMINAL_GETSTATUS_STATUSES.contains(inst.Status__c),
-        inst.Error_Message__c,
-        null,
-        inst.Causation_Id__c
-      );
-      lineage.add(status);
+      ancestors.add(inst);
 
       String cause = inst.Causation_Id__c;
       if (String.isBlank(cause)) {
@@ -969,6 +960,13 @@ public inherited sharing class WorkflowEngine {
           currentId = null;
         }
       }
+    }
+
+    Map<Id, String> resolvedOutputByDocId = bulkResolveOffloadedOutputs(
+      ancestors
+    );
+    for (Workflow_Instance__c inst : ancestors) {
+      lineage.add(buildStatus(inst, resolvedOutputByDocId));
     }
     return lineage;
   }

@@ -7686,4 +7686,54 @@ public class WorkflowEngineTest {
     System.assertEquals(run2.Id, lineage[0].instanceId);
     System.assertEquals(parentId, lineage[1].instanceId);
   }
+
+  @isTest
+  static void testCausationLineageCarriesTerminalOutputs() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start Parent
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKey',
+      '{"val": "ParentInput"}'
+    );
+
+    // Complete the Parent by executing it
+    new WorkflowOrchestrator(parentId).execute(null);
+    new WorkflowOrchestrator(parentId).execute(null);
+
+    // Verify it is completed and has output
+    Workflow_Instance__c parent = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals('Completed', parent.Status__c);
+    System.assertNotEquals(null, parent.Output__c);
+
+    // Start Child under Parent
+    Id childId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ChildKey',
+      null,
+      parentId
+    );
+
+    // Get causation lineage on Child
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(childId, lineage[0].instanceId);
+    System.assertEquals(parentId, lineage[1].instanceId);
+
+    // Verify parent's output in the lineage matches the actual output
+    System.assertNotEquals(null, lineage[1].output);
+    System.assertNotEquals('', lineage[1].output);
+    System.assertEquals(
+      parent.Output__c,
+      lineage[1].output,
+      'Terminal lineage entries must carry rehydrated output'
+    );
+  }
 }
