@@ -85,6 +85,7 @@
                 <elementReference>ResolvedCorrelationKey</elementReference>
             </value>
         </inputAssignments>
+        <inputReference>$Record</inputReference>
     </recordUpdates>
     <start>
         <locationX>50</locationX>

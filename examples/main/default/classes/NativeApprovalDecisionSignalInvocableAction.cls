@@ -34,6 +34,7 @@ public inherited sharing class NativeApprovalDecisionSignalInvocableAction {
       return;
     }
 
+    List<WorkflowEngine.SignalRequest> engineRequests = new List<WorkflowEngine.SignalRequest>();
     for (DecisionRequest req : requests) {
       String payload = JSON.serialize(
         new Map<String, Object>{
@@ -42,12 +43,14 @@ public inherited sharing class NativeApprovalDecisionSignalInvocableAction {
           'approver' => req.approverName
         }
       );
-      WorkflowEngine.signal(
+      WorkflowEngine.SignalRequest engineReq = new WorkflowEngine.SignalRequest(
         req.targetKey,
         NativeApprovalWorkflowExample.DECISION_SIGNAL,
-        payload,
-        req.idempotencyKey
+        payload
       );
+      engineReq.idempotencyKey = req.idempotencyKey;
+      engineRequests.add(engineReq);
     }
+    WorkflowEngine.signal(engineRequests);
   }
 }
