@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ApprovalProcess xmlns="http://soap.sforce.com/2006/04/metadata">
+    <active>false</active>
+    <allowRecall>true</allowRecall>
+    <allowedSubmitters>
+        <type>owner</type>
+    </allowedSubmitters>
+    <approvalPageFields>
+        <field>Subject</field>
+    </approvalPageFields>
+    <approvalPageFields>
+        <field>Description</field>
+    </approvalPageFields>
+    <approvalStep>
+        <allowDelegate>true</allowDelegate>
+        <assignedApprover>
+            <approver>
+                <type>relatedUserField</type>
+                <name>Manager</name>
+            </approver>
+        </assignedApprover>
+        <description>Reference example for issue #125's Apex-trigger bridge alternative. Approval is assigned to the record owner's manager -- adjust to whatever assignedApprover fits your org (a queue, a named user, a role) before activating. This is a demo entry point: Revenant does not care how the approver is chosen, only that the process's final actions land on Approval_Status__c.</description>
+        <entryCriteria>
+            <criteriaItems>
+                <field>Case.Approval_Status__c</field>
+                <operation>equals</operation>
+                <value>Pending</value>
+            </criteriaItems>
+        </entryCriteria>
+        <label>Manager Approval</label>
+        <name>Manager_Approval</name>
+    </approvalStep>
+    <description>Reference example for issue #125: demonstrates bridging a native Approval Process to the durable NativeApprovalWorkflowExample workflow via a plain Apex trigger (CaseApprovalBridgeTrigger.trigger / NativeApprovalTriggerBridgeExample.cls) instead of Flow metadata -- an alternative to Revenant_Native_Approval_Example, which does the same job with two record-triggered Flows. Ships inactive as all Approval Processes do; activate after adjusting the approver assignment for your org. Final actions only flip Approval_Status__c -- CaseApprovalBridgeTrigger reacts to that change and signals the workflow directly in Apex. This is example-only wiring on the standard Case object: it fires on every Case in the org, which is acceptable for a reference example but would need scoping (e.g. a dedicated Record Type) before adapting for real use.</description>
+    <entryCriteria>
+        <criteriaItems>
+            <field>Case.Approval_Status__c</field>
+            <operation>equals</operation>
+            <value>Pending</value>
+        </criteriaItems>
+    </entryCriteria>
+    <finalApprovalActions>
+        <action>
+            <name>Set_Status_Approved</name>
+            <type>FieldUpdate</type>
+        </action>
+    </finalApprovalActions>
+    <finalApprovalRecordLock>false</finalApprovalRecordLock>
+    <finalRejectionActions>
+        <action>
+            <name>Set_Status_Rejected</name>
+            <type>FieldUpdate</type>
+        </action>
+    </finalRejectionActions>
+    <finalRejectionRecordLock>false</finalRejectionRecordLock>
+    <label>Revenant Trigger Approval Example</label>
+    <processOrder>1</processOrder>
+    <recordEditability>AdminOrCurrentApprover</recordEditability>
+    <showApprovalHistory>true</showApprovalHistory>
+</ApprovalProcess>
