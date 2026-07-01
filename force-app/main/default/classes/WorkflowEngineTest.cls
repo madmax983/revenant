@@ -7607,7 +7607,7 @@ public class WorkflowEngineTest {
       'ChildKeyReused',
       null
     );
-    childReq.causationId = 'ReusedKey';
+    childReq.causationId = 'key:ReusedKey';
     Id childId = WorkflowEngine.startOrGet(
         new List<WorkflowEngine.StartRequest>{ childReq }
       )[0]
@@ -7784,7 +7784,7 @@ public class WorkflowEngineTest {
       'ReusedKeySame',
       null
     );
-    childReq.causationId = 'ReusedKeySame';
+    childReq.causationId = 'key:ReusedKeySame';
     Id childId = WorkflowEngine.startOrGet(
         new List<WorkflowEngine.StartRequest>{ childReq }
       )[0]
@@ -7950,7 +7950,7 @@ public class WorkflowEngineTest {
       'ChildKey',
       null
     );
-    childReq.causationId = lookalikeId;
+    childReq.causationId = 'key:' + lookalikeId;
     Id childId = WorkflowEngine.startOrGet(
         new List<WorkflowEngine.StartRequest>{ childReq }
       )[0]
@@ -7999,7 +7999,7 @@ public class WorkflowEngineTest {
       'ChildDaemonKey',
       (Object) 0
     );
-    childReq.causationId = 'ParentKeyReused';
+    childReq.causationId = 'key:ParentKeyReused';
     Id childId = WorkflowEngine.startOrGet(
         new List<WorkflowEngine.StartRequest>{ childReq }
       )[0]
@@ -8014,7 +8014,7 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Previous_Instance__c = :childId
     ];
-    System.assertEquals('ParentKeyReused', run2.Causation_Id__c);
+    System.assertEquals('key:ParentKeyReused', run2.Causation_Id__c);
 
     // 3. Create a NEW parent run with the same key AFTER the child was created
     Id newerParentId = WorkflowEngine.start(
@@ -8112,7 +8112,7 @@ public class WorkflowEngineTest {
       Workflow_Instance__c inst = new Workflow_Instance__c(
         Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
         Correlation_Key__c = 'ChainDaemonKey-' + i,
-        Causation_Id__c = 'ParentKeyReusedLong',
+        Causation_Id__c = 'key:ParentKeyReusedLong',
         Previous_Instance__c = prevId
       );
       insert inst;

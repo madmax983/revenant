@@ -955,14 +955,15 @@ public inherited sharing class WorkflowEngine {
 
       if (resolvedId != null) {
         currentId = resolvedId;
-      } else {
+      } else if (cause.startsWith('key:')) {
+        String correlationKey = cause.substring(4);
         DateTime earliestCreatedDate = getEarliestPredecessorCreatedDate(inst);
         List<Workflow_Instance__c> parents = [
           SELECT Id
           FROM Workflow_Instance__c
           WHERE
-            (Correlation_Key__c = :cause
-            OR Active_Correlation_Key__c = :cause)
+            (Correlation_Key__c = :correlationKey
+            OR Active_Correlation_Key__c = :correlationKey)
             AND CreatedDate <= :earliestCreatedDate
             AND Id NOT IN :visitedIds
           WITH SYSTEM_MODE
@@ -975,6 +976,8 @@ public inherited sharing class WorkflowEngine {
         } else {
           currentId = null;
         }
+      } else {
+        currentId = null;
       }
     }
 
@@ -1122,24 +1125,6 @@ public inherited sharing class WorkflowEngine {
     String workflowName,
     String correlationKey,
     Object input,
-    String causationId
-  ) {
-    return doStart(
-        workflowName,
-        correlationKey,
-        input,
-        null,
-        true,
-        null,
-        causationId
-      )
-      .instanceId;
-  }
-
-  public static Id start(
-    String workflowName,
-    String correlationKey,
-    Object input,
     Map<String, String> attributes
   ) {
     return doStart(
@@ -1181,25 +1166,6 @@ public inherited sharing class WorkflowEngine {
     String correlationKey,
     Object input,
     Id parentInstanceId,
-    String causationId
-  ) {
-    return doStart(
-        workflowName,
-        correlationKey,
-        input,
-        parentInstanceId,
-        true,
-        null,
-        causationId
-      )
-      .instanceId;
-  }
-
-  public static Id start(
-    String workflowName,
-    String correlationKey,
-    Object input,
-    Id parentInstanceId,
     Map<String, String> attributes
   ) {
     return doStart(
@@ -1210,26 +1176,6 @@ public inherited sharing class WorkflowEngine {
         true,
         attributes,
         null
-      )
-      .instanceId;
-  }
-
-  public static Id start(
-    String workflowName,
-    String correlationKey,
-    Object input,
-    Id parentInstanceId,
-    Map<String, String> attributes,
-    String causationId
-  ) {
-    return doStart(
-        workflowName,
-        correlationKey,
-        input,
-        parentInstanceId,
-        true,
-        attributes,
-        causationId
       )
       .instanceId;
   }
