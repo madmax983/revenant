@@ -29,6 +29,8 @@ public inherited sharing class WorkflowEngine {
   public static Integer reclaimThresholdMinutes = null;
   @TestVisible
   private static Datetime mockNow = null;
+  @TestVisible
+  private static Integer predecessorQueriesRemaining = 15;
 
   // Base + jitter (seconds) before a concurrency-parked instance re-attempts
   // admission. Precise scheduling drives it promptly when slots free; under a large
@@ -896,6 +898,7 @@ public inherited sharing class WorkflowEngine {
       return lineage;
     }
 
+    predecessorQueriesRemaining = 15;
     Id currentId = instanceId;
     Set<Id> visitedIds = new Set<Id>();
     Integer maxHops = 12;
@@ -1019,9 +1022,11 @@ public inherited sharing class WorkflowEngine {
     while (
       prevId != null &&
       !visited.contains(prevId) &&
-      hopsCount < maxPredecessors
+      hopsCount < maxPredecessors &&
+      predecessorQueriesRemaining > 0
     ) {
       visited.add(prevId);
+      predecessorQueriesRemaining--;
       List<Workflow_Instance__c> prevs = [
         SELECT
           Id,
@@ -1196,23 +1201,6 @@ public inherited sharing class WorkflowEngine {
     String workflowName,
     String correlationKey,
     Object input,
-    String causationId
-  ) {
-    return doStart(
-      workflowName,
-      correlationKey,
-      input,
-      null,
-      true,
-      null,
-      causationId
-    );
-  }
-
-  public static StartResult startOrGet(
-    String workflowName,
-    String correlationKey,
-    Object input,
     Map<String, String> attributes
   ) {
     return doStart(
@@ -1248,24 +1236,6 @@ public inherited sharing class WorkflowEngine {
     String correlationKey,
     Object input,
     Id parentInstanceId,
-    String causationId
-  ) {
-    return doStart(
-      workflowName,
-      correlationKey,
-      input,
-      parentInstanceId,
-      true,
-      null,
-      causationId
-    );
-  }
-
-  public static StartResult startOrGet(
-    String workflowName,
-    String correlationKey,
-    Object input,
-    Id parentInstanceId,
     Map<String, String> attributes
   ) {
     return doStart(
@@ -1276,25 +1246,6 @@ public inherited sharing class WorkflowEngine {
       true,
       attributes,
       null
-    );
-  }
-
-  public static StartResult startOrGet(
-    String workflowName,
-    String correlationKey,
-    Object input,
-    Id parentInstanceId,
-    Map<String, String> attributes,
-    String causationId
-  ) {
-    return doStart(
-      workflowName,
-      correlationKey,
-      input,
-      parentInstanceId,
-      true,
-      attributes,
-      causationId
     );
   }
 
