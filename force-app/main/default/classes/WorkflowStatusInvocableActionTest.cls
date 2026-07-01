@@ -529,7 +529,7 @@ public class WorkflowStatusInvocableActionTest {
       Workflow_Name__c = 'Test.Workflow',
       Status__c = 'Completed',
       Correlation_Key__c = 'CausationActionKey',
-      Causation_Id__c = 'my-cause-abc'
+      Causation_Id__c = 'key:my-cause-abc#1719859200000'
     );
     insert inst;
 
@@ -541,6 +541,6 @@ public class WorkflowStatusInvocableActionTest {
 
     System.assertEquals(1, results.size());
     System.assertEquals(true, results[0].found);
-    System.assertEquals('my-cause-abc', results[0].causationId);
+    System.assertEquals('key:my-cause-abc', results[0].causationId);
   }
 }

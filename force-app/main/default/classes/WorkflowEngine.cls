@@ -813,15 +813,7 @@ public inherited sharing class WorkflowEngine {
         output = '';
       }
     }
-    String cleanCausationId = inst.Causation_Id__c;
-    if (
-      String.isNotBlank(cleanCausationId) && cleanCausationId.startsWith('key:')
-    ) {
-      Integer hashIndex = cleanCausationId.indexOf('#');
-      if (hashIndex != -1) {
-        cleanCausationId = cleanCausationId.substring(0, hashIndex);
-      }
-    }
+    String cleanCausationId = cleanCausationId(inst.Causation_Id__c);
     return new WorkflowStatus(
       inst.Id,
       inst.Workflow_Name__c,
@@ -970,15 +962,17 @@ public inherited sharing class WorkflowEngine {
       } else if (cause.startsWith('key:')) {
         String correlationKey = cause.substring(4);
         DateTime earliestCreatedDate = null;
-        Integer hashIndex = correlationKey.indexOf('#');
+        Integer hashIndex = correlationKey.lastIndexOf('#');
         if (hashIndex != -1) {
           String tsStr = correlationKey.substring(hashIndex + 1);
-          correlationKey = correlationKey.substring(0, hashIndex);
-          try {
-            Long ms = Long.valueOf(tsStr);
-            earliestCreatedDate = DateTime.newInstance(ms);
-          } catch (Exception ex) {
-            // fallback
+          if (tsStr.length() >= 12 && tsStr.length() <= 15) {
+            try {
+              Long ms = Long.valueOf(tsStr);
+              earliestCreatedDate = DateTime.newInstance(ms);
+              correlationKey = correlationKey.substring(0, hashIndex);
+            } catch (Exception ex) {
+              // fallback
+            }
           }
         }
         if (earliestCreatedDate == null) {
@@ -1024,6 +1018,44 @@ public inherited sharing class WorkflowEngine {
     try {
       Id parsed = (Id) val;
       return parsed.getSObjectType() == Workflow_Instance__c.SObjectType;
+    } catch (Exception ex) {
+      return false;
+    }
+  }
+
+  public static String cleanCausationId(String val) {
+    if (String.isNotBlank(val) && val.startsWith('key:')) {
+      Integer hashIndex = val.lastIndexOf('#');
+      if (hashIndex != -1) {
+        String suffix = val.substring(hashIndex + 1);
+        if (suffix.length() >= 12 && suffix.length() <= 15) {
+          try {
+            Long.valueOf(suffix);
+            return val.substring(0, hashIndex);
+          } catch (Exception ex) {
+            // not a valid long, keep suffix
+          }
+        }
+      }
+    }
+    return val;
+  }
+
+  private static Boolean hasTimestampSuffix(String val) {
+    if (String.isBlank(val)) {
+      return false;
+    }
+    Integer lastHash = val.lastIndexOf('#');
+    if (lastHash == -1 || lastHash == val.length() - 1) {
+      return false;
+    }
+    String suffix = val.substring(lastHash + 1);
+    if (suffix.length() < 12 || suffix.length() > 15) {
+      return false;
+    }
+    try {
+      Long.valueOf(suffix);
+      return true;
     } catch (Exception ex) {
       return false;
     }
@@ -1506,7 +1538,8 @@ public inherited sharing class WorkflowEngine {
     if (String.isNotBlank(req.causationId)) {
       finalCausationId = req.causationId;
       if (
-        finalCausationId.startsWith('key:') && !finalCausationId.contains('#')
+        finalCausationId.startsWith('key:') &&
+        !hasTimestampSuffix(finalCausationId)
       ) {
         finalCausationId += '#' + String.valueOf(System.now().getTime());
       }

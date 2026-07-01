@@ -8211,4 +8211,44 @@ public class WorkflowEngineTest {
     System.assertEquals(parentId, lineage[1].instanceId);
     System.assertEquals('key:MyRealParentKey', lineage[0].causationId);
   }
+
+  @isTest
+  static void testCausationIdWithHashInKey() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Start a parent workflow with a key containing '#'
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'order#123',
+      null
+    );
+
+    // 2. Start a child with a key-based causation ID referencing 'order#123'
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'MyChildKeyHash',
+      null
+    );
+    childReq.causationId = 'key:order#123';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Verify child instance contains the causationId with the timestamp appended after order#123
+    Workflow_Instance__c childInst = [
+      SELECT Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    System.assert(childInst.Causation_Id__c.startsWith('key:order#123#'));
+
+    // 3. Resolve lineage and verify it correctly parses 'order#123' (preserving the '#' character) and resolves to parentId
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(parentId, lineage[1].instanceId);
+    System.assertEquals('key:order#123', lineage[0].causationId);
+  }
 }

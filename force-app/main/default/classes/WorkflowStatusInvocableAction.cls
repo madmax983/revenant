@@ -313,7 +313,7 @@ public inherited sharing class WorkflowStatusInvocableAction {
         res.errorMessage = inst.Error_Message__c;
         res.outputJson = rehydrate(inst.Output__c, dataByAttachment);
         res.progressJson = rehydrate(inst.Progress__c, dataByAttachment);
-        res.causationId = inst.Causation_Id__c;
+        res.causationId = WorkflowEngine.cleanCausationId(inst.Causation_Id__c);
       }
       results.add(res);
     }
