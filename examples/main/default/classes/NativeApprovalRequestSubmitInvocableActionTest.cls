@@ -2,11 +2,11 @@
 private class NativeApprovalRequestSubmitInvocableActionTest {
 
   /**
-   * The shipped Approval Process ships inactive (Approval Processes always deploy inactive).
-   * In an org where it has not yet been activated, Approval.process() cannot find a matching
-   * process and Salesforce throws -- this must be captured on the result, not allowed to
-   * propagate, so the invocable never faults the Flow interview or blocks the workflow-start
-   * action that runs before it in Revenant_Start_Approval_Workflow_Example.
+   * Submission must fail gracefully (captured on the result, never thrown) when Approval.process()
+   * can't find a matching Approval Process. This must be deterministic regardless of whether the
+   * shipped Approval Process has since been activated in this org (the README's documented next
+   * step), so the request explicitly names a definitely-nonexistent process rather than relying
+   * on the shipped process still being inactive.
    */
   @isTest
   static void testSubmitWithNoActiveProcessCapturesFailureGracefully() {
@@ -16,6 +16,7 @@ private class NativeApprovalRequestSubmitInvocableActionTest {
     NativeApprovalRequestSubmitInvocableAction.SubmitRequest req =
       new NativeApprovalRequestSubmitInvocableAction.SubmitRequest();
     req.recordId = rec.Id;
+    req.processDefinitionNameOrId = 'Nonexistent_Approval_Process_For_Test_Only';
 
     Test.startTest();
     List<NativeApprovalRequestSubmitInvocableAction.SubmitResult> results =
@@ -28,7 +29,7 @@ private class NativeApprovalRequestSubmitInvocableActionTest {
     System.assertEquals(
       false,
       results[0].success,
-      'Submission must fail gracefully (captured, not thrown) while no Approval Process is active'
+      'Submission must fail gracefully (captured, not thrown) when the named Approval Process does not exist'
     );
     System.assert(
       String.isNotBlank(results[0].errorMessage),

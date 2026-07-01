@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Flow xmlns="http://soap.sforce.com/2006/04/metadata">
     <apiVersion>67.0</apiVersion>
-    <description>Reference example for issue #125: starts NativeApprovalWorkflowExample when an Approval_Request__c is created, using the record's Correlation_Key__c (falling back to its Id when blank) as the workflow correlation key, then persists the resolved key back onto the record so the decision-side Flow can never re-derive a different value later, then submits the record into the native Approval Process via NativeApprovalRequestSubmitInvocableAction.</description>
+    <description>Reference example for issue #125: starts NativeApprovalWorkflowExample when an Approval_Request__c is created, using the record's Correlation_Key__c (falling back to its Id when blank) as the workflow correlation key, then persists the resolved key back onto the record so the decision-side Flow can never re-derive a different value later, then submits the record into the native Approval Process via NativeApprovalRequestSubmitInvocableAction. Approval submission is gated on Start_Workflow.isNew so a correlation-key collision with an existing workflow instance cannot submit the record into a native Approval Process whose eventual decision would signal the wrong (already-existing, possibly already-completed) workflow instance.</description>
     <formulas>
         <name>ResolvedCorrelationKey</name>
         <dataType>String</dataType>
@@ -20,7 +20,7 @@
         <actionName>WorkflowStartInvocableAction</actionName>
         <actionType>apex</actionType>
         <connector>
-            <targetReference>Update_Correlation_Key</targetReference>
+            <targetReference>Branch_On_Is_New</targetReference>
         </connector>
         <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
@@ -48,7 +48,7 @@
         <name>Submit_For_Approval</name>
         <label>Submit For Approval</label>
         <locationX>176</locationX>
-        <locationY>374</locationY>
+        <locationY>494</locationY>
         <actionName>NativeApprovalRequestSubmitInvocableAction</actionName>
         <actionType>apex</actionType>
         <flowTransactionModel>CurrentTransaction</flowTransactionModel>
@@ -71,11 +71,33 @@
         </value>
     </processMetadataValues>
     <processType>AutoLaunchedFlow</processType>
+    <decisions>
+        <name>Branch_On_Is_New</name>
+        <label>Branch On Is New</label>
+        <locationX>176</locationX>
+        <locationY>254</locationY>
+        <defaultConnectorLabel>Existing Workflow Instance (Skip Submission)</defaultConnectorLabel>
+        <rules>
+            <name>Is_New</name>
+            <conditionLogic>and</conditionLogic>
+            <conditions>
+                <leftValueReference>Start_Workflow.isNew</leftValueReference>
+                <operator>EqualTo</operator>
+                <rightValue>
+                    <booleanValue>true</booleanValue>
+                </rightValue>
+            </conditions>
+            <connector>
+                <targetReference>Update_Correlation_Key</targetReference>
+            </connector>
+            <label>Is New</label>
+        </rules>
+    </decisions>
     <recordUpdates>
         <name>Update_Correlation_Key</name>
         <label>Update Correlation Key</label>
         <locationX>176</locationX>
-        <locationY>254</locationY>
+        <locationY>374</locationY>
         <connector>
             <targetReference>Submit_For_Approval</targetReference>
         </connector>
