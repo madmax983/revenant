@@ -86,8 +86,8 @@ public inherited sharing class NativeApprovalTriggerBridgeExample {
       SELECT Id, TargetObjectId
       FROM ProcessInstance
       WHERE TargetObjectId IN :decidedCaseIds
-      ORDER BY CreatedDate DESC
       WITH USER_MODE
+      ORDER BY CreatedDate DESC
     ]) {
       if (!latestProcessInstanceIdByCaseId.containsKey(pi.TargetObjectId)) {
         latestProcessInstanceIdByCaseId.put(pi.TargetObjectId, pi.Id);
@@ -101,8 +101,8 @@ public inherited sharing class NativeApprovalTriggerBridgeExample {
       WHERE
         ProcessInstanceId IN :latestProcessInstanceIdByCaseId.values()
         AND StepStatus IN ('Approved', 'Rejected')
-      ORDER BY CreatedDate DESC
       WITH USER_MODE
+      ORDER BY CreatedDate DESC
     ]) {
       if (!latestCommentByProcessInstanceId.containsKey(step.ProcessInstanceId)) {
         latestCommentByProcessInstanceId.put(step.ProcessInstanceId, step.Comments);
