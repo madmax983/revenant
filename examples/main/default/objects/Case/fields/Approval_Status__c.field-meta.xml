@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Approval_Status__c</fullName>
+    <description>Reference field for issue #125's Apex-trigger bridge alternative (see CaseApprovalBridgeTrigger.trigger / NativeApprovalTriggerBridgeExample.cls). Set to Pending on submission; flipped to Approved or Rejected only by the native Approval Process's final field-update actions (Set_Status_Approved / Set_Status_Rejected). CaseApprovalBridgeTrigger fires when this changes away from Pending and signals the corresponding decision directly in Apex.</description>
+    <externalId>false</externalId>
+    <label>Approval Status</label>
+    <required>true</required>
+    <type>Picklist</type>
+    <valueSet>
+        <restricted>true</restricted>
+        <valueSetDefinition>
+            <sorted>false</sorted>
+            <value>
+                <fullName>Pending</fullName>
+                <default>true</default>
+                <label>Pending</label>
+            </value>
+            <value>
+                <fullName>Approved</fullName>
+                <default>false</default>
+                <label>Approved</label>
+            </value>
+            <value>
+                <fullName>Rejected</fullName>
+                <default>false</default>
+                <label>Rejected</label>
+            </value>
+        </valueSetDefinition>
+    </valueSet>
+</CustomField>
