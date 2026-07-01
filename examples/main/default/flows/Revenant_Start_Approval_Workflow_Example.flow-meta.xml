@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Flow xmlns="http://soap.sforce.com/2006/04/metadata">
     <apiVersion>67.0</apiVersion>
-    <description>Reference example for issue #125: starts NativeApprovalWorkflowExample when an Approval_Request__c is created, using the record's Correlation_Key__c (falling back to its Id when blank) as the workflow correlation key. Zero custom Apex is required for this half of the bridge -- the Start Workflow invocable action is already shipped by the framework.</description>
+    <description>Reference example for issue #125: starts NativeApprovalWorkflowExample when an Approval_Request__c is created, using the record's Correlation_Key__c (falling back to its Id when blank) as the workflow correlation key, then persists the resolved key back onto the record so the decision-side Flow can never re-derive a different value later, then submits the record into the native Approval Process via NativeApprovalRequestSubmitInvocableAction.</description>
     <formulas>
         <name>ResolvedCorrelationKey</name>
         <dataType>String</dataType>
@@ -10,7 +10,7 @@
     <formulas>
         <name>StartInputJson</name>
         <dataType>String</dataType>
-        <expression>&apos;{&quot;amount&quot;:&apos; &amp; TEXT(BLANKVALUE({!$Record.Amount__c}, 0)) &amp; &apos;}&apos;</expression>
+        <expression>'{"amount":' &amp; TEXT(BLANKVALUE({!$Record.Amount__c}, 0)) &amp; '}'</expression>
     </formulas>
     <actionCalls>
         <name>Start_Workflow</name>
@@ -19,6 +19,9 @@
         <locationY>134</locationY>
         <actionName>WorkflowStartInvocableAction</actionName>
         <actionType>apex</actionType>
+        <connector>
+            <targetReference>Update_Correlation_Key</targetReference>
+        </connector>
         <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
             <name>workflowName</name>
@@ -41,6 +44,23 @@
         <nameSegment>WorkflowStartInvocableAction</nameSegment>
         <storeOutputAutomatically>true</storeOutputAutomatically>
     </actionCalls>
+    <actionCalls>
+        <name>Submit_For_Approval</name>
+        <label>Submit For Approval</label>
+        <locationX>176</locationX>
+        <locationY>374</locationY>
+        <actionName>NativeApprovalRequestSubmitInvocableAction</actionName>
+        <actionType>apex</actionType>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
+        <inputParameters>
+            <name>recordId</name>
+            <value>
+                <elementReference>$Record.Id</elementReference>
+            </value>
+        </inputParameters>
+        <nameSegment>NativeApprovalRequestSubmitInvocableAction</nameSegment>
+        <storeOutputAutomatically>true</storeOutputAutomatically>
+    </actionCalls>
     <environments>Default</environments>
     <interviewLabel>Revenant Start Approval Workflow Example {!$Flow.CurrentDateTime}</interviewLabel>
     <label>Revenant Start Approval Workflow Example</label>
@@ -51,6 +71,21 @@
         </value>
     </processMetadataValues>
     <processType>AutoLaunchedFlow</processType>
+    <recordUpdates>
+        <name>Update_Correlation_Key</name>
+        <label>Update Correlation Key</label>
+        <locationX>176</locationX>
+        <locationY>254</locationY>
+        <connector>
+            <targetReference>Submit_For_Approval</targetReference>
+        </connector>
+        <inputAssignments>
+            <field>Correlation_Key__c</field>
+            <value>
+                <elementReference>ResolvedCorrelationKey</elementReference>
+            </value>
+        </inputAssignments>
+    </recordUpdates>
     <start>
         <locationX>50</locationX>
         <locationY>0</locationY>

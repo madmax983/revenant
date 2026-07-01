@@ -9,27 +9,35 @@
  *          reject  -> RejectStep -> WorkflowException -> LIFO compensation -> Compensated
  *
  * The approver-facing surface here is deliberately NOT a custom LWC: a native Approval
- * Process already ships a least-privilege approver inbox, mobile approve/reject, and
- * delegation, so this example reuses it rather than rebuilding it. The bridge from the
- * native process to this suspended gate is entirely declarative:
+ * Process already ships an approver inbox, mobile approve/reject, and delegation, so this
+ * example reuses it rather than rebuilding it. The bridge from the native process to this
+ * suspended gate is entirely declarative, wired through two small invocable actions rather
+ * than hand-built Flow-formula strings:
  *
- *   1. A record-triggered Flow starts this workflow when an Approval_Request__c is
- *      created (see Revenant_Start_Approval_Workflow_Example.flow-meta.xml), correlating
- *      on Correlation_Key__c.
- *   2. The record is separately submitted to the native Approval Process
- *      (Approval_Request__c.Revenant_Native_Approval_Example.approvalProcess-meta.xml),
- *      whose final approval/rejection action is a plain field update to
- *      Approval_Status__c -- no Apex, no custom UI.
- *   3. A second record-triggered Flow
- *      (Revenant_Approval_Decision_To_Signal_Example.flow-meta.xml) fires when that field
- *      update lands and calls the already-shipped WorkflowSignalInvocableAction to publish
- *      this workflow's DECISION_SIGNAL -- the same 'Approve:' + key convention
- *      ApprovalWorkflowExample and the dashboard's submitApproval already use.
+ *   1. A record-triggered Flow starts this workflow when an Approval_Request__c is created
+ *      (see Revenant_Start_Approval_Workflow_Example.flow-meta.xml), correlating on
+ *      Correlation_Key__c, then calls NativeApprovalRequestSubmitInvocableAction to submit
+ *      the same record into the native Approval Process
+ *      (Approval_Request__c.Revenant_Native_Approval_Example.approvalProcess-meta.xml) --
+ *      meeting a process's entry criteria is not by itself sufficient in Salesforce; this
+ *      invocable is the explicit submission action that closes that gap.
+ *   2. The Approval Process's final approval/rejection action is a plain field update to
+ *      Approval_Status__c.
+ *   3. A second record-triggered Flow (Revenant_Approval_Decision_To_Signal_Example.flow-meta.xml)
+ *      fires when that field update lands and calls NativeApprovalDecisionSignalInvocableAction,
+ *      which JSON.serialize()s the decision (safe against newlines/quotes in the approver's
+ *      comment, unlike a hand-assembled formula string) and hardcodes the target signal name
+ *      to this class's DECISION_SIGNAL constant so the two can never drift apart.
  *
- * Revenant supplies only the primitive (waitForApproval + the Approve: signal); the
- * approval *mechanism* -- who may decide, the inbox, mobile access -- is the native
- * Approval Process, which is exactly what native Approval Processes are good at and what
- * they cannot combine with durable multi-step orchestration or compensating rollback.
+ * Revenant supplies only the primitive (waitForApproval + the Approve: signal); the native
+ * Approval Process supplies the human-facing mechanism -- who may decide, the inbox, mobile
+ * access. That said, the signal path itself (WorkflowEngine.signal / the invocable actions
+ * above) performs no authorization check of its own, exactly like every other waitForApproval
+ * gate in this repo (see ApprovalWorkflowExample) -- the Approval Process's approver
+ * assignment is a UI-level convenience for who is *prompted* to decide, not an enforced
+ * boundary on who *can* publish the decision signal. Pass a shipped Custom Permission (e.g.
+ * 'Workflow_Admin') as waitForApproval's second argument if you need
+ * WorkflowDashboardController.enforceApprovalRole to actually gate that.
  */
 public inherited sharing class NativeApprovalWorkflowExample implements WorkflowDefinition {
   /** Approval gate identifier passed to waitForApproval(). */
@@ -169,10 +177,11 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
         // The second argument is an optional Custom Permission API name that
         // WorkflowDashboardController.enforceApprovalRole would require an approver to
         // hold if this workflow were also decided from the dashboard. Left null here:
-        // the native Approval Process's assigned approver is this example's
-        // least-privilege boundary, so there is nothing further to gate on the Revenant
-        // side. Pass a shipped permission (e.g. 'Workflow_Admin') to additionally
-        // restrict the dashboard's fallback decision path.
+        // this example relies on the native Approval Process's approver assignment to
+        // decide who is *prompted* to act, not on any check at the signal layer itself --
+        // the signal path has no authorization check of its own (see the class doc
+        // comment). Pass a shipped permission (e.g. 'Workflow_Admin') if you need an
+        // actual enforced check on who may publish the decision signal.
         return StepResult.waitForApproval(APPROVAL_KEY, null);
       }
 
