@@ -60,9 +60,9 @@ private class OrderChoreographyWorkflowExampleTest {
       'Workflow B must be started exactly once (no double-start from retries)'
     );
     System.assertEquals(
-      'order-shipped-choreo-1',
+      shipmentId,
       refundInstances[0].Causation_Id__c,
-      'Downstream B must be causally linked to upstream A via trace id'
+      'Downstream B must be causally linked to upstream A via stable trace/causation ID'
     );
   }
 }

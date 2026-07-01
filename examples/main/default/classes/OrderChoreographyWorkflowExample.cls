@@ -90,21 +90,13 @@ public inherited sharing class OrderChoreographyWorkflowExample {
         ctx.workflowInputJson
       );
       String orderId = (String) input.get('orderId');
-
-      Workflow_Instance__c inst = [
-        SELECT Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE Id = :ctx.workflowInstanceId
-        WITH SYSTEM_MODE
-      ];
-
       // Buffered every execution; published only when this step's COMPLETE
       // transition commits.
       ctx.emit(
         new Order_Shipped__e(
           Order_Id__c = orderId,
           Correlation_Key__c = orderId,
-          Trace_Id__c = inst.Correlation_Key__c
+          Trace_Id__c = ctx.workflowInstanceId
         )
       );
 
