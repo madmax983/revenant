@@ -1002,15 +1002,36 @@ public inherited sharing class WorkflowEngine {
   private static DateTime getEarliestPredecessorCreatedDate(
     Workflow_Instance__c inst
   ) {
+    return getEarliestPredecessorCreatedDate(inst, 100);
+  }
+
+  private static DateTime getEarliestPredecessorCreatedDate(
+    Workflow_Instance__c inst,
+    Integer maxPredecessors
+  ) {
     DateTime earliest = inst.CreatedDate;
     Id prevId = inst.Previous_Instance__c;
     Set<Id> visited = new Set<Id>{ inst.Id };
-    Integer hops = 0;
-    while (prevId != null && !visited.contains(prevId) && hops < 5) {
+    Integer hopsCount = 0;
+    while (
+      prevId != null &&
+      !visited.contains(prevId) &&
+      hopsCount < maxPredecessors
+    ) {
       visited.add(prevId);
-      hops++;
       List<Workflow_Instance__c> prevs = [
-        SELECT Id, Previous_Instance__c, CreatedDate
+        SELECT
+          Id,
+          CreatedDate,
+          Previous_Instance__c,
+          Previous_Instance__r.CreatedDate,
+          Previous_Instance__r.Previous_Instance__c,
+          Previous_Instance__r.Previous_Instance__r.CreatedDate,
+          Previous_Instance__r.Previous_Instance__r.Previous_Instance__c,
+          Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.CreatedDate,
+          Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c,
+          Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.CreatedDate,
+          Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c
         FROM Workflow_Instance__c
         WHERE Id = :prevId
         WITH SYSTEM_MODE
@@ -1019,8 +1040,66 @@ public inherited sharing class WorkflowEngine {
       if (prevs.isEmpty()) {
         break;
       }
-      earliest = prevs[0].CreatedDate;
-      prevId = prevs[0].Previous_Instance__c;
+
+      Workflow_Instance__c p = prevs[0];
+      earliest = p.CreatedDate;
+      prevId = p.Previous_Instance__c;
+      hopsCount++;
+
+      // Look ahead up to 4 more levels from p in-memory
+      if (
+        prevId != null &&
+        !visited.contains(prevId) &&
+        p.Previous_Instance__r != null &&
+        hopsCount < maxPredecessors
+      ) {
+        visited.add(prevId);
+        earliest = p.Previous_Instance__r.CreatedDate;
+        prevId = p.Previous_Instance__r.Previous_Instance__c;
+        hopsCount++;
+
+        if (
+          prevId != null &&
+          !visited.contains(prevId) &&
+          p.Previous_Instance__r.Previous_Instance__r != null &&
+          hopsCount < maxPredecessors
+        ) {
+          visited.add(prevId);
+          earliest = p.Previous_Instance__r.Previous_Instance__r.CreatedDate;
+          prevId = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c;
+          hopsCount++;
+
+          if (
+            prevId != null &&
+            !visited.contains(prevId) &&
+            p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c !=
+            null &&
+            hopsCount < maxPredecessors
+          ) {
+            visited.add(prevId);
+            earliest = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
+              .CreatedDate;
+            prevId = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
+              .Previous_Instance__c;
+            hopsCount++;
+
+            if (
+              prevId != null &&
+              !visited.contains(prevId) &&
+              p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
+                .Previous_Instance__c != null &&
+              hopsCount < maxPredecessors
+            ) {
+              visited.add(prevId);
+              earliest = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
+                .Previous_Instance__r.CreatedDate;
+              prevId = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
+                .Previous_Instance__r.Previous_Instance__c;
+              hopsCount++;
+            }
+          }
+        }
+      }
     }
     return earliest;
   }

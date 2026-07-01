@@ -8082,4 +8082,74 @@ public class WorkflowEngineTest {
       'Lineage must be returned successfully'
     );
   }
+
+  @isTest
+  static void testCausationIdInheritedOnContinueAsNewReusedKeyTimeBoundLongChain() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Create original parent
+    Id originalParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKeyReusedLong',
+      null
+    );
+
+    // Make original parent complete to release the key
+    Workflow_Instance__c origParent = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :originalParentId
+    ];
+    origParent.Status__c = 'Completed';
+    update origParent;
+    origParent.Terminal_At__c = DateTime.now().addDays(-2);
+    update origParent;
+
+    // 2. Create a chain of 8 continue-as-new instances caused by 'ParentKeyReusedLong'
+    List<Workflow_Instance__c> chain = new List<Workflow_Instance__c>();
+    Id prevId = null;
+    for (Integer i = 0; i < 8; i++) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+        Correlation_Key__c = 'ChainDaemonKey-' + i,
+        Causation_Id__c = 'ParentKeyReusedLong',
+        Previous_Instance__c = prevId
+      );
+      insert inst;
+      prevId = inst.Id;
+      chain.add(inst);
+    }
+
+    // 3. Create a NEW parent run with the same key AFTER the child was created
+    Id newerParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKeyReusedLong',
+      null
+    );
+
+    // Explicitly set CreatedDates to order them:
+    // originalParent (10 mins ago) -> first run (5 mins ago) -> newParent (now) -> last run (now + 1 min)
+    Test.setCreatedDate(originalParentId, DateTime.now().addMinutes(-10));
+    Test.setCreatedDate(chain[0].Id, DateTime.now().addMinutes(-5));
+    Test.setCreatedDate(newerParentId, DateTime.now());
+    Test.setCreatedDate(chain[7].Id, DateTime.now().addMinutes(1));
+
+    // Get causation lineage on the last run of the chain.
+    // Because we bulk-query 5 levels at a time, we will successfully walk back all 8 levels to the first run (5 mins ago),
+    // and correctly resolve to originalParentId (10 mins ago) instead of newerParentId (now).
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      chain[7].Id
+    );
+    System.assertEquals(
+      2,
+      lineage.size(),
+      'Lineage walk must resolve to the original parent'
+    );
+    System.assertEquals(chain[7].Id, lineage[0].instanceId);
+    System.assertEquals(
+      originalParentId,
+      lineage[1].instanceId,
+      'Must resolve to original parent and not newer parent with reused key'
+    );
+  }
 }
