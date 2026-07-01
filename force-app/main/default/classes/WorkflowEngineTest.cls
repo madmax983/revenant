@@ -7755,4 +7755,55 @@ public class WorkflowEngineTest {
       'Terminal lineage entries must carry rehydrated output'
     );
   }
+
+  @isTest
+  static void testCausationIdReusedKeySelfExclusion() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Create original parent
+    Id originalParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ReusedKeySame',
+      null
+    );
+
+    // Make the original parent complete first to release the Active_Correlation_Key__c
+    Workflow_Instance__c origParent = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :originalParentId
+    ];
+    origParent.Status__c = 'Completed';
+    update origParent;
+    origParent.Terminal_At__c = DateTime.now().addDays(-2);
+    update origParent;
+
+    // 2. Start a downstream/child workflow with the SAME correlation key, caused by the parent key
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ReusedKeySame',
+      null
+    );
+    childReq.causationId = 'ReusedKeySame';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Set CreatedDates so child is newer
+    Test.setCreatedDate(originalParentId, DateTime.now().addMinutes(-10));
+    Test.setCreatedDate(childId, DateTime.now());
+
+    // Get causation lineage on Child. It should NOT resolve to itself, but correctly walk up to originalParentId.
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size(), 'Must walk up to parent');
+    System.assertEquals(childId, lineage[0].instanceId);
+    System.assertEquals(
+      originalParentId,
+      lineage[1].instanceId,
+      'Must resolve to the parent and not self'
+    );
+  }
 }

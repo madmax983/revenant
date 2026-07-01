@@ -949,6 +949,7 @@ public inherited sharing class WorkflowEngine {
             (Correlation_Key__c = :cause
             OR Active_Correlation_Key__c = :cause)
             AND CreatedDate <= :inst.CreatedDate
+            AND Id NOT IN :visitedIds
           WITH SYSTEM_MODE
           ORDER BY CreatedDate DESC
           LIMIT 1
