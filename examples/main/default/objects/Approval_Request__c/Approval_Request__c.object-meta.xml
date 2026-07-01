@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <deploymentStatus>Deployed</deploymentStatus>
+    <description>Reference demo object for issue #125: bridges a native Salesforce Approval Process to a durable Revenant workflow (see NativeApprovalWorkflowExample.cls). Approval_Status__c is the field the native Approval Process's final approval/rejection actions update; Revenant_Approval_Decision_To_Signal_Example reacts to that change and signals the suspended workflow. Correlation_Key__c is the workflow correlation key, author-defined and optional (falls back to the record Id when blank).</description>
+    <label>Approval Request</label>
+    <pluralLabel>Approval Requests</pluralLabel>
+    <nameField>
+        <label>Approval Request Name</label>
+        <type>AutoNumber</type>
+        <displayFormat>AR-{0000}</displayFormat>
+    </nameField>
+    <sharingModel>ReadWrite</sharingModel>
+</CustomObject>

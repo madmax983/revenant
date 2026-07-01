@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Approval_Comments__c</fullName>
+    <description>Optional submitter-supplied context, shown read-only on the native Approval Process's approval page. Not the approver's decision comment -- Salesforce stores that on the standard approval history (ProcessInstanceStep.Comments), not back onto this field, so Revenant_Approval_Decision_To_Signal_Example reads the comment from there rather than from here.</description>
+    <length>4000</length>
+    <label>Approval Comments</label>
+    <type>LongTextArea</type>
+    <visibleLines>3</visibleLines>
+</CustomField>
