@@ -45,6 +45,10 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
 
     List<WorkflowEngine.SignalOrStartRequest> engineRequests = new List<WorkflowEngine.SignalOrStartRequest>();
     for (SignalOrStartRequest req : requests) {
+      if (req == null) {
+        engineRequests.add(null);
+        continue;
+      }
       Object input = null;
       if (String.isNotBlank(req.inputJson)) {
         try {

@@ -25,6 +25,9 @@ public inherited sharing class WorkflowSignalInvocableAction {
 
     List<WorkflowEngine.SignalRequest> engineRequests = new List<WorkflowEngine.SignalRequest>();
     for (SignalRequest req : requests) {
+      if (req == null) {
+        continue;
+      }
       WorkflowEngine.SignalRequest engineReq = new WorkflowEngine.SignalRequest(
         req.targetKey,
         req.signalName,

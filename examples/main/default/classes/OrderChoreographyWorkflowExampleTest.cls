@@ -49,15 +49,20 @@ private class OrderChoreographyWorkflowExampleTest {
     );
 
     // ...and started exactly one workflow B instance (not three).
-    Integer refundInstances = [
-      SELECT COUNT()
+    List<Workflow_Instance__c> refundInstances = [
+      SELECT Id, Causation_Id__c
       FROM Workflow_Instance__c
       WHERE Workflow_Name__c = 'OrderChoreographyWorkflowExample.RefundWorkflow'
     ];
     System.assertEquals(
       1,
-      refundInstances,
+      refundInstances.size(),
       'Workflow B must be started exactly once (no double-start from retries)'
+    );
+    System.assertEquals(
+      'order-shipped-choreo-1',
+      refundInstances[0].Causation_Id__c,
+      'Downstream B must be causally linked to upstream A via trace id'
     );
   }
 }
