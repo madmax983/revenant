@@ -223,6 +223,35 @@ The pattern is identical whether the preceding step was an LLM call or a human t
 
 ---
 
+## Pattern 4 — ReAct tool-calling loop
+
+[ReAct](https://arxiv.org/abs/2210.03629) interleaves **Thought** (reasoning), **Action** (a tool call), and **Observation** (the tool's result) until the model has enough information to answer. The natural way to loop is a plain `while` inside one step — but that step makes one LLM callout per iteration, and callouts are capped at 100 per transaction (see Governor limits below). Model the loop as a **cycle in the DAG** instead: `ReasonStep` (Thought + choose an Action) routes to `ActStep` (run the tool, record the Observation), which always routes back to `ReasonStep` — until the model emits `Finish[answer]`, which routes to a terminal step.
+
+```java
+public String getNextStep(String currentStep, StepResult result) {
+    if (currentStep == 'ReActLoopWorkflowExample.ReasonStep') {
+        Map<String,Object> out = (Map<String,Object>) JSON.deserializeUntyped(result.outputJson);
+        Boolean done = (Boolean) out.get('done');
+        return done ? 'ReActLoopWorkflowExample.FinishStep' : 'ReActLoopWorkflowExample.ActStep';
+    }
+    if (currentStep == 'ReActLoopWorkflowExample.ActStep') {
+        return 'ReActLoopWorkflowExample.ReasonStep';  // loop back
+    }
+    return null; // FinishStep is terminal
+}
+```
+
+Each iteration threads a growing scratchpad (the Thought/Action/Observation transcript) and an `iteration` counter forward as ordinary step output/input — the same threading technique Pattern 2 uses for `sessionId`. Why the workflow-level loop beats an in-step `while`:
+
+- **Fresh governor-limit budget per iteration.** Each hop is its own Queueable transaction, so a 10-round ReAct trace never risks the 100-callout ceiling the way one step making 10 sequential LLM calls would.
+- **No lost reasoning on a transient failure.** If the LLM call or the tool throws mid-loop, only that one step retries with backoff — the scratchpad accumulated so far is durable and is never replayed or discarded.
+- **A complete, inspectable audit trail.** Every Thought, Action, and Observation is a `Workflow_Step_Execution__c` record, not just the final answer.
+- **A loop guard is mandatory.** Cap iterations (a `MAX_ITERATIONS` check in `ReasonStep`) and route straight to the terminal step once hit, so a model that never emits `Finish[...]` still ends gracefully instead of looping until the watchdog or DML limits step in.
+
+Full example: `examples/main/default/classes/ReActLoopWorkflowExample.cls` — two tools (`Search[query]`, `Calculator[expr]`) plus `Finish[answer]`, with a static-mock harness (`mockLlmResponses`) for driving the loop deterministically in tests.
+
+---
+
 ## Testing AI steps
 
 ### `aiplatform.ModelsAPI` — static mock field
@@ -378,6 +407,7 @@ For `Invocable.Action` / `generateAiAgentResponse`, the target agent must be cre
 | Route a workflow based on AI output | `aiplatform.ModelsAPI` + `getNextStep()` branching |
 | Multi-turn conversation with memory between turns | `Invocable.Action` + sessionId threading |
 | Leverage an agent with pre-built topics and CRM actions | `Invocable.Action` |
+| Let the model reason, call tools, and iterate (ReAct) | `aiplatform.ModelsAPI` + a `ReasonStep`/`ActStep` DAG cycle |
 | Human sign-off on an AI recommendation | `StepResult.waitForApproval()` |
 | Retry failed AI calls automatically | Both — engine retries the step on any unhandled exception |
 | Audit trail of every AI decision | Both — step execution records capture all output |
