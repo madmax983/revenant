@@ -468,4 +468,60 @@ public class WorkflowTestHarness {
     }
     return r;
   }
+
+  public WorkflowTestHarness failStep(String stepName, String message) {
+    if (String.isBlank(stepName)) {
+      throw new HarnessException('stepName is required.');
+    }
+    if (WorkflowEngine.injectedFaults == null) {
+      WorkflowEngine.injectedFaults = new Map<String, WorkflowEngine.FaultConfig>();
+    }
+    String key = rootInstanceId + ':' + stepName.toLowerCase();
+    WorkflowEngine.injectedFaults.put(key, new WorkflowEngine.FaultConfig(message, null));
+    return this;
+  }
+
+  public WorkflowTestHarness failStepOnce(String stepName, String message) {
+    if (String.isBlank(stepName)) {
+      throw new HarnessException('stepName is required.');
+    }
+    if (WorkflowEngine.injectedFaults == null) {
+      WorkflowEngine.injectedFaults = new Map<String, WorkflowEngine.FaultConfig>();
+    }
+    String key = rootInstanceId + ':' + stepName.toLowerCase();
+    WorkflowEngine.injectedFaults.put(key, new WorkflowEngine.FaultConfig(message, 1));
+    return this;
+  }
+
+  public WorkflowTestHarness failStep(String stepName, String message, Integer failCount) {
+    if (String.isBlank(stepName)) {
+      throw new HarnessException('stepName is required.');
+    }
+    if (failCount == null || failCount <= 0) {
+      throw new HarnessException('failCount must be greater than 0.');
+    }
+    if (WorkflowEngine.injectedFaults == null) {
+      WorkflowEngine.injectedFaults = new Map<String, WorkflowEngine.FaultConfig>();
+    }
+    String key = rootInstanceId + ':' + stepName.toLowerCase();
+    WorkflowEngine.injectedFaults.put(key, new WorkflowEngine.FaultConfig(message, failCount));
+    return this;
+  }
+
+  public WorkflowTestHarness clearFaults() {
+    if (WorkflowEngine.injectedFaults != null) {
+      String prefix = rootInstanceId + ':';
+      List<String> keysToRemove = new List<String>();
+      for (String key : WorkflowEngine.injectedFaults.keySet()) {
+        if (key.startsWith(prefix)) {
+          keysToRemove.add(key);
+        }
+      }
+      for (String key : keysToRemove) {
+        WorkflowEngine.injectedFaults.remove(key);
+      }
+    }
+    return this;
+  }
 }
+

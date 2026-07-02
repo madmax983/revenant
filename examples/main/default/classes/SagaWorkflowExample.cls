@@ -84,8 +84,11 @@ public inherited sharing class SagaWorkflowExample {
 
   public class SendWelcomeEmailStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      // Intentionally fail to trigger Saga compensations
-      throw new WorkflowEngine.WorkflowException('SMTP Server Down');
+      ctx.log(StepContext.Level.INFO, 'Sending welcome email...');
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{ 'status' => 'Sent' }
+      );
     }
   }
 }

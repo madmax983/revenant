@@ -152,6 +152,38 @@ public inherited sharing class WorkflowEngine {
   public class WorkflowException extends Exception {
   }
 
+  @TestVisible
+  private class FaultConfig {
+    public String message;
+    public Integer remainingFailures;
+    public FaultConfig(String message, Integer remainingFailures) {
+      this.message = message;
+      this.remainingFailures = remainingFailures;
+    }
+  }
+
+  @TestVisible
+  private static Map<String, FaultConfig> injectedFaults = new Map<String, FaultConfig>();
+
+  private static void checkAndInjectFault(Id instanceId, String stepName) {
+    if (Test.isRunningTest() && injectedFaults != null && String.isNotBlank(stepName)) {
+      String key = (instanceId != null ? String.valueOf(instanceId) : '') + ':' + stepName.toLowerCase();
+      if (injectedFaults.containsKey(key)) {
+        FaultConfig config = injectedFaults.get(key);
+        if (config != null) {
+          if (config.remainingFailures == null) {
+            throw new WorkflowException(config.message);
+          } else if (config.remainingFailures > 0) {
+            config.remainingFailures--;
+            throw new WorkflowException(config.message);
+          }
+        }
+      }
+    }
+  }
+
+
+
   /**
    * Outcome of a get-or-start admission decision. Distinguishes a brand-new
    * instance from an existing instance returned for a deduplicated redelivery.
@@ -4005,6 +4037,9 @@ public inherited sharing class WorkflowEngine {
 
     StepResult result;
     try {
+      if (Test.isRunningTest() && injectedFaults != null) {
+        checkAndInjectFault(instanceId, activeStepName);
+      }
       result = stepInstance.execute(context);
     } finally {
       if (timeoutSeconds != null && timeoutSeconds > 0) {
@@ -8600,6 +8635,14 @@ public inherited sharing class WorkflowEngine {
 
     StepResult result;
     try {
+      if (Test.isRunningTest() && injectedFaults != null) {
+        String compKey = instance.Id + ':' + compensationStepLogName.toLowerCase();
+        if (injectedFaults.containsKey(compKey)) {
+          checkAndInjectFault(instance.Id, compensationStepLogName);
+        } else {
+          checkAndInjectFault(instance.Id, activeStepName);
+        }
+      }
       result = compensatableStepInstance.compensate(context);
     } catch (Exception ex) {
       persistStepBreadcrumbs(instance, stepExec, null, context);
