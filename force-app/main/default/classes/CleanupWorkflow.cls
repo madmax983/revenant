@@ -213,7 +213,7 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
               for (ContentDocumentLink cdl : cdls) {
                 Id linkedId = cdl.LinkedEntityId;
                 String sObjType = linkedId.getSObjectType()
-                  .getDescribe()
+                  .getDescribe(SObjectDescribeOptions.DEFERRED)
                   .getName();
                 // Ignore the default User link created on file upload
                 if (sObjType == 'User') {

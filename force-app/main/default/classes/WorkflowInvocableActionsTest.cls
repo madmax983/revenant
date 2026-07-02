@@ -213,4 +213,57 @@ public class WorkflowInvocableActionsTest {
     System.assertEquals('tier', attrs[1].Key__c);
     System.assertEquals('enterprise', attrs[1].Value__c);
   }
+
+  @isTest
+  static void testStartWorkflowInvocableWithCausationId() {
+    WorkflowStartInvocableAction.StartRequest req = new WorkflowStartInvocableAction.StartRequest();
+    req.workflowName = 'WorkflowEngineTest.HappyWorkflow';
+    req.correlationKey = 'InvocableCausationKey';
+    req.causationId = 'invocable-cause-789';
+
+    Test.startTest();
+    List<WorkflowStartInvocableAction.StartResult> results = WorkflowStartInvocableAction.startWorkflow(
+      new List<WorkflowStartInvocableAction.StartRequest>{ req }
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, results.size());
+    Id instanceId = results[0].workflowInstanceId;
+    System.assertNotEquals(null, instanceId);
+
+    Workflow_Instance__c inst = [
+      SELECT Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('invocable-cause-789', inst.Causation_Id__c);
+  }
+
+  @isTest
+  static void testInvocableActionsNullSafety() {
+    Test.startTest();
+
+    // Start Action Null Safety
+    List<WorkflowStartInvocableAction.StartResult> startResults = WorkflowStartInvocableAction.startWorkflow(
+      new List<WorkflowStartInvocableAction.StartRequest>{ null }
+    );
+    System.assertEquals(1, startResults.size());
+    System.assertEquals(null, startResults[0].workflowInstanceId);
+
+    // Signal Action Null Safety
+    WorkflowSignalInvocableAction.signalWorkflow(
+      new List<WorkflowSignalInvocableAction.SignalRequest>{ null }
+    );
+
+    // SignalOrStart Action Null Safety
+    List<WorkflowSignalOrStartInvocableAction.SignalOrStartResult> signalOrStartResults = WorkflowSignalOrStartInvocableAction.signalOrStartWorkflow(
+      new List<WorkflowSignalOrStartInvocableAction.SignalOrStartRequest>{
+        null
+      }
+    );
+    System.assertEquals(1, signalOrStartResults.size());
+    System.assertEquals(null, signalOrStartResults[0].workflowInstanceId);
+
+    Test.stopTest();
+  }
 }

@@ -45,13 +45,13 @@ public inherited sharing class OrderChoreographyWorkflowExample {
     List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
     for (Order_Shipped__e evt : events) {
       refundStartCount++;
-      requests.add(
-        new WorkflowEngine.StartRequest(
-          'OrderChoreographyWorkflowExample.RefundWorkflow',
-          'refund-' + evt.Correlation_Key__c,
-          new Map<String, Object>{ 'orderId' => evt.Order_Id__c }
-        )
+      WorkflowEngine.StartRequest req = new WorkflowEngine.StartRequest(
+        'OrderChoreographyWorkflowExample.RefundWorkflow',
+        'refund-' + evt.Correlation_Key__c,
+        new Map<String, Object>{ 'orderId' => evt.Order_Id__c }
       );
+      req.causationId = evt.Trace_Id__c;
+      requests.add(req);
     }
     if (!requests.isEmpty()) {
       WorkflowEngine.start(requests);
@@ -90,17 +90,18 @@ public inherited sharing class OrderChoreographyWorkflowExample {
         ctx.workflowInputJson
       );
       String orderId = (String) input.get('orderId');
-
       // Buffered every execution; published only when this step's COMPLETE
       // transition commits.
       ctx.emit(
         new Order_Shipped__e(
           Order_Id__c = orderId,
-          Correlation_Key__c = orderId
+          Correlation_Key__c = orderId,
+          Trace_Id__c = ctx.workflowInstanceId
         )
       );
 
       Integer retryCount = currentRetryCount(ctx);
+
       Boolean resumedFromYield = String.isNotBlank(ctx.stepStateJson);
 
       if (retryCount == 0 && !resumedFromYield) {

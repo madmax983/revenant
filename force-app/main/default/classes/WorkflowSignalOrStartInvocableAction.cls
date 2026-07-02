@@ -20,6 +20,12 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
 
     @InvocableVariable(label='Idempotency Key')
     public String idempotencyKey;
+
+    @InvocableVariable(
+      label='Causation ID'
+      description='Optional causation or trace identifier linking this instance to the upstream instance/event.'
+    )
+    public String causationId;
   }
 
   public class SignalOrStartResult {
@@ -38,13 +44,19 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
     category='Revenant Workflows'
     description='Idempotently starts a workflow and/or signals it in one transaction'
   )
-  public static List<SignalOrStartResult> signalOrStartWorkflow(List<SignalOrStartRequest> requests) {
+  public static List<SignalOrStartResult> signalOrStartWorkflow(
+    List<SignalOrStartRequest> requests
+  ) {
     if (requests == null || requests.isEmpty()) {
       return new List<SignalOrStartResult>();
     }
 
     List<WorkflowEngine.SignalOrStartRequest> engineRequests = new List<WorkflowEngine.SignalOrStartRequest>();
     for (SignalOrStartRequest req : requests) {
+      if (req == null) {
+        engineRequests.add(null);
+        continue;
+      }
       Object input = null;
       if (String.isNotBlank(req.inputJson)) {
         try {
@@ -84,6 +96,7 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
         attributes
       );
       startReq.inputJson = req.inputJson;
+      startReq.causationId = req.causationId;
 
       WorkflowEngine.SignalOrStartRequest engineReq = new WorkflowEngine.SignalOrStartRequest(
         startReq,

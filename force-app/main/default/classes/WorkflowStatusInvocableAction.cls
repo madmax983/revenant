@@ -95,6 +95,12 @@ public inherited sharing class WorkflowStatusInvocableAction {
     )
     public String progressJson;
 
+    @InvocableVariable(
+      label='Causation ID'
+      description='Causation or trace identifier linking this instance to the upstream instance/event.'
+    )
+    public String causationId;
+
     public StatusResult() {
       this.found = false;
       this.isTerminal = false;
@@ -166,7 +172,8 @@ public inherited sharing class WorkflowStatusInvocableAction {
           Correlation_Key__c,
           Previous_Instance__c,
           CreatedDate,
-          Progress__c
+          Progress__c,
+          Causation_Id__c
         FROM Workflow_Instance__c
         WHERE Id IN :lookupIds OR Correlation_Key__c IN :lookupKeys
         WITH SYSTEM_MODE
@@ -235,7 +242,8 @@ public inherited sharing class WorkflowStatusInvocableAction {
           Error_Message__c,
           Correlation_Key__c,
           Previous_Instance__c,
-          Progress__c
+          Progress__c,
+          Causation_Id__c
         FROM Workflow_Instance__c
         WHERE Previous_Instance__c IN :predecessorIds
         WITH SYSTEM_MODE
@@ -305,6 +313,7 @@ public inherited sharing class WorkflowStatusInvocableAction {
         res.errorMessage = inst.Error_Message__c;
         res.outputJson = rehydrate(inst.Output__c, dataByAttachment);
         res.progressJson = rehydrate(inst.Progress__c, dataByAttachment);
+        res.causationId = WorkflowEngine.cleanCausationId(inst.Causation_Id__c);
       }
       results.add(res);
     }

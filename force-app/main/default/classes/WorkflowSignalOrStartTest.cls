@@ -238,7 +238,14 @@ public class WorkflowSignalOrStartTest {
       'Bulk-New',
       'Input'
     );
-    requests.add(new WorkflowEngine.SignalOrStartRequest(startNew, 'Approve:MySignal', '"PayloadNew"', 'Idemp-Bulk-1'));
+    requests.add(
+      new WorkflowEngine.SignalOrStartRequest(
+        startNew,
+        'Approve:MySignal',
+        '"PayloadNew"',
+        'Idemp-Bulk-1'
+      )
+    );
 
     // Request 2: Existing active instance
     WorkflowEngine.StartRequest startActive = new WorkflowEngine.StartRequest(
@@ -246,14 +253,30 @@ public class WorkflowSignalOrStartTest {
       'Bulk-Active',
       'Input'
     );
-    requests.add(new WorkflowEngine.SignalOrStartRequest(startActive, 'Approve:MySignal', '"PayloadActive"', 'Idemp-Bulk-2'));
+    requests.add(
+      new WorkflowEngine.SignalOrStartRequest(
+        startActive,
+        'Approve:MySignal',
+        '"PayloadActive"',
+        'Idemp-Bulk-2'
+      )
+    );
 
     // Request 3: Duplicate of Request 1 in same batch (in-batch duplicate)
-    requests.add(new WorkflowEngine.SignalOrStartRequest(startNew, 'Approve:MySignal', '"PayloadNew"', 'Idemp-Bulk-1'));
+    requests.add(
+      new WorkflowEngine.SignalOrStartRequest(
+        startNew,
+        'Approve:MySignal',
+        '"PayloadNew"',
+        'Idemp-Bulk-1'
+      )
+    );
 
     WorkflowEngine.disableQueueableInTest = false;
     Test.startTest();
-    List<WorkflowEngine.StartResult> results = WorkflowEngine.signalOrStart(requests);
+    List<WorkflowEngine.StartResult> results = WorkflowEngine.signalOrStart(
+      requests
+    );
 
     System.assertEquals(3, results.size());
 
@@ -316,6 +339,7 @@ public class WorkflowSignalOrStartTest {
     req.signalName = 'Approve:MySignal';
     req.payloadJson = '"SignalInput"';
     req.idempotencyKey = 'Idemp-Invocable';
+    req.causationId = 'ParentCauseId';
 
     Test.startTest();
     List<WorkflowSignalOrStartInvocableAction.SignalOrStartResult> results = WorkflowSignalOrStartInvocableAction.signalOrStartWorkflow(
@@ -326,6 +350,13 @@ public class WorkflowSignalOrStartTest {
     System.assertEquals(1, results.size());
     System.assertNotEquals(null, results[0].workflowInstanceId);
     System.assertEquals(true, results[0].isNew);
+
+    Workflow_Instance__c inst = [
+      SELECT Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :results[0].workflowInstanceId
+    ];
+    System.assertEquals('ParentCauseId', inst.Causation_Id__c);
 
     // Verify signal is recorded
     List<Workflow_Signal__c> signals = [
@@ -437,7 +468,9 @@ public class WorkflowSignalOrStartTest {
     List<Workflow_Signal__c> signals = [
       SELECT Status__c, Signal_Name__c
       FROM Workflow_Signal__c
-      WHERE Workflow_Instance__c = :instanceId AND Signal_Name__c = 'Approve:MySignal'
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Signal_Name__c = 'Approve:MySignal'
     ];
     System.assertEquals(0, signals.size());
   }
@@ -482,7 +515,9 @@ public class WorkflowSignalOrStartTest {
     List<Workflow_Signal__c> signals = [
       SELECT Status__c, Signal_Name__c
       FROM Workflow_Signal__c
-      WHERE Workflow_Instance__c = :instanceId AND Signal_Name__c = 'Approve:MySignal'
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Signal_Name__c = 'Approve:MySignal'
     ];
     System.assertEquals(0, signals.size());
   }
@@ -528,7 +563,7 @@ public class WorkflowSignalOrStartTest {
       Correlation_Key__c = 'ChildKey2',
       Input__c = '"Child2Input"'
     );
-    insert new List<Workflow_Instance__c>{child1, child2};
+    insert new List<Workflow_Instance__c>{ child1, child2 };
 
     WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
       'WorkflowSignalOrStartTest.TestAggregationWorkflow',
@@ -546,7 +581,11 @@ public class WorkflowSignalOrStartTest {
     );
 
     // Verify parent is still Suspended (gated)
-    Workflow_Instance__c parentRefreshed1 = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :parentId];
+    Workflow_Instance__c parentRefreshed1 = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
     System.assertEquals('Suspended', parentRefreshed1.Status__c);
 
     // 5. Force Child 1 to be Completed (terminal)
@@ -563,7 +602,11 @@ public class WorkflowSignalOrStartTest {
     Test.stopTest();
 
     // Verify parent is now Running (woken)
-    Workflow_Instance__c parentRefreshed2 = [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :parentId];
+    Workflow_Instance__c parentRefreshed2 = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
     System.assertEquals('Running', parentRefreshed2.Status__c);
   }
 }

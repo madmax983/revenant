@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Trace_Id__c</fullName>
+    <description>Custom trace identifier passed from the upstream workflow shipment step to downstream subscribers.</description>
+    <externalId>false</externalId>
+    <label>Trace ID</label>
+    <length>255</length>
+    <required>false</required>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>

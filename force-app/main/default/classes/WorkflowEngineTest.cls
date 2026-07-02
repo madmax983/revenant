@@ -877,13 +877,32 @@ public class WorkflowEngineTest {
     System.assertEquals('SubKey', childInfo.get('childCorrelationKey'));
 
     Workflow_Instance__c childInst = [
-      SELECT Id, Status__c, Parent_Instance__c, Correlation_Key__c
+      SELECT
+        Id,
+        Status__c,
+        Parent_Instance__c,
+        Correlation_Key__c,
+        Causation_Id__c
       FROM Workflow_Instance__c
       WHERE Parent_Instance__c = :parentId
       LIMIT 1
     ];
     System.assertEquals('SubKey', childInst.Correlation_Key__c);
     System.assertEquals('Pending', childInst.Status__c);
+    System.assertEquals(
+      parentId,
+      childInst.Causation_Id__c,
+      'Child must have parent Id as Causation_Id__c'
+    );
+
+    WorkflowEngine.WorkflowStatus status = WorkflowEngine.getStatus(
+      childInst.Id
+    );
+    System.assertEquals(
+      parentId,
+      status.causationId,
+      'WorkflowStatus must return parent Id as causationId'
+    );
 
     // Execute child workflow synchronously
     new WorkflowOrchestrator(childInst.Id).execute(null); // ChildStep completes, triggers child completion event
@@ -6255,7 +6274,9 @@ public class WorkflowEngineTest {
 
   public class SkipTestStep3 implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      Map<String, Object> outputMap = (Map<String, Object>) JSON.deserializeUntyped(ctx.previousStepOutput);
+      Map<String, Object> outputMap = (Map<String, Object>) JSON.deserializeUntyped(
+        ctx.previousStepOutput
+      );
       String val = (String) outputMap.get('overrideVal');
       return StepResult.complete(null, 'StepThreeReceived_' + val);
     }
@@ -6310,9 +6331,13 @@ public class WorkflowEngineTest {
 
   public class SkipParallelJoinStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      Map<String, Object> outputs = (Map<String, Object>) JSON.deserializeUntyped(ctx.inputJson);
+      Map<String, Object> outputs = (Map<String, Object>) JSON.deserializeUntyped(
+        ctx.inputJson
+      );
       String outA = (String) outputs.get('WorkflowEngineTest.SkipParallelA');
-      Map<String, Object> outBMap = (Map<String, Object>) outputs.get('WorkflowEngineTest.SkipParallelB');
+      Map<String, Object> outBMap = (Map<String, Object>) outputs.get(
+        'WorkflowEngineTest.SkipParallelB'
+      );
       String valB = (String) outBMap.get('val');
       return StepResult.complete(null, 'Join_' + outA + '_' + valB);
     }
@@ -6336,7 +6361,10 @@ public class WorkflowEngineTest {
       WHERE Id = :instanceId
     ];
     System.assertEquals('Running', inst1.Status__c);
-    System.assertEquals('WorkflowEngineTest.SkipTestStep2', inst1.Current_Step__c);
+    System.assertEquals(
+      'WorkflowEngineTest.SkipTestStep2',
+      inst1.Current_Step__c
+    );
 
     // 2. Run step 2 (SkipTestStep2) -> throws exception, transitions instance to Failed
     new WorkflowOrchestrator(instanceId).execute(null);
@@ -6346,33 +6374,50 @@ public class WorkflowEngineTest {
       WHERE Id = :instanceId
     ];
     System.assertEquals('Failed', inst2.Status__c);
-    System.assertEquals('WorkflowEngineTest.SkipTestStep2', inst2.Current_Step__c);
+    System.assertEquals(
+      'WorkflowEngineTest.SkipTestStep2',
+      inst2.Current_Step__c
+    );
 
     // 3. Skip Step 2 by supplying JSON output output
     Test.startTest();
-    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipTestStep2', '{"overrideVal": "skippedOutput"}');
+    WorkflowEngine.resumePastStep(
+      instanceId,
+      'WorkflowEngineTest.SkipTestStep2',
+      '{"overrideVal": "skippedOutput"}'
+    );
     Test.stopTest();
 
     // 4. Verify step 2 execution is recorded as OperatorSkipped
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Status__c, Output__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipTestStep2'
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.SkipTestStep2'
       ORDER BY CreatedDate DESC, Id DESC
     ];
     // There should be 2 execs: the failed one and the OperatorSkipped one
     System.assertEquals(2, stepExecs.size());
     System.assertEquals('OperatorSkipped', stepExecs[0].Status__c);
-    System.assertEquals('{"overrideVal": "skippedOutput"}', stepExecs[0].Output__c);
+    System.assertEquals(
+      '{"overrideVal": "skippedOutput"}',
+      stepExecs[0].Output__c
+    );
 
     // Verify operator intervention log was recorded
     List<Workflow_Log__c> logs = [
       SELECT Log_Type__c, Message__c
       FROM Workflow_Log__c
-      WHERE Workflow_Instance__c = :instanceId AND Log_Type__c = 'OperatorIntervention'
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Log_Type__c = 'OperatorIntervention'
     ];
     System.assertEquals(1, logs.size());
-    System.assert(logs[0].Message__c.contains('skipped step WorkflowEngineTest.SkipTestStep2'));
+    System.assert(
+      logs[0]
+        .Message__c.contains('skipped step WorkflowEngineTest.SkipTestStep2')
+    );
 
     // 5. Run next step execution (should resume from SkipTestStep3 because WorkflowEngine.resumePastStep enqueued it)
     Workflow_Instance__c finalInst = [
@@ -6381,12 +6426,23 @@ public class WorkflowEngineTest {
       WHERE Id = :instanceId
     ];
     System.assertEquals('Completed', finalInst.Status__c);
-    System.assertEquals('"StepThreeReceived_skippedOutput"', finalInst.Output__c);
+    System.assertEquals(
+      '"StepThreeReceived_skippedOutput"',
+      finalInst.Output__c
+    );
 
     // Check that the skipped step was NOT added to the compensation stack
-    Boolean isStackEmpty = String.isBlank(finalInst.Compensation_Stack__c) ||
-      ((List<String>) JSON.deserialize(finalInst.Compensation_Stack__c, List<String>.class)).isEmpty();
-    System.assert(isStackEmpty, 'Compensation stack should be empty because SkipTestStep2 was skipped');
+    Boolean isStackEmpty =
+      String.isBlank(finalInst.Compensation_Stack__c) ||
+      ((List<String>) JSON.deserialize(
+          finalInst.Compensation_Stack__c,
+          List<String>.class
+        ))
+        .isEmpty();
+    System.assert(
+      isStackEmpty,
+      'Compensation stack should be empty because SkipTestStep2 was skipped'
+    );
   }
 
   @isTest
@@ -6407,14 +6463,20 @@ public class WorkflowEngineTest {
       WHERE Id = :instanceId
     ];
     System.assertEquals('Running', inst1.Status__c);
-    System.assert(inst1.Current_Step__c.contains('WorkflowEngineTest.SkipParallelA'));
-    System.assert(inst1.Current_Step__c.contains('WorkflowEngineTest.SkipParallelB'));
+    System.assert(
+      inst1.Current_Step__c.contains('WorkflowEngineTest.SkipParallelA')
+    );
+    System.assert(
+      inst1.Current_Step__c.contains('WorkflowEngineTest.SkipParallelB')
+    );
 
     // 2. Run ParallelA -> completes successfully
-    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelA').execute(null);
-    
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelA')
+      .execute(null);
+
     // 3. Run ParallelB -> fails and fails the workflow instance
-    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB')
+      .execute(null);
 
     Workflow_Instance__c inst2 = [
       SELECT Status__c, Current_Step__c
@@ -6425,7 +6487,11 @@ public class WorkflowEngineTest {
 
     // 4. Resume past ParallelB
     Test.startTest();
-    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+    WorkflowEngine.resumePastStep(
+      instanceId,
+      'WorkflowEngineTest.SkipParallelB',
+      '{"val": "skippedParallelB"}'
+    );
     Test.stopTest();
 
     // 5. Verify workflow finishes successfully after join step runs
@@ -6455,7 +6521,9 @@ public class WorkflowEngineTest {
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Id, Status__c, Step_Name__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
     ];
     System.assertEquals(1, stepExecs.size());
     stepExecs[0].Status__c = 'Pending';
@@ -6464,7 +6532,8 @@ public class WorkflowEngineTest {
     update stepExecs[0];
 
     // 3. Run ParallelB -> fails and fails the workflow instance
-    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB')
+      .execute(null);
 
     Workflow_Instance__c inst2 = [
       SELECT Status__c, Current_Step__c
@@ -6474,11 +6543,19 @@ public class WorkflowEngineTest {
     System.assertEquals('Failed', inst2.Status__c);
 
     // Count existing queueable jobs
-    Integer jobsBefore = [SELECT Count() FROM AsyncApexJob WHERE JobType = 'Queueable'];
+    Integer jobsBefore = [
+      SELECT COUNT()
+      FROM AsyncApexJob
+      WHERE JobType = 'Queueable'
+    ];
 
     // 4. Resume past ParallelB
     Test.startTest();
-    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+    WorkflowEngine.resumePastStep(
+      instanceId,
+      'WorkflowEngineTest.SkipParallelB',
+      '{"val": "skippedParallelB"}'
+    );
     Test.stopTest();
 
     // Verify that SkipParallelA's execution remains Pending and was NOT reset (retry count is still 3, not reset to 0)
@@ -6496,11 +6573,23 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
-    System.assertEquals('Suspended', instAfter.Status__c, 'Parent instance should stay Suspended when a sibling branch is parked');
+    System.assertEquals(
+      'Suspended',
+      instAfter.Status__c,
+      'Parent instance should stay Suspended when a sibling branch is parked'
+    );
 
     // Verify that NO new job was enqueued
-    Integer jobsAfter = [SELECT Count() FROM AsyncApexJob WHERE JobType = 'Queueable'];
-    System.assertEquals(jobsBefore, jobsAfter, 'No new queueable jobs should have been enqueued for the sleeping branch');
+    Integer jobsAfter = [
+      SELECT COUNT()
+      FROM AsyncApexJob
+      WHERE JobType = 'Queueable'
+    ];
+    System.assertEquals(
+      jobsBefore,
+      jobsAfter,
+      'No new queueable jobs should have been enqueued for the sleeping branch'
+    );
   }
 
   @isTest
@@ -6517,10 +6606,15 @@ public class WorkflowEngineTest {
     new WorkflowOrchestrator(instanceId).execute(null);
 
     // 2. Run ParallelB -> fails and fails the workflow instance
-    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB')
+      .execute(null);
 
     // 3. Resume past ParallelB (sets it to OperatorSkipped)
-    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+    WorkflowEngine.resumePastStep(
+      instanceId,
+      'WorkflowEngineTest.SkipParallelB',
+      '{"val": "skippedParallelB"}'
+    );
 
     // 4. Try executing runStep directly on the skipped step ParallelB (simulating a signal or duplicate orchestrator run)
     WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.SkipParallelB');
@@ -6529,10 +6623,16 @@ public class WorkflowEngineTest {
     List<Workflow_Step_Execution__c> stepsAfter = [
       SELECT Status__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelB'
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.SkipParallelB'
       ORDER BY CreatedDate DESC, Id DESC
     ];
-    System.assertEquals('OperatorSkipped', stepsAfter[0].Status__c, 'Bypassed step should not be re-run');
+    System.assertEquals(
+      'OperatorSkipped',
+      stepsAfter[0].Status__c,
+      'Bypassed step should not be re-run'
+    );
   }
 
   @isTest
@@ -6556,18 +6656,27 @@ public class WorkflowEngineTest {
       WHERE Id = :instanceId
     ];
     System.assertEquals('Failed', inst2.Status__c);
-    System.assertEquals('WorkflowEngineTest.SkipTestStep2', inst2.Current_Step__c);
+    System.assertEquals(
+      'WorkflowEngineTest.SkipTestStep2',
+      inst2.Current_Step__c
+    );
 
     // 3. Skip Step 2 by supplying JSON output with lowercase casing
     Test.startTest();
-    WorkflowEngine.resumePastStep(instanceId, 'workflowenginetest.skipteststep2', '{"overrideVal": "skippedOutput"}');
+    WorkflowEngine.resumePastStep(
+      instanceId,
+      'workflowenginetest.skipteststep2',
+      '{"overrideVal": "skippedOutput"}'
+    );
     Test.stopTest();
 
     // 4. Verify step 2 execution is recorded as OperatorSkipped (using exact casing)
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Status__c, Output__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipTestStep2'
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.SkipTestStep2'
       ORDER BY CreatedDate DESC, Id DESC
     ];
     System.assertEquals(2, stepExecs.size());
@@ -6599,17 +6708,21 @@ public class WorkflowEngineTest {
     List<Workflow_Step_Execution__c> stepExecsA = [
       SELECT Id, Status__c, Step_Name__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
     ];
     stepExecsA[0].Status__c = 'Pending';
     stepExecsA[0].CPU_Time_Ms__c = 1;
     update stepExecsA[0];
 
     // 3. Run ParallelB -> fails and fails the workflow instance
-    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB')
+      .execute(null);
 
     // 4. Run ParallelC -> fails as well
-    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelC').execute(null);
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelC')
+      .execute(null);
 
     // Verify parent is Failed
     Workflow_Instance__c instFailed = [
@@ -6620,11 +6733,16 @@ public class WorkflowEngineTest {
     System.assertEquals('Failed', instFailed.Status__c);
 
     // 5. Resume past ParallelB
-    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+    WorkflowEngine.resumePastStep(
+      instanceId,
+      'WorkflowEngineTest.SkipParallelB',
+      '{"val": "skippedParallelB"}'
+    );
 
     // 6. Sibling C was reset and is now Pending. We set failParallelC to false and run it manually.
     WorkflowEngineTest.failParallelC = false;
-    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelC').execute(null);
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelC')
+      .execute(null);
 
     // 7. Verify that parent is set back to Suspended because A is still parked
     Workflow_Instance__c instFinal = [
@@ -6632,7 +6750,11 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
-    System.assertEquals('Suspended', instFinal.Status__c, 'Parent should be Suspended since A is still parked');
+    System.assertEquals(
+      'Suspended',
+      instFinal.Status__c,
+      'Parent should be Suspended since A is still parked'
+    );
   }
 
   @isTest
@@ -6650,7 +6772,8 @@ public class WorkflowEngineTest {
 
     // Sibling A is left as Pending (undriven, CPU_Time_Ms__c is null).
     // Sibling B fails and fails the workflow instance.
-    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB')
+      .execute(null);
 
     // Verify parent is Failed
     Workflow_Instance__c instFailed = [
@@ -6668,12 +6791,18 @@ public class WorkflowEngineTest {
 
     // Both A and C will be reset/enqueued in memory or as no-ops since disableQueueableInTest is true.
     // We run them manually to drive their execution synchronously.
-    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+    WorkflowEngine.resumePastStep(
+      instanceId,
+      'WorkflowEngineTest.SkipParallelB',
+      '{"val": "skippedParallelB"}'
+    );
 
     // Run branch A and branch C manually. Wrap C in startTest/stopTest to execute the enqueued Join step.
-    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelA').execute(null);
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelA')
+      .execute(null);
     Test.startTest();
-    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelC').execute(null);
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelC')
+      .execute(null);
     Test.stopTest();
 
     // Verify parent is Completed (since all A, B, C completed/skipped)
@@ -6721,7 +6850,11 @@ public class WorkflowEngineTest {
 
     // 2. Skip the terminal step. This will transition status to 'Completed'.
     Test.startTest();
-    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.TerminalSkipStep', '{"overrideVal": "skippedOutput"}');
+    WorkflowEngine.resumePastStep(
+      instanceId,
+      'WorkflowEngineTest.TerminalSkipStep',
+      '{"overrideVal": "skippedOutput"}'
+    );
     Test.stopTest();
 
     // 3. Verify that the parent instance transitioned to Completed and Terminal_At__c was restamped with the new time
@@ -6732,7 +6865,10 @@ public class WorkflowEngineTest {
     ];
     System.assertEquals('Completed', instFinal.Status__c);
     System.assertNotEquals(null, instFinal.Terminal_At__c);
-    System.assert(instFinal.Terminal_At__c > tenMinutesAgo, 'Terminal_At__c should have been restamped to a fresh value');
+    System.assert(
+      instFinal.Terminal_At__c > tenMinutesAgo,
+      'Terminal_At__c should have been restamped to a fresh value'
+    );
   }
 
   @isTest
@@ -6752,7 +6888,9 @@ public class WorkflowEngineTest {
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Id, Status__c, Step_Name__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
     ];
     System.assertEquals(1, stepExecs.size());
     stepExecs[0].Status__c = 'Retrying';
@@ -6761,7 +6899,8 @@ public class WorkflowEngineTest {
     update stepExecs[0];
 
     // 3. Run ParallelB -> fails and fails the workflow instance
-    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB')
+      .execute(null);
 
     Workflow_Instance__c inst2 = [
       SELECT Status__c, Current_Step__c
@@ -6771,11 +6910,19 @@ public class WorkflowEngineTest {
     System.assertEquals('Failed', inst2.Status__c);
 
     // Count existing queueable jobs
-    Integer jobsBefore = [SELECT Count() FROM AsyncApexJob WHERE JobType = 'Queueable'];
+    Integer jobsBefore = [
+      SELECT COUNT()
+      FROM AsyncApexJob
+      WHERE JobType = 'Queueable'
+    ];
 
     // 4. Resume past ParallelB
     Test.startTest();
-    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+    WorkflowEngine.resumePastStep(
+      instanceId,
+      'WorkflowEngineTest.SkipParallelB',
+      '{"val": "skippedParallelB"}'
+    );
     Test.stopTest();
 
     // Verify that SkipParallelA's execution remains Retrying and was NOT reset (retry count is still 1)
@@ -6793,11 +6940,23 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
-    System.assertEquals('Suspended', instAfter.Status__c, 'Parent instance should stay Suspended when a sibling branch is retrying');
+    System.assertEquals(
+      'Suspended',
+      instAfter.Status__c,
+      'Parent instance should stay Suspended when a sibling branch is retrying'
+    );
 
     // Verify that NO new job was enqueued
-    Integer jobsAfter = [SELECT Count() FROM AsyncApexJob WHERE JobType = 'Queueable'];
-    System.assertEquals(jobsBefore, jobsAfter, 'No new queueable jobs should have been enqueued for the retrying branch');
+    Integer jobsAfter = [
+      SELECT COUNT()
+      FROM AsyncApexJob
+      WHERE JobType = 'Queueable'
+    ];
+    System.assertEquals(
+      jobsBefore,
+      jobsAfter,
+      'No new queueable jobs should have been enqueued for the retrying branch'
+    );
   }
 
   @isTest
@@ -6824,10 +6983,17 @@ public class WorkflowEngineTest {
 
     // 3. Try to skip the step
     try {
-      WorkflowEngine.resumePastStep(inst.Id, 'WorkflowEngineTest.LoopExposeStep', '{}');
+      WorkflowEngine.resumePastStep(
+        inst.Id,
+        'WorkflowEngineTest.LoopExposeStep',
+        '{}'
+      );
       System.assert(false, 'Should have thrown a WorkflowException');
     } catch (WorkflowEngine.WorkflowException ex) {
-      System.assertEquals('Skip is not supported for dynamic-next step definitions.', ex.getMessage());
+      System.assertEquals(
+        'Skip is not supported for dynamic-next step definitions.',
+        ex.getMessage()
+      );
     }
   }
 
@@ -6848,21 +7014,32 @@ public class WorkflowEngineTest {
     Workflow_Step_Execution__c sibA = [
       SELECT Id, Timeout_At__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.SkipParallelA'
       LIMIT 1
     ];
-    System.assertNotEquals(null, sibA.Timeout_At__c, 'Sibling A should have an initial timeout set');
-    
+    System.assertNotEquals(
+      null,
+      sibA.Timeout_At__c,
+      'Sibling A should have an initial timeout set'
+    );
+
     // Artificially modify Timeout_At__c to be in the past to simulate delay/stale timeout.
     Datetime pastTime = Datetime.now().addMinutes(-10);
     sibA.Timeout_At__c = pastTime;
     update sibA;
 
     // Fail Sibling B to fail the workflow instance.
-    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB').execute(null);
+    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.SkipParallelB')
+      .execute(null);
 
     // 3. Resume past ParallelB (the skip).
-    WorkflowEngine.resumePastStep(instanceId, 'WorkflowEngineTest.SkipParallelB', '{"val": "skippedParallelB"}');
+    WorkflowEngine.resumePastStep(
+      instanceId,
+      'WorkflowEngineTest.SkipParallelB',
+      '{"val": "skippedParallelB"}'
+    );
 
     // 4. Fetch Sibling A again to verify Timeout_At__c was re-armed (set to a future time, i.e., > pastTime)
     Workflow_Step_Execution__c sibAAfter = [
@@ -6870,8 +7047,16 @@ public class WorkflowEngineTest {
       FROM Workflow_Step_Execution__c
       WHERE Id = :sibA.Id
     ];
-    System.assertNotEquals(null, sibAAfter.Timeout_At__c, 'Sibling A should have its timeout set');
-    System.assert(sibAAfter.Timeout_At__c > pastTime, 'Sibling A timeout should have been re-armed/advanced: ' + sibAAfter.Timeout_At__c);
+    System.assertNotEquals(
+      null,
+      sibAAfter.Timeout_At__c,
+      'Sibling A should have its timeout set'
+    );
+    System.assert(
+      sibAAfter.Timeout_At__c > pastTime,
+      'Sibling A timeout should have been re-armed/advanced: ' +
+      sibAAfter.Timeout_At__c
+    );
   }
 
   public class TerminalSkipWorkflow implements WorkflowDefinition {
@@ -6958,7 +7143,9 @@ public class WorkflowEngineTest {
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Id, Status__c, CPU_Time_Ms__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.CompensatableParallelA'
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.CompensatableParallelA'
       LIMIT 1
     ];
     System.assertEquals(1, stepExecs.size());
@@ -6978,7 +7165,11 @@ public class WorkflowEngineTest {
     // 4. Run Sibling B (which is CompensatableParallelB).
     // Because it is compensatable, it will execute `update as system instance;` during compensation-stack update.
     // At the end, in the `if (!allDone)` block, it should repark the instance as 'Suspended' since Sibling A is parked.
-    new WorkflowOrchestrator(instanceId, 'WorkflowEngineTest.CompensatableParallelB').execute(null);
+    new WorkflowOrchestrator(
+        instanceId,
+        'WorkflowEngineTest.CompensatableParallelB'
+      )
+      .execute(null);
 
     // 5. Verify the parent instance was correctly updated to 'Suspended'
     Workflow_Instance__c instAfter = [
@@ -6986,7 +7177,11 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
-    System.assertEquals('Suspended', instAfter.Status__c, 'Parent instance should be Suspended since Sibling A is parked');
+    System.assertEquals(
+      'Suspended',
+      instAfter.Status__c,
+      'Parent instance should be Suspended since Sibling A is parked'
+    );
   }
 
   public class CompensatableParallelWorkflow implements WorkflowDefinition {
@@ -7002,7 +7197,9 @@ public class WorkflowEngineTest {
       return 'WorkflowEngineTest.CompensatableParallelSplitStep';
     }
     public String getNextStep(String currentStepName, StepResult result) {
-      if (currentStepName == 'WorkflowEngineTest.CompensatableParallelSplitStep') {
+      if (
+        currentStepName == 'WorkflowEngineTest.CompensatableParallelSplitStep'
+      ) {
         return 'WorkflowEngineTest.CompensatableParallelJoinStep';
       }
       return null;
@@ -7060,7 +7257,11 @@ public class WorkflowEngineTest {
 
   public class BreadcrumbStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      ctx.log(StepContext.Level.INFO, 'Step 1 execution started', new Map<String, Object>{'status' => 'init'});
+      ctx.log(
+        StepContext.Level.INFO,
+        'Step 1 execution started',
+        new Map<String, Object>{ 'status' => 'init' }
+      );
       ctx.log(StepContext.Level.WARN, 'Step 1 warning encountered');
       return StepResult.complete(null, 'Success');
     }
@@ -7101,7 +7302,10 @@ public class WorkflowEngineTest {
 
   public class RetryBreadcrumbStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      ctx.log(StepContext.Level.INFO, 'Attempt ' + WorkflowEngineTest.retryBreadcrumbAttempt);
+      ctx.log(
+        StepContext.Level.INFO,
+        'Attempt ' + WorkflowEngineTest.retryBreadcrumbAttempt
+      );
       if (WorkflowEngineTest.retryBreadcrumbAttempt < 3) {
         WorkflowEngineTest.retryBreadcrumbAttempt++;
         RetryPolicy policy = new RetryPolicy(1, (Double) 1.0, 5);
@@ -7122,25 +7326,41 @@ public class WorkflowEngineTest {
     Test.stopTest(); // runs BreadcrumbStep synchronously
 
     List<Workflow_Log__c> logs = [
-      SELECT Log_Type__c, Level__c, Message__c, Correlation_Key__c, Workflow_Instance__c, Workflow_Name__c
+      SELECT
+        Log_Type__c,
+        Level__c,
+        Message__c,
+        Correlation_Key__c,
+        Workflow_Instance__c,
+        Workflow_Name__c
       FROM Workflow_Log__c
-      WHERE Workflow_Instance__c = :instanceId AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
       ORDER BY Fire_Time__c ASC, Id ASC
     ];
 
     Workflow_Step_Execution__c stepExec = [
-      SELECT Id 
-      FROM Workflow_Step_Execution__c 
-      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = 'WorkflowEngineTest.BreadcrumbStep'
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.BreadcrumbStep'
       LIMIT 1
     ];
 
     System.assertEquals(2, logs.size(), 'Should have saved 2 breadcrumbs');
-    
+
     System.assertEquals(StepContext.LOG_TYPE_BREADCRUMB, logs[0].Log_Type__c);
     System.assertEquals('INFO', logs[0].Level__c);
-    System.assert(logs[0].Message__c.contains('Step 1 execution started'), 'Message mismatch: ' + logs[0].Message__c);
-    System.assert(logs[0].Message__c.contains('"status":"init"'), 'Message mismatch: ' + logs[0].Message__c);
+    System.assert(
+      logs[0].Message__c.contains('Step 1 execution started'),
+      'Message mismatch: ' + logs[0].Message__c
+    );
+    System.assert(
+      logs[0].Message__c.contains('"status":"init"'),
+      'Message mismatch: ' + logs[0].Message__c
+    );
     System.assertEquals(stepExec.Id, logs[0].Correlation_Key__c);
 
     System.assertEquals(StepContext.LOG_TYPE_BREADCRUMB, logs[1].Log_Type__c);
@@ -7164,15 +7384,25 @@ public class WorkflowEngineTest {
       System.assert(false, 'Should have thrown an exception');
     } catch (Exception ex) {
       Database.rollback(sp);
-      System.assert(ex.getMessage().contains('Simulated Failure') || ex.getMessage().contains('terminated, cancelled'), 'Exception mismatch: ' + ex.getMessage());
+      System.assert(
+        ex.getMessage().contains('Simulated Failure') ||
+        ex.getMessage().contains('terminated, cancelled'),
+        'Exception mismatch: ' + ex.getMessage()
+      );
     }
 
     List<Workflow_Log__c> logs = [
       SELECT Log_Type__c, Level__c, Message__c
       FROM Workflow_Log__c
-      WHERE Workflow_Instance__c = :instanceId AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
     ];
-    System.assertEquals(0, logs.size(), 'Should not have saved any breadcrumbs because of rollback');
+    System.assertEquals(
+      0,
+      logs.size(),
+      'Should not have saved any breadcrumbs because of rollback'
+    );
   }
 
   @isTest
@@ -7196,13 +7426,1051 @@ public class WorkflowEngineTest {
     List<Workflow_Log__c> logs = [
       SELECT Log_Type__c, Level__c, Message__c, Correlation_Key__c
       FROM Workflow_Log__c
-      WHERE Workflow_Instance__c = :instanceId AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
       ORDER BY CreatedDate ASC, Id ASC
     ];
 
-    System.assertEquals(3, logs.size(), 'Should have saved exactly 3 breadcrumbs');
+    System.assertEquals(
+      3,
+      logs.size(),
+      'Should have saved exactly 3 breadcrumbs'
+    );
     System.assertEquals('Attempt 1', logs[0].Message__c);
     System.assertEquals('Attempt 2', logs[1].Message__c);
     System.assertEquals('Attempt 3', logs[2].Message__c);
+  }
+
+  @isTest
+  static void testCausationIdPersistenceAndLineage() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start A (root) with a causation ID
+    WorkflowEngine.StartRequest reqA = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'CausationKeyA',
+      null
+    );
+    reqA.causationId = 'root-causation-trace-123';
+
+    Test.startTest();
+    WorkflowEngine.StartResult resultA = WorkflowEngine.startOrGet(
+      new List<WorkflowEngine.StartRequest>{ reqA }
+    )[0];
+    System.assertEquals(true, resultA.isNew);
+
+    Workflow_Instance__c instA = [
+      SELECT Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :resultA.instanceId
+    ];
+    System.assertEquals(
+      'root-causation-trace-123',
+      instA.Causation_Id__c,
+      'Causation ID must be persisted'
+    );
+
+    // Test getStatus read API
+    WorkflowEngine.WorkflowStatus statusA = WorkflowEngine.getStatus(
+      resultA.instanceId
+    );
+    System.assertEquals(
+      'root-causation-trace-123',
+      statusA.causationId,
+      'Status DTO must expose causationId'
+    );
+
+    // Start B (downstream) using A as cause
+    WorkflowEngine.StartRequest reqB = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'CausationKeyB',
+      null
+    );
+    reqB.causationId = resultA.instanceId;
+    WorkflowEngine.StartResult resultB = WorkflowEngine.startOrGet(
+      new List<WorkflowEngine.StartRequest>{ reqB }
+    )[0];
+
+    // Start C (downstream) using B as cause
+    WorkflowEngine.StartRequest reqC = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'CausationKeyC',
+      null
+    );
+    reqC.causationId = resultB.instanceId;
+    WorkflowEngine.StartResult resultC = WorkflowEngine.startOrGet(
+      new List<WorkflowEngine.StartRequest>{ reqC }
+    )[0];
+
+    // Verify lineage walk: C -> B -> A
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      resultC.instanceId
+    );
+    System.assertNotEquals(null, lineage);
+    System.assertEquals(3, lineage.size(), 'Lineage size mismatch');
+    System.assertEquals(resultC.instanceId, lineage[0].instanceId);
+    System.assertEquals(resultB.instanceId, lineage[1].instanceId);
+    System.assertEquals(resultA.instanceId, lineage[2].instanceId);
+
+    Test.stopTest();
+  }
+
+  @isTest
+  static void testCausationIdInheritedOnContinueAsNew() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start with a causation ID
+    WorkflowEngine.StartRequest req = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.DaemonWorkflow',
+      'CausationDaemonKey',
+      0
+    );
+    req.causationId = 'trace-456';
+
+    Id instanceId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ req }
+      )[0]
+      .instanceId;
+    new WorkflowOrchestrator(instanceId).execute(null); // Runs the first execution run -> continueAsNew
+
+    // Find Run 2
+    Workflow_Instance__c run2 = [
+      SELECT Id, Status__c, Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :instanceId
+    ];
+    System.assertEquals('Pending', run2.Status__c);
+    System.assertEquals(
+      'trace-456',
+      run2.Causation_Id__c,
+      'Successor must inherit causation ID'
+    );
+  }
+
+  @isTest
+  static void testCausationIdParentFallback() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start Parent
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKey',
+      null
+    );
+
+    // Start Child under Parent
+    Id childId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ChildKey',
+      null,
+      parentId
+    );
+
+    Workflow_Instance__c child = [
+      SELECT Causation_Id__c, Parent_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    System.assertEquals(
+      parentId,
+      child.Causation_Id__c,
+      'Causation ID must fallback to Parent Instance ID on build'
+    );
+
+    // Verify lineage walk follows Parent_Instance__c fallback even if Causation_Id__c was blank (test by manually nulling it)
+    child.Causation_Id__c = null;
+    update child;
+
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(childId, lineage[0].instanceId);
+    System.assertEquals(parentId, lineage[1].instanceId);
+  }
+
+  @isTest
+  static void testCausationIdReusedKeyTimeBound() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Create original parent
+    Id originalParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ReusedKey',
+      null
+    );
+
+    // Start Child using correlation key of parent
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ChildKeyReused',
+      null
+    );
+    childReq.causationId = 'key:ReusedKey';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // 2. Create a new, later run with the same correlation key
+    // Since Correlation_Key__c unique index prevents multiple active runs, we make the original parent complete first.
+    Workflow_Instance__c origParent = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :originalParentId
+    ];
+    origParent.Status__c = 'Completed';
+    update origParent;
+    origParent.Terminal_At__c = DateTime.now().addDays(-2);
+    update origParent;
+
+    Id newerParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ReusedKey',
+      null
+    );
+
+    // Explicitly set CreatedDates to bound them
+    Test.setCreatedDate(originalParentId, DateTime.now().addMinutes(-10));
+    Test.setCreatedDate(childId, DateTime.now().addMinutes(-5));
+    Test.setCreatedDate(newerParentId, DateTime.now());
+
+    // Update child's Causation_Id__c timestamp to match its mocked CreatedDate
+    Workflow_Instance__c childInst = [
+      SELECT Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    childInst.Causation_Id__c =
+      'key:ReusedKey::ts::' +
+      String.valueOf(DateTime.now().addMinutes(-5).getTime());
+    update childInst;
+
+    // Assert that getCausationLineage on child resolves to originalParentId (older) and NOT newerParentId (newer)
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(childId, lineage[0].instanceId);
+    System.assertEquals(
+      originalParentId,
+      lineage[1].instanceId,
+      'Must resolve to the parent that existed at child creation time'
+    );
+  }
+
+  @isTest
+  static void testCausationIdInheritedOnContinueAsNewFallback() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start Parent
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKey',
+      null
+    );
+
+    // Start Child under Parent with blank causationId (so it has only Parent_Instance__c)
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.DaemonWorkflow',
+      'ChildDaemonKey',
+      0,
+      parentId
+    );
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Verify child has blank Causation_Id__c but non-blank Parent_Instance__c
+    Workflow_Instance__c child = [
+      SELECT Causation_Id__c, Parent_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    child.Causation_Id__c = null;
+    update child;
+
+    // Execute run -> triggers continueAsNew
+    new WorkflowOrchestrator(childId).execute(null);
+
+    // Find Run 2 of Child (the successor)
+    Workflow_Instance__c run2 = [
+      SELECT Id, Status__c, Causation_Id__c, Previous_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :childId
+    ];
+    // successor must inherit parentId as causationId since predecessor's Causation_Id__c was blank but Parent_Instance__c was parentId
+    System.assertEquals(
+      parentId,
+      run2.Causation_Id__c,
+      'Successor must inherit parentId as causationId'
+    );
+
+    // Verify lineage walk from Run 2 correctly resolves to Parent
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      run2.Id
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(run2.Id, lineage[0].instanceId);
+    System.assertEquals(parentId, lineage[1].instanceId);
+  }
+
+  @isTest
+  static void testCausationLineageCarriesTerminalOutputs() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Start Parent
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKey',
+      '{"val": "ParentInput"}'
+    );
+
+    // Complete the Parent by executing it
+    new WorkflowOrchestrator(parentId).execute(null);
+    new WorkflowOrchestrator(parentId).execute(null);
+
+    // Verify it is completed and has output
+    Workflow_Instance__c parent = [
+      SELECT Status__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals('Completed', parent.Status__c);
+    System.assertNotEquals(null, parent.Output__c);
+
+    // Start Child under Parent
+    Id childId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ChildKey',
+      null,
+      parentId
+    );
+
+    // Get causation lineage on Child
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(childId, lineage[0].instanceId);
+    System.assertEquals(parentId, lineage[1].instanceId);
+
+    // Verify parent's output in the lineage matches the actual output
+    System.assertNotEquals(null, lineage[1].output);
+    System.assertNotEquals('', lineage[1].output);
+    System.assertEquals(
+      parent.Output__c,
+      lineage[1].output,
+      'Terminal lineage entries must carry rehydrated output'
+    );
+  }
+
+  @isTest
+  static void testCausationIdReusedKeySelfExclusion() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Create original parent
+    Id originalParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ReusedKeySame',
+      null
+    );
+
+    // Make the original parent complete first to release the Active_Correlation_Key__c
+    Workflow_Instance__c origParent = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :originalParentId
+    ];
+    origParent.Status__c = 'Completed';
+    update origParent;
+    origParent.Terminal_At__c = DateTime.now().addDays(-2);
+    update origParent;
+
+    // 2. Start a downstream/child workflow with the SAME correlation key, caused by the parent key
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ReusedKeySame',
+      null
+    );
+    childReq.causationId = 'key:ReusedKeySame';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Set CreatedDates so child is newer
+    Test.setCreatedDate(originalParentId, DateTime.now().addMinutes(-10));
+    Test.setCreatedDate(childId, DateTime.now());
+
+    // Get causation lineage on Child. It should NOT resolve to itself, but correctly walk up to originalParentId.
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size(), 'Must walk up to parent');
+    System.assertEquals(childId, lineage[0].instanceId);
+    System.assertEquals(
+      originalParentId,
+      lineage[1].instanceId,
+      'Must resolve to the parent and not self'
+    );
+  }
+
+  @isTest
+  static void testManualCompensationLineageAndParentIsolation() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Start Parent
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.ParentWorkflow',
+      'ParentKey',
+      null
+    );
+
+    // Execute ParentStep once to spawn child and suspend parent
+    new WorkflowOrchestrator(parentId).execute(null);
+
+    // Find the spawned child
+    Workflow_Instance__c child = [
+      SELECT
+        Id,
+        Status__c,
+        Parent_Instance__c,
+        Correlation_Key__c,
+        Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentId
+      LIMIT 1
+    ];
+    Id childId = child.Id;
+
+    System.assertEquals('Pending', child.Status__c);
+    System.assertEquals(parentId, child.Parent_Instance__c);
+    System.assertEquals(parentId, child.Causation_Id__c);
+
+    // Complete the Child by running it
+    new WorkflowOrchestrator(childId).execute(null);
+
+    // Verify Child completed
+    child = [
+      SELECT Status__c, Compensation_Stack__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    System.assertEquals('Completed', child.Status__c);
+
+    // Manually stamp compensation stack on completed child so it can be compensated
+    child.Compensation_Stack__c = JSON.serialize(
+      new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+    );
+    update child;
+
+    // Set up a mock completed step execution so compensation has something to run
+    Workflow_Step_Execution__c origExec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = childId,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep',
+      Status__c = 'Completed',
+      Input__c = '"Input"',
+      Output__c = '"Output"'
+    );
+    insert origExec;
+
+    // 3. Compensate the completed child
+    Id compensatingId = WorkflowEngine.compensate(childId);
+    System.assertNotEquals(null, compensatingId);
+
+    // Verify the compensating run has NO Parent_Instance__c but DOES have Causation_Id__c!
+    Workflow_Instance__c compInst = [
+      SELECT Status__c, Parent_Instance__c, Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :compensatingId
+    ];
+    System.assertEquals(
+      null,
+      compInst.Parent_Instance__c,
+      'Must NOT set Parent_Instance__c on manual compensation run'
+    );
+    System.assertEquals(
+      parentId,
+      compInst.Causation_Id__c,
+      'Must preserve Causation_Id__c'
+    );
+
+    // Verify lineage walk from the compensating run successfully reaches the parent
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      compensatingId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(compensatingId, lineage[0].instanceId);
+    System.assertEquals(parentId, lineage[1].instanceId);
+
+    // Parent is currently Suspended (waiting for child completions). Verify this.
+    Workflow_Instance__c parentReload = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals('Suspended', parentReload.Status__c);
+
+    // 4. Drive the compensating run to completion
+    new WorkflowOrchestrator(compensatingId).execute(null);
+
+    // Verify compensating run is Compensated
+    compInst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :compensatingId
+    ];
+    System.assertEquals('Compensated', compInst.Status__c);
+
+    // Verify Parent is STILL Suspended (its state was NOT corrupted/altered by notifications from the compensating run)
+    parentReload = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+    ];
+    System.assertEquals(
+      'Suspended',
+      parentReload.Status__c,
+      'Parent must remain Suspended; compensation run completion must be isolated'
+    );
+  }
+
+  @isTest
+  static void testCausationIdLooksLikeIdFallback() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // Get key prefix for Workflow_Instance__c (usually 'a01' or 'a00')
+    String prefix = Workflow_Instance__c.SObjectType.getDescribe(
+        SObjectDescribeOptions.DEFERRED
+      )
+      .getKeyPrefix();
+    // Pad to 15 characters to make it look like a valid Salesforce ID
+    String lookalikeId = prefix + '000000000000';
+
+    // 1. Create parent with this lookalike correlation key
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      lookalikeId,
+      null
+    );
+
+    // 2. Start child caused by the lookalike correlation key
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ChildKey',
+      null
+    );
+    childReq.causationId = 'key:' + lookalikeId;
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Get causation lineage on Child.
+    // Even though lookalikeId is a valid ID syntax, it does not exist in the database,
+    // so getCausationLineage should fall back to key-based query and resolve to parentId.
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(
+      2,
+      lineage.size(),
+      'Must walk up to parent via fallback key lookup'
+    );
+    System.assertEquals(childId, lineage[0].instanceId);
+    System.assertEquals(parentId, lineage[1].instanceId);
+  }
+
+  @isTest
+  static void testCausationIdInheritedOnContinueAsNewReusedKeyTimeBound() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Create original parent
+    Id originalParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKeyReused',
+      null
+    );
+
+    // Make original parent complete to release the key
+    Workflow_Instance__c origParent = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :originalParentId
+    ];
+    origParent.Status__c = 'Completed';
+    update origParent;
+    origParent.Terminal_At__c = DateTime.now().addDays(-2);
+    update origParent;
+
+    // 2. Start Child caused by 'ParentKeyReused'
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.DaemonWorkflow',
+      'ChildDaemonKey',
+      (Object) 0
+    );
+    childReq.causationId = 'key:ParentKeyReused';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Execute run -> triggers continueAsNew, spawning successor
+    new WorkflowOrchestrator(childId).execute(null);
+
+    // Find Run 2 of Child (successor)
+    Workflow_Instance__c run2 = [
+      SELECT Id, Status__c, Causation_Id__c, Previous_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :childId
+    ];
+    System.assert(
+      run2.Causation_Id__c.startsWith('key:{"') &&
+      run2.Causation_Id__c.contains('"k":"ParentKeyReused"')
+    );
+
+    // 3. Create a NEW parent run with the same key AFTER the child was created
+    Id newerParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKeyReused',
+      null
+    );
+
+    // Explicitly set CreatedDates to order them:
+    // originalParent (10 mins ago) -> child/predecessor (5 mins ago) -> newParent (now) -> run2 (now + 1 min)
+    Test.setCreatedDate(originalParentId, DateTime.now().addMinutes(-10));
+    Test.setCreatedDate(childId, DateTime.now().addMinutes(-5));
+    Test.setCreatedDate(newerParentId, DateTime.now());
+    Test.setCreatedDate(run2.Id, DateTime.now().addMinutes(1));
+
+    // Update run2's Causation_Id__c timestamp to match predecessor's mocked CreatedDate
+    run2.Causation_Id__c =
+      'key:ParentKeyReused::ts::' +
+      String.valueOf(DateTime.now().addMinutes(-5).getTime());
+    update run2;
+
+    // Get causation lineage on successor (run2).
+    // Because lineage lookup bounds key resolution by the earliest predecessor creation time (5 mins ago),
+    // it should resolve to originalParentId (10 mins ago) and NOT newerParentId (now).
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      run2.Id
+    );
+    System.assertEquals(
+      2,
+      lineage.size(),
+      'Lineage walk must resolve to the original parent'
+    );
+    System.assertEquals(run2.Id, lineage[0].instanceId);
+    System.assertEquals(
+      originalParentId,
+      lineage[1].instanceId,
+      'Must resolve to original parent and not newer parent with reused key'
+    );
+  }
+
+  @isTest
+  static void testCausationIdInheritedOnContinueAsNewReusedKeyTimeBoundCapped() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Create a chain of 7 instances linked by Previous_Instance__c
+    List<Workflow_Instance__c> chain = new List<Workflow_Instance__c>();
+    Id prevId = null;
+    for (Integer i = 0; i < 7; i++) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+        Correlation_Key__c = 'ChainKey-' + i,
+        Causation_Id__c = 'ParentKey',
+        Previous_Instance__c = prevId
+      );
+      insert inst;
+      prevId = inst.Id;
+      chain.add(inst);
+    }
+
+    // Run getCausationLineage on the last item.
+    // It should not throw any exceptions (governor limits) and should complete successfully.
+    Test.startTest();
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      chain[6].Id
+    );
+    Test.stopTest();
+
+    System.assertNotEquals(
+      null,
+      lineage,
+      'Lineage must be returned successfully'
+    );
+  }
+
+  @isTest
+  static void testCausationIdInheritedOnContinueAsNewReusedKeyTimeBoundLongChain() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Create original parent
+    Id originalParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKeyReusedLong',
+      null
+    );
+
+    // Make original parent complete to release the key
+    Workflow_Instance__c origParent = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :originalParentId
+    ];
+    origParent.Status__c = 'Completed';
+    update origParent;
+    origParent.Terminal_At__c = DateTime.now().addDays(-2);
+    update origParent;
+
+    // 2. Create a chain of 8 continue-as-new instances caused by 'ParentKeyReusedLong'
+    List<Workflow_Instance__c> chain = new List<Workflow_Instance__c>();
+    Id prevId = null;
+    for (Integer i = 0; i < 8; i++) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+        Correlation_Key__c = 'ChainDaemonKey-' + i,
+        Causation_Id__c = 'key:ParentKeyReusedLong::ts::' +
+          String.valueOf(DateTime.now().addMinutes(-5).getTime()),
+        Previous_Instance__c = prevId
+      );
+      insert inst;
+      prevId = inst.Id;
+      chain.add(inst);
+    }
+
+    // 3. Create a NEW parent run with the same key AFTER the child was created
+    Id newerParentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ParentKeyReusedLong',
+      null
+    );
+
+    // Explicitly set CreatedDates to order them:
+    // originalParent (10 mins ago) -> first run (5 mins ago) -> newParent (now) -> last run (now + 1 min)
+    Test.setCreatedDate(originalParentId, DateTime.now().addMinutes(-10));
+    Test.setCreatedDate(chain[0].Id, DateTime.now().addMinutes(-5));
+    Test.setCreatedDate(newerParentId, DateTime.now());
+    Test.setCreatedDate(chain[7].Id, DateTime.now().addMinutes(1));
+
+    // Get causation lineage on the last run of the chain.
+    // Because we bulk-query 5 levels at a time, we will successfully walk back all 8 levels to the first run (5 mins ago),
+    // and correctly resolve to originalParentId (10 mins ago) instead of newerParentId (now).
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      chain[7].Id
+    );
+    System.assertEquals(
+      2,
+      lineage.size(),
+      'Lineage walk must resolve to the original parent'
+    );
+    System.assertEquals(chain[7].Id, lineage[0].instanceId);
+    System.assertEquals(
+      originalParentId,
+      lineage[1].instanceId,
+      'Must resolve to original parent and not newer parent with reused key'
+    );
+  }
+
+  @isTest
+  static void testCausationIdTimestampPropagationAndLineage() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Start a parent workflow
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'MyRealParentKey',
+      null
+    );
+
+    // 2. Start a child with a key-based causation ID
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'MyChildKey',
+      null
+    );
+    childReq.causationId = 'key:MyRealParentKey';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Verify child instance contains the causationId with the timestamp
+    Workflow_Instance__c childInst = [
+      SELECT Causation_Id__c, CreatedDate
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    System.assert(
+      childInst.Causation_Id__c.startsWith('key:{"') &&
+      childInst.Causation_Id__c.contains('"k":"MyRealParentKey"'),
+      'CausationId was actually: ' + childInst.Causation_Id__c
+    );
+
+    // 3. Resolve lineage and verify it correctly parses and matches to parentId,
+    // and returns the clean causationId in the DTO.
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(parentId, lineage[1].instanceId);
+    System.assertEquals('key:MyRealParentKey', lineage[0].causationId);
+  }
+
+  @isTest
+  static void testCausationIdWithHashInKey() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Start a parent workflow with a key containing '#'
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'order#123',
+      null
+    );
+
+    // 2. Start a child with a key-based causation ID referencing 'order#123'
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'MyChildKeyHash',
+      null
+    );
+    childReq.causationId = 'key:order#123';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Verify child instance contains the causationId with the timestamp appended after order#123
+    Workflow_Instance__c childInst = [
+      SELECT Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    System.assert(
+      childInst.Causation_Id__c.startsWith('key:{"') &&
+      childInst.Causation_Id__c.contains('"k":"order#123"')
+    );
+
+    // 3. Resolve lineage and verify it correctly parses 'order#123' (preserving the '#' character) and resolves to parentId
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(parentId, lineage[1].instanceId);
+    System.assertEquals('key:order#123', lineage[0].causationId);
+  }
+
+  @isTest
+  static void testCausationIdBulkStartRaceCondition() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Prepare a bulk start request containing both parent and child
+    WorkflowEngine.StartRequest parentReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'BulkParentKey',
+      null
+    );
+
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'BulkChildKey',
+      null
+    );
+    childReq.causationId = 'key:BulkParentKey';
+
+    // Start both workflows in the same bulk transaction
+    List<WorkflowEngine.StartResult> results = WorkflowEngine.startOrGet(
+      new List<WorkflowEngine.StartRequest>{ parentReq, childReq }
+    );
+    Id parentId = results[0].instanceId;
+    Id childId = results[1].instanceId;
+
+    // Resolve lineage. Since the child's causation timestamp is stamped with the actual database CreatedDate
+    // after insert, the parent is correctly resolved even without any buffer.
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(parentId, lineage[1].instanceId);
+  }
+
+  @isTest
+  static void testCausationIdResolveThroughChainRoot() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Insert parent run 1 (stale ContinuedAsNew)
+    Workflow_Instance__c run1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Correlation_Key__c = 'ParentKeyRoot',
+      Root_Correlation_Key__c = 'ParentKeyRoot',
+      Status__c = 'ContinuedAsNew'
+    );
+    insert run1;
+    Test.setCreatedDate(run1.Id, DateTime.now().addMinutes(-10));
+
+    // 2. Insert parent run 2 (live completed successor)
+    Workflow_Instance__c run2 = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Correlation_Key__c = 'ParentKeyRoot-1',
+      Root_Correlation_Key__c = 'ParentKeyRoot',
+      Previous_Instance__c = run1.Id,
+      Status__c = 'Completed'
+    );
+    insert run2;
+    Test.setCreatedDate(run2.Id, DateTime.now().addMinutes(-5));
+
+    // 3. Start a child caused by the root key 'ParentKeyRoot'
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'ChildKey',
+      null
+    );
+    childReq.causationId = 'key:ParentKeyRoot';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+    Test.setCreatedDate(childId, DateTime.now());
+
+    // Resolve lineage. It should trace back to the terminal successor (run2) and NOT the stale predecessor (run1)
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(run2.Id, lineage[1].instanceId);
+    System.assertEquals('key:ParentKeyRoot', lineage[0].causationId);
+  }
+
+  @isTest
+  static void testCausationIdWithNumericHashSuffixInKey() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Start a parent workflow with a key containing '#' followed by 13 digits
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'order#1234567890123',
+      null
+    );
+
+    // 2. Start a child with a key-based causation ID referencing 'order#1234567890123'
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'MyChildKeyNumericHash',
+      null
+    );
+    childReq.causationId = 'key:order#1234567890123';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Verify child instance contains the causationId with the ::ts:: suffix appended after the full key
+    Workflow_Instance__c childInst = [
+      SELECT Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    System.assert(
+      childInst.Causation_Id__c.startsWith('key:{"') &&
+      childInst.Causation_Id__c.contains('"k":"order#1234567890123"')
+    );
+
+    // 3. Resolve lineage and verify it correctly parses 'order#1234567890123' (preserving the '#' and 13 digits) and resolves to parentId
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(parentId, lineage[1].instanceId);
+    System.assertEquals('key:order#1234567890123', lineage[0].causationId);
+  }
+
+  @isTest
+  static void testCausationIdWithDelimiterInKey() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Start a parent workflow with a key containing '::ts::'
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'order::ts::prod',
+      null
+    );
+
+    // 2. Start a child with a key-based causation ID referencing 'order::ts::prod'
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'MyChildKeyDelimiter',
+      null
+    );
+    childReq.causationId = 'key:order::ts::prod';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Verify child instance contains the causationId with the ::ts:: suffix appended after the full key
+    Workflow_Instance__c childInst = [
+      SELECT Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    System.assert(
+      childInst.Causation_Id__c.startsWith('key:{"') &&
+      childInst.Causation_Id__c.contains('"k":"order::ts::prod"')
+    );
+
+    // 3. Resolve lineage and verify it correctly parses 'order::ts::prod' (preserving the '::ts::prod' prefix) and resolves to parentId
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(parentId, lineage[1].instanceId);
+    System.assertEquals('key:order::ts::prod', lineage[0].causationId);
+  }
+
+  @isTest
+  static void testCausationIdWithTimestampShapedKey() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Start a parent workflow with a key that literally ends with ::ts::<timestamp>
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'order::ts::1719859200000',
+      null
+    );
+
+    // 2. Start a child with a key-based causation ID referencing 'order::ts::1719859200000'
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'MyChildKeyTimestampShaped',
+      null
+    );
+    childReq.causationId = 'key:order::ts::1719859200000';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Verify child instance contains the causationId with the JSON envelope, preserving the full key
+    Workflow_Instance__c childInst = [
+      SELECT Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    System.assert(
+      childInst.Causation_Id__c.startsWith('key:{"') &&
+      childInst.Causation_Id__c.contains('"k":"order::ts::1719859200000"')
+    );
+
+    // 3. Resolve lineage and verify it correctly parses 'order::ts::1719859200000' (preserving the full key) and resolves to parentId
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(parentId, lineage[1].instanceId);
+    System.assertEquals('key:order::ts::1719859200000', lineage[0].causationId);
   }
 }

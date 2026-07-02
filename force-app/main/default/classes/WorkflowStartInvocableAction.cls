@@ -11,6 +11,12 @@ public inherited sharing class WorkflowStartInvocableAction {
 
     @InvocableVariable(label='Attributes JSON')
     public String attributesJson;
+
+    @InvocableVariable(
+      label='Causation ID'
+      description='Optional causation or trace identifier linking this instance to the upstream instance/event.'
+    )
+    public String causationId;
   }
 
   public class StartResult {
@@ -36,6 +42,10 @@ public inherited sharing class WorkflowStartInvocableAction {
 
     List<WorkflowEngine.StartRequest> engineRequests = new List<WorkflowEngine.StartRequest>();
     for (StartRequest req : requests) {
+      if (req == null) {
+        engineRequests.add(null);
+        continue;
+      }
       Object input = null;
       if (String.isNotBlank(req.inputJson)) {
         try {
@@ -74,6 +84,7 @@ public inherited sharing class WorkflowStartInvocableAction {
         attributes
       );
       startReq.inputJson = req.inputJson;
+      startReq.causationId = req.causationId;
       engineRequests.add(startReq);
     }
 

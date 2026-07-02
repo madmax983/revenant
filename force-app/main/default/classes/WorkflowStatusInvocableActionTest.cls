@@ -482,11 +482,16 @@ public class WorkflowStatusInvocableActionTest {
     );
     insert inst1;
 
-    List<WorkflowStatusInvocableAction.StatusResult> results1 = call('ProgressKey1');
+    List<WorkflowStatusInvocableAction.StatusResult> results1 = call(
+      'ProgressKey1'
+    );
 
     System.assertEquals(1, results1.size());
     System.assertEquals(true, results1[0].found);
-    System.assertEquals('{"percentComplete":42.5,"message":"Working"}', results1[0].progressJson);
+    System.assertEquals(
+      '{"percentComplete":42.5,"message":"Working"}',
+      results1[0].progressJson
+    );
 
     // Test offloaded progress rehydration
     Workflow_Instance__c inst2 = new Workflow_Instance__c(
@@ -496,7 +501,10 @@ public class WorkflowStatusInvocableActionTest {
     );
     insert inst2;
 
-    String bigProgress = '{"percent":95.0,"details":"' + 'P'.repeat(110000) + '"}';
+    String bigProgress =
+      '{"percent":95.0,"details":"' +
+      'P'.repeat(110000) +
+      '"}';
     inst2.Progress__c = WorkflowEngine.savePayloadIfNeeded(
       inst2.Id,
       bigProgress,
@@ -508,6 +516,31 @@ public class WorkflowStatusInvocableActionTest {
 
     System.assertEquals(1, results2.size());
     System.assertEquals(true, results2[0].found);
-    System.assertEquals(bigProgress, results2[0].progressJson, 'Offloaded progress should be rehydrated');
+    System.assertEquals(
+      bigProgress,
+      results2[0].progressJson,
+      'Offloaded progress should be rehydrated'
+    );
+  }
+
+  @isTest
+  static void testGetStatusActionExposesCausationId() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'Test.Workflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'CausationActionKey',
+      Causation_Id__c = 'key:my-cause-abc#1719859200000'
+    );
+    insert inst;
+
+    Test.startTest();
+    List<WorkflowStatusInvocableAction.StatusResult> results = call(
+      'CausationActionKey'
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, results.size());
+    System.assertEquals(true, results[0].found);
+    System.assertEquals('key:my-cause-abc', results[0].causationId);
   }
 }
