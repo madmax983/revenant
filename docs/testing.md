@@ -38,6 +38,18 @@ Result r = harness.injectSignal(correlationKey, signalName, payload);
 // Fire the shipped WorkflowTimeoutJob for a specific step, then resume driving.
 Result r = harness.fireTimeout('MyWorkflow.SomeStep');
 
+// Inject a fault on a step to fail forward execution or compensation indefinitely (returns `this` for chaining).
+harness.failStep('MyWorkflow.SomeStep', 'Failure message');
+
+// Inject a fault on a step that fails only the first execution (returns `this` for chaining).
+harness.failStepOnce('MyWorkflow.SomeStep', 'Failure message');
+
+// Inject a fault on a step that fails a specific number of times (returns `this` for chaining).
+harness.failStep('MyWorkflow.SomeStep', 'Failure message', 3);
+
+// Clear all registered faults (returns `this` for chaining).
+harness.clearFaults();
+
 // Snapshot current state without advancing.
 Result r = harness.inspect();
 ```
@@ -286,6 +298,32 @@ static void testStepIdempotency() {
 ```
 
 See `IdempotentChargeWorkflowExampleTest.testDistinctVisitsAreNotDeduped` for a full example.
+
+---
+
+## Pattern 10 — Fault injection
+
+For testing saga compensation, retries, and rollback failure states on unmodified workflows, use `failStep` and `failStepOnce`. These allow you to force any step to throw an exception at runtime without changing the workflow definition or step class.
+
+```java
+@isTest
+static void testSagaRollbackWithFault() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start('MyWorkflow', 'key-1', null);
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+
+    // Fail the second step forward to trigger compensation of the first step
+    harness.failStep('MyWorkflow.SecondStep', 'Injected forward failure');
+
+    // Also fail the compensation of the first step to test the incomplete rollback state
+    harness.failStep('MyWorkflow.FirstStep_Compensate', 'Injected compensation failure');
+
+    WorkflowTestHarness.Result result = harness.drive();
+    Test.stopTest();
+
+    System.assertEquals('CompensationFailed', result.status);
+}
+```
 
 ---
 
