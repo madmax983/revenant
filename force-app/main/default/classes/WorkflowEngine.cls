@@ -210,7 +210,6 @@ public inherited sharing class WorkflowEngine {
       if (injectedFaults.containsKey(key)) {
         FaultConfig config = injectedFaults.get(key);
         if (config != null) {
-          System.debug('FaultInjection key=' + key + ' stepInstance=' + stepInstance + ' isRetryConfigurable=' + (stepInstance instanceof RetryConfigurable));
           Boolean shouldFail = false;
           if (config.remainingFailures == null) {
             shouldFail = true;
