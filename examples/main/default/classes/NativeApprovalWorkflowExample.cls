@@ -4,40 +4,29 @@
  *
  * Shape:
  *   ReserveBudgetStep (CompensatableStep)
- *     -> RequestApprovalStep (suspends; on resume surfaces the decision as output)
+ *     -> RequestApprovalStep (suspends; automatically submits the record; on resume surfaces the decision as output)
  *          approve -> PlaceOrderStep -> Completed
  *          reject  -> RejectStep -> WorkflowException -> LIFO compensation -> Compensated
  *
  * The approver-facing surface here is deliberately NOT a custom LWC: a native Approval
  * Process already ships an approver inbox, mobile approve/reject, and delegation, so this
  * example reuses it rather than rebuilding it. The bridge from the native process to this
- * suspended gate is entirely declarative, wired through two small invocable actions rather
- * than hand-built Flow-formula strings:
+ * suspended gate is wired via standard SObjects (e.g. standard Case) and a trigger/flow bridge:
  *
- *   1. A record-triggered Flow starts this workflow when an Approval_Request__c is created
- *      (see Revenant_Start_Approval_Workflow_Example.flow-meta.xml), correlating on
- *      Correlation_Key__c, then calls NativeApprovalRequestSubmitInvocableAction to submit
- *      the same record into the native Approval Process
- *      (Approval_Request__c.Revenant_Native_Approval_Example.approvalProcess-meta.xml) --
- *      meeting a process's entry criteria is not by itself sufficient in Salesforce; this
- *      invocable is the explicit submission action that closes that gap.
- *   2. The Approval Process's final approval/rejection action is a plain field update to
- *      Approval_Status__c.
- *   3. A second record-triggered Flow (Revenant_Approval_Decision_To_Signal_Example.flow-meta.xml)
- *      fires when that field update lands and calls NativeApprovalDecisionSignalInvocableAction,
- *      which JSON.serialize()s the decision (safe against newlines/quotes in the approver's
- *      comment, unlike a hand-assembled formula string) and hardcodes the target signal name
- *      to this class's DECISION_SIGNAL constant so the two can never drift apart.
+ *   1. A Case is created. An after-insert trigger (CaseApprovalBridgeTrigger) starts the
+ *      workflow, correlating on the Case ID.
+ *   2. The workflow executes. When it reaches RequestApprovalStep, it automatically queries the 
+ *      correlation key (the Case ID) and submits it to the native Salesforce Approval Process
+ *      (Case.Revenant_Trigger_Approval_Example.approvalProcess-meta.xml).
+ *   3. The request lands in the standard Salesforce Approval Requests tab/inbox.
+ *   4. The designated approver acts on the request. On approval/rejection, the native process
+ *      performs a final field update to Case.Approval_Status__c (e.g. to 'Approved' or 'Rejected').
+ *   5. The Case trigger (CaseApprovalBridgeTrigger) detects this update, queries the approval comments
+ *      from ProcessInstanceStep, and signals the workflow to resume.
  *
- * Revenant supplies only the primitive (waitForApproval + the Approve: signal); the native
- * Approval Process supplies the human-facing mechanism -- who may decide, the inbox, mobile
- * access. That said, the signal path itself (WorkflowEngine.signal / the invocable actions
- * above) performs no authorization check of its own, exactly like every other waitForApproval
- * gate in this repo (see ApprovalWorkflowExample) -- the Approval Process's approver
- * assignment is a UI-level convenience for who is *prompted* to decide, not an enforced
- * boundary on who *can* publish the decision signal. Pass a shipped Custom Permission (e.g.
- * 'Workflow_Admin') as waitForApproval's second argument if you need
- * WorkflowDashboardController.enforceApprovalRole to actually gate that.
+ * Revenant supplies the orchestration primitives (waitForApproval + signal-driven resume); 
+ * the native Salesforce Approval Process handles the human-facing workflow (routing, delegation,
+ * and the standard global Approvals inbox).
  */
 public inherited sharing class NativeApprovalWorkflowExample implements WorkflowDefinition {
   /** Approval gate identifier passed to waitForApproval(). */
@@ -72,7 +61,9 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
     if (currentStepName == 'NativeApprovalWorkflowExample.ReserveBudgetStep') {
       return 'NativeApprovalWorkflowExample.RequestApprovalStep';
     }
-    if (currentStepName == 'NativeApprovalWorkflowExample.RequestApprovalStep') {
+    if (
+      currentStepName == 'NativeApprovalWorkflowExample.RequestApprovalStep'
+    ) {
       if (result.outputJson != null) {
         Map<String, Object> decision = (Map<String, Object>) JSON.deserializeUntyped(
           result.outputJson
@@ -174,14 +165,17 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
       StepContext.Signal decision = ctx.getSignal(DECISION_SIGNAL);
 
       if (!decision.isPresent()) {
+        // Query the Workflow_Instance__c record to retrieve its Correlation_Key__c.
+        // If it is a valid SObject ID, automatically submit it to the native Approval Process.
+        // This ensures the approval request shows up in the standard Salesforce Approval Requests tab/inbox.
+        String correlationKey = getCorrelationKey(ctx.workflowInstanceId);
+        submitRecordIfValid(correlationKey);
+        
         // The second argument is an optional Custom Permission API name that
         // WorkflowDashboardController.enforceApprovalRole would require an approver to
         // hold if this workflow were also decided from the dashboard. Left null here:
         // this example relies on the native Approval Process's approver assignment to
-        // decide who is *prompted* to act, not on any check at the signal layer itself --
-        // the signal path has no authorization check of its own (see the class doc
-        // comment). Pass a shipped permission (e.g. 'Workflow_Admin') if you need an
-        // actual enforced check on who may publish the decision signal.
+        // decide who is *prompted* to act, not on any check at the signal layer itself.
         return StepResult.waitForApproval(APPROVAL_KEY, null);
       }
 
@@ -189,6 +183,42 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
         decision.payload
       );
       return StepResult.complete(null, payload);
+    }
+
+    private String getCorrelationKey(Id instanceId) {
+      if (instanceId == null) {
+        return null;
+      }
+      try {
+        Workflow_Instance__c inst = [
+          SELECT Correlation_Key__c
+          FROM Workflow_Instance__c
+          WHERE Id = :instanceId
+          WITH SYSTEM_MODE
+          LIMIT 1
+        ];
+        return inst.Correlation_Key__c;
+      } catch (Exception e) {
+        return null;
+      }
+    }
+
+    private void submitRecordIfValid(String correlationKey) {
+      if (String.isBlank(correlationKey)) {
+        return;
+      }
+      try {
+        Id recordId = (Id) correlationKey;
+        Approval.ProcessSubmitRequest submitReq = new Approval.ProcessSubmitRequest();
+        submitReq.setObjectId(recordId);
+        // Let Salesforce pick the active process whose entry criteria matches
+        Approval.process(submitReq, false);
+      } catch (Exception e) {
+        System.debug(
+          LoggingLevel.WARN,
+          'Native approval auto-submission skipped/failed for key ' + correlationKey + ': ' + e.getMessage()
+        );
+      }
     }
   }
 
