@@ -43,9 +43,7 @@ public inherited sharing class StepContextTestBuilder {
   }
 
   public StepContextTestBuilder input(Object val) {
-    this.inputJsonVal = (val instanceof String)
-      ? (String) val
-      : JSON.serialize(val);
+    this.inputJsonVal = (val == null) ? null : JSON.serialize(val);
     return this;
   }
 
@@ -55,9 +53,7 @@ public inherited sharing class StepContextTestBuilder {
   }
 
   public StepContextTestBuilder previousStepOutput(Object val) {
-    this.previousStepOutputVal = (val instanceof String)
-      ? (String) val
-      : JSON.serialize(val);
+    this.previousStepOutputVal = (val == null) ? null : JSON.serialize(val);
     return this;
   }
 
@@ -67,9 +63,7 @@ public inherited sharing class StepContextTestBuilder {
   }
 
   public StepContextTestBuilder stepState(Object val) {
-    this.stepStateJsonVal = (val instanceof String)
-      ? (String) val
-      : JSON.serialize(val);
+    this.stepStateJsonVal = (val == null) ? null : JSON.serialize(val);
     return this;
   }
 
@@ -79,9 +73,7 @@ public inherited sharing class StepContextTestBuilder {
   }
 
   public StepContextTestBuilder workflowInput(Object val) {
-    this.workflowInputJsonVal = (val instanceof String)
-      ? (String) val
-      : JSON.serialize(val);
+    this.workflowInputJsonVal = (val == null) ? null : JSON.serialize(val);
     return this;
   }
 

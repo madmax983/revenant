@@ -96,6 +96,23 @@ public class StepContextTestBuilderTest {
     System.assertEquals('{"b":2}', ctx.stepStateJson);
     System.assertEquals('{"c":3}', ctx.workflowInputJson);
     System.assertEquals('{"d":4}', ctx.previousStepOutput);
+
+    // Assert that string inputs and nulls serialize properly matching the engine
+    StepContext ctx2 = new StepContextTestBuilder()
+      .input('abc')
+      .stepState(null)
+      .build();
+
+    System.assertEquals(
+      '"abc"',
+      ctx2.inputJson,
+      'String value should be JSON serialized'
+    );
+    System.assertEquals(
+      null,
+      ctx2.stepStateJson,
+      'Null value should remain null'
+    );
   }
 
   @isTest
