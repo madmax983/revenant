@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Flow xmlns="http://soap.sforce.com/2006/04/metadata">
     <apiVersion>67.0</apiVersion>
-    <description>Reference example for issue #125: starts NativeApprovalWorkflowExample when an Approval_Request__c is created, using the record's Correlation_Key__c (falling back to its Id when blank) as the workflow correlation key, then persists the resolved key back onto the record so the decision-side Flow can never re-derive a different value later, then submits the record into the native Approval Process via NativeApprovalRequestSubmitInvocableAction. Approval submission is gated on Start_Workflow.isNew so a correlation-key collision with an existing workflow instance cannot submit the record into a native Approval Process whose eventual decision would signal the wrong (already-existing, possibly already-completed) workflow instance.</description>
+    <runInMode>SystemModeWithoutSharing</runInMode>
+    <description>Reference example for issue #125: starts NativeApprovalWorkflowExample when an Approval_Request__c is created, using the record's Correlation_Key__c (falling back to its Id when blank) as the workflow correlation key, then persists the resolved key back onto the record so the decision-side Flow can never re-derive a different value later, then submits the record into the native Approval Process via NativeApprRequestSubmitAction. Approval submission is gated on Start_Workflow.isNew so a correlation-key collision with an existing workflow instance cannot submit the record into a native Approval Process whose eventual decision would signal the wrong (already-existing, possibly already-completed) workflow instance.</description>
     <formulas>
         <name>ResolvedCorrelationKey</name>
         <dataType>String</dataType>
@@ -49,7 +50,7 @@
         <label>Submit For Approval</label>
         <locationX>176</locationX>
         <locationY>494</locationY>
-        <actionName>NativeApprovalRequestSubmitInvocableAction</actionName>
+        <actionName>NativeApprRequestSubmitAction</actionName>
         <actionType>apex</actionType>
         <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
@@ -58,7 +59,7 @@
                 <elementReference>$Record.Id</elementReference>
             </value>
         </inputParameters>
-        <nameSegment>NativeApprovalRequestSubmitInvocableAction</nameSegment>
+        <nameSegment>NativeApprRequestSubmitAction</nameSegment>
         <storeOutputAutomatically>true</storeOutputAutomatically>
     </actionCalls>
     <environments>Default</environments>

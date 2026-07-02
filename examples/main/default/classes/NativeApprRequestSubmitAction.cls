@@ -7,7 +7,7 @@
  * creating an Approval_Request__c both starts the durable workflow AND submits the record
  * for approval in the same transaction.
  */
-public inherited sharing class NativeApprovalRequestSubmitInvocableAction {
+public without sharing class NativeApprRequestSubmitAction {
   public class SubmitRequest {
     @InvocableVariable(label='Record Id' required=true)
     public Id recordId;
@@ -28,9 +28,9 @@ public inherited sharing class NativeApprovalRequestSubmitInvocableAction {
   }
 
   /**
-   * Submits every record in a single bulk Approval.process(List<Approval.ProcessSubmitRequest>)
-   * call so batches don't spend one DML-counted Approval.process invocation per record. Each
-   * individual request has setAllOrNoneHeader(false) so one record's submission failure (most
+   * Submits every record in a single bulk Approval.process(List<Approval.ProcessSubmitRequest>, Boolean)
+   * call so batches don't spend one DML-counted Approval.process invocation per record. Passing
+   * false for allOrNone ensures that one record's submission failure (most
    * commonly: no active Approval Process yet matches the record, since Approval Processes
    * always deploy inactive) is captured as that record's own failed ProcessResult instead of
    * aborting the whole bulk call -- without this, a single bad record would sink every other
@@ -44,7 +44,9 @@ public inherited sharing class NativeApprovalRequestSubmitInvocableAction {
     category='Revenant Workflows'
     description='Submits records into a native Salesforce Approval Process via Approval.process().'
   )
-  public static List<SubmitResult> submitForApproval(List<SubmitRequest> requests) {
+  public static List<SubmitResult> submitForApproval(
+    List<SubmitRequest> requests
+  ) {
     if (requests == null || requests.isEmpty()) {
       return new List<SubmitResult>();
     }
@@ -56,24 +58,32 @@ public inherited sharing class NativeApprovalRequestSubmitInvocableAction {
       if (String.isNotBlank(req.processDefinitionNameOrId)) {
         submitReq.setProcessDefinitionNameOrId(req.processDefinitionNameOrId);
       }
-      submitReq.setAllOrNoneHeader(false);
       submitRequests.add(submitReq);
     }
 
     List<SubmitResult> results = new List<SubmitResult>();
     try {
-      List<Approval.ProcessResult> processResults = Approval.process(submitRequests);
+      List<Approval.ProcessResult> processResults = Approval.process(
+        submitRequests,
+        false
+      );
       for (Approval.ProcessResult processResult : processResults) {
         SubmitResult res = new SubmitResult();
         res.success = processResult.isSuccess();
         if (!res.success) {
           res.errorMessage = collectErrorMessage(processResult);
-          System.debug(LoggingLevel.WARN, 'Approval submission failed: ' + res.errorMessage);
+          System.debug(
+            LoggingLevel.WARN,
+            'Approval submission failed: ' + res.errorMessage
+          );
         }
         results.add(res);
       }
     } catch (Exception e) {
-      System.debug(LoggingLevel.WARN, 'Bulk approval submission failed: ' + e.getMessage());
+      System.debug(
+        LoggingLevel.WARN,
+        'Bulk approval submission failed: ' + e.getMessage()
+      );
       results.clear();
       for (Integer i = 0; i < requests.size(); i++) {
         SubmitResult res = new SubmitResult();
@@ -85,11 +95,15 @@ public inherited sharing class NativeApprovalRequestSubmitInvocableAction {
     return results;
   }
 
-  private static String collectErrorMessage(Approval.ProcessResult processResult) {
+  private static String collectErrorMessage(
+    Approval.ProcessResult processResult
+  ) {
     List<String> messages = new List<String>();
     for (Database.Error err : processResult.getErrors()) {
       messages.add(err.getMessage());
     }
-    return messages.isEmpty() ? 'Approval submission failed.' : String.join(messages, '; ');
+    return messages.isEmpty()
+      ? 'Approval submission failed.'
+      : String.join(messages, '; ');
   }
 }

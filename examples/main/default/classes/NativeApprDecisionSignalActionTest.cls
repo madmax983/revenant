@@ -1,6 +1,5 @@
 @isTest
-private class NativeApprovalDecisionSignalInvocableActionTest {
-
+private class NativeApprDecisionSignalActionTest {
   static final String KEY_PREFIX = 'NativeApprovalDecisionSignal_Test_';
 
   /**
@@ -24,15 +23,14 @@ private class NativeApprovalDecisionSignalInvocableActionTest {
 
     System.assertEquals('Suspended', suspended.status);
 
-    NativeApprovalDecisionSignalInvocableAction.DecisionRequest req =
-      new NativeApprovalDecisionSignalInvocableAction.DecisionRequest();
+    NativeApprDecisionSignalAction.DecisionRequest req = new NativeApprDecisionSignalAction.DecisionRequest();
     req.targetKey = key;
     req.approved = true;
     req.comments = 'Looks good.\nApproved as discussed in the review meeting.';
     req.approverName = 'Jane Manager';
 
-    NativeApprovalDecisionSignalInvocableAction.signalDecision(
-      new List<NativeApprovalDecisionSignalInvocableAction.DecisionRequest>{ req }
+    NativeApprDecisionSignalAction.signalDecision(
+      new List<NativeApprDecisionSignalAction.DecisionRequest>{ req }
     );
 
     WorkflowTestHarness.Result done = harness.drive();
@@ -68,14 +66,13 @@ private class NativeApprovalDecisionSignalInvocableActionTest {
 
     System.assertEquals('Suspended', suspended.status);
 
-    NativeApprovalDecisionSignalInvocableAction.DecisionRequest req =
-      new NativeApprovalDecisionSignalInvocableAction.DecisionRequest();
+    NativeApprDecisionSignalAction.DecisionRequest req = new NativeApprDecisionSignalAction.DecisionRequest();
     req.targetKey = key;
     req.approved = false;
     req.comments = 'Over budget -- see "Q3 plan" at C:\\budgets\\q3.xlsx';
 
-    NativeApprovalDecisionSignalInvocableAction.signalDecision(
-      new List<NativeApprovalDecisionSignalInvocableAction.DecisionRequest>{ req }
+    NativeApprDecisionSignalAction.signalDecision(
+      new List<NativeApprDecisionSignalAction.DecisionRequest>{ req }
     );
 
     WorkflowTestHarness.Result done = harness.drive();
@@ -90,8 +87,8 @@ private class NativeApprovalDecisionSignalInvocableActionTest {
   @isTest
   static void testEmptyRequestListIsNoOp() {
     Test.startTest();
-    NativeApprovalDecisionSignalInvocableAction.signalDecision(
-      new List<NativeApprovalDecisionSignalInvocableAction.DecisionRequest>()
+    NativeApprDecisionSignalAction.signalDecision(
+      new List<NativeApprDecisionSignalAction.DecisionRequest>()
     );
     Test.stopTest();
     // No exception thrown is the assertion.

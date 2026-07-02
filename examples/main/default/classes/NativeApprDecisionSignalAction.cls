@@ -6,7 +6,7 @@
  * NativeApprovalWorkflowExample.DECISION_SIGNAL so the Flow never carries its own copy of the
  * 'Approve:' + key literal to drift out of sync with the Apex constant.
  */
-public inherited sharing class NativeApprovalDecisionSignalInvocableAction {
+public inherited sharing class NativeApprDecisionSignalAction {
   public class DecisionRequest {
     @InvocableVariable(label='Correlation Key / Instance Id' required=true)
     public String targetKey;

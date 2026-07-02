@@ -16,7 +16,7 @@
  *
  *   1. A record-triggered Flow starts this workflow when an Approval_Request__c is created
  *      (see Revenant_Start_Approval_Workflow_Example.flow-meta.xml), correlating on
- *      Correlation_Key__c, then calls NativeApprovalRequestSubmitInvocableAction to submit
+ *      Correlation_Key__c, then calls NativeApprRequestSubmitAction to submit
  *      the same record into the native Approval Process
  *      (Approval_Request__c.Revenant_Native_Approval_Example.approvalProcess-meta.xml) --
  *      meeting a process's entry criteria is not by itself sufficient in Salesforce; this
@@ -24,7 +24,7 @@
  *   2. The Approval Process's final approval/rejection action is a plain field update to
  *      Approval_Status__c.
  *   3. A second record-triggered Flow (Revenant_Approval_Decision_To_Signal_Example.flow-meta.xml)
- *      fires when that field update lands and calls NativeApprovalDecisionSignalInvocableAction,
+ *      fires when that field update lands and calls NativeApprDecisionSignalAction,
  *      which JSON.serialize()s the decision (safe against newlines/quotes in the approver's
  *      comment, unlike a hand-assembled formula string) and hardcodes the target signal name
  *      to this class's DECISION_SIGNAL constant so the two can never drift apart.
@@ -72,7 +72,9 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
     if (currentStepName == 'NativeApprovalWorkflowExample.ReserveBudgetStep') {
       return 'NativeApprovalWorkflowExample.RequestApprovalStep';
     }
-    if (currentStepName == 'NativeApprovalWorkflowExample.RequestApprovalStep') {
+    if (
+      currentStepName == 'NativeApprovalWorkflowExample.RequestApprovalStep'
+    ) {
       if (result.outputJson != null) {
         Map<String, Object> decision = (Map<String, Object>) JSON.deserializeUntyped(
           result.outputJson
