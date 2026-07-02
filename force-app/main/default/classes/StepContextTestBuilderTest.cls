@@ -45,8 +45,10 @@ public class StepContextTestBuilderTest {
   @isTest
   static void testChainedSetters() {
     Id fakeInstanceId = Id.valueOf(
-      Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix() +
-      '000000000001'
+      Workflow_Instance__c.SObjectType.getDescribe(
+          SObjectDescribeOptions.DEFERRED
+        )
+        .getKeyPrefix() + '000000000001'
     );
     Datetime past = Datetime.now().addDays(-1);
 
@@ -197,8 +199,10 @@ public class StepContextTestBuilderTest {
   @isTest
   static void testDistinctIdempotencyKeys() {
     Id fakeInstanceId = Id.valueOf(
-      Workflow_Instance__c.SObjectType.getDescribe().getKeyPrefix() +
-      '000000000001'
+      Workflow_Instance__c.SObjectType.getDescribe(
+          SObjectDescribeOptions.DEFERRED
+        )
+        .getKeyPrefix() + '000000000001'
     );
     StepContext visit0 = new StepContextTestBuilder()
       .workflowInstanceId(fakeInstanceId)

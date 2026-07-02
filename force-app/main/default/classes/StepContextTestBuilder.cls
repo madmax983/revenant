@@ -135,7 +135,8 @@ public inherited sharing class StepContextTestBuilder {
   private static Id generateFakeId(SObjectType sObjectType) {
     String keyPrefix = keyPrefixCache.get(sObjectType);
     if (keyPrefix == null) {
-      keyPrefix = sObjectType.getDescribe().getKeyPrefix();
+      keyPrefix = sObjectType.getDescribe(SObjectDescribeOptions.DEFERRED)
+        .getKeyPrefix();
       keyPrefixCache.put(sObjectType, keyPrefix);
     }
     fakeIdSequence++;
