@@ -157,6 +157,7 @@ public inherited sharing class StepContextTestBuilder {
       this.signals = (signals != null)
         ? signals
         : new List<StepContext.Signal>();
+      this.signals.sort();
     }
     public List<StepContext.Signal> getPendingSignals(String signalName) {
       if (signalName == null) {

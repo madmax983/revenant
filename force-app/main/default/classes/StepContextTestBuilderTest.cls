@@ -264,4 +264,40 @@ public class StepContextTestBuilderTest {
       'Should return the chronologically newer signal'
     );
   }
+
+  @isTest
+  static void testSignalListArrivalOrder() {
+    Datetime now = Datetime.now();
+    StepContext.Signal newerSig = new StepContext.Signal(
+      null,
+      'MySignal',
+      '{"status":"newer"}',
+      now.addMinutes(10)
+    );
+    StepContext.Signal olderSig = new StepContext.Signal(
+      null,
+      'MySignal',
+      '{"status":"older"}',
+      now
+    );
+
+    StepContext ctx = new StepContextTestBuilder()
+      .addSignal(newerSig)
+      .addSignal(olderSig)
+      .build();
+
+    // Call named getSignals('MySignal') first, bypassing loadAll()
+    List<StepContext.Signal> signals = ctx.getSignals('MySignal');
+    System.assertEquals(2, signals.size());
+    System.assertEquals(
+      '{"status":"older"}',
+      signals[0].payload,
+      'Older signal should be sorted first'
+    );
+    System.assertEquals(
+      '{"status":"newer"}',
+      signals[1].payload,
+      'Newer signal should be sorted second'
+    );
+  }
 }
