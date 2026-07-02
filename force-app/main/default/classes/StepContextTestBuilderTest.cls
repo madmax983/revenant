@@ -7,6 +7,16 @@ public class StepContextTestBuilderTest {
     }
   }
 
+  private class StringProducer implements CaptureProducer {
+    private String val;
+    public StringProducer(String val) {
+      this.val = val;
+    }
+    public Object produce() {
+      return this.val;
+    }
+  }
+
   @isTest
   static void testBuilderDefaults() {
     StepContext ctx = new StepContextTestBuilder().build();
@@ -191,6 +201,36 @@ public class StepContextTestBuilderTest {
       visit0.idempotencyKey,
       visit1.idempotencyKey,
       'Idempotency keys should be distinct per visit'
+    );
+  }
+
+  @isTest
+  static void testBuilderCapturedValuesIsolation() {
+    StepContextTestBuilder builder = new StepContextTestBuilder()
+      .once('key1', 'value1');
+
+    StepContext ctx1 = builder.build();
+    StepContext ctx2 = builder.build();
+
+    // Verify both have value1
+    System.assertEquals(
+      'value1',
+      (String) ctx1.once('key1', new ThrowingProducer())
+    );
+    System.assertEquals(
+      'value1',
+      (String) ctx2.once('key1', new ThrowingProducer())
+    );
+
+    // Call once() on ctx1 with a new key.
+    ctx1.once('key2', new StringProducer('value2'));
+
+    // Verify ctx2 does NOT have key2 (asserting they don't share the map reference)
+    Object ctx2Result = ctx2.once('key2', new StringProducer('newValue'));
+    System.assertEquals(
+      'newValue',
+      (String) ctx2Result,
+      'ctx2 should not share capturedValues reference with ctx1'
     );
   }
 }

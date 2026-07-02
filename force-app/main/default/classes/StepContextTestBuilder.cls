@@ -217,7 +217,7 @@ public inherited sharing class StepContextTestBuilder {
       this.stepVisitVal != null ? this.stepVisitVal : 0,
       source,
       this.previousRunAtVal,
-      this.capturedValues,
+      new Map<String, Object>(this.capturedValues),
       this.timeoutResumeVal != null ? this.timeoutResumeVal : false,
       this.attemptVal != null ? this.attemptVal : 1,
       this.maxAttemptsVal != null ? this.maxAttemptsVal : 1
