@@ -152,6 +152,91 @@ public inherited sharing class WorkflowEngine {
   public class WorkflowException extends Exception {
   }
 
+  @TestVisible
+  private class FaultConfig {
+    public String message;
+    public Integer remainingFailures;
+    public FaultConfig(String message, Integer remainingFailures) {
+      this.message = message;
+      this.remainingFailures = remainingFailures;
+    }
+  }
+
+  @TestVisible
+  private static Map<String, FaultConfig> injectedFaults = new Map<String, FaultConfig>();
+
+  @TestVisible
+  private static Map<Id, Id> childToParentMap = new Map<Id, Id>();
+
+  private static void registerChildParent(Id childId, Id parentId) {
+    if (childId != null && parentId != null) {
+      childToParentMap.put(childId, parentId);
+    }
+  }
+
+  private static Id getRootInstanceId(Id instanceId) {
+    if (instanceId == null) {
+      return null;
+    }
+    Id currentId = instanceId;
+    for (Integer i = 0; i < 10; i++) {
+      if (childToParentMap.containsKey(currentId)) {
+        currentId = childToParentMap.get(currentId);
+      } else {
+        // Fallback: Query parent from DB to resolve root across hops/transactions
+        List<Workflow_Instance__c> insts = [
+          SELECT Parent_Instance__c
+          FROM Workflow_Instance__c
+          WHERE Id = :currentId
+          WITH SYSTEM_MODE
+          LIMIT 1
+        ];
+        if (!insts.isEmpty() && insts[0].Parent_Instance__c != null) {
+          Id parentId = insts[0].Parent_Instance__c;
+          childToParentMap.put(currentId, parentId);
+          currentId = parentId;
+        } else {
+          break;
+        }
+      }
+    }
+    return currentId;
+  }
+
+  private static StepResult checkAndInjectFault(Id instanceId, String stepName, WorkflowStep stepInstance) {
+    if (Test.isRunningTest() && injectedFaults != null && !injectedFaults.isEmpty() && String.isNotBlank(stepName)) {
+      Id rootId = getRootInstanceId(instanceId);
+      String key = (rootId != null ? String.valueOf(rootId) : '') + ':' + stepName.toLowerCase();
+      if (injectedFaults.containsKey(key)) {
+        FaultConfig config = injectedFaults.get(key);
+        if (config != null) {
+          Boolean shouldFail = false;
+          if (config.remainingFailures == null) {
+            shouldFail = true;
+          } else if (config.remainingFailures > 0) {
+            config.remainingFailures--;
+            shouldFail = true;
+            if (config.remainingFailures == 0) {
+              injectedFaults.remove(key);
+            }
+          }
+          if (shouldFail) {
+            if (stepInstance instanceof RetryConfigurable) {
+              RetryPolicy policy = ((RetryConfigurable) stepInstance).getRetryPolicy();
+              if (policy != null) {
+                return StepResult.retry(policy);
+              }
+            }
+            throw new WorkflowException(config.message);
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+
+
   /**
    * Outcome of a get-or-start admission decision. Distinguishes a brand-new
    * instance from an existing instance returned for a deduplicated redelivery.
@@ -4005,7 +4090,12 @@ public inherited sharing class WorkflowEngine {
 
     StepResult result;
     try {
-      result = stepInstance.execute(context);
+      if (Test.isRunningTest() && injectedFaults != null && !injectedFaults.isEmpty()) {
+        result = checkAndInjectFault(instanceId, activeStepName, stepInstance);
+      }
+      if (result == null) {
+        result = stepInstance.execute(context);
+      }
     } finally {
       if (timeoutSeconds != null && timeoutSeconds > 0) {
         stepExec.Timeout_At__c = null;
@@ -6073,6 +6163,7 @@ public inherited sharing class WorkflowEngine {
       instance.Sleep_Until__c = null;
       instance.Async_Job_Id__c = null;
       update as system instance;
+      notifyParentCompletion(instance);
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       WorkflowLifecyclePublisher.publish(instance);
       return;
@@ -6173,6 +6264,9 @@ public inherited sharing class WorkflowEngine {
 
     try {
       insert as system instance;
+      if (Test.isRunningTest() && parentId != null) {
+        registerChildParent(instance.Id, parentId);
+      }
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
         // Concurrency backstop: check if the sibling that won the insert race belongs to the same parent.
@@ -6352,6 +6446,11 @@ public inherited sharing class WorkflowEngine {
 
     try {
       insert as system instancesToInsert;
+      if (Test.isRunningTest()) {
+        for (Workflow_Instance__c inst : instancesToInsert) {
+          registerChildParent(inst.Id, parentId);
+        }
+      }
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
         for (Workflow_Instance__c inst : instancesToInsert) {
@@ -8600,7 +8699,18 @@ public inherited sharing class WorkflowEngine {
 
     StepResult result;
     try {
-      result = compensatableStepInstance.compensate(context);
+      if (Test.isRunningTest() && injectedFaults != null && !injectedFaults.isEmpty()) {
+        Id rootId = getRootInstanceId(instance.Id);
+        String compKey = (rootId != null ? String.valueOf(rootId) : '') + ':' + compensationStepLogName.toLowerCase();
+        if (injectedFaults.containsKey(compKey)) {
+          result = checkAndInjectFault(instance.Id, compensationStepLogName, compensatableStepInstance);
+        } else {
+          result = checkAndInjectFault(instance.Id, activeStepName, compensatableStepInstance);
+        }
+      }
+      if (result == null) {
+        result = compensatableStepInstance.compensate(context);
+      }
     } catch (Exception ex) {
       persistStepBreadcrumbs(instance, stepExec, null, context);
       stepExec.Status__c = 'Failed';
@@ -8870,6 +8980,7 @@ public inherited sharing class WorkflowEngine {
         instance.Sleep_Until__c = null;
         instance.Async_Job_Id__c = null;
         update as system instance;
+        notifyParentCompletion(instance);
         WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
         WorkflowLifecyclePublisher.publish(instance);
       } else {
@@ -8917,6 +9028,7 @@ public inherited sharing class WorkflowEngine {
       instance.Sleep_Until__c = null;
       instance.Async_Job_Id__c = null;
       update as system instance;
+      notifyParentCompletion(instance);
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       WorkflowLifecyclePublisher.publish(instance);
     } else {
@@ -8941,6 +9053,7 @@ public inherited sharing class WorkflowEngine {
       instance.Sleep_Until__c = null;
       instance.Async_Job_Id__c = null;
       update as system instance;
+      notifyParentCompletion(instance);
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       WorkflowLifecyclePublisher.publish(instance);
     }

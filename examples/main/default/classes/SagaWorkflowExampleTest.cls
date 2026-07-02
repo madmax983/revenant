@@ -9,6 +9,7 @@ public class SagaWorkflowExampleTest {
       '{"email":"test@example.com"}'
     );
     WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    harness.failStep('SagaWorkflowExample.SendWelcomeEmailStep', 'SMTP Server Down');
     WorkflowTestHarness.Result result = harness.drive();
     Test.stopTest();
 
