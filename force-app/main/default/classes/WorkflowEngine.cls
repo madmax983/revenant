@@ -216,6 +216,9 @@ public inherited sharing class WorkflowEngine {
           } else if (config.remainingFailures > 0) {
             config.remainingFailures--;
             shouldFail = true;
+            if (config.remainingFailures == 0) {
+              injectedFaults.remove(key);
+            }
           }
           if (shouldFail) {
             if (stepInstance instanceof RetryConfigurable) {
