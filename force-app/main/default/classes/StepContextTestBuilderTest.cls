@@ -233,4 +233,35 @@ public class StepContextTestBuilderTest {
       'ctx2 should not share capturedValues reference with ctx1'
     );
   }
+
+  @isTest
+  static void testSignalLatestArrivalOrder() {
+    Datetime now = Datetime.now();
+    // Seed signals out of chronological order (newer signal added first, older signal added second)
+    StepContext.Signal newerSig = new StepContext.Signal(
+      null,
+      'MySignal',
+      '{"status":"newer"}',
+      now.addMinutes(10)
+    );
+    StepContext.Signal olderSig = new StepContext.Signal(
+      null,
+      'MySignal',
+      '{"status":"older"}',
+      now
+    );
+
+    StepContext ctx = new StepContextTestBuilder()
+      .addSignal(newerSig)
+      .addSignal(olderSig)
+      .build();
+
+    // The builder's mock source should order by arrival when returning the latest signal
+    StepContext.Signal latest = ctx.getSignal('MySignal');
+    System.assertEquals(
+      '{"status":"newer"}',
+      latest.payload,
+      'Should return the chronologically newer signal'
+    );
+  }
 }

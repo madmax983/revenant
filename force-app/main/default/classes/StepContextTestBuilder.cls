@@ -172,7 +172,11 @@ public inherited sharing class StepContextTestBuilder {
     }
     public StepContext.Signal getLatestSignal(String signalName) {
       List<StepContext.Signal> matches = getPendingSignals(signalName);
-      return matches.isEmpty() ? null : matches[matches.size() - 1];
+      if (matches.isEmpty()) {
+        return null;
+      }
+      matches.sort();
+      return matches[matches.size() - 1];
     }
     public Boolean readWasCapped() {
       return false;
