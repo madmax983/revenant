@@ -6595,7 +6595,9 @@ public inherited sharing class WorkflowEngine {
     String payload,
     String idempotencyKey
   ) {
-    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe()
+    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
+        SObjectDescribeOptions.DEFERRED
+      )
       .getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
     Boolean isId =
@@ -6831,7 +6833,9 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe()
+    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
+        SObjectDescribeOptions.DEFERRED
+      )
       .getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
     Set<Id> ids = new Set<Id>();
@@ -10425,7 +10429,9 @@ public inherited sharing class WorkflowEngine {
           Integer sweepLimit = 20;
 
           // Split correlation keys from Id binds to avoid System.QueryException: Invalid ID
-          String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe()
+          String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
+              SObjectDescribeOptions.DEFERRED
+            )
             .getKeyPrefix();
           Pattern idPattern = Pattern.compile(
             '^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$'
@@ -11552,7 +11558,9 @@ public inherited sharing class WorkflowEngine {
       return false;
     }
 
-    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe()
+    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
+        SObjectDescribeOptions.DEFERRED
+      )
       .getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
     Boolean isId =

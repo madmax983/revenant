@@ -7943,7 +7943,9 @@ public class WorkflowEngineTest {
     WorkflowEngine.disableQueueableInTest = true;
 
     // Get key prefix for Workflow_Instance__c (usually 'a01' or 'a00')
-    String prefix = Workflow_Instance__c.SObjectType.getDescribe()
+    String prefix = Workflow_Instance__c.SObjectType.getDescribe(
+        SObjectDescribeOptions.DEFERRED
+      )
       .getKeyPrefix();
     // Pad to 15 characters to make it look like a valid Salesforce ID
     String lookalikeId = prefix + '000000000000';
