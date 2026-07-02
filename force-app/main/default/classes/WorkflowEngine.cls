@@ -965,14 +965,17 @@ public inherited sharing class WorkflowEngine {
         Integer tsIndex = correlationKey.lastIndexOf('::ts::');
         if (tsIndex != -1) {
           String tsStr = correlationKey.substring(tsIndex + 6);
-          correlationKey = correlationKey.substring(0, tsIndex);
-          try {
-            Long ms = Long.valueOf(tsStr);
-            earliestCreatedDate = DateTime.newInstance(ms);
-          } catch (Exception ex) {
-            // fallback
+          if (tsStr.length() >= 12 && tsStr.length() <= 15) {
+            try {
+              Long ms = Long.valueOf(tsStr);
+              earliestCreatedDate = DateTime.newInstance(ms);
+              correlationKey = correlationKey.substring(0, tsIndex);
+            } catch (Exception ex) {
+              // fallback
+            }
           }
-        } else {
+        }
+        if (earliestCreatedDate == null) {
           // Backwards compatibility fallback for older '#' format
           Integer hashIndex = correlationKey.lastIndexOf('#');
           if (hashIndex != -1) {
@@ -1046,7 +1049,15 @@ public inherited sharing class WorkflowEngine {
     if (String.isNotBlank(val) && val.startsWith('key:')) {
       Integer tsIndex = val.lastIndexOf('::ts::');
       if (tsIndex != -1) {
-        return val.substring(0, tsIndex);
+        String suffix = val.substring(tsIndex + 6);
+        if (suffix.length() >= 12 && suffix.length() <= 15) {
+          try {
+            Long.valueOf(suffix);
+            return val.substring(0, tsIndex);
+          } catch (Exception ex) {
+            // not a valid long, keep suffix
+          }
+        }
       }
       // Backwards compatibility fallback for older '#' format
       Integer hashIndex = val.lastIndexOf('#');
@@ -1063,6 +1074,26 @@ public inherited sharing class WorkflowEngine {
       }
     }
     return val;
+  }
+
+  private static Boolean hasUnambiguousTimestampSuffix(String val) {
+    if (String.isBlank(val)) {
+      return false;
+    }
+    Integer tsIndex = val.lastIndexOf('::ts::');
+    if (tsIndex == -1 || tsIndex == val.length() - 6) {
+      return false;
+    }
+    String suffix = val.substring(tsIndex + 6);
+    if (suffix.length() < 12 || suffix.length() > 15) {
+      return false;
+    }
+    try {
+      Long.valueOf(suffix);
+      return true;
+    } catch (Exception ex) {
+      return false;
+    }
   }
 
   private static DateTime getEarliestPredecessorCreatedDate(
@@ -1543,7 +1574,7 @@ public inherited sharing class WorkflowEngine {
       finalCausationId = req.causationId;
       if (
         finalCausationId.startsWith('key:') &&
-        !finalCausationId.contains('::ts::')
+        !hasUnambiguousTimestampSuffix(finalCausationId)
       ) {
         finalCausationId += '::ts::' + String.valueOf(System.now().getTime());
       }

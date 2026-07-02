@@ -8391,4 +8391,46 @@ public class WorkflowEngineTest {
     System.assertEquals(parentId, lineage[1].instanceId);
     System.assertEquals('key:order#1234567890123', lineage[0].causationId);
   }
+
+  @isTest
+  static void testCausationIdWithDelimiterInKey() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Start a parent workflow with a key containing '::ts::'
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'order::ts::prod',
+      null
+    );
+
+    // 2. Start a child with a key-based causation ID referencing 'order::ts::prod'
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'MyChildKeyDelimiter',
+      null
+    );
+    childReq.causationId = 'key:order::ts::prod';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Verify child instance contains the causationId with the ::ts:: suffix appended after the full key
+    Workflow_Instance__c childInst = [
+      SELECT Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    System.assert(
+      childInst.Causation_Id__c.startsWith('key:order::ts::prod::ts::')
+    );
+
+    // 3. Resolve lineage and verify it correctly parses 'order::ts::prod' (preserving the '::ts::prod' prefix) and resolves to parentId
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(parentId, lineage[1].instanceId);
+    System.assertEquals('key:order::ts::prod', lineage[0].causationId);
+  }
 }
