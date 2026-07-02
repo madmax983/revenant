@@ -8025,7 +8025,10 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Previous_Instance__c = :childId
     ];
-    System.assert(run2.Causation_Id__c.startsWith('key:ParentKeyReused'));
+    System.assert(
+      run2.Causation_Id__c.startsWith('key:{"') &&
+      run2.Causation_Id__c.contains('"k":"ParentKeyReused"')
+    );
 
     // 3. Create a NEW parent run with the same key AFTER the child was created
     Id newerParentId = WorkflowEngine.start(
@@ -8201,7 +8204,9 @@ public class WorkflowEngineTest {
       WHERE Id = :childId
     ];
     System.assert(
-      childInst.Causation_Id__c.startsWith('key:MyRealParentKey::ts::')
+      childInst.Causation_Id__c.startsWith('key:{"') &&
+      childInst.Causation_Id__c.contains('"k":"MyRealParentKey"'),
+      'CausationId was actually: ' + childInst.Causation_Id__c
     );
 
     // 3. Resolve lineage and verify it correctly parses and matches to parentId,
@@ -8243,7 +8248,10 @@ public class WorkflowEngineTest {
       FROM Workflow_Instance__c
       WHERE Id = :childId
     ];
-    System.assert(childInst.Causation_Id__c.startsWith('key:order#123::ts::'));
+    System.assert(
+      childInst.Causation_Id__c.startsWith('key:{"') &&
+      childInst.Causation_Id__c.contains('"k":"order#123"')
+    );
 
     // 3. Resolve lineage and verify it correctly parses 'order#123' (preserving the '#' character) and resolves to parentId
     List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
@@ -8279,23 +8287,8 @@ public class WorkflowEngineTest {
     Id parentId = results[0].instanceId;
     Id childId = results[1].instanceId;
 
-    // Simulate bulk CreatedDate behavior by mocking parent's CreatedDate to be slightly AFTER the pre-insert timestamp.
-    // We update parent's CreatedDate to be now, and set child's timestamp suffix to be 2 seconds ago.
-    Workflow_Instance__c childInst = [
-      SELECT Causation_Id__c
-      FROM Workflow_Instance__c
-      WHERE Id = :childId
-    ];
-    childInst.Causation_Id__c =
-      'key:BulkParentKey::ts::' +
-      String.valueOf(DateTime.now().addSeconds(-2).getTime());
-    update childInst;
-
-    Test.setCreatedDate(parentId, DateTime.now());
-    Test.setCreatedDate(childId, DateTime.now());
-
-    // Resolve lineage. Even though the parent's mocked CreatedDate (now) is 2 seconds after the child's
-    // causation timestamp (2 seconds ago), the 5-second buffer ensures the parent is correctly resolved.
+    // Resolve lineage. Since the child's causation timestamp is stamped with the actual database CreatedDate
+    // after insert, the parent is correctly resolved even without any buffer.
     List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
       childId
     );
@@ -8380,7 +8373,8 @@ public class WorkflowEngineTest {
       WHERE Id = :childId
     ];
     System.assert(
-      childInst.Causation_Id__c.startsWith('key:order#1234567890123::ts::')
+      childInst.Causation_Id__c.startsWith('key:{"') &&
+      childInst.Causation_Id__c.contains('"k":"order#1234567890123"')
     );
 
     // 3. Resolve lineage and verify it correctly parses 'order#1234567890123' (preserving the '#' and 13 digits) and resolves to parentId
@@ -8422,7 +8416,8 @@ public class WorkflowEngineTest {
       WHERE Id = :childId
     ];
     System.assert(
-      childInst.Causation_Id__c.startsWith('key:order::ts::prod::ts::')
+      childInst.Causation_Id__c.startsWith('key:{"') &&
+      childInst.Causation_Id__c.contains('"k":"order::ts::prod"')
     );
 
     // 3. Resolve lineage and verify it correctly parses 'order::ts::prod' (preserving the '::ts::prod' prefix) and resolves to parentId
@@ -8432,5 +8427,48 @@ public class WorkflowEngineTest {
     System.assertEquals(2, lineage.size());
     System.assertEquals(parentId, lineage[1].instanceId);
     System.assertEquals('key:order::ts::prod', lineage[0].causationId);
+  }
+
+  @isTest
+  static void testCausationIdWithTimestampShapedKey() {
+    WorkflowEngine.disableQueueableInTest = true;
+
+    // 1. Start a parent workflow with a key that literally ends with ::ts::<timestamp>
+    Id parentId = WorkflowEngine.start(
+      'WorkflowEngineTest.HappyWorkflow',
+      'order::ts::1719859200000',
+      null
+    );
+
+    // 2. Start a child with a key-based causation ID referencing 'order::ts::1719859200000'
+    WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
+      'WorkflowEngineTest.HappyWorkflow',
+      'MyChildKeyTimestampShaped',
+      null
+    );
+    childReq.causationId = 'key:order::ts::1719859200000';
+    Id childId = WorkflowEngine.startOrGet(
+        new List<WorkflowEngine.StartRequest>{ childReq }
+      )[0]
+      .instanceId;
+
+    // Verify child instance contains the causationId with the JSON envelope, preserving the full key
+    Workflow_Instance__c childInst = [
+      SELECT Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :childId
+    ];
+    System.assert(
+      childInst.Causation_Id__c.startsWith('key:{"') &&
+      childInst.Causation_Id__c.contains('"k":"order::ts::1719859200000"')
+    );
+
+    // 3. Resolve lineage and verify it correctly parses 'order::ts::1719859200000' (preserving the full key) and resolves to parentId
+    List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      childId
+    );
+    System.assertEquals(2, lineage.size());
+    System.assertEquals(parentId, lineage[1].instanceId);
+    System.assertEquals('key:order::ts::1719859200000', lineage[0].causationId);
   }
 }

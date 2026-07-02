@@ -962,16 +962,30 @@ public inherited sharing class WorkflowEngine {
       } else if (cause.startsWith('key:')) {
         String correlationKey = cause.substring(4);
         DateTime earliestCreatedDate = null;
-        Integer tsIndex = correlationKey.lastIndexOf('::ts::');
-        if (tsIndex != -1) {
-          String tsStr = correlationKey.substring(tsIndex + 6);
-          if (tsStr.length() >= 12 && tsStr.length() <= 15) {
-            try {
-              Long ms = Long.valueOf(tsStr);
-              earliestCreatedDate = DateTime.newInstance(ms);
-              correlationKey = correlationKey.substring(0, tsIndex);
-            } catch (Exception ex) {
-              // fallback
+        if (cause.startsWith('key:{"')) {
+          try {
+            String jsonStr = cause.substring(4);
+            Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
+              jsonStr
+            );
+            correlationKey = (String) data.get('k');
+            Long ms = (Long) data.get('t');
+            earliestCreatedDate = DateTime.newInstance(ms);
+          } catch (Exception ex) {
+            // fallback
+          }
+        } else {
+          Integer tsIndex = correlationKey.lastIndexOf('::ts::');
+          if (tsIndex != -1) {
+            String tsStr = correlationKey.substring(tsIndex + 6);
+            if (tsStr.length() >= 12 && tsStr.length() <= 15) {
+              try {
+                Long ms = Long.valueOf(tsStr);
+                earliestCreatedDate = DateTime.newInstance(ms);
+                correlationKey = correlationKey.substring(0, tsIndex);
+              } catch (Exception ex) {
+                // fallback
+              }
             }
           }
         }
@@ -991,12 +1005,7 @@ public inherited sharing class WorkflowEngine {
             }
           }
         }
-        if (earliestCreatedDate != null) {
-          // Add a 5-second buffer to the parsed pre-insert timestamp to safeguard
-          // against bulk-inserted parent/child workflows where the parent's actual
-          // database CreatedDate is assigned slightly after the pre-insert timestamp.
-          earliestCreatedDate = earliestCreatedDate.addSeconds(5);
-        } else {
+        if (earliestCreatedDate == null) {
           earliestCreatedDate = getEarliestPredecessorCreatedDate(inst);
         }
 
@@ -1047,6 +1056,18 @@ public inherited sharing class WorkflowEngine {
 
   public static String cleanCausationId(String val) {
     if (String.isNotBlank(val) && val.startsWith('key:')) {
+      if (val.startsWith('key:{"')) {
+        try {
+          String jsonStr = val.substring(4);
+          Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
+            jsonStr
+          );
+          return 'key:' + (String) data.get('k');
+        } catch (Exception ex) {
+          // fallback
+        }
+      }
+      // Backwards compatibility fallback for older formats
       Integer tsIndex = val.lastIndexOf('::ts::');
       if (tsIndex != -1) {
         String suffix = val.substring(tsIndex + 6);
@@ -1059,7 +1080,6 @@ public inherited sharing class WorkflowEngine {
           }
         }
       }
-      // Backwards compatibility fallback for older '#' format
       Integer hashIndex = val.lastIndexOf('#');
       if (hashIndex != -1) {
         String suffix = val.substring(hashIndex + 1);
@@ -1572,11 +1592,12 @@ public inherited sharing class WorkflowEngine {
     String finalCausationId = null;
     if (String.isNotBlank(req.causationId)) {
       finalCausationId = req.causationId;
-      if (
-        finalCausationId.startsWith('key:') &&
-        !hasUnambiguousTimestampSuffix(finalCausationId)
-      ) {
-        finalCausationId += '::ts::' + String.valueOf(System.now().getTime());
+      if (finalCausationId.startsWith('key:')) {
+        Map<String, Object> payload = new Map<String, Object>{
+          'k' => finalCausationId.substring(4),
+          't' => System.now().getTime() + 1000
+        };
+        finalCausationId = 'key:' + JSON.serialize(payload);
       }
     } else {
       finalCausationId = req.parentInstanceId;
