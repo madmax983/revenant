@@ -204,7 +204,7 @@ public inherited sharing class WorkflowEngine {
   }
 
   private static StepResult checkAndInjectFault(Id instanceId, String stepName, WorkflowStep stepInstance) {
-    if (Test.isRunningTest() && injectedFaults != null && String.isNotBlank(stepName)) {
+    if (Test.isRunningTest() && injectedFaults != null && !injectedFaults.isEmpty() && String.isNotBlank(stepName)) {
       Id rootId = getRootInstanceId(instanceId);
       String key = (rootId != null ? String.valueOf(rootId) : '') + ':' + stepName.toLowerCase();
       if (injectedFaults.containsKey(key)) {
@@ -4087,7 +4087,7 @@ public inherited sharing class WorkflowEngine {
 
     StepResult result;
     try {
-      if (Test.isRunningTest() && injectedFaults != null) {
+      if (Test.isRunningTest() && injectedFaults != null && !injectedFaults.isEmpty()) {
         result = checkAndInjectFault(instanceId, activeStepName, stepInstance);
       }
       if (result == null) {
@@ -6160,6 +6160,7 @@ public inherited sharing class WorkflowEngine {
       instance.Sleep_Until__c = null;
       instance.Async_Job_Id__c = null;
       update as system instance;
+      notifyParentCompletion(instance);
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       WorkflowLifecyclePublisher.publish(instance);
       return;
@@ -8695,8 +8696,9 @@ public inherited sharing class WorkflowEngine {
 
     StepResult result;
     try {
-      if (Test.isRunningTest() && injectedFaults != null) {
-        String compKey = instance.Id + ':' + compensationStepLogName.toLowerCase();
+      if (Test.isRunningTest() && injectedFaults != null && !injectedFaults.isEmpty()) {
+        Id rootId = getRootInstanceId(instance.Id);
+        String compKey = (rootId != null ? String.valueOf(rootId) : '') + ':' + compensationStepLogName.toLowerCase();
         if (injectedFaults.containsKey(compKey)) {
           result = checkAndInjectFault(instance.Id, compensationStepLogName, compensatableStepInstance);
         } else {
@@ -8975,6 +8977,7 @@ public inherited sharing class WorkflowEngine {
         instance.Sleep_Until__c = null;
         instance.Async_Job_Id__c = null;
         update as system instance;
+        notifyParentCompletion(instance);
         WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
         WorkflowLifecyclePublisher.publish(instance);
       } else {
@@ -9022,6 +9025,7 @@ public inherited sharing class WorkflowEngine {
       instance.Sleep_Until__c = null;
       instance.Async_Job_Id__c = null;
       update as system instance;
+      notifyParentCompletion(instance);
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       WorkflowLifecyclePublisher.publish(instance);
     } else {
@@ -9046,6 +9050,7 @@ public inherited sharing class WorkflowEngine {
       instance.Sleep_Until__c = null;
       instance.Async_Job_Id__c = null;
       update as system instance;
+      notifyParentCompletion(instance);
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       WorkflowLifecyclePublisher.publish(instance);
     }

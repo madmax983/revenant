@@ -333,6 +333,53 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  public class TestCompensatableChildWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowTestHarnessTest.MyCompensatableStep',
+        'WorkflowTestHarnessTest.SimpleStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowTestHarnessTest.MyCompensatableStep';
+    }
+    public String getNextStep(String currentStep, StepResult result) {
+      if (currentStep == 'WorkflowTestHarnessTest.MyCompensatableStep') {
+        return 'WorkflowTestHarnessTest.SimpleStep';
+      }
+      return null;
+    }
+  }
+
+  public class StartCompensatableChildStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      String childKey = 'ChildKey';
+      StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
+      if (outcome.isPresent()) {
+        if (outcome.isSuccess()) {
+          return StepResult.complete(null, null);
+        } else {
+          return StepResult.fail('Child failed: ' + outcome.errorMessage);
+        }
+      }
+      return StepResult.startChild('WorkflowTestHarnessTest.TestCompensatableChildWorkflow', childKey, null);
+    }
+  }
+
+  public class TestCompensatableParentWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowTestHarnessTest.StartCompensatableChildStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowTestHarnessTest.StartCompensatableChildStep';
+    }
+    public String getNextStep(String currentStep, StepResult result) {
+      return null;
+    }
+  }
+
   // --- Fault Injection Tests -----------------------------------------------
 
   @isTest
@@ -424,6 +471,54 @@ public class WorkflowTestHarnessTest {
 
     // Verify parent has failed because the child failed
     System.assertEquals('Failed', result.status, 'Parent workflow should fail if child fails');
+  }
+
+  @isTest
+  static void testFaultInjectionChildWorkflowCompensate() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowTestHarnessTest.TestCompensatableParentWorkflow',
+      'Parent_Comp_1',
+      new Map<String, Object>()
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    // Register fault to fail the second step of the child, causing it to roll back
+    harness.failStep('WorkflowTestHarnessTest.SimpleStep', 'Injected child step failure');
+    // Register fault to fail the compensation of the first step of the child
+    harness.failStep('WorkflowTestHarnessTest.MyCompensatableStep_Compensate', 'Injected child compensation failure');
+
+    WorkflowTestHarness.Result result = harness.drive();
+    Test.stopTest();
+
+    // Verify parent has failed because the child failed
+    System.assertEquals('Failed', result.status, 'Parent workflow should fail if child fails');
+
+    // Retrieve child workflow instances
+    List<Workflow_Instance__c> children = [
+      SELECT Id, Status__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :instanceId
+    ];
+    System.assertEquals(1, children.size(), 'Should have started one child workflow');
+    Workflow_Instance__c child = children[0];
+    System.assertEquals('CompensationFailed', child.Status__c, 'Child workflow should be in CompensationFailed state');
+
+    // Verify child step execution log for compensation step is Failed
+    List<Workflow_Step_Execution__c> logs = [
+      SELECT Step_Name__c, Status__c, Error_Details__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :child.Id
+      ORDER BY CreatedDate ASC
+    ];
+    Boolean foundCompensateFailure = false;
+    for (Workflow_Step_Execution__c log : logs) {
+      if (log.Step_Name__c == 'WorkflowTestHarnessTest.MyCompensatableStep_Compensate') {
+        System.assertEquals('Failed', log.Status__c);
+        System.assert(log.Error_Details__c.contains('Injected child compensation failure'));
+        foundCompensateFailure = true;
+      }
+    }
+    System.assert(foundCompensateFailure, 'Should have executed and failed the child compensation step');
   }
 }
 
