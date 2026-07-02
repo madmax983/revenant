@@ -304,6 +304,35 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  public class StartChildStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      String childKey = 'ChildKey';
+      StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
+      if (outcome.isPresent()) {
+        if (outcome.isSuccess()) {
+          return StepResult.complete(null, null);
+        } else {
+          return StepResult.fail('Child failed: ' + outcome.errorMessage);
+        }
+      }
+      return StepResult.startChild('WorkflowTestHarnessTest.TestFaultWorkflow', childKey, null);
+    }
+  }
+
+  public class TestParentWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowTestHarnessTest.StartChildStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowTestHarnessTest.StartChildStep';
+    }
+    public String getNextStep(String currentStep, StepResult result) {
+      return null;
+    }
+  }
+
   // --- Fault Injection Tests -----------------------------------------------
 
   @isTest
@@ -377,6 +406,24 @@ public class WorkflowTestHarnessTest {
       }
     }
     System.assert(foundCompensateFailure, 'Should have executed and failed the compensation step');
+  }
+
+  @isTest
+  static void testFaultInjectionChildWorkflow() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowTestHarnessTest.TestParentWorkflow',
+      'Parent_1',
+      new Map<String, Object>()
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    // Register fault on the child workflow step, specifying the child step name
+    harness.failStep('WorkflowTestHarnessTest.SimpleStep', 'Injected child step failure');
+    WorkflowTestHarness.Result result = harness.drive();
+    Test.stopTest();
+
+    // Verify parent has failed because the child failed
+    System.assertEquals('Failed', result.status, 'Parent workflow should fail if child fails');
   }
 }
 

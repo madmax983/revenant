@@ -165,21 +165,72 @@ public inherited sharing class WorkflowEngine {
   @TestVisible
   private static Map<String, FaultConfig> injectedFaults = new Map<String, FaultConfig>();
 
-  private static void checkAndInjectFault(Id instanceId, String stepName) {
+  @TestVisible
+  private static Map<Id, Id> childToParentMap = new Map<Id, Id>();
+
+  private static void registerChildParent(Id childId, Id parentId) {
+    if (childId != null && parentId != null) {
+      childToParentMap.put(childId, parentId);
+    }
+  }
+
+  private static Id getRootInstanceId(Id instanceId) {
+    if (instanceId == null) {
+      return null;
+    }
+    Id currentId = instanceId;
+    for (Integer i = 0; i < 10; i++) {
+      if (childToParentMap.containsKey(currentId)) {
+        currentId = childToParentMap.get(currentId);
+      } else {
+        // Fallback: Query parent from DB to resolve root across hops/transactions
+        List<Workflow_Instance__c> insts = [
+          SELECT Parent_Instance__c
+          FROM Workflow_Instance__c
+          WHERE Id = :currentId
+          WITH SYSTEM_MODE
+          LIMIT 1
+        ];
+        if (!insts.isEmpty() && insts[0].Parent_Instance__c != null) {
+          Id parentId = insts[0].Parent_Instance__c;
+          childToParentMap.put(currentId, parentId);
+          currentId = parentId;
+        } else {
+          break;
+        }
+      }
+    }
+    return currentId;
+  }
+
+  private static StepResult checkAndInjectFault(Id instanceId, String stepName, WorkflowStep stepInstance) {
     if (Test.isRunningTest() && injectedFaults != null && String.isNotBlank(stepName)) {
-      String key = (instanceId != null ? String.valueOf(instanceId) : '') + ':' + stepName.toLowerCase();
+      Id rootId = getRootInstanceId(instanceId);
+      String key = (rootId != null ? String.valueOf(rootId) : '') + ':' + stepName.toLowerCase();
       if (injectedFaults.containsKey(key)) {
         FaultConfig config = injectedFaults.get(key);
         if (config != null) {
+          System.debug('FaultInjection key=' + key + ' stepInstance=' + stepInstance + ' isRetryConfigurable=' + (stepInstance instanceof RetryConfigurable));
+          Boolean shouldFail = false;
           if (config.remainingFailures == null) {
-            throw new WorkflowException(config.message);
+            shouldFail = true;
           } else if (config.remainingFailures > 0) {
             config.remainingFailures--;
+            shouldFail = true;
+          }
+          if (shouldFail) {
+            if (stepInstance instanceof RetryConfigurable) {
+              RetryPolicy policy = ((RetryConfigurable) stepInstance).getRetryPolicy();
+              if (policy != null) {
+                return StepResult.retry(policy);
+              }
+            }
             throw new WorkflowException(config.message);
           }
         }
       }
     }
+    return null;
   }
 
 
@@ -4038,9 +4089,11 @@ public inherited sharing class WorkflowEngine {
     StepResult result;
     try {
       if (Test.isRunningTest() && injectedFaults != null) {
-        checkAndInjectFault(instanceId, activeStepName);
+        result = checkAndInjectFault(instanceId, activeStepName, stepInstance);
       }
-      result = stepInstance.execute(context);
+      if (result == null) {
+        result = stepInstance.execute(context);
+      }
     } finally {
       if (timeoutSeconds != null && timeoutSeconds > 0) {
         stepExec.Timeout_At__c = null;
@@ -6208,6 +6261,9 @@ public inherited sharing class WorkflowEngine {
 
     try {
       insert as system instance;
+      if (Test.isRunningTest() && parentId != null) {
+        registerChildParent(instance.Id, parentId);
+      }
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
         // Concurrency backstop: check if the sibling that won the insert race belongs to the same parent.
@@ -6387,6 +6443,11 @@ public inherited sharing class WorkflowEngine {
 
     try {
       insert as system instancesToInsert;
+      if (Test.isRunningTest()) {
+        for (Workflow_Instance__c inst : instancesToInsert) {
+          registerChildParent(inst.Id, parentId);
+        }
+      }
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
         for (Workflow_Instance__c inst : instancesToInsert) {
@@ -8638,12 +8699,14 @@ public inherited sharing class WorkflowEngine {
       if (Test.isRunningTest() && injectedFaults != null) {
         String compKey = instance.Id + ':' + compensationStepLogName.toLowerCase();
         if (injectedFaults.containsKey(compKey)) {
-          checkAndInjectFault(instance.Id, compensationStepLogName);
+          result = checkAndInjectFault(instance.Id, compensationStepLogName, compensatableStepInstance);
         } else {
-          checkAndInjectFault(instance.Id, activeStepName);
+          result = checkAndInjectFault(instance.Id, activeStepName, compensatableStepInstance);
         }
       }
-      result = compensatableStepInstance.compensate(context);
+      if (result == null) {
+        result = compensatableStepInstance.compensate(context);
+      }
     } catch (Exception ex) {
       persistStepBreadcrumbs(instance, stepExec, null, context);
       stepExec.Status__c = 'Failed';
