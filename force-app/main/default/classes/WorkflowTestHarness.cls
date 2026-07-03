@@ -469,13 +469,7 @@ public inherited sharing class WorkflowTestHarness {
         Workflow_Step_Execution__c se = latestStepMap.get(stepName.trim());
         if (se != null) {
           if (se.Status__c == 'Pending' && se.SOQL_Query_Count__c != null) {
-            if (se.Output__c != null && (
-              se.Output__c.contains('$timeoutStep') ||
-              se.Output__c.contains('childWorkflowName') ||
-              se.Output__c.contains('childCorrelationKeys') ||
-              se.Output__c.contains('waitingForApproval') ||
-              se.Output__c.contains('approvalKey')
-            )) {
+            if (isFrameworkWaitState(se.Output__c)) {
               continue;
             }
             if (WorkflowEngine.useDynamicScheduling) {
@@ -505,6 +499,26 @@ public inherited sharing class WorkflowTestHarness {
         Async_Job_Id__c = null
       );
     }
+  }
+
+  private Boolean isFrameworkWaitState(String output) {
+    if (String.isBlank(output) || !output.trim().startsWith('{')) {
+      return false;
+    }
+    try {
+      Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(output);
+      if (data != null) {
+        if (data.containsKey('$timeoutStep') ||
+            data.containsKey('childWorkflowName') ||
+            data.containsKey('childRequests') ||
+            data.containsKey('waitingForApproval')) {
+          return true;
+        }
+      }
+    } catch (Exception ex) {
+      // Ignored: Not framework wait metadata
+    }
+    return false;
   }
 
   /**
@@ -730,14 +744,7 @@ public inherited sharing class WorkflowTestHarness {
         String status = se.Status__c;
         if (inst.Status__c == 'Suspended' && inst.Sleep_Until__c != null) {
           if (checkSleep && status == 'Pending' && se.SOQL_Query_Count__c != null) {
-            // Exclude timed waits, child workflows, and approvals carrying wait metadata in Output
-            if (se.Output__c != null && (
-              se.Output__c.contains('$timeoutStep') ||
-              se.Output__c.contains('childWorkflowName') ||
-              se.Output__c.contains('childCorrelationKeys') ||
-              se.Output__c.contains('waitingForApproval') ||
-              se.Output__c.contains('approvalKey')
-            )) {
+            if (isFrameworkWaitState(se.Output__c)) {
               continue;
             }
             // Check CronTrigger to ensure this specific step scheduled a sleep resume job
