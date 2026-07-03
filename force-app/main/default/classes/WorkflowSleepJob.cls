@@ -15,6 +15,9 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
   }
 
   public void execute(SchedulableContext ctx) {
+    // Clear expired sleep markers before enqueueing to prevent immediate watchdog double-wakes
+    clearSleepMarkers(this.instanceId);
+
     // Enqueue the next step execution
     if (Test.isRunningTest()) {
       if (!WorkflowEngine.disableQueueableInTest) {
@@ -33,6 +36,29 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     }
   }
 
+  private static void clearSleepMarkers(Id instanceId) {
+    List<Workflow_Instance__c> insts = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+    if (insts.isEmpty()) {
+      return;
+    }
+    Workflow_Instance__c inst = insts[0];
+    Workflow_Instance__c toUpdate = new Workflow_Instance__c(
+      Id = instanceId,
+      Sleep_Until__c = null,
+      Async_Job_Id__c = null
+    );
+    if (inst.Status__c == 'Suspended') {
+      toUpdate.Status__c = 'Running';
+    }
+    update as system toUpdate;
+  }
+
   public inherited sharing class QueueableSleepJob implements Queueable {
     private Id instanceId;
     private String stepName;
@@ -47,6 +73,9 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     }
 
     public void execute(QueueableContext ctx) {
+      // Clear expired sleep markers before enqueueing to prevent immediate watchdog double-wakes
+      clearSleepMarkers(this.instanceId);
+
       if (Test.isRunningTest()) {
         if (!WorkflowEngine.disableQueueableInTest) {
           System.enqueueJob(new WorkflowOrchestrator(this.instanceId, this.stepName));
