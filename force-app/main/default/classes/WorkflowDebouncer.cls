@@ -119,6 +119,11 @@ public inherited sharing class WorkflowDebouncer {
           'Correlation key is required.'
         );
       }
+      if (req.correlationKey.length() > 200) {
+        throw new WorkflowEngine.WorkflowException(
+          'Correlation key length cannot exceed 200 characters.'
+        );
+      }
       if (req.debounceSeconds == null || req.debounceSeconds < 0) {
         throw new WorkflowEngine.WorkflowException(
           'Debounce seconds must be non-negative.'
@@ -226,9 +231,11 @@ public inherited sharing class WorkflowDebouncer {
         Input_Json__c,
         Attributes_Json__c,
         Causation_Id__c,
-        Fire_At__c
+        Fire_At__c,
+        Retry_Count__c,
+        Error_Message__c
       FROM Debounce_State__c
-      WHERE Fire_At__c <= :now
+      WHERE Fire_At__c <= :now AND (Retry_Count__c = NULL OR Retry_Count__c < 3)
       WITH SYSTEM_MODE
       ORDER BY Fire_At__c ASC, Id ASC
       LIMIT 100
@@ -271,6 +278,7 @@ public inherited sharing class WorkflowDebouncer {
     }
 
     List<Debounce_State__c> statesToDelete = new List<Debounce_State__c>();
+    List<Debounce_State__c> statesToUpdate = new List<Debounce_State__c>();
 
     try {
       WorkflowEngine.startOrGet(startRequests);
@@ -283,7 +291,7 @@ public inherited sharing class WorkflowDebouncer {
       // Fallback: start them individually
       for (Integer i = 0; i < startRequests.size(); i++) {
         // Halt if approaching SOQL or DML limits to prevent uncatchable governor exceptions
-        if (Limits.getQueries() >= 90 || Limits.getDmlStatements() >= 140) {
+        if (Limits.getQueries() >= 90 || Limits.getDmlStatements() >= 135) {
           System.debug(
             LoggingLevel.WARN,
             'WorkflowDebouncer sweep individual fallback halted to prevent Governor Limit exceptions.'
@@ -303,11 +311,37 @@ public inherited sharing class WorkflowDebouncer {
             'WorkflowDebouncer sweep failed to start individual: ' +
             innerEx.getMessage()
           );
+
+          Integer currentRetries = state.Retry_Count__c == null
+            ? 0
+            : (Integer) state.Retry_Count__c;
+          currentRetries++;
+          state.Retry_Count__c = currentRetries;
+
+          String errMsg = innerEx.getMessage();
+          if (innerEx.getStackTraceString() != null) {
+            errMsg += '\n' + innerEx.getStackTraceString();
+          }
+          if (errMsg.length() > 32768) {
+            errMsg = errMsg.substring(0, 32768);
+          }
+          state.Error_Message__c = errMsg;
+
+          if (currentRetries >= 3) {
+            state.Fire_At__c = now.addYears(100); // Quarantine
+          } else {
+            // Exponential backoff retry in 1 or 2 minutes
+            state.Fire_At__c = now.addSeconds(currentRetries * 60);
+          }
+          statesToUpdate.add(state);
         }
       }
     } finally {
       if (!statesToDelete.isEmpty()) {
         delete as system statesToDelete;
+      }
+      if (!statesToUpdate.isEmpty()) {
+        update as system statesToUpdate;
       }
     }
   }

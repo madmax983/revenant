@@ -413,4 +413,131 @@ private class WorkflowDebounceTest {
     System.assertEquals('val1', attrs[0].Value__c);
     Test.stopTest();
   }
+
+  @isTest
+  static void testOverlongCorrelationKeyValidation() {
+    String longKey = 'k'.repeat(201);
+    try {
+      WorkflowEngine.startDebounced(
+        'WorkflowEngineTest.HappyWorkflow',
+        longKey,
+        '{}',
+        10
+      );
+      System.assert(false, 'Should have failed due to correlation key length');
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assert(
+        ex.getMessage()
+          .contains('Correlation key length cannot exceed 200 characters'),
+        'Exception message should mention 200 character limit'
+      );
+    }
+  }
+
+  @isTest
+  static void testFailedDebounceRetryAndQuarantine() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.mockNow = Datetime.now();
+
+    Test.startTest();
+    // Enqueue debounce state with a invalid/non-existent workflow name
+    WorkflowEngine.startDebounced(
+      'NonExistentWorkflowClassDoesNotExist',
+      'deb_key_fail_retry',
+      '{}',
+      10
+    );
+
+    // Verify debounce state created
+    List<Debounce_State__c> states = [
+      SELECT Id, Fire_At__c, Retry_Count__c, Error_Message__c
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = 'deb_key_fail_retry'
+    ];
+    System.assertEquals(1, states.size());
+    System.assertEquals(0, states[0].Retry_Count__c);
+
+    // 1st Sweep: Advance 11 seconds and run sweep
+    WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(11);
+    WorkflowDebouncer.sweep();
+
+    states = [
+      SELECT Id, Fire_At__c, Retry_Count__c, Error_Message__c
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = 'deb_key_fail_retry'
+    ];
+    System.assertEquals(1, states.size(), 'Poison row should not be deleted');
+    System.assertEquals(
+      1,
+      states[0].Retry_Count__c,
+      'Retry count should be incremented to 1'
+    );
+    System.assertNotEquals(null, states[0].Error_Message__c);
+    System.assertEquals(
+      WorkflowEngine.mockNow.addSeconds(60),
+      states[0].Fire_At__c,
+      'Fire time should be pushed by 60s'
+    );
+
+    // 2nd Sweep: Sweep again at current time (should skip since Fire_At__c is in the future)
+    WorkflowDebouncer.sweep();
+    states = [
+      SELECT Id, Retry_Count__c
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = 'deb_key_fail_retry'
+    ];
+    System.assertEquals(
+      1,
+      states[0].Retry_Count__c,
+      'Retry count should still be 1 (skipped)'
+    );
+
+    // 3rd Sweep: Advance past the 1-minute retry push (61 seconds) and sweep
+    WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(61);
+    WorkflowDebouncer.sweep();
+
+    states = [
+      SELECT Id, Fire_At__c, Retry_Count__c, Error_Message__c
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = 'deb_key_fail_retry'
+    ];
+    System.assertEquals(2, states[0].Retry_Count__c, 'Retry count should be 2');
+    System.assertEquals(
+      WorkflowEngine.mockNow.addSeconds(120),
+      states[0].Fire_At__c,
+      'Fire time should be pushed by 120s'
+    );
+
+    // 4th Sweep: Advance past the 2-minute retry push (121 seconds) and sweep
+    WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(121);
+    WorkflowDebouncer.sweep();
+
+    states = [
+      SELECT Id, Fire_At__c, Retry_Count__c, Error_Message__c
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = 'deb_key_fail_retry'
+    ];
+    System.assertEquals(3, states[0].Retry_Count__c, 'Retry count should be 3');
+    System.assertEquals(
+      WorkflowEngine.mockNow.addYears(100),
+      states[0].Fire_At__c,
+      'Fire time should be far-future (quarantined)'
+    );
+
+    // 5th Sweep: Sweep again. Since Retry_Count__c >= 3, it should never be picked up
+    WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(1000);
+    WorkflowDebouncer.sweep();
+
+    states = [
+      SELECT Id, Retry_Count__c
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = 'deb_key_fail_retry'
+    ];
+    System.assertEquals(
+      3,
+      states[0].Retry_Count__c,
+      'Retry count should stay at 3 (completely ignored by sweep)'
+    );
+    Test.stopTest();
+  }
 }
