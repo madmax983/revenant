@@ -43,7 +43,7 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
 
   private static Boolean checkAndClearSleepMarkers(Id instanceId, String stepName) {
     List<Workflow_Instance__c> insts = [
-      SELECT Status__c, Sleep_Until__c, Current_Step__c
+      SELECT Status__c, Sleep_Until__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -57,11 +57,16 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
       return false;
     }
     if (String.isNotBlank(stepName)) {
-      List<String> activeSteps = new List<String>();
-      for (String s : inst.Current_Step__c.split(',')) {
-        activeSteps.add(s.trim().toLowerCase());
-      }
-      if (!activeSteps.contains(stepName.trim().toLowerCase())) {
+      List<Workflow_Step_Execution__c> steps = [
+        SELECT Id
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c = :instanceId
+          AND Step_Name__c = :stepName
+          AND Status__c = 'Pending'
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      if (steps.isEmpty()) {
         return false;
       }
     }

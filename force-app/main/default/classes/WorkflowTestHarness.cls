@@ -510,7 +510,7 @@ public inherited sharing class WorkflowTestHarness {
       if (data != null) {
         if (data.containsKey('$timeoutStep') ||
             data.containsKey('childWorkflowName') ||
-            data.containsKey('childRequests') ||
+            data.containsKey('childCorrelationKeys') ||
             data.containsKey('waitingForApproval')) {
           return true;
         }
