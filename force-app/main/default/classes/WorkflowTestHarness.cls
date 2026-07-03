@@ -34,7 +34,7 @@
  * before driving past the suspend.
  */
 @IsTest
-public class WorkflowTestHarness {
+public inherited sharing class WorkflowTestHarness {
   /** Default hop budget if the caller does not supply one. */
   public static final Integer DEFAULT_MAX_HOPS = 100;
 
@@ -74,6 +74,9 @@ public class WorkflowTestHarness {
     public Integer hops;
     public Boolean isTerminal;
     public Boolean isSuspended;
+    public Boolean isSleeping;
+    public Boolean isAwaitingRetry;
+
 
     /** True if the named step appears anywhere in the audit trail. */
     public Boolean reachedStep(String stepName) {
@@ -86,6 +89,8 @@ public class WorkflowTestHarness {
   // Instances discovered so far (root + spawned children). Cached so the per-hop
   // tree scan stays cheap on SOQL instead of re-walking the whole tree each hop.
   private final Set<Id> knownInstanceIds;
+  private final Set<Id> scannedInstanceIds = new Set<Id>();
+  public Boolean disableAutoTimeSkip = false;
 
   public WorkflowTestHarness(Id instanceId) {
     if (!Test.isRunningTest()) {
@@ -257,6 +262,7 @@ public class WorkflowTestHarness {
     String payload,
     Integer maxHops
   ) {
+    scannedInstanceIds.clear();
     WorkflowEngine.signal(correlationKey, signalName, payload);
     return drive(maxHops);
   }
@@ -292,6 +298,9 @@ public class WorkflowTestHarness {
   private Boolean isAdvanceable(Workflow_Instance__c inst) {
     if (ACTIVE_STATUSES.contains(inst.Status__c)) {
       return true;
+    }
+    if (disableAutoTimeSkip) {
+      return false;
     }
     // A sleep/retry wait carries a wake time; resuming it is deterministic, so the
     // harness skips the timer and lets the engine re-run the step (the same resume
@@ -363,6 +372,7 @@ public class WorkflowTestHarness {
    * own proven crash-driving pattern instead.)
    */
   private void runStepSafely(Id instanceId, String stepName) {
+    scannedInstanceIds.remove(instanceId);
     totalHops++;
     try {
       WorkflowEngine.runStep(instanceId, stepName);
@@ -412,30 +422,43 @@ public class WorkflowTestHarness {
       }
     }
 
-    if (maybeSpawnedChild) {
-      for (Workflow_Instance__c child : [
+    Set<Id> unscannedIds = new Set<Id>();
+    for (Id instId : knownInstanceIds) {
+      if (!scannedInstanceIds.contains(instId)) {
+        unscannedIds.add(instId);
+      }
+    }
+
+    if (maybeSpawnedChild && !unscannedIds.isEmpty()) {
+      List<Workflow_Instance__c> children = [
         SELECT Id, Status__c, Current_Step__c, Sleep_Until__c
         FROM Workflow_Instance__c
         WHERE
-          Parent_Instance__c IN :knownInstanceIds
+          Parent_Instance__c IN :unscannedIds
           AND Id NOT IN :knownInstanceIds
         WITH SYSTEM_MODE
-      ]) {
+      ];
+      for (Workflow_Instance__c child : children) {
         byId.put(child.Id, child);
         knownInstanceIds.add(child.Id);
       }
+      scannedInstanceIds.addAll(unscannedIds);
     }
     return byId.values();
   }
 
   private Workflow_Instance__c queryInstance(Id instanceId) {
-    return [
+    List<Workflow_Instance__c> results = [
       SELECT Id, Status__c, Current_Step__c, Sleep_Until__c, Output__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
       LIMIT 1
     ];
+    if (results.isEmpty()) {
+      throw new HarnessException('Workflow instance ' + instanceId + ' not found in the database.');
+    }
+    return results[0];
   }
 
   private Result buildResult() {
@@ -452,6 +475,8 @@ public class WorkflowTestHarness {
     r.completedSteps = new List<String>();
     r.compensatedSteps = new List<String>();
 
+    Map<String, String> stepLatestStatus = new Map<String, String>();
+
     for (Workflow_Step_Execution__c se : [
       SELECT Step_Name__c, Status__c
       FROM Workflow_Step_Execution__c
@@ -465,7 +490,31 @@ public class WorkflowTestHarness {
       } else if (se.Status__c == 'Compensated') {
         r.compensatedSteps.add(se.Step_Name__c);
       }
+      stepLatestStatus.put(se.Step_Name__c.toLowerCase(), se.Status__c);
     }
+
+    r.isSleeping = false;
+    r.isAwaitingRetry = false;
+    if (root.Status__c == 'Suspended' && root.Sleep_Until__c != null) {
+      List<String> activeSteps = new List<String>();
+      if (String.isNotBlank(root.Current_Step__c)) {
+        for (String s : root.Current_Step__c.split(',')) {
+          activeSteps.add(s.trim());
+        }
+      }
+      for (String step : activeSteps) {
+        String status = stepLatestStatus.get(step.toLowerCase());
+        if (status == 'Retrying') {
+          r.isAwaitingRetry = true;
+        } else if (status == 'Pending') {
+          r.isSleeping = true;
+        }
+      }
+      if (!r.isSleeping && !r.isAwaitingRetry) {
+        r.isSleeping = true;
+      }
+    }
+
     return r;
   }
 
@@ -522,6 +571,101 @@ public class WorkflowTestHarness {
       }
     }
     return this;
+  }
+
+  private Workflow_Instance__c findSleepingOrRetryingInstance(String stepName, Boolean checkSleep) {
+    if (String.isBlank(stepName)) {
+      return null;
+    }
+    List<Workflow_Instance__c> tree = collectTree();
+    List<Id> candidateInstanceIds = new List<Id>();
+
+    for (Workflow_Instance__c inst : tree) {
+      if (String.isNotBlank(inst.Current_Step__c)) {
+        List<String> activeSteps = new List<String>();
+        for (String s : inst.Current_Step__c.split(',')) {
+          activeSteps.add(s.trim().toLowerCase());
+        }
+        if (activeSteps.contains(stepName.toLowerCase())) {
+          candidateInstanceIds.add(inst.Id);
+        }
+      }
+    }
+
+    if (candidateInstanceIds.isEmpty()) {
+      return null;
+    }
+
+    List<Workflow_Step_Execution__c> execs = [
+      SELECT Workflow_Instance__c, Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :candidateInstanceIds
+        AND Step_Name__c = :stepName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+
+    Map<Id, String> latestStatusMap = new Map<Id, String>();
+    for (Workflow_Step_Execution__c se : execs) {
+      if (!latestStatusMap.containsKey(se.Workflow_Instance__c)) {
+        latestStatusMap.put(se.Workflow_Instance__c, se.Status__c);
+      }
+    }
+
+    for (Workflow_Instance__c inst : tree) {
+      if (latestStatusMap.containsKey(inst.Id)) {
+        String status = latestStatusMap.get(inst.Id);
+        if (inst.Status__c == 'Suspended' && inst.Sleep_Until__c != null) {
+          if (checkSleep && status == 'Pending') {
+            return inst;
+          }
+          if (!checkSleep && status == 'Retrying') {
+            return inst;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  public Result fireSleep(String stepName) {
+    return fireSleep(stepName, DEFAULT_MAX_HOPS);
+  }
+
+  public Result fireSleep(String stepName, Integer maxHops) {
+    if (String.isBlank(stepName)) {
+      throw new HarnessException('stepName is required.');
+    }
+    if (maxHops == null || maxHops <= 0) {
+      throw new HarnessException('maxHops must be a positive number.');
+    }
+    Workflow_Instance__c inst = findSleepingOrRetryingInstance(stepName, true);
+    if (inst == null) {
+      throw new HarnessException('Step ' + stepName + ' is not currently sleeping.');
+    }
+    clearSleepMarkers(inst.Id);
+    runStepSafely(inst.Id, stepName);
+    return drive(maxHops);
+  }
+
+  public Result fireRetry(String stepName) {
+    return fireRetry(stepName, DEFAULT_MAX_HOPS);
+  }
+
+  public Result fireRetry(String stepName, Integer maxHops) {
+    if (String.isBlank(stepName)) {
+      throw new HarnessException('stepName is required.');
+    }
+    if (maxHops == null || maxHops <= 0) {
+      throw new HarnessException('maxHops must be a positive number.');
+    }
+    Workflow_Instance__c inst = findSleepingOrRetryingInstance(stepName, false);
+    if (inst == null) {
+      throw new HarnessException('Step ' + stepName + ' is not currently awaiting retry.');
+    }
+    clearSleepMarkers(inst.Id);
+    runStepSafely(inst.Id, stepName);
+    return drive(maxHops);
   }
 }
 

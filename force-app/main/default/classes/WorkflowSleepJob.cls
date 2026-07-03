@@ -2,6 +2,9 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
   private Id instanceId;
 
   public WorkflowSleepJob(Id instanceId) {
+    if (instanceId == null) {
+      throw new WorkflowEngine.WorkflowException('instanceId is required.');
+    }
     this.instanceId = instanceId;
   }
 
@@ -19,10 +22,12 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     WorkflowEngine.scheduleTimeoutJobForInstance(this.instanceId);
 
     // Clean up this scheduled execution from the schedule queue
-    System.abortJob(ctx.getTriggerId());
+    if (ctx != null && ctx.getTriggerId() != null) {
+      System.abortJob(ctx.getTriggerId());
+    }
   }
 
-  public class QueueableSleepJob implements Queueable {
+  public inherited sharing class QueueableSleepJob implements Queueable {
     private Id instanceId;
 
     public QueueableSleepJob(Id instanceId) {

@@ -38,6 +38,12 @@ Result r = harness.injectSignal(correlationKey, signalName, payload);
 // Fire the shipped WorkflowTimeoutJob for a specific step, then resume driving.
 Result r = harness.fireTimeout('MyWorkflow.SomeStep');
 
+// Resume a sleeping step immediately (time-skip), then resume driving.
+Result r = harness.fireSleep('MyWorkflow.SomeStep');
+
+// Resume a retrying step immediately (time-skip), then resume driving.
+Result r = harness.fireRetry('MyWorkflow.SomeStep');
+
 // Inject a fault on a step to fail forward execution or compensation indefinitely (returns `this` for chaining).
 harness.failStep('MyWorkflow.SomeStep', 'Failure message');
 
@@ -65,6 +71,8 @@ result.compensatedSteps // Compensation steps that ran, LIFO order
 result.hops             // Total hops consumed across all drive()/step() calls
 result.isTerminal       // Completed / Failed / Compensated / Cancelled / ContinuedAsNew
 result.isSuspended      // Status == Suspended (waiting for signal)
+result.isSleeping       // Status == Suspended and awaiting timer/sleep resume
+result.isAwaitingRetry  // Status == Suspended and awaiting retry back-off resume
 
 result.reachedStep('MyWorkflow.SomeStep')  // true if step appears in executedSteps
 ```
@@ -319,6 +327,65 @@ static void testSagaRollbackWithFault() {
     Test.stopTest();
 
     System.assertEquals('CompensationFailed', result.status);
+}
+```
+
+---
+
+## Pattern 11 — Durable timer (sleep)
+
+By default, `drive()` automatically skips/resumes sleeps and retries. To test sleeps step-by-step, set `disableAutoTimeSkip = true` on the harness, use `step()` to execute the sleeping step, assert that the result `isSleeping` is true and status is `Suspended`, and then call `fireSleep` to resume.
+
+```java
+@isTest
+static void testSleepWorkflow() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start('MySleepWorkflow', 'key-1', null);
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    harness.disableAutoTimeSkip = true;
+
+    // Run up to the sleep step
+    WorkflowTestHarness.Result result = harness.step();
+    System.assertEquals('Suspended', result.status);
+    System.assertEquals(true, result.isSleeping);
+
+    // Skip the sleep timer and resume
+    WorkflowTestHarness.Result finalResult = harness.fireSleep('MySleepWorkflow.SleepStep');
+    Test.stopTest();
+
+    System.assertEquals('Completed', finalResult.status);
+}
+```
+
+---
+
+## Pattern 12 — Retry back-off
+
+To verify how step retries behave over multiple attempts, set `disableAutoTimeSkip = true` on the harness. Each attempt will pause with `isAwaitingRetry = true` and `Suspended` status. Call `fireRetry` to execute each subsequent attempt.
+
+```java
+@isTest
+static void testRetryWorkflow() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start('MyRetryWorkflow', 'key-1', null);
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    harness.disableAutoTimeSkip = true;
+
+    // Run first attempt (which fails and schedules retry)
+    WorkflowTestHarness.Result result = harness.step();
+    System.assertEquals('Suspended', result.status);
+    System.assertEquals(true, result.isAwaitingRetry);
+
+    // Fire the retry (runs second attempt, which also fails)
+    WorkflowTestHarness.Result secondResult = harness.fireRetry('MyRetryWorkflow.RetryStep');
+    System.assertEquals('Suspended', secondResult.status);
+    System.assertEquals(true, secondResult.isAwaitingRetry);
+
+    // Fire the retry again (runs third attempt, which succeeds)
+    WorkflowTestHarness.Result finalResult = harness.fireRetry('MyRetryWorkflow.RetryStep');
+    Test.stopTest();
+
+    System.assertEquals('Completed', finalResult.status);
 }
 ```
 

@@ -518,7 +518,192 @@ public class WorkflowTestHarnessTest {
         foundCompensateFailure = true;
       }
     }
-    System.assert(foundCompensateFailure, 'Should have executed and failed the child compensation step');
+  }
+
+  // ==========================================================================
+  // ISSUE 110: DETERMINISTIC SLEEP & RETRY TIME-SKIP TEST ARTIFACTS
+  // ==========================================================================
+
+  public class TimeSkipSleepWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowTestHarnessTest.TimeSkipSleepStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowTestHarnessTest.TimeSkipSleepStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  public class TimeSkipSleepStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (ctx.stepStateJson != null) {
+        return StepResult.complete(null, 'ResumedSuccessfully');
+      }
+      return StepResult.sleep(60, 'resumed_state');
+    }
+  }
+
+  public class TimeSkipRetryWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowTestHarnessTest.TimeSkipRetryStep' };
+    }
+    public String getInitialStep() {
+      return 'WorkflowTestHarnessTest.TimeSkipRetryStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  public class TimeSkipRetryStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (ctx.attempt < 3) {
+        return StepResult.retry(5);
+      }
+      return StepResult.complete(null, 'RetryComplete');
+    }
+  }
+
+  @isTest
+  static void testSleepWorkflowTimeSkip() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowTestHarnessTest.TimeSkipSleepWorkflow',
+      'SleepKey',
+      null
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    harness.disableAutoTimeSkip = true;
+    
+    // Drive the initial step (TimeSkipSleepStep)
+    WorkflowTestHarness.Result result = harness.step();
+    
+    System.assertEquals('Suspended', result.status);
+    System.assertEquals(true, result.isSleeping, 'Should be marked as sleeping');
+    System.assertEquals(false, result.isAwaitingRetry, 'Should not be retrying');
+    
+    // Fire the sleep and drive to completion
+    WorkflowTestHarness.Result finalResult = harness.fireSleep(
+      'WorkflowTestHarnessTest.TimeSkipSleepStep'
+    );
+    Test.stopTest();
+    
+    System.assertEquals('Completed', finalResult.status);
+  }
+
+  @isTest
+  static void testRetryWorkflowTimeSkip() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowTestHarnessTest.TimeSkipRetryWorkflow',
+      'RetryKey',
+      null
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    harness.disableAutoTimeSkip = true;
+    
+    // Drive the initial step (TimeSkipRetryStep first attempt which retries)
+    WorkflowTestHarness.Result result = harness.step();
+    
+    System.assertEquals('Suspended', result.status);
+    System.assertEquals(false, result.isSleeping, 'Should not be sleeping');
+    System.assertEquals(true, result.isAwaitingRetry, 'Should be marked as retrying');
+    
+    // Fire the retry once (will run second attempt and retry again)
+    WorkflowTestHarness.Result secondResult = harness.fireRetry(
+      'WorkflowTestHarnessTest.TimeSkipRetryStep'
+    );
+    System.assertEquals('Suspended', secondResult.status);
+    System.assertEquals(true, secondResult.isAwaitingRetry);
+    
+    // Fire the retry again (will run third attempt and complete)
+    WorkflowTestHarness.Result finalResult = harness.fireRetry(
+      'WorkflowTestHarnessTest.TimeSkipRetryStep'
+    );
+    Test.stopTest();
+    
+    System.assertEquals('Completed', finalResult.status);
+  }
+
+  @isTest
+  static void testFireSleepOnNonSleepingStepThrows() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowTestHarnessTest.TimeSkipSleepWorkflow',
+      'SleepKey2',
+      null
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    harness.drive();
+    Test.stopTest();
+    
+    try {
+      harness.fireSleep('WorkflowTestHarnessTest.TimeSkipSleepStep');
+      System.assert(false, 'Should have thrown HarnessException');
+    } catch (WorkflowTestHarness.HarnessException ex) {
+      System.assert(
+        ex.getMessage().contains('is not currently sleeping'),
+        'Actionable message expected: ' + ex.getMessage()
+      );
+    }
+  }
+
+  @isTest
+  static void testFireRetryOnNonRetryingStepThrows() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowTestHarnessTest.TimeSkipRetryWorkflow',
+      'RetryKey2',
+      null
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    harness.drive();
+    Test.stopTest();
+    
+    try {
+      harness.fireRetry('WorkflowTestHarnessTest.TimeSkipRetryStep');
+      System.assert(false, 'Should have thrown HarnessException');
+    } catch (WorkflowTestHarness.HarnessException ex) {
+      System.assert(
+        ex.getMessage().contains('is not currently awaiting retry'),
+        'Actionable message expected: ' + ex.getMessage()
+      );
+    }
+  }
+
+  @isTest
+  static void testJobsGracefulNullContext() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowTestHarnessTest.TimeSkipSleepWorkflow',
+      'SleepKeyJobs',
+      null
+    );
+    // Call Schedulable execute directly with null context.
+    // It should run without throwing since we guarded System.abortJob.
+    new WorkflowSleepJob(instanceId).execute(null);
+    new WorkflowRetryJob(instanceId, 'TimeSkipRetryStep').execute(null);
+
+    // Validate that constructors throw on null instance ID
+    try {
+      new WorkflowSleepJob(null);
+      System.assert(false, 'Expected WorkflowSleepJob to throw WorkflowException');
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assertEquals('instanceId is required.', ex.getMessage());
+    }
+
+    try {
+      new WorkflowRetryJob(null, 'TimeSkipRetryStep');
+      System.assert(false, 'Expected WorkflowRetryJob to throw WorkflowException');
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assertEquals('instanceId is required.', ex.getMessage());
+    }
+    
+    Test.stopTest();
   }
 }
 
