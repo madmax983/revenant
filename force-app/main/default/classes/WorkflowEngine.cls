@@ -11452,13 +11452,13 @@ public inherited sharing class WorkflowEngine {
         if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
           return String.valueOf(
             System.enqueueJob(
-              new WorkflowSleepJob.QueueableSleepJob(instanceId),
+              new WorkflowSleepJob.QueueableSleepJob(instanceId, stepName),
               delaySeconds / 60
             )
           );
         }
       }
-      WorkflowSleepJob job = new WorkflowSleepJob(instanceId);
+      WorkflowSleepJob job = new WorkflowSleepJob(instanceId, stepName);
       Datetime runTime = Datetime.now()
         .addSeconds(Test.isRunningTest() ? delaySeconds + 60 : delaySeconds);
       String cronStr =
