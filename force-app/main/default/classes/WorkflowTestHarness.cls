@@ -427,12 +427,25 @@ public inherited sharing class WorkflowTestHarness {
    * instance.
    */
   private void clearSleepMarkers(Id instanceId) {
-    update as system new Workflow_Instance__c(
+    List<Workflow_Instance__c> insts = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+    ];
+    if (insts.isEmpty()) {
+      return;
+    }
+    Workflow_Instance__c inst = insts[0];
+    Workflow_Instance__c toUpdate = new Workflow_Instance__c(
       Id = instanceId,
-      Status__c = 'Running',
       Sleep_Until__c = null,
       Async_Job_Id__c = null
     );
+    if (inst.Status__c == 'Suspended') {
+      toUpdate.Status__c = 'Running';
+    }
+    update as system toUpdate;
   }
 
   /**
@@ -658,8 +671,14 @@ public inherited sharing class WorkflowTestHarness {
         String status = se.Status__c;
         if (inst.Status__c == 'Suspended' && inst.Sleep_Until__c != null) {
           if (checkSleep && status == 'Pending' && se.SOQL_Query_Count__c != null) {
-            // Exclude timed suspend/approval waits carrying $timeoutStep
-            if (se.Output__c != null && se.Output__c.contains('$timeoutStep')) {
+            // Exclude timed waits, child workflows, and approvals carrying wait metadata in Output
+            if (se.Output__c != null && (
+              se.Output__c.contains('$timeoutStep') ||
+              se.Output__c.contains('childWorkflowName') ||
+              se.Output__c.contains('childCorrelationKeys') ||
+              se.Output__c.contains('waitingForApproval') ||
+              se.Output__c.contains('approvalKey')
+            )) {
               continue;
             }
             return inst;
