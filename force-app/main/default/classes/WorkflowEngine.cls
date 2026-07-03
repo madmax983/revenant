@@ -1425,7 +1425,32 @@ public inherited sharing class WorkflowEngine {
       correlationKey,
       inputJson,
       debounceSeconds,
-      maxWaitSeconds
+      maxWaitSeconds,
+      null,
+      null
+    );
+  }
+
+  /**
+   * Arms a durable trailing-edge debounce timer for starting a workflow, with a maxWaitSeconds cap, search attributes, and a causation ID.
+   */
+  public static void startDebounced(
+    String workflowName,
+    String correlationKey,
+    String inputJson,
+    Integer debounceSeconds,
+    Integer maxWaitSeconds,
+    String attributesJson,
+    String causationId
+  ) {
+    WorkflowDebouncer.startDebounced(
+      workflowName,
+      correlationKey,
+      inputJson,
+      debounceSeconds,
+      maxWaitSeconds,
+      attributesJson,
+      causationId
     );
   }
 

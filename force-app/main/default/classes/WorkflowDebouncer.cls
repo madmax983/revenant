@@ -5,6 +5,8 @@ public inherited sharing class WorkflowDebouncer {
     public String inputJson;
     public Integer debounceSeconds;
     public Integer maxWaitSeconds;
+    public String attributesJson;
+    public String causationId;
 
     public DebounceRequest(
       String workflowName,
@@ -13,11 +15,33 @@ public inherited sharing class WorkflowDebouncer {
       Integer debounceSeconds,
       Integer maxWaitSeconds
     ) {
+      this(
+        workflowName,
+        correlationKey,
+        inputJson,
+        debounceSeconds,
+        maxWaitSeconds,
+        null,
+        null
+      );
+    }
+
+    public DebounceRequest(
+      String workflowName,
+      String correlationKey,
+      String inputJson,
+      Integer debounceSeconds,
+      Integer maxWaitSeconds,
+      String attributesJson,
+      String causationId
+    ) {
       this.workflowName = workflowName;
       this.correlationKey = correlationKey;
       this.inputJson = inputJson;
       this.debounceSeconds = debounceSeconds;
       this.maxWaitSeconds = maxWaitSeconds;
+      this.attributesJson = attributesJson;
+      this.causationId = causationId;
     }
   }
 
@@ -32,13 +56,35 @@ public inherited sharing class WorkflowDebouncer {
     Integer maxWaitSeconds
   ) {
     startDebounced(
+      workflowName,
+      correlationKey,
+      inputJson,
+      debounceSeconds,
+      maxWaitSeconds,
+      null,
+      null
+    );
+  }
+
+  public static void startDebounced(
+    String workflowName,
+    String correlationKey,
+    String inputJson,
+    Integer debounceSeconds,
+    Integer maxWaitSeconds,
+    String attributesJson,
+    String causationId
+  ) {
+    startDebounced(
       new List<DebounceRequest>{
         new DebounceRequest(
           workflowName,
           correlationKey,
           inputJson,
           debounceSeconds,
-          maxWaitSeconds
+          maxWaitSeconds,
+          attributesJson,
+          causationId
         )
       }
     );
@@ -86,6 +132,14 @@ public inherited sharing class WorkflowDebouncer {
       if (String.isNotBlank(req.inputJson) && req.inputJson.length() > 131072) {
         throw new WorkflowEngine.WorkflowException(
           'Input JSON payload exceeds maximum size limit of 131,072 characters.'
+        );
+      }
+      if (
+        String.isNotBlank(req.attributesJson) &&
+        req.attributesJson.length() > 131072
+      ) {
+        throw new WorkflowEngine.WorkflowException(
+          'Attributes JSON payload exceeds maximum size limit of 131,072 characters.'
         );
       }
 
@@ -145,6 +199,8 @@ public inherited sharing class WorkflowDebouncer {
 
       state.Fire_At__c = proposedFireAt;
       state.Input_Json__c = req.inputJson;
+      state.Attributes_Json__c = req.attributesJson;
+      state.Causation_Id__c = req.causationId;
 
       statesToUpsert.put(key, state);
     }
@@ -163,7 +219,14 @@ public inherited sharing class WorkflowDebouncer {
       : Datetime.now();
 
     List<Debounce_State__c> dueStates = [
-      SELECT Id, Workflow_Name__c, Correlation_Key__c, Input_Json__c, Fire_At__c
+      SELECT
+        Id,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Input_Json__c,
+        Attributes_Json__c,
+        Causation_Id__c,
+        Fire_At__c
       FROM Debounce_State__c
       WHERE Fire_At__c <= :now
       WITH SYSTEM_MODE
@@ -177,13 +240,33 @@ public inherited sharing class WorkflowDebouncer {
 
     List<WorkflowEngine.StartRequest> startRequests = new List<WorkflowEngine.StartRequest>();
     for (Debounce_State__c state : dueStates) {
+      Map<String, String> attributes = null;
+      if (String.isNotBlank(state.Attributes_Json__c)) {
+        attributes = new Map<String, String>();
+        try {
+          Object deserialized = JSON.deserializeUntyped(
+            state.Attributes_Json__c
+          );
+          if (deserialized instanceof Map<String, Object>) {
+            Map<String, Object> raw = (Map<String, Object>) deserialized;
+            for (String k : raw.keySet()) {
+              attributes.put(k, String.valueOf(raw.get(k)));
+            }
+          }
+        } catch (Exception ex) {
+          // ignore parsing error
+        }
+      }
+
       // Pass null to input since we set inputJson directly, saving CPU deserialization cycles.
       WorkflowEngine.StartRequest req = new WorkflowEngine.StartRequest(
         state.Workflow_Name__c,
         state.Correlation_Key__c,
-        null
+        null,
+        attributes
       );
       req.inputJson = state.Input_Json__c;
+      req.causationId = state.Causation_Id__c;
       startRequests.add(req);
     }
 

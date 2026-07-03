@@ -363,4 +363,54 @@ private class WorkflowDebounceTest {
       );
     }
   }
+
+  @isTest
+  static void testDebounceMetadataPreservation() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.mockNow = Datetime.now();
+
+    Test.startTest();
+    WorkflowEngine.startDebounced(
+      'WorkflowEngineTest.HappyWorkflow',
+      'deb_key_metadata',
+      '{"val":1}',
+      10,
+      15,
+      '{"attr1":"val1"}',
+      'causation123'
+    );
+
+    // Verify debounce state record contains attributes and causation
+    List<Debounce_State__c> states = [
+      SELECT Id, Attributes_Json__c, Causation_Id__c
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = 'deb_key_metadata'
+    ];
+    System.assertEquals(1, states.size());
+    System.assertEquals('{"attr1":"val1"}', states[0].Attributes_Json__c);
+    System.assertEquals('causation123', states[0].Causation_Id__c);
+
+    // Advance time and sweep
+    WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(11);
+    WorkflowEngine.processWatchdogHeartbeat();
+
+    // Verify workflow instance started and has attributes and causation
+    List<Workflow_Instance__c> instances = [
+      SELECT Id, Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c = 'deb_key_metadata'
+    ];
+    System.assertEquals(1, instances.size());
+    System.assertEquals('causation123', instances[0].Causation_Id__c);
+
+    List<Workflow_Search_Attribute__c> attrs = [
+      SELECT Key__c, Value__c
+      FROM Workflow_Search_Attribute__c
+      WHERE Workflow_Instance__c = :instances[0].Id
+    ];
+    System.assertEquals(1, attrs.size());
+    System.assertEquals('attr1', attrs[0].Key__c);
+    System.assertEquals('val1', attrs[0].Value__c);
+    Test.stopTest();
+  }
 }

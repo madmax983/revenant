@@ -3,6 +3,8 @@ public inherited sharing class CaseDebounceTriggerHandler {
     List<Case> newCases,
     Map<Id, Case> oldCasesMap
   ) {
+    List<WorkflowDebouncer.DebounceRequest> debounceRequests = new List<WorkflowDebouncer.DebounceRequest>();
+
     for (Case c : newCases) {
       Case oldCase = oldCasesMap.get(c.Id);
 
@@ -18,14 +20,21 @@ public inherited sharing class CaseDebounceTriggerHandler {
           'description' => c.Description
         };
 
-        // Start a debounced workflow instance: debounce for 5 seconds
-        WorkflowEngine.startDebounced(
-          'WorkflowEngineTest.HappyWorkflow',
-          'Case_Debounce_' + c.Id,
-          JSON.serialize(input),
-          5 // debounceSeconds
+        // Collect bulk debounce request: debounce for 5 seconds
+        debounceRequests.add(
+          new WorkflowDebouncer.DebounceRequest(
+            'WorkflowEngineTest.HappyWorkflow',
+            'Case_Debounce_' + c.Id,
+            JSON.serialize(input),
+            5, // debounceSeconds
+            null // maxWaitSeconds
+          )
         );
       }
+    }
+
+    if (!debounceRequests.isEmpty()) {
+      WorkflowDebouncer.startDebounced(debounceRequests);
     }
   }
 }

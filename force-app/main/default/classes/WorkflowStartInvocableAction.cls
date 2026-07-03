@@ -77,7 +77,9 @@ public inherited sharing class WorkflowStartInvocableAction {
             req.correlationKey,
             req.inputJson,
             req.debounceSeconds,
-            req.maxWaitSeconds
+            req.maxWaitSeconds,
+            req.attributesJson,
+            req.causationId
           )
         );
         StartResult res = new StartResult();

@@ -322,4 +322,39 @@ public class WorkflowInvocableActionsTest {
     }
     Test.stopTest();
   }
+
+  @isTest
+  static void testFlowDebouncedStartWithMetadata() {
+    WorkflowStartInvocableAction.StartRequest req = new WorkflowStartInvocableAction.StartRequest();
+    req.workflowName = 'WorkflowEngineTest.HappyWorkflow';
+    req.correlationKey = 'InvocableDebounceKeyMeta';
+    req.inputJson = '{"val":1}';
+    req.debounceSeconds = 10;
+    req.maxWaitSeconds = 15;
+    req.attributesJson = '{"attr2":"val2"}';
+    req.causationId = 'flowCausation123';
+
+    Test.startTest();
+    List<WorkflowStartInvocableAction.StartResult> results = WorkflowStartInvocableAction.startWorkflow(
+      new List<WorkflowStartInvocableAction.StartRequest>{ req }
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, results.size());
+    System.assertEquals(
+      null,
+      results[0].workflowInstanceId,
+      'Workflow should not start immediately'
+    );
+
+    List<Debounce_State__c> states = [
+      SELECT Id, Attributes_Json__c, Causation_Id__c, Input_Json__c
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = 'InvocableDebounceKeyMeta'
+    ];
+    System.assertEquals(1, states.size(), 'Debounce state should be created');
+    System.assertEquals('{"val":1}', states[0].Input_Json__c);
+    System.assertEquals('{"attr2":"val2"}', states[0].Attributes_Json__c);
+    System.assertEquals('flowCausation123', states[0].Causation_Id__c);
+  }
 }
