@@ -209,8 +209,11 @@ public inherited sharing class WorkflowTestHarness {
           break;
         }
         if (isAdvanceable(inst)) {
-          hopsThisCall += advanceOneStep(inst, maxHops - hopsThisCall);
-          advancedAny = true;
+          Integer used = advanceOneStep(inst, maxHops - hopsThisCall);
+          if (used > 0) {
+            hopsThisCall += used;
+            advancedAny = true;
+          }
         }
       }
 
@@ -299,6 +302,35 @@ public inherited sharing class WorkflowTestHarness {
     if (ACTIVE_STATUSES.contains(inst.Status__c)) {
       return true;
     }
+    // If suspended but there are still branches in Current_Step__c that have not run yet,
+    // the instance is still advanceable to let those sibling branches execute.
+    if (String.isNotBlank(inst.Current_Step__c) && inst.Current_Step__c.contains(',')) {
+      List<String> branches = new List<String>();
+      for (String s : inst.Current_Step__c.split(',')) {
+        branches.add(s.trim());
+      }
+      List<Workflow_Step_Execution__c> execs = [
+        SELECT Step_Name__c, Status__c, SOQL_Query_Count__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c = :inst.Id
+          AND Step_Name__c IN :branches
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC, Id DESC
+      ];
+      Map<String, Workflow_Step_Execution__c> latestExecs = new Map<String, Workflow_Step_Execution__c>();
+      for (Workflow_Step_Execution__c se : execs) {
+        if (!latestExecs.containsKey(se.Step_Name__c)) {
+          latestExecs.put(se.Step_Name__c, se);
+        }
+      }
+      for (String branch : branches) {
+        Workflow_Step_Execution__c se = latestExecs.get(branch);
+        if (se == null || (se.Status__c == 'Pending' && se.SOQL_Query_Count__c == null)) {
+          return true; // Sibling branch has not run yet!
+        }
+      }
+    }
+
     if (disableAutoTimeSkip) {
       return false;
     }
@@ -323,33 +355,50 @@ public inherited sharing class WorkflowTestHarness {
       for (String branch : currentStep.split(',')) {
         branches.add(branch.trim());
       }
-      // Skip branches that already completed so they never consume the hop budget;
-      // otherwise a low-budget drive would keep re-spending its budget on a
-      // no-op completed branch and never reach the still-pending ones.
-      Set<String> completed = new Set<String>();
-      for (Workflow_Step_Execution__c se : [
-        SELECT Step_Name__c
+      List<Workflow_Step_Execution__c> execs = [
+        SELECT Step_Name__c, Status__c, SOQL_Query_Count__c
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :inst.Id
           AND Step_Name__c IN :branches
-          AND Status__c = 'Completed'
         WITH SYSTEM_MODE
-      ]) {
-        completed.add(se.Step_Name__c);
+        ORDER BY CreatedDate DESC, Id DESC
+      ];
+      Map<String, Workflow_Step_Execution__c> latestExecMap = new Map<String, Workflow_Step_Execution__c>();
+      for (Workflow_Step_Execution__c se : execs) {
+        if (!latestExecMap.containsKey(se.Step_Name__c)) {
+          latestExecMap.put(se.Step_Name__c, se);
+        }
       }
 
       Integer used = 0;
       for (String branch : branches) {
-        if (completed.contains(branch)) {
-          continue;
+        Workflow_Step_Execution__c se = latestExecMap.get(branch);
+        if (se != null) {
+          if (se.Status__c == 'Completed') {
+            continue;
+          }
+          if (inst.Status__c == 'Suspended') {
+            if (se.Status__c == 'Retrying' && disableAutoTimeSkip) {
+              continue;
+            }
+            if (se.Status__c == 'Pending' && se.SOQL_Query_Count__c != null && disableAutoTimeSkip) {
+              continue; // Already ran and suspended/sleeping/waiting
+            }
+          }
         }
         if (used >= remaining) {
           break;
         }
         Boolean isCallout = isCalloutStep(branch);
         if (!isCallout && inst.Status__c == 'Suspended') {
-          clearSleepMarkers(inst.Id);
+          Boolean isSleepingOrRetrying = (se != null && (
+            se.Status__c == 'Retrying' ||
+            (se.Status__c == 'Pending' && se.SOQL_Query_Count__c != null)
+          ));
+          if (isSleepingOrRetrying) {
+            clearSleepMarkers(inst.Id);
+          }
         }
         runStepSafely(inst.Id, branch);
         if (isCallout) {
@@ -449,6 +498,9 @@ public inherited sharing class WorkflowTestHarness {
     }
 
     Boolean hasActiveSleepOrRetry = false;
+    Boolean hasActiveWait = false;
+    Boolean hasNormalPending = false;
+
     if (String.isNotBlank(inst.Current_Step__c)) {
       List<String> activeSteps = inst.Current_Step__c.split(',');
       List<Workflow_Step_Execution__c> execs = [
@@ -467,37 +519,42 @@ public inherited sharing class WorkflowTestHarness {
       }
       for (String stepName : activeSteps) {
         Workflow_Step_Execution__c se = latestStepMap.get(stepName.trim());
-        if (se != null) {
-          if (se.Status__c == 'Pending' && se.SOQL_Query_Count__c != null) {
-            if (isFrameworkWaitState(se.Output__c)) {
-              continue;
-            }
+        if (se == null || (se.Status__c == 'Pending' && se.SOQL_Query_Count__c == null)) {
+          hasNormalPending = true;
+        } else if (se.Status__c == 'Retrying') {
+          hasActiveSleepOrRetry = true;
+        } else if (se.Status__c == 'Pending' && se.SOQL_Query_Count__c != null) {
+          if (isFrameworkWaitState(se.Output__c)) {
+            hasActiveWait = true;
+          } else {
+            Boolean hasJob = true;
             if (WorkflowEngine.useDynamicScheduling) {
               String jobPrefix = WorkflowEngine.getSleepJobPrefix(instanceId, stepName.trim()) + '%';
               List<CronTrigger> jobs = [
                 SELECT Id FROM CronTrigger WHERE CronJobDetail.Name LIKE :jobPrefix WITH SYSTEM_MODE LIMIT 1
               ];
-              if (jobs.isEmpty()) {
-                continue;
-              }
+              hasJob = !jobs.isEmpty();
             }
-            hasActiveSleepOrRetry = true;
-            break;
-          }
-          if (se.Status__c == 'Retrying') {
-            hasActiveSleepOrRetry = true;
-            break;
+            if (hasJob) {
+              hasActiveSleepOrRetry = true;
+            } else {
+              hasNormalPending = true;
+            }
           }
         }
       }
     }
 
     if (!hasActiveSleepOrRetry) {
-      update as system new Workflow_Instance__c(
+      Workflow_Instance__c toUpdate = new Workflow_Instance__c(
         Id = instanceId,
         Sleep_Until__c = null,
         Async_Job_Id__c = null
       );
+      if (hasNormalPending && !hasActiveWait) {
+        toUpdate.Status__c = 'Running';
+      }
+      update as system toUpdate;
     }
   }
 
@@ -742,12 +799,11 @@ public inherited sharing class WorkflowTestHarness {
       if (latestStepMap.containsKey(inst.Id)) {
         Workflow_Step_Execution__c se = latestStepMap.get(inst.Id);
         String status = se.Status__c;
-        if (inst.Status__c == 'Suspended' && inst.Sleep_Until__c != null) {
+        if (inst.Status__c == 'Suspended') {
           if (checkSleep && status == 'Pending' && se.SOQL_Query_Count__c != null) {
             if (isFrameworkWaitState(se.Output__c)) {
               continue;
             }
-            // Check CronTrigger to ensure this specific step scheduled a sleep resume job
             if (WorkflowEngine.useDynamicScheduling) {
               String jobPrefix = WorkflowEngine.getSleepJobPrefix(inst.Id, stepName) + '%';
               List<CronTrigger> jobs = [
@@ -760,10 +816,31 @@ public inherited sharing class WorkflowTestHarness {
               if (jobs.isEmpty()) {
                 continue;
               }
+            } else {
+              if (inst.Sleep_Until__c == null) {
+                continue;
+              }
             }
             return inst;
           }
           if (!checkSleep && status == 'Retrying') {
+            if (WorkflowEngine.useDynamicScheduling) {
+              String jobPrefix = 'WorkflowRetry_' + inst.Id + '_%';
+              List<CronTrigger> jobs = [
+                SELECT Id
+                FROM CronTrigger
+                WHERE CronJobDetail.Name LIKE :jobPrefix
+                WITH SYSTEM_MODE
+                LIMIT 1
+              ];
+              if (jobs.isEmpty()) {
+                continue;
+              }
+            } else {
+              if (inst.Sleep_Until__c == null) {
+                continue;
+              }
+            }
             return inst;
           }
         }
