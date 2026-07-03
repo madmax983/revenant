@@ -353,15 +353,7 @@ public inherited sharing class WorkflowTestHarness {
         }
         runStepSafely(inst.Id, branch);
         if (isCallout) {
-          List<Workflow_Instance__c> current = [
-            SELECT Status__c
-            FROM Workflow_Instance__c
-            WHERE Id = :inst.Id
-            WITH SYSTEM_MODE
-          ];
-          if (!current.isEmpty() && current[0].Status__c != 'Suspended') {
-            clearSleepMarkers(inst.Id);
-          }
+          clearStaleSleepMarkers(inst.Id);
         }
         used++;
       }
@@ -374,15 +366,7 @@ public inherited sharing class WorkflowTestHarness {
     }
     runStepSafely(inst.Id, null);
     if (isCallout) {
-      List<Workflow_Instance__c> current = [
-        SELECT Status__c
-        FROM Workflow_Instance__c
-        WHERE Id = :inst.Id
-        WITH SYSTEM_MODE
-      ];
-      if (!current.isEmpty() && current[0].Status__c != 'Suspended') {
-        clearSleepMarkers(inst.Id);
-      }
+      clearStaleSleepMarkers(inst.Id);
     }
     return 1;
   }
@@ -446,6 +430,81 @@ public inherited sharing class WorkflowTestHarness {
       toUpdate.Status__c = 'Running';
     }
     update as system toUpdate;
+  }
+
+  private void clearStaleSleepMarkers(Id instanceId) {
+    List<Workflow_Instance__c> insts = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+    ];
+    if (insts.isEmpty()) {
+      return;
+    }
+    Workflow_Instance__c inst = insts[0];
+    if (inst.Status__c != 'Suspended') {
+      clearSleepMarkers(instanceId);
+      return;
+    }
+
+    Boolean hasActiveSleepOrRetry = false;
+    if (String.isNotBlank(inst.Current_Step__c)) {
+      List<String> activeSteps = inst.Current_Step__c.split(',');
+      List<Workflow_Step_Execution__c> execs = [
+        SELECT Step_Name__c, Status__c, SOQL_Query_Count__c, Output__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c = :instanceId
+          AND Step_Name__c IN :activeSteps
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC, Id DESC
+      ];
+      Map<String, Workflow_Step_Execution__c> latestStepMap = new Map<String, Workflow_Step_Execution__c>();
+      for (Workflow_Step_Execution__c se : execs) {
+        if (!latestStepMap.containsKey(se.Step_Name__c)) {
+          latestStepMap.put(se.Step_Name__c, se);
+        }
+      }
+      for (String stepName : activeSteps) {
+        Workflow_Step_Execution__c se = latestStepMap.get(stepName.trim());
+        if (se != null) {
+          if (se.Status__c == 'Pending' && se.SOQL_Query_Count__c != null) {
+            if (se.Output__c != null && (
+              se.Output__c.contains('$timeoutStep') ||
+              se.Output__c.contains('childWorkflowName') ||
+              se.Output__c.contains('childCorrelationKeys') ||
+              se.Output__c.contains('waitingForApproval') ||
+              se.Output__c.contains('approvalKey')
+            )) {
+              continue;
+            }
+            if (WorkflowEngine.useDynamicScheduling) {
+              String jobPrefix = 'WorkflowSleep_' + instanceId + '_' + stepName.trim().replaceAll('[^a-zA-Z0-9]', '_') + '%';
+              List<CronTrigger> jobs = [
+                SELECT Id FROM CronTrigger WHERE CronJobDetail.Name LIKE :jobPrefix WITH SYSTEM_MODE LIMIT 1
+              ];
+              if (jobs.isEmpty()) {
+                continue;
+              }
+            }
+            hasActiveSleepOrRetry = true;
+            break;
+          }
+          if (se.Status__c == 'Retrying') {
+            hasActiveSleepOrRetry = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!hasActiveSleepOrRetry) {
+      update as system new Workflow_Instance__c(
+        Id = instanceId,
+        Sleep_Until__c = null,
+        Async_Job_Id__c = null
+      );
+    }
   }
 
   /**
@@ -727,15 +786,7 @@ public inherited sharing class WorkflowTestHarness {
     }
     runStepSafely(inst.Id, stepName);
     if (isCallout) {
-      List<Workflow_Instance__c> current = [
-        SELECT Status__c
-        FROM Workflow_Instance__c
-        WHERE Id = :inst.Id
-        WITH SYSTEM_MODE
-      ];
-      if (!current.isEmpty() && current[0].Status__c != 'Suspended') {
-        clearSleepMarkers(inst.Id);
-      }
+      clearStaleSleepMarkers(inst.Id);
     }
     return drive(maxHops);
   }
@@ -761,15 +812,7 @@ public inherited sharing class WorkflowTestHarness {
     }
     runStepSafely(inst.Id, stepName);
     if (isCallout) {
-      List<Workflow_Instance__c> current = [
-        SELECT Status__c
-        FROM Workflow_Instance__c
-        WHERE Id = :inst.Id
-        WITH SYSTEM_MODE
-      ];
-      if (!current.isEmpty() && current[0].Status__c != 'Suspended') {
-        clearSleepMarkers(inst.Id);
-      }
+      clearStaleSleepMarkers(inst.Id);
     }
     return drive(maxHops);
   }

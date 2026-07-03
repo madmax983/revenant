@@ -3704,7 +3704,7 @@ public inherited sharing class WorkflowEngine {
         }
         // Ceiling full: park and re-attempt admission automatically through the
         // existing sleep/watchdog resume plumbing.
-        parkForConcurrency(instance);
+        parkForConcurrency(instance, resolvedStep);
         return;
       }
       // Otherwise unbounded (no ceiling): fall through and run exactly as today. If
@@ -11398,7 +11398,7 @@ public inherited sharing class WorkflowEngine {
    * current Pending step's watchdog deadline is cleared so a parked (not-yet-executed)
    * step is never failed by the timeout sweep; admission re-arms it.
    */
-  private static void parkForConcurrency(Workflow_Instance__c instance) {
+  private static void parkForConcurrency(Workflow_Instance__c instance, String resolvedStep) {
     // Reset the current step's pre-execution state so a re-park is always clean: an
     // external resume() can have flipped the not-yet-executed step to Running and
     // stamped a deadline before this delivery reached the gate. Put it back to
@@ -11430,7 +11430,7 @@ public inherited sharing class WorkflowEngine {
     instance.Concurrency_Parked__c = true;
     instance.Concurrency_Slot_Held__c = false;
     instance.Sleep_Until__c = DateTime.now().addSeconds(retrySeconds);
-    instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, instance.Current_Step__c, retrySeconds);
+    instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, resolvedStep, retrySeconds);
     update as system instance;
   }
 
@@ -11473,10 +11473,13 @@ public inherited sharing class WorkflowEngine {
         runTime.month() +
         ' ? ' +
         runTime.year();
-      String cleanStepName = stepName.replaceAll('[^a-zA-Z0-9]', '_');
+      String cleanStepName = String.isNotBlank(stepName) ? stepName.replaceAll('[^a-zA-Z0-9]', '_') : '';
+      String jobName = 'WorkflowSleep_' + instanceId + 
+        (String.isNotBlank(cleanStepName) ? '_' + cleanStepName : '') + 
+        '_' + runTime.getTime();
       return String.valueOf(
         System.schedule(
-          'WorkflowSleep_' + instanceId + '_' + cleanStepName + '_' + runTime.getTime(),
+          jobName,
           cronStr,
           job
         )
