@@ -571,14 +571,24 @@ public class WorkflowTestHarnessTest {
   public class ParallelSleepWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
       return new List<String>{
+        'WorkflowTestHarnessTest.ParallelSleepSplitStep',
         'WorkflowTestHarnessTest.ParallelSleepA,WorkflowTestHarnessTest.ParallelSleepB'
       };
     }
     public String getInitialStep() {
-      return 'WorkflowTestHarnessTest.ParallelSleepA,WorkflowTestHarnessTest.ParallelSleepB';
+      return 'WorkflowTestHarnessTest.ParallelSleepSplitStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
+    }
+  }
+
+  public class ParallelSleepSplitStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.split(new List<String>{
+        'WorkflowTestHarnessTest.ParallelSleepA',
+        'WorkflowTestHarnessTest.ParallelSleepB'
+      });
     }
   }
 
@@ -746,8 +756,11 @@ public class WorkflowTestHarnessTest {
     WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
     harness.disableAutoTimeSkip = true;
 
-    // Run first step execution (spawns ParallelSleepA and ParallelSleepB).
-    // It will run ParallelSleepA first, which returns SLEEP and suspends the instance.
+    // Run first step (ParallelSleepSplitStep) which splits the flow
+    WorkflowTestHarness.Result splitResult = harness.step();
+    System.assertEquals('Running', splitResult.status);
+
+    // Run the next step execution (runs ParallelSleepA which returns SLEEP and suspends)
     WorkflowTestHarness.Result result = harness.step();
 
     System.assertEquals('Suspended', result.status);

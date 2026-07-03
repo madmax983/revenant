@@ -598,7 +598,7 @@ public inherited sharing class WorkflowTestHarness {
     }
 
     List<Workflow_Step_Execution__c> execs = [
-      SELECT Workflow_Instance__c, Status__c, SOQL_Query_Count__c
+      SELECT Workflow_Instance__c, Status__c, SOQL_Query_Count__c, Output__c
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c IN :candidateInstanceIds
         AND Step_Name__c = :stepName
@@ -619,6 +619,10 @@ public inherited sharing class WorkflowTestHarness {
         String status = se.Status__c;
         if (inst.Status__c == 'Suspended' && inst.Sleep_Until__c != null) {
           if (checkSleep && status == 'Pending' && se.SOQL_Query_Count__c != null) {
+            // Exclude timed suspend/approval waits carrying $timeoutStep
+            if (se.Output__c != null && se.Output__c.contains('$timeoutStep')) {
+              continue;
+            }
             return inst;
           }
           if (!checkSleep && status == 'Retrying') {
