@@ -317,13 +317,6 @@ public inherited sharing class WorkflowTestHarness {
    * than the remaining budget allows — any leftover branches resume on the next hop.
    */
   private Integer advanceOneStep(Workflow_Instance__c inst, Integer remaining) {
-    // Resuming a sleep/retry wait: clear the wake markers first, exactly as the
-    // engine's own watchdog resume does (processWatchdogHeartbeat), so a later
-    // external suspend on this same instance is not misread as a sleep to skip.
-    if (inst.Status__c == 'Suspended') {
-      clearSleepMarkers(inst.Id);
-    }
-
     String currentStep = inst.Current_Step__c;
     if (String.isNotBlank(currentStep) && currentStep.contains(',')) {
       List<String> branches = new List<String>();
@@ -354,12 +347,43 @@ public inherited sharing class WorkflowTestHarness {
         if (used >= remaining) {
           break;
         }
+        Boolean isCallout = isCalloutStep(branch);
+        if (!isCallout && inst.Status__c == 'Suspended') {
+          clearSleepMarkers(inst.Id);
+        }
         runStepSafely(inst.Id, branch);
+        if (isCallout) {
+          List<Workflow_Instance__c> current = [
+            SELECT Status__c
+            FROM Workflow_Instance__c
+            WHERE Id = :inst.Id
+            WITH SYSTEM_MODE
+          ];
+          if (!current.isEmpty() && current[0].Status__c != 'Suspended') {
+            clearSleepMarkers(inst.Id);
+          }
+        }
         used++;
       }
       return used;
     }
+    
+    Boolean isCallout = isCalloutStep(inst.Current_Step__c);
+    if (!isCallout && inst.Status__c == 'Suspended') {
+      clearSleepMarkers(inst.Id);
+    }
     runStepSafely(inst.Id, null);
+    if (isCallout) {
+      List<Workflow_Instance__c> current = [
+        SELECT Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :inst.Id
+        WITH SYSTEM_MODE
+      ];
+      if (!current.isEmpty() && current[0].Status__c != 'Suspended') {
+        clearSleepMarkers(inst.Id);
+      }
+    }
     return 1;
   }
 
@@ -381,11 +405,26 @@ public inherited sharing class WorkflowTestHarness {
     }
   }
 
+  private Boolean isCalloutStep(String stepName) {
+    if (String.isBlank(stepName)) {
+      return false;
+    }
+    try {
+      Type stepType = Type.forName(stepName);
+      if (stepType != null) {
+        return stepType.newInstance() instanceof CalloutStep;
+      }
+    } catch (Exception e) {
+      // Ignored
+    }
+    return false;
+  }
+
   /**
    * Clears the sleep/retry wake markers on an instance (never Status__c or
-   * Current_Step__c). This is the same field reset the engine performs when its
-   * watchdog or WorkflowSleepJob wakes a sleeping instance, so resuming a sleep
-   * here leaves no stale Sleep_Until__c to confuse a later external suspend.
+   * Current_Step__c unless the instance is still Suspended). This is the same field
+   * reset the engine performs when its watchdog or WorkflowSleepJob wakes a sleeping
+   * instance.
    */
   private void clearSleepMarkers(Id instanceId) {
     update as system new Workflow_Instance__c(
@@ -649,8 +688,22 @@ public inherited sharing class WorkflowTestHarness {
     if (inst == null) {
       throw new HarnessException('Step ' + stepName + ' is not currently sleeping.');
     }
-    clearSleepMarkers(inst.Id);
+    Boolean isCallout = isCalloutStep(stepName);
+    if (!isCallout) {
+      clearSleepMarkers(inst.Id);
+    }
     runStepSafely(inst.Id, stepName);
+    if (isCallout) {
+      List<Workflow_Instance__c> current = [
+        SELECT Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :inst.Id
+        WITH SYSTEM_MODE
+      ];
+      if (!current.isEmpty() && current[0].Status__c != 'Suspended') {
+        clearSleepMarkers(inst.Id);
+      }
+    }
     return drive(maxHops);
   }
 
@@ -669,8 +722,22 @@ public inherited sharing class WorkflowTestHarness {
     if (inst == null) {
       throw new HarnessException('Step ' + stepName + ' is not currently awaiting retry.');
     }
-    clearSleepMarkers(inst.Id);
+    Boolean isCallout = isCalloutStep(stepName);
+    if (!isCallout) {
+      clearSleepMarkers(inst.Id);
+    }
     runStepSafely(inst.Id, stepName);
+    if (isCallout) {
+      List<Workflow_Instance__c> current = [
+        SELECT Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :inst.Id
+        WITH SYSTEM_MODE
+      ];
+      if (!current.isEmpty() && current[0].Status__c != 'Suspended') {
+        clearSleepMarkers(inst.Id);
+      }
+    }
     return drive(maxHops);
   }
 }

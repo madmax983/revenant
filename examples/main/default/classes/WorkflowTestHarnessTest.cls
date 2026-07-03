@@ -722,10 +722,15 @@ public class WorkflowTestHarnessTest {
       'SleepKeyJobs',
       null
     );
+    Id retryInstanceId = WorkflowEngine.start(
+      'WorkflowTestHarnessTest.TimeSkipRetryWorkflow',
+      'RetryKeyJobs',
+      null
+    );
     // Call Schedulable execute directly with null context.
     // It should run without throwing since we guarded System.abortJob.
     new WorkflowSleepJob(instanceId).execute(null);
-    new WorkflowRetryJob(instanceId, 'TimeSkipRetryStep').execute(null);
+    new WorkflowRetryJob(retryInstanceId, 'WorkflowTestHarnessTest.TimeSkipRetryStep').execute(null);
 
     // Validate that constructors throw on null instance ID
     try {
@@ -736,7 +741,7 @@ public class WorkflowTestHarnessTest {
     }
 
     try {
-      new WorkflowRetryJob(null, 'TimeSkipRetryStep');
+      new WorkflowRetryJob(null, 'WorkflowTestHarnessTest.TimeSkipRetryStep');
       System.assert(false, 'Expected WorkflowRetryJob to throw WorkflowException');
     } catch (WorkflowEngine.WorkflowException ex) {
       System.assertEquals('instanceId is required.', ex.getMessage());
