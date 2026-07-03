@@ -763,13 +763,19 @@ public inherited sharing class WorkflowTestHarness {
     List<Workflow_Instance__c> tree = collectTree();
     List<Id> candidateInstanceIds = new List<Id>();
 
+    String checkName = stepName.toLowerCase();
+    String forwardName = checkName;
+    if (checkName.endsWith('_compensate')) {
+      forwardName = checkName.substring(0, checkName.length() - 11);
+    }
+
     for (Workflow_Instance__c inst : tree) {
       if (String.isNotBlank(inst.Current_Step__c)) {
         List<String> activeSteps = new List<String>();
         for (String s : inst.Current_Step__c.split(',')) {
           activeSteps.add(s.trim().toLowerCase());
         }
-        if (activeSteps.contains(stepName.toLowerCase())) {
+        if (activeSteps.contains(checkName) || activeSteps.contains(forwardName)) {
           candidateInstanceIds.add(inst.Id);
         }
       }
@@ -813,7 +819,7 @@ public inherited sharing class WorkflowTestHarness {
                 WITH SYSTEM_MODE
                 LIMIT 1
               ];
-              if (jobs.isEmpty()) {
+              if (jobs.isEmpty() && inst.Sleep_Until__c == null) {
                 continue;
               }
             } else {
@@ -833,7 +839,7 @@ public inherited sharing class WorkflowTestHarness {
                 WITH SYSTEM_MODE
                 LIMIT 1
               ];
-              if (jobs.isEmpty()) {
+              if (jobs.isEmpty() && inst.Sleep_Until__c == null) {
                 continue;
               }
             } else {
