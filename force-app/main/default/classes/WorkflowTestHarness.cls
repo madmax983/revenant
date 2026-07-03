@@ -473,7 +473,7 @@ public inherited sharing class WorkflowTestHarness {
               continue;
             }
             if (WorkflowEngine.useDynamicScheduling) {
-              String jobPrefix = 'WorkflowSleep_' + instanceId + '_' + stepName.trim().replaceAll('[^a-zA-Z0-9]', '_') + '%';
+              String jobPrefix = WorkflowEngine.getSleepJobPrefix(instanceId, stepName.trim()) + '%';
               List<CronTrigger> jobs = [
                 SELECT Id FROM CronTrigger WHERE CronJobDetail.Name LIKE :jobPrefix WITH SYSTEM_MODE LIMIT 1
               ];
@@ -749,7 +749,7 @@ public inherited sharing class WorkflowTestHarness {
             }
             // Check CronTrigger to ensure this specific step scheduled a sleep resume job
             if (WorkflowEngine.useDynamicScheduling) {
-              String jobPrefix = 'WorkflowSleep_' + inst.Id + '_' + stepName.replaceAll('[^a-zA-Z0-9]', '_') + '%';
+              String jobPrefix = WorkflowEngine.getSleepJobPrefix(inst.Id, stepName) + '%';
               List<CronTrigger> jobs = [
                 SELECT Id
                 FROM CronTrigger

@@ -11473,10 +11473,7 @@ public inherited sharing class WorkflowEngine {
         runTime.month() +
         ' ? ' +
         runTime.year();
-      String cleanStepName = String.isNotBlank(stepName) ? stepName.replaceAll('[^a-zA-Z0-9]', '_') : '';
-      String jobName = 'WorkflowSleep_' + instanceId + 
-        (String.isNotBlank(cleanStepName) ? '_' + cleanStepName : '') + 
-        '_' + runTime.getTime();
+      String jobName = getSleepJobPrefix(instanceId, stepName) + '_' + runTime.getTime();
       return String.valueOf(
         System.schedule(
           jobName,
@@ -11498,6 +11495,14 @@ public inherited sharing class WorkflowEngine {
       );
       return null;
     }
+  }
+
+  public static String getSleepJobPrefix(Id instanceId, String stepName) {
+    String cleanStepName = String.isNotBlank(stepName) ? stepName.replaceAll('[^a-zA-Z0-9]', '_') : '';
+    if (cleanStepName.length() > 25) {
+      cleanStepName = cleanStepName.substring(0, 15) + '_' + Math.abs(cleanStepName.hashCode());
+    }
+    return 'WorkflowSleep_' + instanceId + (String.isNotBlank(cleanStepName) ? '_' + cleanStepName : '');
   }
 
   private static void cancelTimeoutJob(Id instanceId, String stepName) {

@@ -15,8 +15,13 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
   }
 
   public void execute(SchedulableContext ctx) {
-    // Clear expired sleep markers before enqueueing to prevent immediate watchdog double-wakes
-    clearSleepMarkers(this.instanceId);
+    // If the sleep has already been resumed by fireSleep or the watchdog, this scheduled job is stale and must no-op.
+    if (!checkAndClearSleepMarkers(this.instanceId, this.stepName)) {
+      if (ctx != null && ctx.getTriggerId() != null) {
+        System.abortJob(ctx.getTriggerId());
+      }
+      return;
+    }
 
     // Enqueue the next step execution
     if (Test.isRunningTest()) {
@@ -36,27 +41,39 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     }
   }
 
-  private static void clearSleepMarkers(Id instanceId) {
+  private static Boolean checkAndClearSleepMarkers(Id instanceId, String stepName) {
     List<Workflow_Instance__c> insts = [
-      SELECT Status__c
+      SELECT Status__c, Sleep_Until__c, Current_Step__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
       FOR UPDATE
     ];
     if (insts.isEmpty()) {
-      return;
+      return false;
     }
     Workflow_Instance__c inst = insts[0];
+    if (inst.Status__c != 'Suspended' || inst.Sleep_Until__c == null) {
+      return false;
+    }
+    if (String.isNotBlank(stepName)) {
+      List<String> activeSteps = new List<String>();
+      for (String s : inst.Current_Step__c.split(',')) {
+        activeSteps.add(s.trim().toLowerCase());
+      }
+      if (!activeSteps.contains(stepName.trim().toLowerCase())) {
+        return false;
+      }
+    }
+
     Workflow_Instance__c toUpdate = new Workflow_Instance__c(
       Id = instanceId,
       Sleep_Until__c = null,
-      Async_Job_Id__c = null
+      Async_Job_Id__c = null,
+      Status__c = 'Running'
     );
-    if (inst.Status__c == 'Suspended') {
-      toUpdate.Status__c = 'Running';
-    }
     update as system toUpdate;
+    return true;
   }
 
   public inherited sharing class QueueableSleepJob implements Queueable {
@@ -73,8 +90,10 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     }
 
     public void execute(QueueableContext ctx) {
-      // Clear expired sleep markers before enqueueing to prevent immediate watchdog double-wakes
-      clearSleepMarkers(this.instanceId);
+      // If the sleep has already been resumed by fireSleep or the watchdog, this queueable job is stale and must no-op.
+      if (!checkAndClearSleepMarkers(this.instanceId, this.stepName)) {
+        return;
+      }
 
       if (Test.isRunningTest()) {
         if (!WorkflowEngine.disableQueueableInTest) {
