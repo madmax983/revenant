@@ -390,6 +390,7 @@ public inherited sharing class WorkflowTestHarness {
   private void clearSleepMarkers(Id instanceId) {
     update as system new Workflow_Instance__c(
       Id = instanceId,
+      Status__c = 'Running',
       Sleep_Until__c = null,
       Async_Job_Id__c = null
     );
@@ -597,7 +598,7 @@ public inherited sharing class WorkflowTestHarness {
     }
 
     List<Workflow_Step_Execution__c> execs = [
-      SELECT Workflow_Instance__c, Status__c
+      SELECT Workflow_Instance__c, Status__c, SOQL_Query_Count__c
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c IN :candidateInstanceIds
         AND Step_Name__c = :stepName
@@ -605,18 +606,19 @@ public inherited sharing class WorkflowTestHarness {
       ORDER BY CreatedDate DESC, Id DESC
     ];
 
-    Map<Id, String> latestStatusMap = new Map<Id, String>();
+    Map<Id, Workflow_Step_Execution__c> latestStepMap = new Map<Id, Workflow_Step_Execution__c>();
     for (Workflow_Step_Execution__c se : execs) {
-      if (!latestStatusMap.containsKey(se.Workflow_Instance__c)) {
-        latestStatusMap.put(se.Workflow_Instance__c, se.Status__c);
+      if (!latestStepMap.containsKey(se.Workflow_Instance__c)) {
+        latestStepMap.put(se.Workflow_Instance__c, se);
       }
     }
 
     for (Workflow_Instance__c inst : tree) {
-      if (latestStatusMap.containsKey(inst.Id)) {
-        String status = latestStatusMap.get(inst.Id);
+      if (latestStepMap.containsKey(inst.Id)) {
+        Workflow_Step_Execution__c se = latestStepMap.get(inst.Id);
+        String status = se.Status__c;
         if (inst.Status__c == 'Suspended' && inst.Sleep_Until__c != null) {
-          if (checkSleep && status == 'Pending') {
+          if (checkSleep && status == 'Pending' && se.SOQL_Query_Count__c != null) {
             return inst;
           }
           if (!checkSleep && status == 'Retrying') {

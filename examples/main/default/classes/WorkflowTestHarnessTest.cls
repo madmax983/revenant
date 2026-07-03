@@ -568,6 +568,35 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  public class ParallelSleepWorkflow implements WorkflowDefinition {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowTestHarnessTest.ParallelSleepA,WorkflowTestHarnessTest.ParallelSleepB'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowTestHarnessTest.ParallelSleepA,WorkflowTestHarnessTest.ParallelSleepB';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+  }
+
+  public class ParallelSleepA implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (ctx.stepStateJson != null) {
+        return StepResult.complete(null, 'ResumedA');
+      }
+      return StepResult.sleep(10, 'slept_state_a');
+    }
+  }
+
+  public class ParallelSleepB implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'done_b');
+    }
+  }
+
   @isTest
   static void testSleepWorkflowTimeSkip() {
     Test.startTest();
@@ -704,6 +733,42 @@ public class WorkflowTestHarnessTest {
     }
     
     Test.stopTest();
+  }
+
+  @isTest
+  static void testParallelSleepBranchDifferentiated() {
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowTestHarnessTest.ParallelSleepWorkflow',
+      'ParallelSleepKey',
+      null
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    harness.disableAutoTimeSkip = true;
+
+    // Run first step execution (spawns ParallelSleepA and ParallelSleepB).
+    // It will run ParallelSleepA first, which returns SLEEP and suspends the instance.
+    WorkflowTestHarness.Result result = harness.step();
+
+    System.assertEquals('Suspended', result.status);
+    System.assertEquals(true, result.isSleeping);
+
+    // Firing sleep on ParallelSleepB (which has NOT run yet and is not sleeping) must throw HarnessException
+    try {
+      harness.fireSleep('WorkflowTestHarnessTest.ParallelSleepB');
+      System.assert(false, 'Expected fireSleep on ParallelSleepB to throw HarnessException');
+    } catch (WorkflowTestHarness.HarnessException ex) {
+      System.assert(
+        ex.getMessage().contains('is not currently sleeping'),
+        'Actionable message expected: ' + ex.getMessage()
+      );
+    }
+
+    // Firing sleep on ParallelSleepA (which is actually sleeping) must succeed and drive to completion
+    WorkflowTestHarness.Result finalResult = harness.fireSleep('WorkflowTestHarnessTest.ParallelSleepA');
+    Test.stopTest();
+
+    System.assertEquals('Completed', finalResult.status);
   }
 }
 
