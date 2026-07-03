@@ -5335,6 +5335,7 @@ public inherited sharing class WorkflowEngine {
         .addSeconds(result.sleepDurationSeconds);
       instance.Async_Job_Id__c = scheduleSleepResume(
         instance.Id,
+        stepExec.Step_Name__c,
         result.sleepDurationSeconds
       );
       update as system instance;
@@ -8897,6 +8898,7 @@ public inherited sharing class WorkflowEngine {
           .addSeconds(result.sleepDurationSeconds);
         instance.Async_Job_Id__c = scheduleSleepResume(
           instance.Id,
+          stepExec.Step_Name__c,
           result.sleepDurationSeconds
         );
       }
@@ -11428,12 +11430,13 @@ public inherited sharing class WorkflowEngine {
     instance.Concurrency_Parked__c = true;
     instance.Concurrency_Slot_Held__c = false;
     instance.Sleep_Until__c = DateTime.now().addSeconds(retrySeconds);
-    instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, retrySeconds);
+    instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, instance.Current_Step__c, retrySeconds);
     update as system instance;
   }
 
   private static String scheduleSleepResume(
     Id instanceId,
+    String stepName,
     Integer delaySeconds
   ) {
     if (!useDynamicScheduling) {
@@ -11470,9 +11473,10 @@ public inherited sharing class WorkflowEngine {
         runTime.month() +
         ' ? ' +
         runTime.year();
+      String cleanStepName = stepName.replaceAll('[^a-zA-Z0-9]', '_');
       return String.valueOf(
         System.schedule(
-          'WorkflowSleep_' + instanceId + '_' + runTime.getTime(),
+          'WorkflowSleep_' + instanceId + '_' + cleanStepName + '_' + runTime.getTime(),
           cronStr,
           job
         )

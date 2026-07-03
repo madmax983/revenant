@@ -603,7 +603,10 @@ public class WorkflowTestHarnessTest {
 
   public class ParallelSleepB implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      return StepResult.complete(null, 'done_b');
+      if (ctx.getSignal('WorkflowTestHarnessTest.ParallelSleepB').isPresent()) {
+        return StepResult.complete(null, 'done_b');
+      }
+      return StepResult.suspend();
     }
   }
 
@@ -766,12 +769,15 @@ public class WorkflowTestHarnessTest {
     System.assertEquals('Running', splitResult.status);
 
     // Run the next step execution (runs ParallelSleepA which returns SLEEP and suspends)
-    WorkflowTestHarness.Result result = harness.step();
+    WorkflowTestHarness.Result resultA = harness.step();
+    System.assertEquals('Suspended', resultA.status);
+    System.assertEquals(true, resultA.isSleeping);
 
-    System.assertEquals('Suspended', result.status);
-    System.assertEquals(true, result.isSleeping);
+    // Run the next step execution (runs ParallelSleepB which returns SUSPEND and suspends)
+    WorkflowTestHarness.Result resultB = harness.step();
+    System.assertEquals('Suspended', resultB.status);
 
-    // Firing sleep on ParallelSleepB (which has NOT run yet and is not sleeping) must throw HarnessException
+    // Firing sleep on ParallelSleepB (which is plain suspended, not sleeping) must throw HarnessException
     try {
       harness.fireSleep('WorkflowTestHarnessTest.ParallelSleepB');
       System.assert(false, 'Expected fireSleep on ParallelSleepB to throw HarnessException');
@@ -782,8 +788,16 @@ public class WorkflowTestHarnessTest {
       );
     }
 
-    // Firing sleep on ParallelSleepA (which is actually sleeping) must succeed and drive to completion
-    WorkflowTestHarness.Result finalResult = harness.fireSleep('WorkflowTestHarnessTest.ParallelSleepA');
+    // Firing sleep on ParallelSleepA (which is actually sleeping) must succeed and wait on the remaining branch B
+    WorkflowTestHarness.Result awakeA = harness.fireSleep('WorkflowTestHarnessTest.ParallelSleepA');
+    System.assertEquals('Suspended', awakeA.status);
+
+    // Resuming B via signal must succeed and drive to completion
+    WorkflowTestHarness.Result finalResult = harness.injectSignal(
+      'ParallelSleepKey',
+      'WorkflowTestHarnessTest.ParallelSleepB',
+      null
+    );
     Test.stopTest();
 
     System.assertEquals('Completed', finalResult.status);

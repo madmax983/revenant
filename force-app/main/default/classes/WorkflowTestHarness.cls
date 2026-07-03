@@ -681,6 +681,20 @@ public inherited sharing class WorkflowTestHarness {
             )) {
               continue;
             }
+            // Check CronTrigger to ensure this specific step scheduled a sleep resume job
+            if (WorkflowEngine.useDynamicScheduling) {
+              String jobPrefix = 'WorkflowSleep_' + inst.Id + '_' + stepName.replaceAll('[^a-zA-Z0-9]', '_') + '%';
+              List<CronTrigger> jobs = [
+                SELECT Id
+                FROM CronTrigger
+                WHERE CronJobDetail.Name LIKE :jobPrefix
+                WITH SYSTEM_MODE
+                LIMIT 1
+              ];
+              if (jobs.isEmpty()) {
+                continue;
+              }
+            }
             return inst;
           }
           if (!checkSleep && status == 'Retrying') {
