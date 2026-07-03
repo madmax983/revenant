@@ -8039,17 +8039,17 @@ public class WorkflowEngineTest {
       null
     );
 
-    // Explicitly set CreatedDates to order them:
-    // originalParent (10 mins ago) -> child/predecessor (5 mins ago) -> newParent (now) -> run2 (now + 1 min)
-    Test.setCreatedDate(originalParentId, DateTime.now().addMinutes(-10));
-    Test.setCreatedDate(childId, DateTime.now().addMinutes(-5));
-    Test.setCreatedDate(newerParentId, DateTime.now());
-    Test.setCreatedDate(run2.Id, DateTime.now().addMinutes(1));
+    // Explicitly set CreatedDates to order them in the past:
+    // originalParent (30 mins ago) -> child/predecessor (20 mins ago) -> newParent (10 mins ago) -> run2 (5 mins ago)
+    Test.setCreatedDate(originalParentId, DateTime.now().addMinutes(-30));
+    Test.setCreatedDate(childId, DateTime.now().addMinutes(-20));
+    Test.setCreatedDate(newerParentId, DateTime.now().addMinutes(-10));
+    Test.setCreatedDate(run2.Id, DateTime.now().addMinutes(-5));
 
     // Update run2's Causation_Id__c timestamp to match predecessor's mocked CreatedDate
     run2.Causation_Id__c =
       'key:ParentKeyReused::ts::' +
-      String.valueOf(DateTime.now().addMinutes(-5).getTime());
+      String.valueOf(DateTime.now().addMinutes(-20).getTime());
     update run2;
 
     // Get causation lineage on successor (run2).
@@ -8135,7 +8135,7 @@ public class WorkflowEngineTest {
         Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
         Correlation_Key__c = 'ChainDaemonKey-' + i,
         Causation_Id__c = 'key:ParentKeyReusedLong::ts::' +
-          String.valueOf(DateTime.now().addMinutes(-5).getTime()),
+          String.valueOf(DateTime.now().addMinutes(-20).getTime()),
         Previous_Instance__c = prevId
       );
       insert inst;
@@ -8150,12 +8150,12 @@ public class WorkflowEngineTest {
       null
     );
 
-    // Explicitly set CreatedDates to order them:
-    // originalParent (10 mins ago) -> first run (5 mins ago) -> newParent (now) -> last run (now + 1 min)
-    Test.setCreatedDate(originalParentId, DateTime.now().addMinutes(-10));
-    Test.setCreatedDate(chain[0].Id, DateTime.now().addMinutes(-5));
-    Test.setCreatedDate(newerParentId, DateTime.now());
-    Test.setCreatedDate(chain[7].Id, DateTime.now().addMinutes(1));
+    // Explicitly set CreatedDates to order them in the past:
+    // originalParent (30 mins ago) -> first run (20 mins ago) -> newParent (10 mins ago) -> last run (5 mins ago)
+    Test.setCreatedDate(originalParentId, DateTime.now().addMinutes(-30));
+    Test.setCreatedDate(chain[0].Id, DateTime.now().addMinutes(-20));
+    Test.setCreatedDate(newerParentId, DateTime.now().addMinutes(-10));
+    Test.setCreatedDate(chain[7].Id, DateTime.now().addMinutes(-5));
 
     // Get causation lineage on the last run of the chain.
     // Because we bulk-query 5 levels at a time, we will successfully walk back all 8 levels to the first run (5 mins ago),

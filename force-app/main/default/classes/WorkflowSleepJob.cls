@@ -52,6 +52,9 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     if (insts.isEmpty()) {
       return false;
     }
+    if (Test.isRunningTest() && WorkflowEngine.disableQueueableInTest) {
+      return false;
+    }
     Workflow_Instance__c inst = insts[0];
     if (inst.Status__c != 'Suspended' || inst.Sleep_Until__c == null) {
       return false;
@@ -74,8 +77,7 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     Workflow_Instance__c toUpdate = new Workflow_Instance__c(
       Id = instanceId,
       Sleep_Until__c = null,
-      Async_Job_Id__c = null,
-      Status__c = 'Running'
+      Async_Job_Id__c = null
     );
     update as system toUpdate;
     return true;
