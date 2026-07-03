@@ -2,11 +2,10 @@ public inherited sharing class WorkflowRetryJob implements Schedulable {
   private Id instanceId;
   private String stepName;
 
-  public WorkflowRetryJob(Id instanceId) {
-    this.instanceId = instanceId;
-  }
-
   public WorkflowRetryJob(Id instanceId, String stepName) {
+    if (instanceId == null) {
+      throw new WorkflowEngine.WorkflowException('instanceId is required.');
+    }
     this.instanceId = instanceId;
     this.stepName = stepName;
   }
@@ -28,10 +27,12 @@ public inherited sharing class WorkflowRetryJob implements Schedulable {
     WorkflowEngine.scheduleTimeoutJobForInstance(this.instanceId);
 
     // Clean up this scheduled execution from the schedule queue
-    System.abortJob(ctx.getTriggerId());
+    if (ctx != null && ctx.getTriggerId() != null) {
+      System.abortJob(ctx.getTriggerId());
+    }
   }
 
-  public class QueueableRetryJob implements Queueable {
+  public inherited sharing class QueueableRetryJob implements Queueable {
     private Id instanceId;
     private String stepName;
 

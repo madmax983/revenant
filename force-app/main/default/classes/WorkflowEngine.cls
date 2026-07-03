@@ -3704,7 +3704,7 @@ public inherited sharing class WorkflowEngine {
         }
         // Ceiling full: park and re-attempt admission automatically through the
         // existing sleep/watchdog resume plumbing.
-        parkForConcurrency(instance);
+        parkForConcurrency(instance, resolvedStep);
         return;
       }
       // Otherwise unbounded (no ceiling): fall through and run exactly as today. If
@@ -5335,6 +5335,7 @@ public inherited sharing class WorkflowEngine {
         .addSeconds(result.sleepDurationSeconds);
       instance.Async_Job_Id__c = scheduleSleepResume(
         instance.Id,
+        stepExec.Step_Name__c,
         result.sleepDurationSeconds
       );
       update as system instance;
@@ -8897,6 +8898,7 @@ public inherited sharing class WorkflowEngine {
           .addSeconds(result.sleepDurationSeconds);
         instance.Async_Job_Id__c = scheduleSleepResume(
           instance.Id,
+          stepExec.Step_Name__c,
           result.sleepDurationSeconds
         );
       }
@@ -11396,7 +11398,7 @@ public inherited sharing class WorkflowEngine {
    * current Pending step's watchdog deadline is cleared so a parked (not-yet-executed)
    * step is never failed by the timeout sweep; admission re-arms it.
    */
-  private static void parkForConcurrency(Workflow_Instance__c instance) {
+  private static void parkForConcurrency(Workflow_Instance__c instance, String resolvedStep) {
     // Reset the current step's pre-execution state so a re-park is always clean: an
     // external resume() can have flipped the not-yet-executed step to Running and
     // stamped a deadline before this delivery reached the gate. Put it back to
@@ -11428,12 +11430,13 @@ public inherited sharing class WorkflowEngine {
     instance.Concurrency_Parked__c = true;
     instance.Concurrency_Slot_Held__c = false;
     instance.Sleep_Until__c = DateTime.now().addSeconds(retrySeconds);
-    instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, retrySeconds);
+    instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, resolvedStep, retrySeconds);
     update as system instance;
   }
 
   private static String scheduleSleepResume(
     Id instanceId,
+    String stepName,
     Integer delaySeconds
   ) {
     if (!useDynamicScheduling) {
@@ -11449,13 +11452,13 @@ public inherited sharing class WorkflowEngine {
         if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
           return String.valueOf(
             System.enqueueJob(
-              new WorkflowSleepJob.QueueableSleepJob(instanceId),
+              new WorkflowSleepJob.QueueableSleepJob(instanceId, stepName),
               delaySeconds / 60
             )
           );
         }
       }
-      WorkflowSleepJob job = new WorkflowSleepJob(instanceId);
+      WorkflowSleepJob job = new WorkflowSleepJob(instanceId, stepName);
       Datetime runTime = Datetime.now()
         .addSeconds(Test.isRunningTest() ? delaySeconds + 60 : delaySeconds);
       String cronStr =
@@ -11470,9 +11473,10 @@ public inherited sharing class WorkflowEngine {
         runTime.month() +
         ' ? ' +
         runTime.year();
+      String jobName = getSleepJobPrefix(instanceId, stepName) + '_' + runTime.getTime();
       return String.valueOf(
         System.schedule(
-          'WorkflowSleep_' + instanceId + '_' + runTime.getTime(),
+          jobName,
           cronStr,
           job
         )
@@ -11491,6 +11495,14 @@ public inherited sharing class WorkflowEngine {
       );
       return null;
     }
+  }
+
+  public static String getSleepJobPrefix(Id instanceId, String stepName) {
+    String cleanStepName = String.isNotBlank(stepName) ? stepName.replaceAll('[^a-zA-Z0-9]', '_') : '';
+    if (cleanStepName.length() > 25) {
+      cleanStepName = cleanStepName.substring(0, 15) + '_' + Math.abs(cleanStepName.hashCode());
+    }
+    return 'WorkflowSleep_' + instanceId + (String.isNotBlank(cleanStepName) ? '_' + cleanStepName : '');
   }
 
   private static void cancelTimeoutJob(Id instanceId, String stepName) {
