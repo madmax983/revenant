@@ -686,7 +686,11 @@ public inherited sharing class WorkflowTestHarness {
         }
       }
       for (String step : activeSteps) {
-        String status = stepLatestStatus.get(step.toLowerCase());
+        String forwardKey = step.toLowerCase();
+        String compensateKey = forwardKey + '_compensate';
+        String status = stepLatestStatus.containsKey(compensateKey)
+          ? stepLatestStatus.get(compensateKey)
+          : stepLatestStatus.get(forwardKey);
         if (status == 'Retrying') {
           r.isAwaitingRetry = true;
         } else if (status == 'Pending') {
