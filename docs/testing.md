@@ -273,31 +273,28 @@ static void testPollerChain() {
 
 ## Pattern 9 — Step-level unit tests (skip the harness entirely)
 
-For CPU/SOQL-heavy steps, or when you need to prove idempotency across many re-executions, construct `StepContext` directly and call `step.execute(ctx)`. This runs in a single lightweight DML transaction and accumulates no framework overhead.
+For CPU/SOQL-heavy steps, or when you need to prove idempotency across many re-executions, construct `StepContext` using the fluent `StepContextTestBuilder` and call `step.execute(ctx)` directly. This runs in a single lightweight unit test transaction with **0 DML** and **0 SOQL** statements, and accumulates no framework overhead.
 
 ```java
 @isTest
 static void testStepIdempotency() {
-    // Construct a StepContext as the engine would — no WorkflowEngine.start() needed.
-    StepContext ctx = new StepContext(
-        instanceId,
-        'MyWorkflow',
-        'MyWorkflow.ChargeStep',
-        '{"amountCents":4200}',   // workflowInputJson
-        null,                      // compensationStack
-        null,                      // activeCorrelationKey
-        '{"amountCents":4200}'    // stepStateJson
-    );
+    // Construct a StepContext fluently — no DML, no SOQL, no positional constructors.
+    StepContext ctx = new StepContextTestBuilder()
+        .workflowName('MyWorkflow')
+        .stepName('MyWorkflow.ChargeStep')
+        .workflowInputJson('{"amountCents":4200}')
+        .build();
 
     StepResult result = new MyWorkflow.ChargeStep().execute(ctx);
-    System.assertEquals('Completed', result.action);
+    System.assertEquals(StepResult.ActionType.COMPLETE, result.action);
+
     // Re-run with the same context — side effects should be deduplicated.
     StepResult retry = new MyWorkflow.ChargeStep().execute(ctx);
     System.assert(((Map<String,Object>)JSON.deserializeUntyped(retry.outputJson)).get('deduplicated') == true);
 }
 ```
 
-See `IdempotentChargeWorkflowExampleTest.testDistinctVisitsAreNotDeduped` for a full example.
+For more detailed information, see the [StepContextTestBuilder Developer Guide](file:///c:/Users/markm/revenant/docs/step-context-test-builder.md). See `IdempotentChargeWorkflowExampleTest.testChargePaymentStepWithBuilder` for a reference example.
 
 ---
 

@@ -21,7 +21,8 @@ public class IdempotentChargeWorkflowExampleTest {
       'idem-charge-1',
       new Map<String, Object>{ 'amountCents' => 4200 }
     );
-    WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId).drive();
+    WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
+      .drive();
     Test.stopTest();
 
     System.assertEquals(
@@ -93,8 +94,8 @@ public class IdempotentChargeWorkflowExampleTest {
         (String) replayAudit.Id,
         ctx.idempotencyKey,
         'idempotencyKey must not be the per-attempt Workflow_Step_Execution__c Id (' +
-        scenario +
-        ')'
+          scenario +
+          ')'
       );
 
       StepResult res = new IdempotentChargeWorkflowExample.ChargePaymentStep()
@@ -106,15 +107,15 @@ public class IdempotentChargeWorkflowExampleTest {
         firstChargeId,
         (String) out.get('chargeId'),
         'Re-execution (' +
-        scenario +
-        ') must observe the prior charge via the same key'
+          scenario +
+          ') must observe the prior charge via the same key'
       );
       System.assertEquals(
         true,
         out.get('deduplicated'),
         'Gateway should report the repeat call (' +
-        scenario +
-        ') as deduplicated'
+          scenario +
+          ') as deduplicated'
       );
     }
 
@@ -191,6 +192,70 @@ public class IdempotentChargeWorkflowExampleTest {
       2,
       MockIdempotentPaymentGateway.effectiveSideEffectCount,
       'Two distinct visits must produce two effective charges'
+    );
+  }
+
+  @isTest
+  static void testChargePaymentStepWithBuilder() {
+    MockIdempotentPaymentGateway.reset();
+
+    // 1. Happy path: execute the step with a custom amount
+    StepContext ctx1 = new StepContextTestBuilder()
+      .workflowInputJson('{"amountCents":3500}')
+      .build();
+
+    StepResult res1 = new IdempotentChargeWorkflowExample.ChargePaymentStep()
+      .execute(ctx1);
+    System.assertEquals(
+      null,
+      res1.nextStepName,
+      'Terminal step should have no routing target'
+    );
+
+    Map<String, Object> out1 = (Map<String, Object>) JSON.deserializeUntyped(
+      res1.outputJson
+    );
+    System.assertEquals(3500, (Integer) out1.get('amountCents'));
+    System.assertEquals(false, (Boolean) out1.get('deduplicated'));
+    String chargeId = (String) out1.get('chargeId');
+    System.assert(String.isNotBlank(chargeId));
+
+    // 2. Replay path: execute the step with the same idempotency key (same instance, step, visit)
+    // To do this, we use the same builder values (defaults are identical, yielding the same idempotencyKey).
+    // The mock payment gateway uses the idempotencyKey to deduplicate and return the cached result.
+    StepContext ctx2 = new StepContextTestBuilder()
+      .workflowInstanceId(ctx1.workflowInstanceId)
+      .workflowInputJson('{"amountCents":3500}')
+      .build();
+
+    System.assertEquals(
+      ctx1.idempotencyKey,
+      ctx2.idempotencyKey,
+      'Idempotency keys must match for same logical visit'
+    );
+
+    StepResult res2 = new IdempotentChargeWorkflowExample.ChargePaymentStep()
+      .execute(ctx2);
+    Map<String, Object> out2 = (Map<String, Object>) JSON.deserializeUntyped(
+      res2.outputJson
+    );
+    System.assertEquals(3500, (Integer) out2.get('amountCents'));
+    System.assertEquals(
+      true,
+      (Boolean) out2.get('deduplicated'),
+      'Second attempt should be deduplicated by the gateway'
+    );
+    System.assertEquals(
+      chargeId,
+      (String) out2.get('chargeId'),
+      'Should return the same charge ID'
+    );
+
+    // 3. Verify exactly 1 side effect occurred
+    System.assertEquals(
+      1,
+      MockIdempotentPaymentGateway.effectiveSideEffectCount,
+      'Exactly 1 charge should have been processed'
     );
   }
 
