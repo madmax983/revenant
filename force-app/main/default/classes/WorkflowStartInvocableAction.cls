@@ -71,6 +71,31 @@ public inherited sharing class WorkflowStartInvocableAction {
             'Debounce seconds must be non-negative.'
           );
         }
+        if (String.isNotBlank(req.inputJson)) {
+          try {
+            JSON.deserializeUntyped(req.inputJson);
+          } catch (Exception ex) {
+            throw new WorkflowEngine.WorkflowException(
+              'Invalid Input JSON: ' + ex.getMessage()
+            );
+          }
+        }
+        if (String.isNotBlank(req.attributesJson)) {
+          try {
+            Object deserialized = JSON.deserializeUntyped(req.attributesJson);
+            if (!(deserialized instanceof Map<String, Object>)) {
+              throw new WorkflowEngine.WorkflowException(
+                'Attributes JSON must represent a key-value object.'
+              );
+            }
+          } catch (WorkflowEngine.WorkflowException ex) {
+            throw ex;
+          } catch (Exception ex) {
+            throw new WorkflowEngine.WorkflowException(
+              'Invalid Attributes JSON: ' + ex.getMessage()
+            );
+          }
+        }
         debounceRequests.add(
           new WorkflowDebouncer.DebounceRequest(
             req.workflowName,

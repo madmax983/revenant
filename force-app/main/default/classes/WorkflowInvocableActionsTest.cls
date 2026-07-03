@@ -357,4 +357,72 @@ public class WorkflowInvocableActionsTest {
     System.assertEquals('{"attr2":"val2"}', states[0].Attributes_Json__c);
     System.assertEquals('flowCausation123', states[0].Causation_Id__c);
   }
+
+  @isTest
+  static void testFlowDebouncedValidation() {
+    // 1. Malformed Input JSON
+    WorkflowStartInvocableAction.StartRequest req1 = new WorkflowStartInvocableAction.StartRequest();
+    req1.workflowName = 'WorkflowEngineTest.HappyWorkflow';
+    req1.correlationKey = 'InvocableDebounceKeyVal1';
+    req1.debounceSeconds = 10;
+    req1.inputJson = '{"val":'; // Malformed JSON
+
+    try {
+      WorkflowStartInvocableAction.startWorkflow(
+        new List<WorkflowStartInvocableAction.StartRequest>{ req1 }
+      );
+      System.assert(false, 'Should have failed due to malformed inputJson');
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assert(
+        ex.getMessage().contains('Invalid Input JSON'),
+        'Exception message should indicate malformed JSON: ' + ex.getMessage()
+      );
+    }
+
+    // 2. Malformed Attributes JSON
+    WorkflowStartInvocableAction.StartRequest req2 = new WorkflowStartInvocableAction.StartRequest();
+    req2.workflowName = 'WorkflowEngineTest.HappyWorkflow';
+    req2.correlationKey = 'InvocableDebounceKeyVal2';
+    req2.debounceSeconds = 10;
+    req2.attributesJson = '{invalid'; // Malformed JSON
+
+    try {
+      WorkflowStartInvocableAction.startWorkflow(
+        new List<WorkflowStartInvocableAction.StartRequest>{ req2 }
+      );
+      System.assert(
+        false,
+        'Should have failed due to malformed attributesJson'
+      );
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assert(
+        ex.getMessage().contains('Invalid Attributes JSON'),
+        'Exception message should indicate malformed JSON: ' + ex.getMessage()
+      );
+    }
+
+    // 3. Non-object Attributes JSON
+    WorkflowStartInvocableAction.StartRequest req3 = new WorkflowStartInvocableAction.StartRequest();
+    req3.workflowName = 'WorkflowEngineTest.HappyWorkflow';
+    req3.correlationKey = 'InvocableDebounceKeyVal3';
+    req3.debounceSeconds = 10;
+    req3.attributesJson = '"simpleString"'; // Non-object JSON
+
+    try {
+      WorkflowStartInvocableAction.startWorkflow(
+        new List<WorkflowStartInvocableAction.StartRequest>{ req3 }
+      );
+      System.assert(
+        false,
+        'Should have failed due to non-object attributesJson'
+      );
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assert(
+        ex.getMessage()
+          .contains('Attributes JSON must represent a key-value object'),
+        'Exception message should indicate non-object mapping: ' +
+        ex.getMessage()
+      );
+    }
+  }
 }

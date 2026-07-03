@@ -23,7 +23,7 @@ public inherited sharing class CaseDebounceTriggerHandler {
         // Collect bulk debounce request: debounce for 5 seconds
         debounceRequests.add(
           new WorkflowDebouncer.DebounceRequest(
-            'WorkflowEngineTest.HappyWorkflow',
+            'CaseDebounceWorkflowExample',
             'Case_Debounce_' + c.Id,
             JSON.serialize(input),
             5, // debounceSeconds
