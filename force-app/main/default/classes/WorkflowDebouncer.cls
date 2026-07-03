@@ -1,0 +1,231 @@
+public inherited sharing class WorkflowDebouncer {
+  public class DebounceRequest {
+    public String workflowName;
+    public String correlationKey;
+    public String inputJson;
+    public Integer debounceSeconds;
+    public Integer maxWaitSeconds;
+
+    public DebounceRequest(
+      String workflowName,
+      String correlationKey,
+      String inputJson,
+      Integer debounceSeconds,
+      Integer maxWaitSeconds
+    ) {
+      this.workflowName = workflowName;
+      this.correlationKey = correlationKey;
+      this.inputJson = inputJson;
+      this.debounceSeconds = debounceSeconds;
+      this.maxWaitSeconds = maxWaitSeconds;
+    }
+  }
+
+  /**
+   * Public Apex entry point delegating to the bulk implementation.
+   */
+  public static void startDebounced(
+    String workflowName,
+    String correlationKey,
+    String inputJson,
+    Integer debounceSeconds,
+    Integer maxWaitSeconds
+  ) {
+    startDebounced(
+      new List<DebounceRequest>{
+        new DebounceRequest(
+          workflowName,
+          correlationKey,
+          inputJson,
+          debounceSeconds,
+          maxWaitSeconds
+        )
+      }
+    );
+  }
+
+  /**
+   * Bulk start debounced requests.
+   */
+  public static void startDebounced(List<DebounceRequest> requests) {
+    if (requests == null || requests.isEmpty()) {
+      return;
+    }
+
+    Datetime now = WorkflowEngine.mockNow != null
+      ? WorkflowEngine.mockNow
+      : Datetime.now();
+
+    Set<String> debounceKeys = new Set<String>();
+    List<DebounceRequest> validRequests = new List<DebounceRequest>();
+
+    for (DebounceRequest req : requests) {
+      if (req == null) {
+        continue;
+      }
+      if (String.isBlank(req.workflowName)) {
+        throw new WorkflowEngine.WorkflowException(
+          'Workflow name is required.'
+        );
+      }
+      if (String.isBlank(req.correlationKey)) {
+        throw new WorkflowEngine.WorkflowException(
+          'Correlation key is required.'
+        );
+      }
+      if (req.debounceSeconds == null || req.debounceSeconds < 0) {
+        throw new WorkflowEngine.WorkflowException(
+          'Debounce seconds must be non-negative.'
+        );
+      }
+      if (req.maxWaitSeconds != null && req.maxWaitSeconds < 0) {
+        throw new WorkflowEngine.WorkflowException(
+          'Max wait seconds must be non-negative.'
+        );
+      }
+      if (String.isNotBlank(req.inputJson) && req.inputJson.length() > 131072) {
+        throw new WorkflowEngine.WorkflowException(
+          'Input JSON payload exceeds maximum size limit of 131,072 characters.'
+        );
+      }
+
+      debounceKeys.add(
+        (req.workflowName + ':' + req.correlationKey).toLowerCase()
+      );
+      validRequests.add(req);
+    }
+
+    if (validRequests.isEmpty()) {
+      return;
+    }
+
+    List<Debounce_State__c> existingStates = [
+      SELECT Id, Debounce_Key__c, First_Triggered_At__c, Fire_At__c
+      FROM Debounce_State__c
+      WHERE Debounce_Key__c IN :debounceKeys
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+
+    Map<String, Debounce_State__c> existingMap = new Map<String, Debounce_State__c>();
+    for (Debounce_State__c state : existingStates) {
+      existingMap.put(state.Debounce_Key__c.toLowerCase(), state);
+    }
+
+    Map<String, Debounce_State__c> statesToUpsert = new Map<String, Debounce_State__c>();
+
+    for (DebounceRequest req : validRequests) {
+      String key = (req.workflowName + ':' + req.correlationKey).toLowerCase();
+
+      Debounce_State__c state = statesToUpsert.get(key);
+      if (state == null) {
+        Debounce_State__c dbState = existingMap.get(key);
+        if (dbState != null) {
+          state = dbState;
+        } else {
+          state = new Debounce_State__c(
+            Debounce_Key__c = key,
+            Workflow_Name__c = req.workflowName,
+            Correlation_Key__c = req.correlationKey,
+            First_Triggered_At__c = now
+          );
+        }
+      }
+
+      Datetime proposedFireAt = now.addSeconds(req.debounceSeconds);
+
+      if (req.maxWaitSeconds != null && req.maxWaitSeconds > 0) {
+        Datetime maxFireAt = state.First_Triggered_At__c.addSeconds(
+          req.maxWaitSeconds
+        );
+        if (proposedFireAt > maxFireAt) {
+          proposedFireAt = maxFireAt;
+        }
+      }
+
+      state.Fire_At__c = proposedFireAt;
+      state.Input_Json__c = req.inputJson;
+
+      statesToUpsert.put(key, state);
+    }
+
+    if (!statesToUpsert.isEmpty()) {
+      upsert as system statesToUpsert.values() Debounce_Key__c;
+    }
+  }
+
+  /**
+   * Sweeps and fires due debounce states, deleting them after starting.
+   */
+  public static void sweep() {
+    Datetime now = WorkflowEngine.mockNow != null
+      ? WorkflowEngine.mockNow
+      : Datetime.now();
+
+    List<Debounce_State__c> dueStates = [
+      SELECT Id, Workflow_Name__c, Correlation_Key__c, Input_Json__c, Fire_At__c
+      FROM Debounce_State__c
+      WHERE Fire_At__c <= :now
+      WITH SYSTEM_MODE
+      ORDER BY Fire_At__c ASC, Id ASC
+      LIMIT 100
+    ];
+
+    if (dueStates.isEmpty()) {
+      return;
+    }
+
+    List<WorkflowEngine.StartRequest> startRequests = new List<WorkflowEngine.StartRequest>();
+    for (Debounce_State__c state : dueStates) {
+      // Pass null to input since we set inputJson directly, saving CPU deserialization cycles.
+      WorkflowEngine.StartRequest req = new WorkflowEngine.StartRequest(
+        state.Workflow_Name__c,
+        state.Correlation_Key__c,
+        null
+      );
+      req.inputJson = state.Input_Json__c;
+      startRequests.add(req);
+    }
+
+    List<Debounce_State__c> statesToDelete = new List<Debounce_State__c>();
+
+    try {
+      WorkflowEngine.startOrGet(startRequests);
+      statesToDelete.addAll(dueStates);
+    } catch (Exception ex) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'WorkflowDebouncer sweep failed to bulk start: ' + ex.getMessage()
+      );
+      // Fallback: start them individually
+      for (Integer i = 0; i < startRequests.size(); i++) {
+        // Halt if approaching SOQL or DML limits to prevent uncatchable governor exceptions
+        if (Limits.getQueries() >= 90 || Limits.getDmlStatements() >= 140) {
+          System.debug(
+            LoggingLevel.WARN,
+            'WorkflowDebouncer sweep individual fallback halted to prevent Governor Limit exceptions.'
+          );
+          break;
+        }
+        WorkflowEngine.StartRequest req = startRequests[i];
+        Debounce_State__c state = dueStates[i];
+        try {
+          WorkflowEngine.startOrGet(
+            new List<WorkflowEngine.StartRequest>{ req }
+          );
+          statesToDelete.add(state);
+        } catch (Exception innerEx) {
+          System.debug(
+            LoggingLevel.ERROR,
+            'WorkflowDebouncer sweep failed to start individual: ' +
+            innerEx.getMessage()
+          );
+        }
+      }
+    } finally {
+      if (!statesToDelete.isEmpty()) {
+        delete as system statesToDelete;
+      }
+    }
+  }
+}

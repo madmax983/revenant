@@ -266,4 +266,60 @@ public class WorkflowInvocableActionsTest {
 
     Test.stopTest();
   }
+
+  @isTest
+  static void testFlowDebouncedStart() {
+    WorkflowStartInvocableAction.StartRequest req = new WorkflowStartInvocableAction.StartRequest();
+    req.workflowName = 'WorkflowEngineTest.HappyWorkflow';
+    req.correlationKey = 'InvocableDebounceKey';
+    req.inputJson = '{"val":1}';
+    req.debounceSeconds = 10;
+    req.maxWaitSeconds = 15;
+
+    Test.startTest();
+    List<WorkflowStartInvocableAction.StartResult> results = WorkflowStartInvocableAction.startWorkflow(
+      new List<WorkflowStartInvocableAction.StartRequest>{ req }
+    );
+    Test.stopTest();
+
+    System.assertEquals(1, results.size());
+    System.assertEquals(
+      null,
+      results[0].workflowInstanceId,
+      'Workflow should not start immediately'
+    );
+
+    List<Debounce_State__c> states = [
+      SELECT Id, Fire_At__c, Input_Json__c
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = 'InvocableDebounceKey'
+    ];
+    System.assertEquals(1, states.size(), 'Debounce state should be created');
+    System.assertEquals('{"val":1}', states[0].Input_Json__c);
+  }
+
+  @isTest
+  static void testFlowNegativeDebounceValidation() {
+    WorkflowStartInvocableAction.StartRequest req = new WorkflowStartInvocableAction.StartRequest();
+    req.workflowName = 'WorkflowEngineTest.HappyWorkflow';
+    req.correlationKey = 'InvocableDebounceKeyNeg';
+    req.debounceSeconds = -5;
+
+    Test.startTest();
+    try {
+      WorkflowStartInvocableAction.startWorkflow(
+        new List<WorkflowStartInvocableAction.StartRequest>{ req }
+      );
+      System.assert(
+        false,
+        'Should have failed due to negative debounce seconds'
+      );
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assert(
+        ex.getMessage().contains('Debounce seconds must be non-negative'),
+        'Exception message should mention non-negative constraint'
+      );
+    }
+    Test.stopTest();
+  }
 }

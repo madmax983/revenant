@@ -360,6 +360,13 @@
         <readable>true</readable>
     </fieldPermissions>
 
+    <!-- fieldPermissions for Debounce_State__c -->
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Debounce_State__c.Input_Json__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
     <hasActivationRequired>false</hasActivationRequired>
     <label>Revenant Admin</label>
 
@@ -461,6 +468,16 @@
         <allowRead>true</allowRead>
         <modifyAllRecords>true</modifyAllRecords>
         <object>Workflow_Search_Attribute__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>true</allowDelete>
+        <allowEdit>true</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords>
+        <object>Debounce_State__c</object>
         <viewAllRecords>true</viewAllRecords>
     </objectPermissions>
 </PermissionSet>
