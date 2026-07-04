@@ -139,17 +139,10 @@ public inherited sharing class WorkflowDebouncer {
           'Input JSON payload exceeds maximum size limit of 131,072 characters.'
         );
       }
-      if (
-        String.isNotBlank(req.attributesJson) &&
-        req.attributesJson.length() > 131072
-      ) {
-        throw new WorkflowEngine.WorkflowException(
-          'Attributes JSON payload exceeds maximum size limit of 131,072 characters.'
-        );
-      }
+      validateAttributesJson(req.attributesJson);
 
       debounceKeys.add(
-        (req.workflowName + ':' + req.correlationKey).toLowerCase()
+        generateDebounceKey(req.workflowName, req.correlationKey)
       );
       validRequests.add(req);
     }
@@ -174,7 +167,7 @@ public inherited sharing class WorkflowDebouncer {
     Map<String, Debounce_State__c> statesToUpsert = new Map<String, Debounce_State__c>();
 
     for (DebounceRequest req : validRequests) {
-      String key = (req.workflowName + ':' + req.correlationKey).toLowerCase();
+      String key = generateDebounceKey(req.workflowName, req.correlationKey);
 
       Debounce_State__c state = statesToUpsert.get(key);
       if (state == null) {
@@ -342,6 +335,74 @@ public inherited sharing class WorkflowDebouncer {
       }
       if (!statesToUpdate.isEmpty()) {
         update as system statesToUpdate;
+      }
+    }
+  }
+
+  public static String generateDebounceKey(
+    String workflowName,
+    String correlationKey
+  ) {
+    Blob keyBlob = Blob.valueOf(
+      (workflowName + ':' + correlationKey).toLowerCase()
+    );
+    return EncodingUtil.convertToHex(Crypto.generateDigest('MD5', keyBlob));
+  }
+
+  public static void validateAttributesJson(String attributesJson) {
+    if (String.isBlank(attributesJson)) {
+      return;
+    }
+    if (attributesJson.length() > 131072) {
+      throw new WorkflowEngine.WorkflowException(
+        'Attributes JSON payload exceeds maximum size limit of 131,072 characters.'
+      );
+    }
+    Object deserialized;
+    try {
+      deserialized = JSON.deserializeUntyped(attributesJson);
+    } catch (Exception ex) {
+      throw new WorkflowEngine.WorkflowException(
+        'Invalid Attributes JSON: ' + ex.getMessage()
+      );
+    }
+    if (!(deserialized instanceof Map<String, Object>)) {
+      throw new WorkflowEngine.WorkflowException(
+        'Attributes JSON must represent a key-value object.'
+      );
+    }
+    Map<String, Object> raw = (Map<String, Object>) deserialized;
+    if (raw.size() > WorkflowEngine.MAX_ATTRIBUTES_PER_INSTANCE) {
+      throw new WorkflowEngine.WorkflowException(
+        'Attribute count exceeds maximum limit of ' +
+        WorkflowEngine.MAX_ATTRIBUTES_PER_INSTANCE
+      );
+    }
+    for (String key : raw.keySet()) {
+      if (String.isBlank(key)) {
+        throw new WorkflowEngine.WorkflowException(
+          'Attribute key cannot be blank'
+        );
+      }
+      if (key.length() > WorkflowEngine.MAX_ATTRIBUTE_KEY_LENGTH) {
+        throw new WorkflowEngine.WorkflowException(
+          'Attribute key length exceeds maximum limit of ' +
+            WorkflowEngine.MAX_ATTRIBUTE_KEY_LENGTH +
+            ' characters: ' +
+            key
+        );
+      }
+      String val = raw.get(key) == null ? null : String.valueOf(raw.get(key));
+      if (
+        val != null &&
+        val.length() > WorkflowEngine.MAX_ATTRIBUTE_VALUE_LENGTH
+      ) {
+        throw new WorkflowEngine.WorkflowException(
+          'Attribute value length exceeds maximum limit of ' +
+            WorkflowEngine.MAX_ATTRIBUTE_VALUE_LENGTH +
+            ' characters: ' +
+            val
+        );
       }
     }
   }

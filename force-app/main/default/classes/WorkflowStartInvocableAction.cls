@@ -80,22 +80,7 @@ public inherited sharing class WorkflowStartInvocableAction {
             );
           }
         }
-        if (String.isNotBlank(req.attributesJson)) {
-          try {
-            Object deserialized = JSON.deserializeUntyped(req.attributesJson);
-            if (!(deserialized instanceof Map<String, Object>)) {
-              throw new WorkflowEngine.WorkflowException(
-                'Attributes JSON must represent a key-value object.'
-              );
-            }
-          } catch (WorkflowEngine.WorkflowException ex) {
-            throw ex;
-          } catch (Exception ex) {
-            throw new WorkflowEngine.WorkflowException(
-              'Invalid Attributes JSON: ' + ex.getMessage()
-            );
-          }
-        }
+        WorkflowDebouncer.validateAttributesJson(req.attributesJson);
         debounceRequests.add(
           new WorkflowDebouncer.DebounceRequest(
             req.workflowName,

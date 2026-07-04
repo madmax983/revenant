@@ -540,4 +540,104 @@ private class WorkflowDebounceTest {
     );
     Test.stopTest();
   }
+
+  @isTest
+  static void testDebounceKeyHashLengthSafety() {
+    // Generate a long workflow name (>60 chars) and a long correlation key (200 chars)
+    String longWorkflowName = 'a'.repeat(60);
+    String longCorrelationKey = 'b'.repeat(200);
+
+    Test.startTest();
+    WorkflowEngine.startDebounced(
+      longWorkflowName,
+      longCorrelationKey,
+      '{}',
+      10
+    );
+    Test.stopTest();
+
+    // Verify it was successfully saved
+    List<Debounce_State__c> states = [
+      SELECT Id, Debounce_Key__c
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = :longCorrelationKey
+    ];
+    System.assertEquals(1, states.size());
+    // Verify unique key is a 32-character MD5 hash
+    System.assertEquals(32, states[0].Debounce_Key__c.length());
+  }
+
+  @isTest
+  static void testAttributesValidationLimits() {
+    // 1. Exceed attribute count (11 attributes)
+    Map<String, Object> tooManyAttrs = new Map<String, Object>();
+    for (Integer i = 0; i < 11; i++) {
+      tooManyAttrs.put('key' + i, 'val' + i);
+    }
+    try {
+      WorkflowEngine.startDebounced(
+        'WorkflowEngineTest.HappyWorkflow',
+        'deb_key_limits_1',
+        '{}',
+        10,
+        15,
+        JSON.serialize(tooManyAttrs),
+        'causation1'
+      );
+      System.assert(false, 'Should have failed due to attribute count limit');
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assert(
+        ex.getMessage().contains('Attribute count exceeds maximum limit'),
+        'Exception message should indicate attribute count limit exceeded: ' +
+        ex.getMessage()
+      );
+    }
+
+    // 2. Exceed key length (101 characters)
+    Map<String, Object> longKeyAttrs = new Map<String, Object>{
+      'k'.repeat(101) => 'val'
+    };
+    try {
+      WorkflowEngine.startDebounced(
+        'WorkflowEngineTest.HappyWorkflow',
+        'deb_key_limits_2',
+        '{}',
+        10,
+        15,
+        JSON.serialize(longKeyAttrs),
+        'causation2'
+      );
+      System.assert(false, 'Should have failed due to key length limit');
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assert(
+        ex.getMessage().contains('Attribute key length exceeds maximum limit'),
+        'Exception message should indicate key length limit exceeded: ' +
+        ex.getMessage()
+      );
+    }
+
+    // 3. Exceed value length (151 characters)
+    Map<String, Object> longValAttrs = new Map<String, Object>{
+      'key' => 'v'.repeat(151)
+    };
+    try {
+      WorkflowEngine.startDebounced(
+        'WorkflowEngineTest.HappyWorkflow',
+        'deb_key_limits_3',
+        '{}',
+        10,
+        15,
+        JSON.serialize(longValAttrs),
+        'causation3'
+      );
+      System.assert(false, 'Should have failed due to value length limit');
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assert(
+        ex.getMessage()
+          .contains('Attribute value length exceeds maximum limit'),
+        'Exception message should indicate value length limit exceeded: ' +
+        ex.getMessage()
+      );
+    }
+  }
 }
