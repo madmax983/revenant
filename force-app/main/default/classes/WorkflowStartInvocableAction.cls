@@ -17,12 +17,6 @@ public inherited sharing class WorkflowStartInvocableAction {
       description='Optional causation or trace identifier linking this instance to the upstream instance/event.'
     )
     public String causationId;
-
-    @InvocableVariable(label='Debounce Seconds')
-    public Integer debounceSeconds;
-
-    @InvocableVariable(label='Max Wait Seconds')
-    public Integer maxWaitSeconds;
   }
 
   public class StartResult {
@@ -46,121 +40,67 @@ public inherited sharing class WorkflowStartInvocableAction {
       return new List<StartResult>();
     }
 
-    List<StartResult> results = new List<StartResult>();
-    for (Integer i = 0; i < requests.size(); i++) {
-      results.add(null);
-    }
-
     List<WorkflowEngine.StartRequest> engineRequests = new List<WorkflowEngine.StartRequest>();
-    List<Integer> engineRequestIndices = new List<Integer>();
-    List<WorkflowDebouncer.DebounceRequest> debounceRequests = new List<WorkflowDebouncer.DebounceRequest>();
-
-    for (Integer i = 0; i < requests.size(); i++) {
-      StartRequest req = requests[i];
+    for (StartRequest req : requests) {
       if (req == null) {
-        StartResult res = new StartResult();
-        res.workflowInstanceId = null;
-        res.isNew = null;
-        results[i] = res;
+        engineRequests.add(null);
         continue;
       }
-
-      if (req.debounceSeconds != null) {
-        if (req.debounceSeconds < 0) {
+      Object input = null;
+      if (String.isNotBlank(req.inputJson)) {
+        try {
+          input = JSON.deserializeUntyped(req.inputJson);
+        } catch (Exception ex) {
           throw new WorkflowEngine.WorkflowException(
-            'Debounce seconds must be non-negative.'
+            'Invalid Input JSON: ' + ex.getMessage()
           );
         }
-        if (String.isNotBlank(req.inputJson)) {
-          try {
-            JSON.deserializeUntyped(req.inputJson);
-          } catch (Exception ex) {
-            throw new WorkflowEngine.WorkflowException(
-              'Invalid Input JSON: ' + ex.getMessage()
-            );
-          }
-        }
-        WorkflowDebouncer.validateAttributesJson(req.attributesJson);
-        debounceRequests.add(
-          new WorkflowDebouncer.DebounceRequest(
-            req.workflowName,
-            req.correlationKey,
-            req.inputJson,
-            req.debounceSeconds,
-            req.maxWaitSeconds,
-            req.attributesJson,
-            req.causationId
-          )
-        );
-        StartResult res = new StartResult();
-        res.workflowInstanceId = null;
-        res.isNew = false;
-        results[i] = res;
-      } else {
-        Object input = null;
-        if (String.isNotBlank(req.inputJson)) {
-          try {
-            input = JSON.deserializeUntyped(req.inputJson);
-          } catch (Exception ex) {
-            throw new WorkflowEngine.WorkflowException(
-              'Invalid Input JSON: ' + ex.getMessage()
-            );
-          }
-        }
-        Map<String, String> attributes = null;
-        if (String.isNotBlank(req.attributesJson)) {
-          attributes = new Map<String, String>();
-          try {
-            Object deserialized = JSON.deserializeUntyped(req.attributesJson);
-            if (deserialized instanceof Map<String, Object>) {
-              Map<String, Object> raw = (Map<String, Object>) deserialized;
-              for (String k : raw.keySet()) {
-                attributes.put(k, String.valueOf(raw.get(k)));
-              }
-            } else {
-              throw new WorkflowEngine.WorkflowException(
-                'Attributes JSON must represent a key-value object.'
-              );
+      }
+      Map<String, String> attributes = null;
+      if (String.isNotBlank(req.attributesJson)) {
+        attributes = new Map<String, String>();
+        try {
+          Object deserialized = JSON.deserializeUntyped(req.attributesJson);
+          if (deserialized instanceof Map<String, Object>) {
+            Map<String, Object> raw = (Map<String, Object>) deserialized;
+            for (String k : raw.keySet()) {
+              attributes.put(k, String.valueOf(raw.get(k)));
             }
-          } catch (Exception ex) {
+          } else {
             throw new WorkflowEngine.WorkflowException(
-              'Invalid Attributes JSON: ' + ex.getMessage()
+              'Attributes JSON must represent a key-value object.'
             );
           }
+        } catch (Exception ex) {
+          throw new WorkflowEngine.WorkflowException(
+            'Invalid Attributes JSON: ' + ex.getMessage()
+          );
         }
-        WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
-          req.workflowName,
-          req.correlationKey,
-          input,
-          attributes
-        );
-        startReq.inputJson = req.inputJson;
-        startReq.causationId = req.causationId;
-        engineRequests.add(startReq);
-        engineRequestIndices.add(i);
       }
-    }
-
-    if (!debounceRequests.isEmpty()) {
-      WorkflowDebouncer.startDebounced(debounceRequests);
-    }
-
-    if (!engineRequests.isEmpty()) {
-      List<WorkflowEngine.StartResult> engineResults = WorkflowEngine.startOrGet(
-        engineRequests
+      WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
+        req.workflowName,
+        req.correlationKey,
+        input,
+        attributes
       );
-      for (Integer j = 0; j < engineResults.size(); j++) {
-        WorkflowEngine.StartResult engineResult = engineResults[j];
-        Integer origIndex = engineRequestIndices[j];
-        StartResult res = new StartResult();
-        res.workflowInstanceId = engineResult == null
-          ? null
-          : engineResult.instanceId;
-        res.isNew = engineResult == null ? null : engineResult.isNew;
-        results[origIndex] = res;
-      }
+      startReq.inputJson = req.inputJson;
+      startReq.causationId = req.causationId;
+      engineRequests.add(startReq);
     }
 
+    List<WorkflowEngine.StartResult> engineResults = WorkflowEngine.startOrGet(
+      engineRequests
+    );
+
+    List<StartResult> results = new List<StartResult>();
+    for (WorkflowEngine.StartResult engineResult : engineResults) {
+      StartResult res = new StartResult();
+      res.workflowInstanceId = engineResult == null
+        ? null
+        : engineResult.instanceId;
+      res.isNew = engineResult == null ? null : engineResult.isNew;
+      results.add(res);
+    }
     return results;
   }
 }

@@ -28,7 +28,7 @@ public inherited sharing class WorkflowEngine {
   public static Integer staleThresholdMinutes = 60;
   public static Integer reclaimThresholdMinutes = null;
   @TestVisible
-  public static Datetime mockNow = null;
+  private static Datetime mockNow = null;
   @TestVisible
   private static Integer predecessorQueriesRemaining = 15;
 
@@ -203,22 +203,10 @@ public inherited sharing class WorkflowEngine {
     return currentId;
   }
 
-  private static StepResult checkAndInjectFault(
-    Id instanceId,
-    String stepName,
-    WorkflowStep stepInstance
-  ) {
-    if (
-      Test.isRunningTest() &&
-      injectedFaults != null &&
-      !injectedFaults.isEmpty() &&
-      String.isNotBlank(stepName)
-    ) {
+  private static StepResult checkAndInjectFault(Id instanceId, String stepName, WorkflowStep stepInstance) {
+    if (Test.isRunningTest() && injectedFaults != null && !injectedFaults.isEmpty() && String.isNotBlank(stepName)) {
       Id rootId = getRootInstanceId(instanceId);
-      String key =
-        (rootId != null ? String.valueOf(rootId) : '') +
-        ':' +
-        stepName.toLowerCase();
+      String key = (rootId != null ? String.valueOf(rootId) : '') + ':' + stepName.toLowerCase();
       if (injectedFaults.containsKey(key)) {
         FaultConfig config = injectedFaults.get(key);
         if (config != null) {
@@ -234,8 +222,7 @@ public inherited sharing class WorkflowEngine {
           }
           if (shouldFail) {
             if (stepInstance instanceof RetryConfigurable) {
-              RetryPolicy policy = ((RetryConfigurable) stepInstance)
-                .getRetryPolicy();
+              RetryPolicy policy = ((RetryConfigurable) stepInstance).getRetryPolicy();
               if (policy != null) {
                 return StepResult.retry(policy);
               }
@@ -247,6 +234,8 @@ public inherited sharing class WorkflowEngine {
     }
     return null;
   }
+
+
 
   /**
    * Outcome of a get-or-start admission decision. Distinguishes a brand-new
@@ -1390,68 +1379,6 @@ public inherited sharing class WorkflowEngine {
         null
       )
       .instanceId;
-  }
-
-  /**
-   * Arms a durable trailing-edge debounce timer for starting a workflow.
-   */
-  public static void startDebounced(
-    String workflowName,
-    String correlationKey,
-    String inputJson,
-    Integer debounceSeconds
-  ) {
-    WorkflowDebouncer.startDebounced(
-      workflowName,
-      correlationKey,
-      inputJson,
-      debounceSeconds,
-      null
-    );
-  }
-
-  /**
-   * Arms a durable trailing-edge debounce timer for starting a workflow, with a maxWaitSeconds cap.
-   */
-  public static void startDebounced(
-    String workflowName,
-    String correlationKey,
-    String inputJson,
-    Integer debounceSeconds,
-    Integer maxWaitSeconds
-  ) {
-    WorkflowDebouncer.startDebounced(
-      workflowName,
-      correlationKey,
-      inputJson,
-      debounceSeconds,
-      maxWaitSeconds,
-      null,
-      null
-    );
-  }
-
-  /**
-   * Arms a durable trailing-edge debounce timer for starting a workflow, with a maxWaitSeconds cap, search attributes, and a causation ID.
-   */
-  public static void startDebounced(
-    String workflowName,
-    String correlationKey,
-    String inputJson,
-    Integer debounceSeconds,
-    Integer maxWaitSeconds,
-    String attributesJson,
-    String causationId
-  ) {
-    WorkflowDebouncer.startDebounced(
-      workflowName,
-      correlationKey,
-      inputJson,
-      debounceSeconds,
-      maxWaitSeconds,
-      attributesJson,
-      causationId
-    );
   }
 
   /**
@@ -4163,11 +4090,7 @@ public inherited sharing class WorkflowEngine {
 
     StepResult result;
     try {
-      if (
-        Test.isRunningTest() &&
-        injectedFaults != null &&
-        !injectedFaults.isEmpty()
-      ) {
+      if (Test.isRunningTest() && injectedFaults != null && !injectedFaults.isEmpty()) {
         result = checkAndInjectFault(instanceId, activeStepName, stepInstance);
       }
       if (result == null) {
@@ -8777,28 +8700,13 @@ public inherited sharing class WorkflowEngine {
 
     StepResult result;
     try {
-      if (
-        Test.isRunningTest() &&
-        injectedFaults != null &&
-        !injectedFaults.isEmpty()
-      ) {
+      if (Test.isRunningTest() && injectedFaults != null && !injectedFaults.isEmpty()) {
         Id rootId = getRootInstanceId(instance.Id);
-        String compKey =
-          (rootId != null ? String.valueOf(rootId) : '') +
-          ':' +
-          compensationStepLogName.toLowerCase();
+        String compKey = (rootId != null ? String.valueOf(rootId) : '') + ':' + compensationStepLogName.toLowerCase();
         if (injectedFaults.containsKey(compKey)) {
-          result = checkAndInjectFault(
-            instance.Id,
-            compensationStepLogName,
-            compensatableStepInstance
-          );
+          result = checkAndInjectFault(instance.Id, compensationStepLogName, compensatableStepInstance);
         } else {
-          result = checkAndInjectFault(
-            instance.Id,
-            activeStepName,
-            compensatableStepInstance
-          );
+          result = checkAndInjectFault(instance.Id, activeStepName, compensatableStepInstance);
         }
       }
       if (result == null) {
@@ -10426,13 +10334,7 @@ public inherited sharing class WorkflowEngine {
           Workflow_Name__c,
           Current_Step__c,
           Concurrency_Parked__c,
-          Concurrency_Slot_Held__c,
-          (
-            SELECT Workflow_Instance__c, Step_Name__c, Output__c, Id, Status__c
-            FROM Workflow_Step_Executions__r
-            ORDER BY CreatedDate DESC, Id DESC
-            LIMIT 1
-          )
+          Concurrency_Slot_Held__c
         FROM Workflow_Instance__c
         WHERE
           Status__c = 'Suspended'
@@ -10445,13 +10347,23 @@ public inherited sharing class WorkflowEngine {
     }
 
     if (!readyToResume.isEmpty()) {
-      Map<Id, Workflow_Step_Execution__c> latestStepByInstId = new Map<Id, Workflow_Step_Execution__c>();
+      Set<Id> resumeIds = new Set<Id>();
       for (Workflow_Instance__c inst : readyToResume) {
-        if (
-          inst.Workflow_Step_Executions__r != null &&
-          !inst.Workflow_Step_Executions__r.isEmpty()
-        ) {
-          latestStepByInstId.put(inst.Id, inst.Workflow_Step_Executions__r[0]);
+        resumeIds.add(inst.Id);
+      }
+
+      List<Workflow_Step_Execution__c> latestSteps = [
+        SELECT Workflow_Instance__c, Step_Name__c, Output__c, Id, Status__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c IN :resumeIds
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC, Id DESC
+      ];
+
+      Map<Id, Workflow_Step_Execution__c> latestStepByInstId = new Map<Id, Workflow_Step_Execution__c>();
+      for (Workflow_Step_Execution__c step : latestSteps) {
+        if (!latestStepByInstId.containsKey(step.Workflow_Instance__c)) {
+          latestStepByInstId.put(step.Workflow_Instance__c, step);
         }
       }
 
@@ -10581,20 +10493,43 @@ public inherited sharing class WorkflowEngine {
     if (!WorkflowPauseGate.wildcardPaused()) {
       Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
 
-      // 1. Query sparse Unrouted signals first (safety net capped backlog)
-      List<Workflow_Signal__c> unrouted = [
-        SELECT
-          Id,
-          Correlation_Key__c,
-          Status__c,
-          Idempotency_Key__c,
-          Signal_Key__c
-        FROM Workflow_Signal__c
-        WHERE Status__c = 'Unrouted'
+      // 1. Query Suspended instances to get candidate active keys first (ordered deterministically)
+      List<Workflow_Instance__c> suspended = [
+        SELECT Id, Correlation_Key__c
+        FROM Workflow_Instance__c
+        WHERE
+          Status__c = 'Suspended'
+          AND Workflow_Name__c NOT IN :pausedDefNames
         WITH SYSTEM_MODE
-        ORDER BY CreatedDate ASC, Id ASC
-        LIMIT 1000
+        ORDER BY LastModifiedDate DESC, Id DESC
+        LIMIT 10000
       ];
+
+      List<Workflow_Signal__c> unrouted = new List<Workflow_Signal__c>();
+      if (!suspended.isEmpty()) {
+        Set<String> activeKeys = new Set<String>();
+        for (Workflow_Instance__c inst : suspended) {
+          activeKeys.add(String.valueOf(inst.Id));
+          if (String.isNotBlank(inst.Correlation_Key__c)) {
+            activeKeys.add(inst.Correlation_Key__c);
+          }
+        }
+
+        // Query Unrouted signals matching active keys with safety limit
+        unrouted = [
+          SELECT
+            Id,
+            Correlation_Key__c,
+            Status__c,
+            Idempotency_Key__c,
+            Signal_Key__c
+          FROM Workflow_Signal__c
+          WHERE Status__c = 'Unrouted' AND Correlation_Key__c IN :activeKeys
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate ASC, Id ASC
+          LIMIT 1000
+        ];
+      }
 
       if (!unrouted.isEmpty()) {
         Set<String> keys = new Set<String>();
@@ -10710,16 +10645,6 @@ public inherited sharing class WorkflowEngine {
       System.debug(
         LoggingLevel.ERROR,
         'WorkflowEngine: schedule sweep failed: ' + scheduleEx.getMessage()
-      );
-    }
-
-    // 3b. Process due debounced starts (0-slot: runs inside the watchdog heartbeat).
-    try {
-      WorkflowDebouncer.sweep();
-    } catch (Exception debounceEx) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'WorkflowEngine: debounce sweep failed: ' + debounceEx.getMessage()
       );
     }
 
@@ -11066,25 +10991,19 @@ public inherited sharing class WorkflowEngine {
     WorkflowLifecyclePublisher.publish(watchdogTerminalInstances);
   }
 
-  private static Map<String, Integer> stepTimeoutCache = new Map<String, Integer>();
-
   private static Integer getStepTimeoutSeconds(String stepName) {
     if (String.isBlank(stepName)) {
       return null;
     }
-    if (stepTimeoutCache.containsKey(stepName)) {
-      return stepTimeoutCache.get(stepName);
-    }
     String className = stepName.endsWith('_Compensate')
       ? stepName.substring(0, stepName.lastIndexOf('_Compensate'))
       : stepName;
-    Integer timeout = null;
     try {
       Type stepType = Type.forName(className);
       if (stepType != null) {
         Object stepObj = stepType.newInstance();
         if (stepObj instanceof TimeoutConfigurable) {
-          timeout = ((TimeoutConfigurable) stepObj).getTimeoutSeconds();
+          return ((TimeoutConfigurable) stepObj).getTimeoutSeconds();
         }
       }
     } catch (Exception e) {
@@ -11096,8 +11015,7 @@ public inherited sharing class WorkflowEngine {
           e.getMessage()
       );
     }
-    stepTimeoutCache.put(stepName, timeout);
-    return timeout;
+    return null;
   }
 
   private static String resolveContinueAsNewKey(
@@ -11480,10 +11398,7 @@ public inherited sharing class WorkflowEngine {
    * current Pending step's watchdog deadline is cleared so a parked (not-yet-executed)
    * step is never failed by the timeout sweep; admission re-arms it.
    */
-  private static void parkForConcurrency(
-    Workflow_Instance__c instance,
-    String resolvedStep
-  ) {
+  private static void parkForConcurrency(Workflow_Instance__c instance, String resolvedStep) {
     // Reset the current step's pre-execution state so a re-park is always clean: an
     // external resume() can have flipped the not-yet-executed step to Running and
     // stamped a deadline before this delivery reached the gate. Put it back to
@@ -11515,11 +11430,7 @@ public inherited sharing class WorkflowEngine {
     instance.Concurrency_Parked__c = true;
     instance.Concurrency_Slot_Held__c = false;
     instance.Sleep_Until__c = DateTime.now().addSeconds(retrySeconds);
-    instance.Async_Job_Id__c = scheduleSleepResume(
-      instance.Id,
-      resolvedStep,
-      retrySeconds
-    );
+    instance.Async_Job_Id__c = scheduleSleepResume(instance.Id, resolvedStep, retrySeconds);
     update as system instance;
   }
 
@@ -11562,11 +11473,14 @@ public inherited sharing class WorkflowEngine {
         runTime.month() +
         ' ? ' +
         runTime.year();
-      String jobName =
-        getSleepJobPrefix(instanceId, stepName) +
-        '_' +
-        runTime.getTime();
-      return String.valueOf(System.schedule(jobName, cronStr, job));
+      String jobName = getSleepJobPrefix(instanceId, stepName) + '_' + runTime.getTime();
+      return String.valueOf(
+        System.schedule(
+          jobName,
+          cronStr,
+          job
+        )
+      );
     } catch (AsyncException ex) {
       System.debug(
         LoggingLevel.INFO,
@@ -11584,18 +11498,11 @@ public inherited sharing class WorkflowEngine {
   }
 
   public static String getSleepJobPrefix(Id instanceId, String stepName) {
-    String cleanStepName = String.isNotBlank(stepName)
-      ? stepName.replaceAll('[^a-zA-Z0-9]', '_')
-      : '';
+    String cleanStepName = String.isNotBlank(stepName) ? stepName.replaceAll('[^a-zA-Z0-9]', '_') : '';
     if (cleanStepName.length() > 25) {
-      cleanStepName =
-        cleanStepName.substring(0, 15) +
-        '_' +
-        Math.abs(cleanStepName.hashCode());
+      cleanStepName = cleanStepName.substring(0, 15) + '_' + Math.abs(cleanStepName.hashCode());
     }
-    return 'WorkflowSleep_' +
-      instanceId +
-      (String.isNotBlank(cleanStepName) ? '_' + cleanStepName : '');
+    return 'WorkflowSleep_' + instanceId + (String.isNotBlank(cleanStepName) ? '_' + cleanStepName : '');
   }
 
   private static void cancelTimeoutJob(Id instanceId, String stepName) {
