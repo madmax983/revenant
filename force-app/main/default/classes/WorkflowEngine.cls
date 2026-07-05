@@ -6168,7 +6168,9 @@ public inherited sharing class WorkflowEngine {
         Workflow_Name__c,
         Correlation_Key__c,
         Root_Correlation_Key__c,
-        Failure_Category__c
+        Failure_Category__c,
+        Concurrency_Parked__c,
+        Concurrency_Slot_Held__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -6179,6 +6181,88 @@ public inherited sharing class WorkflowEngine {
       return;
     }
     Workflow_Instance__c instance = instances[0];
+
+    Boolean isCompFailure = (instance.Status__c == 'Compensating' ||
+    instance.Status__c == 'Cancelling' ||
+    (String.isNotBlank(stepName) && stepName.endsWith('_Compensate')));
+
+    if (!isCompFailure) {
+      try {
+        Type wfType = Type.forName(instance.Workflow_Name__c);
+        if (wfType != null) {
+          WorkflowDefinition def = (WorkflowDefinition) wfType.newInstance();
+          if (def instanceof ErrorRoutingWorkflow) {
+            List<Workflow_Step_Execution__c> stepExecs = [
+              SELECT Retry_Count__c
+              FROM Workflow_Step_Execution__c
+              WHERE
+                Workflow_Instance__c = :instanceId
+                AND Step_Name__c = :stepName
+              WITH SYSTEM_MODE
+              ORDER BY CreatedDate DESC, Id DESC
+              LIMIT 1
+            ];
+            Integer attemptCount = 1;
+            if (!stepExecs.isEmpty() && stepExecs[0].Retry_Count__c != null) {
+              attemptCount = (Integer) stepExecs[0].Retry_Count__c + 1;
+            }
+            String truncatedError = errorMessage != null
+              ? errorMessage.left(20000)
+              : null;
+            StepError err = new StepError(
+              stepName,
+              truncatedError,
+              attemptCount
+            );
+            String errorStepName = ((ErrorRoutingWorkflow) def)
+              .getErrorStep(stepName, err);
+            if (String.isNotBlank(errorStepName)) {
+              Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
+              nextStepExec.Workflow_Instance__c = instance.Id;
+              nextStepExec.Step_Name__c = errorStepName;
+              nextStepExec.Status__c = 'Pending';
+              nextStepExec.Retry_Count__c = 0;
+
+              Map<String, Object> errorCaptures = new Map<String, Object>{
+                '__failedStepName' => stepName,
+                '__errorMessage' => truncatedError,
+                '__attemptCount' => attemptCount
+              };
+              nextStepExec.Captured_Values__c = savePayloadIfNeeded(
+                instance.Id,
+                JSON.serialize(errorCaptures),
+                'Captures_' + errorStepName.replaceAll('[^a-zA-Z0-9]', '_')
+              );
+              insert as system nextStepExec;
+
+              instance.Current_Step__c = errorStepName;
+              instance.Status__c = 'Running';
+              instance.Sleep_Until__c = null;
+              instance.Async_Job_Id__c = null;
+              update as system instance;
+
+              scheduleTimeoutJobForInstance(instance);
+              if (Test.isRunningTest()) {
+                if (!disableQueueableInTest) {
+                  System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+                }
+              } else {
+                enqueueOrchestrator(instance.Id, null);
+              }
+              return;
+            }
+          }
+        }
+      } catch (Exception ex) {
+        System.debug(
+          LoggingLevel.ERROR,
+          'Error in error routing: ' +
+            ex.getMessage() +
+            '\n' +
+            ex.getStackTraceString()
+        );
+      }
+    }
 
     // Check if there are compensations to run
     Boolean hasCompensations = false;
@@ -6531,18 +6615,32 @@ public inherited sharing class WorkflowEngine {
       }
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
+        Set<String> corrKeys = new Set<String>();
         for (Workflow_Instance__c inst : instancesToInsert) {
           if (String.isNotBlank(inst.Correlation_Key__c)) {
-            List<Workflow_Instance__c> sibling = [
-              SELECT Id, Parent_Instance__c
-              FROM Workflow_Instance__c
-              WHERE Active_Correlation_Key__c = :inst.Correlation_Key__c
-              WITH SYSTEM_MODE
-              LIMIT 1
-            ];
-            if (
-              sibling.isEmpty() || sibling[0].Parent_Instance__c != parentId
-            ) {
+            corrKeys.add(normalizeKey(inst.Correlation_Key__c));
+          }
+        }
+        Map<String, Workflow_Instance__c> siblingsMap = new Map<String, Workflow_Instance__c>();
+        if (!corrKeys.isEmpty()) {
+          for (Workflow_Instance__c sibling : [
+            SELECT Id, Parent_Instance__c, Active_Correlation_Key__c
+            FROM Workflow_Instance__c
+            WHERE Active_Correlation_Key__c IN :corrKeys
+            WITH SYSTEM_MODE
+          ]) {
+            siblingsMap.put(
+              normalizeKey(sibling.Active_Correlation_Key__c),
+              sibling
+            );
+          }
+        }
+        for (Workflow_Instance__c inst : instancesToInsert) {
+          if (String.isNotBlank(inst.Correlation_Key__c)) {
+            Workflow_Instance__c sibling = siblingsMap.get(
+              normalizeKey(inst.Correlation_Key__c)
+            );
+            if (sibling == null || sibling.Parent_Instance__c != parentId) {
               throw new WorkflowException(
                 'An active workflow already exists with correlation key: ' +
                 inst.Correlation_Key__c
@@ -6708,8 +6806,12 @@ public inherited sharing class WorkflowEngine {
         signalName = 'ChildFailed';
         Map<String, Object> outcomeData = new Map<String, Object>{
           'status' => child.Status__c,
-          'errorMessage' => child.Error_Message__c,
-          'output' => child.Output__c
+          'errorMessage' => child.Error_Message__c != null
+            ? child.Error_Message__c.left(10000)
+            : null,
+          'output' => child.Output__c != null
+            ? child.Output__c.left(10000)
+            : null
         };
         payload = savePayloadIfNeeded(
           parent.Id,
