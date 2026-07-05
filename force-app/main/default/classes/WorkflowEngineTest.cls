@@ -9373,4 +9373,82 @@ public class WorkflowEngineTest {
     );
     System.assertEquals(1, (Integer) routedStepContextData.get('attemptCount'));
   }
+
+  public class RetryableHandlerWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.RetryExhaustedFailureStep',
+        'WorkflowEngineTest.RetryableHandlerStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.RetryExhaustedFailureStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      if (failedStepName == 'WorkflowEngineTest.RetryExhaustedFailureStep') {
+        return 'WorkflowEngineTest.RetryableHandlerStep';
+      }
+      return null;
+    }
+  }
+
+  public class RetryableHandlerStep implements WorkflowStep, RetryConfigurable {
+    public StepResult execute(StepContext ctx) {
+      routedStepsRun.add('RetryableHandlerStep');
+      routedStepContextData.put('failedStepName', ctx.failedStepName);
+      routedStepContextData.put('errorMessage', ctx.errorMessage);
+      routedStepContextData.put('attemptCount', ctx.attemptCount);
+      return StepResult.complete(null, 'HandlerDone');
+    }
+    public RetryPolicy getRetryPolicy() {
+      return new RetryPolicy(5, (Double) 1.0, 3);
+    }
+  }
+
+  @isTest
+  static void testLoadErrorMetadataForRetryableHandler() {
+    routedStepsRun.clear();
+    routedStepContextData.clear();
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.RetryableHandlerWorkflow',
+      'RetryableHandlerKey',
+      null
+    );
+
+    // Fail the step and route to RetryableHandlerStep
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.RetryExhaustedFailureStep'
+    );
+
+    Workflow_Instance__c inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.RetryableHandlerStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals('Running', inst.Status__c);
+
+    // Run the RetryableHandlerStep
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.RetryableHandlerStep'
+    );
+
+    System.assertEquals(1, routedStepsRun.size());
+    System.assertEquals('RetryableHandlerStep', routedStepsRun[0]);
+    System.assertEquals(
+      'WorkflowEngineTest.RetryExhaustedFailureStep',
+      (String) routedStepContextData.get('failedStepName')
+    );
+    System.assertEquals(1, (Integer) routedStepContextData.get('attemptCount'));
+  }
 }

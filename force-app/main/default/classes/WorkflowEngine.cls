@@ -4103,14 +4103,18 @@ public inherited sharing class WorkflowEngine {
         ((RetryConfigurable) stepInstance).getRetryPolicy()
       );
       maxAttempts = policy.maximumAttempts;
-    } else if (String.isNotBlank(stepExec.Captured_Values__c)) {
+    }
+    if (String.isNotBlank(stepExec.Captured_Values__c)) {
       String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
       if (String.isNotBlank(resolvedCaptures)) {
         try {
           capturesMap = (Map<String, Object>) JSON.deserializeUntyped(
             resolvedCaptures
           );
-          if (capturesMap.containsKey('__maxAttempts')) {
+          if (
+            !(stepInstance instanceof RetryConfigurable) &&
+            capturesMap.containsKey('__maxAttempts')
+          ) {
             maxAttempts = Integer.valueOf(capturesMap.get('__maxAttempts'));
           }
         } catch (Exception e) {
@@ -8863,14 +8867,18 @@ public inherited sharing class WorkflowEngine {
         ((RetryConfigurable) compensatableStepInstance).getRetryPolicy()
       );
       maxAttempts = policy.maximumAttempts;
-    } else if (String.isNotBlank(stepExec.Captured_Values__c)) {
+    }
+    if (String.isNotBlank(stepExec.Captured_Values__c)) {
       String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
       if (String.isNotBlank(resolvedCaptures)) {
         try {
           capturesMap = (Map<String, Object>) JSON.deserializeUntyped(
             resolvedCaptures
           );
-          if (capturesMap.containsKey('__maxAttempts')) {
+          if (
+            !(compensatableStepInstance instanceof RetryConfigurable) &&
+            capturesMap.containsKey('__maxAttempts')
+          ) {
             maxAttempts = Integer.valueOf(capturesMap.get('__maxAttempts'));
           }
         } catch (Exception e) {
