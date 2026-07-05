@@ -640,4 +640,92 @@ private class WorkflowDebounceTest {
       );
     }
   }
+
+  @isTest
+  static void testResetRetryStateOnRearm() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.mockNow = Datetime.now();
+
+    Test.startTest();
+    // 1. Enqueue state with invalid workflow to force a failure
+    WorkflowEngine.startDebounced(
+      'InvalidWorkflowToForceFailure',
+      'deb_key_rearm_reset',
+      '{}',
+      10
+    );
+
+    // Run sweep to fail the state and increment Retry_Count__c to 1
+    WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(11);
+    WorkflowDebouncer.sweep();
+
+    List<Debounce_State__c> states = [
+      SELECT
+        Id,
+        Retry_Count__c,
+        Error_Message__c,
+        First_Triggered_At__c,
+        Fire_At__c
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = 'deb_key_rearm_reset'
+    ];
+    System.assertEquals(1, states.size());
+    System.assertEquals(1, states[0].Retry_Count__c);
+    System.assertNotEquals(null, states[0].Error_Message__c);
+
+    // 2. Re-arm the same key with the SAME invalid workflow name but new payload/timing
+    WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(10);
+    WorkflowEngine.startDebounced(
+      'InvalidWorkflowToForceFailure',
+      'deb_key_rearm_reset',
+      '{"newVal":1}',
+      10
+    );
+
+    // Verify retry state reset and first triggered timestamp updated
+    states = [
+      SELECT
+        Id,
+        Retry_Count__c,
+        Error_Message__c,
+        First_Triggered_At__c,
+        Fire_At__c,
+        Workflow_Name__c,
+        Input_Json__c
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = 'deb_key_rearm_reset'
+    ];
+    System.assertEquals(1, states.size());
+    System.assertEquals(
+      0,
+      states[0].Retry_Count__c,
+      'Retry count must be reset to 0'
+    );
+    System.assertEquals(
+      null,
+      states[0].Error_Message__c,
+      'Error message must be cleared'
+    );
+    System.assertEquals(
+      WorkflowEngine.mockNow,
+      states[0].First_Triggered_At__c,
+      'First triggered timestamp must be updated to now'
+    );
+    System.assertEquals(
+      WorkflowEngine.mockNow.addSeconds(10),
+      states[0].Fire_At__c,
+      'Fire time must be updated to mockNow + 10s'
+    );
+    System.assertEquals(
+      'InvalidWorkflowToForceFailure',
+      states[0].Workflow_Name__c,
+      'Workflow name must be updated'
+    );
+    System.assertEquals(
+      '{"newVal":1}',
+      states[0].Input_Json__c,
+      'Input payload must be updated'
+    );
+    Test.stopTest();
+  }
 }

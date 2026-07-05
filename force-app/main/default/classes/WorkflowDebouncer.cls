@@ -152,7 +152,13 @@ public inherited sharing class WorkflowDebouncer {
     }
 
     List<Debounce_State__c> existingStates = [
-      SELECT Id, Debounce_Key__c, First_Triggered_At__c, Fire_At__c
+      SELECT
+        Id,
+        Debounce_Key__c,
+        First_Triggered_At__c,
+        Fire_At__c,
+        Retry_Count__c,
+        Error_Message__c
       FROM Debounce_State__c
       WHERE Debounce_Key__c IN :debounceKeys
       WITH SYSTEM_MODE
@@ -174,6 +180,11 @@ public inherited sharing class WorkflowDebouncer {
         Debounce_State__c dbState = existingMap.get(key);
         if (dbState != null) {
           state = dbState;
+          if (state.Retry_Count__c != null && state.Retry_Count__c > 0) {
+            state.First_Triggered_At__c = now;
+            state.Retry_Count__c = 0;
+            state.Error_Message__c = null;
+          }
         } else {
           state = new Debounce_State__c(
             Debounce_Key__c = key,
