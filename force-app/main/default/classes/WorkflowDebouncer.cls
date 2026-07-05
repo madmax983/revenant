@@ -265,7 +265,11 @@ public inherited sharing class WorkflowDebouncer {
             }
           }
         } catch (Exception ex) {
-          // ignore parsing error
+          System.debug(
+            LoggingLevel.WARN,
+            'WorkflowDebouncer sweep failed to parse attributes JSON: ' +
+            ex.getMessage()
+          );
         }
       }
 
