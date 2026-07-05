@@ -3838,36 +3838,6 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    // Validate explicit stepName only when Current_Step__c is a parallel list and the requested step is in that list
-    if (String.isNotBlank(stepName) && instance.Current_Step__c != stepName) {
-      if (
-        String.isBlank(instance.Current_Step__c) ||
-        !instance.Current_Step__c.contains(',')
-      ) {
-        throw new WorkflowException(
-          'Step ' +
-            stepName +
-            ' is not the active/expected step for this instance: ' +
-            instance.Current_Step__c
-        );
-      }
-      Boolean isValid = false;
-      for (String pStep : instance.Current_Step__c.split(',')) {
-        if (pStep.trim() == stepName) {
-          isValid = true;
-          break;
-        }
-      }
-      if (!isValid) {
-        throw new WorkflowException(
-          'Step ' +
-            stepName +
-            ' is not the active/expected step for this instance: ' +
-            instance.Current_Step__c
-        );
-      }
-    }
-
     // Determine step name to execute
     String activeStepName = String.isNotBlank(stepName)
       ? stepName
@@ -3996,6 +3966,36 @@ public inherited sharing class WorkflowEngine {
         return; // Already completed or terminated by concurrent thread
       }
       stepExec.Status__c = 'Running';
+    }
+
+    // Validate explicit stepName only when Current_Step__c is a parallel list and the requested step is in that list
+    if (String.isNotBlank(stepName) && instance.Current_Step__c != stepName) {
+      if (
+        String.isBlank(instance.Current_Step__c) ||
+        !instance.Current_Step__c.contains(',')
+      ) {
+        throw new WorkflowException(
+          'Step ' +
+            stepName +
+            ' is not the active/expected step for this instance: ' +
+            instance.Current_Step__c
+        );
+      }
+      Boolean isValid = false;
+      for (String pStep : instance.Current_Step__c.split(',')) {
+        if (pStep.trim() == stepName) {
+          isValid = true;
+          break;
+        }
+      }
+      if (!isValid) {
+        throw new WorkflowException(
+          'Step ' +
+            stepName +
+            ' is not the active/expected step for this instance: ' +
+            instance.Current_Step__c
+        );
+      }
     }
 
     // 4. Resolve previous step output & step state (for yielded/resumed executions)
@@ -4992,6 +4992,20 @@ public inherited sharing class WorkflowEngine {
       WITH SYSTEM_MODE
       FOR UPDATE
     ];
+
+    // Verify that the completing step is still active in the current step list. If not, this is a stale completion and must be ignored.
+    Boolean stepIsActive = false;
+    if (String.isNotBlank(freshInstance.Current_Step__c) && stepExec != null) {
+      for (String activeStep : freshInstance.Current_Step__c.split(',')) {
+        if (activeStep.trim() == stepExec.Step_Name__c) {
+          stepIsActive = true;
+          break;
+        }
+      }
+    }
+    if (!stepIsActive) {
+      return;
+    }
     if (context != null && context.isProgressReported()) {
       String progJson = context.getProgressJson();
       freshInstance.Progress__c = savePayloadIfNeeded(
@@ -6163,6 +6177,7 @@ public inherited sharing class WorkflowEngine {
         Id,
         Name,
         Status__c,
+        Current_Step__c,
         Error_Message__c,
         Compensation_Stack__c,
         Workflow_Name__c,
@@ -6204,7 +6219,10 @@ public inherited sharing class WorkflowEngine {
             ];
             Integer attemptCount = 1;
             if (!stepExecs.isEmpty() && stepExecs[0].Retry_Count__c != null) {
-              attemptCount = (Integer) stepExecs[0].Retry_Count__c + 1;
+              attemptCount = (Integer) stepExecs[0].Retry_Count__c;
+              if (failureCategory != CAT_RETRIES_EXHAUSTED) {
+                attemptCount += 1;
+              }
             }
             String truncatedError = errorMessage != null
               ? errorMessage.left(20000)
@@ -6217,6 +6235,32 @@ public inherited sharing class WorkflowEngine {
             String errorStepName = ((ErrorRoutingWorkflow) def)
               .getErrorStep(stepName, err);
             if (String.isNotBlank(errorStepName)) {
+              if (
+                String.isNotBlank(instance.Current_Step__c) &&
+                instance.Current_Step__c.contains(',')
+              ) {
+                List<String> activeSteps = instance.Current_Step__c.split(',');
+                List<Workflow_Step_Execution__c> siblingExecs = [
+                  SELECT Id, Status__c
+                  FROM Workflow_Step_Execution__c
+                  WHERE
+                    Workflow_Instance__c = :instance.Id
+                    AND Step_Name__c IN :activeSteps
+                    AND Step_Name__c != :stepName
+                    AND Status__c IN ('Pending', 'Running', 'Retrying')
+                  WITH SYSTEM_MODE
+                  FOR UPDATE
+                ];
+                for (Workflow_Step_Execution__c sibling : siblingExecs) {
+                  sibling.Status__c = 'Cancelled';
+                }
+                if (!siblingExecs.isEmpty()) {
+                  update as system siblingExecs;
+                }
+              }
+
+              abortScheduledJobs(instance.Id);
+
               Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
               nextStepExec.Workflow_Instance__c = instance.Id;
               nextStepExec.Step_Name__c = errorStepName;
@@ -6809,9 +6853,7 @@ public inherited sharing class WorkflowEngine {
           'errorMessage' => child.Error_Message__c != null
             ? child.Error_Message__c.left(10000)
             : null,
-          'output' => child.Output__c != null
-            ? child.Output__c.left(10000)
-            : null
+          'output' => child.Output__c
         };
         payload = savePayloadIfNeeded(
           parent.Id,
