@@ -1770,7 +1770,11 @@ public inherited sharing class WorkflowEngine {
           FROM ApexTypeImplementor
           WHERE
             ClassName = :req.workflowName
-            AND InterfaceName IN ('WorkflowDefinition', 'VersionedWorkflow')
+            AND InterfaceName IN (
+              'WorkflowDefinition',
+              'VersionedWorkflow',
+              'ErrorRoutingWorkflow'
+            )
           WITH SYSTEM_MODE
           LIMIT 1
         ];
@@ -2540,7 +2544,11 @@ public inherited sharing class WorkflowEngine {
         FROM ApexTypeImplementor
         WHERE
           ClassName IN :workflowNamesToQuery
-          AND InterfaceName IN ('WorkflowDefinition', 'VersionedWorkflow')
+          AND InterfaceName IN (
+            'WorkflowDefinition',
+            'VersionedWorkflow',
+            'ErrorRoutingWorkflow'
+          )
         WITH SYSTEM_MODE
       ]) {
         validatedWorkflows.put(impl.ClassName.toLowerCase(), true);
@@ -6206,6 +6214,39 @@ public inherited sharing class WorkflowEngine {
     }
     Workflow_Instance__c instance = instances[0];
 
+    // Determine attempt count
+    Integer attemptCount = 1;
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Retry_Count__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = :stepName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    if (!stepExecs.isEmpty() && stepExecs[0].Retry_Count__c != null) {
+      attemptCount = (Integer) stepExecs[0].Retry_Count__c;
+      if (failureCategory != CAT_RETRIES_EXHAUSTED) {
+        attemptCount += 1;
+      }
+    }
+
+    failWorkflowInstance(
+      instance,
+      stepName,
+      errorMessage,
+      failureCategory,
+      attemptCount
+    );
+  }
+
+  public static void failWorkflowInstance(
+    Workflow_Instance__c instance,
+    String stepName,
+    String errorMessage,
+    String failureCategory,
+    Integer attemptCount
+  ) {
     Boolean isCompFailure = (instance.Status__c == 'Compensating' ||
     instance.Status__c == 'Cancelling' ||
     (String.isNotBlank(stepName) && stepName.endsWith('_Compensate')));
@@ -6216,23 +6257,6 @@ public inherited sharing class WorkflowEngine {
         if (wfType != null) {
           WorkflowDefinition def = (WorkflowDefinition) wfType.newInstance();
           if (def instanceof ErrorRoutingWorkflow) {
-            List<Workflow_Step_Execution__c> stepExecs = [
-              SELECT Retry_Count__c
-              FROM Workflow_Step_Execution__c
-              WHERE
-                Workflow_Instance__c = :instanceId
-                AND Step_Name__c = :stepName
-              WITH SYSTEM_MODE
-              ORDER BY CreatedDate DESC, Id DESC
-              LIMIT 1
-            ];
-            Integer attemptCount = 1;
-            if (!stepExecs.isEmpty() && stepExecs[0].Retry_Count__c != null) {
-              attemptCount = (Integer) stepExecs[0].Retry_Count__c;
-              if (failureCategory != CAT_RETRIES_EXHAUSTED) {
-                attemptCount += 1;
-              }
-            }
             String truncatedError = errorMessage != null
               ? errorMessage.left(20000)
               : null;
@@ -6347,18 +6371,6 @@ public inherited sharing class WorkflowEngine {
     (String.isNotBlank(stepName) && stepName.endsWith('_Compensate')));
 
     if (isCompensationFailure) {
-      // The rollback itself could not complete. Because the failed step's entry is
-      // never popped, the remaining LIFO stack is still intact here. Rather than
-      // driving to a generic terminal Failed and silently abandoning the deeper
-      // (un-run) compensations, park the saga in the recoverable, operator-visible
-      // "rollback incomplete" condition so it can be resumed from this exact point.
-      //
-      // Detect the cancel phase via the engine-owned 'Cancelled by user' marker in
-      // addition to the live status: when a cancel-driven rollback crashed while a
-      // compensation was Suspended (sleep/approval), the in-transaction flip back to
-      // 'Cancelling' was rolled back, so the persisted status is 'Suspended' but the
-      // preserved Error_Message__c still carries the marker. Reading it keeps the saga on
-      // the cancel path so it finishes 'Cancelled' rather than 'Compensated' on resume.
       Boolean wasCancelling =
         instance.Status__c == 'Cancelling' ||
         (instance.Error_Message__c != null &&
@@ -6373,8 +6385,6 @@ public inherited sharing class WorkflowEngine {
             errorMessage
         )
         .left(255);
-      // Clear any stale sleep/retry deadline so the watchdog cannot prematurely wake a
-      // remaining SUSPEND/approval gate once the rollback is resumed.
       instance.Sleep_Until__c = null;
       instance.Async_Job_Id__c = null;
       update as system instance;
@@ -6393,7 +6403,6 @@ public inherited sharing class WorkflowEngine {
     preCreateFirstCompensationStep(instance);
     update as system instance;
 
-    // Kick off rollback loop
     if (Test.isRunningTest()) {
       if (!disableQueueableInTest) {
         System.enqueueJob(new WorkflowOrchestrator(instance.Id));
@@ -10199,7 +10208,9 @@ public inherited sharing class WorkflowEngine {
             Workflow_Name__c,
             Correlation_Key__c,
             Root_Correlation_Key__c,
-            Failure_Category__c
+            Failure_Category__c,
+            Concurrency_Parked__c,
+            Concurrency_Slot_Held__c
           FROM Workflow_Instance__c
           WHERE Id IN :instanceIds
           WITH SYSTEM_MODE
@@ -10231,6 +10242,49 @@ public inherited sharing class WorkflowEngine {
 
       Set<Id> instancesNeedingCompensationInfo = new Set<Id>();
       Set<String> activeStepNamesForComp = new Set<String>();
+
+      // Bulk determine which instances run ErrorRoutingWorkflows and fetch their retry counts
+      Set<Id> routingInstanceIds = new Set<Id>();
+      Map<String, Boolean> isRoutingWflow = new Map<String, Boolean>();
+      for (Workflow_Instance__c parent : parents.values()) {
+        if (String.isNotBlank(parent.Workflow_Name__c)) {
+          String wfName = parent.Workflow_Name__c;
+          if (!isRoutingWflow.containsKey(wfName)) {
+            Type wflowType = Type.forName(wfName);
+            if (wflowType != null) {
+              Object instObj = wflowType.newInstance();
+              isRoutingWflow.put(
+                wfName,
+                instObj instanceof ErrorRoutingWorkflow
+              );
+            } else {
+              isRoutingWflow.put(wfName, false);
+            }
+          }
+          if (isRoutingWflow.get(wfName)) {
+            routingInstanceIds.add(parent.Id);
+          }
+        }
+      }
+
+      Map<String, Integer> latestRetryCounts = new Map<String, Integer>();
+      if (!routingInstanceIds.isEmpty()) {
+        for (Workflow_Step_Execution__c exec : [
+          SELECT Workflow_Instance__c, Step_Name__c, Retry_Count__c
+          FROM Workflow_Step_Execution__c
+          WHERE Workflow_Instance__c IN :routingInstanceIds
+          WITH SYSTEM_MODE
+          ORDER BY CreatedDate DESC, Id DESC
+        ]) {
+          String key = exec.Workflow_Instance__c + ':' + exec.Step_Name__c;
+          if (!latestRetryCounts.containsKey(key)) {
+            latestRetryCounts.put(
+              key,
+              exec.Retry_Count__c != null ? (Integer) exec.Retry_Count__c : 0
+            );
+          }
+        }
+      }
 
       for (Workflow_Step_Execution__c step : timedOutSteps) {
         Workflow_Instance__c parent = parents.get(step.Workflow_Instance__c);
@@ -10286,25 +10340,18 @@ public inherited sharing class WorkflowEngine {
 
         // Check if error routing is defined for this timed-out step
         String errorStepName = null;
-        Type wflowType = Type.forName(parent.Workflow_Name__c);
-        if (wflowType != null) {
-          WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
-          if (def instanceof ErrorRoutingWorkflow) {
-            // Query latest retry count to calculate attempt count
-            Integer attemptCount = 1;
-            List<Workflow_Step_Execution__c> stepExecs = [
-              SELECT Retry_Count__c
-              FROM Workflow_Step_Execution__c
-              WHERE
-                Workflow_Instance__c = :parent.Id
-                AND Step_Name__c = :step.Step_Name__c
-              WITH SYSTEM_MODE
-              ORDER BY CreatedDate DESC, Id DESC
-              LIMIT 1
-            ];
-            if (!stepExecs.isEmpty() && stepExecs[0].Retry_Count__c != null) {
-              attemptCount = (Integer) stepExecs[0].Retry_Count__c + 1;
-            }
+        if (
+          isRoutingWflow.containsKey(parent.Workflow_Name__c) &&
+          isRoutingWflow.get(parent.Workflow_Name__c)
+        ) {
+          Type wflowType = Type.forName(parent.Workflow_Name__c);
+          if (wflowType != null) {
+            WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
+            String key = parent.Id + ':' + step.Step_Name__c;
+            Integer attemptCount =
+              (latestRetryCounts.containsKey(key)
+                ? latestRetryCounts.get(key)
+                : 0) + 1;
             StepError err = new StepError(
               step.Step_Name__c,
               errorMsg,
@@ -10321,11 +10368,18 @@ public inherited sharing class WorkflowEngine {
           lockedStep.Timeout_At__c = null;
           update as system lockedStep;
 
+          String key = parent.Id + ':' + step.Step_Name__c;
+          Integer attemptCount =
+            (latestRetryCounts.containsKey(key)
+              ? latestRetryCounts.get(key)
+              : 0) + 1;
+
           failWorkflowInstance(
-            parent.Id,
+            parent,
             step.Step_Name__c,
             errorMsg,
-            CAT_TIMEOUT
+            CAT_TIMEOUT,
+            attemptCount
           );
           continue;
         }

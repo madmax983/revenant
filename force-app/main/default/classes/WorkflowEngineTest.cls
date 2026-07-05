@@ -8477,6 +8477,7 @@ public class WorkflowEngineTest {
   public static List<String> routedStepsRun = new List<String>();
   public static Map<String, Object> routedStepContextData = new Map<String, Object>();
   public static List<String> compensationsRun = new List<String>();
+  public static Boolean yieldingHandlerFirstRunDone = false;
 
   public class CrashStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
@@ -9252,5 +9253,124 @@ public class WorkflowEngineTest {
       inst.Current_Step__c
     );
     System.assertEquals('Running', inst.Status__c);
+  }
+
+  public class PureRoutingWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.NormalHandlerStep' };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.NormalHandlerStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      return null;
+    }
+  }
+
+  @isTest
+  static void testErrorRoutingWorkflowInStartValidation() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.PureRoutingWorkflow',
+      'PureRoutingKey',
+      null
+    );
+    System.assertNotEquals(null, instanceId);
+  }
+
+  public class YieldingHandlerWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.RetryExhaustedFailureStep',
+        'WorkflowEngineTest.YieldingHandlerStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.RetryExhaustedFailureStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      if (failedStepName == 'WorkflowEngineTest.RetryExhaustedFailureStep') {
+        return 'WorkflowEngineTest.YieldingHandlerStep';
+      }
+      return null;
+    }
+  }
+
+  public class YieldedProducer implements CaptureProducer {
+    public Object produce() {
+      return true;
+    }
+  }
+
+  public class YieldingHandlerStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (!yieldingHandlerFirstRunDone) {
+        yieldingHandlerFirstRunDone = true;
+        ctx.once('hasYielded', new YieldedProducer());
+        return StepResult.sleep(10, 'YieldingHandlerStep');
+      }
+      routedStepsRun.add('YieldingHandlerStep');
+      routedStepContextData.put('failedStepName', ctx.failedStepName);
+      routedStepContextData.put('errorMessage', ctx.errorMessage);
+      routedStepContextData.put('attemptCount', ctx.attemptCount);
+      return StepResult.complete(null, 'HandlerDone');
+    }
+  }
+
+  @isTest
+  static void testPreserveErrorMetadataAcrossHandlerCheckpoint() {
+    routedStepsRun.clear();
+    routedStepContextData.clear();
+    yieldingHandlerFirstRunDone = false;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.YieldingHandlerWorkflow',
+      'YieldingKey',
+      null
+    );
+
+    // Fail the step and route to YieldingHandlerStep
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.RetryExhaustedFailureStep'
+    );
+
+    // Run the YieldingHandlerStep (first execution -> returns Sleep, writes capture)
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.YieldingHandlerStep'
+    );
+
+    Workflow_Instance__c inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.YieldingHandlerStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals('Suspended', inst.Status__c);
+
+    // Re-run the YieldingHandlerStep (second execution -> completes, reads capture)
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.YieldingHandlerStep'
+    );
+
+    System.assertEquals(1, routedStepsRun.size());
+    System.assertEquals('YieldingHandlerStep', routedStepsRun[0]);
+    System.assertEquals(
+      'WorkflowEngineTest.RetryExhaustedFailureStep',
+      (String) routedStepContextData.get('failedStepName')
+    );
+    System.assertEquals(1, (Integer) routedStepContextData.get('attemptCount'));
   }
 }

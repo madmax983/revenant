@@ -1114,13 +1114,25 @@ public inherited sharing class StepContext {
     if (
       capturedValues.isEmpty() &&
       (this.maxAttempts == null ||
-      this.maxAttempts <= 1)
+      this.maxAttempts <= 1) &&
+      String.isBlank(this.failedStepName) &&
+      String.isBlank(this.errorMessage) &&
+      this.attemptCount == null
     ) {
       return null;
     }
     Map<String, Object> toSerialize = new Map<String, Object>(capturedValues);
     if (this.maxAttempts != null && this.maxAttempts > 1) {
       toSerialize.put('__maxAttempts', this.maxAttempts);
+    }
+    if (String.isNotBlank(this.failedStepName)) {
+      toSerialize.put('__failedStepName', this.failedStepName);
+    }
+    if (String.isNotBlank(this.errorMessage)) {
+      toSerialize.put('__errorMessage', this.errorMessage);
+    }
+    if (this.attemptCount != null) {
+      toSerialize.put('__attemptCount', this.attemptCount);
     }
     return JSON.serialize(toSerialize);
   }
