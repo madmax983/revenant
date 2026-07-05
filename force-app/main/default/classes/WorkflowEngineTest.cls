@@ -9169,4 +9169,88 @@ public class WorkflowEngineTest {
     );
     System.assertEquals(1, (Integer) routedStepContextData.get('attemptCount'));
   }
+
+  public class TimeoutErrorRoutedWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.TimeoutFailureStep',
+        'WorkflowEngineTest.NormalHandlerStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.TimeoutFailureStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      if (failedStepName == 'WorkflowEngineTest.TimeoutFailureStep') {
+        return 'WorkflowEngineTest.NormalHandlerStep';
+      }
+      return null;
+    }
+  }
+
+  public class TimeoutFailureStep implements WorkflowStep, TimeoutConfigurable {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'TimeoutDone');
+    }
+    public Integer getTimeoutSeconds() {
+      return 10;
+    }
+  }
+
+  @isTest
+  static void testWatchdogTimeoutErrorRouting() {
+    routedStepsRun.clear();
+    routedStepContextData.clear();
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.TimeoutErrorRoutedWorkflow',
+      'TimeoutRoutedKey',
+      null
+    );
+
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    Workflow_Instance__c inst = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    // Simulate running state
+    inst.Status__c = 'Running';
+    inst.Current_Step__c = 'WorkflowEngineTest.TimeoutFailureStep';
+    update inst;
+
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Id, Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.TimeoutFailureStep'
+      LIMIT 1
+    ];
+    System.assert(!stepExecs.isEmpty());
+    Workflow_Step_Execution__c stepExec = stepExecs[0];
+    stepExec.Status__c = 'Running';
+    stepExec.Timeout_At__c = DateTime.now().addSeconds(-10);
+    update as system stepExec;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.NormalHandlerStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals('Running', inst.Status__c);
+  }
 }

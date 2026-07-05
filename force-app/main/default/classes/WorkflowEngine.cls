@@ -5005,6 +5005,14 @@ public inherited sharing class WorkflowEngine {
     }
     if (!stepIsActive) {
       rollbackClaimedSignals(context);
+      if (
+        stepExec != null &&
+        stepExec.Id != null &&
+        stepExec.Status__c == 'Running'
+      ) {
+        stepExec.Status__c = 'Cancelled';
+        update as system stepExec;
+      }
       return;
     }
     if (context != null && context.isProgressReported()) {
@@ -6248,7 +6256,7 @@ public inherited sharing class WorkflowEngine {
                     Workflow_Instance__c = :instance.Id
                     AND Step_Name__c IN :activeSteps
                     AND Step_Name__c != :stepName
-                    AND Status__c IN ('Pending', 'Running', 'Retrying')
+                    AND Status__c IN ('Pending', 'Retrying')
                   WITH SYSTEM_MODE
                   FOR UPDATE
                 ];
@@ -10275,6 +10283,52 @@ public inherited sharing class WorkflowEngine {
         String errorMsg = (lockedStep.Status__c == 'Running')
           ? 'Step execution timed out.'
           : 'Step execution timed out before starting.';
+
+        // Check if error routing is defined for this timed-out step
+        String errorStepName = null;
+        Type wflowType = Type.forName(parent.Workflow_Name__c);
+        if (wflowType != null) {
+          WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
+          if (def instanceof ErrorRoutingWorkflow) {
+            // Query latest retry count to calculate attempt count
+            Integer attemptCount = 1;
+            List<Workflow_Step_Execution__c> stepExecs = [
+              SELECT Retry_Count__c
+              FROM Workflow_Step_Execution__c
+              WHERE
+                Workflow_Instance__c = :parent.Id
+                AND Step_Name__c = :step.Step_Name__c
+              WITH SYSTEM_MODE
+              ORDER BY CreatedDate DESC, Id DESC
+              LIMIT 1
+            ];
+            if (!stepExecs.isEmpty() && stepExecs[0].Retry_Count__c != null) {
+              attemptCount = (Integer) stepExecs[0].Retry_Count__c + 1;
+            }
+            StepError err = new StepError(
+              step.Step_Name__c,
+              errorMsg,
+              attemptCount
+            );
+            errorStepName = ((ErrorRoutingWorkflow) def)
+              .getErrorStep(step.Step_Name__c, err);
+          }
+        }
+
+        if (String.isNotBlank(errorStepName)) {
+          lockedStep.Status__c = 'Failed';
+          lockedStep.Error_Details__c = errorMsg;
+          lockedStep.Timeout_At__c = null;
+          update as system lockedStep;
+
+          failWorkflowInstance(
+            parent.Id,
+            step.Step_Name__c,
+            errorMsg,
+            CAT_TIMEOUT
+          );
+          continue;
+        }
 
         lockedStep.Status__c = 'Failed';
         lockedStep.Error_Details__c = errorMsg;
