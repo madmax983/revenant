@@ -2,7 +2,11 @@ public inherited sharing class StepContext {
   /**
    * Logging severity levels for step breadcrumbs.
    */
-  public enum Level { INFO, WARN, ERROR }
+  public enum Level {
+    INFO,
+    WARN,
+    ERROR
+  }
 
   /**
    * Represents an individual step log entry.
@@ -52,42 +56,71 @@ public inherited sharing class StepContext {
       return;
     }
     if (this.breadcrumbs.size() == MAX_LOG_ENTRIES) {
-      this.breadcrumbs.add(new Breadcrumb(StepContext.Level.WARN, '[TRUNCATED] Log limit of ' + MAX_LOG_ENTRIES + ' entries reached. Subsequent step logs are discarded.'));
+      this.breadcrumbs.add(
+        new Breadcrumb(
+          StepContext.Level.WARN,
+          '[TRUNCATED] Log limit of ' +
+            MAX_LOG_ENTRIES +
+            ' entries reached. Subsequent step logs are discarded.'
+        )
+      );
       return;
     }
 
     String formattedMessage = message;
     if (logContext != null && !logContext.isEmpty()) {
       if (logContext.size() > 50) {
-        formattedMessage = (message != null ? message : 'null') + ' | Context: [TRUNCATED] Map size limit of 50 entries exceeded.';
+        formattedMessage =
+          (message != null ? message : 'null') +
+          ' | Context: [TRUNCATED] Map size limit of 50 entries exceeded.';
       } else if (Limits.getHeapSize() > Limits.getLimitHeapSize() * 0.85) {
-        formattedMessage = (message != null ? message : 'null') + ' | Context: [TRUNCATED] JSON serialization bypassed due to heap pressure.';
+        formattedMessage =
+          (message != null ? message : 'null') +
+          ' | Context: [TRUNCATED] JSON serialization bypassed due to heap pressure.';
       } else {
         Boolean hasHugeValue = false;
         for (Object val : logContext.values()) {
-          if (val instanceof String && ((String) val).length() > MAX_MESSAGE_LENGTH) {
+          if (
+            val instanceof String &&
+            ((String) val).length() > MAX_MESSAGE_LENGTH
+          ) {
             hasHugeValue = true;
             break;
           }
         }
         if (hasHugeValue) {
-          formattedMessage = (message != null ? message : 'null') + ' | Context: [TRUNCATED] JSON serialization bypassed due to oversized string value.';
+          formattedMessage =
+            (message != null ? message : 'null') +
+            ' | Context: [TRUNCATED] JSON serialization bypassed due to oversized string value.';
         } else {
           try {
             String serializedContext = JSON.serialize(logContext);
             if (serializedContext.length() > MAX_MESSAGE_LENGTH) {
-              serializedContext = serializedContext.substring(0, MAX_MESSAGE_LENGTH) + '... [TRUNCATED]';
+              serializedContext =
+                serializedContext.substring(0, MAX_MESSAGE_LENGTH) +
+                '... [TRUNCATED]';
             }
-            formattedMessage = (message != null ? message : 'null') + ' | Context: ' + serializedContext;
+            formattedMessage =
+              (message != null ? message : 'null') +
+              ' | Context: ' +
+              serializedContext;
           } catch (Exception ex) {
-            formattedMessage = (message != null ? message : 'null') + ' | Context: [TRUNCATED] JSON serialization failed: ' + ex.getMessage();
+            formattedMessage =
+              (message != null ? message : 'null') +
+              ' | Context: [TRUNCATED] JSON serialization failed: ' +
+              ex.getMessage();
           }
         }
       }
     }
 
-    if (formattedMessage != null && formattedMessage.length() > MAX_MESSAGE_LENGTH) {
-      formattedMessage = formattedMessage.substring(0, MAX_MESSAGE_LENGTH - 15) + '... [TRUNCATED]';
+    if (
+      formattedMessage != null &&
+      formattedMessage.length() > MAX_MESSAGE_LENGTH
+    ) {
+      formattedMessage =
+        formattedMessage.substring(0, MAX_MESSAGE_LENGTH - 15) +
+        '... [TRUNCATED]';
     }
 
     this.breadcrumbs.add(new Breadcrumb(level, formattedMessage));
@@ -112,6 +145,9 @@ public inherited sharing class StepContext {
   public Integer workflowVersion { get; private set; }
   public Integer attempt { get; private set; }
   public Integer maxAttempts { get; private set; }
+  public String failedStepName { get; private set; }
+  public String errorMessage { get; private set; }
+  public Integer attemptCount { get; private set; }
 
   public Boolean isFinalAttempt() {
     return this.attempt >= this.maxAttempts;
@@ -1078,13 +1114,25 @@ public inherited sharing class StepContext {
     if (
       capturedValues.isEmpty() &&
       (this.maxAttempts == null ||
-      this.maxAttempts <= 1)
+      this.maxAttempts <= 1) &&
+      String.isBlank(this.failedStepName) &&
+      String.isBlank(this.errorMessage) &&
+      this.attemptCount == null
     ) {
       return null;
     }
     Map<String, Object> toSerialize = new Map<String, Object>(capturedValues);
     if (this.maxAttempts != null && this.maxAttempts > 1) {
       toSerialize.put('__maxAttempts', this.maxAttempts);
+    }
+    if (String.isNotBlank(this.failedStepName)) {
+      toSerialize.put('__failedStepName', this.failedStepName);
+    }
+    if (String.isNotBlank(this.errorMessage)) {
+      toSerialize.put('__errorMessage', this.errorMessage);
+    }
+    if (this.attemptCount != null) {
+      toSerialize.put('__attemptCount', this.attemptCount);
     }
     return JSON.serialize(toSerialize);
   }
@@ -1360,6 +1408,31 @@ public inherited sharing class StepContext {
           );
         }
         ctx.capturedValues.remove('__maxAttempts');
+      }
+      if (ctx.capturedValues.containsKey('__failedStepName')) {
+        ctx.failedStepName = String.valueOf(
+          ctx.capturedValues.get('__failedStepName')
+        );
+        ctx.capturedValues.remove('__failedStepName');
+      }
+      if (ctx.capturedValues.containsKey('__errorMessage')) {
+        ctx.errorMessage = String.valueOf(
+          ctx.capturedValues.get('__errorMessage')
+        );
+        ctx.capturedValues.remove('__errorMessage');
+      }
+      if (ctx.capturedValues.containsKey('__attemptCount')) {
+        try {
+          ctx.attemptCount = Integer.valueOf(
+            ctx.capturedValues.get('__attemptCount')
+          );
+        } catch (Exception e) {
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to parse __attemptCount: ' + e.getMessage()
+          );
+        }
+        ctx.capturedValues.remove('__attemptCount');
       }
     }
     return ctx;

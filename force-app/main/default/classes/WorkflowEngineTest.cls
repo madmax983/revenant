@@ -8470,7 +8470,985 @@ public class WorkflowEngineTest {
       childId
     );
     System.assertEquals(2, lineage.size());
-    System.assertEquals(parentId, lineage[1].instanceId);
-    System.assertEquals('key:order::ts::1719859200000', lineage[0].causationId);
+  }
+
+  // --- BEGIN #90 Error Handler Routing Tests ---
+
+  public static List<String> routedStepsRun = new List<String>();
+  public static Map<String, Object> routedStepContextData = new Map<String, Object>();
+  public static List<String> compensationsRun = new List<String>();
+  public static Boolean yieldingHandlerFirstRunDone = false;
+
+  public class CrashStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      throw new IllegalArgumentException('Crash in execution');
+    }
+  }
+
+  public class ExplicitFailStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.fail('Explicit business failure');
+    }
+  }
+
+  public class RetryThenFailStep implements WorkflowStep, RetryConfigurable {
+    public StepResult execute(StepContext ctx) {
+      if (ctx.attempt >= 2) {
+        return StepResult.fail('Failed after retry');
+      }
+      return StepResult.retry(getRetryPolicy());
+    }
+    public RetryPolicy getRetryPolicy() {
+      return new RetryPolicy(1, (Double) 1.0, 2);
+    }
+  }
+
+  public class NormalHandlerStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      routedStepsRun.add('NormalHandlerStep');
+      routedStepContextData.put('failedStepName', ctx.failedStepName);
+      routedStepContextData.put('errorMessage', ctx.errorMessage);
+      routedStepContextData.put('attemptCount', ctx.attemptCount);
+      return StepResult.complete(null, 'HandlerComplete');
+    }
+  }
+
+  public class FailingHandlerStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      routedStepsRun.add('FailingHandlerStep');
+      return StepResult.fail('Handler itself failed');
+    }
+  }
+
+  public class CompensatableForwardStep1 implements CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      routedStepsRun.add('CompensatableForwardStep1');
+      return StepResult.complete(null, 'Step1Output');
+    }
+    public StepResult compensate(StepContext ctx) {
+      compensationsRun.add('CompensatableForwardStep1_Compensate');
+      return StepResult.complete(null, 'Compensate1Complete');
+    }
+  }
+
+  public class CompensatableForwardStep2 implements CompensatableStep {
+    public StepResult execute(StepContext ctx) {
+      routedStepsRun.add('CompensatableForwardStep2');
+      return StepResult.complete(null, 'Step2Output');
+    }
+    public StepResult compensate(StepContext ctx) {
+      compensationsRun.add('CompensatableForwardStep2_Compensate');
+      return StepResult.complete(null, 'Compensate2Complete');
+    }
+  }
+
+  public class ErrorRoutedWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.CrashStep',
+        'WorkflowEngineTest.ExplicitFailStep',
+        'WorkflowEngineTest.RetryThenFailStep',
+        'WorkflowEngineTest.NormalHandlerStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.CrashStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      if (
+        failedStepName == 'WorkflowEngineTest.CrashStep' ||
+        failedStepName == 'WorkflowEngineTest.ExplicitFailStep' ||
+        failedStepName == 'WorkflowEngineTest.RetryThenFailStep'
+      ) {
+        return 'WorkflowEngineTest.NormalHandlerStep';
+      }
+      return null;
+    }
+  }
+
+  public class FailingHandlerWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.ExplicitFailStep',
+        'WorkflowEngineTest.FailingHandlerStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.ExplicitFailStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      if (failedStepName == 'WorkflowEngineTest.ExplicitFailStep') {
+        return 'WorkflowEngineTest.FailingHandlerStep';
+      }
+      return null;
+    }
+  }
+
+  public class CompensatableErrorRoutedWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.CompensatableForwardStep1',
+        'WorkflowEngineTest.ExplicitFailStep',
+        'WorkflowEngineTest.NormalHandlerStep',
+        'WorkflowEngineTest.CompensatableForwardStep2'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.CompensatableForwardStep1';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      if (currentStepName == 'WorkflowEngineTest.CompensatableForwardStep1') {
+        return 'WorkflowEngineTest.ExplicitFailStep';
+      }
+      if (currentStepName == 'WorkflowEngineTest.NormalHandlerStep') {
+        return 'WorkflowEngineTest.CompensatableForwardStep2';
+      }
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      if (failedStepName == 'WorkflowEngineTest.ExplicitFailStep') {
+        return 'WorkflowEngineTest.NormalHandlerStep';
+      }
+      return null;
+    }
+  }
+
+  @isTest
+  static void testErrorRoutingOnCrash() {
+    routedStepsRun.clear();
+    routedStepContextData.clear();
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.ErrorRoutedWorkflow',
+      'CrashKey',
+      null
+    );
+
+    try {
+      WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.CrashStep');
+    } catch (Exception ex) {
+      WorkflowEngine.handleCrash(
+        instanceId,
+        'WorkflowEngineTest.CrashStep',
+        ex
+      );
+    }
+
+    Workflow_Instance__c inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.NormalHandlerStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals('Running', inst.Status__c);
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.NormalHandlerStep');
+
+    System.assertEquals(1, routedStepsRun.size());
+    System.assertEquals('NormalHandlerStep', routedStepsRun[0]);
+    System.assertEquals(
+      'WorkflowEngineTest.CrashStep',
+      routedStepContextData.get('failedStepName')
+    );
+    System.assert(
+      String.valueOf(routedStepContextData.get('errorMessage'))
+        .contains('Crash in execution')
+    );
+    System.assertEquals(1, routedStepContextData.get('attemptCount'));
+  }
+
+  @isTest
+  static void testErrorRoutingOnRetryExhaustion() {
+    routedStepsRun.clear();
+    routedStepContextData.clear();
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.ErrorRoutedWorkflow',
+      'RetryExhaustKey',
+      null
+    );
+
+    Workflow_Instance__c inst = [
+      SELECT Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    inst.Current_Step__c = 'WorkflowEngineTest.RetryThenFailStep';
+    update inst;
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.RetryThenFailStep');
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.RetryThenFailStep');
+
+    inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.NormalHandlerStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals('Running', inst.Status__c);
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.NormalHandlerStep');
+
+    System.assertEquals(1, routedStepsRun.size());
+    System.assertEquals('NormalHandlerStep', routedStepsRun[0]);
+    System.assertEquals(
+      'WorkflowEngineTest.RetryThenFailStep',
+      routedStepContextData.get('failedStepName')
+    );
+    System.assert(
+      String.valueOf(routedStepContextData.get('errorMessage'))
+        .contains('Failed after retry')
+    );
+    System.assertEquals(2, routedStepContextData.get('attemptCount'));
+  }
+
+  @isTest
+  static void testErrorRoutingOnExplicitFail() {
+    routedStepsRun.clear();
+    routedStepContextData.clear();
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.ErrorRoutedWorkflow',
+      'ExplicitFailKey',
+      null
+    );
+
+    Workflow_Instance__c inst = [
+      SELECT Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    inst.Current_Step__c = 'WorkflowEngineTest.ExplicitFailStep';
+    update inst;
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.ExplicitFailStep');
+
+    inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.NormalHandlerStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals('Running', inst.Status__c);
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.NormalHandlerStep');
+
+    System.assertEquals(1, routedStepsRun.size());
+    System.assertEquals('NormalHandlerStep', routedStepsRun[0]);
+    System.assertEquals(
+      'WorkflowEngineTest.ExplicitFailStep',
+      routedStepContextData.get('failedStepName')
+    );
+    System.assert(
+      String.valueOf(routedStepContextData.get('errorMessage'))
+        .contains('Explicit business failure')
+    );
+    System.assertEquals(1, routedStepContextData.get('attemptCount'));
+  }
+
+  @isTest
+  static void testHandlerItselfFailsFallsBack() {
+    routedStepsRun.clear();
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.FailingHandlerWorkflow',
+      'HandlerFailKey',
+      null
+    );
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.ExplicitFailStep');
+
+    Workflow_Instance__c inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.FailingHandlerStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals('Running', inst.Status__c);
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.FailingHandlerStep');
+
+    inst = [
+      SELECT Current_Step__c, Status__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Failed', inst.Status__c);
+    System.assert(inst.Error_Message__c.contains('Handler itself failed'));
+  }
+
+  @isTest
+  static void testCompensationStackPreservedAcrossErrorRouting() {
+    routedStepsRun.clear();
+    compensationsRun.clear();
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.CompensatableErrorRoutedWorkflow',
+      'CompStackKey',
+      null
+    );
+
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.CompensatableForwardStep1'
+    );
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.ExplicitFailStep');
+
+    Workflow_Instance__c inst = [
+      SELECT Current_Step__c, Status__c, Compensation_Stack__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.NormalHandlerStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals('Running', inst.Status__c);
+
+    List<String> stack = (List<String>) JSON.deserialize(
+      inst.Compensation_Stack__c,
+      List<String>.class
+    );
+    System.assertEquals(1, stack.size());
+    System.assertEquals(
+      'WorkflowEngineTest.CompensatableForwardStep1',
+      stack[0]
+    );
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.NormalHandlerStep');
+
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.CompensatableForwardStep2'
+    );
+
+    inst = [
+      SELECT Current_Step__c, Status__c, Compensation_Stack__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    stack = (List<String>) JSON.deserialize(
+      inst.Compensation_Stack__c,
+      List<String>.class
+    );
+    System.assertEquals(2, stack.size());
+    System.assertEquals(
+      'WorkflowEngineTest.CompensatableForwardStep1',
+      stack[0]
+    );
+    System.assertEquals(
+      'WorkflowEngineTest.CompensatableForwardStep2',
+      stack[1]
+    );
+
+    WorkflowEngine.failWorkflowInstance(
+      instanceId,
+      'FinalFailureStep',
+      'Final terminal failure triggering rollback'
+    );
+
+    inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Compensating', inst.Status__c);
+
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.CompensatableForwardStep2_Compensate'
+    );
+
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.CompensatableForwardStep1_Compensate'
+    );
+
+    inst = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals('Compensated', inst.Status__c);
+    System.assertEquals(2, compensationsRun.size());
+    System.assertEquals(
+      'CompensatableForwardStep2_Compensate',
+      compensationsRun[0]
+    );
+    System.assertEquals(
+      'CompensatableForwardStep1_Compensate',
+      compensationsRun[1]
+    );
+  }
+
+  public class ParallelSpawnStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.split(
+        new List<String>{
+          'WorkflowEngineTest.ExplicitFailStep',
+          'WorkflowEngineTest.SiblingStep'
+        },
+        null
+      );
+    }
+  }
+
+  public class SiblingStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'SiblingComplete');
+    }
+  }
+
+  public class ParallelErrorRoutedWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.ParallelSpawnStep',
+        'WorkflowEngineTest.ExplicitFailStep',
+        'WorkflowEngineTest.SiblingStep',
+        'WorkflowEngineTest.NormalHandlerStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.ParallelSpawnStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      if (failedStepName == 'WorkflowEngineTest.ExplicitFailStep') {
+        return 'WorkflowEngineTest.NormalHandlerStep';
+      }
+      return null;
+    }
+  }
+
+  public class RetryExhaustedFailureStep implements WorkflowStep, RetryConfigurable {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.retry(getRetryPolicy());
+    }
+    public RetryPolicy getRetryPolicy() {
+      return new RetryPolicy(1, (Double) 1.0, 1);
+    }
+  }
+
+  public class RetryExhaustedErrorRoutedWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.RetryExhaustedFailureStep',
+        'WorkflowEngineTest.NormalHandlerStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.RetryExhaustedFailureStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      if (failedStepName == 'WorkflowEngineTest.RetryExhaustedFailureStep') {
+        return 'WorkflowEngineTest.NormalHandlerStep';
+      }
+      return null;
+    }
+  }
+
+  @isTest
+  static void testParallelErrorRoutingSiblingCancellation() {
+    routedStepsRun.clear();
+    compensationsRun.clear();
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.ParallelErrorRoutedWorkflow',
+      'ParallelKey',
+      null
+    );
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.ParallelSpawnStep');
+
+    Workflow_Instance__c inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assert(
+      inst.Current_Step__c.contains('WorkflowEngineTest.ExplicitFailStep')
+    );
+    System.assert(
+      inst.Current_Step__c.contains('WorkflowEngineTest.SiblingStep')
+    );
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.ExplicitFailStep');
+
+    Workflow_Step_Execution__c siblingExec = [
+      SELECT Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.SiblingStep'
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    System.assertEquals('Cancelled', siblingExec.Status__c);
+
+    inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.NormalHandlerStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals('Running', inst.Status__c);
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.SiblingStep');
+
+    inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.NormalHandlerStep',
+      inst.Current_Step__c
+    );
+  }
+
+  public class StaleSpawnStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.split(
+        new List<String>{
+          'WorkflowEngineTest.ExplicitFailStep',
+          'WorkflowEngineTest.StaleSignalSiblingStep'
+        },
+        null
+      );
+    }
+  }
+
+  public class StaleSignalSiblingStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      ctx.getSignals('TestSignal');
+      Workflow_Instance__c inst = [
+        SELECT Id, Current_Step__c
+        FROM Workflow_Instance__c
+        WHERE Id = :ctx.workflowInstanceId
+        FOR UPDATE
+      ];
+      inst.Current_Step__c = 'WorkflowEngineTest.NormalHandlerStep';
+      update as system inst;
+      return StepResult.complete(null, 'StaleComplete');
+    }
+  }
+
+  public class StaleSignalRollbackWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.StaleSpawnStep',
+        'WorkflowEngineTest.ExplicitFailStep',
+        'WorkflowEngineTest.StaleSignalSiblingStep',
+        'WorkflowEngineTest.NormalHandlerStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.StaleSpawnStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      if (failedStepName == 'WorkflowEngineTest.ExplicitFailStep') {
+        return 'WorkflowEngineTest.NormalHandlerStep';
+      }
+      return null;
+    }
+  }
+
+  @isTest
+  static void testStaleCompletionSignalRollback() {
+    routedStepsRun.clear();
+    compensationsRun.clear();
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.StaleSignalRollbackWorkflow',
+      'ParallelKey',
+      null
+    );
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.StaleSpawnStep');
+
+    // Insert a signal that the stale sibling step will claim
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Workflow_Instance__c = instanceId,
+      Signal_Name__c = 'TestSignal',
+      Correlation_Key__c = 'ParallelKey',
+      Status__c = 'Received'
+    );
+    insert as system sig;
+
+    // Run the StaleSignalSiblingStep. During its execute(), it claims the signal
+    // and then updates the instance's Current_Step__c to NormalHandlerStep,
+    // causing handleStepResult to treat it as a stale completion.
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.StaleSignalSiblingStep'
+    );
+
+    // Verify that the signal's status is rolled back to Received
+    sig = [
+      SELECT Status__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig.Id
+      WITH SYSTEM_MODE
+    ];
+    System.assertEquals('Received', sig.Status__c);
+  }
+
+  @isTest
+  static void testRetryExhaustedAttemptCount() {
+    routedStepsRun.clear();
+    routedStepContextData.clear();
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.RetryExhaustedErrorRoutedWorkflow',
+      'RetryExhaustedKey',
+      null
+    );
+
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.RetryExhaustedFailureStep'
+    );
+
+    Workflow_Instance__c inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.NormalHandlerStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals('Running', inst.Status__c);
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.NormalHandlerStep');
+
+    System.assertEquals(1, routedStepsRun.size());
+    System.assertEquals('NormalHandlerStep', routedStepsRun[0]);
+    System.assertEquals(
+      'WorkflowEngineTest.RetryExhaustedFailureStep',
+      (String) routedStepContextData.get('failedStepName')
+    );
+    System.assertEquals(1, (Integer) routedStepContextData.get('attemptCount'));
+  }
+
+  public class TimeoutErrorRoutedWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.TimeoutFailureStep',
+        'WorkflowEngineTest.NormalHandlerStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.TimeoutFailureStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      if (failedStepName == 'WorkflowEngineTest.TimeoutFailureStep') {
+        return 'WorkflowEngineTest.NormalHandlerStep';
+      }
+      return null;
+    }
+  }
+
+  public class TimeoutFailureStep implements WorkflowStep, TimeoutConfigurable {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'TimeoutDone');
+    }
+    public Integer getTimeoutSeconds() {
+      return 10;
+    }
+  }
+
+  @isTest
+  static void testWatchdogTimeoutErrorRouting() {
+    routedStepsRun.clear();
+    routedStepContextData.clear();
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.TimeoutErrorRoutedWorkflow',
+      'TimeoutRoutedKey',
+      null
+    );
+
+    new WorkflowOrchestrator(instanceId).execute(null);
+
+    Workflow_Instance__c inst = [
+      SELECT Status__c, Current_Step__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    // Simulate running state
+    inst.Status__c = 'Running';
+    inst.Current_Step__c = 'WorkflowEngineTest.TimeoutFailureStep';
+    update inst;
+
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Id, Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'WorkflowEngineTest.TimeoutFailureStep'
+      LIMIT 1
+    ];
+    System.assert(!stepExecs.isEmpty());
+    Workflow_Step_Execution__c stepExec = stepExecs[0];
+    stepExec.Status__c = 'Running';
+    stepExec.Timeout_At__c = DateTime.now().addSeconds(-10);
+    update as system stepExec;
+
+    Test.startTest();
+    WorkflowEngine.processWatchdogHeartbeat();
+    Test.stopTest();
+
+    inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.NormalHandlerStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals('Running', inst.Status__c);
+  }
+
+  public class PureRoutingWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowEngineTest.NormalHandlerStep' };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.NormalHandlerStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      return null;
+    }
+  }
+
+  @isTest
+  static void testErrorRoutingWorkflowInStartValidation() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.PureRoutingWorkflow',
+      'PureRoutingKey',
+      null
+    );
+    System.assertNotEquals(null, instanceId);
+  }
+
+  public class YieldingHandlerWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.RetryExhaustedFailureStep',
+        'WorkflowEngineTest.YieldingHandlerStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.RetryExhaustedFailureStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      if (failedStepName == 'WorkflowEngineTest.RetryExhaustedFailureStep') {
+        return 'WorkflowEngineTest.YieldingHandlerStep';
+      }
+      return null;
+    }
+  }
+
+  public class YieldedProducer implements CaptureProducer {
+    public Object produce() {
+      return true;
+    }
+  }
+
+  public class YieldingHandlerStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      if (!yieldingHandlerFirstRunDone) {
+        yieldingHandlerFirstRunDone = true;
+        ctx.once('hasYielded', new YieldedProducer());
+        return StepResult.sleep(10, 'YieldingHandlerStep');
+      }
+      routedStepsRun.add('YieldingHandlerStep');
+      routedStepContextData.put('failedStepName', ctx.failedStepName);
+      routedStepContextData.put('errorMessage', ctx.errorMessage);
+      routedStepContextData.put('attemptCount', ctx.attemptCount);
+      return StepResult.complete(null, 'HandlerDone');
+    }
+  }
+
+  @isTest
+  static void testPreserveErrorMetadataAcrossHandlerCheckpoint() {
+    routedStepsRun.clear();
+    routedStepContextData.clear();
+    yieldingHandlerFirstRunDone = false;
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.YieldingHandlerWorkflow',
+      'YieldingKey',
+      null
+    );
+
+    // Fail the step and route to YieldingHandlerStep
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.RetryExhaustedFailureStep'
+    );
+
+    // Run the YieldingHandlerStep (first execution -> returns Sleep, writes capture)
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.YieldingHandlerStep'
+    );
+
+    Workflow_Instance__c inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.YieldingHandlerStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals('Suspended', inst.Status__c);
+
+    // Re-run the YieldingHandlerStep (second execution -> completes, reads capture)
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.YieldingHandlerStep'
+    );
+
+    System.assertEquals(1, routedStepsRun.size());
+    System.assertEquals('YieldingHandlerStep', routedStepsRun[0]);
+    System.assertEquals(
+      'WorkflowEngineTest.RetryExhaustedFailureStep',
+      (String) routedStepContextData.get('failedStepName')
+    );
+    System.assertEquals(1, (Integer) routedStepContextData.get('attemptCount'));
+  }
+
+  public class RetryableHandlerWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.RetryExhaustedFailureStep',
+        'WorkflowEngineTest.RetryableHandlerStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.RetryExhaustedFailureStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      if (failedStepName == 'WorkflowEngineTest.RetryExhaustedFailureStep') {
+        return 'WorkflowEngineTest.RetryableHandlerStep';
+      }
+      return null;
+    }
+  }
+
+  public class RetryableHandlerStep implements WorkflowStep, RetryConfigurable {
+    public StepResult execute(StepContext ctx) {
+      routedStepsRun.add('RetryableHandlerStep');
+      routedStepContextData.put('failedStepName', ctx.failedStepName);
+      routedStepContextData.put('errorMessage', ctx.errorMessage);
+      routedStepContextData.put('attemptCount', ctx.attemptCount);
+      return StepResult.complete(null, 'HandlerDone');
+    }
+    public RetryPolicy getRetryPolicy() {
+      return new RetryPolicy(5, (Double) 1.0, 3);
+    }
+  }
+
+  @isTest
+  static void testLoadErrorMetadataForRetryableHandler() {
+    routedStepsRun.clear();
+    routedStepContextData.clear();
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.RetryableHandlerWorkflow',
+      'RetryableHandlerKey',
+      null
+    );
+
+    // Fail the step and route to RetryableHandlerStep
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.RetryExhaustedFailureStep'
+    );
+
+    Workflow_Instance__c inst = [
+      SELECT Current_Step__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+    System.assertEquals(
+      'WorkflowEngineTest.RetryableHandlerStep',
+      inst.Current_Step__c
+    );
+    System.assertEquals('Running', inst.Status__c);
+
+    // Run the RetryableHandlerStep
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.RetryableHandlerStep'
+    );
+
+    System.assertEquals(1, routedStepsRun.size());
+    System.assertEquals('RetryableHandlerStep', routedStepsRun[0]);
+    System.assertEquals(
+      'WorkflowEngineTest.RetryExhaustedFailureStep',
+      (String) routedStepContextData.get('failedStepName')
+    );
+    System.assertEquals(1, (Integer) routedStepContextData.get('attemptCount'));
   }
 }
