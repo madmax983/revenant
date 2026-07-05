@@ -9040,6 +9040,97 @@ public class WorkflowEngineTest {
     );
   }
 
+  public class StaleSpawnStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      return StepResult.split(
+        new List<String>{
+          'WorkflowEngineTest.ExplicitFailStep',
+          'WorkflowEngineTest.StaleSignalSiblingStep'
+        },
+        null
+      );
+    }
+  }
+
+  public class StaleSignalSiblingStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      ctx.getSignals('TestSignal');
+      Workflow_Instance__c inst = [
+        SELECT Id, Current_Step__c
+        FROM Workflow_Instance__c
+        WHERE Id = :ctx.workflowInstanceId
+        FOR UPDATE
+      ];
+      inst.Current_Step__c = 'WorkflowEngineTest.NormalHandlerStep';
+      update as system inst;
+      return StepResult.complete(null, 'StaleComplete');
+    }
+  }
+
+  public class StaleSignalRollbackWorkflow implements ErrorRoutingWorkflow {
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowEngineTest.StaleSpawnStep',
+        'WorkflowEngineTest.ExplicitFailStep',
+        'WorkflowEngineTest.StaleSignalSiblingStep',
+        'WorkflowEngineTest.NormalHandlerStep'
+      };
+    }
+    public String getInitialStep() {
+      return 'WorkflowEngineTest.StaleSpawnStep';
+    }
+    public String getNextStep(String currentStepName, StepResult stepResult) {
+      return null;
+    }
+    public String getErrorStep(String failedStepName, StepError error) {
+      if (failedStepName == 'WorkflowEngineTest.ExplicitFailStep') {
+        return 'WorkflowEngineTest.NormalHandlerStep';
+      }
+      return null;
+    }
+  }
+
+  @isTest
+  static void testStaleCompletionSignalRollback() {
+    routedStepsRun.clear();
+    compensationsRun.clear();
+    WorkflowEngine.disableQueueableInTest = true;
+
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowEngineTest.StaleSignalRollbackWorkflow',
+      'ParallelKey',
+      null
+    );
+
+    WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.StaleSpawnStep');
+
+    // Insert a signal that the stale sibling step will claim
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Workflow_Instance__c = instanceId,
+      Signal_Name__c = 'TestSignal',
+      Correlation_Key__c = 'ParallelKey',
+      Status__c = 'Received'
+    );
+    insert as system sig;
+
+    // Run the StaleSignalSiblingStep. During its execute(), it claims the signal
+    // and then updates the instance's Current_Step__c to NormalHandlerStep,
+    // causing handleStepResult to treat it as a stale completion.
+    WorkflowEngine.runStep(
+      instanceId,
+      'WorkflowEngineTest.StaleSignalSiblingStep'
+    );
+
+    // Verify that the signal's status is rolled back to Received
+    sig = [
+      SELECT Status__c
+      FROM Workflow_Signal__c
+      WHERE Id = :sig.Id
+      WITH SYSTEM_MODE
+    ];
+    System.assertEquals('Received', sig.Status__c);
+  }
+
   @isTest
   static void testRetryExhaustedAttemptCount() {
     routedStepsRun.clear();

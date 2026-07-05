@@ -5004,6 +5004,7 @@ public inherited sharing class WorkflowEngine {
       }
     }
     if (!stepIsActive) {
+      rollbackClaimedSignals(context);
       return;
     }
     if (context != null && context.isProgressReported()) {
