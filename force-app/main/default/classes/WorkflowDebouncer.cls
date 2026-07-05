@@ -284,10 +284,12 @@ public inherited sharing class WorkflowDebouncer {
     List<Debounce_State__c> statesToDelete = new List<Debounce_State__c>();
     List<Debounce_State__c> statesToUpdate = new List<Debounce_State__c>();
 
+    Savepoint sp = Database.setSavepoint();
     try {
       WorkflowEngine.startOrGet(startRequests);
       statesToDelete.addAll(dueStates);
     } catch (Exception ex) {
+      Database.rollback(sp);
       System.debug(
         LoggingLevel.ERROR,
         'WorkflowDebouncer sweep failed to bulk start: ' + ex.getMessage()
@@ -304,12 +306,14 @@ public inherited sharing class WorkflowDebouncer {
         }
         WorkflowEngine.StartRequest req = startRequests[i];
         Debounce_State__c state = dueStates[i];
+        Savepoint individualSp = Database.setSavepoint();
         try {
           WorkflowEngine.startOrGet(
             new List<WorkflowEngine.StartRequest>{ req }
           );
           statesToDelete.add(state);
         } catch (Exception innerEx) {
+          Database.rollback(individualSp);
           System.debug(
             LoggingLevel.ERROR,
             'WorkflowDebouncer sweep failed to start individual: ' +

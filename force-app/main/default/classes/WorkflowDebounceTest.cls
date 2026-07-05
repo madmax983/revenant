@@ -728,4 +728,81 @@ private class WorkflowDebounceTest {
     );
     Test.stopTest();
   }
+
+  @isTest
+  static void testBulkSweepRollbackOnPartialFailure() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.mockNow = Datetime.now();
+
+    Test.startTest();
+    // 1. Enqueue one valid and one invalid workflow start request
+    WorkflowEngine.startDebounced(
+      'WorkflowEngineTest.HappyWorkflow',
+      'deb_key_valid_part',
+      '{}',
+      10
+    );
+    WorkflowEngine.startDebounced(
+      'InvalidWorkflowToForceFailure',
+      'deb_key_invalid_part',
+      '{}',
+      10
+    );
+
+    // 2. Advance time and sweep
+    WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(11);
+    WorkflowDebouncer.sweep();
+
+    // Verify the valid request was started (debounce state deleted)
+    List<Debounce_State__c> validStates = [
+      SELECT Id
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = 'deb_key_valid_part'
+    ];
+    System.assertEquals(
+      0,
+      validStates.size(),
+      'Valid request should have succeeded and been deleted'
+    );
+
+    // Verify the invalid request failed and is pending retry
+    List<Debounce_State__c> invalidStates = [
+      SELECT Id, Retry_Count__c, Error_Message__c
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = 'deb_key_invalid_part'
+    ];
+    System.assertEquals(
+      1,
+      invalidStates.size(),
+      'Invalid request should remain'
+    );
+    System.assertEquals(
+      1,
+      invalidStates[0].Retry_Count__c,
+      'Retry count should be 1'
+    );
+    System.assertNotEquals(
+      null,
+      invalidStates[0].Error_Message__c,
+      'Error message should be logged'
+    );
+
+    // Verify the workflow instance for HappyWorkflow actually exists in the database
+    List<Workflow_Instance__c> instances = [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c = 'deb_key_valid_part'
+    ];
+    System.assertEquals(
+      1,
+      instances.size(),
+      'One workflow instance should have been started'
+    );
+    System.assertEquals(
+      'Pending',
+      instances[0].Status__c,
+      'Status should be Pending'
+    );
+    Test.stopTest();
+  }
 }
