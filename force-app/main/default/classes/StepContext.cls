@@ -1219,6 +1219,34 @@ public inherited sharing class StepContext {
     if (hasLoadedExecutions || this.workflowInstanceId == null) {
       return;
     }
+    List<Workflow_Step_Execution__c> currentExecs = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :this.workflowInstanceId
+        AND Step_Name__c = :this.stepName
+      WITH SYSTEM_MODE
+    ];
+
+    List<Workflow_Step_Execution__c> otherExecs = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :this.workflowInstanceId
+        AND Step_Name__c != :this.stepName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate ASC, Id ASC
+      LIMIT 5000
+    ];
+
+    Set<Id> targetIds = new Set<Id>();
+    for (Workflow_Step_Execution__c e : currentExecs) {
+      targetIds.add(e.Id);
+    }
+    for (Workflow_Step_Execution__c e : otherExecs) {
+      targetIds.add(e.Id);
+    }
+
     List<Workflow_Step_Execution__c> executions = [
       SELECT
         Step_Name__c,
@@ -1226,7 +1254,7 @@ public inherited sharing class StepContext {
         Captured_Values__c,
         Workflow_Instance__r.CreatedDate
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :this.workflowInstanceId
+      WHERE Id IN :targetIds
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
     ];
