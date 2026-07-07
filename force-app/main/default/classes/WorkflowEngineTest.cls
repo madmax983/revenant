@@ -9587,4 +9587,62 @@ public class WorkflowEngineTest {
       WorkflowEngine.adoptionQueryLimit = 45000;
     }
   }
+
+  @isTest
+  static void testGetPatchAdoptionCountExactKeyMatching() {
+    DateTime introducedAt = DateTime.newInstance(2026, 1, 2);
+
+    try {
+      // Insert a real parent instance to satisfy database reference checks
+      Workflow_Instance__c realInst = new Workflow_Instance__c(
+        Workflow_Name__c = 'TestWorkflowExact',
+        Status__c = 'Running',
+        Correlation_Key__c = 'ExactKey1'
+      );
+      insert realInst;
+
+      // Create a mock active instance created on Day 1 (before introducedAt) using the real ID
+      String instanceJson =
+        '{"attributes":{"type":"Workflow_Instance__c"},"Id":"' +
+        realInst.Id +
+        '","Workflow_Name__c":"TestWorkflowExact","Status__c":"Running","CreatedDate":"2026-01-01T00:00:00.000Z"}';
+      Workflow_Instance__c mockInst = (Workflow_Instance__c) JSON.deserialize(
+        instanceJson,
+        Workflow_Instance__c.class
+      );
+      WorkflowEngine.mockInstancesForAdoption = new List<Workflow_Instance__c>{
+        mockInst
+      };
+
+      // Create a step execution with a similar patch name (e.g. 'foo-v2' containing 'foo')
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = mockInst.Id,
+        Step_Name__c = 'StepB',
+        Status__c = 'Completed',
+        Captured_Values__c = '{"__patch:foo-v2":false}'
+      );
+
+      // Query adoption count for 'foo' (which this workflow has NOT used exactly!)
+      // Since it only has 'foo-v2', 'foo' adoption count should be 0, not 1!
+      Integer count = WorkflowEngine.getPatchAdoptionCount('foo', introducedAt);
+      System.assertEquals(
+        0,
+        count,
+        'Should not count mockInst as legacy for foo since it only used foo-v2'
+      );
+
+      // If we query for 'foo-v2', it should count it as 1!
+      Integer countV2 = WorkflowEngine.getPatchAdoptionCount(
+        'foo-v2',
+        introducedAt
+      );
+      System.assertEquals(
+        1,
+        countV2,
+        'Should count mockInst as legacy for foo-v2 since it matches exactly'
+      );
+    } finally {
+      WorkflowEngine.mockInstancesForAdoption = null;
+    }
+  }
 }

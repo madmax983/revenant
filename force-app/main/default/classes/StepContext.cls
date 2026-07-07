@@ -1267,7 +1267,17 @@ public inherited sharing class StepContext {
     for (Workflow_Step_Execution__c exec : executions) {
       rawCaptures.add(exec.Captured_Values__c);
     }
-    List<String> resolvedCaptures = WorkflowEngine.resolvePayloads(rawCaptures);
+
+    // Resolve offloaded payloads in small batches to stay under Apex Heap Limits (synchronous cap is 6 MB)
+    Integer batchSize = 40;
+    List<String> resolvedCaptures = new List<String>();
+    for (Integer i = 0; i < rawCaptures.size(); i += batchSize) {
+      List<String> batchRaw = new List<String>();
+      for (Integer j = i; j < i + batchSize && j < rawCaptures.size(); j++) {
+        batchRaw.add(rawCaptures[j]);
+      }
+      resolvedCaptures.addAll(WorkflowEngine.resolvePayloads(batchRaw));
+    }
 
     Map<String, Integer> completedCounts = new Map<String, Integer>();
     for (Integer i = 0; i < executions.size(); i++) {

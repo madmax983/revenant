@@ -7976,9 +7976,7 @@ public inherited sharing class WorkflowEngine {
       instances = [
         SELECT Id, Workflow_Name__c, CreatedDate
         FROM Workflow_Instance__c
-        WHERE
-          Status__c IN :ACTIVE_STATUSES
-          AND Workflow_Name__c = :workflowName
+        WHERE Status__c IN :ACTIVE_STATUSES AND Workflow_Name__c = :workflowName
         WITH SYSTEM_MODE
         LIMIT :queryLimit
       ];
@@ -7986,8 +7984,7 @@ public inherited sharing class WorkflowEngine {
       instances = [
         SELECT Id, Workflow_Name__c, CreatedDate
         FROM Workflow_Instance__c
-        WHERE
-          Status__c IN :ACTIVE_STATUSES
+        WHERE Status__c IN :ACTIVE_STATUSES
         WITH SYSTEM_MODE
         LIMIT :queryLimit
       ];
@@ -7996,8 +7993,8 @@ public inherited sharing class WorkflowEngine {
     if (instances.size() >= queryLimit) {
       throw new WorkflowException(
         'Active instances exceed query limit (' +
-        queryLimit +
-        ' rows). Adoption count cannot be computed reliably.'
+          queryLimit +
+          ' rows). Adoption count cannot be computed reliably.'
       );
     }
 
@@ -8013,9 +8010,7 @@ public inherited sharing class WorkflowEngine {
     for (Integer i = 0; i < instances.size(); i += instanceBatchSize) {
       List<Workflow_Instance__c> batchInstances = new List<Workflow_Instance__c>();
       for (
-        Integer j = i;
-        j < i + instanceBatchSize && j < instances.size();
-        j++
+        Integer j = i; j < i + instanceBatchSize && j < instances.size(); j++
       ) {
         batchInstances.add(instances[j]);
       }
@@ -8035,11 +8030,7 @@ public inherited sharing class WorkflowEngine {
       List<String> resolvedCaptures = new List<String>();
       for (Integer k = 0; k < execs.size(); k += offloadBatchSize) {
         List<String> batchRaw = new List<String>();
-        for (
-          Integer m = k;
-          m < k + offloadBatchSize && m < execs.size();
-          m++
-        ) {
+        for (Integer m = k; m < k + offloadBatchSize && m < execs.size(); m++) {
           batchRaw.add(execs[m].Captured_Values__c);
         }
         resolvedCaptures.addAll(resolvePayloads(batchRaw));
@@ -8053,16 +8044,15 @@ public inherited sharing class WorkflowEngine {
         }
 
         if (capturesJson.contains(key)) {
-          targetWorkflows.add(exec.Workflow_Instance__r.Workflow_Name__c);
-        }
-
-        if (capturesJson.contains(targetPattern)) {
           try {
             Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
               capturesJson
             );
-            if (captures.containsKey(key) && captures.get(key) == false) {
-              instancesWithExplicitFalse.add(exec.Workflow_Instance__c);
+            if (captures.containsKey(key)) {
+              targetWorkflows.add(exec.Workflow_Instance__r.Workflow_Name__c);
+              if (captures.get(key) == false) {
+                instancesWithExplicitFalse.add(exec.Workflow_Instance__c);
+              }
             }
           } catch (Exception e) {
             // Ignore malformed JSON
