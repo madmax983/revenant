@@ -213,6 +213,10 @@ public class ParallelSagaFanoutWorkflowExampleTest {
       harness.drive(3);
     } catch (WorkflowTestHarness.HarnessException ex) {
       // Expected: budget exhausted during rollback before stabilization
+      System.debug(
+        LoggingLevel.FINEST,
+        'Expected budget exhaustion: ' + ex.getMessage()
+      );
     }
     Workflow_Instance__c freshInst = [
       SELECT Status__c

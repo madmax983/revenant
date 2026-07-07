@@ -1360,6 +1360,10 @@ public inherited sharing class StepContext {
         }
       } catch (Exception e) {
         // Ignore malformed JSON
+        System.debug(
+          LoggingLevel.FINEST,
+          'Ignore malformed JSON: ' + e.getMessage()
+        );
       }
     }
     hasLoadedExecutions = true;
