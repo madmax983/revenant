@@ -246,6 +246,11 @@ public inherited sharing class StepContext {
   private Map<String, Object> capturedValues = new Map<String, Object>();
   private Set<String> newCaptureKeys = new Set<String>();
 
+  // Named change marker (patch) state (issue #130)
+  private Map<String, Boolean> patchDecisionsCache = new Map<String, Boolean>();
+  private Set<String> completedStepsCache = new Set<String>();
+  private Boolean hasLoadedExecutions = false;
+
   // Outbound domain events buffered via emit() during this execution (issue
   // #64). The engine publishes them effectively-once, coupled to the step's
   // COMPLETE/SPLIT transition commit; they are discarded (never published) on a
@@ -1090,6 +1095,117 @@ public inherited sharing class StepContext {
     capturedValues.put(key, normalized);
     newCaptureKeys.add(key);
     return defensiveCopy(normalized);
+  }
+
+  /**
+   * Evaluates if a specific named change marker (patch) is active for this instance.
+   *
+   * The first time a given (instance, changeId) decision is reached, the result
+   * reflects the currently-deployed code's intent (new behavior = true); that
+   * decision is recorded once and returns the identical value on every subsequent
+   * re-execution of that step (retry, yield/resume, at-least-once event resume,
+   * operator re-drive) — same capture-once durability contract as once().
+   *
+   * An instance that already executed past the point where a marker is later
+   * introduced is never retroactively flipped: its recorded patch decisions are
+   * immutable, so resuming it cannot change a branch it already took.
+   *
+   * @param changeId The unique developer-supplied name for the patch/change.
+   * @return True if the patch is active/enabled for this instance, else false.
+   */
+  public Boolean patched(String changeId) {
+    if (String.isBlank(changeId)) {
+      return false;
+    }
+    String key = '__patch:' + changeId;
+    if (capturedValues.containsKey(key)) {
+      return (Boolean) capturedValues.get(key);
+    }
+
+    // Check if any other step in this instance has already recorded a decision for this changeId.
+    loadExecutions();
+    if (patchDecisionsCache.containsKey(changeId)) {
+      Boolean decision = patchDecisionsCache.get(changeId);
+      capturedValues.put(key, decision);
+      newCaptureKeys.add(key);
+      return decision;
+    }
+
+    // No decision has been recorded yet. This is the first time the decision is reached in this instance!
+    Boolean decision;
+    if (completedStepsCache.contains(this.stepName)) {
+      // The current step has already completed in the past, meaning this is a retry/re-execution of a completed step.
+      decision = false;
+    } else if (!completedStepsCache.isEmpty()) {
+      // The current step is running for the first time, but OTHER steps have completed in the past.
+      // This is an in-flight instance that started before this patch was introduced, so default to false (legacy).
+      decision = false;
+    } else {
+      // No steps have completed in the past. This is a brand new instance starting fresh, so default to true.
+      decision = true;
+    }
+
+    capturedValues.put(key, decision);
+    newCaptureKeys.add(key);
+    return decision;
+  }
+
+  /**
+   * Asserts that a named change marker (patch) has been retired/deprecated.
+   *
+   * If this instance is still expecting the old branch (i.e. patched(changeId) == false),
+   * reaching this marker throws a distinguishable WorkflowException to prevent silently
+   * running the wrong path.
+   *
+   * @param changeId The unique developer-supplied name for the patch/change.
+   */
+  public void deprecated(String changeId) {
+    if (!patched(changeId)) {
+      throw new WorkflowEngine.WorkflowException(
+        'Workflow execution reached retired code path for patch: ' + changeId
+      );
+    }
+  }
+
+  private void loadExecutions() {
+    if (hasLoadedExecutions || this.workflowInstanceId == null) {
+      return;
+    }
+    List<Workflow_Step_Execution__c> executions = [
+      SELECT Step_Name__c, Status__c, Captured_Values__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :this.workflowInstanceId
+      WITH SYSTEM_MODE
+    ];
+    for (Workflow_Step_Execution__c exec : executions) {
+      if (
+        exec.Status__c == 'Completed' ||
+        exec.Status__c == 'OperatorSkipped'
+      ) {
+        completedStepsCache.add(exec.Step_Name__c);
+      }
+      if (String.isBlank(exec.Captured_Values__c)) {
+        continue;
+      }
+      // Performance optimization: fast substring check before deserializing
+      if (!exec.Captured_Values__c.contains('__patch:')) {
+        continue;
+      }
+      try {
+        Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
+          exec.Captured_Values__c
+        );
+        for (String k : captures.keySet()) {
+          if (k.startsWith('__patch:')) {
+            String changeId = k.substring(8);
+            patchDecisionsCache.put(changeId, (Boolean) captures.get(k));
+          }
+        }
+      } catch (Exception e) {
+        // Ignore malformed JSON
+      }
+    }
+    hasLoadedExecutions = true;
   }
 
   /**

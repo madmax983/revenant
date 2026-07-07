@@ -9451,4 +9451,61 @@ public class WorkflowEngineTest {
     );
     System.assertEquals(1, (Integer) routedStepContextData.get('attemptCount'));
   }
+
+  @isTest
+  static void testGetPatchAdoptionCount() {
+    // 1. Create a non-terminal instance (Running)
+    Workflow_Instance__c inst1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'AdoptKey1'
+    );
+    insert inst1;
+
+    // 2. Create another non-terminal instance (Suspended)
+    Workflow_Instance__c inst2 = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'AdoptKey2'
+    );
+    insert inst2;
+
+    // 3. Create a terminal instance (Completed)
+    Workflow_Instance__c inst3 = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'AdoptKey3'
+    );
+    insert inst3;
+
+    // 4. Create step executions with patch decisions
+    // inst1: recorded __patch:change-1 = false
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst1.Id,
+      Step_Name__c = 'StepB',
+      Status__c = 'Completed',
+      Captured_Values__c = '{"__patch:change-1":false}'
+    );
+
+    // inst2: recorded __patch:change-1 = true
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst2.Id,
+      Step_Name__c = 'StepB',
+      Status__c = 'Completed',
+      Captured_Values__c = '{"__patch:change-1":true}'
+    );
+
+    // inst3: recorded __patch:change-1 = false (but it's Completed, a terminal status)
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst3.Id,
+      Step_Name__c = 'StepB',
+      Status__c = 'Completed',
+      Captured_Values__c = '{"__patch:change-1":false}'
+    );
+
+    // Query adoption: only inst1 is non-terminal AND has __patch:change-1 = false.
+    // So the count should be exactly 1.
+    Integer count = WorkflowEngine.getPatchAdoptionCount('change-1');
+    System.assertEquals(1, count, 'Adoption count should be 1');
+  }
 }

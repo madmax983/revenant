@@ -7915,6 +7915,63 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Returns the count of non-terminal workflow instances that have recorded
+   * a decision of 'false' for the given changeId.
+   *
+   * @param changeId The unique name of the patch.
+   * @return The number of active instances pinning the old branch.
+   */
+  public static Integer getPatchAdoptionCount(String changeId) {
+    if (String.isBlank(changeId)) {
+      return 0;
+    }
+    String key = '__patch:' + changeId;
+    String targetLike = '%' + key + '%';
+    String targetPattern = '"' + key + '":false';
+
+    // Query step executions for non-terminal (active) instances.
+    // Captured_Values__c is a Long Text Area field and cannot be filtered in SOQL.
+    // Add LIMIT 45000 as a governor limit guardrail.
+    List<Workflow_Step_Execution__c> execs = [
+      SELECT Workflow_Instance__c, Captured_Values__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__r.Status__c NOT IN (
+          'Completed',
+          'Failed',
+          'Compensated',
+          'CompensationFailed',
+          'Cancelled',
+          'ContinuedAsNew'
+        )
+      WITH SYSTEM_MODE
+      LIMIT 45000
+    ];
+
+    Set<Id> instancesWithFalse = new Set<Id>();
+    for (Workflow_Step_Execution__c exec : execs) {
+      if (String.isBlank(exec.Captured_Values__c)) {
+        continue;
+      }
+      // Performance optimization: fast substring check before deserializing
+      if (!exec.Captured_Values__c.contains(targetPattern)) {
+        continue;
+      }
+      try {
+        Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
+          exec.Captured_Values__c
+        );
+        if (captures.containsKey(key) && captures.get(key) == false) {
+          instancesWithFalse.add(exec.Workflow_Instance__c);
+        }
+      } catch (Exception e) {
+        // Ignore malformed JSON
+      }
+    }
+    return instancesWithFalse.size();
+  }
+
+  /**
    * Builds the Error_Message for a stalled ("rollback incomplete") saga, preserving
    * the cancel-driven phase marker when applicable. The resume paths (resumeCompensation,
    * the watchdog sleep-resume, and runStep) infer whether to resume as 'Cancelling'
