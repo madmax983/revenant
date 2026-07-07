@@ -1219,53 +1219,34 @@ public inherited sharing class StepContext {
     if (hasLoadedExecutions || this.workflowInstanceId == null) {
       return;
     }
-    // 1. Group by Step_Name__c to identify looping vs non-looping steps
-    List<AggregateResult> counts = [
-      SELECT Step_Name__c, COUNT(Id) cnt
+    // 1. Get the first and last execution ID for every step name in the workflow
+    List<AggregateResult> aggregates = [
+      SELECT Step_Name__c, MIN(Id) minId, MAX(Id) maxId
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c = :this.workflowInstanceId
       WITH SYSTEM_MODE
       GROUP BY Step_Name__c
     ];
 
-    Set<String> nonLoopingSteps = new Set<String>();
-    Set<String> loopingSteps = new Set<String>();
     Set<Id> targetIds = new Set<Id>();
 
-    for (AggregateResult ar : counts) {
+    for (AggregateResult ar : aggregates) {
       String stepName = (String) ar.get('Step_Name__c');
-      Integer cnt = (Integer) ar.get('cnt');
-
       if (stepName == this.stepName) {
-        // Handled below separately with a bound based on the current stepVisit
+        // Current step name is queried separately below to ensure correct visit counts
         continue;
       }
-
-      if (cnt <= 5) {
-        nonLoopingSteps.add(stepName);
-      } else {
-        loopingSteps.add(stepName);
+      Id minId = (Id) ar.get('minId');
+      Id maxId = (Id) ar.get('maxId');
+      if (minId != null) {
+        targetIds.add(minId);
+      }
+      if (maxId != null) {
+        targetIds.add(maxId);
       }
     }
 
-    if (!loopingSteps.isEmpty()) {
-      // Query the first 500 executions of all looping steps combined to avoid SOQL in loop
-      List<Workflow_Step_Execution__c> firstExecs = [
-        SELECT Id
-        FROM Workflow_Step_Execution__c
-        WHERE
-          Workflow_Instance__c = :this.workflowInstanceId
-          AND Step_Name__c IN :loopingSteps
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate ASC, Id ASC
-        LIMIT 500
-      ];
-      for (Workflow_Step_Execution__c e : firstExecs) {
-        targetIds.add(e.Id);
-      }
-    }
-
-    // 2. Query executions of the current step name bounded by stepVisit + 2
+    // 2. Query executions of the current step name, bounded by stepVisit + 2
     Integer currentStepLimit = this.stepVisit + 2;
     List<Workflow_Step_Execution__c> currentExecs = [
       SELECT Id
@@ -1281,22 +1262,7 @@ public inherited sharing class StepContext {
       targetIds.add(e.Id);
     }
 
-    // 3. Query all non-looping step executions directly
-    if (!nonLoopingSteps.isEmpty()) {
-      List<Workflow_Step_Execution__c> nonLoopingExecs = [
-        SELECT Id
-        FROM Workflow_Step_Execution__c
-        WHERE
-          Workflow_Instance__c = :this.workflowInstanceId
-          AND Step_Name__c IN :nonLoopingSteps
-        WITH SYSTEM_MODE
-      ];
-      for (Workflow_Step_Execution__c e : nonLoopingExecs) {
-        targetIds.add(e.Id);
-      }
-    }
-
-    // 4. Query the final sorted list of step executions by ID
+    // 3. Query the final sorted list of step executions by ID
     List<Workflow_Step_Execution__c> executions = new List<Workflow_Step_Execution__c>();
     if (!targetIds.isEmpty()) {
       executions = [
