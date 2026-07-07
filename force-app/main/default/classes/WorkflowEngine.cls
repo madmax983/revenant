@@ -7972,19 +7972,22 @@ public inherited sharing class WorkflowEngine {
     List<Workflow_Instance__c> instances;
     if (Test.isRunningTest() && mockInstancesForAdoption != null) {
       instances = mockInstancesForAdoption;
+    } else if (String.isNotBlank(workflowName)) {
+      instances = [
+        SELECT Id, Workflow_Name__c, CreatedDate
+        FROM Workflow_Instance__c
+        WHERE
+          Status__c IN :ACTIVE_STATUSES
+          AND Workflow_Name__c = :workflowName
+        WITH SYSTEM_MODE
+        LIMIT :queryLimit
+      ];
     } else {
       instances = [
         SELECT Id, Workflow_Name__c, CreatedDate
         FROM Workflow_Instance__c
         WHERE
-          Status__c NOT IN (
-            'Completed',
-            'Failed',
-            'Compensated',
-            'CompensationFailed',
-            'Cancelled',
-            'ContinuedAsNew'
-          )
+          Status__c IN :ACTIVE_STATUSES
         WITH SYSTEM_MODE
         LIMIT :queryLimit
       ];
@@ -7993,57 +7996,82 @@ public inherited sharing class WorkflowEngine {
     if (instances.size() >= queryLimit) {
       throw new WorkflowException(
         'Active instances exceed query limit (' +
-          queryLimit +
-          ' rows). Adoption count cannot be computed reliably.'
+        queryLimit +
+        ' rows). Adoption count cannot be computed reliably.'
       );
     }
 
-    // 2. Query step executions for these active instances
-    List<Workflow_Step_Execution__c> execs = [
-      SELECT
-        Workflow_Instance__c,
-        Captured_Values__c,
-        Workflow_Instance__r.Workflow_Name__c
-      FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c IN :instances
-      WITH SYSTEM_MODE
-    ];
-
-    // Process offloaded payloads in small batches to stay under Apex Heap Limits (synchronous cap is 6 MB)
-    Integer batchSize = 40;
-    List<String> resolvedCaptures = new List<String>();
-    for (Integer i = 0; i < execs.size(); i += batchSize) {
-      List<String> batchRaw = new List<String>();
-      for (Integer j = i; j < i + batchSize && j < execs.size(); j++) {
-        batchRaw.add(execs[j].Captured_Values__c);
-      }
-      resolvedCaptures.addAll(resolvePayloads(batchRaw));
-    }
-
-    // 3. Identify which workflows check this patch
     Set<String> targetWorkflows = new Set<String>();
     if (String.isNotBlank(workflowName)) {
       targetWorkflows.add(workflowName);
-    } else {
-      for (Integer i = 0; i < execs.size(); i++) {
-        String capturesJson = resolvedCaptures[i];
-        if (String.isNotBlank(capturesJson) && capturesJson.contains(key)) {
-          targetWorkflows.add(execs[i].Workflow_Instance__r.Workflow_Name__c);
+    }
+
+    Set<Id> instancesWithExplicitFalse = new Set<Id>();
+
+    // 2. Query step executions in batches of 1,000 instances to stay under 50k SOQL row limits
+    Integer instanceBatchSize = 1000;
+    for (Integer i = 0; i < instances.size(); i += instanceBatchSize) {
+      List<Workflow_Instance__c> batchInstances = new List<Workflow_Instance__c>();
+      for (
+        Integer j = i;
+        j < i + instanceBatchSize && j < instances.size();
+        j++
+      ) {
+        batchInstances.add(instances[j]);
+      }
+
+      List<Workflow_Step_Execution__c> execs = [
+        SELECT
+          Workflow_Instance__c,
+          Captured_Values__c,
+          Workflow_Instance__r.Workflow_Name__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c IN :batchInstances
+        WITH SYSTEM_MODE
+      ];
+
+      // Process offloaded payloads in small batches of 40 to stay under Apex Heap Limits (synchronous cap is 6 MB)
+      Integer offloadBatchSize = 40;
+      List<String> resolvedCaptures = new List<String>();
+      for (Integer k = 0; k < execs.size(); k += offloadBatchSize) {
+        List<String> batchRaw = new List<String>();
+        for (
+          Integer m = k;
+          m < k + offloadBatchSize && m < execs.size();
+          m++
+        ) {
+          batchRaw.add(execs[m].Captured_Values__c);
+        }
+        resolvedCaptures.addAll(resolvePayloads(batchRaw));
+      }
+
+      for (Integer k = 0; k < execs.size(); k++) {
+        Workflow_Step_Execution__c exec = execs[k];
+        String capturesJson = resolvedCaptures[k];
+        if (String.isBlank(capturesJson)) {
+          continue;
+        }
+
+        if (capturesJson.contains(key)) {
+          targetWorkflows.add(exec.Workflow_Instance__r.Workflow_Name__c);
+        }
+
+        if (capturesJson.contains(targetPattern)) {
+          try {
+            Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
+              capturesJson
+            );
+            if (captures.containsKey(key) && captures.get(key) == false) {
+              instancesWithExplicitFalse.add(exec.Workflow_Instance__c);
+            }
+          } catch (Exception e) {
+            // Ignore malformed JSON
+          }
         }
       }
     }
 
-    // Group executions by instance ID for lookup
-    Map<Id, List<String>> capturesByInstanceId = new Map<Id, List<String>>();
-    for (Integer i = 0; i < execs.size(); i++) {
-      Id instId = execs[i].Workflow_Instance__c;
-      if (!capturesByInstanceId.containsKey(instId)) {
-        capturesByInstanceId.put(instId, new List<String>());
-      }
-      capturesByInstanceId.get(instId).add(resolvedCaptures[i]);
-    }
-
-    // 4. Count instances pinning the legacy branch
+    // 3. Count instances pinning the legacy branch
     Set<Id> instancesWithFalse = new Set<Id>();
     for (Workflow_Instance__c inst : instances) {
       String wflow = inst.Workflow_Name__c;
@@ -8057,29 +8085,8 @@ public inherited sharing class WorkflowEngine {
         continue;
       }
 
-      // Check step execution captures for explicit false decision
-      List<String> instCaptures = capturesByInstanceId.get(inst.Id);
-      if (instCaptures == null) {
-        continue;
-      }
-      for (String capturesJson : instCaptures) {
-        if (String.isBlank(capturesJson)) {
-          continue;
-        }
-        if (!capturesJson.contains(targetPattern)) {
-          continue;
-        }
-        try {
-          Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
-            capturesJson
-          );
-          if (captures.containsKey(key) && captures.get(key) == false) {
-            instancesWithFalse.add(inst.Id);
-            break; // found, check next instance
-          }
-        } catch (Exception e) {
-          // Ignore malformed JSON
-        }
+      if (instancesWithExplicitFalse.contains(inst.Id)) {
+        instancesWithFalse.add(inst.Id);
       }
     }
 
