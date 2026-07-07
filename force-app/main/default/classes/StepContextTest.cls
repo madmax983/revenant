@@ -2487,4 +2487,31 @@ public class StepContextTest {
       );
     }
   }
+
+  @isTest
+  static void testCallingClassNameResolution() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'CallingClassKey'
+    );
+    insert inst;
+
+    StepContext ctx = new StepContext(
+      inst.Id,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null
+    );
+
+    // Call patched. It will call loadExecutions(getCallingClassName())
+    // which resolves the calling class to 'StepContextTest'.
+    // Since 'StepContextTest' is a real class in the org, it will query its LastModifiedDate.
+    ctx.patched('calling-class-change');
+
+    System.assertNotEquals(null, ctx.getCapturedValuesJson());
+  }
 }

@@ -7948,22 +7948,23 @@ public inherited sharing class WorkflowEngine {
       LIMIT 45000
     ];
 
-    Set<Id> instancesWithFalse = new Set<Id>();
+    List<String> rawCaptures = new List<String>();
     for (Workflow_Step_Execution__c exec : execs) {
-      String capturesJson = exec.Captured_Values__c;
+      rawCaptures.add(exec.Captured_Values__c);
+    }
+    List<String> resolvedCaptures = resolvePayloads(rawCaptures);
+
+    Set<Id> instancesWithFalse = new Set<Id>();
+    for (Integer i = 0; i < execs.size(); i++) {
+      Workflow_Step_Execution__c exec = execs[i];
+      String capturesJson = resolvedCaptures[i];
       if (String.isBlank(capturesJson)) {
         continue;
       }
-      Boolean isOffloaded = capturesJson.contains('"$attachmentId"');
-      if (!capturesJson.contains(key) && !isOffloaded) {
+      if (!capturesJson.contains(key)) {
         continue;
       }
-      if (isOffloaded) {
-        capturesJson = resolvePayload(capturesJson);
-      }
-      if (
-        String.isBlank(capturesJson) || !capturesJson.contains(targetPattern)
-      ) {
+      if (!capturesJson.contains(targetPattern)) {
         continue;
       }
       try {

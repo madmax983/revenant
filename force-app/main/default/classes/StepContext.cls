@@ -1130,7 +1130,7 @@ public inherited sharing class StepContext {
     }
 
     // Check if any other step in this instance has already recorded a decision for this changeId.
-    loadExecutions();
+    loadExecutions(getCallingClassName());
     if (patchDecisionsCache.containsKey(changeId)) {
       Boolean decision = patchDecisionsCache.get(changeId);
       capturedValues.put(key, decision);
@@ -1140,15 +1140,15 @@ public inherited sharing class StepContext {
 
     // No decision has been recorded yet. This is the first time the decision is reached in this instance!
     Boolean decision;
-    if (completedStepsCache.contains(this.stepName)) {
-      // The current step has already completed in the past, meaning this is a retry/re-execution of a completed step.
+    if (completedStepsCache.contains(this.stepName + ':' + this.stepVisit)) {
+      // The current step visit has already completed in the past, meaning this is a retry/re-execution of a completed step.
       decision = false;
     } else if (
       instanceCreatedDate != null &&
       classLastModified != null &&
       instanceCreatedDate < classLastModified
     ) {
-      // The instance was created BEFORE the latest deployment of the class.
+      // The instance was created BEFORE the latest deployment of the calling class.
       // This is an in-flight legacy instance that predates this code version, so default to false (legacy).
       decision = false;
     } else if (
@@ -1185,7 +1185,7 @@ public inherited sharing class StepContext {
     }
   }
 
-  private void loadExecutions() {
+  private void loadExecutions(String targetClassName) {
     if (hasLoadedExecutions || this.workflowInstanceId == null) {
       return;
     }
@@ -1198,6 +1198,7 @@ public inherited sharing class StepContext {
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c = :this.workflowInstanceId
       WITH SYSTEM_MODE
+      ORDER BY CreatedDate ASC, Id ASC
     ];
 
     if (Test.isRunningTest() && mockInstanceCreatedDate != null) {
@@ -1220,11 +1221,10 @@ public inherited sharing class StepContext {
     if (Test.isRunningTest() && mockClassLastModified != null) {
       this.classLastModified = mockClassLastModified;
     } else {
-      String outerClassName = this.workflowName.substringBefore('.');
       List<ApexClass> classes = [
         SELECT LastModifiedDate
         FROM ApexClass
-        WHERE Name = :outerClassName
+        WHERE Name = :targetClassName
         WITH SYSTEM_MODE
         LIMIT 1
       ];
@@ -1233,26 +1233,31 @@ public inherited sharing class StepContext {
       }
     }
 
+    List<String> rawCaptures = new List<String>();
     for (Workflow_Step_Execution__c exec : executions) {
+      rawCaptures.add(exec.Captured_Values__c);
+    }
+    List<String> resolvedCaptures = WorkflowEngine.resolvePayloads(rawCaptures);
+
+    Map<String, Integer> completedCounts = new Map<String, Integer>();
+    for (Integer i = 0; i < executions.size(); i++) {
+      Workflow_Step_Execution__c exec = executions[i];
       if (
         exec.Status__c == 'Completed' ||
         exec.Status__c == 'OperatorSkipped'
       ) {
-        completedStepsCache.add(exec.Step_Name__c);
+        Integer visit = completedCounts.containsKey(exec.Step_Name__c)
+          ? completedCounts.get(exec.Step_Name__c)
+          : 0;
+        completedStepsCache.add(exec.Step_Name__c + ':' + visit);
+        completedCounts.put(exec.Step_Name__c, visit + 1);
       }
 
-      String capturesJson = exec.Captured_Values__c;
+      String capturesJson = resolvedCaptures[i];
       if (String.isBlank(capturesJson)) {
         continue;
       }
-      Boolean isOffloaded = capturesJson.contains('"$attachmentId"');
-      if (!capturesJson.contains('__patch:') && !isOffloaded) {
-        continue;
-      }
-      if (isOffloaded) {
-        capturesJson = WorkflowEngine.resolvePayload(capturesJson);
-      }
-      if (String.isBlank(capturesJson) || !capturesJson.contains('__patch:')) {
+      if (!capturesJson.contains('__patch:')) {
         continue;
       }
 
@@ -1271,6 +1276,24 @@ public inherited sharing class StepContext {
       }
     }
     hasLoadedExecutions = true;
+  }
+
+  private String getCallingClassName() {
+    String trace = new DmlException().getStackTraceString();
+    List<String> lines = trace.split('\n');
+    for (String line : lines) {
+      String trimmed = line.trim();
+      if (
+        trimmed.startsWith('Class.') && !trimmed.contains('Class.StepContext.')
+      ) {
+        String classAndMethod = trimmed.substring(6);
+        return classAndMethod.substringBefore('.');
+      }
+    }
+    // Fallback: use outer class of stepName or workflowName
+    return this.stepName != null
+      ? this.stepName.substringBefore('.')
+      : this.workflowName.substringBefore('.');
   }
 
   /**
