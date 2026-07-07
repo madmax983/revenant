@@ -2430,6 +2430,71 @@ public class StepContextTest {
   }
 
   @isTest
+  static void testPatchedWithIntroducedAtDate() {
+    // Class was last modified on Day 3 (e.g. 2026-01-03) due to unrelated changes
+    StepContext.mockClassLastModified = DateTime.newInstance(2026, 1, 3);
+
+    // Patch was introduced on Day 2 (e.g. 2026-01-02)
+    DateTime introducedAt = DateTime.newInstance(2026, 1, 2);
+
+    try {
+      // Instance A was created on Day 1 (2026-01-01), before patch was introduced
+      StepContext.mockInstanceCreatedDate = DateTime.newInstance(2026, 1, 1);
+      Workflow_Instance__c instA = new Workflow_Instance__c(
+        Workflow_Name__c = 'TestWorkflow',
+        Status__c = 'Running',
+        Correlation_Key__c = 'DateKey1'
+      );
+      insert instA;
+
+      StepContext ctxA = new StepContext(
+        instA.Id,
+        'TestWorkflow',
+        'StepA',
+        null,
+        null,
+        null,
+        null
+      );
+
+      // Since instanceCreatedDate < introducedAt, it must default to false (legacy)!
+      System.assertEquals(false, ctxA.patched('change-date', introducedAt));
+
+      // Instance B was created on Day 2.5 (2026-01-02 12:00:00), after patch was introduced but before Day 3 redeploy
+      StepContext.mockInstanceCreatedDate = DateTime.newInstance(
+        2026,
+        1,
+        2,
+        12,
+        0,
+        0
+      );
+      Workflow_Instance__c instB = new Workflow_Instance__c(
+        Workflow_Name__c = 'TestWorkflow',
+        Status__c = 'Running',
+        Correlation_Key__c = 'DateKey2'
+      );
+      insert instB;
+
+      StepContext ctxB = new StepContext(
+        instB.Id,
+        'TestWorkflow',
+        'StepA',
+        null,
+        null,
+        null,
+        null
+      );
+
+      // Since instanceCreatedDate >= introducedAt, it must default to true, even though instanceCreatedDate < classLastModified!
+      System.assertEquals(true, ctxB.patched('change-date', introducedAt));
+    } finally {
+      StepContext.mockInstanceCreatedDate = null;
+      StepContext.mockClassLastModified = null;
+    }
+  }
+
+  @isTest
   static void testDeprecatedPatch() {
     Id dummyInstanceId = '00D000000000001EAA';
 

@@ -7914,6 +7914,9 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  @TestVisible
+  private static Integer adoptionQueryLimit = 45000;
+
   /**
    * Returns the count of non-terminal workflow instances that have recorded
    * a decision of 'false' for the given changeId.
@@ -7926,8 +7929,8 @@ public inherited sharing class WorkflowEngine {
       return 0;
     }
     String key = '__patch:' + changeId;
-    String targetLike = '%' + key + '%';
     String targetPattern = '"' + key + '":false';
+    Integer queryLimit = adoptionQueryLimit;
 
     // Query step executions for non-terminal (active) instances.
     // Captured_Values__c is a Long Text Area field and cannot be filtered in SOQL.
@@ -7945,8 +7948,16 @@ public inherited sharing class WorkflowEngine {
           'ContinuedAsNew'
         )
       WITH SYSTEM_MODE
-      LIMIT 45000
+      LIMIT :queryLimit
     ];
+
+    if (execs.size() >= queryLimit) {
+      throw new WorkflowException(
+        'Active executions exceed query limit (' +
+          queryLimit +
+          ' rows). Adoption count cannot be computed reliably.'
+      );
+    }
 
     List<String> rawCaptures = new List<String>();
     for (Workflow_Step_Execution__c exec : execs) {

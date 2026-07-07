@@ -1121,6 +1121,21 @@ public inherited sharing class StepContext {
    * @return True if the patch is active/enabled for this instance, else false.
    */
   public Boolean patched(String changeId) {
+    return patched(changeId, null);
+  }
+
+  /**
+   * Evaluates if a specific named change marker (patch) is active for this instance,
+   * using an optional introduction date to safely handle future redeployments of the class.
+   *
+   * @param changeId The unique developer-supplied name for the patch/change.
+   * @param introducedAt Optional DateTime representing when the patch was introduced.
+   *                     If provided, any instance created before this date defaults to false,
+   *                     while instances created after default to true. This avoids regression
+   *                     risks when the class is redeployed for unrelated edits later.
+   * @return True if the patch is active/enabled for this instance, else false.
+   */
+  public Boolean patched(String changeId, DateTime introducedAt) {
     if (String.isBlank(changeId)) {
       return false;
     }
@@ -1143,24 +1158,28 @@ public inherited sharing class StepContext {
     if (completedStepsCache.contains(this.stepName + ':' + this.stepVisit)) {
       // The current step visit has already completed in the past, meaning this is a retry/re-execution of a completed step.
       decision = false;
-    } else if (
-      instanceCreatedDate != null &&
-      classLastModified != null &&
-      instanceCreatedDate < classLastModified
-    ) {
-      // The instance was created BEFORE the latest deployment of the calling class.
-      // This is an in-flight legacy instance that predates this code version, so default to false (legacy).
-      decision = false;
-    } else if (
-      !completedStepsCache.isEmpty() &&
-      (instanceCreatedDate == null ||
-      classLastModified == null)
-    ) {
-      // Fallback: if we couldn't resolve dates but there are completed steps in the past, default to false.
-      decision = false;
     } else {
-      // No steps have completed, or the instance was created after the deployment, so default to true.
-      decision = true;
+      DateTime comparisonDate = introducedAt != null
+        ? introducedAt
+        : classLastModified;
+      if (
+        instanceCreatedDate != null &&
+        comparisonDate != null &&
+        instanceCreatedDate < comparisonDate
+      ) {
+        // The instance was created BEFORE the patch was introduced (or before the latest class deployment).
+        decision = false;
+      } else if (
+        !completedStepsCache.isEmpty() &&
+        (instanceCreatedDate == null ||
+        comparisonDate == null)
+      ) {
+        // Fallback: if we couldn't resolve dates but there are completed steps in the past, default to false.
+        decision = false;
+      } else {
+        // Default to true for brand-new instances.
+        decision = true;
+      }
     }
 
     capturedValues.put(key, decision);
@@ -1178,7 +1197,18 @@ public inherited sharing class StepContext {
    * @param changeId The unique developer-supplied name for the patch/change.
    */
   public void deprecated(String changeId) {
-    if (!patched(changeId)) {
+    deprecated(changeId, null);
+  }
+
+  /**
+   * Asserts that a named change marker (patch) has been retired/deprecated,
+   * using an optional introduction date to safely handle future redeployments of the class.
+   *
+   * @param changeId The unique developer-supplied name for the patch/change.
+   * @param introducedAt Optional DateTime representing when the patch was introduced.
+   */
+  public void deprecated(String changeId, DateTime introducedAt) {
+    if (!patched(changeId, introducedAt)) {
       throw new WorkflowEngine.WorkflowException(
         'Workflow execution reached retired code path for patch: ' + changeId
       );

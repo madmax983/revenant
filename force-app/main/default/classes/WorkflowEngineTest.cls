@@ -9543,4 +9543,48 @@ public class WorkflowEngineTest {
       'Adoption count should find offloaded legacy instance'
     );
   }
+
+  @isTest
+  static void testGetPatchAdoptionCountThrowsExceptionWhenCapped() {
+    WorkflowEngine.adoptionQueryLimit = 1;
+    try {
+      Workflow_Instance__c inst1 = new Workflow_Instance__c(
+        Workflow_Name__c = 'TestWorkflow',
+        Status__c = 'Running',
+        Correlation_Key__c = 'CappedKey1'
+      );
+      Workflow_Instance__c inst2 = new Workflow_Instance__c(
+        Workflow_Name__c = 'TestWorkflow',
+        Status__c = 'Running',
+        Correlation_Key__c = 'CappedKey2'
+      );
+      insert new List<Workflow_Instance__c>{ inst1, inst2 };
+
+      insert new List<Workflow_Step_Execution__c>{
+        new Workflow_Step_Execution__c(
+          Workflow_Instance__c = inst1.Id,
+          Step_Name__c = 'StepB',
+          Status__c = 'Completed',
+          Captured_Values__c = '{"__patch:change-capped":false}'
+        ),
+        new Workflow_Step_Execution__c(
+          Workflow_Instance__c = inst2.Id,
+          Step_Name__c = 'StepB',
+          Status__c = 'Completed',
+          Captured_Values__c = '{"__patch:change-capped":false}'
+        )
+      };
+
+      try {
+        WorkflowEngine.getPatchAdoptionCount('change-capped');
+        System.assert(false, 'Should throw exception when query is capped');
+      } catch (WorkflowEngine.WorkflowException e) {
+        System.assert(
+          e.getMessage().contains('Active executions exceed query limit')
+        );
+      }
+    } finally {
+      WorkflowEngine.adoptionQueryLimit = 45000;
+    }
+  }
 }
