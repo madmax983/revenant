@@ -229,4 +229,46 @@ public class PatchExampleWorkflowTest {
       'Expected retired patch message, got: ' + inst.Error_Message__c
     );
   }
+
+  @isTest
+  static void testGetPatchAdoptionCountForUnreachedLegacyInstance() {
+    DateTime introducedAt = DateTime.newInstance(2026, 1, 2);
+
+    try {
+      // Create a mock active instance via JSON deserialization to set CreatedDate (Day 1: 2026-01-01)
+      Id dummyId = '00D000000000001EAA';
+      String instanceJson =
+        '{"attributes":{"type":"Workflow_Instance__c"},"Id":"' +
+        dummyId +
+        '","Workflow_Name__c":"PatchExampleWorkflow.PatchSagaWorkflow","Status__c":"Running","CreatedDate":"2026-01-01T00:00:00.000Z"}';
+      Workflow_Instance__c mockInst = (Workflow_Instance__c) JSON.deserialize(
+        instanceJson,
+        Workflow_Instance__c.class
+      );
+      WorkflowEngine.mockInstancesForAdoption = new List<Workflow_Instance__c>{
+        mockInst
+      };
+
+      // Since its CreatedDate < introducedAt, it will evaluate to false when it reaches it.
+      // So getPatchAdoptionCount with introducedAt should count it as 1!
+      Integer count = WorkflowEngine.getPatchAdoptionCount(
+        'PatchExampleWorkflow.PatchSagaWorkflow',
+        'insert-flight',
+        introducedAt
+      );
+      System.assertEquals(1, count, 'Should count unreached legacy instance');
+
+      // Without introducedAt, it doesn't know the introduction date, so it returns 0 (no decision recorded yet)
+      Integer countNoDate = WorkflowEngine.getPatchAdoptionCount(
+        'insert-flight'
+      );
+      System.assertEquals(
+        0,
+        countNoDate,
+        'Should return 0 without introduction date if not reached'
+      );
+    } finally {
+      WorkflowEngine.mockInstancesForAdoption = null;
+    }
+  }
 }

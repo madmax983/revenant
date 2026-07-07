@@ -7916,6 +7916,8 @@ public inherited sharing class WorkflowEngine {
 
   @TestVisible
   private static Integer adoptionQueryLimit = 45000;
+  @TestVisible
+  private static List<Workflow_Instance__c> mockInstancesForAdoption;
 
   /**
    * Returns the count of non-terminal workflow instances that have recorded
@@ -7925,6 +7927,40 @@ public inherited sharing class WorkflowEngine {
    * @return The number of active instances pinning the old branch.
    */
   public static Integer getPatchAdoptionCount(String changeId) {
+    return getPatchAdoptionCount(null, changeId, null);
+  }
+
+  /**
+   * Returns the count of non-terminal workflow instances that have recorded
+   * a decision of 'false' for the given changeId, using an optional introduction date
+   * to count legacy instances that have not yet reached the patch check.
+   *
+   * @param changeId The unique name of the patch.
+   * @param introducedAt Optional DateTime representing when the patch was introduced.
+   * @return The number of active instances pinning the old branch.
+   */
+  public static Integer getPatchAdoptionCount(
+    String changeId,
+    DateTime introducedAt
+  ) {
+    return getPatchAdoptionCount(null, changeId, introducedAt);
+  }
+
+  /**
+   * Returns the count of non-terminal workflow instances that have recorded
+   * a decision of 'false' for the given changeId, scoped to a specific workflow name
+   * and using an optional introduction date.
+   *
+   * @param workflowName Optional name of the workflow to scope active scans to.
+   * @param changeId The unique name of the patch.
+   * @param introducedAt Optional DateTime representing when the patch was introduced.
+   * @return The number of active instances pinning the old branch.
+   */
+  public static Integer getPatchAdoptionCount(
+    String workflowName,
+    String changeId,
+    DateTime introducedAt
+  ) {
     if (String.isBlank(changeId)) {
       return 0;
     }
@@ -7932,63 +7968,121 @@ public inherited sharing class WorkflowEngine {
     String targetPattern = '"' + key + '":false';
     Integer queryLimit = adoptionQueryLimit;
 
-    // Query step executions for non-terminal (active) instances.
-    // Captured_Values__c is a Long Text Area field and cannot be filtered in SOQL.
-    // Add LIMIT 45000 as a governor limit guardrail.
-    List<Workflow_Step_Execution__c> execs = [
-      SELECT Workflow_Instance__c, Captured_Values__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__r.Status__c NOT IN (
-          'Completed',
-          'Failed',
-          'Compensated',
-          'CompensationFailed',
-          'Cancelled',
-          'ContinuedAsNew'
-        )
-      WITH SYSTEM_MODE
-      LIMIT :queryLimit
-    ];
+    // 1. Query all active (non-terminal) workflow instances directly
+    List<Workflow_Instance__c> instances;
+    if (Test.isRunningTest() && mockInstancesForAdoption != null) {
+      instances = mockInstancesForAdoption;
+    } else {
+      instances = [
+        SELECT Id, Workflow_Name__c, CreatedDate
+        FROM Workflow_Instance__c
+        WHERE
+          Status__c NOT IN (
+            'Completed',
+            'Failed',
+            'Compensated',
+            'CompensationFailed',
+            'Cancelled',
+            'ContinuedAsNew'
+          )
+        WITH SYSTEM_MODE
+        LIMIT :queryLimit
+      ];
+    }
 
-    if (execs.size() >= queryLimit) {
+    if (instances.size() >= queryLimit) {
       throw new WorkflowException(
-        'Active executions exceed query limit (' +
+        'Active instances exceed query limit (' +
           queryLimit +
           ' rows). Adoption count cannot be computed reliably.'
       );
     }
 
-    List<String> rawCaptures = new List<String>();
-    for (Workflow_Step_Execution__c exec : execs) {
-      rawCaptures.add(exec.Captured_Values__c);
-    }
-    List<String> resolvedCaptures = resolvePayloads(rawCaptures);
+    // 2. Query step executions for these active instances
+    List<Workflow_Step_Execution__c> execs = [
+      SELECT
+        Workflow_Instance__c,
+        Captured_Values__c,
+        Workflow_Instance__r.Workflow_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :instances
+      WITH SYSTEM_MODE
+    ];
 
-    Set<Id> instancesWithFalse = new Set<Id>();
-    for (Integer i = 0; i < execs.size(); i++) {
-      Workflow_Step_Execution__c exec = execs[i];
-      String capturesJson = resolvedCaptures[i];
-      if (String.isBlank(capturesJson)) {
-        continue;
+    // Process offloaded payloads in small batches to stay under Apex Heap Limits (synchronous cap is 6 MB)
+    Integer batchSize = 40;
+    List<String> resolvedCaptures = new List<String>();
+    for (Integer i = 0; i < execs.size(); i += batchSize) {
+      List<String> batchRaw = new List<String>();
+      for (Integer j = i; j < i + batchSize && j < execs.size(); j++) {
+        batchRaw.add(execs[j].Captured_Values__c);
       }
-      if (!capturesJson.contains(key)) {
-        continue;
-      }
-      if (!capturesJson.contains(targetPattern)) {
-        continue;
-      }
-      try {
-        Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
-          capturesJson
-        );
-        if (captures.containsKey(key) && captures.get(key) == false) {
-          instancesWithFalse.add(exec.Workflow_Instance__c);
+      resolvedCaptures.addAll(resolvePayloads(batchRaw));
+    }
+
+    // 3. Identify which workflows check this patch
+    Set<String> targetWorkflows = new Set<String>();
+    if (String.isNotBlank(workflowName)) {
+      targetWorkflows.add(workflowName);
+    } else {
+      for (Integer i = 0; i < execs.size(); i++) {
+        String capturesJson = resolvedCaptures[i];
+        if (String.isNotBlank(capturesJson) && capturesJson.contains(key)) {
+          targetWorkflows.add(execs[i].Workflow_Instance__r.Workflow_Name__c);
         }
-      } catch (Exception e) {
-        // Ignore malformed JSON
       }
     }
+
+    // Group executions by instance ID for lookup
+    Map<Id, List<String>> capturesByInstanceId = new Map<Id, List<String>>();
+    for (Integer i = 0; i < execs.size(); i++) {
+      Id instId = execs[i].Workflow_Instance__c;
+      if (!capturesByInstanceId.containsKey(instId)) {
+        capturesByInstanceId.put(instId, new List<String>());
+      }
+      capturesByInstanceId.get(instId).add(resolvedCaptures[i]);
+    }
+
+    // 4. Count instances pinning the legacy branch
+    Set<Id> instancesWithFalse = new Set<Id>();
+    for (Workflow_Instance__c inst : instances) {
+      String wflow = inst.Workflow_Name__c;
+      if (!targetWorkflows.contains(wflow)) {
+        continue;
+      }
+
+      if (introducedAt != null && inst.CreatedDate < introducedAt) {
+        // Active instance of a target workflow created before patch introduction
+        instancesWithFalse.add(inst.Id);
+        continue;
+      }
+
+      // Check step execution captures for explicit false decision
+      List<String> instCaptures = capturesByInstanceId.get(inst.Id);
+      if (instCaptures == null) {
+        continue;
+      }
+      for (String capturesJson : instCaptures) {
+        if (String.isBlank(capturesJson)) {
+          continue;
+        }
+        if (!capturesJson.contains(targetPattern)) {
+          continue;
+        }
+        try {
+          Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
+            capturesJson
+          );
+          if (captures.containsKey(key) && captures.get(key) == false) {
+            instancesWithFalse.add(inst.Id);
+            break; // found, check next instance
+          }
+        } catch (Exception e) {
+          // Ignore malformed JSON
+        }
+      }
+    }
+
     return instancesWithFalse.size();
   }
 

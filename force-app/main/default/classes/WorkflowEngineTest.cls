@@ -9580,7 +9580,7 @@ public class WorkflowEngineTest {
         System.assert(false, 'Should throw exception when query is capped');
       } catch (WorkflowEngine.WorkflowException e) {
         System.assert(
-          e.getMessage().contains('Active executions exceed query limit')
+          e.getMessage().contains('Active instances exceed query limit')
         );
       }
     } finally {
