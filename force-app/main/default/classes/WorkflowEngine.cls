@@ -7914,6 +7914,175 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  @TestVisible
+  private static Integer adoptionQueryLimit = 45000;
+  @TestVisible
+  private static List<Workflow_Instance__c> mockInstancesForAdoption;
+
+  /**
+   * Returns the count of non-terminal workflow instances that have recorded
+   * a decision of 'false' for the given changeId.
+   *
+   * @param changeId The unique name of the patch.
+   * @return The number of active instances pinning the old branch.
+   */
+  public static Integer getPatchAdoptionCount(String changeId) {
+    return getPatchAdoptionCount(null, changeId, null);
+  }
+
+  /**
+   * Returns the count of non-terminal workflow instances that have recorded
+   * a decision of 'false' for the given changeId, using an optional introduction date
+   * to count legacy instances that have not yet reached the patch check.
+   *
+   * @param changeId The unique name of the patch.
+   * @param introducedAt Optional DateTime representing when the patch was introduced.
+   * @return The number of active instances pinning the old branch.
+   */
+  public static Integer getPatchAdoptionCount(
+    String changeId,
+    DateTime introducedAt
+  ) {
+    return getPatchAdoptionCount(null, changeId, introducedAt);
+  }
+
+  /**
+   * Returns the count of non-terminal workflow instances that have recorded
+   * a decision of 'false' for the given changeId, scoped to a specific workflow name
+   * and using an optional introduction date.
+   *
+   * @param workflowName Optional name of the workflow to scope active scans to.
+   * @param changeId The unique name of the patch.
+   * @param introducedAt Optional DateTime representing when the patch was introduced.
+   * @return The number of active instances pinning the old branch.
+   */
+  public static Integer getPatchAdoptionCount(
+    String workflowName,
+    String changeId,
+    DateTime introducedAt
+  ) {
+    if (String.isBlank(changeId)) {
+      return 0;
+    }
+    String key = '__patch:' + changeId;
+    String targetPattern = '"' + key + '":false';
+    Integer queryLimit = adoptionQueryLimit;
+
+    // 1. Query all active (non-terminal) workflow instances directly
+    List<Workflow_Instance__c> instances;
+    if (Test.isRunningTest() && mockInstancesForAdoption != null) {
+      instances = mockInstancesForAdoption;
+    } else if (String.isNotBlank(workflowName)) {
+      instances = [
+        SELECT Id, Workflow_Name__c, CreatedDate
+        FROM Workflow_Instance__c
+        WHERE Status__c IN :ACTIVE_STATUSES AND Workflow_Name__c = :workflowName
+        WITH SYSTEM_MODE
+        LIMIT :queryLimit
+      ];
+    } else {
+      instances = [
+        SELECT Id, Workflow_Name__c, CreatedDate
+        FROM Workflow_Instance__c
+        WHERE Status__c IN :ACTIVE_STATUSES
+        WITH SYSTEM_MODE
+        LIMIT :queryLimit
+      ];
+    }
+
+    if (instances.size() >= queryLimit) {
+      throw new WorkflowException(
+        'Active instances exceed query limit (' +
+          queryLimit +
+          ' rows). Adoption count cannot be computed reliably.'
+      );
+    }
+
+    Set<String> targetWorkflows = new Set<String>();
+    if (String.isNotBlank(workflowName)) {
+      targetWorkflows.add(workflowName);
+    }
+
+    Set<Id> instancesWithExplicitFalse = new Set<Id>();
+
+    // 2. Query step executions in batches of 1,000 instances to stay under 50k SOQL row limits
+    Integer instanceBatchSize = 1000;
+    for (Integer i = 0; i < instances.size(); i += instanceBatchSize) {
+      List<Workflow_Instance__c> batchInstances = new List<Workflow_Instance__c>();
+      for (
+        Integer j = i; j < i + instanceBatchSize && j < instances.size(); j++
+      ) {
+        batchInstances.add(instances[j]);
+      }
+
+      List<Workflow_Step_Execution__c> execs = [
+        SELECT
+          Workflow_Instance__c,
+          Captured_Values__c,
+          Workflow_Instance__r.Workflow_Name__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c IN :batchInstances
+        WITH SYSTEM_MODE
+      ];
+
+      // Process offloaded payloads in small batches of 40 to stay under Apex Heap Limits (synchronous cap is 6 MB)
+      Integer offloadBatchSize = 40;
+      List<String> resolvedCaptures = new List<String>();
+      for (Integer k = 0; k < execs.size(); k += offloadBatchSize) {
+        List<String> batchRaw = new List<String>();
+        for (Integer m = k; m < k + offloadBatchSize && m < execs.size(); m++) {
+          batchRaw.add(execs[m].Captured_Values__c);
+        }
+        resolvedCaptures.addAll(resolvePayloads(batchRaw));
+      }
+
+      for (Integer k = 0; k < execs.size(); k++) {
+        Workflow_Step_Execution__c exec = execs[k];
+        String capturesJson = resolvedCaptures[k];
+        if (String.isBlank(capturesJson)) {
+          continue;
+        }
+
+        if (capturesJson.contains(key)) {
+          try {
+            Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
+              capturesJson
+            );
+            if (captures.containsKey(key)) {
+              targetWorkflows.add(exec.Workflow_Instance__r.Workflow_Name__c);
+              if (captures.get(key) == false) {
+                instancesWithExplicitFalse.add(exec.Workflow_Instance__c);
+              }
+            }
+          } catch (Exception e) {
+            // Ignore malformed JSON
+          }
+        }
+      }
+    }
+
+    // 3. Count instances pinning the legacy branch
+    Set<Id> instancesWithFalse = new Set<Id>();
+    for (Workflow_Instance__c inst : instances) {
+      String wflow = inst.Workflow_Name__c;
+      if (!targetWorkflows.contains(wflow)) {
+        continue;
+      }
+
+      if (introducedAt != null && inst.CreatedDate < introducedAt) {
+        // Active instance of a target workflow created before patch introduction
+        instancesWithFalse.add(inst.Id);
+        continue;
+      }
+
+      if (instancesWithExplicitFalse.contains(inst.Id)) {
+        instancesWithFalse.add(inst.Id);
+      }
+    }
+
+    return instancesWithFalse.size();
+  }
+
   /**
    * Builds the Error_Message for a stalled ("rollback incomplete") saga, preserving
    * the cancel-driven phase marker when applicable. The resume paths (resumeCompensation,

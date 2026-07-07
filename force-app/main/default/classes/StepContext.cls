@@ -246,6 +246,18 @@ public inherited sharing class StepContext {
   private Map<String, Object> capturedValues = new Map<String, Object>();
   private Set<String> newCaptureKeys = new Set<String>();
 
+  // Named change marker (patch) state (issue #130)
+  private Map<String, Boolean> patchDecisionsCache = new Map<String, Boolean>();
+  private Set<String> completedStepsCache = new Set<String>();
+  private Boolean hasLoadedExecutions = false;
+  private DateTime instanceCreatedDate = null;
+  private DateTime classLastModified = null;
+
+  @TestVisible
+  private static DateTime mockInstanceCreatedDate = null;
+  @TestVisible
+  private static DateTime mockClassLastModified = null;
+
   // Outbound domain events buffered via emit() during this execution (issue
   // #64). The engine publishes them effectively-once, coupled to the step's
   // COMPLETE/SPLIT transition commit; they are discarded (never published) on a
@@ -1090,6 +1102,285 @@ public inherited sharing class StepContext {
     capturedValues.put(key, normalized);
     newCaptureKeys.add(key);
     return defensiveCopy(normalized);
+  }
+
+  /**
+   * Evaluates if a specific named change marker (patch) is active for this instance.
+   *
+   * The first time a given (instance, changeId) decision is reached, the result
+   * reflects the currently-deployed code's intent (new behavior = true); that
+   * decision is recorded once and returns the identical value on every subsequent
+   * re-execution of that step (retry, yield/resume, at-least-once event resume,
+   * operator re-drive) — same capture-once durability contract as once().
+   *
+   * An instance that already executed past the point where a marker is later
+   * introduced is never retroactively flipped: its recorded patch decisions are
+   * immutable, so resuming it cannot change a branch it already took.
+   *
+   * @param changeId The unique developer-supplied name for the patch/change.
+   * @return True if the patch is active/enabled for this instance, else false.
+   */
+  public Boolean patched(String changeId) {
+    return patched(changeId, null);
+  }
+
+  /**
+   * Evaluates if a specific named change marker (patch) is active for this instance,
+   * using an optional introduction date to safely handle future redeployments of the class.
+   *
+   * @param changeId The unique developer-supplied name for the patch/change.
+   * @param introducedAt Optional DateTime representing when the patch was introduced.
+   *                     If provided, any instance created before this date defaults to false,
+   *                     while instances created after default to true. This avoids regression
+   *                     risks when the class is redeployed for unrelated edits later.
+   * @return True if the patch is active/enabled for this instance, else false.
+   */
+  public Boolean patched(String changeId, DateTime introducedAt) {
+    if (String.isBlank(changeId)) {
+      return false;
+    }
+    String key = '__patch:' + changeId;
+    if (capturedValues.containsKey(key)) {
+      return (Boolean) capturedValues.get(key);
+    }
+
+    // Check if any other step in this instance has already recorded a decision for this changeId.
+    loadExecutions(getCallingClassName());
+    if (patchDecisionsCache.containsKey(changeId)) {
+      Boolean decision = patchDecisionsCache.get(changeId);
+      capturedValues.put(key, decision);
+      newCaptureKeys.add(key);
+      return decision;
+    }
+
+    // No decision has been recorded yet. This is the first time the decision is reached in this instance!
+    Boolean decision;
+    if (completedStepsCache.contains(this.stepName + ':' + this.stepVisit)) {
+      // The current step visit has already completed in the past, meaning this is a retry/re-execution of a completed step.
+      decision = false;
+    } else {
+      DateTime comparisonDate = introducedAt != null
+        ? introducedAt
+        : classLastModified;
+      if (
+        instanceCreatedDate != null &&
+        comparisonDate != null &&
+        instanceCreatedDate < comparisonDate
+      ) {
+        // The instance was created BEFORE the patch was introduced (or before the latest class deployment).
+        decision = false;
+      } else if (
+        !completedStepsCache.isEmpty() &&
+        (instanceCreatedDate == null ||
+        comparisonDate == null)
+      ) {
+        // Fallback: if we couldn't resolve dates but there are completed steps in the past, default to false.
+        decision = false;
+      } else {
+        // Default to true for brand-new instances.
+        decision = true;
+      }
+    }
+
+    capturedValues.put(key, decision);
+    newCaptureKeys.add(key);
+    return decision;
+  }
+
+  /**
+   * Asserts that a named change marker (patch) has been retired/deprecated.
+   *
+   * If this instance is still expecting the old branch (i.e. patched(changeId) == false),
+   * reaching this marker throws a distinguishable WorkflowException to prevent silently
+   * running the wrong path.
+   *
+   * @param changeId The unique developer-supplied name for the patch/change.
+   */
+  public void deprecated(String changeId) {
+    deprecated(changeId, null);
+  }
+
+  /**
+   * Asserts that a named change marker (patch) has been retired/deprecated,
+   * using an optional introduction date to safely handle future redeployments of the class.
+   *
+   * @param changeId The unique developer-supplied name for the patch/change.
+   * @param introducedAt Optional DateTime representing when the patch was introduced.
+   */
+  public void deprecated(String changeId, DateTime introducedAt) {
+    if (!patched(changeId, introducedAt)) {
+      throw new WorkflowEngine.WorkflowException(
+        'Workflow execution reached retired code path for patch: ' + changeId
+      );
+    }
+  }
+
+  private void loadExecutions(String targetClassName) {
+    if (hasLoadedExecutions || this.workflowInstanceId == null) {
+      return;
+    }
+    // 1. Get the first and last execution ID for every step name in the workflow
+    List<AggregateResult> aggregates = [
+      SELECT Step_Name__c, MIN(Id) minId, MAX(Id) maxId
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :this.workflowInstanceId
+      WITH SYSTEM_MODE
+      GROUP BY Step_Name__c
+    ];
+
+    Set<Id> targetIds = new Set<Id>();
+
+    for (AggregateResult ar : aggregates) {
+      String stepName = (String) ar.get('Step_Name__c');
+      if (stepName == this.stepName) {
+        // Current step name is queried separately below to ensure correct visit counts
+        continue;
+      }
+      Id minId = (Id) ar.get('minId');
+      Id maxId = (Id) ar.get('maxId');
+      if (minId != null) {
+        targetIds.add(minId);
+      }
+      if (maxId != null) {
+        targetIds.add(maxId);
+      }
+    }
+
+    // 2. Query executions of the current step name, bounded by stepVisit + 2
+    Integer currentStepLimit = this.stepVisit + 2;
+    List<Workflow_Step_Execution__c> currentExecs = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :this.workflowInstanceId
+        AND Step_Name__c = :this.stepName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate ASC, Id ASC
+      LIMIT :currentStepLimit
+    ];
+    for (Workflow_Step_Execution__c e : currentExecs) {
+      targetIds.add(e.Id);
+    }
+
+    // 3. Query the final sorted list of step executions by ID
+    List<Workflow_Step_Execution__c> executions = new List<Workflow_Step_Execution__c>();
+    if (!targetIds.isEmpty()) {
+      executions = [
+        SELECT
+          Step_Name__c,
+          Status__c,
+          Captured_Values__c,
+          Workflow_Instance__r.CreatedDate
+        FROM Workflow_Step_Execution__c
+        WHERE Id IN :targetIds
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate ASC, Id ASC
+      ];
+    }
+
+    if (Test.isRunningTest() && mockInstanceCreatedDate != null) {
+      this.instanceCreatedDate = mockInstanceCreatedDate;
+    } else if (!executions.isEmpty()) {
+      this.instanceCreatedDate = executions[0].Workflow_Instance__r.CreatedDate;
+    } else {
+      List<Workflow_Instance__c> instances = [
+        SELECT CreatedDate
+        FROM Workflow_Instance__c
+        WHERE Id = :this.workflowInstanceId
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      if (!instances.isEmpty()) {
+        this.instanceCreatedDate = instances[0].CreatedDate;
+      }
+    }
+
+    if (Test.isRunningTest() && mockClassLastModified != null) {
+      this.classLastModified = mockClassLastModified;
+    } else {
+      List<ApexClass> classes = [
+        SELECT LastModifiedDate
+        FROM ApexClass
+        WHERE Name = :targetClassName
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      if (!classes.isEmpty()) {
+        this.classLastModified = classes[0].LastModifiedDate;
+      }
+    }
+
+    List<String> rawCaptures = new List<String>();
+    for (Workflow_Step_Execution__c exec : executions) {
+      rawCaptures.add(exec.Captured_Values__c);
+    }
+
+    // Resolve offloaded payloads in small batches to stay under Apex Heap Limits (synchronous cap is 6 MB)
+    Integer batchSize = 40;
+    List<String> resolvedCaptures = new List<String>();
+    for (Integer i = 0; i < rawCaptures.size(); i += batchSize) {
+      List<String> batchRaw = new List<String>();
+      for (Integer j = i; j < i + batchSize && j < rawCaptures.size(); j++) {
+        batchRaw.add(rawCaptures[j]);
+      }
+      resolvedCaptures.addAll(WorkflowEngine.resolvePayloads(batchRaw));
+    }
+
+    Map<String, Integer> completedCounts = new Map<String, Integer>();
+    for (Integer i = 0; i < executions.size(); i++) {
+      Workflow_Step_Execution__c exec = executions[i];
+      if (
+        exec.Status__c == 'Completed' ||
+        exec.Status__c == 'OperatorSkipped'
+      ) {
+        Integer visit = completedCounts.containsKey(exec.Step_Name__c)
+          ? completedCounts.get(exec.Step_Name__c)
+          : 0;
+        completedStepsCache.add(exec.Step_Name__c + ':' + visit);
+        completedCounts.put(exec.Step_Name__c, visit + 1);
+      }
+
+      String capturesJson = resolvedCaptures[i];
+      if (String.isBlank(capturesJson)) {
+        continue;
+      }
+      if (!capturesJson.contains('__patch:')) {
+        continue;
+      }
+
+      try {
+        Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
+          capturesJson
+        );
+        for (String k : captures.keySet()) {
+          if (k.startsWith('__patch:')) {
+            String changeId = k.substring(8);
+            patchDecisionsCache.put(changeId, (Boolean) captures.get(k));
+          }
+        }
+      } catch (Exception e) {
+        // Ignore malformed JSON
+      }
+    }
+    hasLoadedExecutions = true;
+  }
+
+  private String getCallingClassName() {
+    String trace = new DmlException().getStackTraceString();
+    List<String> lines = trace.split('\n');
+    for (String line : lines) {
+      String trimmed = line.trim();
+      if (
+        trimmed.startsWith('Class.') && !trimmed.contains('Class.StepContext.')
+      ) {
+        String classAndMethod = trimmed.substring(6);
+        return classAndMethod.substringBefore('.');
+      }
+    }
+    // Fallback: use outer class of stepName or workflowName
+    return this.stepName != null
+      ? this.stepName.substringBefore('.')
+      : this.workflowName.substringBefore('.');
   }
 
   /**

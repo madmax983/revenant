@@ -9451,4 +9451,198 @@ public class WorkflowEngineTest {
     );
     System.assertEquals(1, (Integer) routedStepContextData.get('attemptCount'));
   }
+
+  @isTest
+  static void testGetPatchAdoptionCount() {
+    // 1. Create a non-terminal instance (Running)
+    Workflow_Instance__c inst1 = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'AdoptKey1'
+    );
+    insert inst1;
+
+    // 2. Create another non-terminal instance (Suspended)
+    Workflow_Instance__c inst2 = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestWorkflow',
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'AdoptKey2'
+    );
+    insert inst2;
+
+    // 3. Create a terminal instance (Completed)
+    Workflow_Instance__c inst3 = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestWorkflow',
+      Status__c = 'Completed',
+      Correlation_Key__c = 'AdoptKey3'
+    );
+    insert inst3;
+
+    // 4. Create step executions with patch decisions
+    // inst1: recorded __patch:change-1 = false
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst1.Id,
+      Step_Name__c = 'StepB',
+      Status__c = 'Completed',
+      Captured_Values__c = '{"__patch:change-1":false}'
+    );
+
+    // inst2: recorded __patch:change-1 = true
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst2.Id,
+      Step_Name__c = 'StepB',
+      Status__c = 'Completed',
+      Captured_Values__c = '{"__patch:change-1":true}'
+    );
+
+    // inst3: recorded __patch:change-1 = false (but it's Completed, a terminal status)
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst3.Id,
+      Step_Name__c = 'StepB',
+      Status__c = 'Completed',
+      Captured_Values__c = '{"__patch:change-1":false}'
+    );
+
+    // Query adoption: only inst1 is non-terminal AND has __patch:change-1 = false.
+    // So the count should be exactly 1.
+    Integer count = WorkflowEngine.getPatchAdoptionCount('change-1');
+    System.assertEquals(1, count, 'Adoption count should be 1');
+  }
+
+  @isTest
+  static void testGetPatchAdoptionCountOffloaded() {
+    // 1. Create a non-terminal instance
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'AdoptKeyOffloaded'
+    );
+    insert inst;
+
+    // 2. Save patch decision to ContentVersion (offloaded payload)
+    String capturesJson = '{"__patch:change-offload":false}';
+    String marker = WorkflowEngine.savePayloadIfNeeded(
+      inst.Id,
+      capturesJson,
+      'CapturedValues'
+    );
+
+    // 3. Create a step execution with the offloaded marker
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'StepB',
+      Status__c = 'Completed',
+      Captured_Values__c = marker
+    );
+
+    // 4. Query adoption: it should resolve the offloaded payload and count it as 1!
+    Integer count = WorkflowEngine.getPatchAdoptionCount('change-offload');
+    System.assertEquals(
+      1,
+      count,
+      'Adoption count should find offloaded legacy instance'
+    );
+  }
+
+  @isTest
+  static void testGetPatchAdoptionCountThrowsExceptionWhenCapped() {
+    WorkflowEngine.adoptionQueryLimit = 1;
+    try {
+      Workflow_Instance__c inst1 = new Workflow_Instance__c(
+        Workflow_Name__c = 'TestWorkflow',
+        Status__c = 'Running',
+        Correlation_Key__c = 'CappedKey1'
+      );
+      Workflow_Instance__c inst2 = new Workflow_Instance__c(
+        Workflow_Name__c = 'TestWorkflow',
+        Status__c = 'Running',
+        Correlation_Key__c = 'CappedKey2'
+      );
+      insert new List<Workflow_Instance__c>{ inst1, inst2 };
+
+      insert new List<Workflow_Step_Execution__c>{
+        new Workflow_Step_Execution__c(
+          Workflow_Instance__c = inst1.Id,
+          Step_Name__c = 'StepB',
+          Status__c = 'Completed',
+          Captured_Values__c = '{"__patch:change-capped":false}'
+        ),
+        new Workflow_Step_Execution__c(
+          Workflow_Instance__c = inst2.Id,
+          Step_Name__c = 'StepB',
+          Status__c = 'Completed',
+          Captured_Values__c = '{"__patch:change-capped":false}'
+        )
+      };
+
+      try {
+        WorkflowEngine.getPatchAdoptionCount('change-capped');
+        System.assert(false, 'Should throw exception when query is capped');
+      } catch (WorkflowEngine.WorkflowException e) {
+        System.assert(
+          e.getMessage().contains('Active instances exceed query limit')
+        );
+      }
+    } finally {
+      WorkflowEngine.adoptionQueryLimit = 45000;
+    }
+  }
+
+  @isTest
+  static void testGetPatchAdoptionCountExactKeyMatching() {
+    DateTime introducedAt = DateTime.newInstance(2026, 1, 2);
+
+    try {
+      // Insert a real parent instance to satisfy database reference checks
+      Workflow_Instance__c realInst = new Workflow_Instance__c(
+        Workflow_Name__c = 'TestWorkflowExact',
+        Status__c = 'Running',
+        Correlation_Key__c = 'ExactKey1'
+      );
+      insert realInst;
+
+      // Create a mock active instance created on Day 1 (before introducedAt) using the real ID
+      String instanceJson =
+        '{"attributes":{"type":"Workflow_Instance__c"},"Id":"' +
+        realInst.Id +
+        '","Workflow_Name__c":"TestWorkflowExact","Status__c":"Running","CreatedDate":"2026-01-01T00:00:00.000Z"}';
+      Workflow_Instance__c mockInst = (Workflow_Instance__c) JSON.deserialize(
+        instanceJson,
+        Workflow_Instance__c.class
+      );
+      WorkflowEngine.mockInstancesForAdoption = new List<Workflow_Instance__c>{
+        mockInst
+      };
+
+      // Create a step execution with a similar patch name (e.g. 'foo-v2' containing 'foo')
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = mockInst.Id,
+        Step_Name__c = 'StepB',
+        Status__c = 'Completed',
+        Captured_Values__c = '{"__patch:foo-v2":false}'
+      );
+
+      // Query adoption count for 'foo' (which this workflow has NOT used exactly!)
+      // Since it only has 'foo-v2', 'foo' adoption count should be 0, not 1!
+      Integer count = WorkflowEngine.getPatchAdoptionCount('foo', introducedAt);
+      System.assertEquals(
+        0,
+        count,
+        'Should not count mockInst as legacy for foo since it only used foo-v2'
+      );
+
+      // If we query for 'foo-v2', it should count it as 1!
+      Integer countV2 = WorkflowEngine.getPatchAdoptionCount(
+        'foo-v2',
+        introducedAt
+      );
+      System.assertEquals(
+        1,
+        countV2,
+        'Should count mockInst as legacy for foo-v2 since it matches exactly'
+      );
+    } finally {
+      WorkflowEngine.mockInstancesForAdoption = null;
+    }
+  }
 }
