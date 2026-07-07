@@ -104,11 +104,60 @@ public class PatchExampleWorkflowTest {
 
   @isTest
   static void testInFlightInstanceWithoutPreRecordedPatchDefaultsToFalse() {
-    // 1. Setup an in-flight instance that completed BookHotel under the old code (no patch recorded).
+    StepContext.mockInstanceCreatedDate = DateTime.newInstance(2026, 1, 1);
+    StepContext.mockClassLastModified = DateTime.newInstance(2026, 1, 2);
+    try {
+      // 1. Setup an in-flight instance that completed BookHotel under the old code (no patch recorded).
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'PatchExampleWorkflow.PatchSagaWorkflow',
+        'InFlightSagaKeyNoDecision',
+        null
+      );
+
+      Workflow_Instance__c inst = [
+        SELECT Status__c, Current_Step__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instanceId
+      ];
+      inst.Current_Step__c = 'PatchExampleWorkflow.BookCar';
+      update inst;
+
+      // Create a completed step execution for BookHotel without any patch captured value
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = instanceId,
+        Step_Name__c = 'PatchExampleWorkflow.BookHotel',
+        Status__c = 'Completed',
+        Captured_Values__c = '{"hotelBooked":true}'
+      );
+
+      // 2. Drive BookCar to completion. Because BookHotel is completed (instance is in-flight),
+      // the patch insert-flight must evaluate to false automatically, even without pre-recording.
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      WorkflowTestHarness.Result result = harness.drive();
+      Test.stopTest();
+
+      System.assertEquals('Completed', result.status);
+      System.assert(result.output.contains('"carBooked":true'));
+      System.assert(
+        result.output.contains('"carType":"Economy Sedan"'),
+        'Should naturally fall back to Economy Sedan because instance was in-flight and did not book flight'
+      );
+    } finally {
+      StepContext.mockInstanceCreatedDate = null;
+      StepContext.mockClassLastModified = null;
+    }
+  }
+
+  @isTest
+  static void testInFlightInstanceNewRunDownstreamPatchDefaultsToTrue() {
+    // Note: Here we do NOT mock dates.
+    // By default, the test-created instance has instanceCreatedDate (now) >= classLastModified (compile time).
+    // So it acts as a brand-new run and the patch defaults to true.
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
       'PatchExampleWorkflow.PatchSagaWorkflow',
-      'InFlightSagaKeyNoDecision',
+      'NewSagaKeyNoDecision',
       null
     );
 
@@ -128,8 +177,6 @@ public class PatchExampleWorkflowTest {
       Captured_Values__c = '{"hotelBooked":true}'
     );
 
-    // 2. Drive BookCar to completion. Because BookHotel is completed (instance is in-flight),
-    // the patch insert-flight must evaluate to false automatically, even without pre-recording.
     WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
     WorkflowTestHarness.Result result = harness.drive();
     Test.stopTest();
@@ -137,8 +184,8 @@ public class PatchExampleWorkflowTest {
     System.assertEquals('Completed', result.status);
     System.assert(result.output.contains('"carBooked":true'));
     System.assert(
-      result.output.contains('"carType":"Economy Sedan"'),
-      'Should naturally fall back to Economy Sedan because instance was in-flight and did not book flight'
+      result.output.contains('"carType":"Luxury SUV"'),
+      'Should default to Luxury SUV because it is a new run and flight patch is active'
     );
   }
 

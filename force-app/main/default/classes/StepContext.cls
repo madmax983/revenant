@@ -250,6 +250,13 @@ public inherited sharing class StepContext {
   private Map<String, Boolean> patchDecisionsCache = new Map<String, Boolean>();
   private Set<String> completedStepsCache = new Set<String>();
   private Boolean hasLoadedExecutions = false;
+  private DateTime instanceCreatedDate = null;
+  private DateTime classLastModified = null;
+
+  @TestVisible
+  private static DateTime mockInstanceCreatedDate = null;
+  @TestVisible
+  private static DateTime mockClassLastModified = null;
 
   // Outbound domain events buffered via emit() during this execution (issue
   // #64). The engine publishes them effectively-once, coupled to the step's
@@ -1136,12 +1143,23 @@ public inherited sharing class StepContext {
     if (completedStepsCache.contains(this.stepName)) {
       // The current step has already completed in the past, meaning this is a retry/re-execution of a completed step.
       decision = false;
-    } else if (!completedStepsCache.isEmpty()) {
-      // The current step is running for the first time, but OTHER steps have completed in the past.
-      // This is an in-flight instance that started before this patch was introduced, so default to false (legacy).
+    } else if (
+      instanceCreatedDate != null &&
+      classLastModified != null &&
+      instanceCreatedDate < classLastModified
+    ) {
+      // The instance was created BEFORE the latest deployment of the class.
+      // This is an in-flight legacy instance that predates this code version, so default to false (legacy).
+      decision = false;
+    } else if (
+      !completedStepsCache.isEmpty() &&
+      (instanceCreatedDate == null ||
+      classLastModified == null)
+    ) {
+      // Fallback: if we couldn't resolve dates but there are completed steps in the past, default to false.
       decision = false;
     } else {
-      // No steps have completed in the past. This is a brand new instance starting fresh, so default to true.
+      // No steps have completed, or the instance was created after the deployment, so default to true.
       decision = true;
     }
 
@@ -1172,11 +1190,49 @@ public inherited sharing class StepContext {
       return;
     }
     List<Workflow_Step_Execution__c> executions = [
-      SELECT Step_Name__c, Status__c, Captured_Values__c
+      SELECT
+        Step_Name__c,
+        Status__c,
+        Captured_Values__c,
+        Workflow_Instance__r.CreatedDate
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c = :this.workflowInstanceId
       WITH SYSTEM_MODE
     ];
+
+    if (Test.isRunningTest() && mockInstanceCreatedDate != null) {
+      this.instanceCreatedDate = mockInstanceCreatedDate;
+    } else if (!executions.isEmpty()) {
+      this.instanceCreatedDate = executions[0].Workflow_Instance__r.CreatedDate;
+    } else {
+      List<Workflow_Instance__c> instances = [
+        SELECT CreatedDate
+        FROM Workflow_Instance__c
+        WHERE Id = :this.workflowInstanceId
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      if (!instances.isEmpty()) {
+        this.instanceCreatedDate = instances[0].CreatedDate;
+      }
+    }
+
+    if (Test.isRunningTest() && mockClassLastModified != null) {
+      this.classLastModified = mockClassLastModified;
+    } else {
+      String outerClassName = this.workflowName.substringBefore('.');
+      List<ApexClass> classes = [
+        SELECT LastModifiedDate
+        FROM ApexClass
+        WHERE Name = :outerClassName
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      if (!classes.isEmpty()) {
+        this.classLastModified = classes[0].LastModifiedDate;
+      }
+    }
+
     for (Workflow_Step_Execution__c exec : executions) {
       if (
         exec.Status__c == 'Completed' ||
@@ -1184,16 +1240,25 @@ public inherited sharing class StepContext {
       ) {
         completedStepsCache.add(exec.Step_Name__c);
       }
-      if (String.isBlank(exec.Captured_Values__c)) {
+
+      String capturesJson = exec.Captured_Values__c;
+      if (String.isBlank(capturesJson)) {
         continue;
       }
-      // Performance optimization: fast substring check before deserializing
-      if (!exec.Captured_Values__c.contains('__patch:')) {
+      Boolean isOffloaded = capturesJson.contains('"$attachmentId"');
+      if (!capturesJson.contains('__patch:') && !isOffloaded) {
         continue;
       }
+      if (isOffloaded) {
+        capturesJson = WorkflowEngine.resolvePayload(capturesJson);
+      }
+      if (String.isBlank(capturesJson) || !capturesJson.contains('__patch:')) {
+        continue;
+      }
+
       try {
         Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
-          exec.Captured_Values__c
+          capturesJson
         );
         for (String k : captures.keySet()) {
           if (k.startsWith('__patch:')) {

@@ -9508,4 +9508,39 @@ public class WorkflowEngineTest {
     Integer count = WorkflowEngine.getPatchAdoptionCount('change-1');
     System.assertEquals(1, count, 'Adoption count should be 1');
   }
+
+  @isTest
+  static void testGetPatchAdoptionCountOffloaded() {
+    // 1. Create a non-terminal instance
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'AdoptKeyOffloaded'
+    );
+    insert inst;
+
+    // 2. Save patch decision to ContentVersion (offloaded payload)
+    String capturesJson = '{"__patch:change-offload":false}';
+    String marker = WorkflowEngine.savePayloadIfNeeded(
+      inst.Id,
+      capturesJson,
+      'CapturedValues'
+    );
+
+    // 3. Create a step execution with the offloaded marker
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'StepB',
+      Status__c = 'Completed',
+      Captured_Values__c = marker
+    );
+
+    // 4. Query adoption: it should resolve the offloaded payload and count it as 1!
+    Integer count = WorkflowEngine.getPatchAdoptionCount('change-offload');
+    System.assertEquals(
+      1,
+      count,
+      'Adoption count should find offloaded legacy instance'
+    );
+  }
 }

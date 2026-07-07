@@ -7950,16 +7950,25 @@ public inherited sharing class WorkflowEngine {
 
     Set<Id> instancesWithFalse = new Set<Id>();
     for (Workflow_Step_Execution__c exec : execs) {
-      if (String.isBlank(exec.Captured_Values__c)) {
+      String capturesJson = exec.Captured_Values__c;
+      if (String.isBlank(capturesJson)) {
         continue;
       }
-      // Performance optimization: fast substring check before deserializing
-      if (!exec.Captured_Values__c.contains(targetPattern)) {
+      Boolean isOffloaded = capturesJson.contains('"$attachmentId"');
+      if (!capturesJson.contains(key) && !isOffloaded) {
+        continue;
+      }
+      if (isOffloaded) {
+        capturesJson = resolvePayload(capturesJson);
+      }
+      if (
+        String.isBlank(capturesJson) || !capturesJson.contains(targetPattern)
+      ) {
         continue;
       }
       try {
         Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
-          exec.Captured_Values__c
+          capturesJson
         );
         if (captures.containsKey(key) && captures.get(key) == false) {
           instancesWithFalse.add(exec.Workflow_Instance__c);

@@ -2248,6 +2248,51 @@ public class StepContextTest {
   }
 
   @isTest
+  static void testPatchedReplayOffloaded() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'TestWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'PatchKeyOffloaded',
+      Current_Step__c = 'TestStep'
+    );
+    insert inst;
+
+    // Save the patch decision JSON to ContentVersion
+    String capturesJson = '{"__patch:change-offloaded":true}';
+    String marker = WorkflowEngine.savePayloadIfNeeded(
+      inst.Id,
+      capturesJson,
+      'CapturedValues'
+    );
+
+    // Insert a completed step execution with the offloaded marker
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'PredecessorStep',
+      Status__c = 'Completed',
+      Captured_Values__c = marker
+    );
+
+    StepContext ctx = new StepContext(
+      inst.Id,
+      'TestWorkflow',
+      'TestStep',
+      null,
+      null,
+      null,
+      null
+    );
+
+    // The offloaded patch decision should be resolved and read successfully as true
+    Boolean isPatched = ctx.patched('change-offloaded');
+    System.assertEquals(
+      true,
+      isPatched,
+      'Should resolve and read offloaded patch decision'
+    );
+  }
+
+  @isTest
   static void testPatchedReExecutionCompletedInPast() {
     // Insert a workflow instance and step execution that completed in the past
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -2297,41 +2342,91 @@ public class StepContextTest {
 
   @isTest
   static void testPatchedDownstreamFirstExecutionLegacy() {
-    // 1. Insert a workflow instance and a completed predecessor step
-    Workflow_Instance__c inst = new Workflow_Instance__c(
-      Workflow_Name__c = 'TestWorkflow',
-      Status__c = 'Running',
-      Correlation_Key__c = 'PatchKey2',
-      Current_Step__c = 'DownstreamStep'
-    );
-    insert inst;
+    StepContext.mockInstanceCreatedDate = DateTime.newInstance(2026, 1, 1);
+    StepContext.mockClassLastModified = DateTime.newInstance(2026, 1, 2);
+    try {
+      // 1. Insert a workflow instance and a completed predecessor step
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'TestWorkflow',
+        Status__c = 'Running',
+        Correlation_Key__c = 'PatchKey2',
+        Current_Step__c = 'DownstreamStep'
+      );
+      insert inst;
 
-    // Completed predecessor step has no patch decision recorded
-    insert new Workflow_Step_Execution__c(
-      Workflow_Instance__c = inst.Id,
-      Step_Name__c = 'PredecessorStep',
-      Status__c = 'Completed',
-      Captured_Values__c = '{"someValue":true}'
-    );
+      // Completed predecessor step has no patch decision recorded
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = 'PredecessorStep',
+        Status__c = 'Completed',
+        Captured_Values__c = '{"someValue":true}'
+      );
 
-    StepContext ctx = new StepContext(
-      inst.Id,
-      'TestWorkflow',
-      'DownstreamStep',
-      null,
-      null,
-      null,
-      null
-    );
+      StepContext ctx = new StepContext(
+        inst.Id,
+        'TestWorkflow',
+        'DownstreamStep',
+        null,
+        null,
+        null,
+        null
+      );
 
-    // DownstreamStep is running for the first time, but because the instance is in-flight
-    // (PredecessorStep completed in past), the patch must default to false (legacy).
-    Boolean isPatched = ctx.patched('change-1');
-    System.assertEquals(
-      false,
-      isPatched,
-      'Downstream step running for first time on legacy instance must default to false'
-    );
+      // DownstreamStep is running for the first time. Since instanceCreatedDate < classLastModified,
+      // it must default to false (legacy).
+      Boolean isPatched = ctx.patched('change-1');
+      System.assertEquals(
+        false,
+        isPatched,
+        'Downstream step running for first time on legacy instance must default to false'
+      );
+    } finally {
+      StepContext.mockInstanceCreatedDate = null;
+      StepContext.mockClassLastModified = null;
+    }
+  }
+
+  @isTest
+  static void testPatchedDownstreamFirstExecutionNewInstance() {
+    StepContext.mockInstanceCreatedDate = DateTime.newInstance(2026, 1, 3);
+    StepContext.mockClassLastModified = DateTime.newInstance(2026, 1, 2);
+    try {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'TestWorkflow',
+        Status__c = 'Running',
+        Correlation_Key__c = 'PatchKey3',
+        Current_Step__c = 'DownstreamStep'
+      );
+      insert inst;
+
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = 'PredecessorStep',
+        Status__c = 'Completed',
+        Captured_Values__c = '{"someValue":true}'
+      );
+
+      StepContext ctx = new StepContext(
+        inst.Id,
+        'TestWorkflow',
+        'DownstreamStep',
+        null,
+        null,
+        null,
+        null
+      );
+
+      // Since instanceCreatedDate >= classLastModified, it is a brand-new instance, so it must default to true!
+      Boolean isPatched = ctx.patched('change-1');
+      System.assertEquals(
+        true,
+        isPatched,
+        'Downstream step running for first time on brand-new instance must default to true'
+      );
+    } finally {
+      StepContext.mockInstanceCreatedDate = null;
+      StepContext.mockClassLastModified = null;
+    }
   }
 
   @isTest
