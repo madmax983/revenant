@@ -1229,6 +1229,7 @@ public inherited sharing class StepContext {
     ];
 
     Set<String> nonLoopingSteps = new Set<String>();
+    Set<String> loopingSteps = new Set<String>();
     Set<Id> targetIds = new Set<Id>();
 
     for (AggregateResult ar : counts) {
@@ -1243,20 +1244,24 @@ public inherited sharing class StepContext {
       if (cnt <= 5) {
         nonLoopingSteps.add(stepName);
       } else {
-        // Looping step: query its first 5 executions
-        List<Workflow_Step_Execution__c> firstExecs = [
-          SELECT Id
-          FROM Workflow_Step_Execution__c
-          WHERE
-            Workflow_Instance__c = :this.workflowInstanceId
-            AND Step_Name__c = :stepName
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate ASC, Id ASC
-          LIMIT 5
-        ];
-        for (Workflow_Step_Execution__c e : firstExecs) {
-          targetIds.add(e.Id);
-        }
+        loopingSteps.add(stepName);
+      }
+    }
+
+    if (!loopingSteps.isEmpty()) {
+      // Query the first 500 executions of all looping steps combined to avoid SOQL in loop
+      List<Workflow_Step_Execution__c> firstExecs = [
+        SELECT Id
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :this.workflowInstanceId
+          AND Step_Name__c IN :loopingSteps
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate ASC, Id ASC
+        LIMIT 500
+      ];
+      for (Workflow_Step_Execution__c e : firstExecs) {
+        targetIds.add(e.Id);
       }
     }
 
