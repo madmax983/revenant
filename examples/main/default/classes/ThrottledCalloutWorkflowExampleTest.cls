@@ -24,6 +24,7 @@ public class ThrottledCalloutWorkflowExampleTest {
 
         // Drive workflow 2
         WorkflowTestHarness harness2 = new WorkflowTestHarness(instId2);
+        harness2.disableAutoTimeSkip = true;
         WorkflowTestHarness.Result res2 = harness2.drive();
         
         // Assert: Throttled instance must suspend with sleep
@@ -43,6 +44,7 @@ public class ThrottledCalloutWorkflowExampleTest {
         update as system state;
 
         // Drive workflow 2 again to resume
+        harness2.disableAutoTimeSkip = false;
         WorkflowTestHarness.Result res2Resume = harness2.drive();
         System.assertEquals('Completed', res2Resume.status, 'Second instance should complete after token refill');
         

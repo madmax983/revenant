@@ -30,12 +30,14 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
         }
     }
 
-    public class ThrottledCalloutStep implements WorkflowStep {
+    public class ThrottledCalloutStep implements WorkflowStep, CalloutStep {
         public StepResult execute(StepContext ctx) {
-            // RED PHASE: Bypasses the rate limiter check and completes immediately.
-            // This will make the test fail because the second workflow instance will complete immediately instead of sleeping.
+            RateLimiter.AcquireResult result = RateLimiter.acquire('ThrottledService');
+            if (result.isAllowed == false) {
+                return StepResult.sleep(result.sleepDurationSeconds);
+            }
             ThrottledCalloutWorkflowExample.performCallout(ctx.idempotencyKey);
-            return StepResult.complete(null, 'Success');
+            return StepResult.complete(null, new Map<String, Object>{'status' => 'Success'});
         }
     }
 }
