@@ -6617,9 +6617,24 @@ public inherited sharing class WorkflowEngine {
     if (String.isBlank(workflowName)) {
       throw new WorkflowException('Workflow name is required.');
     }
+    String parentNamespace = '';
+    if (parentId != null) {
+      List<Workflow_Instance__c> parentInsts = [
+        SELECT Workflow_Name__c
+        FROM Workflow_Instance__c
+        WHERE Id = :parentId
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      if (!parentInsts.isEmpty()) {
+        parentNamespace = WorkflowTypeResolver.extractNamespace(
+          parentInsts[0].Workflow_Name__c
+        );
+      }
+    }
     Type wflowType = WorkflowTypeResolver.resolve(
       workflowName,
-      WorkflowTypeResolver.extractNamespace(workflowName)
+      parentNamespace
     );
     if (wflowType == null) {
       throw new WorkflowException(
@@ -6733,6 +6748,22 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
+    String parentNamespace = '';
+    if (parentId != null) {
+      List<Workflow_Instance__c> parentInsts = [
+        SELECT Workflow_Name__c
+        FROM Workflow_Instance__c
+        WHERE Id = :parentId
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      if (!parentInsts.isEmpty()) {
+        parentNamespace = WorkflowTypeResolver.extractNamespace(
+          parentInsts[0].Workflow_Name__c
+        );
+      }
+    }
+
     Set<String> correlationKeys = new Set<String>();
     for (StepResult.ChildRequest req : requests) {
       validateCorrelationKey(req.correlationKey);
@@ -6743,7 +6774,7 @@ public inherited sharing class WorkflowEngine {
       }
       Type wflowType = WorkflowTypeResolver.resolve(
         req.workflowName,
-        WorkflowTypeResolver.extractNamespace(req.workflowName)
+        parentNamespace
       );
       if (wflowType == null) {
         throw new WorkflowException(
@@ -6809,7 +6840,7 @@ public inherited sharing class WorkflowEngine {
 
       Type wflowType = WorkflowTypeResolver.resolve(
         req.workflowName,
-        WorkflowTypeResolver.extractNamespace(req.workflowName)
+        parentNamespace
       );
       Workflow_Instance__c instance = new Workflow_Instance__c();
       // wflowType is guaranteed non-null by the validation loop above

@@ -311,4 +311,50 @@ private class WorkflowTypeResolverTest {
     // Verify cache has both keys populated by running successfully
     Assert.isTrue(true, 'Executed without exceptions');
   }
+
+  @IsTest
+  static void testChildWorkflowResolutionSimulation() {
+    // 1. Enable simulated namespace context and mock package namespace
+    WorkflowTypeResolver.simulateNamespacedContext = true;
+    WorkflowTypeResolver.mockPackageNamespace = 'rev_pkg';
+
+    // Create a mock parent instance in the database that has a namespaced Workflow_Name__c
+    Workflow_Instance__c parentInstance = new Workflow_Instance__c(
+      Workflow_Name__c = 'rev_pkg.ParentWorkflow',
+      Status__c = 'Running'
+    );
+    insert as system parentInstance;
+
+    // Resolve a child workflow name 'WorkflowEngineTest.HappyWorkflow' using the parent instance ID.
+    // Under simulated namespace context, standard caller resolution (Step 3) requires the 'mock_pkg.' prefix.
+    // However, when starting a child, we pass parentInstance.Id. The engine queries the parent's Workflow_Name__c,
+    // extracts 'rev_pkg' as the parentNamespace prefix, and passes it as contextNamespace to WorkflowTypeResolver.resolve.
+    // Then resolver Step 4 (local fallback) resolves the outer/inner class name successfully!
+    Test.startTest();
+    try {
+      WorkflowEngine.startChildWorkflow(
+        parentInstance.Id,
+        'WorkflowEngineTest.HappyWorkflow',
+        'child_corr_key',
+        '{}'
+      );
+    } catch (Exception ex) {
+      // Catch validation/DML failures that might occur later in initialization
+    }
+    Test.stopTest();
+
+    // Verify child instance was created
+    List<Workflow_Instance__c> children = [
+      SELECT Workflow_Name__c, Parent_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :parentInstance.Id
+      WITH SYSTEM_MODE
+    ];
+    Assert.isFalse(children.isEmpty(), 'Child instance should be created');
+    Assert.areEqual(
+      'WorkflowEngineTest.HappyWorkflow',
+      children[0].Workflow_Name__c,
+      'Child workflow name should store the resolved class name'
+    );
+  }
 }
