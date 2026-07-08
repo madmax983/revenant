@@ -11700,8 +11700,11 @@ public inherited sharing class WorkflowEngine {
     if (String.isBlank(stepName)) {
       return null;
     }
-    if (stepTimeoutCache.containsKey(stepName)) {
-      return stepTimeoutCache.get(stepName);
+    String cacheKey = (stepName +
+      (String.isNotBlank(contextNamespace) ? ('|' + contextNamespace) : ''))
+      .toLowerCase();
+    if (stepTimeoutCache.containsKey(cacheKey)) {
+      return stepTimeoutCache.get(cacheKey);
     }
     String className = stepName.endsWith('_Compensate')
       ? stepName.substring(0, stepName.lastIndexOf('_Compensate'))
@@ -11724,7 +11727,7 @@ public inherited sharing class WorkflowEngine {
           e.getMessage()
       );
     }
-    stepTimeoutCache.put(stepName, timeout);
+    stepTimeoutCache.put(cacheKey, timeout);
     return timeout;
   }
 
@@ -12020,22 +12023,18 @@ public inherited sharing class WorkflowEngine {
     }
     try {
       String ns = null;
-      if (!stepTimeoutCache.containsKey(stepName)) {
-        if (String.isNotBlank(workflowName)) {
-          ns = WorkflowTypeResolver.extractNamespace(workflowName);
-        } else {
-          List<Workflow_Instance__c> insts = [
-            SELECT Workflow_Name__c
-            FROM Workflow_Instance__c
-            WHERE Id = :instanceId
-            WITH SYSTEM_MODE
-            LIMIT 1
-          ];
-          if (!insts.isEmpty()) {
-            ns = WorkflowTypeResolver.extractNamespace(
-              insts[0].Workflow_Name__c
-            );
-          }
+      if (String.isNotBlank(workflowName)) {
+        ns = WorkflowTypeResolver.extractNamespace(workflowName);
+      } else {
+        List<Workflow_Instance__c> insts = [
+          SELECT Workflow_Name__c
+          FROM Workflow_Instance__c
+          WHERE Id = :instanceId
+          WITH SYSTEM_MODE
+          LIMIT 1
+        ];
+        if (!insts.isEmpty()) {
+          ns = WorkflowTypeResolver.extractNamespace(insts[0].Workflow_Name__c);
         }
       }
       Integer timeoutSeconds = getStepTimeoutSeconds(stepName, ns);

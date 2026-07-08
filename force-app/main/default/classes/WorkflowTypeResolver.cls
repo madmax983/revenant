@@ -16,7 +16,7 @@ public inherited sharing class WorkflowTypeResolver {
       return null;
     }
     String cacheKey = (name +
-      (String.isNotBlank(contextNamespace) ? ('|' + contextNamespace) : ''))
+      (contextNamespace != null ? ('|' + contextNamespace) : ''))
       .toLowerCase();
     if (typeCache.containsKey(cacheKey)) {
       return typeCache.get(cacheKey);
@@ -29,25 +29,8 @@ public inherited sharing class WorkflowTypeResolver {
 
   private static Type doResolve(String name, String contextNamespace) {
     Type t = null;
-    if (!simulateNamespacedContext) {
-      // 1. Try single-arg Type.forName (package namespace or caller namespace)
-      t = Type.forName(name);
-      if (t != null) {
-        return t;
-      }
-    } else {
-      // Simulated packaged context: only allow resolving classes
-      // that are explicitly prefixed with the simulated package namespace.
-      String pkg = getPackageNamespace();
-      if (String.isNotBlank(pkg) && name.startsWith(pkg + '.')) {
-        t = Type.forName(name.substringAfter(pkg + '.'));
-        if (t != null) {
-          return t;
-        }
-      }
-    }
 
-    // 2. Try namespace-qualified resolution
+    // 1. Try namespace-qualified resolution first if the name contains a dot
     if (name.contains('.')) {
       String ns = name.substringBefore('.');
       String localName = name.substringAfter('.');
@@ -63,11 +46,30 @@ public inherited sharing class WorkflowTypeResolver {
       }
     }
 
-    // 3. Try context namespace fallback if provided
-    if (String.isNotBlank(contextNamespace)) {
+    // 2. Try context namespace first if provided (resolves collision in subscriber namespace)
+    if (contextNamespace != null) {
       t = Type.forName(contextNamespace, name);
       if (t != null) {
         return t;
+      }
+    }
+
+    // 3. Try standard/caller resolution
+    if (!simulateNamespacedContext) {
+      // Try single-arg Type.forName (package namespace or caller namespace)
+      t = Type.forName(name);
+      if (t != null) {
+        return t;
+      }
+    } else {
+      // Simulated packaged context: only allow resolving classes
+      // that are explicitly prefixed with the simulated package namespace.
+      String pkg = getPackageNamespace();
+      if (String.isNotBlank(pkg) && name.startsWith(pkg + '.')) {
+        t = Type.forName(name.substringAfter(pkg + '.'));
+        if (t != null) {
+          return t;
+        }
       }
     }
 
