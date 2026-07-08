@@ -77,7 +77,6 @@ public inherited sharing class WorkflowTestHarness {
     public Boolean isSleeping;
     public Boolean isAwaitingRetry;
 
-
     /** True if the named step appears anywhere in the audit trail. */
     public Boolean reachedStep(String stepName) {
       return executedSteps != null && executedSteps.contains(stepName);
@@ -304,7 +303,10 @@ public inherited sharing class WorkflowTestHarness {
     }
     // If suspended but there are still branches in Current_Step__c that have not run yet,
     // the instance is still advanceable to let those sibling branches execute.
-    if (String.isNotBlank(inst.Current_Step__c) && inst.Current_Step__c.contains(',')) {
+    if (
+      String.isNotBlank(inst.Current_Step__c) &&
+      inst.Current_Step__c.contains(',')
+    ) {
       List<String> branches = new List<String>();
       for (String s : inst.Current_Step__c.split(',')) {
         branches.add(s.trim());
@@ -312,8 +314,7 @@ public inherited sharing class WorkflowTestHarness {
       List<Workflow_Step_Execution__c> execs = [
         SELECT Step_Name__c, Status__c, SOQL_Query_Count__c
         FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c = :inst.Id
-          AND Step_Name__c IN :branches
+        WHERE Workflow_Instance__c = :inst.Id AND Step_Name__c IN :branches
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
       ];
@@ -325,7 +326,11 @@ public inherited sharing class WorkflowTestHarness {
       }
       for (String branch : branches) {
         Workflow_Step_Execution__c se = latestExecs.get(branch);
-        if (se == null || (se.Status__c == 'Pending' && se.SOQL_Query_Count__c == null)) {
+        if (
+          se == null ||
+          (se.Status__c == 'Pending' &&
+          se.SOQL_Query_Count__c == null)
+        ) {
           return true; // Sibling branch has not run yet!
         }
       }
@@ -358,9 +363,7 @@ public inherited sharing class WorkflowTestHarness {
       List<Workflow_Step_Execution__c> execs = [
         SELECT Step_Name__c, Status__c, SOQL_Query_Count__c
         FROM Workflow_Step_Execution__c
-        WHERE
-          Workflow_Instance__c = :inst.Id
-          AND Step_Name__c IN :branches
+        WHERE Workflow_Instance__c = :inst.Id AND Step_Name__c IN :branches
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
       ];
@@ -382,7 +385,11 @@ public inherited sharing class WorkflowTestHarness {
             if (se.Status__c == 'Retrying' && disableAutoTimeSkip) {
               continue;
             }
-            if (se.Status__c == 'Pending' && se.SOQL_Query_Count__c != null && disableAutoTimeSkip) {
+            if (
+              se.Status__c == 'Pending' &&
+              se.SOQL_Query_Count__c != null &&
+              disableAutoTimeSkip
+            ) {
               continue; // Already ran and suspended/sleeping/waiting
             }
           }
@@ -392,10 +399,10 @@ public inherited sharing class WorkflowTestHarness {
         }
         Boolean isCallout = isCalloutStep(branch);
         if (!isCallout && inst.Status__c == 'Suspended') {
-          Boolean isSleepingOrRetrying = (se != null && (
-            se.Status__c == 'Retrying' ||
-            (se.Status__c == 'Pending' && se.SOQL_Query_Count__c != null)
-          ));
+          Boolean isSleepingOrRetrying = (se != null &&
+          (se.Status__c == 'Retrying' ||
+          (se.Status__c == 'Pending' &&
+          se.SOQL_Query_Count__c != null)));
           if (isSleepingOrRetrying) {
             clearSleepMarkers(inst.Id);
           }
@@ -408,7 +415,7 @@ public inherited sharing class WorkflowTestHarness {
       }
       return used;
     }
-    
+
     Boolean isCallout = isCalloutStep(inst.Current_Step__c);
     if (!isCallout && inst.Status__c == 'Suspended') {
       clearSleepMarkers(inst.Id);
@@ -443,12 +450,15 @@ public inherited sharing class WorkflowTestHarness {
       return false;
     }
     try {
-      Type stepType = Type.forName(stepName);
+      Type stepType = WorkflowTypeResolver.resolve(stepName);
       if (stepType != null) {
         return stepType.newInstance() instanceof CalloutStep;
       }
     } catch (Exception e) {
-      System.debug(LoggingLevel.FINEST, 'Ignore callout step resolution failure: ' + e.getMessage());
+      System.debug(
+        LoggingLevel.FINEST,
+        'Ignore callout step resolution failure: ' + e.getMessage()
+      );
     }
     return false;
   }
@@ -506,7 +516,8 @@ public inherited sharing class WorkflowTestHarness {
       List<Workflow_Step_Execution__c> execs = [
         SELECT Step_Name__c, Status__c, SOQL_Query_Count__c, Output__c
         FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c = :instanceId
+        WHERE
+          Workflow_Instance__c = :instanceId
           AND Step_Name__c IN :activeSteps
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
@@ -519,19 +530,32 @@ public inherited sharing class WorkflowTestHarness {
       }
       for (String stepName : activeSteps) {
         Workflow_Step_Execution__c se = latestStepMap.get(stepName.trim());
-        if (se == null || (se.Status__c == 'Pending' && se.SOQL_Query_Count__c == null)) {
+        if (
+          se == null ||
+          (se.Status__c == 'Pending' &&
+          se.SOQL_Query_Count__c == null)
+        ) {
           hasNormalPending = true;
         } else if (se.Status__c == 'Retrying') {
           hasActiveSleepOrRetry = true;
-        } else if (se.Status__c == 'Pending' && se.SOQL_Query_Count__c != null) {
+        } else if (
+          se.Status__c == 'Pending' &&
+          se.SOQL_Query_Count__c != null
+        ) {
           if (isFrameworkWaitState(se.Output__c)) {
             hasActiveWait = true;
           } else {
             Boolean hasJob = true;
             if (WorkflowEngine.useDynamicScheduling) {
-              String jobPrefix = WorkflowEngine.getSleepJobPrefix(instanceId, stepName.trim()) + '%';
+              String jobPrefix =
+                WorkflowEngine.getSleepJobPrefix(instanceId, stepName.trim()) +
+                '%';
               List<CronTrigger> jobs = [
-                SELECT Id FROM CronTrigger WHERE CronJobDetail.Name LIKE :jobPrefix WITH SYSTEM_MODE LIMIT 1
+                SELECT Id
+                FROM CronTrigger
+                WHERE CronJobDetail.Name LIKE :jobPrefix
+                WITH SYSTEM_MODE
+                LIMIT 1
               ];
               hasJob = !jobs.isEmpty();
             }
@@ -563,17 +587,24 @@ public inherited sharing class WorkflowTestHarness {
       return false;
     }
     try {
-      Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(output);
+      Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
+        output
+      );
       if (data != null) {
-        if (data.containsKey('$timeoutStep') ||
-            data.containsKey('childWorkflowName') ||
-            data.containsKey('childCorrelationKeys') ||
-            data.containsKey('waitingForApproval')) {
+        if (
+          data.containsKey('$timeoutStep') ||
+          data.containsKey('childWorkflowName') ||
+          data.containsKey('childCorrelationKeys') ||
+          data.containsKey('waitingForApproval')
+        ) {
           return true;
         }
       }
     } catch (Exception ex) {
-      System.debug(LoggingLevel.FINEST, 'Ignore JSON deserialization failure: ' + ex.getMessage());
+      System.debug(
+        LoggingLevel.FINEST,
+        'Ignore JSON deserialization failure: ' + ex.getMessage()
+      );
     }
     return false;
   }
@@ -639,7 +670,9 @@ public inherited sharing class WorkflowTestHarness {
       LIMIT 1
     ];
     if (results.isEmpty()) {
-      throw new HarnessException('Workflow instance ' + instanceId + ' not found in the database.');
+      throw new HarnessException(
+        'Workflow instance ' + instanceId + ' not found in the database.'
+      );
     }
     return results[0];
   }
@@ -713,7 +746,10 @@ public inherited sharing class WorkflowTestHarness {
       WorkflowEngine.injectedFaults = new Map<String, WorkflowEngine.FaultConfig>();
     }
     String key = rootInstanceId + ':' + stepName.toLowerCase();
-    WorkflowEngine.injectedFaults.put(key, new WorkflowEngine.FaultConfig(message, null));
+    WorkflowEngine.injectedFaults.put(
+      key,
+      new WorkflowEngine.FaultConfig(message, null)
+    );
     return this;
   }
 
@@ -725,11 +761,18 @@ public inherited sharing class WorkflowTestHarness {
       WorkflowEngine.injectedFaults = new Map<String, WorkflowEngine.FaultConfig>();
     }
     String key = rootInstanceId + ':' + stepName.toLowerCase();
-    WorkflowEngine.injectedFaults.put(key, new WorkflowEngine.FaultConfig(message, 1));
+    WorkflowEngine.injectedFaults.put(
+      key,
+      new WorkflowEngine.FaultConfig(message, 1)
+    );
     return this;
   }
 
-  public WorkflowTestHarness failStep(String stepName, String message, Integer failCount) {
+  public WorkflowTestHarness failStep(
+    String stepName,
+    String message,
+    Integer failCount
+  ) {
     if (String.isBlank(stepName)) {
       throw new HarnessException('stepName is required.');
     }
@@ -740,7 +783,10 @@ public inherited sharing class WorkflowTestHarness {
       WorkflowEngine.injectedFaults = new Map<String, WorkflowEngine.FaultConfig>();
     }
     String key = rootInstanceId + ':' + stepName.toLowerCase();
-    WorkflowEngine.injectedFaults.put(key, new WorkflowEngine.FaultConfig(message, failCount));
+    WorkflowEngine.injectedFaults.put(
+      key,
+      new WorkflowEngine.FaultConfig(message, failCount)
+    );
     return this;
   }
 
@@ -760,7 +806,10 @@ public inherited sharing class WorkflowTestHarness {
     return this;
   }
 
-  private Workflow_Instance__c findSleepingOrRetryingInstance(String stepName, Boolean checkSleep) {
+  private Workflow_Instance__c findSleepingOrRetryingInstance(
+    String stepName,
+    Boolean checkSleep
+  ) {
     if (String.isBlank(stepName)) {
       return null;
     }
@@ -779,7 +828,9 @@ public inherited sharing class WorkflowTestHarness {
         for (String s : inst.Current_Step__c.split(',')) {
           activeSteps.add(s.trim().toLowerCase());
         }
-        if (activeSteps.contains(checkName) || activeSteps.contains(forwardName)) {
+        if (
+          activeSteps.contains(checkName) || activeSteps.contains(forwardName)
+        ) {
           candidateInstanceIds.add(inst.Id);
         }
       }
@@ -792,7 +843,8 @@ public inherited sharing class WorkflowTestHarness {
     List<Workflow_Step_Execution__c> execs = [
       SELECT Workflow_Instance__c, Status__c, SOQL_Query_Count__c, Output__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c IN :candidateInstanceIds
+      WHERE
+        Workflow_Instance__c IN :candidateInstanceIds
         AND Step_Name__c = :stepName
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
@@ -810,12 +862,17 @@ public inherited sharing class WorkflowTestHarness {
         Workflow_Step_Execution__c se = latestStepMap.get(inst.Id);
         String status = se.Status__c;
         if (inst.Status__c == 'Suspended') {
-          if (checkSleep && status == 'Pending' && se.SOQL_Query_Count__c != null) {
+          if (
+            checkSleep &&
+            status == 'Pending' &&
+            se.SOQL_Query_Count__c != null
+          ) {
             if (isFrameworkWaitState(se.Output__c)) {
               continue;
             }
             if (WorkflowEngine.useDynamicScheduling) {
-              String jobPrefix = WorkflowEngine.getSleepJobPrefix(inst.Id, stepName) + '%';
+              String jobPrefix =
+                WorkflowEngine.getSleepJobPrefix(inst.Id, stepName) + '%';
               List<CronTrigger> jobs = [
                 SELECT Id
                 FROM CronTrigger
@@ -872,7 +929,9 @@ public inherited sharing class WorkflowTestHarness {
     }
     Workflow_Instance__c inst = findSleepingOrRetryingInstance(stepName, true);
     if (inst == null) {
-      throw new HarnessException('Step ' + stepName + ' is not currently sleeping.');
+      throw new HarnessException(
+        'Step ' + stepName + ' is not currently sleeping.'
+      );
     }
     Boolean isCallout = isCalloutStep(stepName);
     if (!isCallout) {
@@ -898,7 +957,9 @@ public inherited sharing class WorkflowTestHarness {
     }
     Workflow_Instance__c inst = findSleepingOrRetryingInstance(stepName, false);
     if (inst == null) {
-      throw new HarnessException('Step ' + stepName + ' is not currently awaiting retry.');
+      throw new HarnessException(
+        'Step ' + stepName + ' is not currently awaiting retry.'
+      );
     }
     Boolean isCallout = isCalloutStep(stepName);
     if (!isCallout) {
@@ -911,4 +972,3 @@ public inherited sharing class WorkflowTestHarness {
     return drive(maxHops);
   }
 }
-

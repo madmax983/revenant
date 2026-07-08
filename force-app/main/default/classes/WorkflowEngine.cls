@@ -1708,7 +1708,10 @@ public inherited sharing class WorkflowEngine {
       // then skipped because the parent is not runnable) or, for a still-Pending
       // bounded start, fail it before admission. Resume/admission re-establishes it.
       if (!parkAtStart && !deferTimeoutForConcurrency) {
-        Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
+        Integer timeout = getStepTimeoutSeconds(
+          instance.Current_Step__c,
+          WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+        );
         if (timeout != null && timeout > 0) {
           stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
         }
@@ -1743,7 +1746,13 @@ public inherited sharing class WorkflowEngine {
    */
   private static Workflow_Instance__c buildInstance(StartRequest req) {
     Workflow_Instance__c instance = new Workflow_Instance__c();
-    instance.Workflow_Name__c = req.workflowName;
+    Type startWflowType = WorkflowTypeResolver.resolve(
+      req.workflowName,
+      WorkflowTypeResolver.extractNamespace(req.workflowName)
+    );
+    instance.Workflow_Name__c = startWflowType != null
+      ? String.valueOf(startWflowType)
+      : req.workflowName;
     instance.Status__c = 'Pending';
     instance.Correlation_Key__c = req.correlationKey;
     instance.Parent_Instance__c = req.parentInstanceId;
@@ -1765,19 +1774,54 @@ public inherited sharing class WorkflowEngine {
     if (String.isNotBlank(req.workflowName)) {
       String wflowKey = req.workflowName.toLowerCase();
       if (!validatedWorkflows.containsKey(wflowKey)) {
-        List<ApexTypeImplementor> impls = [
-          SELECT ClassName
+        Type resolvedWflowType = WorkflowTypeResolver.resolve(
+          req.workflowName,
+          WorkflowTypeResolver.extractNamespace(req.workflowName)
+        );
+        String localName1 = req.workflowName;
+        String ns1 = '';
+        String localName2 = req.workflowName;
+        String ns2 = '';
+        if (resolvedWflowType != null) {
+          String fqName = String.valueOf(resolvedWflowType);
+          if (fqName.contains('.')) {
+            ns1 = fqName.substringBefore('.');
+            localName1 = fqName.substringAfter('.');
+            ns2 = '';
+            localName2 = fqName;
+          } else {
+            localName1 = fqName;
+            localName2 = fqName;
+          }
+        }
+        List<ApexTypeImplementor> queryResults = [
+          SELECT ClassName, ClassNamespacePrefix
           FROM ApexTypeImplementor
           WHERE
-            ClassName = :req.workflowName
+            ClassName IN (:localName1, :localName2)
+            AND ClassNamespacePrefix IN (:ns1, :ns2)
             AND InterfaceName IN (
               'WorkflowDefinition',
               'VersionedWorkflow',
               'ErrorRoutingWorkflow'
             )
           WITH SYSTEM_MODE
-          LIMIT 1
         ];
+        List<ApexTypeImplementor> impls = new List<ApexTypeImplementor>();
+        for (ApexTypeImplementor impl : queryResults) {
+          String implNs = String.isBlank(impl.ClassNamespacePrefix)
+            ? ''
+            : impl.ClassNamespacePrefix;
+          if (
+            (impl.ClassName.equalsIgnoreCase(localName1) &&
+            implNs.equalsIgnoreCase(ns1)) ||
+            (impl.ClassName.equalsIgnoreCase(localName2) &&
+            implNs.equalsIgnoreCase(ns2))
+          ) {
+            impls.add(impl);
+            break;
+          }
+        }
         if (impls.isEmpty()) {
           throw new WorkflowException(
             'Unauthorized or invalid workflow definition: ' + req.workflowName
@@ -1787,7 +1831,10 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    Type wflowType = Type.forName(req.workflowName);
+    Type wflowType = WorkflowTypeResolver.resolve(
+      req.workflowName,
+      WorkflowTypeResolver.extractNamespace(req.workflowName)
+    );
     if (wflowType != null) {
       Object defObj = wflowType.newInstance();
       if (defObj instanceof VersionedWorkflow) {
@@ -2539,11 +2586,48 @@ public inherited sharing class WorkflowEngine {
     }
 
     if (!workflowNamesToQuery.isEmpty()) {
+      Set<String> localNamesToQuery = new Set<String>();
+      Set<String> namespacesToQuery = new Set<String>();
+      Map<String, List<String>> rawNamesByResolved = new Map<String, List<String>>();
+      for (String rawName : workflowNamesToQuery) {
+        Type resolved = WorkflowTypeResolver.resolve(
+          rawName,
+          WorkflowTypeResolver.extractNamespace(rawName)
+        );
+        String localName1 = rawName;
+        String ns1 = '';
+        String localName2 = rawName;
+        String ns2 = '';
+        if (resolved != null) {
+          String fqName = String.valueOf(resolved);
+          String resName = fqName.toLowerCase();
+          if (!rawNamesByResolved.containsKey(resName)) {
+            rawNamesByResolved.put(resName, new List<String>());
+          }
+          rawNamesByResolved.get(resName).add(rawName);
+
+          if (fqName.contains('.')) {
+            ns1 = fqName.substringBefore('.');
+            localName1 = fqName.substringAfter('.');
+            ns2 = '';
+            localName2 = fqName;
+          } else {
+            localName1 = fqName;
+            localName2 = fqName;
+          }
+        }
+        localNamesToQuery.add(localName1);
+        localNamesToQuery.add(localName2);
+        namespacesToQuery.add(ns1);
+        namespacesToQuery.add(ns2);
+      }
+
       for (ApexTypeImplementor impl : [
-        SELECT ClassName
+        SELECT ClassName, ClassNamespacePrefix
         FROM ApexTypeImplementor
         WHERE
-          ClassName IN :workflowNamesToQuery
+          ClassName IN :localNamesToQuery
+          AND ClassNamespacePrefix IN :namespacesToQuery
           AND InterfaceName IN (
             'WorkflowDefinition',
             'VersionedWorkflow',
@@ -2551,7 +2635,17 @@ public inherited sharing class WorkflowEngine {
           )
         WITH SYSTEM_MODE
       ]) {
-        validatedWorkflows.put(impl.ClassName.toLowerCase(), true);
+        String matchName = String.isBlank(impl.ClassNamespacePrefix)
+          ? impl.ClassName
+          : (impl.ClassNamespacePrefix + '.' + impl.ClassName);
+        String matchLower = matchName.toLowerCase();
+        validatedWorkflows.put(matchLower, true);
+
+        if (rawNamesByResolved.containsKey(matchLower)) {
+          for (String rawName : rawNamesByResolved.get(matchLower)) {
+            validatedWorkflows.put(rawName.toLowerCase(), true);
+          }
+        }
       }
     }
 
@@ -2809,7 +2903,10 @@ public inherited sharing class WorkflowEngine {
           !parkedIds.contains(instance.Id) &&
           !deferTimeoutIds.contains(instance.Id)
         ) {
-          Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
+          Integer timeout = getStepTimeoutSeconds(
+            instance.Current_Step__c,
+            WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+          );
           if (timeout != null && timeout > 0) {
             stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
           }
@@ -3322,7 +3419,10 @@ public inherited sharing class WorkflowEngine {
           payload,
           'Resume_' + stepExec.Id
         );
-        Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
+        Integer timeout = getStepTimeoutSeconds(
+          instance.Current_Step__c,
+          WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+        );
         if (timeout != null && timeout > 0) {
           stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
         } else {
@@ -3387,7 +3487,10 @@ public inherited sharing class WorkflowEngine {
           payload,
           'Resume_' + stepExec.Id
         );
-        Integer timeout = getStepTimeoutSeconds(instance.Current_Step__c);
+        Integer timeout = getStepTimeoutSeconds(
+          instance.Current_Step__c,
+          WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+        );
         if (timeout != null && timeout > 0) {
           stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
         } else {
@@ -3404,6 +3507,13 @@ public inherited sharing class WorkflowEngine {
     } else {
       enqueueOrchestrator(instance.Id, null);
     }
+  }
+
+  /**
+   * Resumes a suspended workflow instance by ID and step name.
+   */
+  public static void resume(Id instanceId, String stepName, String payload) {
+    resumeInstance(instanceId, payload);
   }
 
   /**
@@ -3523,7 +3633,10 @@ public inherited sharing class WorkflowEngine {
             req.payload,
             'Resume_' + stepExec.Id
           );
-          Integer timeout = getStepTimeoutSeconds(inst.Current_Step__c);
+          Integer timeout = getStepTimeoutSeconds(
+            inst.Current_Step__c,
+            WorkflowTypeResolver.extractNamespace(inst.Workflow_Name__c)
+          );
           if (timeout != null && timeout > 0) {
             stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
           } else {
@@ -3750,7 +3863,10 @@ public inherited sharing class WorkflowEngine {
         // slot; throwing after would roll back the uncommitted increment anyway.
         String resolvedStep = instance.Current_Step__c;
         if (String.isBlank(resolvedStep)) {
-          Type wfType = Type.forName(instance.Workflow_Name__c);
+          Type wfType = WorkflowTypeResolver.resolve(
+            instance.Workflow_Name__c,
+            WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+          );
           if (wfType == null) {
             throw new WorkflowException(
               'Could not resolve workflow definition class: ' +
@@ -3819,7 +3935,10 @@ public inherited sharing class WorkflowEngine {
 
     // 2. Initialize initial step in memory if this is the start (DML deferred to outcome handler)
     if (String.isBlank(instance.Current_Step__c)) {
-      Type wflowType = Type.forName(instance.Workflow_Name__c);
+      Type wflowType = WorkflowTypeResolver.resolve(
+        instance.Workflow_Name__c,
+        WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+      );
       if (wflowType == null) {
         throw new WorkflowException(
           'Could not resolve workflow definition class: ' +
@@ -4044,7 +4163,10 @@ public inherited sharing class WorkflowEngine {
     }
 
     // 5. Invoke Step Execution
-    Type stepType = Type.forName(activeStepName);
+    Type stepType = WorkflowTypeResolver.resolve(
+      activeStepName,
+      WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+    );
     if (stepType == null) {
       throw new WorkflowException(
         'Could not resolve class for step: ' + activeStepName
@@ -5131,7 +5253,10 @@ public inherited sharing class WorkflowEngine {
       publishOutboundEvents(result, context);
 
       // Update compensation stack if step is CompensatableStep
-      Type stepType = Type.forName(stepExec.Step_Name__c);
+      Type stepType = WorkflowTypeResolver.resolve(
+        stepExec.Step_Name__c,
+        WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+      );
       if (stepType != null) {
         Object stepInstanceObj = stepType.newInstance();
         if (stepInstanceObj instanceof CompensatableStep) {
@@ -5152,7 +5277,16 @@ public inherited sharing class WorkflowEngine {
 
       if (!isParallel) {
         // Determine next step
-        Type wflowType = Type.forName(instance.Workflow_Name__c);
+        Type wflowType = WorkflowTypeResolver.resolve(
+          instance.Workflow_Name__c,
+          WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+        );
+        if (wflowType == null) {
+          throw new WorkflowException(
+            'Could not resolve workflow definition class: ' +
+            instance.Workflow_Name__c
+          );
+        }
         WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
         String nextStepName;
         if (def instanceof VersionedWorkflow) {
@@ -5287,7 +5421,16 @@ public inherited sharing class WorkflowEngine {
         LIMIT 1
       ];
 
-      Type wflowType = Type.forName(instance.Workflow_Name__c);
+      Type wflowType = WorkflowTypeResolver.resolve(
+        instance.Workflow_Name__c,
+        WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+      );
+      if (wflowType == null) {
+        throw new WorkflowException(
+          'Could not resolve workflow definition class: ' +
+          instance.Workflow_Name__c
+        );
+      }
       WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
 
       String spawningStepName = !spawningSteps.isEmpty()
@@ -5594,7 +5737,10 @@ public inherited sharing class WorkflowEngine {
           'Input_Parallel_' + ps.replaceAll('[^a-zA-Z0-9]', '_')
         );
         pe.Retry_Count__c = 0;
-        Integer timeout = getStepTimeoutSeconds(ps);
+        Integer timeout = getStepTimeoutSeconds(
+          ps,
+          WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+        );
         if (timeout != null && timeout > 0) {
           pe.Timeout_At__c = DateTime.now().addSeconds(timeout);
         }
@@ -5711,7 +5857,10 @@ public inherited sharing class WorkflowEngine {
       // Resolve initial step for successor instance
       String initialStep = null;
       Datetime nextDeadline = null;
-      Type wflowType = Type.forName(instance.Workflow_Name__c);
+      Type wflowType = WorkflowTypeResolver.resolve(
+        instance.Workflow_Name__c,
+        WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+      );
       if (wflowType != null) {
         Object defObj = wflowType.newInstance();
         if (defObj instanceof WorkflowDefinition) {
@@ -5817,7 +5966,10 @@ public inherited sharing class WorkflowEngine {
         nextStepExec.Status__c = 'Pending';
         nextStepExec.Input__c = nextInstance.Input__c;
         nextStepExec.Retry_Count__c = 0;
-        Integer timeout = getStepTimeoutSeconds(initialStep);
+        Integer timeout = getStepTimeoutSeconds(
+          initialStep,
+          WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+        );
         if (timeout != null && timeout > 0 && !deferTimeoutForConcurrency) {
           nextStepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
         }
@@ -6257,7 +6409,10 @@ public inherited sharing class WorkflowEngine {
 
     if (!isCompFailure) {
       try {
-        Type wfType = Type.forName(instance.Workflow_Name__c);
+        Type wfType = WorkflowTypeResolver.resolve(
+          instance.Workflow_Name__c,
+          WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+        );
         if (wfType != null) {
           WorkflowDefinition def = (WorkflowDefinition) wfType.newInstance();
           if (def instanceof ErrorRoutingWorkflow) {
@@ -6459,22 +6614,24 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    Workflow_Instance__c instance = new Workflow_Instance__c();
-    instance.Workflow_Name__c = workflowName;
-    instance.Status__c = 'Pending';
-    instance.Correlation_Key__c = correlationKey;
-    instance.Parent_Instance__c = parentId;
-    instance.Causation_Id__c = parentId;
-
     if (String.isBlank(workflowName)) {
       throw new WorkflowException('Workflow name is required.');
     }
-    Type wflowType = Type.forName(workflowName);
+    Type wflowType = WorkflowTypeResolver.resolve(
+      workflowName,
+      WorkflowTypeResolver.extractNamespace(workflowName)
+    );
     if (wflowType == null) {
       throw new WorkflowException(
         'Workflow definition not found for name: ' + workflowName
       );
     }
+    Workflow_Instance__c instance = new Workflow_Instance__c();
+    instance.Workflow_Name__c = String.valueOf(wflowType);
+    instance.Status__c = 'Pending';
+    instance.Correlation_Key__c = correlationKey;
+    instance.Parent_Instance__c = parentId;
+    instance.Causation_Id__c = parentId;
     Object defObj = wflowType.newInstance();
     if (!(defObj instanceof WorkflowDefinition)) {
       throw new WorkflowException(
@@ -6584,7 +6741,10 @@ public inherited sharing class WorkflowEngine {
       if (String.isBlank(req.workflowName)) {
         throw new WorkflowException('Workflow name is required.');
       }
-      Type wflowType = Type.forName(req.workflowName);
+      Type wflowType = WorkflowTypeResolver.resolve(
+        req.workflowName,
+        WorkflowTypeResolver.extractNamespace(req.workflowName)
+      );
       if (wflowType == null) {
         throw new WorkflowException(
           'Workflow definition not found for name: ' + req.workflowName
@@ -6647,14 +6807,17 @@ public inherited sharing class WorkflowEngine {
         continue;
       }
 
+      Type wflowType = WorkflowTypeResolver.resolve(
+        req.workflowName,
+        WorkflowTypeResolver.extractNamespace(req.workflowName)
+      );
       Workflow_Instance__c instance = new Workflow_Instance__c();
-      instance.Workflow_Name__c = req.workflowName;
+      // wflowType is guaranteed non-null by the validation loop above
+      instance.Workflow_Name__c = String.valueOf(wflowType);
       instance.Status__c = 'Pending';
       instance.Correlation_Key__c = req.correlationKey;
       instance.Parent_Instance__c = parentId;
       instance.Causation_Id__c = parentId;
-
-      Type wflowType = Type.forName(req.workflowName);
       Object defObj = wflowType.newInstance();
       if (defObj instanceof VersionedWorkflow) {
         instance.Definition_Version__c = ((VersionedWorkflow) defObj)
@@ -7813,7 +7976,10 @@ public inherited sharing class WorkflowEngine {
     }
 
     if (String.isBlank(instance.Current_Step__c) && !hasCompensations) {
-      Type wflowType = Type.forName(instance.Workflow_Name__c);
+      Type wflowType = WorkflowTypeResolver.resolve(
+        instance.Workflow_Name__c,
+        WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+      );
       if (wflowType != null) {
         Object defObj = wflowType.newInstance();
         if (defObj instanceof WorkflowDefinition) {
@@ -8278,7 +8444,16 @@ public inherited sharing class WorkflowEngine {
       insert as system interventionLog;
 
       // 8. Determine Next Step
-      Type wflowType = Type.forName(instance.Workflow_Name__c);
+      Type wflowType = WorkflowTypeResolver.resolve(
+        instance.Workflow_Name__c,
+        WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+      );
+      if (wflowType == null) {
+        throw new WorkflowException(
+          'Could not resolve workflow definition class: ' +
+          instance.Workflow_Name__c
+        );
+      }
       WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
 
       Boolean isParallel =
@@ -8543,7 +8718,10 @@ public inherited sharing class WorkflowEngine {
               stepsToEnqueue.add(ps);
             } else if (pe.Status__c == 'Pending' && pe.CPU_Time_Ms__c == null) {
               // Initial/undriven pending branch: enqueue it directly after re-arming/clearing timeout
-              Integer timeout = getStepTimeoutSeconds(ps);
+              Integer timeout = getStepTimeoutSeconds(
+                ps,
+                WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+              );
               if (timeout != null && timeout > 0) {
                 pe.Timeout_At__c = DateTime.now().addSeconds(timeout);
               } else {
@@ -8976,7 +9154,10 @@ public inherited sharing class WorkflowEngine {
     }
 
     // 4. Instantiate the step and execute compensate
-    Type stepType = Type.forName(activeStepName);
+    Type stepType = WorkflowTypeResolver.resolve(
+      activeStepName,
+      WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+    );
     if (stepType == null) {
       throw new WorkflowException(
         'Could not resolve class for step compensation: ' + activeStepName
@@ -10427,7 +10608,10 @@ public inherited sharing class WorkflowEngine {
         if (String.isNotBlank(parent.Workflow_Name__c)) {
           String wfName = parent.Workflow_Name__c;
           if (!isRoutingWflow.containsKey(wfName)) {
-            Type wflowType = Type.forName(wfName);
+            Type wflowType = WorkflowTypeResolver.resolve(
+              wfName,
+              WorkflowTypeResolver.extractNamespace(wfName)
+            );
             if (wflowType != null) {
               Object instObj = wflowType.newInstance();
               isRoutingWflow.put(
@@ -10521,7 +10705,10 @@ public inherited sharing class WorkflowEngine {
           isRoutingWflow.containsKey(parent.Workflow_Name__c) &&
           isRoutingWflow.get(parent.Workflow_Name__c)
         ) {
-          Type wflowType = Type.forName(parent.Workflow_Name__c);
+          Type wflowType = WorkflowTypeResolver.resolve(
+            parent.Workflow_Name__c,
+            WorkflowTypeResolver.extractNamespace(parent.Workflow_Name__c)
+          );
           if (wflowType != null) {
             WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
             String key = parent.Id + ':' + step.Step_Name__c;
@@ -10995,7 +11182,11 @@ public inherited sharing class WorkflowEngine {
       if (!parallelResumeIds.isEmpty()) {
         reDriveTransientRetryBranches(
           [
-            SELECT Id, Workflow_Instance__c, Step_Name__c
+            SELECT
+              Id,
+              Workflow_Instance__c,
+              Step_Name__c,
+              Workflow_Instance__r.Workflow_Name__c
             FROM Workflow_Step_Execution__c
             WHERE
               Workflow_Instance__c IN :parallelResumeIds
@@ -11181,7 +11372,11 @@ public inherited sharing class WorkflowEngine {
         Set<String> orphanPausedDefs = WorkflowPauseGate.pausedNames();
         reDriveTransientRetryBranches(
           [
-            SELECT Id, Workflow_Instance__c, Step_Name__c
+            SELECT
+              Id,
+              Workflow_Instance__c,
+              Step_Name__c,
+              Workflow_Instance__r.Workflow_Name__c
             FROM Workflow_Step_Execution__c
             WHERE
               Transient_Retry_Count__c > 0
@@ -11498,7 +11693,10 @@ public inherited sharing class WorkflowEngine {
 
   private static Map<String, Integer> stepTimeoutCache = new Map<String, Integer>();
 
-  private static Integer getStepTimeoutSeconds(String stepName) {
+  private static Integer getStepTimeoutSeconds(
+    String stepName,
+    String contextNamespace
+  ) {
     if (String.isBlank(stepName)) {
       return null;
     }
@@ -11510,7 +11708,7 @@ public inherited sharing class WorkflowEngine {
       : stepName;
     Integer timeout = null;
     try {
-      Type stepType = Type.forName(className);
+      Type stepType = WorkflowTypeResolver.resolve(className, contextNamespace);
       if (stepType != null) {
         Object stepObj = stepType.newInstance();
         if (stepObj instanceof TimeoutConfigurable) {
@@ -11567,17 +11765,26 @@ public inherited sharing class WorkflowEngine {
           if (!stack.isEmpty()) {
             scheduleTimeoutJobIfNeeded(
               instance.Id,
-              stack[stack.size() - 1] + '_Compensate'
+              stack[stack.size() - 1] + '_Compensate',
+              instance.Workflow_Name__c
             );
           }
         }
       } else if (String.isNotBlank(instance.Current_Step__c)) {
         if (instance.Current_Step__c.contains(',')) {
           for (String pStep : instance.Current_Step__c.split(',')) {
-            scheduleTimeoutJobIfNeeded(instance.Id, pStep.trim());
+            scheduleTimeoutJobIfNeeded(
+              instance.Id,
+              pStep.trim(),
+              instance.Workflow_Name__c
+            );
           }
         } else {
-          scheduleTimeoutJobIfNeeded(instance.Id, instance.Current_Step__c);
+          scheduleTimeoutJobIfNeeded(
+            instance.Id,
+            instance.Current_Step__c,
+            instance.Workflow_Name__c
+          );
         }
       }
     }
@@ -11604,7 +11811,12 @@ public inherited sharing class WorkflowEngine {
     // concurrency-defer check is needed) — never every active step on the instance.
     List<Workflow_Step_Execution__c> toReArm = new List<Workflow_Step_Execution__c>();
     for (Workflow_Step_Execution__c branch : retryBranches) {
-      Integer timeout = getStepTimeoutSeconds(branch.Step_Name__c);
+      Integer timeout = getStepTimeoutSeconds(
+        branch.Step_Name__c,
+        WorkflowTypeResolver.extractNamespace(
+          branch.Workflow_Instance__r.Workflow_Name__c
+        )
+      );
       if (timeout != null && timeout > 0) {
         toReArm.add(
           new Workflow_Step_Execution__c(
@@ -11700,7 +11912,11 @@ public inherited sharing class WorkflowEngine {
     }
 
     List<Workflow_Step_Execution__c> steps = [
-      SELECT Id, Workflow_Instance__c, Step_Name__c
+      SELECT
+        Id,
+        Workflow_Instance__c,
+        Step_Name__c,
+        Workflow_Instance__r.Workflow_Name__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c IN :instanceIds
@@ -11712,7 +11928,12 @@ public inherited sharing class WorkflowEngine {
       if (deferIds.contains(step.Workflow_Instance__c)) {
         continue;
       }
-      Integer timeout = getStepTimeoutSeconds(step.Step_Name__c);
+      Integer timeout = getStepTimeoutSeconds(
+        step.Step_Name__c,
+        WorkflowTypeResolver.extractNamespace(
+          step.Workflow_Instance__r.Workflow_Name__c
+        )
+      );
       if (timeout != null && timeout > 0) {
         step.Timeout_At__c = DateTime.now().addSeconds(timeout);
         toUpdate.add(step);
@@ -11731,13 +11952,18 @@ public inherited sharing class WorkflowEngine {
       if (deferIds.contains(step.Workflow_Instance__c)) {
         continue;
       }
-      scheduleTimeoutJobIfNeeded(step.Workflow_Instance__c, step.Step_Name__c);
+      scheduleTimeoutJobIfNeeded(
+        step.Workflow_Instance__c,
+        step.Step_Name__c,
+        step.Workflow_Instance__r.Workflow_Name__c
+      );
     }
   }
 
   public static void scheduleTimeoutJobForInstance(Id instanceId) {
     List<Workflow_Instance__c> instances = [
       SELECT
+        Workflow_Name__c,
         Status__c,
         Current_Step__c,
         Compensation_Stack__c,
@@ -11781,11 +12007,38 @@ public inherited sharing class WorkflowEngine {
     Id instanceId,
     String stepName
   ) {
+    scheduleTimeoutJobIfNeeded(instanceId, stepName, null);
+  }
+
+  public static void scheduleTimeoutJobIfNeeded(
+    Id instanceId,
+    String stepName,
+    String workflowName
+  ) {
     if (String.isBlank(stepName) || !useDynamicScheduling) {
       return;
     }
     try {
-      Integer timeoutSeconds = getStepTimeoutSeconds(stepName);
+      String ns = null;
+      if (!stepTimeoutCache.containsKey(stepName)) {
+        if (String.isNotBlank(workflowName)) {
+          ns = WorkflowTypeResolver.extractNamespace(workflowName);
+        } else {
+          List<Workflow_Instance__c> insts = [
+            SELECT Workflow_Name__c
+            FROM Workflow_Instance__c
+            WHERE Id = :instanceId
+            WITH SYSTEM_MODE
+            LIMIT 1
+          ];
+          if (!insts.isEmpty()) {
+            ns = WorkflowTypeResolver.extractNamespace(
+              insts[0].Workflow_Name__c
+            );
+          }
+        }
+      }
+      Integer timeoutSeconds = getStepTimeoutSeconds(stepName, ns);
       if (timeoutSeconds != null && timeoutSeconds > 0) {
         if (
           !Test.isRunningTest() &&
@@ -12659,7 +12912,10 @@ public inherited sharing class WorkflowEngine {
         String wflowName = inst.Workflow_Name__c;
         if (!initialStepByWorkflowName.containsKey(wflowName)) {
           String initialStep = null;
-          Type wflowType = Type.forName(wflowName);
+          Type wflowType = WorkflowTypeResolver.resolve(
+            wflowName,
+            WorkflowTypeResolver.extractNamespace(wflowName)
+          );
           if (wflowType != null) {
             try {
               Object defObj = wflowType.newInstance();

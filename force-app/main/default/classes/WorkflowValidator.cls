@@ -121,11 +121,11 @@ public with sharing class WorkflowValidator {
         CONTRACT_METHOD_THREW,
         workflowName,
         'Workflow "' +
-        workflowName +
-        '" getInitialStep() threw ' +
-        e.getTypeName() +
-        ': ' +
-        e.getMessage()
+          workflowName +
+          '" getInitialStep() threw ' +
+          e.getTypeName() +
+          ': ' +
+          e.getMessage()
       );
     }
 
@@ -138,11 +138,11 @@ public with sharing class WorkflowValidator {
         CONTRACT_METHOD_THREW,
         workflowName,
         'Workflow "' +
-        workflowName +
-        '" getSteps() threw ' +
-        e.getTypeName() +
-        ': ' +
-        e.getMessage()
+          workflowName +
+          '" getSteps() threw ' +
+          e.getTypeName() +
+          ': ' +
+          e.getMessage()
       );
     }
     Set<String> declaredSet = new Set<String>(declaredSteps);
@@ -154,16 +154,14 @@ public with sharing class WorkflowValidator {
         INITIAL_STEP_BLANK,
         workflowName,
         'Workflow "' +
-        workflowName +
-        '" getInitialStep() is blank; the DAG has no entry point.'
+          workflowName +
+          '" getInitialStep() is blank; the DAG has no entry point.'
       );
     } else if (!declaredSet.contains(initialStep)) {
       result.add(
         INITIAL_STEP_NOT_DECLARED,
         initialStep,
-        'Initial step "' +
-        initialStep +
-        '" is not contained in getSteps().'
+        'Initial step "' + initialStep + '" is not contained in getSteps().'
       );
     }
 
@@ -175,9 +173,7 @@ public with sharing class WorkflowValidator {
         result.add(
           DUPLICATE_STEP,
           stepName,
-          'Step "' +
-          stepName +
-          '" is declared more than once in getSteps().'
+          'Step "' + stepName + '" is declared more than once in getSteps().'
         );
         alreadyFlaggedDup.add(stepName);
       }
@@ -213,14 +209,14 @@ public with sharing class WorkflowValidator {
       return null;
     }
 
-    Type defType = Type.forName(workflowName);
+    Type defType = WorkflowTypeResolver.resolve(workflowName);
     if (defType == null) {
       result.add(
         DEFINITION_UNRESOLVABLE,
         workflowName,
         'Workflow "' +
-        workflowName +
-        '" does not resolve to an Apex class via Type.forName.'
+          workflowName +
+          '" does not resolve to an Apex class via Type.forName.'
       );
       return null;
     }
@@ -233,9 +229,9 @@ public with sharing class WorkflowValidator {
         DEFINITION_UNRESOLVABLE,
         workflowName,
         'Workflow "' +
-        workflowName +
-        '" could not be instantiated: ' +
-        e.getMessage()
+          workflowName +
+          '" could not be instantiated: ' +
+          e.getMessage()
       );
       return null;
     }
@@ -244,9 +240,7 @@ public with sharing class WorkflowValidator {
       result.add(
         DEFINITION_UNRESOLVABLE,
         workflowName,
-        'Workflow "' +
-        workflowName +
-        '" does not implement WorkflowDefinition.'
+        'Workflow "' + workflowName + '" does not implement WorkflowDefinition.'
       );
       return null;
     }
@@ -282,14 +276,17 @@ public with sharing class WorkflowValidator {
       return;
     }
 
-    Type stepType = Type.forName(stepName);
+    Type stepType = WorkflowTypeResolver.resolve(
+      stepName,
+      WorkflowTypeResolver.extractNamespace(result.workflowName)
+    );
     if (stepType == null) {
       result.add(
         STEP_UNRESOLVABLE,
         stepName,
         'Step "' +
-        stepName +
-        '" does not resolve to an Apex class via Type.forName.'
+          stepName +
+          '" does not resolve to an Apex class via Type.forName.'
       );
       return;
     }
@@ -301,10 +298,7 @@ public with sharing class WorkflowValidator {
       result.add(
         STEP_UNRESOLVABLE,
         stepName,
-        'Step "' +
-        stepName +
-        '" could not be instantiated: ' +
-        e.getMessage()
+        'Step "' + stepName + '" could not be instantiated: ' + e.getMessage()
       );
       return;
     }
@@ -314,8 +308,8 @@ public with sharing class WorkflowValidator {
         STEP_NOT_WORKFLOWSTEP,
         stepName,
         'Step "' +
-        stepName +
-        '" does not implement WorkflowStep (or CompensatableStep).'
+          stepName +
+          '" does not implement WorkflowStep (or CompensatableStep).'
       );
     }
   }
@@ -385,11 +379,11 @@ public with sharing class WorkflowValidator {
           CONTRACT_METHOD_THREW,
           result.workflowName,
           'Workflow "' +
-          result.workflowName +
-          '" getLatestVersion() threw ' +
-          e.getTypeName() +
-          ': ' +
-          e.getMessage()
+            result.workflowName +
+            '" getLatestVersion() threw ' +
+            e.getTypeName() +
+            ': ' +
+            e.getMessage()
         );
       }
       if (latest != null && latest >= 1) {
@@ -429,10 +423,10 @@ public with sharing class WorkflowValidator {
         DANGLING_SUCCESSOR,
         successor,
         'Step "' +
-        stepName +
-        '" can transition to "' +
-        successor +
-        '", which is not contained in getSteps() (best-effort probe).'
+          stepName +
+          '" can transition to "' +
+          successor +
+          '", which is not contained in getSteps() (best-effort probe).'
       );
       flagged.add(successor);
     }
