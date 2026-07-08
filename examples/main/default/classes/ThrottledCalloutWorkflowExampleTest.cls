@@ -4,8 +4,8 @@ public class ThrottledCalloutWorkflowExampleTest {
   static void testThrottledCalloutWorkflowObeysRateLimitAndResumes() {
     ThrottledCalloutWorkflowExample.reset();
 
-    // Mock RateLimiter config: 1 capacity, 1.0 refill rate per second
-    String mockConfigJson = '{"DeveloperName":"ThrottledService","Capacity__c":1.0,"Refill_Rate_Per_Second__c":1.0}';
+    // Mock RateLimiter config: 1 capacity, 0.001 refill rate per second
+    String mockConfigJson = '{"DeveloperName":"ThrottledService","Capacity__c":1.0,"Refill_Rate_Per_Second__c":0.001}';
     Rate_Limit_Config__mdt mockConfig = (Rate_Limit_Config__mdt) JSON.deserialize(
       mockConfigJson,
       Rate_Limit_Config__mdt.class
@@ -68,7 +68,7 @@ public class ThrottledCalloutWorkflowExampleTest {
     );
 
     // Advance/mock time or allow token refill:
-    // Update state's Last_Refill_Time_Ms__c to 2 seconds ago to allow token refill
+    // Update state's Last_Refill_Time_Ms__c to 2000 seconds ago to allow token refill
     Rate_Limit_State__c state = [
       SELECT Last_Refill_Time_Ms__c
       FROM Rate_Limit_State__c
@@ -76,7 +76,7 @@ public class ThrottledCalloutWorkflowExampleTest {
       WITH SYSTEM_MODE
       LIMIT 1
     ];
-    state.Last_Refill_Time_Ms__c = state.Last_Refill_Time_Ms__c - 2000;
+    state.Last_Refill_Time_Ms__c = state.Last_Refill_Time_Ms__c - 2000000;
     update as system state;
 
     // Drive workflow 2 again to resume
