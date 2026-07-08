@@ -568,6 +568,22 @@ By default, Salesforce Platform Event triggers (like `WorkflowEventTrigger`) exe
 3. **Running User Context**
    - **`userId`**: Triggers delegate step execution to Queueable Apex (`WorkflowOrchestrator`). By default, these run under the `Automated Process` user. While `autoproc` can be assigned Named Credential/External Credential access using Anonymous Apex (`insert new PermissionSetAssignment(...)`), you can optionally specify a dedicated integration `userId` here to run the subscriber trigger and Queueables under a standard user context.
 
+## Packaging Revenant
+
+Revenant supports being packaged inside a Managed Package (1GP or 2GP) and installed in subscriber orgs. The engine resolves workflow and step classes dynamically across the namespace boundary.
+
+### Class Resolution Model
+- **Engine Namespace**: When Revenant is installed as a package, the engine executes in the package namespace (e.g. `revenant`).
+- **Subscriber Namespace**: Subscriber workflows and steps can be defined locally (no namespace) or in their own namespace.
+- **Identifier Serialization**: When starting a workflow, the engine saves the fully-qualified class name (e.g. `sub_ns.MyWorkflow` or `MyWorkflow` if unpackaged) in the database. When resolving step names, the engine automatically attempts to resolve them in the namespace of the parent workflow.
+
+### Rules for Subscriber Workflow Names
+To start a workflow defined in a subscriber org, always use its fully-qualified class name if the subscriber org has a namespace prefix:
+- **Unpackaged subscriber org (no namespace)**: Start using the class name as-is: `WorkflowEngine.start('MyWorkflow', key, input);`
+- **Subscriber org with a namespace (e.g. `sub`)**: Start using the namespace-qualified class name: `WorkflowEngine.start('sub.MyWorkflow', key, input);`
+
+If the class name is not fully-qualified, the engine will search for it first in the package namespace, and then fall back to local/subscriber resolution. However, to ensure namespace-stable execution across all asynchronous boundaries, providing the fully-qualified name is highly recommended.
+
 ---
 
 ## License

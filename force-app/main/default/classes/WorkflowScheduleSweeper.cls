@@ -75,7 +75,8 @@ public inherited sharing class WorkflowScheduleSweeper {
       WHERE
         Enabled__c = TRUE
         AND Dedicated_Slot__c = FALSE
-        AND (Next_Fire_Window__c = NULL OR Next_Fire_Window__c <= :now)
+        AND (Next_Fire_Window__c = NULL
+        OR Next_Fire_Window__c <= :now)
       WITH SYSTEM_MODE
       ORDER BY Next_Fire_Window__c ASC NULLS FIRST, Name ASC
       LIMIT :SWEEP_BATCH_SIZE
@@ -122,7 +123,10 @@ public inherited sharing class WorkflowScheduleSweeper {
             toUpdate.add(
               new Workflow_Schedule__c(
                 Id = sched.Id,
-                Next_Fire_Window__c = nextWindow(sched.Cron_Expression__c, fireTime)
+                Next_Fire_Window__c = nextWindow(
+                  sched.Cron_Expression__c,
+                  fireTime
+                )
               )
             );
           }
@@ -142,7 +146,10 @@ public inherited sharing class WorkflowScheduleSweeper {
           toUpdate.add(
             new Workflow_Schedule__c(
               Id = sched.Id,
-              Next_Fire_Window__c = nextWindow(sched.Cron_Expression__c, fireTime)
+              Next_Fire_Window__c = nextWindow(
+                sched.Cron_Expression__c,
+                fireTime
+              )
             )
           );
           continue;
@@ -182,7 +189,9 @@ public inherited sharing class WorkflowScheduleSweeper {
     List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
     List<DueItem> starting = new List<DueItem>();
     for (DueItem item : dueItems) {
-      if (item.overlapPolicy == 'Skip' && blockedPrefixes.contains(item.prefix)) {
+      if (
+        item.overlapPolicy == 'Skip' && blockedPrefixes.contains(item.prefix)
+      ) {
         logsToUpsert.add(
           buildLog(
             item.sched,
@@ -339,7 +348,11 @@ public inherited sharing class WorkflowScheduleSweeper {
     String sfCron = toSalesforceCron(sched.Cron_Expression__c);
     // Keyed by the immutable schedule Id (not the mutable Name) so a later rename
     // can't orphan the CronTrigger from disable/delete/unregister/re-arm.
-    System.schedule(dedicatedJobName(sched.Id), sfCron, new WorkflowScheduleJob(sched.Id));
+    System.schedule(
+      dedicatedJobName(sched.Id),
+      sfCron,
+      new WorkflowScheduleJob(sched.Id)
+    );
   }
 
   /** Stable CronTrigger/job name for a dedicated schedule, derived from its Id. */
@@ -354,7 +367,12 @@ public inherited sharing class WorkflowScheduleSweeper {
    */
   public static Id runNow(Id scheduleId) {
     Workflow_Schedule__c sched = [
-      SELECT Id, Name, Workflow_Name__c, Correlation_Key_Prefix__c, Input_Json__c
+      SELECT
+        Id,
+        Name,
+        Workflow_Name__c,
+        Correlation_Key_Prefix__c,
+        Input_Json__c
       FROM Workflow_Schedule__c
       WHERE Id = :scheduleId
       WITH SYSTEM_MODE
@@ -444,7 +462,10 @@ public inherited sharing class WorkflowScheduleSweeper {
    * Shared by the 0-slot sweep, run-now, and the dedicated WorkflowScheduleJob so
    * the three paths cannot drift.
    */
-  public static Object resolveInput(Workflow_Schedule__c sched, DateTime fireTime) {
+  public static Object resolveInput(
+    Workflow_Schedule__c sched,
+    DateTime fireTime
+  ) {
     if (String.isBlank(sched.Input_Json__c)) {
       return null;
     }
@@ -561,7 +582,7 @@ public inherited sharing class WorkflowScheduleSweeper {
     if (String.isBlank(workflowName)) {
       return false;
     }
-    Type wflowType = Type.forName(workflowName);
+    Type wflowType = WorkflowTypeResolver.resolve(workflowName);
     if (wflowType == null) {
       return false;
     }
@@ -664,7 +685,10 @@ public inherited sharing class WorkflowScheduleSweeper {
    * Single-schedule overlap check (case-insensitive): is there an ACTIVE instance
    * whose correlation key shares this prefix but is from a different window?
    */
-  private static Boolean hasActivePriorRun(String prefix, String currentCorrKey) {
+  private static Boolean hasActivePriorRun(
+    String prefix,
+    String currentCorrKey
+  ) {
     String likePattern = prefix + '_%';
     List<Workflow_Instance__c> active = [
       SELECT Correlation_Key__c
@@ -728,7 +752,10 @@ public inherited sharing class WorkflowScheduleSweeper {
       return null;
     }
     try {
-      return WorkflowCronEvaluator.nextFireTime(cron, firedWindow.addMinutes(1));
+      return WorkflowCronEvaluator.nextFireTime(
+        cron,
+        firedWindow.addMinutes(1)
+      );
     } catch (Exception e) {
       return null;
     }
