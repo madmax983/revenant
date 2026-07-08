@@ -1,7 +1,56 @@
 @isTest
 public class ThrottledCalloutWorkflowExampleTest {
     @isTest
-    static void testSkeleton() {
-        System.assert(true, 'Skeleton assertion');
+    static void testThrottledCalloutWorkflowObeysRateLimitAndResumes() {
+        ThrottledCalloutWorkflowExample.reset();
+        
+        // Mock RateLimiter config: 1 capacity, 1.0 refill rate per second
+        String mockConfigJson = '{"DeveloperName":"ThrottledService","Capacity__c":1.0,"Refill_Rate_Per_Second__c":1.0}';
+        Rate_Limit_Config__mdt mockConfig = (Rate_Limit_Config__mdt) JSON.deserialize(
+            mockConfigJson,
+            Rate_Limit_Config__mdt.class
+        );
+        RateLimiter.mockConfigs.put('ThrottledService', mockConfig);
+
+        Test.startTest();
+        // Start two workflow instances. Since capacity is 1, the second instance should get blocked and sleep.
+        Id instId1 = WorkflowEngine.start('ThrottledCalloutWorkflowExample.ThrottledCalloutWorkflow', 'c1', null);
+        Id instId2 = WorkflowEngine.start('ThrottledCalloutWorkflowExample.ThrottledCalloutWorkflow', 'c2', null);
+
+        // Drive workflow 1
+        WorkflowTestHarness.Result res1 = new WorkflowTestHarness(instId1).drive();
+        System.assertEquals('Completed', res1.status, 'First instance should complete immediately');
+        System.assertEquals(1, ThrottledCalloutWorkflowExample.successfulCallouts, 'Should have 1 successful callout');
+
+        // Drive workflow 2
+        WorkflowTestHarness harness2 = new WorkflowTestHarness(instId2);
+        WorkflowTestHarness.Result res2 = harness2.drive();
+        
+        // Assert: Throttled instance must suspend with sleep
+        System.assertEquals('Suspended', res2.status, 'Second instance should be suspended/sleeping');
+        System.assert(res2.isSleeping, 'Instance 2 should be sleeping');
+
+        // Advance/mock time or allow token refill:
+        // Update state's Last_Refill_Time_Ms__c to 2 seconds ago to allow token refill
+        Rate_Limit_State__c state = [
+            SELECT Last_Refill_Time_Ms__c
+            FROM Rate_Limit_State__c
+            WHERE Integration_Key__c = 'ThrottledService'
+            WITH SYSTEM_MODE
+            LIMIT 1
+        ];
+        state.Last_Refill_Time_Ms__c = state.Last_Refill_Time_Ms__c - 2000;
+        update as system state;
+
+        // Drive workflow 2 again to resume
+        WorkflowTestHarness.Result res2Resume = harness2.drive();
+        System.assertEquals('Completed', res2Resume.status, 'Second instance should complete after token refill');
+        
+        Test.stopTest();
+
+        // Idempotency verification:
+        // Successful callouts must be 2, callout attempts must be 2 (due to idempotencyKey)
+        System.assertEquals(2, ThrottledCalloutWorkflowExample.successfulCallouts);
+        System.assertEquals(2, ThrottledCalloutWorkflowExample.calloutAttempts);
     }
 }
