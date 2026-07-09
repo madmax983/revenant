@@ -1047,4 +1047,55 @@ public class WorkflowAlertManagerTest {
       'Should NOT publish event'
     );
   }
+
+  @isTest
+  static void testSendAlertEventSkippedIfDmlBudgetExhausted() {
+    String wfName = 'WorkflowEngineTest.HappyWorkflow';
+    WorkflowAlertManager.mockConfigs.clear();
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockConfig(
+        'WorkflowEngineTest_HappyWorkflow',
+        '',
+        true,
+        null,
+        null,
+        null,
+        true
+      )
+    );
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowAlertManager.publishedEvents.clear();
+    WorkflowAlertManager.forceDmlBudgetExhausted = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed',
+      Correlation_Key__c = 'CorrDmlExhausted'
+    );
+    insert inst;
+    inst = [
+      SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+
+    Test.startTest();
+    WorkflowAlertManager.sendAlert(inst, 'Skipped error');
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      WorkflowAlertManager.sentEmailsCount,
+      'Should NOT send email'
+    );
+    System.assertEquals(
+      0,
+      WorkflowAlertManager.publishedEvents.size(),
+      'Should NOT publish event because DML budget is exhausted'
+    );
+
+    // Reset state
+    WorkflowAlertManager.forceDmlBudgetExhausted = false;
+  }
 }

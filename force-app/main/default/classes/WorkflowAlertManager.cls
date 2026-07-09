@@ -17,6 +17,9 @@ public inherited sharing class WorkflowAlertManager {
   @TestVisible
   private static List<Workflow_Alert__e> publishedEvents = new List<Workflow_Alert__e>();
 
+  @TestVisible
+  private static Boolean forceDmlBudgetExhausted = false;
+
   /**
    * Inspects configuration and thresholds, and sends an email alert and/or platform event if needed.
    */
@@ -228,6 +231,31 @@ public inherited sharing class WorkflowAlertManager {
     if (events == null || events.isEmpty()) {
       return;
     }
+
+    // Never spend the transaction's last DML statement or DML rows here.
+    // EventBus.publish consumes a DML statement AND one DML row per event; over
+    // budget either throws an uncatchable System.LimitException that would roll
+    // back the terminal-state write — defeating the fire-and-forget contract.
+    if (
+      forceDmlBudgetExhausted ||
+      Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
+      Limits.getDmlRows() + events.size() > Limits.getLimitDmlRows()
+    ) {
+      System.debug(
+        LoggingLevel.WARN,
+        'Skipping Workflow_Alert__e publish: DML budget exhausted (statements=' +
+          Limits.getDmlStatements() +
+          '/' +
+          Limits.getLimitDmlStatements() +
+          ', rows=' +
+          Limits.getDmlRows() +
+          '/' +
+          Limits.getLimitDmlRows() +
+          ').'
+      );
+      return;
+    }
+
     if (Test.isRunningTest()) {
       publishedEvents.addAll(events);
     }
