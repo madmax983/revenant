@@ -1,0 +1,3 @@
+[submodule "lib/chunkedcursoriterator"]
+	path = lib/chunkedcursoriterator
+	url = https://github.com/madmax983/chunkedcursoriterator.git
