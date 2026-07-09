@@ -1,3 +1,29 @@
+/**
+ * Reference example for durable rate limiting.
+ *
+ * Demonstrates a safe two-step pattern to throttle outbound callouts:
+ *   1. AcquireTokenStep: Calls RateLimiter.acquire(). If allowed, transitions to the callout step.
+ *      If blocked, yields a durable sleep. This commits the DML in a separate transaction.
+ *   2. ThrottledCalloutStep: Executes the callout using ctx.idempotencyKey.
+ *      Runs in a fresh transaction, avoiding System.CalloutException (uncommitted work pending).
+ *
+ * Note on Retries & Re-drives:
+ * ----------------------------
+ * When a callout fails (e.g. transient network error) and is retried via a RetryPolicy,
+ * or when an operator manually re-drives the ThrottledCalloutStep from the dashboard,
+ * the engine re-executes ThrottledCalloutStep directly, bypassing AcquireTokenStep.
+ *
+ * This is the intended behavior:
+ *   - Transaction Safety: AcquireTokenStep performs DML (RateLimiter.acquire), while
+ *     ThrottledCalloutStep performs the HTTP Callout. Apex prohibits HTTP Callouts after
+ *     DML in the same transaction, so they must be separated.
+ *   - Built-in Back-off: Callout retries are already throttled by the step's own
+ *     RetryPolicy back-off delay (which sleeps durably between attempts).
+ *
+ * If you must enforce rate-limiting on every single callout retry, you can handle
+ * callout exceptions in ThrottledCalloutStep and return a transition back to
+ * AcquireTokenStep instead of using the engine's built-in RetryPolicy.
+ */
 public inherited sharing class ThrottledCalloutWorkflowExample {
   public static Integer calloutAttempts = 0;
   public static Integer successfulCallouts = 0;
