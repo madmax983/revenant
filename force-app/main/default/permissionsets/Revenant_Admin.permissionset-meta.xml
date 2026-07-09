@@ -217,6 +217,53 @@
         <readable>true</readable>
     </fieldPermissions>
 
+    <!-- fieldPermissions for Workflow_Alert__e (excluding required/system fields) -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Alert_Reason__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Consecutive_Failures_Limit__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Error_Message__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Failure_Count_Limit__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Stall_Threshold_Minutes__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Time_Window_Minutes__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Workflow_Instance_Id__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Workflow_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
     <!-- fieldPermissions for Workflow_Lifecycle__e subscribers (excluding required fields) -->
     <fieldPermissions>
         <editable>false</editable>
@@ -408,6 +455,17 @@
         <modifyAllRecords>true</modifyAllRecords>
         <object>Workflow_Instance__c</object>
         <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <!-- Publish (create) and subscribe (read) access for the outbound alert event -->
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Alert__e</object>
+        <viewAllRecords>false</viewAllRecords>
     </objectPermissions>
 
     <!-- Publish (create) and subscribe (read) access for the outbound lifecycle event -->

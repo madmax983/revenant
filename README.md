@@ -470,11 +470,31 @@ The engine maps a workflow's class name to a custom metadata record's `Developer
 
 ### Configuration Fields
 
-1.  **Email Recipients** (`Email_Recipients__c`): A comma- or semicolon-separated list of target email addresses (e.g., `ops@example.com, alerts@example.com`).
-2.  **Enable Alerts** (`Enable_Alerts__c`): Checkbox to toggle notifications for this configuration.
-3.  **Threshold Customization** (Optional - if left blank, alerts fire immediately on any failure):
-    - `Consecutive_Failures_Limit__c`: Trigger email alerts only after `N` consecutive executions fail.
-    - `Failure_Count_Limit__c` and `Time_Window_Minutes__c`: Trigger email alerts if `N` failures occur within a sliding window of `M` minutes.
+1.  **Enable Alerts** (`Enable_Alerts__c`): Checkbox to toggle alerts (both email and platform events) for this configuration.
+2.  **Email Recipients** (`Email_Recipients__c`): A comma- or semicolon-separated list of target email addresses (e.g., `ops@example.com, alerts@example.com`).
+3.  **Publish Alert Event** (`Publish_Alert_Event__c`): Checkbox toggle to publish a `Workflow_Alert__e` platform event when an alert is triggered. This can be used in addition to or instead of email alerting (if `Email_Recipients__c` is left blank).
+4.  **Threshold Customization** (Optional - if left blank, alerts fire immediately on any failure):
+    - `Consecutive_Failures_Limit__c`: Trigger alerts only after `N` consecutive executions fail.
+    - `Failure_Count_Limit__c` and `Time_Window_Minutes__c`: Trigger alerts if `N` failures occur within a sliding window of `M` minutes.
+    - `Stall_Threshold_Minutes__c`: Trigger stall alerts if an active workflow has been inactive for `K` minutes.
+
+### Platform Event Routing (Workflow_Alert__e)
+
+For modern ops routing (e.g., paging Slack, PagerDuty, Microsoft Teams, or mobile push), enable the **Publish Alert Event** toggle. The engine will publish a `Workflow_Alert__e` platform event with the following payload:
+
+-   **Workflow Name** (`Workflow_Name__c`): The DeveloperName of the workflow.
+-   **Workflow Instance Id** (`Workflow_Instance_Id__c`): The ID of the `Workflow_Instance__c` record.
+-   **Correlation Key** (`Correlation_Key__c`): The external correlation key.
+-   **Error Message** (`Error_Message__c`): The failure error message, stall details, or stack trace (truncated to 20k characters for safe heap handling).
+-   **Alert Reason** (`Alert_Reason__c`): The trigger reason: `'Consecutive Failures'`, `'Sliding Window'`, `'Immediate'`, or `'Stall'`.
+-   **Threshold Values**: Carries the triggering policy limits: `Consecutive_Failures_Limit__c`, `Failure_Count_Limit__c`, `Time_Window_Minutes__c`, and `Stall_Threshold_Minutes__c`.
+
+#### Subscribing via Flow (No-Code Integration)
+
+Admins can subscribe to `Workflow_Alert__e` via a standard record-triggered Flow in Setup. Under 10 minutes with zero Apex, you can:
+1.  Create a **Platform Event-Triggered Flow** selecting `Workflow_Alert__e`.
+2.  Add a **Decision** block to route based on `Alert_Reason__c` (e.g. route `'Sliding Window'` errors directly to PagerDuty, and `'Stall'` warnings to a Slack channel).
+3.  Use the **HTTP Callout** (Flow Action) to post the payload details directly to your external webhook destination.
 
 ---
 

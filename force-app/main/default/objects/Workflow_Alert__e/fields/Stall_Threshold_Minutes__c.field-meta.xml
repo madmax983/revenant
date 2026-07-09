@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Stall_Threshold_Minutes__c</fullName>
+    <description>The configured stall threshold in minutes that triggered this alert.</description>
+    <externalId>false</externalId>
+    <label>Stall Threshold Minutes</label>
+    <precision>18</precision>
+    <required>false</required>
+    <scale>0</scale>
+    <type>Number</type>
+    <unique>false</unique>
+</CustomField>
