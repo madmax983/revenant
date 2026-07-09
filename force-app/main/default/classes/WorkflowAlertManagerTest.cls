@@ -8,13 +8,34 @@ public class WorkflowAlertManagerTest {
     Integer failLimit,
     Integer windowMin
   ) {
+    return createMockConfig(
+      devName,
+      recipients,
+      enabled,
+      consecutiveLimit,
+      failLimit,
+      windowMin,
+      false
+    );
+  }
+
+  private static Workflow_Alert_Config__mdt createMockConfig(
+    String devName,
+    String recipients,
+    Boolean enabled,
+    Integer consecutiveLimit,
+    Integer failLimit,
+    Integer windowMin,
+    Boolean publishEvent
+  ) {
     Map<String, Object> fields = new Map<String, Object>{
       'DeveloperName' => devName,
       'Email_Recipients__c' => recipients,
       'Enable_Alerts__c' => enabled,
       'Consecutive_Failures_Limit__c' => consecutiveLimit,
       'Failure_Count_Limit__c' => failLimit,
-      'Time_Window_Minutes__c' => windowMin
+      'Time_Window_Minutes__c' => windowMin,
+      'Publish_Alert_Event__c' => publishEvent
     };
     return (Workflow_Alert_Config__mdt) JSON.deserialize(
       JSON.serialize(fields),
@@ -731,5 +752,350 @@ public class WorkflowAlertManagerTest {
       );
     }
     Test.stopTest();
+  }
+
+  @isTest
+  static void testSendAlertPublishEventConsecutive() {
+    String wfName = 'WorkflowEngineTest.HappyWorkflow';
+    WorkflowAlertManager.mockConfigs.clear();
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockConfig(
+        'WorkflowEngineTest_HappyWorkflow',
+        'test@example.com',
+        true,
+        3,
+        null,
+        null,
+        true
+      )
+    );
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowAlertManager.publishedEvents.clear();
+
+    // Insert first two failures
+    Workflow_Instance__c inst1 = new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed'
+    );
+    Workflow_Instance__c inst2 = new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed'
+    );
+    insert new List<Workflow_Instance__c>{ inst1, inst2 };
+
+    // Third failure
+    Workflow_Instance__c inst3 = new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed',
+      Correlation_Key__c = 'Corr3'
+    );
+    insert inst3;
+    inst3 = [
+      SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst3.Id
+    ];
+
+    Test.startTest();
+    WorkflowAlertManager.sendAlert(inst3, 'Error 3');
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      WorkflowAlertManager.sentEmailsCount,
+      'Should send email'
+    );
+    System.assertEquals(
+      1,
+      WorkflowAlertManager.publishedEvents.size(),
+      'Should publish one event'
+    );
+
+    Workflow_Alert__e evt = WorkflowAlertManager.publishedEvents[0];
+    System.assertEquals(wfName, evt.Workflow_Name__c);
+    System.assertEquals(inst3.Id, evt.Workflow_Instance_Id__c);
+    System.assertEquals('Corr3', evt.Correlation_Key__c);
+    System.assertEquals('Error 3', evt.Error_Message__c);
+    System.assertEquals('Consecutive Failures', evt.Alert_Reason__c);
+    System.assertEquals(3, evt.Consecutive_Failures_Limit__c);
+    System.assertEquals(null, evt.Failure_Count_Limit__c);
+    System.assertEquals(null, evt.Time_Window_Minutes__c);
+  }
+
+  @isTest
+  static void testSendAlertPublishEventSlidingWindow() {
+    String wfName = 'WorkflowEngineTest.HappyWorkflow';
+    WorkflowAlertManager.mockConfigs.clear();
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockConfig(
+        'WorkflowEngineTest_HappyWorkflow',
+        'test@example.com',
+        true,
+        null,
+        2,
+        10,
+        true
+      )
+    );
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowAlertManager.publishedEvents.clear();
+
+    // First failure
+    Workflow_Instance__c inst1 = new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed'
+    );
+    insert inst1;
+
+    // Second failure
+    Workflow_Instance__c inst2 = new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed',
+      Correlation_Key__c = 'CorrSliding'
+    );
+    insert inst2;
+    inst2 = [
+      SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst2.Id
+    ];
+
+    Test.startTest();
+    WorkflowAlertManager.sendAlert(inst2, 'Error Sliding');
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      WorkflowAlertManager.sentEmailsCount,
+      'Should send email'
+    );
+    System.assertEquals(
+      1,
+      WorkflowAlertManager.publishedEvents.size(),
+      'Should publish event'
+    );
+
+    Workflow_Alert__e evt = WorkflowAlertManager.publishedEvents[0];
+    System.assertEquals(wfName, evt.Workflow_Name__c);
+    System.assertEquals(inst2.Id, evt.Workflow_Instance_Id__c);
+    System.assertEquals('CorrSliding', evt.Correlation_Key__c);
+    System.assertEquals('Error Sliding', evt.Error_Message__c);
+    System.assertEquals('Sliding Window', evt.Alert_Reason__c);
+    System.assertEquals(null, evt.Consecutive_Failures_Limit__c);
+    System.assertEquals(2, evt.Failure_Count_Limit__c);
+    System.assertEquals(10, evt.Time_Window_Minutes__c);
+  }
+
+  @isTest
+  static void testSendAlertPublishEventImmediate() {
+    String wfName = 'WorkflowEngineTest.HappyWorkflow';
+    WorkflowAlertManager.mockConfigs.clear();
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockConfig(
+        'WorkflowEngineTest_HappyWorkflow',
+        'test@example.com',
+        true,
+        null,
+        null,
+        null,
+        true
+      )
+    );
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowAlertManager.publishedEvents.clear();
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed',
+      Correlation_Key__c = 'CorrImmediate'
+    );
+    insert inst;
+    inst = [
+      SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+
+    Test.startTest();
+    WorkflowAlertManager.sendAlert(inst, 'Immediate error');
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      WorkflowAlertManager.sentEmailsCount,
+      'Should send email'
+    );
+    System.assertEquals(
+      1,
+      WorkflowAlertManager.publishedEvents.size(),
+      'Should publish event'
+    );
+
+    Workflow_Alert__e evt = WorkflowAlertManager.publishedEvents[0];
+    System.assertEquals(wfName, evt.Workflow_Name__c);
+    System.assertEquals(inst.Id, evt.Workflow_Instance_Id__c);
+    System.assertEquals('CorrImmediate', evt.Correlation_Key__c);
+    System.assertEquals('Immediate error', evt.Error_Message__c);
+    System.assertEquals('Immediate', evt.Alert_Reason__c);
+    System.assertEquals(null, evt.Consecutive_Failures_Limit__c);
+    System.assertEquals(null, evt.Failure_Count_Limit__c);
+    System.assertEquals(null, evt.Time_Window_Minutes__c);
+  }
+
+  @isTest
+  static void testSendAlertEventOnlyNoEmail() {
+    String wfName = 'WorkflowEngineTest.HappyWorkflow';
+    WorkflowAlertManager.mockConfigs.clear();
+    // Publish true, but recipients empty
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockConfig(
+        'WorkflowEngineTest_HappyWorkflow',
+        '',
+        true,
+        null,
+        null,
+        null,
+        true
+      )
+    );
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowAlertManager.publishedEvents.clear();
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed',
+      Correlation_Key__c = 'CorrEventOnly'
+    );
+    insert inst;
+    inst = [
+      SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+
+    Test.startTest();
+    WorkflowAlertManager.sendAlert(inst, 'Event only error');
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      WorkflowAlertManager.sentEmailsCount,
+      'Should NOT send email'
+    );
+    System.assertEquals(
+      1,
+      WorkflowAlertManager.publishedEvents.size(),
+      'Should publish event'
+    );
+
+    Workflow_Alert__e evt = WorkflowAlertManager.publishedEvents[0];
+    System.assertEquals(wfName, evt.Workflow_Name__c);
+    System.assertEquals(inst.Id, evt.Workflow_Instance_Id__c);
+    System.assertEquals('CorrEventOnly', evt.Correlation_Key__c);
+    System.assertEquals('Event only error', evt.Error_Message__c);
+    System.assertEquals('Immediate', evt.Alert_Reason__c);
+  }
+
+  @isTest
+  static void testSendAlertNoEventIfToggleDisabled() {
+    String wfName = 'WorkflowEngineTest.HappyWorkflow';
+    WorkflowAlertManager.mockConfigs.clear();
+    // Publish false, recipients filled
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockConfig(
+        'WorkflowEngineTest_HappyWorkflow',
+        'test@example.com',
+        true,
+        null,
+        null,
+        null,
+        false
+      )
+    );
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowAlertManager.publishedEvents.clear();
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed',
+      Correlation_Key__c = 'CorrNoEvent'
+    );
+    insert inst;
+    inst = [
+      SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+
+    Test.startTest();
+    WorkflowAlertManager.sendAlert(inst, 'No event error');
+    Test.stopTest();
+
+    System.assertEquals(
+      1,
+      WorkflowAlertManager.sentEmailsCount,
+      'Should send email'
+    );
+    System.assertEquals(
+      0,
+      WorkflowAlertManager.publishedEvents.size(),
+      'Should NOT publish event'
+    );
+  }
+
+  @isTest
+  static void testSendAlertEventSkippedIfDmlBudgetExhausted() {
+    String wfName = 'WorkflowEngineTest.HappyWorkflow';
+    WorkflowAlertManager.mockConfigs.clear();
+    WorkflowAlertManager.mockConfigs.put(
+      'WorkflowEngineTest_HappyWorkflow',
+      createMockConfig(
+        'WorkflowEngineTest_HappyWorkflow',
+        '',
+        true,
+        null,
+        null,
+        null,
+        true
+      )
+    );
+    WorkflowAlertManager.sentEmailsCount = 0;
+    WorkflowAlertManager.publishedEvents.clear();
+    WorkflowAlertManager.forceDmlBudgetExhausted = true;
+
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = wfName,
+      Status__c = 'Failed',
+      Correlation_Key__c = 'CorrDmlExhausted'
+    );
+    insert inst;
+    inst = [
+      SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+
+    Test.startTest();
+    WorkflowAlertManager.sendAlert(inst, 'Skipped error');
+    Test.stopTest();
+
+    System.assertEquals(
+      0,
+      WorkflowAlertManager.sentEmailsCount,
+      'Should NOT send email'
+    );
+    System.assertEquals(
+      0,
+      WorkflowAlertManager.publishedEvents.size(),
+      'Should NOT publish event because DML budget is exhausted'
+    );
+
+    // Reset state
+    WorkflowAlertManager.forceDmlBudgetExhausted = false;
   }
 }

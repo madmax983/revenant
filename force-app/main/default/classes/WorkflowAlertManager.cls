@@ -14,34 +14,58 @@ public inherited sharing class WorkflowAlertManager {
   @TestVisible
   private static String lastHtmlBody = null;
 
+  @TestVisible
+  private static List<Workflow_Alert__e> publishedEvents = new List<Workflow_Alert__e>();
+
+  @TestVisible
+  private static Boolean forceDmlBudgetExhausted = false;
+
   /**
-   * Inspects configuration and thresholds, and sends an email alert if needed.
+   * Inspects configuration and thresholds, and sends an email alert and/or platform event if needed.
    */
   public static void sendAlert(Workflow_Instance__c instance, String errorMsg) {
     try {
-      String workflowName = instance.Workflow_Name__c;
-      if (String.isBlank(workflowName)) {
+      if (instance == null || String.isBlank(instance.Workflow_Name__c)) {
         return;
       }
 
+      String workflowName = instance.Workflow_Name__c;
+
       // 1. Resolve Config
       Workflow_Alert_Config__mdt config = getAlertConfig(workflowName);
+      if (config == null || !config.Enable_Alerts__c) {
+        return;
+      }
+
+      // If email recipients are blank and event publishing is disabled, exit early
       if (
-        config == null ||
-        !config.Enable_Alerts__c ||
-        String.isBlank(config.Email_Recipients__c)
+        String.isBlank(config.Email_Recipients__c) &&
+        !config.Publish_Alert_Event__c
       ) {
         return;
       }
 
-      // 2. Evaluate Thresholds
-      Boolean isThresholdMet = evaluateThresholds(workflowName, config);
-      if (!isThresholdMet) {
+      // 2. Determine Alert Reason
+      String alertReason = determineAlertReason(workflowName, config);
+      if (alertReason == null) {
         return;
       }
 
-      // 3. Dispatch Alert
-      dispatchEmail(instance, config.Email_Recipients__c, errorMsg);
+      // 3. Dispatch Email if recipients configured
+      if (String.isNotBlank(config.Email_Recipients__c)) {
+        dispatchEmail(instance, config.Email_Recipients__c, errorMsg);
+      }
+
+      // 4. Dispatch Platform Event if enabled
+      if (config.Publish_Alert_Event__c) {
+        Workflow_Alert__e evt = buildAlertEvent(
+          instance,
+          config,
+          errorMsg,
+          alertReason
+        );
+        publishEvents(new List<Workflow_Alert__e>{ evt });
+      }
     } catch (Exception ex) {
       System.debug(
         LoggingLevel.ERROR,
@@ -76,47 +100,22 @@ public inherited sharing class WorkflowAlertManager {
       return mockConfigs.get('Default');
     }
 
-    // Query specific config
-    List<Workflow_Alert_Config__mdt> configs = [
-      SELECT
-        Email_Recipients__c,
-        Enable_Alerts__c,
-        Consecutive_Failures_Limit__c,
-        Failure_Count_Limit__c,
-        Time_Window_Minutes__c,
-        Stall_Threshold_Minutes__c
-      FROM Workflow_Alert_Config__mdt
-      WHERE DeveloperName = :devName OR DeveloperName = :truncatedDevName
-      WITH SYSTEM_MODE
-    ];
-    if (!configs.isEmpty()) {
-      configCache.put(workflowName, configs[0]);
-      return configs[0];
+    // SOQL-free Custom Metadata Retrieval
+    Workflow_Alert_Config__mdt config = Workflow_Alert_Config__mdt.getInstance(
+      devName
+    );
+    if (config == null && truncatedDevName != devName) {
+      config = Workflow_Alert_Config__mdt.getInstance(truncatedDevName);
+    }
+    if (config == null) {
+      config = Workflow_Alert_Config__mdt.getInstance('Default');
     }
 
-    // Fallback to Default
-    configs = [
-      SELECT
-        Email_Recipients__c,
-        Enable_Alerts__c,
-        Consecutive_Failures_Limit__c,
-        Failure_Count_Limit__c,
-        Time_Window_Minutes__c,
-        Stall_Threshold_Minutes__c
-      FROM Workflow_Alert_Config__mdt
-      WHERE DeveloperName = 'Default'
-      WITH SYSTEM_MODE
-    ];
-    if (!configs.isEmpty()) {
-      configCache.put(workflowName, configs[0]);
-      return configs[0];
-    }
-
-    configCache.put(workflowName, null);
-    return null;
+    configCache.put(workflowName, config);
+    return config;
   }
 
-  private static Boolean evaluateThresholds(
+  private static String determineAlertReason(
     String workflowName,
     Workflow_Alert_Config__mdt config
   ) {
@@ -131,7 +130,7 @@ public inherited sharing class WorkflowAlertManager {
 
     // If no thresholds are configured, default to sending the alert
     if (!hasConsecutiveLimit && !hasSlidingWindow) {
-      return true;
+      return 'immediate';
     }
 
     // Check Consecutive Failures
@@ -158,7 +157,7 @@ public inherited sharing class WorkflowAlertManager {
           }
         }
         if (allFailed) {
-          return true;
+          return 'consecutive-failure';
         }
       }
     }
@@ -182,11 +181,92 @@ public inherited sharing class WorkflowAlertManager {
       ];
 
       if (failCount >= limitVal) {
-        return true;
+        return 'sliding-window';
       }
     }
 
-    return false;
+    return null;
+  }
+
+  private static Workflow_Alert__e buildAlertEvent(
+    Workflow_Instance__c instance,
+    Workflow_Alert_Config__mdt config,
+    String errorMsg,
+    String alertReason
+  ) {
+    Workflow_Alert__e evt = new Workflow_Alert__e();
+    evt.Workflow_Name__c = instance.Workflow_Name__c;
+    evt.Workflow_Instance_Id__c = instance.Id;
+    evt.Correlation_Key__c = instance.Correlation_Key__c;
+
+    // Truncate error message if it exceeds 20000 characters
+    if (errorMsg != null && errorMsg.length() > 20000) {
+      evt.Error_Message__c = errorMsg.substring(0, 20000);
+    } else {
+      evt.Error_Message__c = errorMsg;
+    }
+
+    // Map internal reason string to final user-facing string
+    String finalReason = alertReason;
+    if (alertReason == 'consecutive-failure') {
+      finalReason = 'Consecutive Failures';
+    } else if (alertReason == 'sliding-window') {
+      finalReason = 'Sliding Window';
+    } else if (alertReason == 'immediate') {
+      finalReason = 'Immediate';
+    } else if (alertReason == 'stall') {
+      finalReason = 'Stall';
+    }
+    evt.Alert_Reason__c = finalReason;
+
+    evt.Consecutive_Failures_Limit__c = config.Consecutive_Failures_Limit__c;
+    evt.Failure_Count_Limit__c = config.Failure_Count_Limit__c;
+    evt.Time_Window_Minutes__c = config.Time_Window_Minutes__c;
+    evt.Stall_Threshold_Minutes__c = config.Stall_Threshold_Minutes__c;
+
+    return evt;
+  }
+
+  private static void publishEvents(List<Workflow_Alert__e> events) {
+    if (events == null || events.isEmpty()) {
+      return;
+    }
+
+    // Never spend the transaction's last DML statement or DML rows here.
+    // EventBus.publish consumes a DML statement AND one DML row per event; over
+    // budget either throws an uncatchable System.LimitException that would roll
+    // back the terminal-state write — defeating the fire-and-forget contract.
+    if (
+      forceDmlBudgetExhausted ||
+      Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
+      Limits.getDmlRows() + events.size() > Limits.getLimitDmlRows()
+    ) {
+      System.debug(
+        LoggingLevel.WARN,
+        'Skipping Workflow_Alert__e publish: DML budget exhausted (statements=' +
+          Limits.getDmlStatements() +
+          '/' +
+          Limits.getLimitDmlStatements() +
+          ', rows=' +
+          Limits.getDmlRows() +
+          '/' +
+          Limits.getLimitDmlRows() +
+          ').'
+      );
+      return;
+    }
+
+    if (Test.isRunningTest()) {
+      publishedEvents.addAll(events);
+    }
+    try {
+      EventBus.publish(events);
+    } catch (Exception ex) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Failed to publish Workflow_Alert__e events: ' + ex.getMessage()
+      );
+    }
   }
 
   private static void dispatchEmail(
@@ -359,7 +439,11 @@ public inherited sharing class WorkflowAlertManager {
         '</table>' +
         '<div style="background-color: #fffaf0; border: 1px solid #feebc8; border-radius: 4px; padding: 15px; margin-bottom: 20px; color: #c05621;">' +
         '<strong>Stall Details:</strong><br/>' +
-        'The workflow has been inactive for ' + idleMinutes + ' minutes in status ' + escStatus + '.' +
+        'The workflow has been inactive for ' +
+        idleMinutes +
+        ' minutes in status ' +
+        escStatus +
+        '.' +
         '</div>' +
         '<p style="font-size: 14px; color: #718096; margin-bottom: 0;">To view and manage this workflow, open the Workflow Dashboard in Salesforce.</p>' +
         '</div>';
@@ -382,33 +466,39 @@ public inherited sharing class WorkflowAlertManager {
    */
   @TestVisible
   private static List<Workflow_Alert_Config__mdt> getActiveStallConfigs() {
-    if (Test.isRunningTest()) {
-      List<Workflow_Alert_Config__mdt> activeMock = new List<Workflow_Alert_Config__mdt>();
-      for (Workflow_Alert_Config__mdt c : mockConfigs.values()) {
-        if (c.Enable_Alerts__c && c.Stall_Threshold_Minutes__c != null && c.Stall_Threshold_Minutes__c > 0) {
-          activeMock.add(c);
-        }
+    List<Workflow_Alert_Config__mdt> activeConfigs = new List<Workflow_Alert_Config__mdt>();
+    Map<String, Workflow_Alert_Config__mdt> allConfigs = Test.isRunningTest()
+      ? mockConfigs
+      : Workflow_Alert_Config__mdt.getAll();
+
+    for (Workflow_Alert_Config__mdt c : allConfigs.values()) {
+      if (
+        c.Enable_Alerts__c &&
+        c.Stall_Threshold_Minutes__c != null &&
+        c.Stall_Threshold_Minutes__c > 0
+      ) {
+        activeConfigs.add(c);
       }
-      return activeMock;
     }
-    return [
-      SELECT DeveloperName, Stall_Threshold_Minutes__c, Email_Recipients__c, Enable_Alerts__c
-      FROM Workflow_Alert_Config__mdt
-      WHERE Enable_Alerts__c = true AND Stall_Threshold_Minutes__c != null AND Stall_Threshold_Minutes__c > 0
-      WITH SYSTEM_MODE
-    ];
+    return activeConfigs;
   }
 
   /**
    * Performs case-insensitive and name-truncation (40-char limit) lookup matching for workflow configurations.
    */
   @TestVisible
-  private static Workflow_Alert_Config__mdt resolveStallConfig(String workflowName, List<Workflow_Alert_Config__mdt> activeConfigs) {
+  private static Workflow_Alert_Config__mdt resolveStallConfig(
+    String workflowName,
+    List<Workflow_Alert_Config__mdt> activeConfigs
+  ) {
     if (String.isBlank(workflowName)) {
       return null;
     }
-    String devName = workflowName.replaceAll('[^a-zA-Z0-9_]', '_').toLowerCase();
-    String truncatedDevName = devName.length() > 40 ? devName.substring(0, 40) : devName;
+    String devName = workflowName.replaceAll('[^a-zA-Z0-9_]', '_')
+      .toLowerCase();
+    String truncatedDevName = devName.length() > 40
+      ? devName.substring(0, 40)
+      : devName;
 
     Workflow_Alert_Config__mdt defaultConfig = null;
 
@@ -423,7 +513,7 @@ public inherited sharing class WorkflowAlertManager {
       if (configKey == truncatedDevName) {
         return config; // Store first match, but exact match takes precedence
       }
-      if (config.DeveloperName == 'Default') {
+      if (config.DeveloperName.equalsIgnoreCase('Default')) {
         defaultConfig = config;
       }
     }
@@ -444,13 +534,40 @@ public inherited sharing class WorkflowAlertManager {
 
     // 2. Query candidates using parent-child subqueries (eliminates 50k SOQL row processed limit risk)
     List<Workflow_Instance__c> candidates = [
-      SELECT Id, Name, Workflow_Name__c, Status__c, Sleep_Until__c, CreatedDate, Correlation_Key__c,
-        (SELECT CreatedDate FROM Workflow_Step_Executions__r ORDER BY CreatedDate DESC LIMIT 1),
-        (SELECT CreatedDate FROM Workflow_Logs__r WHERE Log_Type__c = 'WorkflowStallAlert' ORDER BY CreatedDate DESC LIMIT 1)
+      SELECT
+        Id,
+        Name,
+        Workflow_Name__c,
+        Status__c,
+        Sleep_Until__c,
+        CreatedDate,
+        Correlation_Key__c,
+        (
+          SELECT CreatedDate
+          FROM Workflow_Step_Executions__r
+          ORDER BY CreatedDate DESC
+          LIMIT 1
+        ),
+        (
+          SELECT CreatedDate
+          FROM Workflow_Logs__r
+          WHERE Log_Type__c = 'WorkflowStallAlert'
+          ORDER BY CreatedDate DESC
+          LIMIT 1
+        )
       FROM Workflow_Instance__c
-      WHERE Status__c IN ('Pending', 'Running', 'Suspended', 'Compensating', 'Cancelling')
+      WHERE
+        Status__c IN (
+          'Pending',
+          'Running',
+          'Suspended',
+          'Compensating',
+          'Cancelling'
+        )
         AND Workflow_Name__c NOT IN ('WatchdogWorkflow', 'CleanupWorkflow')
-        AND (Status__c != 'Suspended' OR Sleep_Until__c = null OR Sleep_Until__c <= :now)
+        AND (Status__c != 'Suspended'
+        OR Sleep_Until__c = NULL
+        OR Sleep_Until__c <= :now)
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC
       LIMIT 1000
@@ -482,6 +599,7 @@ public inherited sharing class WorkflowAlertManager {
 
     List<Messaging.SingleEmailMessage> emailsToSend = new List<Messaging.SingleEmailMessage>();
     List<Workflow_Log__c> alertsToInsert = new List<Workflow_Log__c>();
+    List<Workflow_Alert__e> eventsToPublish = new List<Workflow_Alert__e>();
 
     // 4. Process each candidate
     for (Workflow_Instance__c inst : candidates) {
@@ -496,13 +614,24 @@ public inherited sharing class WorkflowAlertManager {
       }
 
       // Skip Suspended instances waiting on external signals or approvals
-      if (inst.Status__c == 'Suspended' && suspendedWithPendingSteps.contains(inst.Id)) {
+      if (
+        inst.Status__c == 'Suspended' &&
+        suspendedWithPendingSteps.contains(inst.Id)
+      ) {
         continue;
       }
 
       // Resolve config case-insensitively
-      Workflow_Alert_Config__mdt config = resolveStallConfig(inst.Workflow_Name__c, configs);
-      if (config == null || !config.Enable_Alerts__c || config.Stall_Threshold_Minutes__c == null || config.Stall_Threshold_Minutes__c <= 0) {
+      Workflow_Alert_Config__mdt config = resolveStallConfig(
+        inst.Workflow_Name__c,
+        configs
+      );
+      if (
+        config == null ||
+        !config.Enable_Alerts__c ||
+        config.Stall_Threshold_Minutes__c == null ||
+        config.Stall_Threshold_Minutes__c <= 0
+      ) {
         continue;
       }
 
@@ -510,7 +639,10 @@ public inherited sharing class WorkflowAlertManager {
 
       // Compute last progress date
       Datetime lastProgressDateTime = inst.CreatedDate;
-      if (inst.Workflow_Step_Executions__r != null && !inst.Workflow_Step_Executions__r.isEmpty()) {
+      if (
+        inst.Workflow_Step_Executions__r != null &&
+        !inst.Workflow_Step_Executions__r.isEmpty()
+      ) {
         lastProgressDateTime = inst.Workflow_Step_Executions__r[0].CreatedDate;
       }
 
@@ -525,16 +657,35 @@ public inherited sharing class WorkflowAlertManager {
       Long diffMinutes = diffMs / (1000 * 60);
 
       if (diffMinutes >= threshold) {
-        if (lastAlertDateTime == null || lastAlertDateTime < lastProgressDateTime) {
-          // Build alert email
-          Messaging.SingleEmailMessage mail = buildStallEmail(
-            inst,
-            config,
-            diffMinutes.intValue(),
-            threshold
-          );
-          if (mail != null) {
-            emailsToSend.add(mail);
+        if (
+          lastAlertDateTime == null ||
+          lastAlertDateTime < lastProgressDateTime
+        ) {
+          // Build alert email if recipients configured
+          if (String.isNotBlank(config.Email_Recipients__c)) {
+            Messaging.SingleEmailMessage mail = buildStallEmail(
+              inst,
+              config,
+              diffMinutes.intValue(),
+              threshold
+            );
+            if (mail != null) {
+              emailsToSend.add(mail);
+            }
+          }
+
+          // Build event if enabled
+          if (config.Publish_Alert_Event__c) {
+            eventsToPublish.add(
+              buildAlertEvent(
+                inst,
+                config,
+                'Workflow stall detected (idle for ' +
+                  diffMinutes +
+                  ' minutes)',
+                'stall'
+              )
+            );
           }
 
           // Build log marker
@@ -544,7 +695,9 @@ public inherited sharing class WorkflowAlertManager {
             Correlation_Key__c = inst.Correlation_Key__c,
             Log_Type__c = 'WorkflowStallAlert',
             Level__c = 'Warn',
-            Message__c = 'Workflow stall detected (idle for ' + diffMinutes + ' minutes)'
+            Message__c = 'Workflow stall detected (idle for ' +
+              diffMinutes +
+              ' minutes)'
           );
           alertsToInsert.add(marker);
         }
@@ -558,10 +711,16 @@ public inherited sharing class WorkflowAlertManager {
           Messaging.sendEmail(emailsToSend, false);
         }
       } catch (Exception emailEx) {
-        System.debug(LoggingLevel.ERROR, 'Bulk stall email dispatch failed: ' + emailEx.getMessage());
+        System.debug(
+          LoggingLevel.ERROR,
+          'Bulk stall email dispatch failed: ' + emailEx.getMessage()
+        );
       }
       sentEmailsCount += emailsToSend.size();
     }
+
+    // Publish all gathered event alerts in bulk
+    publishEvents(eventsToPublish);
 
     if (!alertsToInsert.isEmpty()) {
       insert as system alertsToInsert;
