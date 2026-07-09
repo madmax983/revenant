@@ -5,6 +5,14 @@
       "default": true
     },
     {
+      "path": "lib/chunkedcursoriterator/force-app",
+      "default": false
+    },
+    {
+      "path": "lib/chunkedcursoriterator/examples",
+      "default": false
+    },
+    {
       "path": "examples",
       "default": false
     }
