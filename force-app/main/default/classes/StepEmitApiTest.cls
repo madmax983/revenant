@@ -7,9 +7,9 @@
  * overload carries events on the result, emit() buffers in arrival order, and
  * the buffer never returns null so the engine can iterate it unconditionally.
  */
-@isTest
+@IsTest
 private class StepEmitApiTest {
-  @isTest
+  @IsTest
   static void completeOverloadCarriesOutboundEvents() {
     List<SObject> events = new List<SObject>{
       new Workflow_Lifecycle__e(Status__c = 'Completed'),
@@ -29,7 +29,7 @@ private class StepEmitApiTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void completeOverloadAcceptsNullEvents() {
     StepResult r = StepResult.complete('NextStep', 'out', null);
     System.assertEquals(StepResult.ActionType.COMPLETE, r.action);
@@ -40,7 +40,7 @@ private class StepEmitApiTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void emitBuffersEventsInOrder() {
     StepContext ctx = new StepContext(null, 'W', 'S', null, null, null, null);
 

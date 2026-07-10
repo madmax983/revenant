@@ -1,6 +1,6 @@
-@isTest
+@IsTest
 public class StepContextTest {
-  @isTest
+  @IsTest
   static void testConstructorAndProperties() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -23,7 +23,7 @@ public class StepContextTest {
     System.assertEquals(1, ctx.workflowVersion);
   }
 
-  @isTest
+  @IsTest
   static void testConstructorWithVersion() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -47,7 +47,7 @@ public class StepContextTest {
     System.assertEquals(3, ctx.workflowVersion);
   }
 
-  @isTest
+  @IsTest
   static void testShouldYieldNormalConditions() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -68,7 +68,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testShouldYieldQueryRowsThresholdExceeded() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -104,7 +104,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testShouldYieldAsyncApexExecutionsLimit() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -147,7 +147,7 @@ public class StepContextTest {
 
   // --- Inbound signal payload accessors (issue #11) ---
 
-  @isTest
+  @IsTest
   static void testNoPendingSignalsReturnsCleanEmptyResult() {
     Id dummyInstanceId = '00D000000000001EAA';
     // Construct via the existing 8-arg constructor (no signals supplied).
@@ -196,7 +196,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testPendingSignalsExposedInArrivalOrder() {
     Id dummyInstanceId = '00D000000000001EAA';
     List<StepContext.Signal> pending = new List<StepContext.Signal>{
@@ -224,7 +224,7 @@ public class StepContextTest {
     System.assertEquals('First', all[2].name);
   }
 
-  @isTest
+  @IsTest
   static void testGetSignalReturnsMostRecentMatchingName() {
     Id dummyInstanceId = '00D000000000001EAA';
     List<StepContext.Signal> pending = new List<StepContext.Signal>{
@@ -258,7 +258,7 @@ public class StepContextTest {
     System.assertEquals(false, ctx.hasSignal('Nope'));
   }
 
-  @isTest
+  @IsTest
   static void testConsumedSignalIdsTracksObservedNamesOnly() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'X',
@@ -321,7 +321,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetSignalsAllMarksEverythingObserved() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'X',
@@ -368,7 +368,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testBlankNamedLookupMatchesNothing() {
     Id dummyInstanceId = '00D000000000001EAA';
     List<StepContext.Signal> pending = new List<StepContext.Signal>{
@@ -426,7 +426,7 @@ public class StepContextTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testGetSignalUsesTrueLatestWhenListReadCapped() {
     Id dummyInstanceId = '00D000000000001EAA';
     // Oldest partial page for 'Evt' (budget-truncated); the true most-recent
@@ -481,7 +481,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetSignalRecoversClaimedPageWhenSourceSeesNoneAfterCap() {
     Id dummyInstanceId = '00D000000000001EAA';
     // A capped page whose rows this branch already claimed (Processing); the
@@ -531,7 +531,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetSignalUsesListTailWhenListReadComplete() {
     Id dummyInstanceId = '00D000000000001EAA';
     // A complete (uncapped) list: its last element IS the true latest, so the
@@ -578,7 +578,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testNamedLookupFallsThroughWhenFullListReadCapped() {
     Id dummyInstanceId = '00D000000000001EAA';
     // A capped unscoped read sees only a partial page (e.g. a Noise backlog)
@@ -630,7 +630,7 @@ public class StepContextTest {
     System.assertEquals('{"go":true}', ctx.getSignal('Important').payload);
   }
 
-  @isTest
+  @IsTest
   static void testCachedNamedLookupIsCaseInsensitive() {
     Id dummyInstanceId = '00D000000000001EAA';
     List<StepContext.Signal> pending = new List<StepContext.Signal>{
@@ -709,7 +709,7 @@ public class StepContextTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testNamedListIncludesClaimedRowsFromCappedFullRead() {
     Id dummyInstanceId = '00D000000000001EAA';
     String prefix = Workflow_Signal__c.SObjectType.getDescribe(
@@ -757,7 +757,7 @@ public class StepContextTest {
     System.assertEquals('{"f":1}', foos[0].payload);
   }
 
-  @isTest
+  @IsTest
   static void testLatestMergeUsesIdTieBreakOnEqualTimestamp() {
     Id dummyInstanceId = '00D000000000001EAA';
     DateTime ts = DateTime.now();
@@ -808,7 +808,7 @@ public class StepContextTest {
   // Idempotency key (issue #2)
   // ---------------------------------------------------------------------------
 
-  @isTest
+  @IsTest
   static void testIdempotencyKeyIsNonBlankAndStableAcrossAttempts() {
     // Two contexts for the SAME logical (instance, step) but representing
     // different attempts: different previous output, step state, workflow
@@ -847,7 +847,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testIdempotencyKeyDistinctPerStep() {
     Id instanceId = '00D000000000001';
     StepContext stepA = new StepContext(
@@ -875,7 +875,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testIdempotencyKeyDistinctPerInstance() {
     // The same step name across two different instances (e.g. two parallel
     // fan-out branch instances with different Parent_Instance__c, or the same
@@ -905,7 +905,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testIdempotencyKeyCompensateDistinctAndStable() {
     // The engine builds a compensate() context with stepName "<step>_Compensate"
     // (see WorkflowEngine.runCompensationStep). So the compensation key is
@@ -952,7 +952,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testIdempotencyKeyDistinctPerVisit() {
     // When a workflow loops back to the same step in the same instance, each
     // completed visit must observe a different key so distinct side effects are
@@ -1006,7 +1006,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testIdempotencyKeyDefaultVisitMatchesExplicitZero() {
     // The additive visit param defaults to 0, so the 8-arg constructor and the
     // 9-arg constructor with stepVisit=0 must yield the identical key.
@@ -1039,7 +1039,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testPreviousRunAtNullByDefault() {
     StepContext ctx = new StepContext(
       '00D000000000001',
@@ -1059,7 +1059,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testPreviousRunAtSetViaFullConstructor() {
     Datetime ts = Datetime.now().addMinutes(-5);
     StepContext ctx = new StepContext(
@@ -1098,7 +1098,7 @@ public class StepContextTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testOnceFirstCallInvokesProducerAndReturnsValue() {
     Id instanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -1124,7 +1124,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testOnceSecondCallReturnsSameValueWithoutCallingProducer() {
     Id instanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -1151,7 +1151,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testOnceDistinctKeysAreIndependent() {
     Id instanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -1173,7 +1173,7 @@ public class StepContextTest {
     System.assertEquals(1, pB.callCount);
   }
 
-  @isTest
+  @IsTest
   static void testOnceWithPriorCapturesSkipsProducer() {
     Id instanceId = '00D000000000001EAA';
     // Seed a prior-capture JSON as if loaded from Workflow_Step_Execution__c.Captured_Values__c
@@ -1208,7 +1208,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetCapturedValuesJsonRoundTrips() {
     Id instanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -1230,7 +1230,7 @@ public class StepContextTest {
     System.assertEquals('v2', parsed.get('k2'));
   }
 
-  @isTest
+  @IsTest
   static void testGetCapturedValuesJsonNullWhenNoCaptures() {
     Id instanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -1249,7 +1249,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testOnceValuesAreJsonRoundTripped() {
     // Numbers and booleans JSON-round-trip to a consistent type so values are
     // byte-identical regardless of whether they come from in-memory or rehydrated.
@@ -1294,7 +1294,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testExposedRetryPropertiesAndDefaults() {
     Id instanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -1314,7 +1314,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testExposedRetryPropertiesOverloads() {
     Id instanceId = '00D000000000001EAA';
     StepContext ctx = StepContext.withCapturedValues(
@@ -1338,7 +1338,7 @@ public class StepContextTest {
     System.assert(!ctx.isFinalAttempt());
   }
 
-  @isTest
+  @IsTest
   static void testExposedRetryPropertiesFromCapturedValues() {
     Id instanceId = '00D000000000001EAA';
     String priorJson = JSON.serialize(
@@ -1369,7 +1369,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testExposedRetryPropertiesStatePreservationOnYield() {
     Id instanceId = '00D000000000001EAA';
     String priorJson = JSON.serialize(
@@ -1411,7 +1411,7 @@ public class StepContextTest {
     System.assertEquals(3, Integer.valueOf(deserialized.get('__maxAttempts')));
   }
 
-  @isTest
+  @IsTest
   static void testRetryRobustnessDecimalAndMalformedJson() {
     Id instanceId = '00D000000000001EAA';
 
@@ -1459,7 +1459,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testReportProgress() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -1505,7 +1505,7 @@ public class StepContextTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testAutoReplayAtYieldTime() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -1573,7 +1573,7 @@ public class StepContextTest {
     System.assertEquals('{"val":42}', fetched.payload);
   }
 
-  @isTest
+  @IsTest
   static void testAutoReplayAtYieldTimeOldestFirst() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -1642,7 +1642,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testAutoReplayDrainsAllSignals() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -1719,7 +1719,7 @@ public class StepContextTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testGetChildOutcomeNotPresent() {
     Id dummyInstanceId = '00D000000000001EAA';
     MapSignalSource fakeSource = new MapSignalSource(
@@ -1745,7 +1745,7 @@ public class StepContextTest {
     System.assertEquals(null, outcome.output);
   }
 
-  @isTest
+  @IsTest
   static void testGetChildOutcomeCompleted() {
     Id dummyInstanceId = '00D000000000001EAA';
     Map<String, StepContext.Signal> sigs = new Map<String, StepContext.Signal>{
@@ -1776,7 +1776,7 @@ public class StepContextTest {
     System.assertEquals('{"score":700}', outcome.output);
   }
 
-  @isTest
+  @IsTest
   static void testGetChildOutcomeFailedStructured() {
     Id dummyInstanceId = '00D000000000001EAA';
     Map<String, StepContext.Signal> sigs = new Map<String, StepContext.Signal>{
@@ -1807,7 +1807,7 @@ public class StepContextTest {
     System.assertEquals('partialData', outcome.output);
   }
 
-  @isTest
+  @IsTest
   static void testGetChildOutcomeFailedMalformed() {
     Id dummyInstanceId = '00D000000000001EAA';
     Map<String, StepContext.Signal> sigs = new Map<String, StepContext.Signal>{
@@ -1838,7 +1838,7 @@ public class StepContextTest {
     System.assertEquals(null, outcome.output);
   }
 
-  @isTest
+  @IsTest
   static void testGetChildOutcomeConsumesBothSignals() {
     Id dummyInstanceId = '00D000000000001EAA';
     Map<String, StepContext.Signal> sigs = new Map<String, StepContext.Signal>{
@@ -1876,7 +1876,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetChildOutcomeConsumesBothSignalsWhenFailed() {
     Id dummyInstanceId = '00D000000000001EAA';
     Map<String, StepContext.Signal> sigs = new Map<String, StepContext.Signal>{
@@ -1914,7 +1914,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetChildOutcomeDoesNotConsumeWhenAbsent() {
     Id dummyInstanceId = '00D000000000001EAA';
     MapSignalSource fakeSource = new MapSignalSource(
@@ -1946,7 +1946,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLogApiBuffering() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -1995,7 +1995,7 @@ public class StepContextTest {
     System.assertNotEquals(null, crumbs[2].timestamp);
   }
 
-  @isTest
+  @IsTest
   static void testLogCharacterTruncation() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -2049,7 +2049,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLogEntriesTruncation() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -2092,7 +2092,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLogNullOrEmptyMessage() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -2117,7 +2117,7 @@ public class StepContextTest {
     System.assertEquals('null | Context: {"x":1}', crumbs[2].message);
   }
 
-  @isTest
+  @IsTest
   static void testLogContextSerializationSafety() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -2159,7 +2159,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testNullLogLevelDefaulting() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -2181,7 +2181,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testPatchedBrandNewInstance() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = new StepContext(
@@ -2215,7 +2215,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testPatchedReplay() {
     Id dummyInstanceId = '00D000000000001EAA';
     StepContext ctx = StepContext.withCapturedValues(
@@ -2247,7 +2247,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testPatchedReplayOffloaded() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'TestWorkflow',
@@ -2292,7 +2292,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testPatchedReExecutionCompletedInPast() {
     // Insert a workflow instance and step execution that completed in the past
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -2340,7 +2340,7 @@ public class StepContextTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testPatchedDownstreamFirstExecutionLegacy() {
     StepContext.mockInstanceCreatedDate = DateTime.newInstance(2026, 1, 1);
     StepContext.mockClassLastModified = DateTime.newInstance(2026, 1, 2);
@@ -2386,7 +2386,7 @@ public class StepContextTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testPatchedDownstreamFirstExecutionNewInstance() {
     StepContext.mockInstanceCreatedDate = DateTime.newInstance(2026, 1, 3);
     StepContext.mockClassLastModified = DateTime.newInstance(2026, 1, 2);
@@ -2429,7 +2429,7 @@ public class StepContextTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testPatchedWithIntroducedAtDate() {
     // Class was last modified on Day 3 (e.g. 2026-01-03) due to unrelated changes
     StepContext.mockClassLastModified = DateTime.newInstance(2026, 1, 3);
@@ -2494,7 +2494,7 @@ public class StepContextTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testDeprecatedPatch() {
     Id dummyInstanceId = '00D000000000001EAA';
 
@@ -2553,7 +2553,7 @@ public class StepContextTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testCallingClassNameResolution() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'TestWorkflow',

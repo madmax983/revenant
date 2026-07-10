@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public inherited sharing class StepContextTestBuilder {
   private Id workflowInstanceIdVal;
   private String workflowNameVal;

@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public class StepContextTestBuilderTest {
   // A mock producer that throws an exception if called, defined at the outer class level
   private class ThrowingProducer implements CaptureProducer {
@@ -17,7 +17,7 @@ public class StepContextTestBuilderTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testBuilderDefaults() {
     StepContext ctx = new StepContextTestBuilder().build();
 
@@ -42,7 +42,7 @@ public class StepContextTestBuilderTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testChainedSetters() {
     Id fakeInstanceId = Id.valueOf(
       Workflow_Instance__c.SObjectType.getDescribe(
@@ -82,7 +82,7 @@ public class StepContextTestBuilderTest {
     System.assertEquals(5, ctx.maxAttempts);
   }
 
-  @isTest
+  @IsTest
   static void testOverloadedObjectSetters() {
     Map<String, Object> inputMap = new Map<String, Object>{ 'a' => 1 };
     Map<String, Object> stateMap = new Map<String, Object>{ 'b' => 2 };
@@ -117,7 +117,7 @@ public class StepContextTestBuilderTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSignalSeeding() {
     StepContext ctx = new StepContextTestBuilder()
       .addSignal('Approve:Order', '{"approved":true}')
@@ -153,7 +153,7 @@ public class StepContextTestBuilderTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSignalSeedingWithExistingSignal() {
     StepContext.Signal customSig = new StepContext.Signal(
       null,
@@ -168,7 +168,7 @@ public class StepContextTestBuilderTest {
     System.assertEquals('{"data":123}', signals[0].payload);
   }
 
-  @isTest
+  @IsTest
   static void testOnceSeedingAndNormalization() {
     Datetime nowTime = Datetime.newInstance(2026, 7, 2, 9, 0, 0);
     StepContext ctx = new StepContextTestBuilder()
@@ -196,7 +196,7 @@ public class StepContextTestBuilderTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testDistinctIdempotencyKeys() {
     Id fakeInstanceId = Id.valueOf(
       Workflow_Instance__c.SObjectType.getDescribe(
@@ -225,7 +225,7 @@ public class StepContextTestBuilderTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testBuilderCapturedValuesIsolation() {
     StepContextTestBuilder builder = new StepContextTestBuilder()
       .once('key1', 'value1');
@@ -255,7 +255,7 @@ public class StepContextTestBuilderTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSignalLatestArrivalOrder() {
     Datetime now = Datetime.now();
     // Seed signals out of chronological order (newer signal added first, older signal added second)
@@ -286,7 +286,7 @@ public class StepContextTestBuilderTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSignalListArrivalOrder() {
     Datetime now = Datetime.now();
     StepContext.Signal newerSig = new StepContext.Signal(

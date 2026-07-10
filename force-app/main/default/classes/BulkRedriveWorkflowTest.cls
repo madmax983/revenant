@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public class BulkRedriveWorkflowTest {
   // ==========================================
   // Helpers
@@ -63,7 +63,7 @@ public class BulkRedriveWorkflowTest {
   // Tests
   // ==========================================
 
-  @isTest
+  @IsTest
   static void testRedrivesEligibleFailedInstances() {
     WorkflowEngine.disableQueueableInTest = true;
     makeFailedInstance('RedriveA');
@@ -102,7 +102,7 @@ public class BulkRedriveWorkflowTest {
     System.assertEquals(0, countByStatus('Failed'), 'No Failed left behind');
   }
 
-  @isTest
+  @IsTest
   static void testExcludesNonRecoverableStatuses() {
     WorkflowEngine.disableQueueableInTest = true;
     // Only Failed is operator-recoverable. Everything else must be untouched.
@@ -151,7 +151,7 @@ public class BulkRedriveWorkflowTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testOuroborosSelfExclusion() {
     WorkflowEngine.disableQueueableInTest = true;
     // A previously-failed re-driver instance must NEVER be selected for re-drive,
@@ -194,7 +194,7 @@ public class BulkRedriveWorkflowTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testIdempotentNoDoubleRedrive() {
     WorkflowEngine.disableQueueableInTest = true;
     makeFailedInstance('IdemA');
@@ -228,7 +228,7 @@ public class BulkRedriveWorkflowTest {
     System.assertEquals(2, countByStatus('Running'));
   }
 
-  @isTest
+  @IsTest
   static void testYieldsAndResumesInChunks() {
     WorkflowEngine.disableQueueableInTest = true;
     Integer original = BulkRedriveWorkflow.CHUNK_SIZE;
@@ -269,7 +269,7 @@ public class BulkRedriveWorkflowTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testOneFailureDoesNotAbortRest() {
     WorkflowEngine.disableQueueableInTest = true;
     Integer original = BulkRedriveWorkflow.CHUNK_SIZE;
@@ -314,7 +314,7 @@ public class BulkRedriveWorkflowTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testZeroEligibleCompletesCleanly() {
     WorkflowEngine.disableQueueableInTest = true;
     insert new Workflow_Instance__c(
@@ -339,7 +339,7 @@ public class BulkRedriveWorkflowTest {
     System.assertEquals(0, (Integer) summary.get('redriven'));
   }
 
-  @isTest
+  @IsTest
   static void testCountEligibleHonorsFilterAndExcludesSelf() {
     makeFailedInstance('CntA');
     makeFailedInstance('CntB');
@@ -374,7 +374,7 @@ public class BulkRedriveWorkflowTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testEndToEndViaEngine() {
     // Dogfood: the re-driver runs AS a Revenant workflow instance.
     WorkflowEngine.disableQueueableInTest = true;

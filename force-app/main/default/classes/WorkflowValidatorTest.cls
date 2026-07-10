@@ -4,7 +4,7 @@
  * single validate() call, that a well-formed definition passes clean, and that
  * validation writes nothing.
  */
-@isTest
+@IsTest
 public class WorkflowValidatorTest {
   // ==========================================
   // FIXTURE STEPS
@@ -278,7 +278,7 @@ public class WorkflowValidatorTest {
   // TESTS
   // ==========================================
 
-  @isTest
+  @IsTest
   static void wellFormedDefinitionPassesClean() {
     Test.startTest();
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
@@ -294,7 +294,7 @@ public class WorkflowValidatorTest {
     System.assertEquals(0, result.defects.size(), 'Expected zero defects');
   }
 
-  @isTest
+  @IsTest
   static void unresolvableDefinitionIsFlagged() {
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
       'WorkflowValidatorTest.NoSuchWorkflowClass'
@@ -306,7 +306,7 @@ public class WorkflowValidatorTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void nonWorkflowClassIsFlagged() {
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
       'WorkflowValidatorTest.NotAWorkflow'
@@ -318,7 +318,7 @@ public class WorkflowValidatorTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void blankWorkflowNameIsFlagged() {
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(null);
     System.assertEquals(false, result.isValid());
@@ -327,7 +327,7 @@ public class WorkflowValidatorTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void initialStepNotDeclaredIsFlagged() {
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
       'WorkflowValidatorTest.BadInitialWorkflow'
@@ -340,7 +340,7 @@ public class WorkflowValidatorTest {
     assertMessageNames(result, 'WorkflowValidatorTest.GoodStepB');
   }
 
-  @isTest
+  @IsTest
   static void blankInitialStepIsFlagged() {
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
       'WorkflowValidatorTest.BlankInitialWorkflow'
@@ -352,7 +352,7 @@ public class WorkflowValidatorTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void danglingSuccessorIsFlagged() {
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
       'WorkflowValidatorTest.DanglingSuccessorWorkflow'
@@ -365,7 +365,7 @@ public class WorkflowValidatorTest {
     assertMessageNames(result, 'WorkflowValidatorTest.GoodStepTypo');
   }
 
-  @isTest
+  @IsTest
   static void nonWorkflowStepClassIsFlagged() {
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
       'WorkflowValidatorTest.NonStepWorkflow'
@@ -378,7 +378,7 @@ public class WorkflowValidatorTest {
     assertMessageNames(result, 'WorkflowValidatorTest.NotAStep');
   }
 
-  @isTest
+  @IsTest
   static void unresolvableStepClassIsFlagged() {
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
       'WorkflowValidatorTest.UnresolvableStepWorkflow'
@@ -390,7 +390,7 @@ public class WorkflowValidatorTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void duplicateStepsAreFlagged() {
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
       'WorkflowValidatorTest.DuplicateStepsWorkflow'
@@ -402,7 +402,7 @@ public class WorkflowValidatorTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void allDefectsReturnedInOneCall() {
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
       'WorkflowValidatorTest.MultiDefectWorkflow'
@@ -431,7 +431,7 @@ public class WorkflowValidatorTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void validationWritesNothing() {
     // Measure DML in the same governor context (no Test.startTest, which would
     // reset limits and mask any DML the validator performed).
@@ -457,7 +457,7 @@ public class WorkflowValidatorTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void contractMethodThrowIsReportedNotPropagated() {
     // getInitialStep()/getSteps() throwing must surface as defects, not abort.
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
@@ -487,7 +487,7 @@ public class WorkflowValidatorTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void wellFormedVersionedWorkflowPassesClean() {
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
       'WorkflowValidatorTest.GoodVersionedWorkflow'
@@ -499,7 +499,7 @@ public class WorkflowValidatorTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void versionedDanglingSuccessorIsFlagged() {
     // The dangling successor is reachable only via the version-aware
     // getNextStep(..., version) overload, so this proves the versioned probe.
@@ -515,7 +515,7 @@ public class WorkflowValidatorTest {
     assertMessageNames(result, 'WorkflowValidatorTest.V2OnlyStepTypo');
   }
 
-  @isTest
+  @IsTest
   static void versionedGetLatestVersionThrowIsFlagged() {
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
       'WorkflowValidatorTest.ThrowingVersionWorkflow'

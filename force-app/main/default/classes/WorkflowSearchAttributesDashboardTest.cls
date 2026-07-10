@@ -1,6 +1,6 @@
-@isTest
+@IsTest
 public class WorkflowSearchAttributesDashboardTest {
-  @isTest
+  @IsTest
   static void testGetInstanceDetailsAttributes() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.PlainWaitWorkflow',
@@ -25,7 +25,7 @@ public class WorkflowSearchAttributesDashboardTest {
     System.assertEquals('enterprise', attrs[1].Value__c);
   }
 
-  @isTest
+  @IsTest
   static void testGetFilteredInstancesByAttributes() {
     Id instId1 = WorkflowEngine.start(
       'StepContextSignalEngineTest.PlainWaitWorkflow',
@@ -88,7 +88,7 @@ public class WorkflowSearchAttributesDashboardTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testGetStalledInstancesByAttributes() {
     Id instId = WorkflowEngine.start(
       'StepContextSignalEngineTest.PlainWaitWorkflow',

@@ -6,7 +6,7 @@
  * WorkflowSignalInvocableAction.SignalRequest.idempotencyKey — all of which
  * are added in the GREEN phase.
  */
-@isTest
+@IsTest
 public class WorkflowSignalIdempotencyTest {
   // ── Inline workflow: suspends until 'Approve' signal, then completes ────────
 
@@ -75,7 +75,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── AC6 / Success Metric: N keyed platform-event publishes → exactly 1 row ──
 
-  @isTest
+  @IsTest
   static void testKeyedPlatformEventDeduplicatesNPublishes() {
     Id instanceId = startAndSuspend('idem-test-1');
 
@@ -129,7 +129,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── AC2 / AC3: second keyed deliver in separate trigger invocation is no-op ─
 
-  @isTest
+  @IsTest
   static void testKeyedSignalSecondDeliveryIsSilentNoOp() {
     Id instanceId = startAndSuspend('idem-test-2');
 
@@ -181,7 +181,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── AC4: no key → at-least-once preserved (backward compatible) ─────────────
 
-  @isTest
+  @IsTest
   static void testUnkeyedSignalsAreAtLeastOnce() {
     Id instanceId = startAndSuspend('idem-test-3');
 
@@ -215,7 +215,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── AC5a: distinct keys on the same instance both deliver ───────────────────
 
-  @isTest
+  @IsTest
   static void testDistinctKeysSameInstanceBothDeliver() {
     Id instanceId = startAndSuspend('idem-test-4');
 
@@ -249,7 +249,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── AC5b: same key on different instances both deliver (scope = per-instance) ─
 
-  @isTest
+  @IsTest
   static void testSameKeyDifferentInstancesBothDeliver() {
     Id instanceA = startAndSuspend('idem-test-5a');
     Id instanceB = startAndSuspend('idem-test-5b');
@@ -293,7 +293,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── AC1 – Apex API: signal/4 overload deduplicates on second call ───────────
 
-  @isTest
+  @IsTest
   static void testApexApiIdempotencyKeyDeduplicates() {
     Id instanceId = startAndSuspend('idem-test-6');
 
@@ -336,7 +336,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── AC1 – Flow invocable: idempotencyKey field deduplicates ─────────────────
 
-  @isTest
+  @IsTest
   static void testFlowInvocableIdempotencyKeyDeduplicates() {
     Id instanceId = startAndSuspend('idem-test-7');
 
@@ -395,7 +395,7 @@ public class WorkflowSignalIdempotencyTest {
   // valid and another fails for a non-duplicate reason must NOT leave the valid
   // row committed (which would strand a Received signal and consume its key).
 
-  @isTest
+  @IsTest
   static void testBulkKeyedInsertGenuineErrorRollsBackAllOrNone() {
     Id instanceId = startAndSuspend('idem-test-8');
 
@@ -440,7 +440,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── Keyed Cancel: dedup + no-throw on redelivery after terminal ──────────────
 
-  @isTest
+  @IsTest
   static void testKeyedCancelDeduplicatesAndNoThrowAfterTerminal() {
     Id instanceId = startAndSuspend('idem-cancel-1');
 
@@ -497,7 +497,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── Keyed Cancel: duplicates in one bulk batch run cancellation once ─────────
 
-  @isTest
+  @IsTest
   static void testBulkDuplicateKeyedCancelRunsOnce() {
     Id instanceId = startAndSuspend('idem-cancel-2');
 
@@ -538,7 +538,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── Unrouted (pre-arrival) keyed signals dedup by correlation key ────────────
 
-  @isTest
+  @IsTest
   static void testUnroutedKeyedSignalsDeduplicate() {
     // No instance exists for this correlation key, so the signals are captured
     // as Unrouted. N publishes with the same Idempotency_Key__c (distinct
@@ -572,7 +572,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── Unrouted: same key, different correlation keys both captured ─────────────
 
-  @isTest
+  @IsTest
   static void testUnroutedSameKeyDifferentCorrelationBothCaptured() {
     EventBus.publish(
       new List<Workflow_Event__e>{
@@ -614,7 +614,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── Unrouted dedup is case-insensitive (matches SOQL correlation matching) ───
 
-  @isTest
+  @IsTest
   static void testUnroutedKeyedDedupIsCaseInsensitive() {
     // Correlation_Key__c matches case-insensitively in SOQL, so 'Order-1' and
     // 'order-1' resolve to the same instance and must collapse to one Unrouted
@@ -650,7 +650,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── Unrouted keyed capture is first-wins (does not overwrite on duplicate) ───
 
-  @isTest
+  @IsTest
   static void testUnroutedKeyedCaptureIsFirstWins() {
     // First capture (transaction 1).
     EventBus.publish(
@@ -693,7 +693,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── Pre-arrival keyed capture dedups across the active boundary (issue P2) ───
 
-  @isTest
+  @IsTest
   static void testPreArrivalKeyedDedupsAcrossActiveBoundary() {
     // 1. Capture a keyed 'Approve' before any instance exists.
     EventBus.publish(
@@ -745,7 +745,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── Bulk: a keyed cancel must not be resurrected by a sibling forward signal ─
 
-  @isTest
+  @IsTest
   static void testBulkKeyedCancelSkipsSiblingForwardSignal() {
     // Instance suspends waiting for 'Go' (a different signal leaves it active).
     Id instanceId = WorkflowEngine.start(
@@ -803,7 +803,7 @@ public class WorkflowSignalIdempotencyTest {
 
   // ── Bulk keyed cancel addressed by a different-cased correlation key ─────────
 
-  @isTest
+  @IsTest
   static void testBulkKeyedCancelMatchesCorrelationKeyCaseInsensitively() {
     // Stored correlation key is mixed-case; the cancel request addresses it in
     // lower case. Correlation-key matching is case-insensitive, so the keyed

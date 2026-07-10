@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public class WorkflowDeadlineTest {
 
   public class TestDeadlineWorkflow implements WorkflowDefinition, ExecutionTimeoutConfigurable {
@@ -43,7 +43,7 @@ public class WorkflowDeadlineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testStartStampsDeadline() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -67,7 +67,7 @@ public class WorkflowDeadlineTest {
     System.assert(diffSeconds <= 65, 'Deadline should be stamped roughly 60 seconds from now: ' + diffSeconds);
   }
 
-  @isTest
+  @IsTest
   static void testContinueAsNewStampsDeadline() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -95,7 +95,7 @@ public class WorkflowDeadlineTest {
     System.assert(diffSeconds <= 125, 'Successor deadline should be roughly 120 seconds from now: ' + diffSeconds);
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogSweepExpiredNoCompensation() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -177,7 +177,7 @@ public class WorkflowDeadlineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogSweepExpiredWithCompensation() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -253,7 +253,7 @@ public class WorkflowDeadlineTest {
     System.assertNotEquals(null, finalInst.Terminal_At__c, 'Terminal_At__c should be set');
   }
 
-  @isTest
+  @IsTest
   static void testDashboardControllerQueries() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -297,7 +297,7 @@ public class WorkflowDeadlineTest {
     System.assertEquals(deadline, reloadedInst.Deadline_At__c, 'Deadline should be returned in getInstanceDetails');
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogSweepExpiredWithCompensationBulk() {
     WorkflowEngine.disableQueueableInTest = true;
 

@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public class WorkflowAlertManagerTest {
   private static Workflow_Alert_Config__mdt createMockConfig(
     String devName,
@@ -43,7 +43,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSendAlertWithMockConfig() {
     // Mock Config
     WorkflowAlertManager.mockConfigs.put(
@@ -84,7 +84,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSendAlertWithDefaultConfigFallback() {
     // Setup only Default config in mock
     WorkflowAlertManager.mockConfigs.clear();
@@ -116,7 +116,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSendAlertWithTruncatedDevNameConfig() {
     String longWorkflowName = 'WorkflowEngineTest.HappyWorkflowWithVeryLongName';
     String expectedTruncatedDevName = longWorkflowName.replaceAll(
@@ -161,7 +161,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSendAlertDisabled() {
     WorkflowAlertManager.mockConfigs.clear();
     WorkflowAlertManager.mockConfigs.put(
@@ -199,7 +199,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSendAlertNoRecipients() {
     WorkflowAlertManager.mockConfigs.clear();
     WorkflowAlertManager.mockConfigs.put(
@@ -237,7 +237,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testConsecutiveFailuresThreshold() {
     WorkflowAlertManager.mockConfigs.clear();
     WorkflowAlertManager.mockConfigs.put(
@@ -339,7 +339,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSlidingWindowCountThreshold() {
     WorkflowAlertManager.mockConfigs.clear();
     WorkflowAlertManager.mockConfigs.put(
@@ -396,7 +396,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowEngineAlertIntegration() {
     // Enforce mock configs
     WorkflowAlertManager.mockConfigs.clear();
@@ -456,7 +456,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowWatchdogAlert() {
     WorkflowAlertManager.mockConfigs.clear();
     WorkflowAlertManager.mockConfigs.put(
@@ -504,7 +504,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSendEmailExceptionIsolation() {
     WorkflowAlertManager.mockConfigs.clear();
     WorkflowAlertManager.mockConfigs.put(
@@ -549,7 +549,7 @@ public class WorkflowAlertManagerTest {
     WorkflowAlertManager.throwTestException = false;
   }
 
-  @isTest
+  @IsTest
   static void testHtmlEscapingAndErrorTruncation() {
     String xssWfName = 'WorkflowEngineTest.HappyWorkflow<script>';
     String devName = xssWfName.replaceAll('[^a-zA-Z0-9_]', '_');
@@ -632,7 +632,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSlidingWindowUsesTerminalAtDate() {
     WorkflowAlertManager.mockConfigs.clear();
     WorkflowAlertManager.mockConfigs.put(
@@ -678,7 +678,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSlidingWindowExcludesStaleModifiedDates() {
     WorkflowAlertManager.mockConfigs.clear();
     WorkflowAlertManager.mockConfigs.put(
@@ -735,7 +735,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSendAlertBestEffortIsolation() {
     Test.startTest();
     try {
@@ -754,7 +754,7 @@ public class WorkflowAlertManagerTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testSendAlertPublishEventConsecutive() {
     String wfName = 'WorkflowEngineTest.HappyWorkflow';
     WorkflowAlertManager.mockConfigs.clear();
@@ -823,7 +823,7 @@ public class WorkflowAlertManagerTest {
     System.assertEquals(null, evt.Time_Window_Minutes__c);
   }
 
-  @isTest
+  @IsTest
   static void testSendAlertPublishEventSlidingWindow() {
     String wfName = 'WorkflowEngineTest.HappyWorkflow';
     WorkflowAlertManager.mockConfigs.clear();
@@ -888,7 +888,7 @@ public class WorkflowAlertManagerTest {
     System.assertEquals(10, evt.Time_Window_Minutes__c);
   }
 
-  @isTest
+  @IsTest
   static void testSendAlertPublishEventImmediate() {
     String wfName = 'WorkflowEngineTest.HappyWorkflow';
     WorkflowAlertManager.mockConfigs.clear();
@@ -945,7 +945,7 @@ public class WorkflowAlertManagerTest {
     System.assertEquals(null, evt.Time_Window_Minutes__c);
   }
 
-  @isTest
+  @IsTest
   static void testSendAlertEventOnlyNoEmail() {
     String wfName = 'WorkflowEngineTest.HappyWorkflow';
     WorkflowAlertManager.mockConfigs.clear();
@@ -1000,7 +1000,7 @@ public class WorkflowAlertManagerTest {
     System.assertEquals('Immediate', evt.Alert_Reason__c);
   }
 
-  @isTest
+  @IsTest
   static void testSendAlertNoEventIfToggleDisabled() {
     String wfName = 'WorkflowEngineTest.HappyWorkflow';
     WorkflowAlertManager.mockConfigs.clear();
@@ -1048,7 +1048,7 @@ public class WorkflowAlertManagerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSendAlertEventSkippedIfDmlBudgetExhausted() {
     String wfName = 'WorkflowEngineTest.HappyWorkflow';
     WorkflowAlertManager.mockConfigs.clear();

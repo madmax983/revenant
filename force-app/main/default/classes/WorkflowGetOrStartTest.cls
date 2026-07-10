@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 private class WorkflowGetOrStartTest {
   // ==========================================
   // Helpers
@@ -22,7 +22,7 @@ private class WorkflowGetOrStartTest {
   // ==========================================
   // AC #1 / #5: get-or-start returns existing active instance instead of throwing
   // ==========================================
-  @isTest
+  @IsTest
   static void testActiveDuplicateReturnsExistingNotThrow() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -75,7 +75,7 @@ private class WorkflowGetOrStartTest {
   // ==========================================
   // AC #2: dedup covers recently-terminal instances within the window
   // ==========================================
-  @isTest
+  @IsTest
   static void testTerminalDuplicateWithinWindowReturnsExisting() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.dedupWindowMinutes = 1440;
@@ -123,7 +123,7 @@ private class WorkflowGetOrStartTest {
   // ==========================================
   // AC #3: minimum window preserves active-only behavior
   // ==========================================
-  @isTest
+  @IsTest
   static void testTerminalDuplicateOutsideWindowStartsNew() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.dedupWindowMinutes = 0; // minimum -> active-only
@@ -159,7 +159,7 @@ private class WorkflowGetOrStartTest {
   // ==========================================
   // AC #7: blank correlation key validation is unchanged (no dedup possible)
   // ==========================================
-  @isTest
+  @IsTest
   static void testBlankKeyValidationUnchanged() {
     Boolean threw = false;
     try {
@@ -174,7 +174,7 @@ private class WorkflowGetOrStartTest {
   // ==========================================
   // AC #1 / #4 (bulk): one duplicate key never faults sibling requests
   // ==========================================
-  @isTest
+  @IsTest
   static void testBulkDedupDoesNotFaultSiblings() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -214,7 +214,7 @@ private class WorkflowGetOrStartTest {
   // ==========================================
   // AC #5 (bulk intra-batch): duplicate keys in one invocation -> one instance
   // ==========================================
-  @isTest
+  @IsTest
   static void testBulkIntraBatchDuplicateKeyYieldsOneInstance() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -255,7 +255,7 @@ private class WorkflowGetOrStartTest {
   // ==========================================
   // AC #1 backward-compat: legacy start() returns the existing Id (no throw)
   // ==========================================
-  @isTest
+  @IsTest
   static void testLegacyStartReturnsExistingIdOnDuplicate() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -277,7 +277,7 @@ private class WorkflowGetOrStartTest {
   // ==========================================
   // Review fix (P2): correlation keys dedup case-insensitively
   // ==========================================
-  @isTest
+  @IsTest
   static void testGetOrStartCaseInsensitiveKey() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -306,7 +306,7 @@ private class WorkflowGetOrStartTest {
   // ==========================================
   // Review fix (P2): case-variant duplicate keys in one batch -> one instance
   // ==========================================
-  @isTest
+  @IsTest
   static void testBulkCaseInsensitiveIntraBatch() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -344,7 +344,7 @@ private class WorkflowGetOrStartTest {
   // ==========================================
   // Review fix (P1): startSingleton ignores the terminal dedup window
   // ==========================================
-  @isTest
+  @IsTest
   static void testStartSingletonIgnoresTerminalWindow() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.dedupWindowMinutes = 1440;
@@ -379,7 +379,7 @@ private class WorkflowGetOrStartTest {
   // Review fix (P2): many terminal rows for a key still dedup to one instance
   // (single-key lookup is row-bounded to the newest match)
   // ==========================================
-  @isTest
+  @IsTest
   static void testTerminalDedupWithMultipleTerminalRows() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.dedupWindowMinutes = 1440;
@@ -426,7 +426,7 @@ private class WorkflowGetOrStartTest {
   // Review fix (P2): in bulk, a hot key's many terminal rows must not crowd a
   // sibling key out of terminal dedup (per-key resolution)
   // ==========================================
-  @isTest
+  @IsTest
   static void testBulkTerminalDedupPerKeyNoCrowdOut() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.dedupWindowMinutes = 1440;
@@ -491,7 +491,7 @@ private class WorkflowGetOrStartTest {
   // ==========================================
   // Review fix (P2): a very large dedup window must not fault starts
   // ==========================================
-  @isTest
+  @IsTest
   static void testLargeDedupWindowDoesNotFault() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.dedupWindowMinutes = 999999999; // near the 9-digit maximum

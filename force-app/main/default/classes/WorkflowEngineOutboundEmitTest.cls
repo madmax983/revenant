@@ -18,7 +18,7 @@
  * Must be `public` (not private) so Type.forName can resolve the inner test
  * WorkflowDefinition/WorkflowStep classes the engine instantiates by name.
  */
-@isTest
+@IsTest
 public class WorkflowEngineOutboundEmitTest {
   // ----- Workflow A: a single step that emits then yields -> retries -> completes.
 
@@ -249,7 +249,7 @@ public class WorkflowEngineOutboundEmitTest {
 
   // ===========================================================================
 
-  @isTest
+  @IsTest
   static void emitPublishesExactlyOnceDespiteThreeReExecutions() {
     WorkflowOutboundEventPublisher.publishedEvents.clear();
 
@@ -276,7 +276,7 @@ public class WorkflowEngineOutboundEmitTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void nothingIsPublishedBeforeCompleteCommits() {
     WorkflowOutboundEventPublisher.publishedEvents.clear();
 
@@ -308,7 +308,7 @@ public class WorkflowEngineOutboundEmitTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void completeOverloadPublishesProvidedEvents() {
     WorkflowOutboundEventPublisher.publishedEvents.clear();
 
@@ -331,7 +331,7 @@ public class WorkflowEngineOutboundEmitTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void splitTransitionPublishesEmittedEventsOnce() {
     WorkflowOutboundEventPublisher.publishedEvents.clear();
 
@@ -354,7 +354,7 @@ public class WorkflowEngineOutboundEmitTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void nullEntriesInResultEventsAreFilteredNotDropped() {
     WorkflowOutboundEventPublisher.publishedEvents.clear();
 
@@ -377,7 +377,7 @@ public class WorkflowEngineOutboundEmitTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void compensationEmitPublishesOnCompensatedCommit() {
     WorkflowOutboundEventPublisher.publishedEvents.clear();
 

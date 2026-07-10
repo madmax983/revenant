@@ -6,7 +6,7 @@
  * (a @TestVisible map) so no Concurrency_Config__mdt deployment is required, and the
  * Concurrency_State__c counter row is the durable, FOR UPDATE-locked state.
  */
-@isTest
+@IsTest
 public class ConcurrencyGateTest {
   private static Concurrency_Config__mdt mockConfig(
     String developerName,
@@ -23,7 +23,7 @@ public class ConcurrencyGateTest {
   }
 
   // ── AC1: CMDT resolution by DeveloperName, with Default fallback ────────────
-  @isTest
+  @IsTest
   static void testCeilingResolvesByDeveloperName() {
     ConcurrencyGate.mockConfigs.put('MyWorkflow', mockConfig('MyWorkflow', 5));
     Test.startTest();
@@ -35,7 +35,7 @@ public class ConcurrencyGateTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testCeilingNormalizesInnerClassName() {
     // Inner/nested class names map dots to underscores, like Workflow_Alert_Config__mdt.
     ConcurrencyGate.mockConfigs.put(
@@ -51,7 +51,7 @@ public class ConcurrencyGateTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testCeilingFallsBackToDefault() {
     ConcurrencyGate.mockConfigs.put('Default', mockConfig('Default', 7));
     Test.startTest();
@@ -63,7 +63,7 @@ public class ConcurrencyGateTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testUnconfiguredIsUnbounded() {
     Test.startTest();
     System.assertEquals(
@@ -79,7 +79,7 @@ public class ConcurrencyGateTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testNonPositiveCeilingTreatedAsUnbounded() {
     // A misconfigured 0 (or negative) ceiling must fail open to unbounded rather
     // than parking every instance forever.
@@ -107,7 +107,7 @@ public class ConcurrencyGateTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testEngineWorkflowsAreExempt() {
     // A Default config must never throttle the engine's perpetual watchdog.
     ConcurrencyGate.mockConfigs.put('Default', mockConfig('Default', 1));
@@ -121,7 +121,7 @@ public class ConcurrencyGateTest {
   }
 
   // ── Acquire / release against the durable counter ──────────────────────────
-  @isTest
+  @IsTest
   static void testAcquireUpToCeilingThenDeny() {
     ConcurrencyGate.mockConfigs.put('Cap2', mockConfig('Cap2', 2));
     Test.startTest();
@@ -143,7 +143,7 @@ public class ConcurrencyGateTest {
     System.assertEquals(2, state.In_Flight_Count__c, 'Counter capped at 2');
   }
 
-  @isTest
+  @IsTest
   static void testUnboundedConsumesNoSlot() {
     Test.startTest();
     ConcurrencyGate.AdmissionResult a = ConcurrencyGate.tryAcquire('Unbounded');
@@ -157,7 +157,7 @@ public class ConcurrencyGateTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testReleaseDecrementsAndAdmits() {
     ConcurrencyGate.mockConfigs.put('Cap1', mockConfig('Cap1', 1));
     Test.startTest();
@@ -171,7 +171,7 @@ public class ConcurrencyGateTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testReleaseFloorsAtZero() {
     ConcurrencyGate.mockConfigs.put('Cap3', mockConfig('Cap3', 3));
     Test.startTest();
@@ -186,7 +186,7 @@ public class ConcurrencyGateTest {
     System.assertEquals(0, state.In_Flight_Count__c, 'Counter floored at 0');
   }
 
-  @isTest
+  @IsTest
   static void testReleaseBulkGroupsByWorkflow() {
     ConcurrencyGate.mockConfigs.put('CapA', mockConfig('CapA', 5));
     ConcurrencyGate.mockConfigs.put('CapB', mockConfig('CapB', 5));
@@ -216,7 +216,7 @@ public class ConcurrencyGateTest {
   // transition for an instance started with differing casing matches the same
   // counter row in SOQL. The Apex decrement lookup must normalize too, or the slot
   // leaks (matched row, but a case-sensitive map miss skips the decrement).
-  @isTest
+  @IsTest
   static void testReleaseNormalizesWorkflowKeyCase() {
     ConcurrencyGate.mockConfigs.put('CaseWf', mockConfig('CaseWf', 5));
     ConcurrencyGate.tryAcquire('CaseWf'); // provisions the row as 'CaseWf', count = 1
@@ -240,7 +240,7 @@ public class ConcurrencyGateTest {
   // Reconciliation must likewise count differently-cased slot holders against the
   // single (case-insensitive unique) counter row, rather than treating a casing
   // mismatch as zero live holders and wrongly resetting the counter.
-  @isTest
+  @IsTest
   static void testReconcileNormalizesWorkflowKeyCase() {
     insert new Concurrency_State__c(
       Workflow_Definition__c = 'ReconCaseWf',
@@ -270,7 +270,7 @@ public class ConcurrencyGateTest {
   }
 
   // ── AC5: reconciliation reclaims leaked slots ──────────────────────────────
-  @isTest
+  @IsTest
   static void testReconcileReclaimsLeakedSlots() {
     ConcurrencyGate.mockConfigs.put('LeakWf', mockConfig('LeakWf', 10));
     // Simulate a leaked counter: 3 reserved, but only 1 instance genuinely holds a
@@ -310,7 +310,7 @@ public class ConcurrencyGateTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testReconcileAllSweepsEveryStateRow() {
     insert new Concurrency_State__c(
       Workflow_Definition__c = 'SweepWf',
@@ -339,7 +339,7 @@ public class ConcurrencyGateTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLazyProvisionDuplicateRace() {
     ConcurrencyGate.mockConfigs.put('RaceWf', mockConfig('RaceWf', 5));
     insert new Concurrency_State__c(

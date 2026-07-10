@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public class WorkflowStatusInvocableActionTest {
   private static WorkflowStatusInvocableAction.StatusRequest req(
     String keyOrId
@@ -16,7 +16,7 @@ public class WorkflowStatusInvocableActionTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCompletedByInstanceId() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'Test.Workflow',
@@ -41,7 +41,7 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals(null, res.errorMessage);
   }
 
-  @isTest
+  @IsTest
   static void testRunningByCorrelationKey() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'Test.Workflow',
@@ -62,7 +62,7 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals(false, res.isSuccess, 'Running is not success');
   }
 
-  @isTest
+  @IsTest
   static void testFailedExposesErrorDetail() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'Test.Workflow',
@@ -84,7 +84,7 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals('Step blew up: boom', res.errorMessage);
   }
 
-  @isTest
+  @IsTest
   static void testCompensatedAndCancelledAreTerminalNotSuccess() {
     Workflow_Instance__c comp = new Workflow_Instance__c(
       Workflow_Name__c = 'Test.Workflow',
@@ -109,7 +109,7 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals(false, cancRes.isSuccess, 'Cancelled is not success');
   }
 
-  @isTest
+  @IsTest
   static void testOffloadedOutputIsRehydrated() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'Test.Workflow',
@@ -155,7 +155,7 @@ public class WorkflowStatusInvocableActionTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testContinuedAsNewChainResolvesSuccessorDistinctKey() {
     // Predecessor terminal-as-ContinuedAsNew; successor carries the default _run2 key.
     Workflow_Instance__c pred = new Workflow_Instance__c(
@@ -190,7 +190,7 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals('"successor-output"', res.outputJson);
   }
 
-  @isTest
+  @IsTest
   static void testContinuedAsNewChainMultiLevelSameKey() {
     // Three-generation chain where the successor reuses the same correlation key.
     Workflow_Instance__c gen1 = new Workflow_Instance__c(
@@ -229,7 +229,7 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals(false, res.isTerminal);
   }
 
-  @isTest
+  @IsTest
   static void testExplicitPredecessorIdIsNotWalked() {
     // An explicit Id is a precise handle: report that exact instance, no chain walk.
     Workflow_Instance__c pred = new Workflow_Instance__c(
@@ -262,7 +262,7 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals(false, res.isSuccess);
   }
 
-  @isTest
+  @IsTest
   static void testReusedKeyPrefersActiveRunOverTerminalHistory() {
     // Correlation_Key__c is not unique: an old terminal run and a current active
     // run can share a key. getStatus must report the live run, not stale history.
@@ -295,7 +295,7 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals(false, res.isTerminal);
   }
 
-  @isTest
+  @IsTest
   static void testUnknownKeyYieldsNotFound() {
     Test.startTest();
     List<WorkflowStatusInvocableAction.StatusResult> results = call(
@@ -311,7 +311,7 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals(null, res.workflowInstanceId);
   }
 
-  @isTest
+  @IsTest
   static void testGarbageIdYieldsNotFoundNoException() {
     // A syntactically id-shaped but non-existent value must not fault the Flow.
     Test.startTest();
@@ -323,7 +323,7 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals(false, results[0].found);
   }
 
-  @isTest
+  @IsTest
   static void testBlankInputYieldsNotFound() {
     Test.startTest();
     List<WorkflowStatusInvocableAction.StatusResult> results = call('');
@@ -332,7 +332,7 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals(false, results[0].found);
   }
 
-  @isTest
+  @IsTest
   static void testNullAndEmptyRequestLists() {
     Test.startTest();
     List<WorkflowStatusInvocableAction.StatusResult> nullRes = WorkflowStatusInvocableAction.getStatus(
@@ -347,7 +347,7 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals(0, emptyRes.size());
   }
 
-  @isTest
+  @IsTest
   static void testReadOnlyNoDml() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'Test.Workflow',
@@ -392,7 +392,7 @@ public class WorkflowStatusInvocableActionTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testBulkOrderingAndGovernorSafety() {
     List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>();
     for (Integer i = 0; i < 50; i++) {
@@ -444,7 +444,7 @@ public class WorkflowStatusInvocableActionTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testBulkMixedFoundAndNotFound() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'Test.Workflow',
@@ -472,7 +472,7 @@ public class WorkflowStatusInvocableActionTest {
     System.assertEquals(false, results[2].found);
   }
 
-  @isTest
+  @IsTest
   static void testExposesProgressAndRehydrates() {
     Workflow_Instance__c inst1 = new Workflow_Instance__c(
       Workflow_Name__c = 'Test.Workflow',
@@ -523,7 +523,7 @@ public class WorkflowStatusInvocableActionTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusActionExposesCausationId() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'Test.Workflow',

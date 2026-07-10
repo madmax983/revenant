@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public class WorkflowEngineTest {
   public static Boolean failParallelC = true;
   // ==========================================
@@ -499,7 +499,7 @@ public class WorkflowEngineTest {
   // TEST METHODS
   // ==========================================
 
-  @isTest
+  @IsTest
   static void testHappyPath() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -534,7 +534,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Completed', steps[1].Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testYieldingPath() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -590,7 +590,7 @@ public class WorkflowEngineTest {
     System.assertEquals('"Done_3"', inst.Output__c);
   }
 
-  @isTest
+  @IsTest
   static void testSuspensionAndResume() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -636,7 +636,7 @@ public class WorkflowEngineTest {
     System.assertEquals('"Resumed_EventData"', inst.Output__c);
   }
 
-  @isTest
+  @IsTest
   static void testSignals() {
     // Start a workflow that blocks on a signal
     Test.startTest();
@@ -695,7 +695,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Consumed', sig.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testCustomRetryPolicy() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -748,7 +748,7 @@ public class WorkflowEngineTest {
     System.assertEquals('RETRIES_EXHAUSTED', inst.Failure_Category__c);
   }
 
-  @isTest
+  @IsTest
   static void testCrashAndFinalizer() {
     Id instanceId = WorkflowEngine.start(
       'WorkflowEngineTest.CrashingWorkflow',
@@ -796,7 +796,7 @@ public class WorkflowEngineTest {
     System.assert(step.Error_Details__c.contains('Simulated Crash'));
   }
 
-  @isTest
+  @IsTest
   static void testSleepingWorkflow() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -841,7 +841,7 @@ public class WorkflowEngineTest {
     System.assertEquals('"Done_resumed_state"', inst.Output__c);
   }
 
-  @isTest
+  @IsTest
   static void testParentChildWorkflow() {
     Test.startTest();
     Id parentId = WorkflowEngine.start(
@@ -925,7 +925,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testRetryWorkflow() {
     // Start the workflow that will fail
     Id instanceId = WorkflowEngine.start(
@@ -978,7 +978,7 @@ public class WorkflowEngineTest {
     System.assertEquals(null, retriedInst.Failure_Category__c);
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowTimeout() {
     // Start a workflow instance
     Id instanceId = WorkflowEngine.start(
@@ -1044,7 +1044,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowApproval() {
     Id instanceId = WorkflowEngine.start(
       'WorkflowEngineTest.ApprovalWorkflow',
@@ -1162,7 +1162,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testParallelExecution() {
     Id instanceId = WorkflowEngine.start(
       'WorkflowEngineTest.ParallelWorkflow',
@@ -1266,7 +1266,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testCompensationFlow() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -1329,7 +1329,7 @@ public class WorkflowEngineTest {
   // to compensate(), so a compensation never sees a surprising null where the
   // forward path saw a value. (It must not be USED to scope what to undo -- that
   // comes from the recorded step input/output -- but it must be present.)
-  @isTest
+  @IsTest
   static void testCompensationContextCarriesPreviousRunAt() {
     WorkflowEngine.disableQueueableInTest = true;
     capturedCompensatePreviousRunAt = null;
@@ -1402,7 +1402,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testCalloutCompensationWithTimeoutDoesNotHitUncommittedWork() {
     Test.setMock(HttpCalloutMock.class, new CompOkMock());
     WorkflowEngine.disableQueueableInTest = true;
@@ -1455,7 +1455,7 @@ public class WorkflowEngineTest {
   // that DML before compensate() (as it used to) would make the callout illegal
   // with an uncommitted-work exception. The engine now defers the status DML for a
   // CalloutStep compensation, so the synchronous callout stays legal.
-  @isTest
+  @IsTest
   static void testSignalResumedCalloutCompensationDefersStatusDml() {
     Test.setMock(HttpCalloutMock.class, new CompOkMock());
     WorkflowEngine.disableQueueableInTest = true;
@@ -1522,7 +1522,7 @@ public class WorkflowEngineTest {
   // #3229: a non-cancel signal that arrives while the instance is mid-rollback
   // (Compensating) must be stored for the compensation step to read, not rejected
   // as "no active workflow" the way the lookup used to do.
-  @isTest
+  @IsTest
   static void testSignalStoredWhileCompensating() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
@@ -1574,7 +1574,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testForwardStepNamedCompensateNotMisroutedAsCompensation() {
     Id instanceId = WorkflowEngine.start(
       'WorkflowEngineTest.SuffixForwardWorkflow',
@@ -1614,7 +1614,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testSignalDrivenCompensationResumes() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -1667,7 +1667,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Compensated', compExec.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testCompensationFailureAndRetry() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -1777,7 +1777,7 @@ public class WorkflowEngineTest {
     System.assertEquals('"CompensatedFailing"', successfulAttempt.Output__c);
   }
 
-  @isTest
+  @IsTest
   static void testCancelWorkflowActiveNoCompensations() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -1819,7 +1819,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testCancelWorkflowActiveWithCompensations() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -1871,7 +1871,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Cancelled', inst.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testCancelWorkflowSleeping() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -1895,7 +1895,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Cancelled', inst.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testCancelWorkflowParentChild() {
     WorkflowEngine.disableQueueableInTest = true;
     Id parentId = WorkflowEngine.start(
@@ -1935,7 +1935,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Cancelled', childInst.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testCancelWorkflowViaSignal() {
     WorkflowEngine.disableQueueableInTest = true;
     Id instanceId = WorkflowEngine.start(
@@ -1966,7 +1966,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testStepContextShouldYield() {
     StepContext ctx = new StepContext(
       null,
@@ -1981,7 +1981,7 @@ public class WorkflowEngineTest {
     System.assertEquals(false, ctx.shouldYield());
   }
 
-  @isTest
+  @IsTest
   static void testTriggerQueueableThrottling() {
     // Create 55 distinct workflow instances
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
@@ -2015,7 +2015,7 @@ public class WorkflowEngineTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testCorrelationKeyValidation() {
     String longKey = 'A'.repeat(201);
     try {
@@ -2052,7 +2052,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testLargePayloadFileOffloading() {
     String largeInput = 'A'.repeat(110000);
 
@@ -2209,7 +2209,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testContinueAsNew() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -2280,7 +2280,7 @@ public class WorkflowEngineTest {
     System.assertEquals('3', run3.Output__c);
   }
 
-  @isTest
+  @IsTest
   static void testStepNameValidation() {
     WorkflowEngine.disableQueueableInTest = true;
     Id instanceId = WorkflowEngine.start(
@@ -2301,7 +2301,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testParallelRecovery() {
     WorkflowEngine.disableQueueableInTest = true;
     Id instanceId = WorkflowEngine.start(
@@ -2392,7 +2392,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Completed', step2Exec.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testCorrelationKeyReuse() {
     WorkflowEngine.disableQueueableInTest = true;
     // Disable the dedup window so a completed key may be reused (legacy reuse)
@@ -2437,7 +2437,7 @@ public class WorkflowEngineTest {
     System.assertEquals('SharedKey', inst2.Correlation_Key__c);
   }
 
-  @isTest
+  @IsTest
   static void testDirectCalloutStep() {
     Test.setMock(HttpCalloutMock.class, new MockCalloutResponse());
 
@@ -2464,7 +2464,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogLifecycle() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -2541,7 +2541,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLargeParallelOutputJoin() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -2632,7 +2632,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Completed', instAfter.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testRetryWorkflowNullCurrentStep() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -2660,7 +2660,7 @@ public class WorkflowEngineTest {
     System.assertEquals('WorkflowEngineTest.HappyStep1', inst.Current_Step__c);
   }
 
-  @isTest
+  @IsTest
   static void testActiveCorrelationKeyUniqueness() {
     WorkflowEngine.disableQueueableInTest = true;
     // Active-only dedup scope (preserves the legacy uniqueness window)
@@ -2715,7 +2715,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSignalByIdShapedKey() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -2793,7 +2793,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testContinueAsNewSuccessorWatchdog() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -2837,7 +2837,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testContentVersionVisibility() {
     Id instanceId = WorkflowEngine.start(
       'WorkflowEngineTest.HappyWorkflow',
@@ -2906,7 +2906,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogRaceAndStatuses() {
     WorkflowEngine.disableQueueableInTest = true;
     Id instanceId = WorkflowEngine.start(
@@ -2949,7 +2949,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Completed', checkStep.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testPreStartTimeout() {
     WorkflowEngine.disableQueueableInTest = true;
     Id instanceId = WorkflowEngine.start(
@@ -3010,7 +3010,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCompensationTimeout() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -3071,7 +3071,7 @@ public class WorkflowEngineTest {
     System.assertEquals('WorkflowEngineTest.CompensatableHappyStep', stack[0]);
   }
 
-  @isTest
+  @IsTest
   static void testCompensationFailureRollback() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -3113,7 +3113,7 @@ public class WorkflowEngineTest {
     System.assertEquals('WorkflowEngineTest.CompensatableCrashStep', stack[0]);
   }
 
-  @isTest
+  @IsTest
   static void testStalledCancellationResumesToCancelled() {
     // A user-cancelled rollback that stalls must remember it was cancel-driven, so
     // that resuming it terminates as 'Cancelled' (not 'Compensated').
@@ -3183,7 +3183,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testStalledRollbackReservesCorrelationKey() {
     // A stalled rollback still has un-reversed side effects, so its correlation key
     // must stay reserved: starting a second workflow with the same key must be blocked.
@@ -3239,7 +3239,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCancelTreeResumesStalledChildRollback() {
     // Cancelling a parent tree with runCompensations=true must reach a stalled
     // (CompensationFailed) child and resume its rollback, draining it to Cancelled.
@@ -3298,7 +3298,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCancelTreeForcesStalledChildTerminalWithoutCompensations() {
     // Cancelling with runCompensations=false must force a stalled child terminal
     // (Cancelled), releasing its correlation key rather than leaving it orphaned.
@@ -3345,7 +3345,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCancelSignalReachesStalledRollback() {
     // A Cancel signal must reach a stalled rollback (CompensationFailed); a non-cancel
     // signal to the same instance must still be rejected as "no active workflow".
@@ -3399,7 +3399,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testFailureRollbackErrorContainingCancelledStillCompensates() {
     // A failure-driven rollback whose compensation error text merely contains the word
     // "Cancelled" must NOT be mistaken for a user cancellation on resume: it must finish
@@ -3465,7 +3465,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testResumeSeedsFromCompensationCheckpoint() {
     // A resumed rollback must continue from the failed compensation's saved checkpoint
     // (YIELD progress stored in its Output__c) rather than restarting from the forward
@@ -3521,7 +3521,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCompensationCrashViaFinalizerRecordsCompensationStep() {
     // A finalizer-style crash during compensation (no stepName) must be recorded against
     // the top-of-stack _Compensate step, not the stale forward Current_Step__c, so the
@@ -3613,7 +3613,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCrashCreatedCompensationRowSeededFromOwnForwardStep() {
     // A finalizer crash that has to CREATE the top-of-stack compensation log must seed it
     // from that step's own forward execution, not the latest completed step overall (which,
@@ -3672,7 +3672,7 @@ public class WorkflowEngineTest {
     System.assertEquals('{"a":"out"}', createdComp.Output__c);
   }
 
-  @isTest
+  @IsTest
   static void testSuspendedCompensationCrashRecordsCompensationStep() {
     // A sleeping/approval-gated compensation: the engine parked the saga as Suspended
     // while a _Compensate step waited (SLEEP/SUSPEND/WAIT_FOR_APPROVAL), then resumed it
@@ -3765,7 +3765,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Failed', compAttempts[0].Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testSuspendedCancelCompensationCrashStaysOnCancelPath() {
     // A cancel-driven rollback whose compensation was sleeping/approval-gated (Suspended)
     // when the crash hit. The persisted status is 'Suspended' (the in-transaction flip to
@@ -3826,7 +3826,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testBulkStart() {
     List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
     for (Integer i = 0; i < 5; i++) {
@@ -3860,7 +3860,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testBulkResume() {
     // 1. Create suspended workflow instances
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
@@ -3921,7 +3921,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testBulkSignal() {
     // 1. Start workflows that block on signals
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
@@ -3970,7 +3970,7 @@ public class WorkflowEngineTest {
   // OUTBOUND Workflow_Lifecycle__e EVENT (issue #14)
   // ==========================================
 
-  @isTest
+  @IsTest
   static void testLifecycleEventOnCompletion() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -4017,7 +4017,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLifecycleEventOnFailure() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -4056,7 +4056,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLifecycleExactlyOnceForContinueAsNewChain() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -4116,7 +4116,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLifecycleEventOnCancellation() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -4150,7 +4150,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLifecycleToggleDisablesEmission() {
     WorkflowEngine.publishLifecycleEvents = false;
 
@@ -4176,7 +4176,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLifecyclePublishFailureDoesNotBreakTransition() {
     WorkflowLifecyclePublisher.throwTestException = true;
 
@@ -4203,7 +4203,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLifecycleEventOnCompensationDrain() {
     // Regression: the compensation drain re-queries the instance, and the
     // terminal publish must carry Correlation_Key__c (was dropped from that
@@ -4255,7 +4255,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLifecycleEventsOnParentChildCancelTree() {
     // The cancel tree publishes one bulk batch after every node is cancelled, so
     // the best-effort publish never starves a later child cancellation of DML.
@@ -4306,7 +4306,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testPreviousRunAtFlowsThroughContinueAsNew() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -4359,7 +4359,7 @@ public class WorkflowEngineTest {
 
   // ── Unrouted-signal capture & re-delivery tests ────────────────────────────
 
-  @isTest
+  @IsTest
   static void testUnroutedSignalCaptured_singleMethod() {
     // Sending a signal when no active instance matches must create an Unrouted
     // Workflow_Signal__c row instead of throwing.
@@ -4409,7 +4409,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testUnroutedSignalCaptured_bulkMethod() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -4439,7 +4439,7 @@ public class WorkflowEngineTest {
     System.assertEquals('BulkKey-B', captured[1].Correlation_Key__c);
   }
 
-  @isTest
+  @IsTest
   static void testUnroutedSignalIdempotent_sameDedupKey() {
     // The same signal delivered N times with the same dedupKey must produce
     // exactly one Unrouted row (at-least-once idempotency).
@@ -4493,7 +4493,7 @@ public class WorkflowEngineTest {
     System.assertEquals(dedupKey, captured[0].Signal_Key__c);
   }
 
-  @isTest
+  @IsTest
   static void testRedeliverCapturedSignal_wakesInstance() {
     // Re-delivering a captured signal to a now-waiting instance must wake it
     // and transition the captured row to Received with the instance FK set.
@@ -4552,7 +4552,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testRedeliverCapturedSignal_noopWhenUnmatched() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -4587,7 +4587,7 @@ public class WorkflowEngineTest {
     System.assertEquals(null, reloaded.Workflow_Instance__c);
   }
 
-  @isTest
+  @IsTest
   static void testUnroutedCancelSignalStillThrows() {
     // An unmatched Cancel signal must NOT be captured — it must still throw,
     // since re-delivering a cancel to a future instance would be incorrect.
@@ -4619,7 +4619,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testMatchedSignalBehaviorUnchanged() {
     // Signals that DO match an active instance must still follow the existing
     // path: Received status, parent FK set, instance woken — no regression.
@@ -4701,7 +4701,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowValidatorReportsMalformedDag() {
     // A deliberately malformed definition is reported with every structural
     // defect, and a well-formed one (HappyWorkflow) passes clean.
@@ -4846,7 +4846,7 @@ public class WorkflowEngineTest {
   // TIMED WAIT — TESTS (Issue #35)
   // ==========================================
 
-  @isTest
+  @IsTest
   static void testTimedSuspend_TimeoutWins() {
     WorkflowEngine.disableQueueableInTest = true;
     capturedIsTimeoutResume = null;
@@ -4979,7 +4979,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testTimedSuspend_SignalWins() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -5064,7 +5064,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testTimedSuspend_LateSignalAfterTimeout_IsNoOp() {
     WorkflowEngine.disableQueueableInTest = true;
     capturedIsTimeoutResume = null;
@@ -5131,7 +5131,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testTimedWait_BackCompat_UntimedOverloadsUnchanged() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -5176,7 +5176,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testTimedApproval_TimeoutWins() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -5258,7 +5258,7 @@ public class WorkflowEngineTest {
     System.assertEquals('"approval_timedout"', inst.Output__c);
   }
 
-  @isTest
+  @IsTest
   static void testTimedSuspend_ManualResumeDisarmsTimer() {
     // A manual resumeInstance() of an armed timed-wait must disarm Sleep_Until__c
     // (issue #35) so the watchdog does not later mis-route to the fallback step.
@@ -5315,7 +5315,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testManualCompensationValidation() {
     // 1. Create a non-completed instance and check it fails validation
     Workflow_Instance__c inst1 = new Workflow_Instance__c(
@@ -5357,7 +5357,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testManualCompensationHappyPath() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -5640,7 +5640,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testRetryAttemptProgressionAndFallback() {
     observedAttemptStates.clear();
     Test.startTest();
@@ -5686,7 +5686,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testDynamicRetryAttemptProgression() {
     dynamicObservedStates.clear();
     Test.startTest();
@@ -5715,7 +5715,7 @@ public class WorkflowEngineTest {
     System.assertEquals(3, dynamicObservedStates[2].get('maxAttempts'));
   }
 
-  @isTest
+  @IsTest
   static void testCompensationRetryAttemptProgression() {
     compensationObservedStates.clear();
     Test.startTest();
@@ -5748,7 +5748,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testRetryAttemptResetOnFreshVisit() {
     loopObservedStates.clear();
     loopCounter = 0;
@@ -5824,7 +5824,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testProgressReportingEndToEnd() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -5937,7 +5937,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testTelemetryCapturedOnTransitions() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -5990,7 +5990,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testTelemetryOnPendingAndCrash() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -6070,7 +6070,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testParentChildWorkflowReentrancy() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -6134,7 +6134,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testParentChildWorkflowForeignCollision() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -6184,7 +6184,7 @@ public class WorkflowEngineTest {
     };
   }
 
-  @isTest
+  @IsTest
   static void testParentChildWorkflowReentrancyWithPausedChild() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -6343,7 +6343,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepSuccess() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -6445,7 +6445,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepParallelSuccess() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -6504,7 +6504,7 @@ public class WorkflowEngineTest {
     System.assertEquals('"Join_OutputA_skippedParallelB"', finalInst.Output__c);
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepParallelPreservesSleeping() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -6592,7 +6592,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepParallelSignalSkippedIsNoop() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -6635,7 +6635,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepCaseInsensitivity() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -6691,7 +6691,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Completed', finalInst.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepParallelReParksParkedBranches() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -6757,7 +6757,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepParallelEnqueuesUndrivenPendingSibling() {
     WorkflowEngine.disableQueueableInTest = false;
     Id instanceId = WorkflowEngine.start(
@@ -6814,7 +6814,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Completed', instFinal.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepRestampsTerminalTime() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -6871,7 +6871,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepParallelPreservesRetrying() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -6959,7 +6959,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepDynamicNextThrowsException() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -6997,7 +6997,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepRearmsPendingSiblingTimeout() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -7126,7 +7126,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testRunStepParallelReparksWithAlreadyRunningSibling() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -7315,7 +7315,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testStepBreadcrumbsPersisted() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -7369,7 +7369,7 @@ public class WorkflowEngineTest {
     System.assertEquals(stepExec.Id, logs[1].Correlation_Key__c);
   }
 
-  @isTest
+  @IsTest
   static void testStepBreadcrumbsRollbackOnFailure() {
     WorkflowEngine.disableQueueableInTest = true;
     Id instanceId = WorkflowEngine.start(
@@ -7405,7 +7405,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testStepBreadcrumbsEffectivelyOnceOnRetry() {
     WorkflowEngineTest.retryBreadcrumbAttempt = 1;
 
@@ -7442,7 +7442,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Attempt 3', logs[2].Message__c);
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdPersistenceAndLineage() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -7516,7 +7516,7 @@ public class WorkflowEngineTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdInheritedOnContinueAsNew() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -7548,7 +7548,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdParentFallback() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -7590,7 +7590,7 @@ public class WorkflowEngineTest {
     System.assertEquals(parentId, lineage[1].instanceId);
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdReusedKeyTimeBound() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -7660,7 +7660,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdInheritedOnContinueAsNewFallback() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -7717,7 +7717,7 @@ public class WorkflowEngineTest {
     System.assertEquals(parentId, lineage[1].instanceId);
   }
 
-  @isTest
+  @IsTest
   static void testCausationLineageCarriesTerminalOutputs() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -7767,7 +7767,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdReusedKeySelfExclusion() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -7818,7 +7818,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testManualCompensationLineageAndParentIsolation() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -7938,7 +7938,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdLooksLikeIdFallback() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -7984,7 +7984,7 @@ public class WorkflowEngineTest {
     System.assertEquals(parentId, lineage[1].instanceId);
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdInheritedOnContinueAsNewReusedKeyTimeBound() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -8071,7 +8071,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdInheritedOnContinueAsNewReusedKeyTimeBoundCapped() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -8105,7 +8105,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdInheritedOnContinueAsNewReusedKeyTimeBoundLongChain() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -8176,7 +8176,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdTimestampPropagationAndLineage() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -8221,7 +8221,7 @@ public class WorkflowEngineTest {
     System.assertEquals('key:MyRealParentKey', lineage[0].causationId);
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdWithHashInKey() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -8264,7 +8264,7 @@ public class WorkflowEngineTest {
     System.assertEquals('key:order#123', lineage[0].causationId);
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdBulkStartRaceCondition() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -8298,7 +8298,7 @@ public class WorkflowEngineTest {
     System.assertEquals(parentId, lineage[1].instanceId);
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdResolveThroughChainRoot() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -8345,7 +8345,7 @@ public class WorkflowEngineTest {
     System.assertEquals('key:ParentKeyRoot', lineage[0].causationId);
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdWithNumericHashSuffixInKey() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -8388,7 +8388,7 @@ public class WorkflowEngineTest {
     System.assertEquals('key:order#1234567890123', lineage[0].causationId);
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdWithDelimiterInKey() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -8431,7 +8431,7 @@ public class WorkflowEngineTest {
     System.assertEquals('key:order::ts::prod', lineage[0].causationId);
   }
 
-  @isTest
+  @IsTest
   static void testCausationIdWithTimestampShapedKey() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -8619,7 +8619,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testErrorRoutingOnCrash() {
     routedStepsRun.clear();
     routedStepContextData.clear();
@@ -8667,7 +8667,7 @@ public class WorkflowEngineTest {
     System.assertEquals(1, routedStepContextData.get('attemptCount'));
   }
 
-  @isTest
+  @IsTest
   static void testErrorRoutingOnRetryExhaustion() {
     routedStepsRun.clear();
     routedStepContextData.clear();
@@ -8717,7 +8717,7 @@ public class WorkflowEngineTest {
     System.assertEquals(2, routedStepContextData.get('attemptCount'));
   }
 
-  @isTest
+  @IsTest
   static void testErrorRoutingOnExplicitFail() {
     routedStepsRun.clear();
     routedStepContextData.clear();
@@ -8765,7 +8765,7 @@ public class WorkflowEngineTest {
     System.assertEquals(1, routedStepContextData.get('attemptCount'));
   }
 
-  @isTest
+  @IsTest
   static void testHandlerItselfFailsFallsBack() {
     routedStepsRun.clear();
     WorkflowEngine.disableQueueableInTest = true;
@@ -8800,7 +8800,7 @@ public class WorkflowEngineTest {
     System.assert(inst.Error_Message__c.contains('Handler itself failed'));
   }
 
-  @isTest
+  @IsTest
   static void testCompensationStackPreservedAcrossErrorRouting() {
     routedStepsRun.clear();
     compensationsRun.clear();
@@ -8977,7 +8977,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testParallelErrorRoutingSiblingCancellation() {
     routedStepsRun.clear();
     compensationsRun.clear();
@@ -9091,7 +9091,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testStaleCompletionSignalRollback() {
     routedStepsRun.clear();
     compensationsRun.clear();
@@ -9132,7 +9132,7 @@ public class WorkflowEngineTest {
     System.assertEquals('Received', sig.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testRetryExhaustedAttemptCount() {
     routedStepsRun.clear();
     routedStepContextData.clear();
@@ -9201,7 +9201,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogTimeoutErrorRouting() {
     routedStepsRun.clear();
     routedStepContextData.clear();
@@ -9270,7 +9270,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testErrorRoutingWorkflowInStartValidation() {
     WorkflowEngine.disableQueueableInTest = true;
     Id instanceId = WorkflowEngine.start(
@@ -9323,7 +9323,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testPreserveErrorMetadataAcrossHandlerCheckpoint() {
     routedStepsRun.clear();
     routedStepContextData.clear();
@@ -9408,7 +9408,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testLoadErrorMetadataForRetryableHandler() {
     routedStepsRun.clear();
     routedStepContextData.clear();
@@ -9452,7 +9452,7 @@ public class WorkflowEngineTest {
     System.assertEquals(1, (Integer) routedStepContextData.get('attemptCount'));
   }
 
-  @isTest
+  @IsTest
   static void testGetPatchAdoptionCount() {
     // 1. Create a non-terminal instance (Running)
     Workflow_Instance__c inst1 = new Workflow_Instance__c(
@@ -9509,7 +9509,7 @@ public class WorkflowEngineTest {
     System.assertEquals(1, count, 'Adoption count should be 1');
   }
 
-  @isTest
+  @IsTest
   static void testGetPatchAdoptionCountOffloaded() {
     // 1. Create a non-terminal instance
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -9544,7 +9544,7 @@ public class WorkflowEngineTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetPatchAdoptionCountThrowsExceptionWhenCapped() {
     WorkflowEngine.adoptionQueryLimit = 1;
     try {
@@ -9588,7 +9588,7 @@ public class WorkflowEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testGetPatchAdoptionCountExactKeyMatching() {
     DateTime introducedAt = DateTime.newInstance(2026, 1, 2);
 

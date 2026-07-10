@@ -1,6 +1,6 @@
-@isTest
+@IsTest
 public class WorkflowSchedulerTest {
-  @isTest
+  @IsTest
   static void testWorkflowSchedulerExecution() {
     // Schedule the job
     Test.startTest();

@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public class WorkflowSignalOrStartTest {
   public class TestAggregationWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
@@ -24,7 +24,7 @@ public class WorkflowSignalOrStartTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testSignalOrStartNewInstance() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -58,7 +58,7 @@ public class WorkflowSignalOrStartTest {
     System.assertEquals('Received', signals[0].Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testSignalOrStartExistingActiveInstance() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -125,7 +125,7 @@ public class WorkflowSignalOrStartTest {
     System.assertEquals('Completed', instCompleted.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testSignalOrStartIdempotency() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -166,7 +166,7 @@ public class WorkflowSignalOrStartTest {
     System.assertEquals(1, signals.size());
   }
 
-  @isTest
+  @IsTest
   static void testSignalOrStartTerminalInstance() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -218,7 +218,7 @@ public class WorkflowSignalOrStartTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testSignalOrStartBulk() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -328,7 +328,7 @@ public class WorkflowSignalOrStartTest {
     System.assertEquals('Completed', activeInstCompleted.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testInvocableAction() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -370,7 +370,7 @@ public class WorkflowSignalOrStartTest {
     System.assertEquals('Received', signals[0].Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testSignalOrStartCancel() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -428,7 +428,7 @@ public class WorkflowSignalOrStartTest {
     System.assertEquals('Consumed', signals[0].Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testSignalOrStartCompensationFailed() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -475,7 +475,7 @@ public class WorkflowSignalOrStartTest {
     System.assertEquals(0, signals.size());
   }
 
-  @isTest
+  @IsTest
   static void testSignalOrStartContinuedAsNew() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -522,7 +522,7 @@ public class WorkflowSignalOrStartTest {
     System.assertEquals(0, signals.size());
   }
 
-  @isTest
+  @IsTest
   static void testSignalOrStartChildWakeGating() {
     WorkflowEngine.disableQueueableInTest = true;
 

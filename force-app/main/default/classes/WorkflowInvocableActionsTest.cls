@@ -1,6 +1,6 @@
-@isTest
+@IsTest
 public class WorkflowInvocableActionsTest {
-  @isTest
+  @IsTest
   static void testStartWorkflowInvocable() {
     WorkflowStartInvocableAction.StartRequest req = new WorkflowStartInvocableAction.StartRequest();
     req.workflowName = 'WorkflowEngineTest.HappyWorkflow';
@@ -30,7 +30,7 @@ public class WorkflowInvocableActionsTest {
     System.assertEquals('"InvocableInput"', inst.Input__c);
   }
 
-  @isTest
+  @IsTest
   static void testStartWorkflowInvocableDuplicateDoesNotFault() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -64,7 +64,7 @@ public class WorkflowInvocableActionsTest {
     System.assertEquals(true, results[1].isNew);
   }
 
-  @isTest
+  @IsTest
   static void testSignalWorkflowInvocable() {
     // Create active instance
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -98,7 +98,7 @@ public class WorkflowInvocableActionsTest {
     System.assertEquals('Approve:InvocableApproval', signals[0].Signal_Name__c);
   }
 
-  @isTest
+  @IsTest
   static void testStartWorkflowInvocableBulk() {
     WorkflowStartInvocableAction.StartRequest req1 = new WorkflowStartInvocableAction.StartRequest();
     req1.workflowName = 'WorkflowEngineTest.HappyWorkflow';
@@ -132,7 +132,7 @@ public class WorkflowInvocableActionsTest {
     System.assertEquals('InvocableKey2', insts[1].Correlation_Key__c);
   }
 
-  @isTest
+  @IsTest
   static void testSignalWorkflowInvocableBulk() {
     Workflow_Instance__c inst1 = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
@@ -183,7 +183,7 @@ public class WorkflowInvocableActionsTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testStartWorkflowInvocableWithAttributes() {
     WorkflowStartInvocableAction.StartRequest req = new WorkflowStartInvocableAction.StartRequest();
     req.workflowName = 'WorkflowEngineTest.HappyWorkflow';
@@ -214,7 +214,7 @@ public class WorkflowInvocableActionsTest {
     System.assertEquals('enterprise', attrs[1].Value__c);
   }
 
-  @isTest
+  @IsTest
   static void testStartWorkflowInvocableWithCausationId() {
     WorkflowStartInvocableAction.StartRequest req = new WorkflowStartInvocableAction.StartRequest();
     req.workflowName = 'WorkflowEngineTest.HappyWorkflow';
@@ -239,7 +239,7 @@ public class WorkflowInvocableActionsTest {
     System.assertEquals('invocable-cause-789', inst.Causation_Id__c);
   }
 
-  @isTest
+  @IsTest
   static void testInvocableActionsNullSafety() {
     Test.startTest();
 
@@ -267,7 +267,7 @@ public class WorkflowInvocableActionsTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testFlowDebouncedStart() {
     WorkflowStartInvocableAction.StartRequest req = new WorkflowStartInvocableAction.StartRequest();
     req.workflowName = 'WorkflowEngineTest.HappyWorkflow';
@@ -298,7 +298,7 @@ public class WorkflowInvocableActionsTest {
     System.assertEquals('{"val":1}', states[0].Input_Json__c);
   }
 
-  @isTest
+  @IsTest
   static void testFlowNegativeDebounceValidation() {
     WorkflowStartInvocableAction.StartRequest req = new WorkflowStartInvocableAction.StartRequest();
     req.workflowName = 'WorkflowEngineTest.HappyWorkflow';
@@ -323,7 +323,7 @@ public class WorkflowInvocableActionsTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testFlowDebouncedStartWithMetadata() {
     WorkflowStartInvocableAction.StartRequest req = new WorkflowStartInvocableAction.StartRequest();
     req.workflowName = 'WorkflowEngineTest.HappyWorkflow';
@@ -358,7 +358,7 @@ public class WorkflowInvocableActionsTest {
     System.assertEquals('flowCausation123', states[0].Causation_Id__c);
   }
 
-  @isTest
+  @IsTest
   static void testFlowDebouncedValidation() {
     // 1. Malformed Input JSON
     WorkflowStartInvocableAction.StartRequest req1 = new WorkflowStartInvocableAction.StartRequest();

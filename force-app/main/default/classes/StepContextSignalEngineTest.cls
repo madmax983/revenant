@@ -3,7 +3,7 @@
  * StepContext and ties consumption to the step's successful (COMPLETE)
  * transition.
  */
-@isTest
+@IsTest
 public class StepContextSignalEngineTest {
   // --- Re-observation safety (AC4a) ---------------------------------------
 
@@ -34,7 +34,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testObservedSignalSurvivesYieldUntilComplete() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.ReObserveWorkflow',
@@ -113,7 +113,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testCancelSignalIsNotSurfacedAsReadablePayload() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.PlainWaitWorkflow',
@@ -183,7 +183,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testInFlightDuplicateConsumedByName() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.InFlightDupWorkflow',
@@ -288,7 +288,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testSplitConsumesSpawningStepSignals() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.SplitSignalWorkflow',
@@ -366,7 +366,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testProbeAbsentNamePreservesLaterSignal() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.ProbeAbsentWorkflow',
@@ -472,7 +472,7 @@ public class StepContextSignalEngineTest {
    * as absent (Processing, not Received) -- atomic claim-at-read for parallel
    * branches.  The signal ends up Consumed after the claiming branch completes.
    */
-  @isTest
+  @IsTest
   static void testParallelBranchAtomicClaimAtRead() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.ClaimRaceWorkflow',
@@ -567,7 +567,7 @@ public class StepContextSignalEngineTest {
    * has not durably finished (its claim is still Processing, or was rolled back
    * to Received after a yield/retry) must keep its signal so it can finish.
    */
-  @isTest
+  @IsTest
   static void testParallelCompleteDoesNotConsumeSiblingClaim() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.ClaimRaceWorkflow',
@@ -691,7 +691,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testParallelGuardThenReadReturnsClaimedPayload() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.GuardReadWorkflow',
@@ -796,7 +796,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testParallelBranchSuspendedOnSignalIsWokenByName() {
     WorkflowEngine.disableQueueableInTest = true;
     Id instanceId = WorkflowEngine.start(
@@ -909,7 +909,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testCalloutStepBranchReadsWithoutClaiming() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.ProbeWorkflow',
@@ -1026,7 +1026,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testCalloutStepWithTimeoutDoesNotHitUncommittedWork() {
     Test.setMock(HttpCalloutMock.class, new CTOkMock());
     // Drive setup synchronously with queueable suppressed so we control every
@@ -1144,7 +1144,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testUnscopedGetSignalsPreservesArrivalOrderAfterClaim() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.OrderWorkflow',
@@ -1240,7 +1240,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testGetSignalFallsBackToOlderWhenNewestUnavailable() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.FallbackWorkflow',
@@ -1364,7 +1364,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testCalloutStepBranchDoesNotConsumeSiblingClaim() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.CalloutSiblingWorkflow',
@@ -1400,7 +1400,7 @@ public class StepContextSignalEngineTest {
 
   // --- Bulk signal wakes parallel branches across instances (find 1) --------
 
-  @isTest
+  @IsTest
   static void testBulkSignalWakesParallelBranchesAcrossInstances() {
     WorkflowEngine.disableQueueableInTest = true;
     Id i1 = WorkflowEngine.start(
@@ -1530,7 +1530,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testYieldDoesNotReleaseSiblingClaimOnObservedRow() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.CalloutRollbackWorkflow',
@@ -1598,7 +1598,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testNamedLookupNotFalselyAbsentAfterBudgetExhausted() {
     // Shrink the cap so a single Noise row exhausts the budget.
     WorkflowEngine.SERIAL_SIGNAL_ROW_CAP = 1;
@@ -1686,7 +1686,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testOffloadedSignalPayloadsResolvedForListRead() {
     Id instanceId = WorkflowEngine.start(
       'StepContextSignalEngineTest.OffloadWorkflow',
@@ -1764,7 +1764,7 @@ public class StepContextSignalEngineTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testE2EAutoReplayPreArrivedSignal() {
     WorkflowEngine.disableQueueableInTest = true;
 

@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public class StepResultFanOutTest {
   // ==========================================
   // MOCK WORKFLOWS & STEPS
@@ -166,7 +166,7 @@ public class StepResultFanOutTest {
   // UNIT TESTS
   // ==========================================
 
-  @isTest
+  @IsTest
   static void testStartChildrenFactory() {
     List<StepResult.ChildRequest> requests = new List<StepResult.ChildRequest>{
       new StepResult.ChildRequest(
@@ -190,7 +190,7 @@ public class StepResultFanOutTest {
     System.assert(result.childRequests[0].inputJson.contains('"val"'));
   }
 
-  @isTest
+  @IsTest
   static void testGetChildOutcomes() {
     Id dummyInstanceId = '00D000000000001EAA';
 
@@ -241,7 +241,7 @@ public class StepResultFanOutTest {
     System.assertEquals(false, outcomes[2].isPresent());
   }
 
-  @isTest
+  @IsTest
   static void testParallelChildFanOutAndJoin() {
     Test.startTest();
     Id parentId = WorkflowEngine.start(
@@ -266,7 +266,7 @@ public class StepResultFanOutTest {
     System.assertEquals(80, ((Decimal) output.get('sum')).intValue());
   }
 
-  @isTest
+  @IsTest
   static void testStepResultValidation() {
     // 1. startChildren validation
     try {
@@ -299,7 +299,7 @@ public class StepResultFanOutTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testSafeDoubleSerialization() {
     String inputJson = '{"val":123}';
     StepResult res = StepResult.startChild('WorkflowA', 'KeyA', inputJson);
@@ -321,7 +321,7 @@ public class StepResultFanOutTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testInvalidWorkflowTypeVerification() {
     Test.startTest();
     try {
@@ -340,7 +340,7 @@ public class StepResultFanOutTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testCaseInsensitiveChildKeyMatching() {
     Test.startTest();
     Id parentId = WorkflowEngine.start(
@@ -381,7 +381,7 @@ public class StepResultFanOutTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testParallelChildFanOutWithConcurrencyGate() {
     // Mock the child workflow to have a ConcurrencyGate configured with ceiling = 1
     ConcurrencyGate.mockConfigs.put(
@@ -433,7 +433,7 @@ public class StepResultFanOutTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testParallelBranchSignalNotGatedByChildFanOut() {
     Test.startTest();
     Id parentId = WorkflowEngine.start(

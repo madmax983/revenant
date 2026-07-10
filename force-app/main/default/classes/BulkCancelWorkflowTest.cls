@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public class BulkCancelWorkflowTest {
   // ==========================================
   // Helpers
@@ -37,7 +37,7 @@ public class BulkCancelWorkflowTest {
   // Tests
   // ==========================================
 
-  @isTest
+  @IsTest
   static void testCountEligibleFiltersAndExcludesSelfAndCompensating() {
     List<String> statuses = new List<String>{
       'Pending',
@@ -87,7 +87,7 @@ public class BulkCancelWorkflowTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCancelsEligibleInstances() {
     WorkflowEngine.disableQueueableInTest = true;
     makeInstance(
@@ -154,7 +154,7 @@ public class BulkCancelWorkflowTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testYieldsAndResumesInChunks() {
     WorkflowEngine.disableQueueableInTest = true;
     Integer original = BulkCancelWorkflow.CHUNK_SIZE;
@@ -217,7 +217,7 @@ public class BulkCancelWorkflowTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testOneFailureDoesNotAbortRest() {
     WorkflowEngine.disableQueueableInTest = true;
     makeInstance('GoodA', 'Running', 'WorkflowEngineTest.HappyWorkflow', null);
@@ -272,7 +272,7 @@ public class BulkCancelWorkflowTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testZeroEligibleCompletesCleanly() {
     WorkflowEngine.disableQueueableInTest = true;
     makeInstance(
@@ -303,7 +303,7 @@ public class BulkCancelWorkflowTest {
     System.assertEquals(0, (Integer) summary.get('cancelled'));
   }
 
-  @isTest
+  @IsTest
   static void testEndToEndViaEngine() {
     WorkflowEngine.disableQueueableInTest = true;
     makeInstance('E2E_A', 'Running', 'WorkflowEngineTest.HappyWorkflow', null);
@@ -349,7 +349,7 @@ public class BulkCancelWorkflowTest {
     System.assertEquals(2, cancelledCount, 'Both targets cancelled');
   }
 
-  @isTest
+  @IsTest
   static void testControllerMethods() {
     WorkflowEngine.disableQueueableInTest = true;
     makeInstance('CtrlA', 'Running', 'WorkflowEngineTest.HappyWorkflow', null);

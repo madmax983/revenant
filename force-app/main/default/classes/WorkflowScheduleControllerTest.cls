@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public class WorkflowScheduleControllerTest {
   private static final String TEST_WF = 'WorkflowEngineTest.HappyWorkflow';
 
@@ -14,7 +14,7 @@ public class WorkflowScheduleControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetSchedules() {
     // getSchedules surfaces the persisted Next_Fire_Window__c cursor as nextFireTime
     // (no per-row cron scan), so seed the cursor to verify it passes through.
@@ -37,7 +37,7 @@ public class WorkflowScheduleControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSaveCreateSeedsCursor() {
     Test.startTest();
     Id newId = WorkflowScheduleController.saveSchedule(
@@ -65,7 +65,7 @@ public class WorkflowScheduleControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testEditCronResetsCursor() {
     // A monthly schedule whose cursor sits far in the future.
     Workflow_Schedule__c sched = makeSchedule('CtrlCursor');
@@ -106,7 +106,7 @@ public class WorkflowScheduleControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSaveCreateAndEdit() {
     Test.startTest();
     // Create
@@ -148,7 +148,7 @@ public class WorkflowScheduleControllerTest {
     System.assertEquals(false, saved.Enabled__c, 'Enabled should be updated');
   }
 
-  @isTest
+  @IsTest
   static void testSaveInvalidCronRejected() {
     Boolean threw = false;
     Test.startTest();
@@ -168,7 +168,7 @@ public class WorkflowScheduleControllerTest {
     System.assert(threw, 'Invalid cron should throw AuraHandledException');
   }
 
-  @isTest
+  @IsTest
   static void testSaveInvalidJsonRejected() {
     Boolean threw = false;
     Test.startTest();
@@ -189,7 +189,7 @@ public class WorkflowScheduleControllerTest {
     System.assert(threw, 'Invalid JSON should throw AuraHandledException');
   }
 
-  @isTest
+  @IsTest
   static void testReEnableRecomputesCursor() {
     // A paused schedule whose cursor has fallen into the past while disabled.
     Workflow_Schedule__c sched = makeSchedule('CtrlReEnable');
@@ -213,7 +213,7 @@ public class WorkflowScheduleControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSetEnabledAndDelete() {
     Workflow_Schedule__c sched = makeSchedule('CtrlToggle');
     insert sched;
@@ -237,7 +237,7 @@ public class WorkflowScheduleControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testRunNow() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = makeSchedule('CtrlRunNow');
@@ -256,7 +256,7 @@ public class WorkflowScheduleControllerTest {
     System.assertEquals(1, instances.size(), 'A manual instance should have started');
   }
 
-  @isTest
+  @IsTest
   static void testGetScheduleDetail() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = makeSchedule('CtrlDetail');
@@ -274,7 +274,7 @@ public class WorkflowScheduleControllerTest {
     System.assertNotEquals(null, detail.get('nextFireTime'), 'nextFireTime present');
   }
 
-  @isTest
+  @IsTest
   static void testPreviewCron() {
     Test.startTest();
     Map<String, Object> good = WorkflowScheduleController.previewCron('0 2 * * *');
@@ -286,7 +286,7 @@ public class WorkflowScheduleControllerTest {
     System.assertEquals(false, bad.get('valid'), 'Invalid cron');
   }
 
-  @isTest
+  @IsTest
   static void testGetWorkflowDefinitions() {
     Test.startTest();
     List<String> defs = WorkflowScheduleController.getWorkflowDefinitions();
@@ -294,7 +294,7 @@ public class WorkflowScheduleControllerTest {
     System.assertNotEquals(null, defs, 'Definitions list should not be null');
   }
 
-  @isTest
+  @IsTest
   static void testDedicatedJobRegisterUnregister() {
     Workflow_Schedule__c sched = makeSchedule('CtrlDed');
     sched.Dedicated_Slot__c = true;
@@ -318,7 +318,7 @@ public class WorkflowScheduleControllerTest {
     System.assertEquals(0, afterUnreg, 'Unregister should remove the CronTrigger');
   }
 
-  @isTest
+  @IsTest
   static void testSavePrefixTooLong() {
     Boolean threw = false;
     String longPrefix = '';
@@ -342,7 +342,7 @@ public class WorkflowScheduleControllerTest {
     System.assert(threw, 'Prefix over 80 chars should be rejected');
   }
 
-  @isTest
+  @IsTest
   static void testSaveDuplicatePrefix() {
     insert new Workflow_Schedule__c(
       Name = 'FirstSched',
@@ -371,7 +371,7 @@ public class WorkflowScheduleControllerTest {
     System.assert(threw, 'Duplicate prefix should be rejected');
   }
 
-  @isTest
+  @IsTest
   static void testSetEnabledAbortsDedicatedJob() {
     Workflow_Schedule__c sched = makeSchedule('CtrlDisableDed');
     sched.Dedicated_Slot__c = true;
@@ -398,7 +398,7 @@ public class WorkflowScheduleControllerTest {
     System.assertEquals(0, afterDisable, 'Disabling a dedicated schedule should abort its CronTrigger');
   }
 
-  @isTest
+  @IsTest
   static void testEditCronReArmsDedicatedJob() {
     Workflow_Schedule__c sched = makeSchedule('CtrlReArm');
     sched.Dedicated_Slot__c = true;
@@ -441,7 +441,7 @@ public class WorkflowScheduleControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSaveTurningOffDedicatedAbortsJob() {
     Workflow_Schedule__c sched = makeSchedule('CtrlUnded');
     sched.Dedicated_Slot__c = true;
@@ -485,7 +485,7 @@ public class WorkflowScheduleControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLogsFollowScheduleRename() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = makeSchedule('CtrlRename');
@@ -508,7 +508,7 @@ public class WorkflowScheduleControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testUnauthorized() {
     // Create a user with a minimal profile and NO Revenant permission sets.
     User u = buildMinimalUser();

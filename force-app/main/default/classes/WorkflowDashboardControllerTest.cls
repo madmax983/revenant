@@ -1,6 +1,6 @@
-@isTest
+@IsTest
 public class WorkflowDashboardControllerTest {
-  @isTest
+  @IsTest
   static void testGetInstancesAndDetails() {
     // Create mock parent workflow instance
     Workflow_Instance__c parentInst = new Workflow_Instance__c(
@@ -98,7 +98,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(inst.Id, parentChildren[0].Id);
   }
 
-  @isTest
+  @IsTest
   static void testGetDefinitions() {
     Test.startTest();
     List<String> definitions = WorkflowDashboardController.getDefinitions();
@@ -122,20 +122,20 @@ public class WorkflowDashboardControllerTest {
       definitions.contains('SagaWorkflowExample.SagaWorkflow'),
       'Should find SagaWorkflowExample.SagaWorkflow inner class'
     );
-    // Regression (PR #?, 2026-06-20): the @isTest-substring guard skipped any
-    // class merely *mentioning* @isTest in a comment. Both AI examples document
-    // @isTest in their doc comments, so they silently fell out of discovery.
+    // Regression (PR #?, 2026-06-20): the @IsTest-substring guard skipped any
+    // class merely *mentioning* @IsTest in a comment. Both AI examples document
+    // @IsTest in their doc comments, so they silently fell out of discovery.
     System.assert(
       definitions.contains('AiSupportTriageWorkflowExample.TriageWorkflow'),
       'Should find AiSupportTriageWorkflowExample.TriageWorkflow despite the ' +
-      '@isTest mention in its doc comment'
+      '@IsTest mention in its doc comment'
     );
     System.assert(
       definitions.contains(
         'AgentConversationWorkflowExample.AgentConversationWorkflow'
       ),
       'Should find AgentConversationWorkflowExample.AgentConversationWorkflow ' +
-      'despite the @isTest mention in its doc comment'
+      'despite the @IsTest mention in its doc comment'
     );
     // Regression: the discovery regex matched comment prose. A doc comment in
     // WorkflowScheduleSweeper reads "...a class that implements WorkflowDefinition",
@@ -146,7 +146,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testStartWorkflow() {
     Test.startTest();
     Id instanceId = WorkflowDashboardController.startWorkflow(
@@ -175,7 +175,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals('"InputPayload"', inst.Input__c);
   }
 
-  @isTest
+  @IsTest
   static void testRetryWorkflowInstance() {
     // Create a failed instance
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -218,7 +218,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(null, updatedStep.Error_Details__c);
   }
 
-  @isTest
+  @IsTest
   static void testSubmitApproval() {
     // Create active instance
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -253,7 +253,7 @@ public class WorkflowDashboardControllerTest {
     System.assert(signals[0].Payload__c.contains('"comments":"Looks good"'));
   }
 
-  @isTest
+  @IsTest
   static void testCancelWorkflowInstance() {
     // Create running instance
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -277,7 +277,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals('Cancelled by user.', updatedInst.Error_Message__c);
   }
 
-  @isTest
+  @IsTest
   static void testGetFilteredInstances() {
     // Create 3 instances with distinct details
     List<Workflow_Instance__c> testInstances = new List<Workflow_Instance__c>{
@@ -404,7 +404,7 @@ public class WorkflowDashboardControllerTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testGetWorkflowStats() {
     // Create 3 instances with distinct details
     List<Workflow_Instance__c> testInstances = new List<Workflow_Instance__c>{
@@ -487,7 +487,7 @@ public class WorkflowDashboardControllerTest {
     return null;
   }
 
-  @isTest
+  @IsTest
   static void testGetDefinitionTrends() {
     Datetime now = Datetime.now();
     List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>();
@@ -623,7 +623,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(25.0, (Decimal) saga.get('successRate'));
   }
 
-  @isTest
+  @IsTest
   static void testGetDefinitionTrendsWindowFiltersByTerminalTime() {
     Datetime now = Datetime.now();
 
@@ -687,7 +687,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetDefinitionTrendsEmptyRendersCleanly() {
     // Only an active instance exists — nothing terminal in the window.
     insert new Workflow_Instance__c(
@@ -709,7 +709,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetDefinitionTrendsWindowKeyMapping() {
     Test.startTest();
     System.assertEquals(
@@ -737,7 +737,7 @@ public class WorkflowDashboardControllerTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testGetDefinitionTrendsAuthorization() {
     Profile stdProfile = [
       SELECT Id
@@ -777,7 +777,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testAuthorizationFailures() {
     // Create standard user who does not have the custom permission or System Administrator profile
     Profile stdProfile = [
@@ -921,7 +921,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testAuthorizationSuccessWithCustomPermission() {
     // Create standard user
     Profile stdProfile = [
@@ -977,7 +977,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testSearchByErrorMessage() {
     // Create instance with error message
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -1008,7 +1008,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(inst.Id, (Id) res[0].get('Id'));
   }
 
-  @isTest
+  @IsTest
   static void testBulkPayloadResolutionAndTruncation() {
     // Create ContentVersion records
     ContentVersion cv1 = new ContentVersion(
@@ -1189,7 +1189,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testProgressRehydrationInDetails() {
     // 1. Create a ContentVersion record for offloaded progress
     ContentVersion cv = new ContentVersion(
@@ -1243,7 +1243,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(docId, (Id) progressFile.get('contentDocumentId'));
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogStatusAndEnqueue() {
     // Mock the WatchdogWorkflow instance
     Workflow_Instance__c watchdogInst = new Workflow_Instance__c(
@@ -1272,7 +1272,7 @@ public class WorkflowDashboardControllerTest {
     System.assert(status.containsKey('elasticAsyncLimit'));
   }
 
-  @isTest
+  @IsTest
   static void testConcurrencyStatus() {
     // A governed workflow with a durable counter and a parked instance.
     ConcurrencyGate.mockConfigs.put(
@@ -1309,7 +1309,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(1, row.get('parked'), 'Parked count surfaced');
   }
 
-  @isTest
+  @IsTest
   static void testResumeWorkflowAndWaitingOn() {
     // Create a mock suspended instance
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -1362,7 +1362,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(null, updatedInst.Async_Job_Id__c);
   }
 
-  @isTest
+  @IsTest
   static void testFilteredInstancesClamping() {
     Test.startTest();
     List<Map<String, Object>> res1 = WorkflowDashboardController.getFilteredInstances(
@@ -1386,7 +1386,7 @@ public class WorkflowDashboardControllerTest {
     System.assertNotEquals(null, res2);
   }
 
-  @isTest
+  @IsTest
   static void testGetDefinitionsFallback() {
     // Force the ApexTypeImplementor fallback path (used when the source scan would
     // approach a governor limit) and verify it still discovers top-level and inner-class
@@ -1421,7 +1421,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testSubmitApprovalRoleEnforced() {
     // A non-admin user holding Workflow_Admin (so they pass the dashboard gate) but NOT
     // the approval's designated role must be blocked from approving that specific gate.
@@ -1550,7 +1550,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetRedriveEligibleCount() {
     seedFailed('CntA');
     seedFailed('CntB');
@@ -1584,7 +1584,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testRedriveMatchingInstancesLaunches() {
     WorkflowEngine.disableQueueableInTest = true;
     seedFailed('RdA');
@@ -1636,7 +1636,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testRedriveMatchingZeroEligible() {
     insert new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
@@ -1669,7 +1669,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testRedriveAuthorizationEnforced() {
     User restricted = buildRestrictedUser();
     Boolean threw = false;
@@ -1692,7 +1692,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCancelAuthorizationEnforced() {
     User restricted = buildRestrictedUser();
     Boolean countThrew = false;
@@ -1736,7 +1736,7 @@ public class WorkflowDashboardControllerTest {
 
   // ── RED → GREEN: Stalled-instance detection tests (issue #26) ───────────────
 
-  @isTest
+  @IsTest
   static void testStalledInstanceFlaggedInFilteredInstances() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'StallTest.ZombieWorkflow',
@@ -1780,7 +1780,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testFreshSuspendedNotStalled() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'StallTest.ZombieWorkflow',
@@ -1810,7 +1810,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSuspendedWithActiveTimerNotStalled() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'StallTest.TimerWorkflow',
@@ -1841,7 +1841,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSuspendedWithStepTimeoutNotStalled() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'StallTest.TimeoutWorkflow',
@@ -1880,7 +1880,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetStalledInstancesReturnsAndSorts() {
     List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>{
       new Workflow_Instance__c(
@@ -1920,7 +1920,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetStalledInstancesThresholdDefault() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'StallTest.ZombieWorkflow',
@@ -1949,7 +1949,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetStalledInstancesNegativeThreshold() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'StallTest.ZombieWorkflow',
@@ -1981,7 +1981,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetStalledInstancesPaginatesAfterFiltering() {
     // Two genuinely stalled instances, plus one that must be excluded because it
     // has a step with a declared timeout (anti-join). With limitSize=1 the two
@@ -2076,7 +2076,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetStalledCount() {
     List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>{
       new Workflow_Instance__c(
@@ -2118,7 +2118,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testIdleMinutesForNonSuspendedNonTerminal() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'StallTest.RunningWorkflow',
@@ -2156,7 +2156,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testIdleMinutesNullForTerminal() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'StallTest.DoneWorkflow',
@@ -2189,7 +2189,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testStaleThresholdConfigFallback() {
     System.assert(
       WorkflowEngine.staleThresholdMinutes >= 0,
@@ -2203,7 +2203,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testStalledReadOnlyNoSideEffects() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'StallTest.ZombieWorkflow',
@@ -2252,7 +2252,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetStalledInstancesAuthorization() {
     Profile stdProfile = [
       SELECT Id
@@ -2308,7 +2308,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testStalledExcludesPendingStepWait() {
     // A Suspended instance with a Pending step-exec (signal/approval/child wait)
     // must NOT be flagged stalled — it has a legitimate active wait.
@@ -2348,7 +2348,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetStalledInstancesExcludesPendingStepWait() {
     // getStalledInstances must not surface instances that have a Pending step-exec,
     // because those are legitimate signal/approval/child waits (engine invariant).
@@ -2387,7 +2387,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testGetStalledCountExcludesPendingStepWait() {
     // getStalledCount must not count instances that have a Pending step-exec.
     Workflow_Instance__c stalledInst = new Workflow_Instance__c(
@@ -2459,7 +2459,7 @@ public class WorkflowDashboardControllerTest {
 
   // ── Version Drain Tests ────────────────────────────────────────────────────
 
-  @isTest
+  @IsTest
   static void testGetVersionDrain_perVersionClassification() {
     String wfName = 'TestVersionDrainWorkflow.Main';
 
@@ -2548,7 +2548,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetVersionDrain_failedCountedSeparatelyAndBlocksRetire() {
     String wfName = 'TestVersionDrainWorkflow.Failed';
 
@@ -2642,7 +2642,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetVersionDrain_safeOnlyWhenZeroNonTerminal() {
     String wfName = 'TestVersionDrainWorkflow.NonTerminal';
     List<String> nonTerminalStatuses = new List<String>{
@@ -2691,7 +2691,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testGetVersionDrain_scopedByWorkflowName_absenceNotSafe() {
     String wfX = 'TestVersionDrainWorkflow.X';
     String wfY = 'TestVersionDrainWorkflow.Y';
@@ -2738,7 +2738,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetVersionDrain_blankWorkflowName_returnsEmpty() {
     Test.startTest();
     List<Map<String, Object>> rows = WorkflowDashboardController.getVersionDrain(
@@ -2752,7 +2752,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetVersionDrain_authorizationEnforced() {
     Profile p = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
     User stdUser = new User(
@@ -2787,7 +2787,7 @@ public class WorkflowDashboardControllerTest {
 
   // ── Unrouted-signal dashboard tests ───────────────────────────────────────
 
-  @isTest
+  @IsTest
   static void testGetUnroutedSignals_returnsUnroutedRows() {
     Workflow_Signal__c sig1 = new Workflow_Signal__c(
       Correlation_Key__c = 'Unrouted-Key-1',
@@ -2843,7 +2843,7 @@ public class WorkflowDashboardControllerTest {
     System.assert(returnedKeys.contains('Unrouted-Key-2'));
   }
 
-  @isTest
+  @IsTest
   static void testGetUnroutedSignalCount_returnsCount() {
     insert new List<Workflow_Signal__c>{
       new Workflow_Signal__c(
@@ -2868,7 +2868,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(false, (Boolean) result.get('capped'));
   }
 
-  @isTest
+  @IsTest
   static void testRedeliverSignal_matchedReturnsTrue() {
     Workflow_Signal__c sig = new Workflow_Signal__c(
       Correlation_Key__c = 'Dashboard-Redeliver-Key',
@@ -2910,7 +2910,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testRedeliverSignal_noMatchReturnsFalse() {
     Workflow_Signal__c sig = new Workflow_Signal__c(
       Correlation_Key__c = 'Dashboard-NoMatch-Key',
@@ -2932,7 +2932,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testUnroutedSignalMethods_authorizationEnforced() {
     Profile p = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
     User stdUser = new User(
@@ -2979,7 +2979,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testGetWorkflowFailureBreakdown_emptyState() {
     Test.startTest();
     Map<String, Object> result = WorkflowDashboardController.getWorkflowFailureBreakdown(
@@ -2996,7 +2996,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(0, steps.size());
   }
 
-  @isTest
+  @IsTest
   static void testGetWorkflowFailureBreakdown_filtersAndGroups() {
     Workflow_Instance__c inst1 = new Workflow_Instance__c(
       Workflow_Name__c = 'CleanupWorkflow',
@@ -3069,7 +3069,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(1, step2.get('failureCount'));
   }
 
-  @isTest
+  @IsTest
   static void testGetWorkflowFailureBreakdown_normalization() {
     Workflow_Instance__c inst1 = new Workflow_Instance__c(
       Workflow_Name__c = 'CleanupWorkflow',
@@ -3118,7 +3118,7 @@ public class WorkflowDashboardControllerTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSearchWithSingleQuote() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'O\'Connor.Workflow',
@@ -3179,7 +3179,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(1, (Integer) unroutedCountResult.get('count'), 'Should count 1 unrouted signal');
   }
 
-  @isTest
+  @IsTest
   static void testFailureCategoryFiltering() {
     List<Workflow_Instance__c> testInstances = new List<Workflow_Instance__c>{
       new Workflow_Instance__c(
@@ -3244,7 +3244,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(testInstances[1].Id, (Id) resSearch[0].get('Id'), 'Should return the correct instance matching search term');
   }
 
-  @isTest
+  @IsTest
   static void testCompensateWorkflowInstance() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -3285,7 +3285,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(compensatingId, instReload.Compensated_By__c, 'getInstanceDetails should return linked Compensated_By__c field');
   }
 
-  @isTest
+  @IsTest
   static void testInjectSignalSuccess() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
@@ -3321,7 +3321,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(null, updatedInst.Sleep_Until__c, 'Sleep_Until__c should be cleared (null) after signal injection');
   }
 
-  @isTest
+  @IsTest
   static void testInjectSignalNonSuspendedRejection() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
@@ -3339,7 +3339,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testInjectSignalInvalidJsonRejection() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
@@ -3357,7 +3357,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testInjectSignalAuthorization() {
     Profile stdProfile = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
     User stdUser = new User(
@@ -3399,7 +3399,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testInjectSignalAttribution() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
@@ -3428,7 +3428,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(UserInfo.getName(), (String) payloadMap.get('operator'), 'operator should match running user display name');
   }
 
-  @isTest
+  @IsTest
   static void testInjectSignalNullInstanceRejection() {
     try {
       WorkflowDashboardController.injectSignal(null, 'PaymentReceived', '{}');
@@ -3442,7 +3442,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testInjectSignalBlankSignalNameRejection() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
@@ -3460,7 +3460,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testInjectSignalNoDashboardAccess() {
     Profile stdProfile = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
     User stdUser = new User(
@@ -3494,7 +3494,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testInjectSignalAuthorizationSuccess() {
     Profile stdProfile = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
     User stdUser = new User(
@@ -3549,7 +3549,7 @@ public class WorkflowDashboardControllerTest {
     System.assertEquals(1, signals.size(), 'Should have inserted one signal record');
   }
 
-  @isTest
+  @IsTest
   static void testInjectSignalExceptionMapping() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
@@ -3570,7 +3570,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testInjectSignalOversizedPayloadRejection() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
@@ -3590,7 +3590,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepControllerAuthorization() {
     Profile stdProfile = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
     User stdUser = new User(
@@ -3623,7 +3623,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepControllerRejections() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
@@ -3726,7 +3726,7 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testGetInstanceDetailsIncludesBreadcrumbs() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',

@@ -1,6 +1,6 @@
-@isTest
+@IsTest
 private class WorkflowDebounceTest {
-  @isTest
+  @IsTest
   static void testSingleDebounceStartsExactlyOnce() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.mockNow = Datetime.now();
@@ -82,7 +82,7 @@ private class WorkflowDebounceTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testSubsequentDebounceExtendsTimerLatestWins() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.mockNow = Datetime.now();
@@ -159,7 +159,7 @@ private class WorkflowDebounceTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testMaxWaitSecondsCapsExtension() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.mockNow = Datetime.now();
@@ -231,7 +231,7 @@ private class WorkflowDebounceTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testTriggerBurstCoalescing() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.mockNow = Datetime.now();
@@ -287,7 +287,7 @@ private class WorkflowDebounceTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testAdmissionDedupCollapsing() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.mockNow = Datetime.now();
@@ -344,7 +344,7 @@ private class WorkflowDebounceTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testLargePayloadValidation() {
     String largeJson = 'x'.repeat(131073);
     try {
@@ -364,7 +364,7 @@ private class WorkflowDebounceTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testDebounceMetadataPreservation() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.mockNow = Datetime.now();
@@ -414,7 +414,7 @@ private class WorkflowDebounceTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testOverlongCorrelationKeyValidation() {
     String longKey = 'k'.repeat(201);
     try {
@@ -434,7 +434,7 @@ private class WorkflowDebounceTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testFailedDebounceRetryAndQuarantine() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.mockNow = Datetime.now();
@@ -541,7 +541,7 @@ private class WorkflowDebounceTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testDebounceKeyHashLengthSafety() {
     // Generate a long workflow name (>60 chars) and a long correlation key (200 chars)
     String longWorkflowName = 'a'.repeat(60);
@@ -567,7 +567,7 @@ private class WorkflowDebounceTest {
     System.assertEquals(32, states[0].Debounce_Key__c.length());
   }
 
-  @isTest
+  @IsTest
   static void testAttributesValidationLimits() {
     // 1. Exceed attribute count (11 attributes)
     Map<String, Object> tooManyAttrs = new Map<String, Object>();
@@ -641,7 +641,7 @@ private class WorkflowDebounceTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testResetRetryStateOnRearm() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.mockNow = Datetime.now();
@@ -729,7 +729,7 @@ private class WorkflowDebounceTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testBulkSweepRollbackOnPartialFailure() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowEngine.mockNow = Datetime.now();

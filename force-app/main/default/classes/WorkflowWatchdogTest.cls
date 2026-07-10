@@ -1,6 +1,6 @@
-@isTest
+@IsTest
 public class WorkflowWatchdogTest {
-  @isTest
+  @IsTest
   static void testWatchdogScheduleAndBootstrap() {
     WorkflowWatchdog.forceBootstrapInTest = true;
 
@@ -26,7 +26,7 @@ public class WorkflowWatchdogTest {
     System.assertEquals('WatchdogWorkflow', watchdog[0].Workflow_Name__c);
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogWorkflowExecution() {
     // Enable force bootstrap and disable automatic queueable triggers in tests
     WorkflowWatchdog.forceBootstrapInTest = true;
@@ -134,7 +134,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testQueueableJobsCoverage() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -173,7 +173,7 @@ public class WorkflowWatchdogTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogBootstrapAndConfig() {
     // Save original config values
     Boolean originalUseDynamic = WorkflowEngine.useDynamicScheduling;
@@ -209,7 +209,7 @@ public class WorkflowWatchdogTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogBootstrapWithSuccessor() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowWatchdog.bootstrapped = false;
@@ -242,7 +242,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testTimedSuspend_BulkSignalWins_DisarmsTimer() {
     // Verifies the bulk signal(List<SignalRequest>) path also clears Sleep_Until__c
     // when a signal wins the race against an armed timed-wait timer.
@@ -343,7 +343,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogStallAlertBasicAndDedup() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -412,7 +412,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogStallAlertResumeAndStallAgain() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -498,7 +498,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogStallAlertLegitimateSleepExclusion() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -535,7 +535,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogStallAlertApprovalWaitExclusion() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -580,7 +580,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogStallAlertPausedDefinitionExclusion() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -622,7 +622,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogStallAlertCaseInsensitiveResolution() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -658,7 +658,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogStallAlertDefaultFallback() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -689,7 +689,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogStallAlertEmptyEmailHandling() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -735,7 +735,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogStallAlertBulkStallHandling() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -775,7 +775,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogStallAlertResumedInstanceExclusion() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -834,7 +834,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogSweepSignalAutoDelivery() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -879,7 +879,7 @@ public class WorkflowWatchdogTest {
     System.assertEquals(null, reloadedInst.Sleep_Until__c);
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogSweepSignalAutoDeliveryOldestFirst() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -930,7 +930,7 @@ public class WorkflowWatchdogTest {
     System.assertEquals(inst.Id, reloadedSig2.Workflow_Instance__c);
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogSweepSignalKeyNormalization() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -970,7 +970,7 @@ public class WorkflowWatchdogTest {
     System.assertEquals(inst.Id, reloadedSig.Workflow_Instance__c);
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogSweepSignalFilterOutStale() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -1024,7 +1024,7 @@ public class WorkflowWatchdogTest {
     System.assertEquals(inst.Id, reloadedSig.Workflow_Instance__c);
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogSweepSignalDrainsAllSignals() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -1080,7 +1080,7 @@ public class WorkflowWatchdogTest {
     System.assertEquals('Running', reloadedInst.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogAutoReclaimOrphanedInstance() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -1156,7 +1156,7 @@ public class WorkflowWatchdogTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogAutoReclaimBypassesHealthyInstance() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -1191,7 +1191,7 @@ public class WorkflowWatchdogTest {
     System.assertEquals('Running', updatedStep.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogAutoReclaimBypassesSuspendedInstance() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -1227,7 +1227,7 @@ public class WorkflowWatchdogTest {
     System.assertEquals('Pending', updatedStep.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogAutoReclaimBypassesCompletedStep() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -1263,7 +1263,7 @@ public class WorkflowWatchdogTest {
     System.assertEquals('Completed', updatedStep.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogAutoReclaimParallelForwardWithCompensation() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;
@@ -1310,7 +1310,7 @@ public class WorkflowWatchdogTest {
     System.assertEquals('Pending', reloadedSteps.get(step2.Id).Status__c);
   }
 
-  @isTest
+  @IsTest
   static void testWatchdogStallAlertPublishEvent() {
     WorkflowWatchdog.forceBootstrapInTest = true;
     WorkflowEngine.disableQueueableInTest = true;

@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public class WorkflowScheduleSweeperTest {
   // Cron that always resolves to a past fire minute regardless of test run time.
   // "* * * * *" fires every minute, so previousFireTime = truncated-now.
@@ -26,7 +26,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── AC2 / AC3: due fires exactly once, second sweep is a no-op ──────────
 
-  @isTest
+  @IsTest
   static void testDueFiresOnce() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -56,7 +56,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── AC3: not-due schedule (Last_Fired_Window__c already set) skips ───────
 
-  @isTest
+  @IsTest
   static void testNotDueSkips() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -78,7 +78,7 @@ public class WorkflowScheduleSweeperTest {
     System.assertEquals(0, instances.size(), 'Already-fired window should not start a new instance');
   }
 
-  @isTest
+  @IsTest
   static void testNeverMatchCronSkips() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -98,7 +98,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── AC4: Overlap=Skip records a Skipped log, does not start new instance ─
 
-  @isTest
+  @IsTest
   static void testOverlapSkip() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -141,7 +141,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── AC5: Overlap=Allow starts a new instance even with prior in-flight ───
 
-  @isTest
+  @IsTest
   static void testOverlapAllow() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -184,7 +184,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── AC1 / AC8: Disabled schedule does not fire ───────────────────────────
 
-  @isTest
+  @IsTest
   static void testDisabledNoFire() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -203,7 +203,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── AC6: 0-slot invariant — enabling N schedules adds 0 CronTrigger rows ─
 
-  @isTest
+  @IsTest
   static void testZeroSlotInvariant() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -235,7 +235,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Log idempotency: repeat sweep does not duplicate Workflow_Log__c ─────
 
-  @isTest
+  @IsTest
   static void testLogIdempotency() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -262,7 +262,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Dedicated-slot helper: converts cron and registers/aborts CronTrigger ─
 
-  @isTest
+  @IsTest
   static void testDedicatedSlotHelper() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -318,7 +318,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Dedicated job honours Skip and records state/logs (parity with 0-slot) ─
 
-  @isTest
+  @IsTest
   static void testDedicatedJobAppliesSkipAndRecordsState() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = makeSchedule('DedSkip', '0 2 * * *', true, 'Skip');
@@ -361,7 +361,7 @@ public class WorkflowScheduleSweeperTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testDedicatedJobRecordsStartedState() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = makeSchedule('DedState', '0 2 * * *', true, 'Allow');
@@ -392,7 +392,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Token values are JSON-escaped (a quote in the name must not break JSON) ─
 
-  @isTest
+  @IsTest
   static void testTokenSubstitutionEscapesSpecialChars() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = new Workflow_Schedule__c(
@@ -421,7 +421,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Manual run keys are unique even within the same second ────────────────
 
-  @isTest
+  @IsTest
   static void testManualRunKeysUnique() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = makeSchedule('ManyManual', '0 2 * * *', true, 'Allow');
@@ -442,7 +442,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Cursor advances strictly past the handled window (no re-selection) ────
 
-  @isTest
+  @IsTest
   static void testCursorAdvancesPastHandledWindow() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = makeSchedule('CursorAdv', EVERY_MINUTE_CRON, true, 'Allow');
@@ -466,7 +466,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Overlap Skip is case-insensitive on the prefix ────────────────────────
 
-  @isTest
+  @IsTest
   static void testOverlapSkipCaseInsensitive() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = makeSchedule('CaseJob', EVERY_MINUTE_CRON, true, 'Skip');
@@ -496,7 +496,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Heartbeat integration: sweep runs inside processWatchdogHeartbeat ─────
 
-  @isTest
+  @IsTest
   static void testHeartbeatIntegration() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -520,7 +520,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── runNow: manual one-off fire independent of cron ──────────────────────
 
-  @isTest
+  @IsTest
   static void testRunNow() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -549,7 +549,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Token substitution in Input_Json__c ──────────────────────────────────
 
-  @isTest
+  @IsTest
   static void testTokenSubstitution() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -586,7 +586,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Fairness: least-recently-fired first, no starvation past the batch limit ─
 
-  @isTest
+  @IsTest
   static void testNoStarvationOrdering() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowScheduleSweeper.SWEEP_BATCH_SIZE = 2;
@@ -621,7 +621,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Overlap Skip must NOT false-positive on a wildcard-overlapping key ────
 
-  @isTest
+  @IsTest
   static void testOverlapSkipNoFalsePositive() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -652,7 +652,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── toSalesforceCron: DOW remap + DOM/DOW rejection ───────────────────────
 
-  @isTest
+  @IsTest
   static void testToSalesforceCron_dowRemap() {
     System.assertEquals(
       '0 0 9 ? * 2 *',
@@ -681,7 +681,7 @@ public class WorkflowScheduleSweeperTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testToSalesforceCron_rejectsDomAndDow() {
     Boolean threw = false;
     try {
@@ -694,7 +694,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── WorkflowScheduleJob: enabled re-check + token resolution ──────────────
 
-  @isTest
+  @IsTest
   static void testDedicatedJobFires() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = makeSchedule('DedJobOn', '0 2 * * *', true, 'Allow');
@@ -712,7 +712,7 @@ public class WorkflowScheduleSweeperTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testDedicatedJobNoopWhenDisabled() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = makeSchedule('DedJobOff', '0 2 * * *', false, 'Allow');
@@ -732,7 +732,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Impossible cron parks the row out of the batch (no starvation) ─────────
 
-  @isTest
+  @IsTest
   static void testImpossibleCronParksRow() {
     WorkflowEngine.disableQueueableInTest = true;
     // "0 0 31 2 *" (Feb 31) is syntactically valid but never fires, so
@@ -773,7 +773,7 @@ public class WorkflowScheduleSweeperTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testImpossibleCronDoesNotStarveValidSchedule() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowScheduleSweeper.SWEEP_BATCH_SIZE = 1;
@@ -798,7 +798,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Bad input JSON on one schedule must not abort the whole sweep batch ────
 
-  @isTest
+  @IsTest
   static void testBadInputJsonIsolatedFromBatch() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -854,7 +854,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Unknown workflow name records Error instead of a phantom Started ───────
 
-  @isTest
+  @IsTest
   static void testUnknownWorkflowRecordsError() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c bad = makeSchedule('BadWf', EVERY_MINUTE_CRON, true, 'Allow');
@@ -890,7 +890,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Dedicated job: fire window comes from the cron, not the execution minute ─
 
-  @isTest
+  @IsTest
   static void testDedicatedJobUsesCronWindow() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = makeSchedule('DedWindow', '0 2 * * *', true, 'Allow');
@@ -915,7 +915,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Dedicated job: bad input JSON records Error instead of failing every tick ─
 
-  @isTest
+  @IsTest
   static void testDedicatedJobBadJsonRecordsError() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Schedule__c sched = new Workflow_Schedule__c(
@@ -953,7 +953,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Dedicated job self-aborts when its schedule row is gone ────────────────
 
-  @isTest
+  @IsTest
   static void testDedicatedJobSelfAbortsWhenScheduleDeleted() {
     Workflow_Schedule__c sched = makeSchedule('DedGone', '0 2 * * *', true, 'Allow');
     sched.Dedicated_Slot__c = true;
@@ -975,7 +975,7 @@ public class WorkflowScheduleSweeperTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testDedicatedJobSelfAbortsWhenDisabledOutOfBand() {
     Workflow_Schedule__c sched = makeSchedule('DedDisabledAbort', '0 2 * * *', true, 'Allow');
     sched.Dedicated_Slot__c = true;
@@ -999,7 +999,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── Direct (Setup/API) inserts must not fire a pre-creation window ─────────
 
-  @isTest
+  @IsTest
   static void testDirectInsertSkipsPreCreationWindow() {
     WorkflowEngine.disableQueueableInTest = true;
     // A yearly cron (Jan 1 00:00) whose most-recent window is up to ~365 days in
@@ -1038,7 +1038,7 @@ public class WorkflowScheduleSweeperTest {
 
   // ── runNow validates the workflow definition ──────────────────────────────
 
-  @isTest
+  @IsTest
   static void testRunNowRejectsUnknownWorkflow() {
     Workflow_Schedule__c sched = makeSchedule('RNBad', '0 2 * * *', true, 'Allow');
     sched.Workflow_Name__c = 'Nope.NotARealWorkflow123';

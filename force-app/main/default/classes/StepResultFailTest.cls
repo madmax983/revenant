@@ -8,7 +8,7 @@
  * instance Error_Message__c; and optional structured failureData is persisted on
  * the failing step's Error_Details__c for downstream inspection.
  */
-@isTest
+@IsTest
 public class StepResultFailTest {
   // ==========================================
   // MOCK WORKFLOWS & STEPS
@@ -100,7 +100,7 @@ public class StepResultFailTest {
   // FACTORY UNIT TESTS (no DML)
   // ==========================================
 
-  @isTest
+  @IsTest
   static void testFailFactoryDefaults() {
     StepResult r = StepResult.fail('boom');
     System.assertEquals(StepResult.ActionType.FAIL, r.action);
@@ -108,7 +108,7 @@ public class StepResultFailTest {
     System.assertEquals(null, r.failureDataJson, 'No failureData -> null json');
   }
 
-  @isTest
+  @IsTest
   static void testFailFactoryWithData() {
     StepResult r = StepResult.fail(
       'boom',
@@ -122,7 +122,7 @@ public class StepResultFailTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testFailBlankReasonThrows() {
     Boolean threw = false;
     try {
@@ -137,7 +137,7 @@ public class StepResultFailTest {
   // ENGINE INTEGRATION TESTS
   // ==========================================
 
-  @isTest
+  @IsTest
   static void testFailWithoutCompensationStackGoesToFailed() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -194,7 +194,7 @@ public class StepResultFailTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testFailWithCompensationStackCompensates() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -248,7 +248,7 @@ public class StepResultFailTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testFailureDataPersisted() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -313,7 +313,7 @@ public class StepResultFailTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testCompensationStepFailLandsInCompensationFailed() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(

@@ -1,6 +1,6 @@
-@isTest
+@IsTest
 public class WorkflowFlowStepTest {
-  @isTest
+  @IsTest
   static void testWorkflowFlowStepNullInput() {
     WorkflowFlowStep step = new WorkflowFlowStep();
     StepContext ctx = new StepContext(
@@ -33,7 +33,7 @@ public class WorkflowFlowStepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowFlowStepInvalidInputType() {
     WorkflowFlowStep step = new WorkflowFlowStep();
     StepContext ctx = new StepContext(
@@ -66,7 +66,7 @@ public class WorkflowFlowStepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowFlowStepNullJsonInput() {
     WorkflowFlowStep step = new WorkflowFlowStep();
     StepContext ctx = new StepContext(
@@ -99,7 +99,7 @@ public class WorkflowFlowStepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowFlowStepMissingFlowName() {
     WorkflowFlowStep step = new WorkflowFlowStep();
     StepContext ctx = new StepContext(
@@ -132,7 +132,7 @@ public class WorkflowFlowStepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowFlowStepInvalidFlowNameType() {
     WorkflowFlowStep step = new WorkflowFlowStep();
 
@@ -194,7 +194,7 @@ public class WorkflowFlowStepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowFlowStepNonExistentFlow() {
     WorkflowFlowStep step = new WorkflowFlowStep();
     StepContext ctx = new StepContext(
@@ -227,7 +227,7 @@ public class WorkflowFlowStepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowFlowStepSuccess() {
     WorkflowFlowStep step = new WorkflowFlowStep();
     StepContext ctx = new StepContext(
@@ -264,7 +264,7 @@ public class WorkflowFlowStepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowFlowStepGuardedAgainstDoubleFire() {
     // 1. Create a StepContext for first execution
     Id instanceId = '00D000000000001EAA';
@@ -328,7 +328,7 @@ public class WorkflowFlowStepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowFlowStepNullContext() {
     WorkflowFlowStep step = new WorkflowFlowStep();
     Test.startTest();
@@ -346,7 +346,7 @@ public class WorkflowFlowStepTest {
     Assert.isTrue(caught, 'Expected WorkflowException for null context');
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowFlowStepInvalidVariablesType() {
     WorkflowFlowStep step = new WorkflowFlowStep();
     StepContext ctx = new StepContext(
@@ -377,7 +377,7 @@ public class WorkflowFlowStepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowFlowStepOmittedVariables() {
     WorkflowFlowStep step = new WorkflowFlowStep();
     StepContext ctx = new StepContext(
@@ -397,7 +397,7 @@ public class WorkflowFlowStepTest {
     Assert.areEqual(StepResult.ActionType.COMPLETE, result.action);
   }
 
-  @isTest
+  @IsTest
   static void testWorkflowFlowStepBypassesMetadataCheckOnReplay() {
     Id instanceId = '00D000000000001EAA';
 

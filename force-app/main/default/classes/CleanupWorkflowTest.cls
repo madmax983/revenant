@@ -1,6 +1,6 @@
-@isTest
+@IsTest
 public class CleanupWorkflowTest {
-  @isTest
+  @IsTest
   static void testCleanupWorkflowPurge() {
     // 1. Create a set of test workflow instances
 
@@ -156,7 +156,7 @@ public class CleanupWorkflowTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testDataLossPrevention() {
     // Purged instance: Completed, 40 days old
     Workflow_Instance__c instPurge = new Workflow_Instance__c(
@@ -294,7 +294,7 @@ public class CleanupWorkflowTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testInputValidation() {
     // Test Malformed JSON
     try {
@@ -431,7 +431,7 @@ public class CleanupWorkflowTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testLimitSafetyClamping() {
     // 60 old workflow instances
     List<Workflow_Instance__c> oldInstances = new List<Workflow_Instance__c>();
@@ -480,7 +480,7 @@ public class CleanupWorkflowTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSingleHugeInstancePurge() {
     // 1. Create a workflow instance that is old and completed
     Workflow_Instance__c instA = new Workflow_Instance__c(

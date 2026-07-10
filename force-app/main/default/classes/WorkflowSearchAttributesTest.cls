@@ -1,6 +1,6 @@
-@isTest
+@IsTest
 public class WorkflowSearchAttributesTest {
-  @isTest
+  @IsTest
   static void testAttributeValidation() {
     // 1. Test count limit validation (max 10)
     Map<String, String> overCountAttrs = new Map<String, String>();
@@ -35,7 +35,7 @@ public class WorkflowSearchAttributesTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testAttributePersistence() {
     Test.startTest();
     Id instanceId = WorkflowEngine.start(
@@ -64,7 +64,7 @@ public class WorkflowSearchAttributesTest {
     System.assertEquals('tier=enterprise', attrs[1].Key_Value__c);
   }
 
-  @isTest
+  @IsTest
   static void testGetOrStartDedupAttributes() {
     Map<String, String> attrs1 = new Map<String, String>{ 'region' => 'EU' };
     Map<String, String> attrs2 = new Map<String, String>{ 'region' => 'US' };
@@ -100,7 +100,7 @@ public class WorkflowSearchAttributesTest {
     System.assertEquals('EU', dbAttrs[0].Value__c, 'Deduplicated start must not overwrite attributes');
   }
 
-  @isTest
+  @IsTest
   static void testInvocableActionInvalidJsonHandling() {
     WorkflowStartInvocableAction.StartRequest req = new WorkflowStartInvocableAction.StartRequest();
     req.workflowName = 'StepContextSignalEngineTest.PlainWaitWorkflow';

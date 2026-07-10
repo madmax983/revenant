@@ -4,7 +4,7 @@
  * so assertions read the @TestVisible WorkflowLifecyclePublisher.publishedEvents
  * capture of what was handed to EventBus.publish.
  */
-@isTest
+@IsTest
 private class WorkflowLifecyclePublisherTest {
   private static Workflow_Instance__c makeInstance(
     String status,
@@ -34,7 +34,7 @@ private class WorkflowLifecyclePublisherTest {
     ];
   }
 
-  @isTest
+  @IsTest
   static void publishesEventForCompleted() {
     Workflow_Instance__c inst = makeInstance('Completed', null);
 
@@ -67,7 +67,7 @@ private class WorkflowLifecyclePublisherTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void publishesFailedWithFailureDetail() {
     Workflow_Instance__c inst = makeInstance('Failed', 'Boom at step X');
 
@@ -82,7 +82,7 @@ private class WorkflowLifecyclePublisherTest {
     System.assertEquals('Boom at step X', evt.Failure_Detail__c);
   }
 
-  @isTest
+  @IsTest
   static void rootKeyFallsBackToCorrelationKeyWhenAbsent() {
     // makeInstance does not query Root_Correlation_Key__c, so it is absent from the
     // populated-field map — mirroring an in-flight instance created before the
@@ -107,7 +107,7 @@ private class WorkflowLifecyclePublisherTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void publishesCompensatedAndCancelled() {
     Test.startTest();
     WorkflowLifecyclePublisher.publish(
@@ -131,7 +131,7 @@ private class WorkflowLifecyclePublisherTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void skipsContinuedAsNew() {
     Workflow_Instance__c inst = makeInstance('ContinuedAsNew', null);
 
@@ -146,7 +146,7 @@ private class WorkflowLifecyclePublisherTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void skipsNonTerminalStatuses() {
     Workflow_Instance__c suspended = makeInstance('Suspended', null);
     Workflow_Instance__c running = makeInstance('Running', null);
@@ -163,7 +163,7 @@ private class WorkflowLifecyclePublisherTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void respectsConfigToggle() {
     WorkflowEngine.publishLifecycleEvents = false;
     Workflow_Instance__c inst = makeInstance('Completed', null);
@@ -179,7 +179,7 @@ private class WorkflowLifecyclePublisherTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void dedupesWithinTransaction() {
     Workflow_Instance__c inst = makeInstance('Completed', null);
 
@@ -196,7 +196,7 @@ private class WorkflowLifecyclePublisherTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void failureIsolationDoesNotThrow() {
     WorkflowLifecyclePublisher.throwTestException = true;
     Workflow_Instance__c inst = makeInstance('Completed', null);
@@ -221,7 +221,7 @@ private class WorkflowLifecyclePublisherTest {
     System.assertEquals('Completed', reloaded.Status__c);
   }
 
-  @isTest
+  @IsTest
   static void truncatesOverlongFailureDetail() {
     String longMsg = 'E'.repeat(400);
     Workflow_Instance__c inst = makeInstance('Failed', null);
@@ -240,7 +240,7 @@ private class WorkflowLifecyclePublisherTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void bulkPublishOnlyEmitsTerminalNonContinue() {
     List<Workflow_Instance__c> mixed = new List<Workflow_Instance__c>{
       makeInstance('Completed', null),
@@ -260,7 +260,7 @@ private class WorkflowLifecyclePublisherTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void nullAndEmptyInputsAreSafe() {
     Test.startTest();
     WorkflowLifecyclePublisher.publish((Workflow_Instance__c) null);
@@ -271,7 +271,7 @@ private class WorkflowLifecyclePublisherTest {
     System.assertEquals(0, WorkflowLifecyclePublisher.publishedEvents.size());
   }
 
-  @isTest
+  @IsTest
   static void skipsPublishWhenDmlBudgetExhausted() {
     // EventBus.publish consumes a DML statement; over budget it throws an
     // uncatchable LimitException that would roll back the terminal write. The
@@ -295,7 +295,7 @@ private class WorkflowLifecyclePublisherTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void underQueriedInstanceFieldDegradesGracefully() {
     // A caller that passes a terminal instance missing an optional field (here
     // Correlation_Key__c) must never throw or roll back the transaction. Reading

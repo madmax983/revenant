@@ -13,7 +13,7 @@
  *  AC6     — a workflow with no config (and no Default) is unbounded, exactly as today.
  *  AC8     — append-only step records and the compensation stack are unaffected.
  */
-@isTest
+@IsTest
 public class WorkflowConcurrencyTest {
   private static final String WF = 'WorkflowConcurrencyTest.WaitWorkflow';
 
@@ -106,7 +106,7 @@ public class WorkflowConcurrencyTest {
   }
 
   // ── AC2 / AC3: admission caps in-flight at the ceiling ─────────────────────
-  @isTest
+  @IsTest
   static void testAdmissionCapsInFlight() {
     WorkflowEngine.disableQueueableInTest = true;
     ConcurrencyGate.mockConfigs.put(
@@ -153,7 +153,7 @@ public class WorkflowConcurrencyTest {
   }
 
   // ── AC4: terminal transition releases the slot; a parked instance admits ───
-  @isTest
+  @IsTest
   static void testTerminalReleaseAdmitsParked() {
     WorkflowEngine.disableQueueableInTest = true;
     ConcurrencyGate.mockConfigs.put(
@@ -184,7 +184,7 @@ public class WorkflowConcurrencyTest {
     System.assertEquals(1, counter(), 'Counter back to 1 after re-admission');
   }
 
-  @isTest
+  @IsTest
   static void testEachTerminalTypeReleasesSlot() {
     WorkflowEngine.disableQueueableInTest = true;
     ConcurrencyGate.mockConfigs.put(
@@ -214,7 +214,7 @@ public class WorkflowConcurrencyTest {
   }
 
   // CompensationFailed is non-terminal (recoverable) and must keep its slot.
-  @isTest
+  @IsTest
   static void testCompensationFailedKeepsSlot() {
     WorkflowEngine.disableQueueableInTest = true;
     ConcurrencyGate.mockConfigs.put(
@@ -237,7 +237,7 @@ public class WorkflowConcurrencyTest {
   // A parked instance carries an admission-retry Sleep_Until__c; admission must
   // clear it so a later SUSPEND/approval wait is not re-driven by the watchdog as a
   // due sleeper without its signal.
-  @isTest
+  @IsTest
   static void testAdmissionClearsSleepDeadline() {
     WorkflowEngine.disableQueueableInTest = true;
     ConcurrencyGate.mockConfigs.put(
@@ -271,7 +271,7 @@ public class WorkflowConcurrencyTest {
 
   // A bounded workflow whose class no longer resolves must fail cleanly without
   // holding a slot (which reconciliation would otherwise count forever).
-  @isTest
+  @IsTest
   static void testUnresolvableWorkflowClassFailsWithoutHoldingSlot() {
     WorkflowEngine.disableQueueableInTest = true;
     ConcurrencyGate.mockConfigs.put(
@@ -322,7 +322,7 @@ public class WorkflowConcurrencyTest {
   // A bounded start must NOT arm the initial step's watchdog deadline until a slot
   // is won, so an overflow start sitting Pending in the backlog during a burst can't
   // be failed by the timeout sweep before it ever parks.
-  @isTest
+  @IsTest
   static void testBoundedStartDefersInitialTimeout() {
     WorkflowEngine.disableQueueableInTest = true;
     ConcurrencyGate.mockConfigs.put(
@@ -361,7 +361,7 @@ public class WorkflowConcurrencyTest {
   // bounded start gets no initial watchdog deadline until a slot is won, so an
   // overflow item sitting Pending in the backlog during a burst can't be failed by
   // the timeout sweep before it ever reaches the admission gate to park.
-  @isTest
+  @IsTest
   static void testBoundedBulkStartDefersInitialTimeout() {
     WorkflowEngine.disableQueueableInTest = true;
     ConcurrencyGate.mockConfigs.put(
@@ -416,7 +416,7 @@ public class WorkflowConcurrencyTest {
   // skip is scoped to that durable marker, not the live CMDT: an unbounded null-deadline
   // step (parked=false) is the pre-start watchdog and must still fail (see
   // testTimeoutJobFailsNullDeadlinePreStartWatchdog), even if a ceiling is added later.
-  @isTest
+  @IsTest
   static void testTimeoutJobSkipsNullDeadlineStep() {
     // Durable awaiting-admission marker => the null deadline is a deferred-admission
     // state, regardless of the current concurrency config.
@@ -465,7 +465,7 @@ public class WorkflowConcurrencyTest {
   // continueAsNew successor whose initial step was precreated with no deadline and a
   // scheduled timeout job, whose worker was then lost before the step armed its own
   // deadline. The timeout job MUST fail it "before starting" rather than skip it.
-  @isTest
+  @IsTest
   static void testTimeoutJobFailsNullDeadlinePreStartWatchdog() {
     // A ceiling is present NOW (as if an admin added it after this unbounded child
     // scheduled its pre-start watchdog), but the instance was never durably marked as
@@ -510,7 +510,7 @@ public class WorkflowConcurrencyTest {
   // has not won a slot, so flipping it would leave a Running row holding no slot and
   // hide it from the parked count. It is re-driven through the admission gate while
   // staying Suspended/parked.
-  @isTest
+  @IsTest
   static void testWatchdogWakeKeepsParkedSuspended() {
     WorkflowEngine.disableQueueableInTest = true;
     ConcurrencyGate.mockConfigs.put('WorkflowConcurrencyTest_WaitWorkflow', cfg(1));
@@ -547,7 +547,7 @@ public class WorkflowConcurrencyTest {
   // When an admin removes/disables a ceiling while an instance is parked under it, the
   // unbounded fallthrough must clear the stale admission-retry markers so a leftover
   // due Sleep_Until__c cannot make the watchdog re-run a later real SUSPEND.
-  @isTest
+  @IsTest
   static void testUnboundedFallthroughClearsStaleParkMarkers() {
     WorkflowEngine.disableQueueableInTest = true;
     // No mockConfig for WF => isConfigured is false (ceiling removed/disabled).
@@ -585,7 +585,7 @@ public class WorkflowConcurrencyTest {
   // reArmTimeoutsForResume (paused-resume and admission-re-drive) must defer the
   // deadline for a bounded instance that has NOT yet won a slot, while still arming
   // one for a slot-holder (the admission path calls it after acquiring).
-  @isTest
+  @IsTest
   static void testReArmDefersTimeoutForBoundedUnadmitted() {
     ConcurrencyGate.mockConfigs.put(
       'WorkflowConcurrencyTest_TimeoutWaitWorkflow',
@@ -659,7 +659,7 @@ public class WorkflowConcurrencyTest {
   // before it owns a slot — that would leave a Running row with no slot (violating the
   // no-running-without-slot invariant) and hide it from the parked count. The signal
   // is captured (Received) and observed once admission drives the step.
-  @isTest
+  @IsTest
   static void testSignalDoesNotWakeParkedRow() {
     WorkflowEngine.disableQueueableInTest = true;
     ConcurrencyGate.mockConfigs.put('WorkflowConcurrencyTest_WaitWorkflow', cfg(1));
@@ -685,7 +685,7 @@ public class WorkflowConcurrencyTest {
   }
 
   // ── AC6: no config -> unbounded, behaves exactly as today ──────────────────
-  @isTest
+  @IsTest
   static void testUnconfiguredIsUnbounded() {
     WorkflowEngine.disableQueueableInTest = true;
     // No mockConfig and no Default record => unbounded.
@@ -709,7 +709,7 @@ public class WorkflowConcurrencyTest {
   }
 
   // ── AC5: watchdog reconcile reclaims a leaked slot within one sweep ────────
-  @isTest
+  @IsTest
   static void testWatchdogReconcilesLeakedSlot() {
     insert new Concurrency_State__c(
       Workflow_Definition__c = WF,
@@ -735,7 +735,7 @@ public class WorkflowConcurrencyTest {
   }
 
   // ── AC8: step records stay append-only; compensation stack untouched ───────
-  @isTest
+  @IsTest
   static void testAppendOnlyStepRecordsAcrossParkAndAdmit() {
     WorkflowEngine.disableQueueableInTest = true;
     ConcurrencyGate.mockConfigs.put(
@@ -780,7 +780,7 @@ public class WorkflowConcurrencyTest {
   // ChildCompleted signals (each FOR UPDATE-ing the shared parent row) plus the
   // parent's own join can collide as UNABLE_TO_LOCK_ROW. That is retryable, not a
   // crash: the engine must re-drive the step rather than fail the whole parent.
-  @isTest
+  @IsTest
   static void testIsTransientLockErrorClassification() {
     System.assert(
       WorkflowEngine.isTransientLockError(
@@ -811,7 +811,7 @@ public class WorkflowConcurrencyTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testTransientLockCrashRetriesInsteadOfFailing() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = WF,
@@ -872,7 +872,7 @@ public class WorkflowConcurrencyTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testTransientLockRetryBudgetExhaustionFails() {
     WorkflowEngine.maxTransientLockRetries = 2;
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -908,7 +908,7 @@ public class WorkflowConcurrencyTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testSuccessfulDriveResetsTransientRetryCount() {
     WorkflowEngine.disableQueueableInTest = true;
     Id i = newPendingInstance('lock-reset-1');
@@ -939,7 +939,7 @@ public class WorkflowConcurrencyTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testTransientLockRetryClearsStaleTimeout() {
     // A timeout-configured step that crashes on a transient lock keeps its pre-crash
     // (now stale) Timeout_At__c. If left in place, once the backoff sleep flips the
@@ -993,7 +993,7 @@ public class WorkflowConcurrencyTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testTransientLockRetryParallelBranchWithoutDynamicScheduling() {
     // With dynamic scheduling off, scheduleRetry returns null. The retry must NOT
     // re-drive the branch immediately (that would bypass the backoff and, under a
@@ -1075,7 +1075,7 @@ public class WorkflowConcurrencyTest {
   // exercises the new per-branch re-arm + query path (no exception, correct scoping)
   // and asserts the wake transition without a drained worker carrying the branch to
   // completion. A non-retrying sibling branch is left as-is.
-  @isTest
+  @IsTest
   static void testWatchdogRedrivesParallelTransientBranch() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = WF,
@@ -1147,7 +1147,7 @@ public class WorkflowConcurrencyTest {
   // a Running parallel parent with a due Sleep_Until__c and a retry-marked branch is
   // re-driven by name (here observed via the branch's deadline being re-armed, since
   // the actual enqueue honors the manual-drive switch).
-  @isTest
+  @IsTest
   static void testWatchdogRescuesOrphanedTransientRetryBranch() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowConcurrencyTest.TimeoutWaitWorkflow',
@@ -1213,7 +1213,7 @@ public class WorkflowConcurrencyTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testResumePastStepDefersTimeoutForConcurrency() {
     WorkflowEngine.disableQueueableInTest = true;
     

@@ -1,6 +1,6 @@
-@isTest
+@IsTest
 private class StepResultBusinessSleepTest {
-  @isTest
+  @IsTest
   static void testDefaultBusinessHoursSleepInSeconds() {
     // Omitting business hours name preserves existing wall-clock sleep
     StepResult r1 = StepResult.sleep(10);
@@ -30,7 +30,7 @@ private class StepResultBusinessSleepTest {
     Assert.areEqual('my_state', r2.stepStateJson, 'State JSON should match');
   }
 
-  @isTest
+  @IsTest
   static void testBusinessHoursHoursSleep() {
     // Start at Friday 16:00:00 (July 3, 2026) - No holidays in this window
     DateTime startTime = DateTime.newInstance(2026, 7, 3, 16, 0, 0);
@@ -86,7 +86,7 @@ private class StepResultBusinessSleepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testBusinessHoursDaysSleep() {
     // Start at Friday 16:00:00 (July 3, 2026) - No holidays in this window
     DateTime startTime = DateTime.newInstance(2026, 7, 3, 16, 0, 0);
@@ -149,7 +149,7 @@ private class StepResultBusinessSleepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testBusinessHoursHolidaySpanning() {
     // Check if Standard Business Hours exists (deployed in examples/scratch org)
     List<BusinessHours> standardBhs = [
@@ -205,7 +205,7 @@ private class StepResultBusinessSleepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testBusinessHoursDefaultExplicit() {
     // Start at Friday 16:00:00 (June 26, 2026)
     DateTime testStart = DateTime.newInstance(2026, 6, 26, 16, 0, 0);
@@ -259,7 +259,7 @@ private class StepResultBusinessSleepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testBusinessHoursInvalidNameThrows() {
     try {
       StepResult.sleep(2, 'Days', 'NonExistentBusinessHours');
@@ -272,7 +272,7 @@ private class StepResultBusinessSleepTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testBusinessHoursInvalidUnitThrows() {
     try {
       StepResult.sleep(2, 'Fortnights', 'Default');
@@ -285,7 +285,7 @@ private class StepResultBusinessSleepTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testBusinessHoursInvalidAmountThrows() {
     try {
       StepResult.sleep(-1, 'Days', 'Default');
@@ -298,7 +298,7 @@ private class StepResultBusinessSleepTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testBusinessHoursCachingEffectiveness() {
     BusinessHours defaultBh = [
       SELECT Name
@@ -334,7 +334,7 @@ private class StepResultBusinessSleepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testUnequalBusinessDayLengthsDoNotAverage() {
     BusinessHours mockBh = new BusinessHours(
       MondayStartTime = Time.newInstance(9, 0, 0, 0),
@@ -369,7 +369,7 @@ private class StepResultBusinessSleepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWalkAfterHoursWithStandardBusinessHours() {
     List<BusinessHours> standardBhs = [
       SELECT
@@ -420,7 +420,7 @@ private class StepResultBusinessSleepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testBusinessHoursHolidaySpanningWithVariableLengthDays() {
     List<BusinessHours> standardBhs = [
       SELECT
@@ -479,7 +479,7 @@ private class StepResultBusinessSleepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testPositiveOffsetDstMidnightRefinement() {
     // Australia/Sydney DST start: Sunday, October 4, 2026
     Date targetDate = Date.newInstance(2026, 10, 4);
@@ -506,7 +506,7 @@ private class StepResultBusinessSleepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testDstFallbackDayWalkingRegression() {
     // Mock a BusinessHours record with America/Chicago timezone.
     // Sunday: 8 hours (28,800,000 ms)
@@ -538,7 +538,7 @@ private class StepResultBusinessSleepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testUnequalDayWalkLargeDurationRegression() {
     // Mock a BusinessHours record. Monday = 8h, Tuesday = 10h, all others closed.
     BusinessHours mockBh = new BusinessHours(
@@ -570,7 +570,7 @@ private class StepResultBusinessSleepTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testLargeDurationExceedingScanLimitThrows() {
     // Mock a BusinessHours record. Monday = 8h, all others closed.
     BusinessHours mockBh = new BusinessHours(

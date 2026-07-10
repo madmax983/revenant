@@ -18,7 +18,7 @@
  * 12. * (org-wide) pauses all user defs but NOT the watchdog
  * 13. Controller: pauseDefinition / resumeDefinition / getPausedDefinitions authz + happy paths
  */
-@isTest
+@IsTest
 public class WorkflowPauseTest {
   // ============================================================
   // MOCK WORKFLOWS
@@ -183,7 +183,7 @@ public class WorkflowPauseTest {
   // 1. PAUSE GATE API — basic pause / isPaused / resume
   // ============================================================
 
-  @isTest
+  @IsTest
   static void testPauseAndResumeDefinition() {
     Test.startTest();
     WorkflowPauseGate.pauseDefinition(
@@ -208,7 +208,7 @@ public class WorkflowPauseTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testAnyPausedFastPath() {
     System.assertEquals(
       false,
@@ -227,7 +227,7 @@ public class WorkflowPauseTest {
     System.assertEquals(true, anyPaused, 'anyPaused should be true');
   }
 
-  @isTest
+  @IsTest
   static void testPauseDurability() {
     WorkflowPauseGate.pauseDefinition(
       'WorkflowPauseTest.TwoStepWorkflow',
@@ -248,7 +248,7 @@ public class WorkflowPauseTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testPauseIdempotent() {
     // Pausing twice should not throw — upsert semantics
     Test.startTest();
@@ -278,7 +278,7 @@ public class WorkflowPauseTest {
   // 2. RESERVED NAMES CANNOT BE PAUSED
   // ============================================================
 
-  @isTest
+  @IsTest
   static void testReservedNamesCannotBePaused() {
     List<String> reserved = new List<String>{
       'WatchdogWorkflow',
@@ -301,7 +301,7 @@ public class WorkflowPauseTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testReservedNamesNotPausedByWildcard() {
     Test.startTest();
     WorkflowPauseGate.pauseDefinition('*', 'Org-wide pause');
@@ -329,7 +329,7 @@ public class WorkflowPauseTest {
   // 3. QUIESCE AT HANDOFF — step in flight completes; NEXT step parks
   // ============================================================
 
-  @isTest
+  @IsTest
   static void testQuiesceAtHandoff() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -374,7 +374,7 @@ public class WorkflowPauseTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testQuiesceAtChainHandoff() {
     // Simulate the gate stopping the SECOND step: run StepA manually (while paused),
     // then verify StepB is NOT enqueued/executed.
@@ -436,7 +436,7 @@ public class WorkflowPauseTest {
   // 4. PARK AT START
   // ============================================================
 
-  @isTest
+  @IsTest
   static void testParkAtStart() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowPauseGate.pauseDefinition(
@@ -482,7 +482,7 @@ public class WorkflowPauseTest {
   // 5. RESUME RE-ENTERS EXACTLY ONCE — serial
   // ============================================================
 
-  @isTest
+  @IsTest
   static void testResumeSerialReentersOnce() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -540,7 +540,7 @@ public class WorkflowPauseTest {
   // 6. RESUME PARALLEL — completed branches not re-run
   // ============================================================
 
-  @isTest
+  @IsTest
   static void testResumeParallelCompletedBranchNotRerun() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -606,7 +606,7 @@ public class WorkflowPauseTest {
   // that job would later find no active step row, match the lingering branch name
   // in Current_Step__c, and wrongly fail the whole instance "before starting".
   // Only the still-active (Pending/Running) branch should be re-armed.
-  @isTest
+  @IsTest
   static void testResumeReArmSkipsCompletedParallelBranch() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -681,7 +681,7 @@ public class WorkflowPauseTest {
   // Regression: a paused run keeps its correlation key reserved, so startOrGet
   // dedup (ACTIVE_STATUSES) must resolve to the live paused instance rather than a
   // stale recently-terminal run for the same key within the dedup window.
-  @isTest
+  @IsTest
   static void testPausedInstanceWinsDedupOverTerminalRow() {
     WorkflowEngine.disableQueueableInTest = true;
     String key = 'PausedDedup-' + Datetime.now().getTime();
@@ -725,7 +725,7 @@ public class WorkflowPauseTest {
   // Regression: a timeout job armed by a pre-pause handoff must NOT fail a step
   // while its definition is paused. The parked step is held and re-armed on resume;
   // failing it here would corrupt an in-flight run "before starting".
-  @isTest
+  @IsTest
   static void testTimeoutJobSkipsPausedDefinition() {
     String key = 'PausedTimeoutJob-' + Datetime.now().getTime();
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -782,7 +782,7 @@ public class WorkflowPauseTest {
   // definition is paused while the parent is still Pending/Running (handoff armed
   // the deadline before the delayed RUN_STEP parked it). It clears the stale
   // deadline instead, so a post-resume heartbeat cannot fire it instantly.
-  @isTest
+  @IsTest
   static void testHeartbeatSkipsAndClearsPausedDefinitionTimeout() {
     String key = 'PausedHeartbeat-' + Datetime.now().getTime();
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -839,7 +839,7 @@ public class WorkflowPauseTest {
   // Regression: a stale RUN_STEP for a row still in Status='Paused' must be a
   // no-op even after the definition's pause record is lifted (the chunked resume
   // drain owns the Paused -> Running flip + re-arm).
-  @isTest
+  @IsTest
   static void testStalePausedRunStepIsNoOpAfterResume() {
     WorkflowEngine.disableQueueableInTest = true;
     String key = 'StalePaused-' + Datetime.now().getTime();
@@ -890,7 +890,7 @@ public class WorkflowPauseTest {
   // Regression: resuming a parallel instance must drive a worker only for the
   // still-active branch(es); a Completed branch lingering in Current_Step__c must
   // be skipped rather than spending the resume publish/DML budget on a no-op.
-  @isTest
+  @IsTest
   static void testParallelResumeSkipsCompletedBranch() {
     WorkflowEngine.disableQueueableInTest = true;
     String key = 'ParResumeSkip-' + Datetime.now().getTime();
@@ -947,7 +947,7 @@ public class WorkflowPauseTest {
   // 7. SIGNAL HELD WHILE PAUSED (Defect B regression)
   // ============================================================
 
-  @isTest
+  @IsTest
   static void testSignalHeldWhilePaused() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -1008,7 +1008,7 @@ public class WorkflowPauseTest {
   // 8. WATCHDOG SLEEP-RESUME SKIPS PAUSED-DEF INSTANCES
   // ============================================================
 
-  @isTest
+  @IsTest
   static void testWatchdogSkipsSleepingPausedDefInstance() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -1074,7 +1074,7 @@ public class WorkflowPauseTest {
   // 9. CANCEL WORKS ON A PAUSED INSTANCE
   // ============================================================
 
-  @isTest
+  @IsTest
   static void testCancelWorksOnPausedInstance() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -1106,7 +1106,7 @@ public class WorkflowPauseTest {
   // 10. CORRELATION KEY STAYS RESERVED WHILE PAUSED (Defect A regression)
   // ============================================================
 
-  @isTest
+  @IsTest
   static void testCorrelationKeyReservedWhilePaused() {
     String corrKey = 'DefectA-' + Datetime.now().getTime();
 
@@ -1131,7 +1131,7 @@ public class WorkflowPauseTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testCorrelationKeyReservationPreventsDuplicate() {
     WorkflowEngine.disableQueueableInTest = true;
     String corrKey = 'DefectA-Dedup-' + Datetime.now().getTime();
@@ -1170,7 +1170,7 @@ public class WorkflowPauseTest {
   // 11. PAUSE STATE DURABILITY (not in-memory only)
   // ============================================================
 
-  @isTest
+  @IsTest
   static void testPauseStateDurability() {
     WorkflowPauseGate.pauseDefinition('WorkflowPauseTest.TwoStepWorkflow', 'D');
 
@@ -1191,7 +1191,7 @@ public class WorkflowPauseTest {
   // 12. * PAUSES USER DEFS, NOT WATCHDOG
   // ============================================================
 
-  @isTest
+  @IsTest
   static void testWildcardPausesUserDefNotWatchdog() {
     Test.startTest();
     WorkflowPauseGate.pauseDefinition('*', 'Org maintenance');
@@ -1228,7 +1228,7 @@ public class WorkflowPauseTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testWildcardResumeUnparksAll() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -1272,7 +1272,7 @@ public class WorkflowPauseTest {
   // 13. DASHBOARD CONTROLLER
   // ============================================================
 
-  @isTest
+  @IsTest
   static void testControllerPauseDefinition() {
     Test.startTest();
     WorkflowDashboardController.pauseDefinition(
@@ -1293,7 +1293,7 @@ public class WorkflowPauseTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testControllerResumeDefinition() {
     WorkflowPauseGate.pauseDefinition('WorkflowPauseTest.TwoStepWorkflow', 'X');
 
@@ -1315,7 +1315,7 @@ public class WorkflowPauseTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testControllerGetPausedDefinitions() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowPauseGate.pauseDefinition(
@@ -1354,7 +1354,7 @@ public class WorkflowPauseTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testControllerGetWatchdogStatusIncludesPausedInfo() {
     WorkflowPauseGate.pauseDefinition('WorkflowPauseTest.TwoStepWorkflow', 'W');
 
@@ -1376,7 +1376,7 @@ public class WorkflowPauseTest {
   // A duplicate/stale RUN_STEP arriving for an instance that is ALREADY Paused
   // must NOT fall through and execute the step (the gate's prior status guard let
   // it through). It must return without executing.
-  @isTest
+  @IsTest
   static void testDuplicateRunStepWhileAlreadyPausedDoesNotExecute() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -1426,7 +1426,7 @@ public class WorkflowPauseTest {
   // Resuming a single definition while an org-wide '*' pause is in effect must NOT
   // delete the wildcard record (which would lift maintenance mode for every other
   // definition and strand their parked instances).
-  @isTest
+  @IsTest
   static void testSingleResumePreservesWildcardPause() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -1487,7 +1487,7 @@ public class WorkflowPauseTest {
 
   // The bulk start path (used by scheduled jobs / the Flow invocable) must apply
   // the pause gate, not just the scalar start.
-  @isTest
+  @IsTest
   static void testBulkStartParksDuringPause() {
     WorkflowEngine.disableQueueableInTest = true;
     WorkflowPauseGate.pauseDefinition(
@@ -1534,7 +1534,7 @@ public class WorkflowPauseTest {
 
   // A Cancel signal sent via the scalar signal() overload must reach and cancel a
   // Paused instance (Paused was missing from that overload's lookup statuses).
-  @isTest
+  @IsTest
   static void testScalarCancelSignalReachesPausedInstance() {
     WorkflowEngine.disableQueueableInTest = true;
     String corrKey = 'ScalarCancel-' + Datetime.now().getTime();
@@ -1564,7 +1564,7 @@ public class WorkflowPauseTest {
 
   // Cancelling a parent must include Paused descendants in the traversal, or a
   // parked child is orphaned (still holding an active correlation reservation).
-  @isTest
+  @IsTest
   static void testCancelParentCancelsPausedChild() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -1612,7 +1612,7 @@ public class WorkflowPauseTest {
 
   // A running parent spawning a child whose definition is paused must park the
   // child (START_CHILD path was bypassing the pause gate).
-  @isTest
+  @IsTest
   static void testChildStartParksWhenChildDefPaused() {
     WorkflowEngine.disableQueueableInTest = true;
     spawnChildKey = 'PausedChild-' + Datetime.now().getTime();
@@ -1656,7 +1656,7 @@ public class WorkflowPauseTest {
 
   // The dashboard Redeliver action must attach a captured (Unrouted) signal to a
   // matching Paused instance as Received (held), without waking it.
-  @isTest
+  @IsTest
   static void testRedeliverSignalToPausedInstance() {
     WorkflowEngine.disableQueueableInTest = true;
     String corrKey = 'RedeliverPaused-' + Datetime.now().getTime();
@@ -1712,7 +1712,7 @@ public class WorkflowPauseTest {
 
   // Version drain must count Paused instances as non-terminal so a version with
   // parked work is not reported as safe to retire.
-  @isTest
+  @IsTest
   static void testVersionDrainTreatsPausedAsNonTerminal() {
     String wf = 'WorkflowPauseTest.TwoStepWorkflow';
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -1745,7 +1745,7 @@ public class WorkflowPauseTest {
 
   // The watchdog timeout batch must skip overdue steps whose parent is Paused, so
   // parked rows neither time out spuriously nor starve the bounded batch.
-  @isTest
+  @IsTest
   static void testWatchdogTimeoutSkipsPausedParentStep() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -1786,7 +1786,7 @@ public class WorkflowPauseTest {
 
   // Pause matching is case-insensitive (Workflow_Name__c is a case-insensitive
   // external id), so a pause stored in one case is honored when checked in another.
-  @isTest
+  @IsTest
   static void testPauseNameMatchingIsCaseInsensitive() {
     Test.startTest();
     WorkflowPauseGate.pauseDefinition(
@@ -1807,7 +1807,7 @@ public class WorkflowPauseTest {
 
   // Smoke test for the resume re-arm path: resuming a parked instance flips it to
   // Running and runs reArmTimeoutsForResume without error.
-  @isTest
+  @IsTest
   static void testResumeReArmsTimeoutsWithoutError() {
     WorkflowEngine.disableQueueableInTest = true;
     Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -1853,7 +1853,7 @@ public class WorkflowPauseTest {
   // stuck in a dead queueable stay Running (not parked), so reArmTimeoutsForResume
   // will not re-arm them on resume — clearing their deadline leaves them
   // permanently unenforceable.
-  @isTest
+  @IsTest
   static void testTimeoutJobTimesOutRunningStepDuringPause() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -1896,7 +1896,7 @@ public class WorkflowPauseTest {
 
   // The watchdog heartbeat must also enforce timeouts on Running stuck steps
   // during a pause — symmetric with the WorkflowTimeoutJob fix.
-  @isTest
+  @IsTest
   static void testWatchdogTimesOutRunningStepDuringPause() {
     WorkflowEngine.disableQueueableInTest = true;
 
@@ -1938,7 +1938,7 @@ public class WorkflowPauseTest {
 
   // A stale QueueableTimeoutJob that fires after a pause/resume re-arm must NOT
   // fail a step whose Timeout_At__c is still in the future (re-armed deadline).
-  @isTest
+  @IsTest
   static void testStaleTimeoutJobSkipsStepWithFutureDeadline() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',
@@ -1975,7 +1975,7 @@ public class WorkflowPauseTest {
 
   // Paused instances must appear in the active bucket of getWorkflowStats(),
   // not silently disappear from all three counters.
-  @isTest
+  @IsTest
   static void testGetWorkflowStatsCountsPausedAsActive() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowPauseTest.TwoStepWorkflow',

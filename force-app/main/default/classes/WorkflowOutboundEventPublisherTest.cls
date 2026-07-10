@@ -13,7 +13,7 @@
  * Workflow_Lifecycle__e instance stands in for an author-owned __e here — the
  * publisher treats every SObject event generically.
  */
-@isTest
+@IsTest
 private class WorkflowOutboundEventPublisherTest {
   private static List<SObject> sampleEvents(Integer count) {
     List<SObject> events = new List<SObject>();
@@ -28,7 +28,7 @@ private class WorkflowOutboundEventPublisherTest {
     return events;
   }
 
-  @isTest
+  @IsTest
   static void publishesEveryProvidedEvent() {
     WorkflowOutboundEventPublisher.publishedEvents.clear();
 
@@ -43,7 +43,7 @@ private class WorkflowOutboundEventPublisherTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void nullAndEmptyAreNoOps() {
     WorkflowOutboundEventPublisher.publishedEvents.clear();
 
@@ -59,7 +59,7 @@ private class WorkflowOutboundEventPublisherTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void publishFailureIsSwallowed() {
     WorkflowOutboundEventPublisher.publishedEvents.clear();
     WorkflowOutboundEventPublisher.throwTestException = true;
@@ -80,7 +80,7 @@ private class WorkflowOutboundEventPublisherTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void dmlBudgetGuardSkipsPublish() {
     WorkflowOutboundEventPublisher.publishedEvents.clear();
     WorkflowOutboundEventPublisher.forceDmlBudgetExhausted = true;

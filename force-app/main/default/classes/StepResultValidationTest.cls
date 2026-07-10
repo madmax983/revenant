@@ -1,6 +1,6 @@
-@isTest
+@IsTest
 private class StepResultValidationTest {
-  @isTest
+  @IsTest
   static void testSleepValidation() {
     try {
       StepResult.sleep((Integer) null);
@@ -39,7 +39,7 @@ private class StepResultValidationTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testRetryValidation() {
     try {
       StepResult.retry((RetryPolicy) null);
@@ -54,7 +54,7 @@ private class StepResultValidationTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testStartChildValidation() {
     try {
       StepResult.startChild(' ', 'key', null);
@@ -81,7 +81,7 @@ private class StepResultValidationTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testChildRequestValidation() {
     try {
       new StepResult.ChildRequest(null, 'key', null);
@@ -96,7 +96,7 @@ private class StepResultValidationTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testStartChildrenValidation() {
     try {
       StepResult.startChildren((List<StepResult.ChildRequest>) null);
@@ -135,7 +135,7 @@ private class StepResultValidationTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testWaitForApprovalValidation() {
     try {
       StepResult.waitForApproval(null, 'Manager');
@@ -184,7 +184,7 @@ private class StepResultValidationTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testSplitValidation() {
     try {
       StepResult.split((List<String>) null);
@@ -238,7 +238,7 @@ private class StepResultValidationTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testScalarJsonPreservation() {
     // 1. Pre-serialized boolean scalar
     StepResult r1 = StepResult.startChild('ChildWF', 'key', 'true');

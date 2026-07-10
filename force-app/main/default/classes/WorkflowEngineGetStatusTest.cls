@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 private class WorkflowEngineGetStatusTest {
   private static final String OFFLOAD_PREFIX = '{"$attachmentId":';
 
@@ -37,7 +37,7 @@ private class WorkflowEngineGetStatusTest {
 
   // ─── getStatus(Id) ────────────────────────────────────────────────────────
 
-  @isTest
+  @IsTest
   static void testGetStatusById_Completed() {
     Workflow_Instance__c inst = makeInstance(
       'Completed',
@@ -63,7 +63,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals('{"result":true}', ws.output);
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusById_Running_outputIsNull() {
     Workflow_Instance__c inst = makeInstance(
       'Running',
@@ -84,7 +84,7 @@ private class WorkflowEngineGetStatusTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusById_Suspended_outputIsNull() {
     Workflow_Instance__c inst = makeInstance(
       'Suspended',
@@ -99,7 +99,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(null, ws.output);
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusById_Failed_errorMessagePopulated() {
     Workflow_Instance__c inst = makeInstance(
       'Failed',
@@ -115,7 +115,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals('NullPointerException on line 42', ws.errorMessage);
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusById_Cancelled_isTerminal() {
     Workflow_Instance__c inst = makeInstance(
       'Cancelled',
@@ -129,7 +129,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(true, ws.isTerminal);
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusById_Compensated_isTerminal() {
     Workflow_Instance__c inst = makeInstance(
       'Compensated',
@@ -143,7 +143,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(true, ws.isTerminal);
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusById_CompensationFailed_notTerminal() {
     Workflow_Instance__c inst = makeInstance(
       'CompensationFailed',
@@ -161,7 +161,7 @@ private class WorkflowEngineGetStatusTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusById_NotFound_returnsNull() {
     // Use a well-formed but non-existent Id (same key prefix as Workflow_Instance__c)
     WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
@@ -174,7 +174,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(null, ws, 'Should return null for an unknown Id');
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusById_Completed_blankOutput_terminalFlag() {
     // AC4: isTerminal=true + blank output is different from a running instance
     Workflow_Instance__c inst = makeInstance(
@@ -196,7 +196,7 @@ private class WorkflowEngineGetStatusTest {
 
   // ─── getStatus(String) ────────────────────────────────────────────────────
 
-  @isTest
+  @IsTest
   static void testGetStatusByKey_ActiveInstance() {
     Workflow_Instance__c inst = makeInstance(
       'Running',
@@ -214,7 +214,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals('Running', ws.status);
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusByKey_TerminalInstance() {
     Workflow_Instance__c inst = makeInstance(
       'Completed',
@@ -232,7 +232,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(true, ws.isTerminal);
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusByKey_PrefersActiveOverTerminal() {
     // Same correlation key: one terminal, one active -- active should win
     makeInstance('Completed', 'key-prefer-active', '{"old":true}', null);
@@ -254,7 +254,7 @@ private class WorkflowEngineGetStatusTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusByKey_NotFound_returnsNull() {
     WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
       'key-does-not-exist-xyz123'
@@ -263,13 +263,13 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(null, ws);
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusByKey_Blank_returnsNull() {
     System.assertEquals(null, WorkflowEngine.getStatus(''));
     System.assertEquals(null, WorkflowEngine.getStatus((String) null));
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusByKey_CaseInsensitive() {
     // Correlation key fields are case-insensitive; a differently-cased lookup must
     // still resolve the stored instance.
@@ -291,7 +291,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals('{"ci":true}', ws.output);
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusByKey_FollowsContinueAsNewViaRoot() {
     // Predecessor handed off via ContinuedAsNew (terminal-ish, no active key).
     Workflow_Instance__c predecessor = new Workflow_Instance__c(
@@ -325,7 +325,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals('{"final":true}', ws.output);
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusByKey_FollowsMultiGenerationChainFromIntermediateKey() {
     // Chain: A (ContinuedAsNew) → A_run2 (ContinuedAsNew) → A_run3 (Completed).
     // Every generation shares Root_Correlation_Key__c = 'A'.
@@ -375,7 +375,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals('{"gen":3}', rootWs.output);
   }
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByKeys_hotKeyDoesNotStarveOthers() {
     // Shrink the row cap so one hot key would fill a single global-LIMIT scan; the
     // per-key resolution must still resolve the other requested key (not return
@@ -433,7 +433,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(cold.Id, results[1].instanceId);
   }
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByKeys_followsChainWhenPollingRootKey() {
     // gen1 hands off (ContinuedAsNew); the successor carries a different
     // correlation key but the shared root. The bulk path matches the polled root
@@ -470,7 +470,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(null, results[1], 'Unrelated key has no instance');
   }
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByKeys_resolvesRootlessLegacyInstance() {
     // Simulate a legacy row created before the Root_Correlation_Key__c default: the
     // trigger only defaults on insert, so null it out via a follow-up update.
@@ -505,7 +505,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(other.Id, results[1].instanceId);
   }
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByKeys_doesNotConflateReusedRoot() {
     // Chain: K (ContinuedAsNew) → K_run2 (Completed). Both share root 'K'.
     Workflow_Instance__c gen1 = new Workflow_Instance__c(
@@ -549,7 +549,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(null, results[1], 'Unrelated key has no instance');
   }
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByKeys_expandsRootlessLegacyHandoff() {
     // Legacy predecessor: blank root (pre-default), already handed off.
     Workflow_Instance__c legacy = makeInstance(
@@ -588,7 +588,7 @@ private class WorkflowEngineGetStatusTest {
 
   // ─── Offload rehydration (AC3 + AC7) ─────────────────────────────────────
 
-  @isTest
+  @IsTest
   static void testGetStatusById_OffloadedOutput_rehydratesTransparently() {
     String bigPayload = 'A'.repeat(110001);
 
@@ -632,7 +632,7 @@ private class WorkflowEngineGetStatusTest {
 
   // ─── SOQL / DML bounds (AC5) ──────────────────────────────────────────────
 
-  @isTest
+  @IsTest
   static void testGetStatusById_governorBounds_noOffload() {
     Workflow_Instance__c inst = makeInstance(
       'Completed',
@@ -655,7 +655,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(0, dmlUsed, 'getStatus must perform zero DML');
   }
 
-  @isTest
+  @IsTest
   static void testGetStatusById_governorBounds_offloadedOutput() {
     String bigPayload = 'B'.repeat(110001);
     Workflow_Instance__c inst = makeInstance(
@@ -689,7 +689,7 @@ private class WorkflowEngineGetStatusTest {
 
   // ─── Bulk getStatus(List of Id) ──────────────────────────────────────────
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByIds_mixed() {
     Workflow_Instance__c completed = makeInstance(
       'Completed',
@@ -725,7 +725,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals('err', results[2].errorMessage);
   }
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByIds_unknownIdYieldsNull() {
     Workflow_Instance__c inst = makeInstance(
       'Completed',
@@ -747,7 +747,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(null, results[1], 'Unknown Id should yield null slot');
   }
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByIds_emptyList() {
     List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
       new List<Id>()
@@ -755,7 +755,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(0, results.size());
   }
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByIds_offloadedOutputs_singleContentVersionQuery() {
     String big1 = 'X'.repeat(110001);
     String big2 = 'Y'.repeat(110001);
@@ -802,7 +802,7 @@ private class WorkflowEngineGetStatusTest {
 
   // ─── Bulk getStatus(List of String) ──────────────────────────────────────
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByKeys_mixed() {
     Workflow_Instance__c done = makeInstance(
       'Completed',
@@ -828,7 +828,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(false, results[1].isTerminal);
   }
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByKeys_prefersActiveOverTerminal() {
     makeInstance('Completed', 'key-bulk-prefer', 'old', null);
     Workflow_Instance__c activeInst = makeInstance(
@@ -849,7 +849,7 @@ private class WorkflowEngineGetStatusTest {
     );
   }
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByKeys_missingKeyYieldsNull() {
     Workflow_Instance__c inst = makeInstance(
       'Completed',
@@ -867,7 +867,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(null, results[1], 'Missing key should yield null slot');
   }
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByKeys_blankEntriesYieldNull() {
     Workflow_Instance__c inst = makeInstance(
       'Completed',
@@ -886,7 +886,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(null, results[2], 'Null key should yield null');
   }
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByKeys_emptyList() {
     List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
       new List<String>()
@@ -894,7 +894,7 @@ private class WorkflowEngineGetStatusTest {
     System.assertEquals(0, results.size());
   }
 
-  @isTest
+  @IsTest
   static void testBulkGetStatusByKeys_governorBounds_offloaded() {
     String big = 'Z'.repeat(110001);
     Workflow_Instance__c inst = makeInstance(
@@ -932,7 +932,7 @@ private class WorkflowEngineGetStatusTest {
 
   // ─── Single-record methods delegate to bulk (consistency check) ───────────
 
-  @isTest
+  @IsTest
   static void testSingleDelegatesConsistentWithBulk() {
     Workflow_Instance__c inst = makeInstance(
       'Completed',

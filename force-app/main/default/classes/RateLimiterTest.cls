@@ -1,6 +1,6 @@
-@isTest
+@IsTest
 public class RateLimiterTest {
-  @isTest
+  @IsTest
   static void testRateLimiterAcquisitionAndRefill() {
     // Setup config mock via JSON deserialization
     String mockConfigJson = '{"DeveloperName":"TestService","Capacity__c":5,"Refill_Rate_Per_Second__c":2.0}';
@@ -56,7 +56,7 @@ public class RateLimiterTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testRateLimiterNoConfigException() {
     Test.startTest();
     try {
@@ -74,7 +74,7 @@ public class RateLimiterTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testRateLimiterInvalidCapacity() {
     String mockConfigJson = '{"DeveloperName":"InvalidCapacityService","Capacity__c":0.5,"Refill_Rate_Per_Second__c":2.0}';
     Rate_Limit_Config__mdt mockConfig = (Rate_Limit_Config__mdt) JSON.deserialize(
@@ -99,7 +99,7 @@ public class RateLimiterTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testRateLimiterInvalidRefillRate() {
     String mockConfigJson = '{"DeveloperName":"InvalidRefillService","Capacity__c":5.0,"Refill_Rate_Per_Second__c":0.0}';
     Rate_Limit_Config__mdt mockConfig = (Rate_Limit_Config__mdt) JSON.deserialize(
@@ -125,7 +125,7 @@ public class RateLimiterTest {
     Test.stopTest();
   }
 
-  @isTest
+  @IsTest
   static void testRateLimiterColdStartConcurrency() {
     // 1. Setup valid config
     String mockConfigJson = '{"DeveloperName":"ConcurrencyService","Capacity__c":5.0,"Refill_Rate_Per_Second__c":2.0}';
