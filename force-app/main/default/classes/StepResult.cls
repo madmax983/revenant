@@ -53,6 +53,20 @@ public inherited sharing class StepResult {
   public String failureReason { get; set; }
   public String failureDataJson { get; set; }
 
+  @TestVisible
+  private static DateTime mockCurrentDateTime = null;
+
+  private static final Long MILLISECONDS_IN_SECOND = 1000L;
+  private static final Long MILLISECONDS_IN_MINUTE = 60000L;
+  private static final Long MILLISECONDS_IN_HOUR = 3600000L;
+  private static final Long MILLISECONDS_IN_DAY = 86400000L;
+
+  private static final Integer MAX_INTEGER = 2147483647;
+  private static final Long MAX_LONG = 9223372036854775807L;
+
+  private static final Map<String, BusinessHours> BUSINESS_HOURS_BY_NAME = new Map<String, BusinessHours>();
+  private static final Map<Id, Long> MS_PER_BUSINESS_DAY_BY_BH_ID = new Map<Id, Long>();
+
   public static StepResult complete(String nextStepName, Object output) {
     StepResult r = new StepResult();
     r.action = ActionType.COMPLETE;
@@ -165,20 +179,6 @@ public inherited sharing class StepResult {
     return r;
   }
 
-  @TestVisible
-  private static DateTime mockCurrentDateTime = null;
-
-  private static final Long MILLISECONDS_IN_SECOND = 1000L;
-  private static final Long MILLISECONDS_IN_MINUTE = 60000L;
-  private static final Long MILLISECONDS_IN_HOUR = 3600000L;
-  private static final Long MILLISECONDS_IN_DAY = 86400000L;
-
-  private static final Integer MAX_INTEGER = 2147483647;
-  private static final Long MAX_LONG = 9223372036854775807L;
-
-  private static final Map<String, BusinessHours> businessHoursByName = new Map<String, BusinessHours>();
-  private static final Map<Id, Long> msPerBusinessDayByBhId = new Map<Id, Long>();
-
   private static DateTime getCurrentDateTime() {
     return mockCurrentDateTime != null ? mockCurrentDateTime : DateTime.now();
   }
@@ -189,8 +189,8 @@ public inherited sharing class StepResult {
     }
     String trimmedName = name.trim();
     String cacheKey = trimmedName.toLowerCase();
-    if (businessHoursByName.containsKey(cacheKey)) {
-      return businessHoursByName.get(cacheKey);
+    if (BUSINESS_HOURS_BY_NAME.containsKey(cacheKey)) {
+      return BUSINESS_HOURS_BY_NAME.get(cacheKey);
     }
 
     Boolean queryDefault = (cacheKey == 'default');
@@ -257,9 +257,9 @@ public inherited sharing class StepResult {
       );
     }
 
-    businessHoursByName.put(cacheKey, matchingBusinessHours[0]);
+    BUSINESS_HOURS_BY_NAME.put(cacheKey, matchingBusinessHours[0]);
     if (matchingBusinessHours[0].Name != null) {
-      businessHoursByName.put(
+      BUSINESS_HOURS_BY_NAME.put(
         matchingBusinessHours[0].Name.toLowerCase(),
         matchingBusinessHours[0]
       );
@@ -271,8 +271,8 @@ public inherited sharing class StepResult {
   private static Long getMillisecondsInBusinessDay(
     BusinessHours selectedBusinessHours
   ) {
-    if (msPerBusinessDayByBhId.containsKey(selectedBusinessHours.Id)) {
-      return msPerBusinessDayByBhId.get(selectedBusinessHours.Id);
+    if (MS_PER_BUSINESS_DAY_BY_BH_ID.containsKey(selectedBusinessHours.Id)) {
+      return MS_PER_BUSINESS_DAY_BY_BH_ID.get(selectedBusinessHours.Id);
     }
 
     List<Time> starts = new List<Time>{
@@ -314,7 +314,7 @@ public inherited sharing class StepResult {
     if (activeDays > 0) {
       result = totalMs / activeDays;
     }
-    msPerBusinessDayByBhId.put(selectedBusinessHours.Id, result);
+    MS_PER_BUSINESS_DAY_BY_BH_ID.put(selectedBusinessHours.Id, result);
     return result;
   }
 
@@ -755,10 +755,6 @@ public inherited sharing class StepResult {
           JSON.deserializeUntyped(trimmed);
           return strInput;
         } catch (Exception ignored) {
-          System.debug(
-            LoggingLevel.FINEST,
-            'Scalar string is not valid JSON, fallback to standard serialization'
-          );
         }
       }
       return JSON.serialize(strInput);

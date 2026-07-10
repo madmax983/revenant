@@ -16,7 +16,7 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
 
   @TestVisible
   // Capped at 4 because of Salesforce Apex's hard limit of 5 savepoints per transaction, leaving 1 slot for safety/triggers.
-  public static Integer CHUNK_SIZE = 4;
+  public static Integer defaultChunkSize = 4;
 
   // ---- WorkflowDefinition ----
 
@@ -293,7 +293,7 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
       Integer skipped = intOf(state.get('skipped'));
       Integer errored = intOf(state.get('errored'));
 
-      Integer chunkSize = CHUNK_SIZE;
+      Integer chunkSize = defaultChunkSize;
       List<Id> chunk = fetchEligibleChunk(
         workflowName,
         status,

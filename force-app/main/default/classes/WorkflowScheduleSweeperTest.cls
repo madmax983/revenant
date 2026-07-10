@@ -589,7 +589,7 @@ public class WorkflowScheduleSweeperTest {
   @isTest
   static void testNoStarvationOrdering() {
     WorkflowEngine.disableQueueableInTest = true;
-    WorkflowScheduleSweeper.SWEEP_BATCH_SIZE = 2;
+    WorkflowScheduleSweeper.sweepBatchSize = 2;
 
     Workflow_Schedule__c a = makeSchedule('StarveA', EVERY_MINUTE_CRON, true, 'Allow');
     Workflow_Schedule__c b = makeSchedule('StarveB', EVERY_MINUTE_CRON, true, 'Allow');
@@ -776,7 +776,7 @@ public class WorkflowScheduleSweeperTest {
   @isTest
   static void testImpossibleCronDoesNotStarveValidSchedule() {
     WorkflowEngine.disableQueueableInTest = true;
-    WorkflowScheduleSweeper.SWEEP_BATCH_SIZE = 1;
+    WorkflowScheduleSweeper.sweepBatchSize = 1;
 
     // Impossible cron sorts first (null cursor). Without parking, it would pin the
     // batch of 1 forever and a valid schedule would never fire.

@@ -66,9 +66,9 @@ public inherited sharing class WorkflowOutboundEventPublisher {
   // fan-out; extreme fan-out at the very edge of the limit may still drop emits
   // rather than risk the commit.
   @TestVisible
-  private static Integer DML_STATEMENT_RESERVE = 10;
+  private static Integer dmlStatementReserve = 10;
   @TestVisible
-  private static Integer DML_ROW_RESERVE = 20;
+  private static Integer dmlRowReserve = 20;
 
   /**
    * Publishes the given outbound events. Safe to call with null/empty (no-op).
@@ -87,23 +87,11 @@ public inherited sharing class WorkflowOutboundEventPublisher {
       // roll back the Completed write. Drop the best-effort publish instead.
       if (
         forceDmlBudgetExhausted ||
-        Limits.getDmlStatements() + 1 + DML_STATEMENT_RESERVE >
+        Limits.getDmlStatements() + 1 + dmlStatementReserve >
         Limits.getLimitDmlStatements() ||
-        Limits.getDmlRows() + events.size() + DML_ROW_RESERVE >
+        Limits.getDmlRows() + events.size() + dmlRowReserve >
         Limits.getLimitDmlRows()
       ) {
-        System.debug(
-          LoggingLevel.WARN,
-          'Skipping outbound emit publish: DML budget exhausted (statements=' +
-            Limits.getDmlStatements() +
-            '/' +
-            Limits.getLimitDmlStatements() +
-            ', rows=' +
-            Limits.getDmlRows() +
-            '/' +
-            Limits.getLimitDmlRows() +
-            ').'
-        );
         return;
       }
 
@@ -113,30 +101,13 @@ public inherited sharing class WorkflowOutboundEventPublisher {
         );
       }
 
-      List<Database.SaveResult> results = EventBus.publish(events);
-      for (Database.SaveResult sr : results) {
-        if (!sr.isSuccess()) {
-          for (Database.Error err : sr.getErrors()) {
-            System.debug(
-              LoggingLevel.WARN,
-              'Outbound emit publish error: ' +
-                err.getStatusCode() +
-                ': ' +
-                err.getMessage()
-            );
-          }
-        }
-      }
+      EventBus.publish(events);
       if (Test.isRunningTest()) {
         publishedEvents.addAll(events);
       }
-    } catch (Exception ex) {
+    } catch (Exception ignored) {
       // Fire-and-forget: log and swallow. A publish failure must never roll back
       // the Completed write, fail the instance, or break the RUN_STEP chain.
-      System.debug(
-        LoggingLevel.WARN,
-        'Outbound emit publish failed (suppressed): ' + ex.getMessage()
-      );
     }
   }
 }

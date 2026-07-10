@@ -30,7 +30,7 @@ public inherited sharing class WorkflowScheduleSweeper {
   // Max schedules processed per heartbeat. The sweep is bulkified, but this bounds
   // the up-front cron evaluation and keeps a single heartbeat's footprint small.
   @TestVisible
-  private static Integer SWEEP_BATCH_SIZE = 50;
+  private static Integer sweepBatchSize = 50;
 
   private static final String LOG_TYPE = 'ScheduleFire';
   private static final String LEVEL_INFO = 'Info';
@@ -79,7 +79,7 @@ public inherited sharing class WorkflowScheduleSweeper {
         OR Next_Fire_Window__c <= :now)
       WITH SYSTEM_MODE
       ORDER BY Next_Fire_Window__c ASC NULLS FIRST, Name ASC
-      LIMIT :SWEEP_BATCH_SIZE
+      LIMIT :sweepBatchSize
     ];
 
     if (schedules.isEmpty()) {
@@ -163,14 +163,7 @@ public inherited sharing class WorkflowScheduleSweeper {
           ? sched.Overlap_Policy__c
           : 'Skip';
         dueItems.add(item);
-      } catch (Exception ex) {
-        System.debug(
-          LoggingLevel.ERROR,
-          'WorkflowScheduleSweeper: error evaluating "' +
-            sched.Name +
-            '": ' +
-            ex.getMessage()
-        );
+      } catch (Exception ignored) {
       }
     }
 
