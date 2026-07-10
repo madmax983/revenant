@@ -145,6 +145,74 @@ function flushPromises() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+// Finds the first <lightning-button> in the component that matches predicate.
+function findButton(element, predicate) {
+  return Array.from(
+    element.shadowRoot.querySelectorAll("lightning-button"),
+  ).find(predicate);
+}
+
+// Mocks the imperative Apex so the list + details show a single Suspended
+// instance, which is the shared arrange for the signal-injection tests.
+function mockSuspendedInstance() {
+  getFilteredInstances.mockResolvedValue([
+    {
+      Id: "a0G000000000001",
+      Name: "WI-0001",
+      Workflow_Name__c: "TestWorkflow",
+      Status__c: "Suspended",
+    },
+  ]);
+  getInstanceDetails.mockResolvedValue({
+    instance: {
+      Id: "a0G000000000001",
+      Name: "WI-0001",
+      Workflow_Name__c: "TestWorkflow",
+      Status__c: "Suspended",
+    },
+    steps: [],
+    children: [],
+    payloadFiles: {},
+  });
+}
+
+// Creates the dashboard, selects the first list item, opens the signal modal,
+// and returns the mounted element. Callers must arrange mocks beforehand.
+async function openSignalModal() {
+  const element = createElement("c-workflow-dashboard", {
+    is: WorkflowDashboard,
+  });
+  document.body.appendChild(element);
+  await flushPromises();
+  element.shadowRoot
+    .querySelector(".list-item")
+    .dispatchEvent(new CustomEvent("click"));
+  await flushPromises();
+  await flushPromises();
+
+  const sendSignalBtn = element.shadowRoot.querySelector(
+    'lightning-button[data-id="send-signal-btn"]',
+  );
+  sendSignalBtn.dispatchEvent(new CustomEvent("click"));
+  await flushPromises();
+  return element;
+}
+
+// Resolves the attribute-filter key/value inputs and the add button used by
+// the business-attributes filter tests.
+function getAttributeFilterInputs(element) {
+  const inputs = Array.from(
+    element.shadowRoot.querySelectorAll("lightning-input"),
+  );
+  const keyInput = inputs.find((i) => i.name === "attrKey");
+  const valueInput = inputs.find((i) => i.name === "attrValue");
+  const btns = Array.from(
+    element.shadowRoot.querySelectorAll("lightning-button-icon"),
+  );
+  const addBtn = btns.find((b) => b.alternativeText === "Add Attribute");
+  return { keyInput, valueInput, addBtn };
+}
+
 describe("c-workflow-dashboard trends panel", () => {
   afterEach(() => {
     while (document.body.firstChild) {
@@ -447,16 +515,18 @@ describe("c-workflow-dashboard bulk cancel", () => {
     await flushPromises();
 
     // Find the button "Cancel Matching Active"
-    const button = Array.from(
-      element.shadowRoot.querySelectorAll("lightning-button"),
-    ).find((btn) => btn.label && btn.label.startsWith("Cancel ("));
+    const button = findButton(
+      element,
+      (btn) => btn.label && btn.label.startsWith("Cancel ("),
+    );
     button.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
     // Check modal confirm button
-    const confirmButton = Array.from(
-      element.shadowRoot.querySelectorAll("lightning-button"),
-    ).find((btn) => btn.label === "Cancel Instances");
+    const confirmButton = findButton(
+      element,
+      (btn) => btn.label === "Cancel Instances",
+    );
     expect(confirmButton).not.toBeNull();
 
     // Listen to the showtoast event
@@ -642,16 +712,18 @@ describe("c-workflow-dashboard bulk redrive", () => {
     await flushPromises();
 
     // Find the button "Re-drive Matching Failed"
-    const button = Array.from(
-      element.shadowRoot.querySelectorAll("lightning-button"),
-    ).find((btn) => btn.label && btn.label.startsWith("Re-drive ("));
+    const button = findButton(
+      element,
+      (btn) => btn.label && btn.label.startsWith("Re-drive ("),
+    );
     button.dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
     // Check modal confirm button
-    const confirmButton = Array.from(
-      element.shadowRoot.querySelectorAll("lightning-button"),
-    ).find((btn) => btn.label === "Re-drive Instances");
+    const confirmButton = findButton(
+      element,
+      (btn) => btn.label === "Re-drive Instances",
+    );
     expect(confirmButton).not.toBeNull();
 
     // Listen to the showtoast event
@@ -1176,7 +1248,8 @@ describe("c-workflow-dashboard details panel", () => {
     await flushPromises();
 
     // 5. Verify that the terminal panel exists and contains the correct breadcrumbs
-    const terminalPanels = element.shadowRoot.querySelectorAll(".terminal-panel");
+    const terminalPanels =
+      element.shadowRoot.querySelectorAll(".terminal-panel");
     expect(terminalPanels.length).toBe(1);
 
     const terminalLines = terminalPanels[0].querySelectorAll(".terminal-line");
@@ -1202,16 +1275,20 @@ describe("c-workflow-dashboard details panel", () => {
     expect(timestamp2.textContent).toBe(`[${expectedTime2}]`);
     expect(badge2.textContent).toBe("WARN");
     expect(badge2.className).toContain("terminal-badge-warn");
-    expect(message2.textContent).toBe("Retrying card charge due to network timeout");
+    expect(message2.textContent).toBe(
+      "Retrying card charge due to network timeout",
+    );
 
     // 6. Click the show details button for SendEmail step to expand it
     toggleButtons[1].dispatchEvent(new CustomEvent("click"));
     await flushPromises();
 
-    const terminalPanelsAfter = element.shadowRoot.querySelectorAll(".terminal-panel");
+    const terminalPanelsAfter =
+      element.shadowRoot.querySelectorAll(".terminal-panel");
     expect(terminalPanelsAfter.length).toBe(2);
 
-    const emailTerminalLines = terminalPanelsAfter[1].querySelectorAll(".terminal-line");
+    const emailTerminalLines =
+      terminalPanelsAfter[1].querySelectorAll(".terminal-line");
     expect(emailTerminalLines.length).toBe(1);
 
     const badgeEmail = emailTerminalLines[0].querySelector(".terminal-badge");
@@ -1310,39 +1387,9 @@ describe("c-workflow-dashboard operator signal injection", () => {
   });
 
   it("opens modal on click, verifies inputs, and confirm button is disabled by default", async () => {
-    getFilteredInstances.mockResolvedValue([
-      {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-    ]);
-    getInstanceDetails.mockResolvedValue({
-      instance: {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-      steps: [],
-      children: [],
-      payloadFiles: {},
-    });
+    mockSuspendedInstance();
 
-    const element = createComponent();
-    await flushPromises();
-    element.shadowRoot
-      .querySelector(".list-item")
-      .dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
-    await flushPromises();
-
-    const sendSignalBtn = element.shadowRoot.querySelector(
-      'lightning-button[data-id="send-signal-btn"]',
-    );
-    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
+    const element = await openSignalModal();
 
     // Verify modal is open
     const modal = element.shadowRoot.querySelector("section.slds-modal");
@@ -1367,39 +1414,9 @@ describe("c-workflow-dashboard operator signal injection", () => {
   });
 
   it("enables confirm button when Signal Name is provided, and handles optional Payload JSON", async () => {
-    getFilteredInstances.mockResolvedValue([
-      {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-    ]);
-    getInstanceDetails.mockResolvedValue({
-      instance: {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-      steps: [],
-      children: [],
-      payloadFiles: {},
-    });
+    mockSuspendedInstance();
 
-    const element = createComponent();
-    await flushPromises();
-    element.shadowRoot
-      .querySelector(".list-item")
-      .dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
-    await flushPromises();
-
-    const sendSignalBtn = element.shadowRoot.querySelector(
-      'lightning-button[data-id="send-signal-btn"]',
-    );
-    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
+    const element = await openSignalModal();
 
     const nameInput = element.shadowRoot.querySelector(
       'lightning-input[data-id="signal-name-input"]',
@@ -1427,41 +1444,10 @@ describe("c-workflow-dashboard operator signal injection", () => {
   });
 
   it("calls injectSignal with correct arguments on confirm (success), shows success toast, closes modal, and refreshes instance details", async () => {
-    getFilteredInstances.mockResolvedValue([
-      {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-    ]);
-    getInstanceDetails.mockResolvedValue({
-      instance: {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-      steps: [],
-      children: [],
-      payloadFiles: {},
-    });
+    mockSuspendedInstance();
     injectSignal.mockResolvedValue({ success: true });
 
-    const element = createComponent();
-    await flushPromises();
-    element.shadowRoot
-      .querySelector(".list-item")
-      .dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
-    await flushPromises();
-
-    // Click "Send Signal" button to open modal
-    const sendSignalBtn = element.shadowRoot.querySelector(
-      'lightning-button[data-id="send-signal-btn"]',
-    );
-    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
+    const element = await openSignalModal();
 
     // Set input values
     const nameInput = element.shadowRoot.querySelector(
@@ -1514,43 +1500,12 @@ describe("c-workflow-dashboard operator signal injection", () => {
   });
 
   it("calls injectSignal and handles failure by showing error toast and keeping modal open", async () => {
-    getFilteredInstances.mockResolvedValue([
-      {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-    ]);
-    getInstanceDetails.mockResolvedValue({
-      instance: {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-      steps: [],
-      children: [],
-      payloadFiles: {},
-    });
+    mockSuspendedInstance();
     injectSignal.mockRejectedValue(
       new Error("Failed to inject signal: invalid state"),
     );
 
-    const element = createComponent();
-    await flushPromises();
-    element.shadowRoot
-      .querySelector(".list-item")
-      .dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
-    await flushPromises();
-
-    // Click "Send Signal" button to open modal
-    const sendSignalBtn = element.shadowRoot.querySelector(
-      'lightning-button[data-id="send-signal-btn"]',
-    );
-    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
+    const element = await openSignalModal();
 
     // Set input values
     const nameInput = element.shadowRoot.querySelector(
@@ -1592,40 +1547,9 @@ describe("c-workflow-dashboard operator signal injection", () => {
   });
 
   it("closes modal on cancel button click without sending", async () => {
-    getFilteredInstances.mockResolvedValue([
-      {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-    ]);
-    getInstanceDetails.mockResolvedValue({
-      instance: {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-      steps: [],
-      children: [],
-      payloadFiles: {},
-    });
+    mockSuspendedInstance();
 
-    const element = createComponent();
-    await flushPromises();
-    element.shadowRoot
-      .querySelector(".list-item")
-      .dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
-    await flushPromises();
-
-    // Click "Send Signal" button to open modal
-    const sendSignalBtn = element.shadowRoot.querySelector(
-      'lightning-button[data-id="send-signal-btn"]',
-    );
-    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
+    const element = await openSignalModal();
 
     // Verify modal is open
     let modal = element.shadowRoot.querySelector("section.slds-modal");
@@ -1646,40 +1570,9 @@ describe("c-workflow-dashboard operator signal injection", () => {
   });
 
   it("rejects invalid JSON payload on confirm", async () => {
-    getFilteredInstances.mockResolvedValue([
-      {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-    ]);
-    getInstanceDetails.mockResolvedValue({
-      instance: {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-      steps: [],
-      children: [],
-      payloadFiles: {},
-    });
+    mockSuspendedInstance();
 
-    const element = createComponent();
-    await flushPromises();
-    element.shadowRoot
-      .querySelector(".list-item")
-      .dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
-    await flushPromises();
-
-    // Click "Send Signal" button to open modal
-    const sendSignalBtn = element.shadowRoot.querySelector(
-      'lightning-button[data-id="send-signal-btn"]',
-    );
-    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
+    const element = await openSignalModal();
 
     // Set input values
     const nameInput = element.shadowRoot.querySelector(
@@ -1720,25 +1613,7 @@ describe("c-workflow-dashboard operator signal injection", () => {
   });
 
   it("disables Cancel button when loadingDetails is true", async () => {
-    getFilteredInstances.mockResolvedValue([
-      {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-    ]);
-    getInstanceDetails.mockResolvedValue({
-      instance: {
-        Id: "a0G000000000001",
-        Name: "WI-0001",
-        Workflow_Name__c: "TestWorkflow",
-        Status__c: "Suspended",
-      },
-      steps: [],
-      children: [],
-      payloadFiles: {},
-    });
+    mockSuspendedInstance();
     // Return a promise that doesn't resolve immediately to keep loadingDetails = true
     let resolveSignal;
     injectSignal.mockImplementation(() => {
@@ -1747,20 +1622,7 @@ describe("c-workflow-dashboard operator signal injection", () => {
       });
     });
 
-    const element = createComponent();
-    await flushPromises();
-    element.shadowRoot
-      .querySelector(".list-item")
-      .dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
-    await flushPromises();
-
-    // Click "Send Signal" button to open modal
-    const sendSignalBtn = element.shadowRoot.querySelector(
-      'lightning-button[data-id="send-signal-btn"]',
-    );
-    sendSignalBtn.dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
+    const element = await openSignalModal();
 
     // Set input values
     const nameInput = element.shadowRoot.querySelector(
@@ -1831,16 +1693,7 @@ describe("c-workflow-dashboard business attributes filters", () => {
     await flushPromises();
 
     // Query key & value inputs and add button using their properties
-    const inputs = Array.from(
-      element.shadowRoot.querySelectorAll("lightning-input"),
-    );
-    const keyInput = inputs.find((i) => i.name === "attrKey");
-    const valueInput = inputs.find((i) => i.name === "attrValue");
-
-    const btns = Array.from(
-      element.shadowRoot.querySelectorAll("lightning-button-icon"),
-    );
-    const addBtn = btns.find((b) => b.alternativeText === "Add Attribute");
+    const { keyInput, valueInput, addBtn } = getAttributeFilterInputs(element);
 
     expect(keyInput).toBeDefined();
     expect(valueInput).toBeDefined();
@@ -1945,15 +1798,7 @@ describe("c-workflow-dashboard business attributes filters", () => {
     const element = createComponent();
     await flushPromises();
 
-    const inputs = Array.from(
-      element.shadowRoot.querySelectorAll("lightning-input"),
-    );
-    const keyInput = inputs.find((i) => i.name === "attrKey");
-    const valueInput = inputs.find((i) => i.name === "attrValue");
-    const btns = Array.from(
-      element.shadowRoot.querySelectorAll("lightning-button-icon"),
-    );
-    const addBtn = btns.find((b) => b.alternativeText === "Add Attribute");
+    const { keyInput, valueInput, addBtn } = getAttributeFilterInputs(element);
 
     // Mock showToast event listener
     const toastHandler = jest.fn();
