@@ -2032,6 +2032,7 @@ public class WorkflowEngineTest {
 
   public class MockQueueable implements Queueable {
     public void execute(QueueableContext ctx) {
+      return;
     }
   }
 
@@ -2649,44 +2650,10 @@ public class WorkflowEngineTest {
       WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.LargeOutputStep');
       WorkflowEngine.runStep(instanceId, 'WorkflowEngineTest.ParallelStep2');
 
-      Workflow_Instance__c instBefore = [
-        SELECT Status__c, Current_Step__c
-        FROM Workflow_Instance__c
-        WHERE Id = :instanceId
-      ];
-      System.debug(
-        '--- TEST BEFORE JOIN: Status=' +
-          instBefore.Status__c +
-          ', CurrentStep=' +
-          instBefore.Current_Step__c
-      );
-
-      List<Workflow_Step_Execution__c> stepsBefore = [
-        SELECT Step_Name__c, Status__c, Input__c
-        FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c = :instanceId
-      ];
-      for (Workflow_Step_Execution__c s : stepsBefore) {
-        System.debug(
-          '--- STEP BEFORE JOIN: Name=' +
-            s.Step_Name__c +
-            ', Status=' +
-            s.Status__c +
-            ', InputLength=' +
-            (s.Input__c != null ? s.Input__c.length() : 0)
-        );
-      }
-
       // Run JoinStep manually
       try {
         new WorkflowOrchestrator(instanceId).execute(null);
       } catch (Exception ex) {
-        System.debug(
-          '--- JOIN EXECUTION CRASHED: ' +
-            ex.getMessage() +
-            '\n' +
-            ex.getStackTraceString()
-        );
         throw ex;
       }
 
@@ -2695,30 +2662,6 @@ public class WorkflowEngineTest {
         FROM Workflow_Instance__c
         WHERE Id = :instanceId
       ];
-      System.debug(
-        '--- TEST AFTER JOIN: Status=' +
-          instAfter.Status__c +
-          ', CurrentStep=' +
-          instAfter.Current_Step__c +
-          ', Error=' +
-          instAfter.Error_Message__c
-      );
-
-      List<Workflow_Step_Execution__c> stepsAfter = [
-        SELECT Step_Name__c, Status__c, Error_Details__c
-        FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c = :instanceId
-      ];
-      for (Workflow_Step_Execution__c s : stepsAfter) {
-        System.debug(
-          '--- STEP AFTER JOIN: Name=' +
-            s.Step_Name__c +
-            ', Status=' +
-            s.Status__c +
-            ', Error=' +
-            s.Error_Details__c
-        );
-      }
 
       System.assertEquals('Completed', instAfter.Status__c);
     }
@@ -8782,7 +8725,7 @@ public class WorkflowEngineTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       // 1. Start a parent workflow with a key that literally ends with ::ts::<timestamp>
-      Id parentId = WorkflowEngine.start(
+      WorkflowEngine.start(
         'WorkflowEngineTest.HappyWorkflow',
         'order::ts::1719859200000',
         null

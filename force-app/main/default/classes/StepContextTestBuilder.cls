@@ -19,9 +19,6 @@ public inherited sharing class StepContextTestBuilder {
   private static Integer fakeIdSequence = 0;
   private static Map<SObjectType, String> keyPrefixCache = new Map<SObjectType, String>();
 
-  public StepContextTestBuilder() {
-  }
-
   public StepContextTestBuilder workflowInstanceId(Id val) {
     this.workflowInstanceIdVal = val;
     return this;
