@@ -1,55 +1,61 @@
 .font-outfit {
-    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    font-weight: 600;
+  font-family:
+    "Outfit",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-weight: var(--slds-g-font-weight-6, 600);
 }
 
 .schedule-container {
-    border-radius: 12px;
+  border-radius: var(--slds-g-radius-border-3, 12px);
 }
 
 .panel-card {
-    background: #ffffff;
-    border: 1px solid rgba(226, 232, 240, 0.8);
-    border-radius: 12px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
-    overflow: hidden;
+  background: var(--slds-g-color-surface-1, #ffffff);
+  border: var(--slds-g-sizing-border-1, 1px) solid
+    var(--slds-g-color-border-1, rgba(226, 232, 240, 0.8));
+  border-radius: var(--slds-g-radius-border-3, 12px);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
 }
 
 .brand-button {
-    --slds-c-button-brand-color-background: hsl(243, 75%, 59%);
-    --slds-c-button-brand-color-border: hsl(243, 75%, 59%);
+  --slds-c-button-brand-color-background: hsl(243, 75%, 59%);
+  --slds-c-button-brand-color-border: hsl(243, 75%, 59%);
 }
 
 .badge {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    line-height: 1.4;
+  display: inline-block;
+  padding: var(--slds-g-spacing-1, 2px) var(--slds-g-spacing-2, 10px);
+  border-radius: var(--slds-g-radius-border-circle, 999px);
+  font-size: var(--slds-g-font-scale-neg-1, 0.75rem);
+  font-weight: var(--slds-g-font-weight-6, 600);
+  line-height: var(--slds-g-font-lineheight-2, 1.4);
 }
 
 .badge-green {
-    background: hsl(145, 63%, 92%);
-    color: hsl(145, 63%, 28%);
+  background: var(--slds-g-color-success-base-95, hsl(145, 63%, 92%));
+  color: var(--slds-g-color-palette-green-40, hsl(145, 63%, 28%));
 }
 
 .badge-orange {
-    background: hsl(32, 95%, 92%);
-    color: hsl(32, 81%, 33%);
+  background: var(--slds-g-color-warning-base-95, hsl(32, 95%, 92%));
+  color: var(--slds-g-color-warning-base-40, hsl(32, 81%, 33%));
 }
 
 .badge-blue {
-    background: hsl(213, 94%, 92%);
-    color: hsl(213, 74%, 34%);
+  background: var(--slds-g-color-info-base-90, hsl(213, 94%, 92%));
+  color: var(--slds-g-color-info-base-40, hsl(213, 74%, 34%));
 }
 
 .badge-neutral {
-    background: hsl(220, 13%, 91%);
-    color: hsl(220, 9%, 36%);
+  background: var(--slds-g-color-surface-container-3, hsl(220, 13%, 91%));
+  color: var(--slds-g-color-on-surface-1, hsl(220, 9%, 36%));
 }
 
 .logs-content {
-    max-height: 60vh;
-    overflow-y: auto;
+  max-height: 60vh;
+  overflow-y: auto;
 }

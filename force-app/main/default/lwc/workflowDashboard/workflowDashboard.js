@@ -332,6 +332,42 @@ export default class WorkflowDashboard extends LightningElement {
     return !this.signalName || !this.signalName.trim() || this.loadingDetails;
   }
 
+  // Builds the shared stats/count promises and settles them alongside the
+  // caller-supplied instances query. Used by both fetchInstances and
+  // refreshInstances so the query construction lives in one place.
+  _loadStatsAndCounts(instancesPromise) {
+    const statsPromise = getWorkflowStats({
+      workflowName: this.selectedWorkflow,
+      status: this.selectedStatus,
+      searchTerm: this.searchTerm,
+      attributesFilterJson: this.attributesFilterJson,
+    });
+
+    const stalledCountPromise = getStalledCount({
+      workflowName: this.selectedWorkflow,
+      searchTerm: this.searchTerm,
+      thresholdMinutes: null,
+      attributesFilterJson: this.attributesFilterJson,
+    }).catch((error) => {
+      console.error("Stalled count query failed:", error);
+      return { count: 0, capped: false };
+    });
+
+    const unroutedCountPromise = getUnroutedSignalCount({
+      searchTerm: null,
+    }).catch((error) => {
+      console.error("Unrouted signal count query failed:", error);
+      return { count: 0, capped: false };
+    });
+
+    return Promise.all([
+      instancesPromise,
+      statsPromise,
+      stalledCountPromise,
+      unroutedCountPromise,
+    ]);
+  }
+
   fetchInstances(isAppend, targetOffset) {
     const requestId = ++this._instanceRequestId;
     if (!isAppend) {
@@ -411,36 +447,7 @@ export default class WorkflowDashboard extends LightningElement {
         });
     }
 
-    const statsPromise = getWorkflowStats({
-      workflowName: this.selectedWorkflow,
-      status: this.selectedStatus,
-      searchTerm: this.searchTerm,
-      attributesFilterJson: this.attributesFilterJson,
-    });
-
-    const stalledCountPromise = getStalledCount({
-      workflowName: this.selectedWorkflow,
-      searchTerm: this.searchTerm,
-      thresholdMinutes: null,
-      attributesFilterJson: this.attributesFilterJson,
-    }).catch((error) => {
-      console.error("Stalled count query failed:", error);
-      return { count: 0, capped: false };
-    });
-
-    const unroutedCountPromise = getUnroutedSignalCount({
-      searchTerm: null,
-    }).catch((error) => {
-      console.error("Unrouted signal count query failed:", error);
-      return { count: 0, capped: false };
-    });
-
-    return Promise.all([
-      instancesPromise,
-      statsPromise,
-      stalledCountPromise,
-      unroutedCountPromise,
-    ])
+    return this._loadStatsAndCounts(instancesPromise)
       .then(([result, statsResult, stalledResult, unroutedResult]) => {
         if (!this._isConnected || requestId !== this._instanceRequestId) return;
         const formatted = result.map((inst) => this.formatInstance(inst));
@@ -512,36 +519,7 @@ export default class WorkflowDashboard extends LightningElement {
           attributesFilterJson: this.attributesFilterJson,
         });
 
-    const statsPromise = getWorkflowStats({
-      workflowName: this.selectedWorkflow,
-      status: this.selectedStatus,
-      searchTerm: this.searchTerm,
-      attributesFilterJson: this.attributesFilterJson,
-    });
-
-    const stalledCountPromise = getStalledCount({
-      workflowName: this.selectedWorkflow,
-      searchTerm: this.searchTerm,
-      thresholdMinutes: null,
-      attributesFilterJson: this.attributesFilterJson,
-    }).catch((error) => {
-      console.error("Stalled count query failed:", error);
-      return { count: 0, capped: false };
-    });
-
-    const unroutedCountPromise = getUnroutedSignalCount({
-      searchTerm: null,
-    }).catch((error) => {
-      console.error("Unrouted signal count query failed:", error);
-      return { count: 0, capped: false };
-    });
-
-    return Promise.all([
-      instancesPromise,
-      statsPromise,
-      stalledCountPromise,
-      unroutedCountPromise,
-    ])
+    return this._loadStatsAndCounts(instancesPromise)
       .then(([result, statsResult, stalledResult, unroutedResult]) => {
         if (!this._isConnected || requestId !== this._instanceRequestId) return;
         this.instances = result.map((inst) => this.formatInstance(inst));
@@ -954,7 +932,7 @@ export default class WorkflowDashboard extends LightningElement {
           const soql = step.SOQL_Query_Count__c;
           const heap = step.Heap_Size_Bytes__c;
 
-          let hasTelemetry = cpu !== undefined && cpu !== null;
+          const hasTelemetry = cpu !== undefined && cpu !== null;
           let telemetryString = "—";
           let hasLimitPressure = false;
 
@@ -971,8 +949,8 @@ export default class WorkflowDashboard extends LightningElement {
             hasLimitPressure = cpuPct >= 80 || soqlPct >= 80 || heapPct >= 80;
           }
 
-          const stepBreadcrumbs = (breadcrumbsByStep[step.Id] || [])
-            .map((b) => {
+          const stepBreadcrumbs = (breadcrumbsByStep[step.Id] || []).map(
+            (b) => {
               let badgeClass = "terminal-badge";
               const lvl = (b.Level__c || "").toUpperCase();
               if (lvl === "WARN") {
@@ -989,7 +967,8 @@ export default class WorkflowDashboard extends LightningElement {
                   : this.formatDateTime(b.CreatedDate),
                 badgeClass,
               };
-            });
+            },
+          );
 
           return {
             ...step,

@@ -18,7 +18,7 @@
  * Must be `public` (not private) so Type.forName can resolve the inner test
  * WorkflowDefinition/WorkflowStep classes the engine instantiates by name.
  */
-@isTest
+@IsTest
 public class WorkflowEngineOutboundEmitTest {
   // ----- Workflow A: a single step that emits then yields -> retries -> completes.
 
@@ -84,7 +84,9 @@ public class WorkflowEngineOutboundEmitTest {
 
   public class ResultEmitWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
-      return new List<String>{ 'WorkflowEngineOutboundEmitTest.ResultEmitStep' };
+      return new List<String>{
+        'WorkflowEngineOutboundEmitTest.ResultEmitStep'
+      };
     }
     public String getInitialStep() {
       return 'WorkflowEngineOutboundEmitTest.ResultEmitStep';
@@ -249,157 +251,169 @@ public class WorkflowEngineOutboundEmitTest {
 
   // ===========================================================================
 
-  @isTest
+  @IsTest
   static void emitPublishesExactlyOnceDespiteThreeReExecutions() {
-    WorkflowOutboundEventPublisher.publishedEvents.clear();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowOutboundEventPublisher.publishedEvents.clear();
 
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowEngineOutboundEmitTest.EmitWorkflow',
-      'emit-once-1',
-      null
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    WorkflowTestHarness.Result result = harness.drive();
-    Test.stopTest();
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowEngineOutboundEmitTest.EmitWorkflow',
+        'emit-once-1',
+        null
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      WorkflowTestHarness.Result result = harness.drive();
+      Test.stopTest();
 
-    System.assertEquals('Completed', result.status, 'Workflow must complete');
-    System.assert(
-      result.reachedStep('WorkflowEngineOutboundEmitTest.EmitOnceStep'),
-      'EmitOnceStep must have executed'
-    );
-    System.assertEquals(
-      1,
-      WorkflowOutboundEventPublisher.publishedEvents.size(),
-      'Producer-side effectively-once: exactly one publish across yield -> ' +
-      'retry -> complete (>=3 re-executions), each of which called emit()'
-    );
+      System.assertEquals('Completed', result.status, 'Workflow must complete');
+      System.assert(
+        result.reachedStep('WorkflowEngineOutboundEmitTest.EmitOnceStep'),
+        'EmitOnceStep must have executed'
+      );
+      System.assertEquals(
+        1,
+        WorkflowOutboundEventPublisher.publishedEvents.size(),
+        'Producer-side effectively-once: exactly one publish across yield -> ' +
+        'retry -> complete (>=3 re-executions), each of which called emit()'
+      );
+    }
   }
 
-  @isTest
+  @IsTest
   static void nothingIsPublishedBeforeCompleteCommits() {
-    WorkflowOutboundEventPublisher.publishedEvents.clear();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowOutboundEventPublisher.publishedEvents.clear();
 
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowEngineOutboundEmitTest.EmitWorkflow',
-      'emit-once-pre-commit',
-      null
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowEngineOutboundEmitTest.EmitWorkflow',
+        'emit-once-pre-commit',
+        null
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
 
-    // First hop: the step emits then YIELDS — no COMPLETE record, no publish.
-    harness.step();
-    System.assertEquals(
-      0,
-      WorkflowOutboundEventPublisher.publishedEvents.size(),
-      'A yield (pre-commit) must publish nothing even though emit() was called'
-    );
+      // First hop: the step emits then YIELDS — no COMPLETE record, no publish.
+      harness.step();
+      System.assertEquals(
+        0,
+        WorkflowOutboundEventPublisher.publishedEvents.size(),
+        'A yield (pre-commit) must publish nothing even though emit() was called'
+      );
 
-    // Drive the rest (retry -> complete): now exactly one publish.
-    WorkflowTestHarness.Result result = harness.drive();
-    Test.stopTest();
+      // Drive the rest (retry -> complete): now exactly one publish.
+      WorkflowTestHarness.Result result = harness.drive();
+      Test.stopTest();
 
-    System.assertEquals('Completed', result.status);
-    System.assertEquals(
-      1,
-      WorkflowOutboundEventPublisher.publishedEvents.size(),
-      'Publish happens only when COMPLETE commits'
-    );
+      System.assertEquals('Completed', result.status);
+      System.assertEquals(
+        1,
+        WorkflowOutboundEventPublisher.publishedEvents.size(),
+        'Publish happens only when COMPLETE commits'
+      );
+    }
   }
 
-  @isTest
+  @IsTest
   static void completeOverloadPublishesProvidedEvents() {
-    WorkflowOutboundEventPublisher.publishedEvents.clear();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowOutboundEventPublisher.publishedEvents.clear();
 
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowEngineOutboundEmitTest.ResultEmitWorkflow',
-      'result-emit-1',
-      null
-    );
-    WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
-      .drive();
-    Test.stopTest();
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowEngineOutboundEmitTest.ResultEmitWorkflow',
+        'result-emit-1',
+        null
+      );
+      WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
+        .drive();
+      Test.stopTest();
 
-    System.assertEquals('Completed', result.status);
-    System.assertEquals(
-      1,
-      WorkflowOutboundEventPublisher.publishedEvents.size(),
-      'Events handed to StepResult.complete(next, output, events) publish ' +
-      'once on COMPLETE'
-    );
+      System.assertEquals('Completed', result.status);
+      System.assertEquals(
+        1,
+        WorkflowOutboundEventPublisher.publishedEvents.size(),
+        'Events handed to StepResult.complete(next, output, events) publish ' +
+        'once on COMPLETE'
+      );
+    }
   }
 
-  @isTest
+  @IsTest
   static void splitTransitionPublishesEmittedEventsOnce() {
-    WorkflowOutboundEventPublisher.publishedEvents.clear();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowOutboundEventPublisher.publishedEvents.clear();
 
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowEngineOutboundEmitTest.SplitEmitWorkflow',
-      'split-emit-1',
-      null
-    );
-    WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
-      .drive();
-    Test.stopTest();
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowEngineOutboundEmitTest.SplitEmitWorkflow',
+        'split-emit-1',
+        null
+      );
+      WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
+        .drive();
+      Test.stopTest();
 
-    System.assertEquals('Completed', result.status);
-    System.assertEquals(
-      1,
-      WorkflowOutboundEventPublisher.publishedEvents.size(),
-      'A step that emits then SPLITs publishes its events once on the SPLIT ' +
-      'commit; the fan-out branches emit nothing and add no publishes'
-    );
+      System.assertEquals('Completed', result.status);
+      System.assertEquals(
+        1,
+        WorkflowOutboundEventPublisher.publishedEvents.size(),
+        'A step that emits then SPLITs publishes its events once on the SPLIT ' +
+        'commit; the fan-out branches emit nothing and add no publishes'
+      );
+    }
   }
 
-  @isTest
+  @IsTest
   static void nullEntriesInResultEventsAreFilteredNotDropped() {
-    WorkflowOutboundEventPublisher.publishedEvents.clear();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowOutboundEventPublisher.publishedEvents.clear();
 
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowEngineOutboundEmitTest.NullEventWorkflow',
-      'null-event-1',
-      null
-    );
-    WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
-      .drive();
-    Test.stopTest();
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowEngineOutboundEmitTest.NullEventWorkflow',
+        'null-event-1',
+        null
+      );
+      WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
+        .drive();
+      Test.stopTest();
 
-    System.assertEquals('Completed', result.status);
-    System.assertEquals(
-      1,
-      WorkflowOutboundEventPublisher.publishedEvents.size(),
-      'A null entry in the result events is filtered; the valid event still ' +
-      'publishes (a null would otherwise throw and drop the whole batch)'
-    );
+      System.assertEquals('Completed', result.status);
+      System.assertEquals(
+        1,
+        WorkflowOutboundEventPublisher.publishedEvents.size(),
+        'A null entry in the result events is filtered; the valid event still ' +
+        'publishes (a null would otherwise throw and drop the whole batch)'
+      );
+    }
   }
 
-  @isTest
+  @IsTest
   static void compensationEmitPublishesOnCompensatedCommit() {
-    WorkflowOutboundEventPublisher.publishedEvents.clear();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowOutboundEventPublisher.publishedEvents.clear();
 
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowEngineOutboundEmitTest.CompensationEmitWorkflow',
-      'comp-emit-1',
-      null
-    );
-    WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
-      .drive();
-    Test.stopTest();
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowEngineOutboundEmitTest.CompensationEmitWorkflow',
+        'comp-emit-1',
+        null
+      );
+      WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
+        .drive();
+      Test.stopTest();
 
-    System.assertEquals(
-      'Compensated',
-      result.status,
-      'Saga must roll back so the compensation runs'
-    );
-    System.assertEquals(
-      1,
-      WorkflowOutboundEventPublisher.publishedEvents.size(),
-      'A compensate() emit publishes once, coupled to the Compensated commit'
-    );
+      System.assertEquals(
+        'Compensated',
+        result.status,
+        'Saga must roll back so the compensation runs'
+      );
+      System.assertEquals(
+        1,
+        WorkflowOutboundEventPublisher.publishedEvents.size(),
+        'A compensate() emit publishes once, coupled to the Compensated commit'
+      );
+    }
   }
 }

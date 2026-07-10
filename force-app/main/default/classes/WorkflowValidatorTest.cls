@@ -4,7 +4,7 @@
  * single validate() call, that a well-formed definition passes clean, and that
  * validation writes nothing.
  */
-@isTest
+@IsTest
 public class WorkflowValidatorTest {
   // ==========================================
   // FIXTURE STEPS
@@ -278,258 +278,292 @@ public class WorkflowValidatorTest {
   // TESTS
   // ==========================================
 
-  @isTest
+  @IsTest
   static void wellFormedDefinitionPassesClean() {
-    Test.startTest();
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.GoodWorkflow'
-    );
-    Test.stopTest();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.GoodWorkflow'
+      );
+      Test.stopTest();
 
-    System.assertEquals(
-      true,
-      result.isValid(),
-      'Well-formed workflow should pass: ' + result.getMessages()
-    );
-    System.assertEquals(0, result.defects.size(), 'Expected zero defects');
-  }
-
-  @isTest
-  static void unresolvableDefinitionIsFlagged() {
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.NoSuchWorkflowClass'
-    );
-    System.assertEquals(false, result.isValid());
-    System.assert(
-      result.hasDefect(WorkflowValidator.DEFINITION_UNRESOLVABLE),
-      'Expected DEFINITION_UNRESOLVABLE: ' + result.getMessages()
-    );
-  }
-
-  @isTest
-  static void nonWorkflowClassIsFlagged() {
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.NotAWorkflow'
-    );
-    System.assertEquals(false, result.isValid());
-    System.assert(
-      result.hasDefect(WorkflowValidator.DEFINITION_UNRESOLVABLE),
-      'A class not implementing WorkflowDefinition should be flagged'
-    );
-  }
-
-  @isTest
-  static void blankWorkflowNameIsFlagged() {
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(null);
-    System.assertEquals(false, result.isValid());
-    System.assert(
-      result.hasDefect(WorkflowValidator.DEFINITION_UNRESOLVABLE)
-    );
-  }
-
-  @isTest
-  static void initialStepNotDeclaredIsFlagged() {
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.BadInitialWorkflow'
-    );
-    System.assertEquals(false, result.isValid());
-    System.assert(
-      result.hasDefect(WorkflowValidator.INITIAL_STEP_NOT_DECLARED),
-      'Expected INITIAL_STEP_NOT_DECLARED: ' + result.getMessages()
-    );
-    assertMessageNames(result, 'WorkflowValidatorTest.GoodStepB');
-  }
-
-  @isTest
-  static void blankInitialStepIsFlagged() {
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.BlankInitialWorkflow'
-    );
-    System.assertEquals(false, result.isValid());
-    System.assert(
-      result.hasDefect(WorkflowValidator.INITIAL_STEP_BLANK),
-      'Expected INITIAL_STEP_BLANK: ' + result.getMessages()
-    );
-  }
-
-  @isTest
-  static void danglingSuccessorIsFlagged() {
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.DanglingSuccessorWorkflow'
-    );
-    System.assertEquals(false, result.isValid());
-    System.assert(
-      result.hasDefect(WorkflowValidator.DANGLING_SUCCESSOR),
-      'Expected DANGLING_SUCCESSOR: ' + result.getMessages()
-    );
-    assertMessageNames(result, 'WorkflowValidatorTest.GoodStepTypo');
-  }
-
-  @isTest
-  static void nonWorkflowStepClassIsFlagged() {
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.NonStepWorkflow'
-    );
-    System.assertEquals(false, result.isValid());
-    System.assert(
-      result.hasDefect(WorkflowValidator.STEP_NOT_WORKFLOWSTEP),
-      'Expected STEP_NOT_WORKFLOWSTEP: ' + result.getMessages()
-    );
-    assertMessageNames(result, 'WorkflowValidatorTest.NotAStep');
-  }
-
-  @isTest
-  static void unresolvableStepClassIsFlagged() {
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.UnresolvableStepWorkflow'
-    );
-    System.assertEquals(false, result.isValid());
-    System.assert(
-      result.hasDefect(WorkflowValidator.STEP_UNRESOLVABLE),
-      'Expected STEP_UNRESOLVABLE: ' + result.getMessages()
-    );
-  }
-
-  @isTest
-  static void duplicateStepsAreFlagged() {
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.DuplicateStepsWorkflow'
-    );
-    System.assertEquals(false, result.isValid());
-    System.assert(
-      result.hasDefect(WorkflowValidator.DUPLICATE_STEP),
-      'Expected DUPLICATE_STEP: ' + result.getMessages()
-    );
-  }
-
-  @isTest
-  static void allDefectsReturnedInOneCall() {
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.MultiDefectWorkflow'
-    );
-    System.assertEquals(false, result.isValid());
-    // 100% of the structural defect classes wired into this fixture.
-    System.assert(
-      result.hasDefect(WorkflowValidator.INITIAL_STEP_NOT_DECLARED),
-      'missing INITIAL_STEP_NOT_DECLARED: ' + result.getMessages()
-    );
-    System.assert(
-      result.hasDefect(WorkflowValidator.STEP_NOT_WORKFLOWSTEP),
-      'missing STEP_NOT_WORKFLOWSTEP: ' + result.getMessages()
-    );
-    System.assert(
-      result.hasDefect(WorkflowValidator.STEP_UNRESOLVABLE),
-      'missing STEP_UNRESOLVABLE: ' + result.getMessages()
-    );
-    System.assert(
-      result.hasDefect(WorkflowValidator.DUPLICATE_STEP),
-      'missing DUPLICATE_STEP: ' + result.getMessages()
-    );
-    System.assert(
-      result.hasDefect(WorkflowValidator.DANGLING_SUCCESSOR),
-      'missing DANGLING_SUCCESSOR: ' + result.getMessages()
-    );
-  }
-
-  @isTest
-  static void validationWritesNothing() {
-    // Measure DML in the same governor context (no Test.startTest, which would
-    // reset limits and mask any DML the validator performed).
-    Integer dmlBefore = Limits.getDmlStatements();
-
-    WorkflowValidator.validate('WorkflowValidatorTest.MultiDefectWorkflow');
-    WorkflowValidator.validate('WorkflowValidatorTest.GoodWorkflow');
-
-    System.assertEquals(
-      dmlBefore,
-      Limits.getDmlStatements(),
-      'Validation must perform no DML'
-    );
-    System.assertEquals(
-      0,
-      [SELECT COUNT() FROM Workflow_Instance__c],
-      'Validation must create no Workflow_Instance__c'
-    );
-    System.assertEquals(
-      0,
-      [SELECT COUNT() FROM Workflow_Step_Execution__c],
-      'Validation must create no Workflow_Step_Execution__c'
-    );
-  }
-
-  @isTest
-  static void contractMethodThrowIsReportedNotPropagated() {
-    // getInitialStep()/getSteps() throwing must surface as defects, not abort.
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.ThrowingContractWorkflow'
-    );
-    System.assertEquals(
-      false,
-      result.isValid(),
-      'A throwing definition must be reported as invalid'
-    );
-    System.assert(
-      result.hasDefect(WorkflowValidator.CONTRACT_METHOD_THREW),
-      'Expected CONTRACT_METHOD_THREW: ' + result.getMessages()
-    );
-    // Both contract methods threw; both should be surfaced.
-    Integer threwCount = 0;
-    for (WorkflowValidator.Defect d : result.defects) {
-      if (d.code == WorkflowValidator.CONTRACT_METHOD_THREW) {
-        threwCount++;
-      }
+      System.assertEquals(
+        true,
+        result.isValid(),
+        'Well-formed workflow should pass: ' + result.getMessages()
+      );
+      System.assertEquals(0, result.defects.size(), 'Expected zero defects');
     }
-    System.assertEquals(
-      2,
-      threwCount,
-      'Both getInitialStep() and getSteps() throws should be reported: ' +
-      result.getMessages()
-    );
   }
 
-  @isTest
+  @IsTest
+  static void unresolvableDefinitionIsFlagged() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.NoSuchWorkflowClass'
+      );
+      System.assertEquals(false, result.isValid());
+      System.assert(
+        result.hasDefect(WorkflowValidator.DEFINITION_UNRESOLVABLE),
+        'Expected DEFINITION_UNRESOLVABLE: ' + result.getMessages()
+      );
+    }
+  }
+
+  @IsTest
+  static void nonWorkflowClassIsFlagged() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.NotAWorkflow'
+      );
+      System.assertEquals(false, result.isValid());
+      System.assert(
+        result.hasDefect(WorkflowValidator.DEFINITION_UNRESOLVABLE),
+        'A class not implementing WorkflowDefinition should be flagged'
+      );
+    }
+  }
+
+  @IsTest
+  static void blankWorkflowNameIsFlagged() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        null
+      );
+      System.assertEquals(false, result.isValid());
+      System.assert(
+        result.hasDefect(WorkflowValidator.DEFINITION_UNRESOLVABLE)
+      );
+    }
+  }
+
+  @IsTest
+  static void initialStepNotDeclaredIsFlagged() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.BadInitialWorkflow'
+      );
+      System.assertEquals(false, result.isValid());
+      System.assert(
+        result.hasDefect(WorkflowValidator.INITIAL_STEP_NOT_DECLARED),
+        'Expected INITIAL_STEP_NOT_DECLARED: ' + result.getMessages()
+      );
+      assertMessageNames(result, 'WorkflowValidatorTest.GoodStepB');
+    }
+  }
+
+  @IsTest
+  static void blankInitialStepIsFlagged() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.BlankInitialWorkflow'
+      );
+      System.assertEquals(false, result.isValid());
+      System.assert(
+        result.hasDefect(WorkflowValidator.INITIAL_STEP_BLANK),
+        'Expected INITIAL_STEP_BLANK: ' + result.getMessages()
+      );
+    }
+  }
+
+  @IsTest
+  static void danglingSuccessorIsFlagged() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.DanglingSuccessorWorkflow'
+      );
+      System.assertEquals(false, result.isValid());
+      System.assert(
+        result.hasDefect(WorkflowValidator.DANGLING_SUCCESSOR),
+        'Expected DANGLING_SUCCESSOR: ' + result.getMessages()
+      );
+      assertMessageNames(result, 'WorkflowValidatorTest.GoodStepTypo');
+    }
+  }
+
+  @IsTest
+  static void nonWorkflowStepClassIsFlagged() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.NonStepWorkflow'
+      );
+      System.assertEquals(false, result.isValid());
+      System.assert(
+        result.hasDefect(WorkflowValidator.STEP_NOT_WORKFLOWSTEP),
+        'Expected STEP_NOT_WORKFLOWSTEP: ' + result.getMessages()
+      );
+      assertMessageNames(result, 'WorkflowValidatorTest.NotAStep');
+    }
+  }
+
+  @IsTest
+  static void unresolvableStepClassIsFlagged() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.UnresolvableStepWorkflow'
+      );
+      System.assertEquals(false, result.isValid());
+      System.assert(
+        result.hasDefect(WorkflowValidator.STEP_UNRESOLVABLE),
+        'Expected STEP_UNRESOLVABLE: ' + result.getMessages()
+      );
+    }
+  }
+
+  @IsTest
+  static void duplicateStepsAreFlagged() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.DuplicateStepsWorkflow'
+      );
+      System.assertEquals(false, result.isValid());
+      System.assert(
+        result.hasDefect(WorkflowValidator.DUPLICATE_STEP),
+        'Expected DUPLICATE_STEP: ' + result.getMessages()
+      );
+    }
+  }
+
+  @IsTest
+  static void allDefectsReturnedInOneCall() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.MultiDefectWorkflow'
+      );
+      System.assertEquals(false, result.isValid());
+      // 100% of the structural defect classes wired into this fixture.
+      System.assert(
+        result.hasDefect(WorkflowValidator.INITIAL_STEP_NOT_DECLARED),
+        'missing INITIAL_STEP_NOT_DECLARED: ' + result.getMessages()
+      );
+      System.assert(
+        result.hasDefect(WorkflowValidator.STEP_NOT_WORKFLOWSTEP),
+        'missing STEP_NOT_WORKFLOWSTEP: ' + result.getMessages()
+      );
+      System.assert(
+        result.hasDefect(WorkflowValidator.STEP_UNRESOLVABLE),
+        'missing STEP_UNRESOLVABLE: ' + result.getMessages()
+      );
+      System.assert(
+        result.hasDefect(WorkflowValidator.DUPLICATE_STEP),
+        'missing DUPLICATE_STEP: ' + result.getMessages()
+      );
+      System.assert(
+        result.hasDefect(WorkflowValidator.DANGLING_SUCCESSOR),
+        'missing DANGLING_SUCCESSOR: ' + result.getMessages()
+      );
+    }
+  }
+
+  @IsTest
+  static void validationWritesNothing() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Measure DML in the same governor context (no Test.startTest, which would
+      // reset limits and mask any DML the validator performed).
+      Integer dmlBefore = Limits.getDmlStatements();
+
+      WorkflowValidator.validate('WorkflowValidatorTest.MultiDefectWorkflow');
+      WorkflowValidator.validate('WorkflowValidatorTest.GoodWorkflow');
+
+      System.assertEquals(
+        dmlBefore,
+        Limits.getDmlStatements(),
+        'Validation must perform no DML'
+      );
+      System.assertEquals(
+        0,
+        [SELECT COUNT() FROM Workflow_Instance__c],
+        'Validation must create no Workflow_Instance__c'
+      );
+      System.assertEquals(
+        0,
+        [SELECT COUNT() FROM Workflow_Step_Execution__c],
+        'Validation must create no Workflow_Step_Execution__c'
+      );
+    }
+  }
+
+  @IsTest
+  static void contractMethodThrowIsReportedNotPropagated() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // getInitialStep()/getSteps() throwing must surface as defects, not abort.
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.ThrowingContractWorkflow'
+      );
+      System.assertEquals(
+        false,
+        result.isValid(),
+        'A throwing definition must be reported as invalid'
+      );
+      System.assert(
+        result.hasDefect(WorkflowValidator.CONTRACT_METHOD_THREW),
+        'Expected CONTRACT_METHOD_THREW: ' + result.getMessages()
+      );
+      // Both contract methods threw; both should be surfaced.
+      Integer threwCount = 0;
+      for (WorkflowValidator.Defect d : result.defects) {
+        if (d.code == WorkflowValidator.CONTRACT_METHOD_THREW) {
+          threwCount++;
+        }
+      }
+      System.assertEquals(
+        2,
+        threwCount,
+        'Both getInitialStep() and getSteps() throws should be reported: ' +
+        result.getMessages()
+      );
+    }
+  }
+
+  @IsTest
   static void wellFormedVersionedWorkflowPassesClean() {
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.GoodVersionedWorkflow'
-    );
-    System.assertEquals(
-      true,
-      result.isValid(),
-      'Well-formed versioned workflow should pass: ' + result.getMessages()
-    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.GoodVersionedWorkflow'
+      );
+      System.assertEquals(
+        true,
+        result.isValid(),
+        'Well-formed versioned workflow should pass: ' + result.getMessages()
+      );
+    }
   }
 
-  @isTest
+  @IsTest
   static void versionedDanglingSuccessorIsFlagged() {
-    // The dangling successor is reachable only via the version-aware
-    // getNextStep(..., version) overload, so this proves the versioned probe.
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.VersionedDanglingWorkflow'
-    );
-    System.assertEquals(false, result.isValid());
-    System.assert(
-      result.hasDefect(WorkflowValidator.DANGLING_SUCCESSOR),
-      'Expected DANGLING_SUCCESSOR from versioned probe: ' +
-      result.getMessages()
-    );
-    assertMessageNames(result, 'WorkflowValidatorTest.V2OnlyStepTypo');
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // The dangling successor is reachable only via the version-aware
+      // getNextStep(..., version) overload, so this proves the versioned probe.
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.VersionedDanglingWorkflow'
+      );
+      System.assertEquals(false, result.isValid());
+      System.assert(
+        result.hasDefect(WorkflowValidator.DANGLING_SUCCESSOR),
+        'Expected DANGLING_SUCCESSOR from versioned probe: ' +
+        result.getMessages()
+      );
+      assertMessageNames(result, 'WorkflowValidatorTest.V2OnlyStepTypo');
+    }
   }
 
-  @isTest
+  @IsTest
   static void versionedGetLatestVersionThrowIsFlagged() {
-    WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      'WorkflowValidatorTest.ThrowingVersionWorkflow'
-    );
-    System.assertEquals(
-      false,
-      result.isValid(),
-      'A versioned workflow whose getLatestVersion() throws must be flagged'
-    );
-    System.assert(
-      result.hasDefect(WorkflowValidator.CONTRACT_METHOD_THREW),
-      'Expected CONTRACT_METHOD_THREW from getLatestVersion(): ' +
-      result.getMessages()
-    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.ThrowingVersionWorkflow'
+      );
+      System.assertEquals(
+        false,
+        result.isValid(),
+        'A versioned workflow whose getLatestVersion() throws must be flagged'
+      );
+      System.assert(
+        result.hasDefect(WorkflowValidator.CONTRACT_METHOD_THREW),
+        'Expected CONTRACT_METHOD_THREW from getLatestVersion(): ' +
+        result.getMessages()
+      );
+    }
   }
 
   // Asserts that at least one defect message embeds the given step name.
@@ -547,9 +581,9 @@ public class WorkflowValidatorTest {
     System.assert(
       found,
       'Expected a defect message naming "' +
-      expectedName +
-      '" but got: ' +
-      result.getMessages()
+        expectedName +
+        '" but got: ' +
+        result.getMessages()
     );
   }
 }
