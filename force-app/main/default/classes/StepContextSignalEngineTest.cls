@@ -36,52 +36,50 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testObservedSignalSurvivesYieldUntilComplete() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.ReObserveWorkflow',
-      'ReObserveKey',
-      null
-    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.ReObserveWorkflow',
+        'ReObserveKey',
+        null
+      );
 
-    // Suspends waiting for the signal.
-    new WorkflowOrchestrator(instanceId).execute(null);
+      // Suspends waiting for the signal.
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    WorkflowEngine.signal('ReObserveKey', 'Tick', '{"v":1}');
+      WorkflowEngine.signal('ReObserveKey', 'Tick', '{"v":1}');
 
-    // First observed run yields without completing.
-    new WorkflowOrchestrator(instanceId).execute(null);
-    System.assertEquals(
-      1,
-      [
-        SELECT COUNT()
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Status__c = 'Received'
-      ],
-      'A signal observed by a step that yields (not completes) must remain pending'
-    );
+      // First observed run yields without completing.
+      new WorkflowOrchestrator(instanceId).execute(null);
+      System.assertEquals(
+        1,
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Received'
+        ],
+        'A signal observed by a step that yields (not completes) must remain pending'
+      );
 
-    // Second run sees state set, completes, and the engine consumes the signal.
-    new WorkflowOrchestrator(instanceId).execute(null);
+      // Second run sees state set, completes, and the engine consumes the signal.
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    Workflow_Instance__c inst = [
-      SELECT Status__c, Output__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
-    System.assertEquals('Completed', inst.Status__c);
-    System.assertEquals('"done:{\\"v\\":1}"', inst.Output__c);
-    System.assertEquals(
-      0,
-      [
-        SELECT COUNT()
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Status__c = 'Received'
-      ],
-      'Signal must be consumed once the observing step completes'
-    );
+      Workflow_Instance__c inst = [
+        SELECT Status__c, Output__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instanceId
+      ];
+      System.assertEquals('Completed', inst.Status__c);
+      System.assertEquals('"done:{\\"v\\":1}"', inst.Output__c);
+      System.assertEquals(
+        0,
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Received'
+        ],
+        'Signal must be consumed once the observing step completes'
+      );
+    }
   }
 
   // --- Cancel control signals are never surfaced (AC5) --------------------
@@ -115,39 +113,41 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testCancelSignalIsNotSurfacedAsReadablePayload() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.PlainWaitWorkflow',
-      'CancelKey',
-      null
-    );
-    new WorkflowOrchestrator(instanceId).execute(null);
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.PlainWaitWorkflow',
+        'CancelKey',
+        null
+      );
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    Test.startTest();
-    WorkflowEngine.signal('CancelKey', 'Cancel', null);
-    Test.stopTest();
+      Test.startTest();
+      WorkflowEngine.signal('CancelKey', 'Cancel', null);
+      Test.stopTest();
 
-    // Cancellation is handled inline by the engine and never persists a
-    // Workflow_Signal__c record, so it can never reach StepContext.
-    System.assertEquals(
-      0,
-      [
-        SELECT COUNT()
-        FROM Workflow_Signal__c
-        WHERE Workflow_Instance__c = :instanceId
-      ],
-      'Cancel control signals must not create readable signal records'
-    );
+      // Cancellation is handled inline by the engine and never persists a
+      // Workflow_Signal__c record, so it can never reach StepContext.
+      System.assertEquals(
+        0,
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE Workflow_Instance__c = :instanceId
+        ],
+        'Cancel control signals must not create readable signal records'
+      );
 
-    Workflow_Instance__c inst = [
-      SELECT Status__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
-    System.assertNotEquals(
-      'Running',
-      inst.Status__c,
-      'Cancel must still drive cancellation semantics'
-    );
+      Workflow_Instance__c inst = [
+        SELECT Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instanceId
+      ];
+      System.assertNotEquals(
+        'Running',
+        inst.Status__c,
+        'Cancel must still drive cancellation semantics'
+      );
+    }
   }
 
   // --- In-flight duplicate consumed by observed-name re-query (AC4b) -------
@@ -185,39 +185,37 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testInFlightDuplicateConsumedByName() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.InFlightDupWorkflow',
-      'InFlightKey',
-      null
-    );
-    new WorkflowOrchestrator(instanceId).execute(null);
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.InFlightDupWorkflow',
+        'InFlightKey',
+        null
+      );
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    WorkflowEngine.signal('InFlightKey', 'Dup', '{"v":1}');
+      WorkflowEngine.signal('InFlightKey', 'Dup', '{"v":1}');
 
-    // Step reads the signal, a duplicate lands mid-execution, then it completes.
-    new WorkflowOrchestrator(instanceId).execute(null);
+      // Step reads the signal, a duplicate lands mid-execution, then it completes.
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    System.assertEquals(
-      0,
-      [
-        SELECT COUNT()
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Status__c = 'Received'
-      ],
-      'A same-name duplicate delivered during execution must also be consumed'
-    );
-    System.assertEquals(
-      2,
-      [
-        SELECT COUNT()
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Status__c = 'Consumed'
-      ]
-    );
+      System.assertEquals(
+        0,
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Received'
+        ],
+        'A same-name duplicate delivered during execution must also be consumed'
+      );
+      System.assertEquals(
+        2,
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Consumed'
+        ]
+      );
+    }
   }
 
   // --- SPLIT consumes the spawning step's observed signals (AC4) ----------
@@ -290,42 +288,42 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testSplitConsumesSpawningStepSignals() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.SplitSignalWorkflow',
-      'FanKey',
-      null
-    );
-    new WorkflowOrchestrator(instanceId).execute(null);
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.SplitSignalWorkflow',
+        'FanKey',
+        null
+      );
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    WorkflowEngine.signal('FanKey', 'Fan', '{"x":1}');
+      WorkflowEngine.signal('FanKey', 'Fan', '{"x":1}');
 
-    // SignalThenSplitStep observes 'Fan' and fans out: the signal must be
-    // consumed at the split so it is not re-loaded into the parallel branches.
-    new WorkflowOrchestrator(instanceId).execute(null);
+      // SignalThenSplitStep observes 'Fan' and fans out: the signal must be
+      // consumed at the split so it is not re-loaded into the parallel branches.
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    System.assertEquals(
-      0,
-      [
-        SELECT COUNT()
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Status__c = 'Received'
-      ],
-      'SPLIT must consume the spawning step observed signals'
-    );
+      System.assertEquals(
+        0,
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Received'
+        ],
+        'SPLIT must consume the spawning step observed signals'
+      );
 
-    // Run the parallel branches; their in-step asserts confirm no leak.
-    new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.BranchAStep'
-      )
-      .execute(null);
-    new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.BranchBStep'
-      )
-      .execute(null);
+      // Run the parallel branches; their in-step asserts confirm no leak.
+      new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.BranchAStep'
+        )
+        .execute(null);
+      new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.BranchBStep'
+        )
+        .execute(null);
+    }
   }
 
   // --- A name probed absent must not consume a later arrival (AC4b nuance) -
@@ -368,41 +366,43 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testProbeAbsentNamePreservesLaterSignal() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.ProbeAbsentWorkflow',
-      'ProbeKey',
-      null
-    );
-    new WorkflowOrchestrator(instanceId).execute(null);
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.ProbeAbsentWorkflow',
+        'ProbeKey',
+        null
+      );
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    WorkflowEngine.signal('ProbeKey', 'Trigger', '{"v":1}');
-    new WorkflowOrchestrator(instanceId).execute(null);
+      WorkflowEngine.signal('ProbeKey', 'Trigger', '{"v":1}');
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    // Trigger was matched and consumed.
-    System.assertEquals(
-      0,
-      [
-        SELECT COUNT()
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Signal_Name__c = 'Trigger'
-          AND Status__c = 'Received'
-      ]
-    );
-    // LateGhost was only probed absent -> it must survive for a later step.
-    System.assertEquals(
-      1,
-      [
-        SELECT COUNT()
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Signal_Name__c = 'LateGhost'
-          AND Status__c = 'Received'
-      ],
-      'A signal that arrived after an absent probe must be preserved'
-    );
+      // Trigger was matched and consumed.
+      System.assertEquals(
+        0,
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Signal_Name__c = 'Trigger'
+            AND Status__c = 'Received'
+        ]
+      );
+      // LateGhost was only probed absent -> it must survive for a later step.
+      System.assertEquals(
+        1,
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Signal_Name__c = 'LateGhost'
+            AND Status__c = 'Received'
+        ],
+        'A signal that arrived after an absent probe must be preserved'
+      );
+    }
   }
 
   // --- Atomic claim-at-read for parallel branches (AC6) --------------------
@@ -474,91 +474,93 @@ public class StepContextSignalEngineTest {
    */
   @IsTest
   static void testParallelBranchAtomicClaimAtRead() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.ClaimRaceWorkflow',
-      'ClaimRaceKey',
-      null
-    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.ClaimRaceWorkflow',
+        'ClaimRaceKey',
+        null
+      );
 
-    // Suspends waiting for Fan signal.
-    new WorkflowOrchestrator(instanceId).execute(null);
+      // Suspends waiting for Fan signal.
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    // Send the fan-out trigger.
-    WorkflowEngine.signal('ClaimRaceKey', 'Fan', '{"x":1}');
-    // Send the shared signal that both branches will race to claim.
-    WorkflowEngine.signal('ClaimRaceKey', 'Shared', '{"s":1}');
+      // Send the fan-out trigger.
+      WorkflowEngine.signal('ClaimRaceKey', 'Fan', '{"x":1}');
+      // Send the shared signal that both branches will race to claim.
+      WorkflowEngine.signal('ClaimRaceKey', 'Shared', '{"s":1}');
 
-    // Spawning step consumes 'Fan' and fans out; 'Shared' is untouched.
-    new WorkflowOrchestrator(instanceId).execute(null);
+      // Spawning step consumes 'Fan' and fans out; 'Shared' is untouched.
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    System.assertEquals(
-      1,
-      [
-        SELECT COUNT()
-        FROM Workflow_Signal__c
+      System.assertEquals(
+        1,
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Signal_Name__c = 'Shared'
+            AND Status__c = 'Received'
+        ],
+        'Shared signal must still be Received after spawn'
+      );
+
+      // Run Alpha branch first -- it claims 'Shared'.
+      new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.ClaimBranchAlpha'
+        )
+        .execute(null);
+
+      // After Alpha completes, the signal is Consumed (claim + consume in one transaction).
+      System.assertEquals(
+        0,
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Signal_Name__c = 'Shared'
+            AND Status__c = 'Received'
+        ],
+        'Shared signal must no longer be Received after Alpha completes'
+      );
+      System.assertEquals(
+        1,
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Signal_Name__c = 'Shared'
+            AND Status__c = 'Consumed'
+        ],
+        'Shared signal must be Consumed once Alpha completes'
+      );
+
+      // Run Beta branch -- it must find no Received signal (Alpha claimed it).
+      new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.ClaimBranchBeta'
+        )
+        .execute(null);
+
+      // Verify Beta output was 'absent'.
+      List<Workflow_Step_Execution__c> betaExecs = [
+        SELECT Output__c
+        FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Signal_Name__c = 'Shared'
-          AND Status__c = 'Received'
-      ],
-      'Shared signal must still be Received after spawn'
-    );
-
-    // Run Alpha branch first -- it claims 'Shared'.
-    new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.ClaimBranchAlpha'
-      )
-      .execute(null);
-
-    // After Alpha completes, the signal is Consumed (claim + consume in one transaction).
-    System.assertEquals(
-      0,
-      [
-        SELECT COUNT()
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Signal_Name__c = 'Shared'
-          AND Status__c = 'Received'
-      ],
-      'Shared signal must no longer be Received after Alpha completes'
-    );
-    System.assertEquals(
-      1,
-      [
-        SELECT COUNT()
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Signal_Name__c = 'Shared'
-          AND Status__c = 'Consumed'
-      ],
-      'Shared signal must be Consumed once Alpha completes'
-    );
-
-    // Run Beta branch -- it must find no Received signal (Alpha claimed it).
-    new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.ClaimBranchBeta'
-      )
-      .execute(null);
-
-    // Verify Beta output was 'absent'.
-    List<Workflow_Step_Execution__c> betaExecs = [
-      SELECT Output__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Step_Name__c = 'StepContextSignalEngineTest.ClaimBranchBeta'
-        AND Status__c = 'Completed'
-    ];
-    System.assertEquals(1, betaExecs.size());
-    System.assertEquals(
-      '"absent"',
-      betaExecs[0].Output__c,
-      'Beta must have seen signal as absent (already claimed by Alpha)'
-    );
+          AND Step_Name__c = 'StepContextSignalEngineTest.ClaimBranchBeta'
+          AND Status__c = 'Completed'
+      ];
+      System.assertEquals(1, betaExecs.size());
+      System.assertEquals(
+        '"absent"',
+        betaExecs[0].Output__c,
+        'Beta must have seen signal as absent (already claimed by Alpha)'
+      );
+    }
   }
 
   /**
@@ -569,58 +571,60 @@ public class StepContextSignalEngineTest {
    */
   @IsTest
   static void testParallelCompleteDoesNotConsumeSiblingClaim() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.ClaimRaceWorkflow',
-      'SiblingClaimKey',
-      null
-    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.ClaimRaceWorkflow',
+        'SiblingClaimKey',
+        null
+      );
 
-    new WorkflowOrchestrator(instanceId).execute(null);
-    WorkflowEngine.signal('SiblingClaimKey', 'Fan', '{"x":1}');
-    WorkflowEngine.signal('SiblingClaimKey', 'Shared', '{"s":1}');
-    // Fan-out: spawn step reads Fan (consumed), fans out branches.
-    new WorkflowOrchestrator(instanceId).execute(null);
+      new WorkflowOrchestrator(instanceId).execute(null);
+      WorkflowEngine.signal('SiblingClaimKey', 'Fan', '{"x":1}');
+      WorkflowEngine.signal('SiblingClaimKey', 'Shared', '{"s":1}');
+      // Fan-out: spawn step reads Fan (consumed), fans out branches.
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    // Simulate a sibling branch (Beta) that has already claimed its OWN copy of
-    // 'Shared' but has not yet durably completed -- its claim sits in Processing.
-    Workflow_Signal__c siblingClaim = new Workflow_Signal__c(
-      Workflow_Instance__c = instanceId,
-      Signal_Name__c = 'Shared',
-      Payload__c = '{"s":2}',
-      Status__c = 'Processing'
-    );
-    insert siblingClaim;
+      // Simulate a sibling branch (Beta) that has already claimed its OWN copy of
+      // 'Shared' but has not yet durably completed -- its claim sits in Processing.
+      Workflow_Signal__c siblingClaim = new Workflow_Signal__c(
+        Workflow_Instance__c = instanceId,
+        Signal_Name__c = 'Shared',
+        Payload__c = '{"s":2}',
+        Status__c = 'Processing'
+      );
+      insert siblingClaim;
 
-    // Alpha reads the Received 'Shared' (claims its own copy), then completes.
-    new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.ClaimBranchAlpha'
-      )
-      .execute(null);
+      // Alpha reads the Received 'Shared' (claims its own copy), then completes.
+      new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.ClaimBranchAlpha'
+        )
+        .execute(null);
 
-    // Alpha consumed only the row IT claimed.
-    System.assertEquals(
-      'Consumed',
-      [
-        SELECT Status__c
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Signal_Name__c = 'Shared'
-          AND Id != :siblingClaim.Id
-      ]
-      .Status__c,
-      'Alpha must consume the copy it claimed'
-    );
+      // Alpha consumed only the row IT claimed.
+      System.assertEquals(
+        'Consumed',
+        [
+          SELECT Status__c
+          FROM Workflow_Signal__c
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Signal_Name__c = 'Shared'
+            AND Id != :siblingClaim.Id
+        ]
+        .Status__c,
+        'Alpha must consume the copy it claimed'
+      );
 
-    // The sibling branch's Processing claim must be untouched -- consuming it
-    // would strip a signal from a branch that has not durably finished.
-    System.assertEquals(
-      'Processing',
-      [SELECT Status__c FROM Workflow_Signal__c WHERE Id = :siblingClaim.Id]
-      .Status__c,
-      'A completing branch must NOT consume a sibling branch claim of the same name'
-    );
+      // The sibling branch's Processing claim must be untouched -- consuming it
+      // would strip a signal from a branch that has not durably finished.
+      System.assertEquals(
+        'Processing',
+        [SELECT Status__c FROM Workflow_Signal__c WHERE Id = :siblingClaim.Id]
+        .Status__c,
+        'A completing branch must NOT consume a sibling branch claim of the same name'
+      );
+    }
   }
 
   // --- Guard-then-read returns the claimed payload (StepContext cache merge) --
@@ -693,48 +697,50 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testParallelGuardThenReadReturnsClaimedPayload() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.GuardReadWorkflow',
-      'GuardReadKey',
-      null
-    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.GuardReadWorkflow',
+        'GuardReadKey',
+        null
+      );
 
-    new WorkflowOrchestrator(instanceId).execute(null);
-    WorkflowEngine.signal('GuardReadKey', 'Fan', '{"x":1}');
-    WorkflowEngine.signal('GuardReadKey', 'Shared', '{"s":1}');
-    // Fan-out.
-    new WorkflowOrchestrator(instanceId).execute(null);
+      new WorkflowOrchestrator(instanceId).execute(null);
+      WorkflowEngine.signal('GuardReadKey', 'Fan', '{"x":1}');
+      WorkflowEngine.signal('GuardReadKey', 'Shared', '{"s":1}');
+      // Fan-out.
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    // Run the guard-then-read branch.
-    new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.GuardReadBranch'
-      )
-      .execute(null);
+      // Run the guard-then-read branch.
+      new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.GuardReadBranch'
+        )
+        .execute(null);
 
-    Workflow_Step_Execution__c branchExec = [
-      SELECT Output__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Step_Name__c = 'StepContextSignalEngineTest.GuardReadBranch'
-        AND Status__c = 'Completed'
-    ];
-    System.assert(
-      branchExec.Output__c.contains('guard=true'),
-      'hasSignal must have observed the Shared signal'
-    );
-    System.assert(
-      branchExec.Output__c.contains('count=1'),
-      'getSignals(name) after hasSignal must still return the claimed signal, got: ' +
-      branchExec.Output__c
-    );
-    System.assert(
-      branchExec.Output__c.contains('payload={\\"s\\":1}') ||
-      branchExec.Output__c.contains('payload={"s":1}'),
-      'The claimed payload must survive the guard-then-read: ' +
-      branchExec.Output__c
-    );
+      Workflow_Step_Execution__c branchExec = [
+        SELECT Output__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = 'StepContextSignalEngineTest.GuardReadBranch'
+          AND Status__c = 'Completed'
+      ];
+      System.assert(
+        branchExec.Output__c.contains('guard=true'),
+        'hasSignal must have observed the Shared signal'
+      );
+      System.assert(
+        branchExec.Output__c.contains('count=1'),
+        'getSignals(name) after hasSignal must still return the claimed signal, got: ' +
+        branchExec.Output__c
+      );
+      System.assert(
+        branchExec.Output__c.contains('payload={\\"s\\":1}') ||
+        branchExec.Output__c.contains('payload={"s":1}'),
+        'The claimed payload must survive the guard-then-read: ' +
+        branchExec.Output__c
+      );
+    }
   }
 
   // --- A parallel branch suspended on a signal is woken by name (D) ---------
@@ -798,36 +804,38 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testParallelBranchSuspendedOnSignalIsWokenByName() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.WakeWorkflow',
-      'WakeKey',
-      null
-    );
-    // Spawn suspends waiting for Go.
-    new WorkflowOrchestrator(instanceId).execute(null);
-    WorkflowEngine.signal('WakeKey', 'Go', '{}');
-    // Spawn fans out into the two branches.
-    new WorkflowOrchestrator(instanceId).execute(null);
-    // The waiting branch suspends on the Resume signal.
-    new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.WakeWaitBranch'
-      )
-      .execute(null);
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.WakeWorkflow',
+        'WakeKey',
+        null
+      );
+      // Spawn suspends waiting for Go.
+      new WorkflowOrchestrator(instanceId).execute(null);
+      WorkflowEngine.signal('WakeKey', 'Go', '{}');
+      // Spawn fans out into the two branches.
+      new WorkflowOrchestrator(instanceId).execute(null);
+      // The waiting branch suspends on the Resume signal.
+      new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.WakeWaitBranch'
+        )
+        .execute(null);
 
-    // Signal Resume: the suspended parallel branch must be enqueued BY NAME,
-    // not via a blank-stepName enqueue that runStep would discard.
-    WorkflowEngine.enqueuedBranchKeys.clear();
-    WorkflowEngine.signal('WakeKey', 'Resume', '{}');
+      // Signal Resume: the suspended parallel branch must be enqueued BY NAME,
+      // not via a blank-stepName enqueue that runStep would discard.
+      WorkflowEngine.enqueuedBranchKeys.clear();
+      WorkflowEngine.signal('WakeKey', 'Resume', '{}');
 
-    System.assert(
-      WorkflowEngine.enqueuedBranchKeys.contains(
-        instanceId + '::StepContextSignalEngineTest.WakeWaitBranch'
-      ),
-      'A parallel branch suspended on a signal must be woken by its step name. Keys: ' +
-      WorkflowEngine.enqueuedBranchKeys
-    );
+      System.assert(
+        WorkflowEngine.enqueuedBranchKeys.contains(
+          instanceId + '::StepContextSignalEngineTest.WakeWaitBranch'
+        ),
+        'A parallel branch suspended on a signal must be woken by its step name. Keys: ' +
+        WorkflowEngine.enqueuedBranchKeys
+      );
+    }
   }
 
   // --- CalloutStep branches read without claiming (C) -----------------------
@@ -911,58 +919,60 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testCalloutStepBranchReadsWithoutClaiming() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.ProbeWorkflow',
-      'ProbeKey',
-      null
-    );
-    new WorkflowOrchestrator(instanceId).execute(null);
-    WorkflowEngine.signal('ProbeKey', 'Kick', '{}');
-    WorkflowEngine.signal('ProbeKey', 'ProbeA', '{"a":1}');
-    WorkflowEngine.signal('ProbeKey', 'ProbeB', '{"b":1}');
-    // Fan out.
-    new WorkflowOrchestrator(instanceId).execute(null);
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.ProbeWorkflow',
+        'ProbeKey',
+        null
+      );
+      new WorkflowOrchestrator(instanceId).execute(null);
+      WorkflowEngine.signal('ProbeKey', 'Kick', '{}');
+      WorkflowEngine.signal('ProbeKey', 'ProbeA', '{"a":1}');
+      WorkflowEngine.signal('ProbeKey', 'ProbeB', '{"b":1}');
+      // Fan out.
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    // Default (claiming) branch: its signal is Processing while it runs.
-    new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.ProbeClaimBranch'
-      )
-      .execute(null);
-    // CalloutStep branch: its signal stays Received while it runs (no claim).
-    new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.ProbeCalloutBranch'
-      )
-      .execute(null);
+      // Default (claiming) branch: its signal is Processing while it runs.
+      new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.ProbeClaimBranch'
+        )
+        .execute(null);
+      // CalloutStep branch: its signal stays Received while it runs (no claim).
+      new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.ProbeCalloutBranch'
+        )
+        .execute(null);
 
-    Workflow_Step_Execution__c claimExec = [
-      SELECT Output__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Step_Name__c = 'StepContextSignalEngineTest.ProbeClaimBranch'
-        AND Status__c = 'Completed'
-    ];
-    Workflow_Step_Execution__c calloutExec = [
-      SELECT Output__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Step_Name__c = 'StepContextSignalEngineTest.ProbeCalloutBranch'
-        AND Status__c = 'Completed'
-    ];
+      Workflow_Step_Execution__c claimExec = [
+        SELECT Output__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = 'StepContextSignalEngineTest.ProbeClaimBranch'
+          AND Status__c = 'Completed'
+      ];
+      Workflow_Step_Execution__c calloutExec = [
+        SELECT Output__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = 'StepContextSignalEngineTest.ProbeCalloutBranch'
+          AND Status__c = 'Completed'
+      ];
 
-    System.assert(
-      claimExec.Output__c.contains('Processing'),
-      'A claiming parallel branch must flip its signal to Processing mid-step, got: ' +
-      claimExec.Output__c
-    );
-    System.assert(
-      calloutExec.Output__c.contains('Received'),
-      'A CalloutStep branch must read its signal without claiming (stays Received), got: ' +
-      calloutExec.Output__c
-    );
+      System.assert(
+        claimExec.Output__c.contains('Processing'),
+        'A claiming parallel branch must flip its signal to Processing mid-step, got: ' +
+        claimExec.Output__c
+      );
+      System.assert(
+        calloutExec.Output__c.contains('Received'),
+        'A CalloutStep branch must read its signal without claiming (stays Received), got: ' +
+        calloutExec.Output__c
+      );
+    }
   }
 
   // --- A CalloutStep that is also TimeoutConfigurable must run its synchronous
@@ -991,7 +1001,9 @@ public class StepContextSignalEngineTest {
         return StepResult.suspend();
       }
       return StepResult.split(
-        new List<String>{ 'StepContextSignalEngineTest.CTCalloutTimeoutBranch' },
+        new List<String>{
+          'StepContextSignalEngineTest.CTCalloutTimeoutBranch'
+        },
         s.payload
       );
     }
@@ -1028,57 +1040,60 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testCalloutStepWithTimeoutDoesNotHitUncommittedWork() {
-    Test.setMock(HttpCalloutMock.class, new CTOkMock());
-    // Drive setup synchronously with queueable suppressed so we control every
-    // hop without auto-enqueuing noise.
-    WorkflowEngine.disableQueueableInTest = true;
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.CalloutTimeoutWorkflow',
-      'CTKey',
-      null
-    );
-    new WorkflowOrchestrator(instanceId).execute(null); // spawn suspends on Kick
-    WorkflowEngine.signal('CTKey', 'Kick', '{}');
-    WorkflowEngine.signal('CTKey', 'CTSig', '{"v":1}');
-    new WorkflowOrchestrator(instanceId).execute(null); // fan out
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.setMock(HttpCalloutMock.class, new CTOkMock());
+      // Drive setup synchronously with queueable suppressed so we control every
+      // hop without auto-enqueuing noise.
+      WorkflowEngine.disableQueueableInTest = true;
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.CalloutTimeoutWorkflow',
+        'CTKey',
+        null
+      );
+      new WorkflowOrchestrator(instanceId).execute(null); // spawn suspends on Kick
+      WorkflowEngine.signal('CTKey', 'Kick', '{}');
+      WorkflowEngine.signal('CTKey', 'CTSig', '{"v":1}');
+      new WorkflowOrchestrator(instanceId).execute(null); // fan out
 
-    // Run the CalloutStep + TimeoutConfigurable branch via the async Queueable
-    // path. In production each orchestrator hop is a separate Queueable
-    // transaction, so the callout never sees uncommitted work from prior hops.
-    // Test.stopTest() replicates that: it executes enqueued jobs in a fresh
-    // async context where prior test DML appears committed. Calling execute(null)
-    // directly (synchronously) would leave all the setup DML uncommitted and the
-    // callout would throw "You have uncommitted work pending" regardless of the
-    // deferPreExecDml fix — the fix only removes DML *within* the current
-    // runStep call, not DML from previous calls in the same test transaction.
-    WorkflowEngine.disableQueueableInTest = false;
-    Test.startTest();
-    System.enqueueJob(
-      new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.CTCalloutTimeoutBranch'
-      )
-    );
-    Test.stopTest();
+      // Run the CalloutStep + TimeoutConfigurable branch via the async Queueable
+      // path. In production each orchestrator hop is a separate Queueable
+      // transaction, so the callout never sees uncommitted work from prior hops.
+      // Test.stopTest() replicates that: it executes enqueued jobs in a fresh
+      // async context where prior test DML appears committed. Calling execute(null)
+      // directly (synchronously) would leave all the setup DML uncommitted and the
+      // callout would throw "You have uncommitted work pending" regardless of the
+      // deferPreExecDml fix — the fix only removes DML *within* the current
+      // runStep call, not DML from previous calls in the same test transaction.
+      WorkflowEngine.disableQueueableInTest = false;
+      Test.startTest();
+      System.enqueueJob(
+        new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.CTCalloutTimeoutBranch'
+        )
+      );
+      Test.stopTest();
 
-    Workflow_Step_Execution__c branchExec = [
-      SELECT Status__c, Output__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Step_Name__c = 'StepContextSignalEngineTest.CTCalloutTimeoutBranch'
-      ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
-    ];
-    System.assertEquals(
-      'Completed',
-      branchExec.Status__c,
-      'A CalloutStep+TimeoutConfigurable branch must complete its synchronous callout without an uncommitted-work exception'
-    );
-    System.assert(
-      branchExec.Output__c != null && branchExec.Output__c.contains('200'),
-      'callout response status should be recorded, got: ' + branchExec.Output__c
-    );
+      Workflow_Step_Execution__c branchExec = [
+        SELECT Status__c, Output__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = 'StepContextSignalEngineTest.CTCalloutTimeoutBranch'
+        ORDER BY CreatedDate DESC, Id DESC
+        LIMIT 1
+      ];
+      System.assertEquals(
+        'Completed',
+        branchExec.Status__c,
+        'A CalloutStep+TimeoutConfigurable branch must complete its synchronous callout without an uncommitted-work exception'
+      );
+      System.assert(
+        branchExec.Output__c != null && branchExec.Output__c.contains('200'),
+        'callout response status should be recorded, got: ' +
+        branchExec.Output__c
+      );
+    }
   }
 
   // --- Unscoped getSignals() preserves arrival order after a claim (B) ------
@@ -1146,41 +1161,49 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testUnscopedGetSignalsPreservesArrivalOrderAfterClaim() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.OrderWorkflow',
-      'OrderKey',
-      null
-    );
-    new WorkflowOrchestrator(instanceId).execute(null);
-    WorkflowEngine.signal('OrderKey', 'Kick', '{}');
-    WorkflowEngine.signal('OrderKey', 'Foo', '{"foo":1}');
-    WorkflowEngine.signal('OrderKey', 'Bar', '{"bar":1}');
-    // Fan out.
-    new WorkflowOrchestrator(instanceId).execute(null);
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.OrderWorkflow',
+        'OrderKey',
+        null
+      );
+      new WorkflowOrchestrator(instanceId).execute(null);
+      WorkflowEngine.signal('OrderKey', 'Kick', '{}');
+      WorkflowEngine.signal('OrderKey', 'Foo', '{"foo":1}');
+      WorkflowEngine.signal('OrderKey', 'Bar', '{"bar":1}');
+      // Fan out.
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.OrderBranch'
-      )
-      .execute(null);
+      new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.OrderBranch'
+        )
+        .execute(null);
 
-    Workflow_Step_Execution__c branchExec = [
-      SELECT Output__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Step_Name__c = 'StepContextSignalEngineTest.OrderBranch'
-        AND Status__c = 'Completed'
-    ];
-    Integer fooIdx = branchExec.Output__c.indexOf('Foo');
-    Integer barIdx = branchExec.Output__c.indexOf('Bar');
-    System.assert(fooIdx >= 0, 'Foo must be present: ' + branchExec.Output__c);
-    System.assert(barIdx >= 0, 'Bar must be present: ' + branchExec.Output__c);
-    System.assert(
-      fooIdx < barIdx,
-      'The earlier-arriving Foo (claimed) must sort before the later Bar even after being merged back in, got: ' +
-      branchExec.Output__c
-    );
+      Workflow_Step_Execution__c branchExec = [
+        SELECT Output__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = 'StepContextSignalEngineTest.OrderBranch'
+          AND Status__c = 'Completed'
+      ];
+      Integer fooIdx = branchExec.Output__c.indexOf('Foo');
+      Integer barIdx = branchExec.Output__c.indexOf('Bar');
+      System.assert(
+        fooIdx >= 0,
+        'Foo must be present: ' + branchExec.Output__c
+      );
+      System.assert(
+        barIdx >= 0,
+        'Bar must be present: ' + branchExec.Output__c
+      );
+      System.assert(
+        fooIdx < barIdx,
+        'The earlier-arriving Foo (claimed) must sort before the later Bar even after being merged back in, got: ' +
+        branchExec.Output__c
+      );
+    }
   }
 
   // --- getSignal falls back to an older signal when the newest is taken (E) -
@@ -1242,57 +1265,59 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testGetSignalFallsBackToOlderWhenNewestUnavailable() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.FallbackWorkflow',
-      'FallbackKey',
-      null
-    );
-    new WorkflowOrchestrator(instanceId).execute(null);
-    WorkflowEngine.signal('FallbackKey', 'Kick', '{}');
-    WorkflowEngine.signal('FallbackKey', 'Foo', '{"old":1}');
-    WorkflowEngine.signal('FallbackKey', 'Foo', '{"new":1}');
-    // Fan out.
-    new WorkflowOrchestrator(instanceId).execute(null);
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.FallbackWorkflow',
+        'FallbackKey',
+        null
+      );
+      new WorkflowOrchestrator(instanceId).execute(null);
+      WorkflowEngine.signal('FallbackKey', 'Kick', '{}');
+      WorkflowEngine.signal('FallbackKey', 'Foo', '{"old":1}');
+      WorkflowEngine.signal('FallbackKey', 'Foo', '{"new":1}');
+      // Fan out.
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    // Simulate a racing sibling having already claimed the NEWEST Foo.
-    Workflow_Signal__c newest = [
-      SELECT Id
-      FROM Workflow_Signal__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Signal_Name__c = 'Foo'
-        AND Status__c = 'Received'
-      ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
-    ];
-    newest.Status__c = 'Processing';
-    update newest;
+      // Simulate a racing sibling having already claimed the NEWEST Foo.
+      Workflow_Signal__c newest = [
+        SELECT Id
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Signal_Name__c = 'Foo'
+          AND Status__c = 'Received'
+        ORDER BY CreatedDate DESC, Id DESC
+        LIMIT 1
+      ];
+      newest.Status__c = 'Processing';
+      update newest;
 
-    // The branch must fall back to the older still-Received Foo, not report absent.
-    new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.FallbackBranch'
-      )
-      .execute(null);
+      // The branch must fall back to the older still-Received Foo, not report absent.
+      new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.FallbackBranch'
+        )
+        .execute(null);
 
-    Workflow_Step_Execution__c branchExec = [
-      SELECT Output__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Step_Name__c = 'StepContextSignalEngineTest.FallbackBranch'
-        AND Status__c = 'Completed'
-    ];
-    System.assert(
-      branchExec.Output__c.contains('old'),
-      'getSignal must fall back to the older available Foo when the newest is unavailable, got: ' +
-      branchExec.Output__c
-    );
-    System.assert(
-      !branchExec.Output__c.contains('absent'),
-      'getSignal must not report absent while a matching signal remains, got: ' +
-      branchExec.Output__c
-    );
+      Workflow_Step_Execution__c branchExec = [
+        SELECT Output__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = 'StepContextSignalEngineTest.FallbackBranch'
+          AND Status__c = 'Completed'
+      ];
+      System.assert(
+        branchExec.Output__c.contains('old'),
+        'getSignal must fall back to the older available Foo when the newest is unavailable, got: ' +
+        branchExec.Output__c
+      );
+      System.assert(
+        !branchExec.Output__c.contains('absent'),
+        'getSignal must not report absent while a matching signal remains, got: ' +
+        branchExec.Output__c
+      );
+    }
   }
 
   // --- A CalloutStep branch must not consume a sibling's later claim (find 3) -
@@ -1366,96 +1391,92 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testCalloutStepBranchDoesNotConsumeSiblingClaim() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.CalloutSiblingWorkflow',
-      'CalloutSiblingKey',
-      null
-    );
-    new WorkflowOrchestrator(instanceId).execute(null);
-    WorkflowEngine.signal('CalloutSiblingKey', 'Kick', '{}');
-    WorkflowEngine.signal('CalloutSiblingKey', 'Shared', '{"s":1}');
-    new WorkflowOrchestrator(instanceId).execute(null);
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.CalloutSiblingWorkflow',
+        'CalloutSiblingKey',
+        null
+      );
+      new WorkflowOrchestrator(instanceId).execute(null);
+      WorkflowEngine.signal('CalloutSiblingKey', 'Kick', '{}');
+      WorkflowEngine.signal('CalloutSiblingKey', 'Shared', '{"s":1}');
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.CalloutSiblingBranch'
-      )
-      .execute(null);
+      new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.CalloutSiblingBranch'
+        )
+        .execute(null);
 
-    // The row the CalloutStep branch observed was claimed by a sibling mid-flight
-    // (now Processing). The branch must leave it for the sibling, not consume it.
-    System.assertEquals(
-      'Processing',
-      [
-        SELECT Status__c
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Signal_Name__c = 'Shared'
-      ]
-      .Status__c,
-      'A non-claiming (CalloutStep) branch must not consume a row a sibling has since claimed'
-    );
+      // The row the CalloutStep branch observed was claimed by a sibling mid-flight
+      // (now Processing). The branch must leave it for the sibling, not consume it.
+      System.assertEquals(
+        'Processing',
+        [
+          SELECT Status__c
+          FROM Workflow_Signal__c
+          WHERE Workflow_Instance__c = :instanceId AND Signal_Name__c = 'Shared'
+        ]
+        .Status__c,
+        'A non-claiming (CalloutStep) branch must not consume a row a sibling has since claimed'
+      );
+    }
   }
 
   // --- Bulk signal wakes parallel branches across instances (find 1) --------
 
   @IsTest
   static void testBulkSignalWakesParallelBranchesAcrossInstances() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Id i1 = WorkflowEngine.start(
-      'StepContextSignalEngineTest.WakeWorkflow',
-      'BulkWakeKey1',
-      null
-    );
-    Id i2 = WorkflowEngine.start(
-      'StepContextSignalEngineTest.WakeWorkflow',
-      'BulkWakeKey2',
-      null
-    );
-    // Spawns suspend for Go.
-    new WorkflowOrchestrator(i1).execute(null);
-    new WorkflowOrchestrator(i2).execute(null);
-    WorkflowEngine.signal('BulkWakeKey1', 'Go', '{}');
-    WorkflowEngine.signal('BulkWakeKey2', 'Go', '{}');
-    // Fan out both.
-    new WorkflowOrchestrator(i1).execute(null);
-    new WorkflowOrchestrator(i2).execute(null);
-    // Wait branches suspend on Resume.
-    new WorkflowOrchestrator(
-        i1,
-        'StepContextSignalEngineTest.WakeWaitBranch'
-      )
-      .execute(null);
-    new WorkflowOrchestrator(
-        i2,
-        'StepContextSignalEngineTest.WakeWaitBranch'
-      )
-      .execute(null);
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Id i1 = WorkflowEngine.start(
+        'StepContextSignalEngineTest.WakeWorkflow',
+        'BulkWakeKey1',
+        null
+      );
+      Id i2 = WorkflowEngine.start(
+        'StepContextSignalEngineTest.WakeWorkflow',
+        'BulkWakeKey2',
+        null
+      );
+      // Spawns suspend for Go.
+      new WorkflowOrchestrator(i1).execute(null);
+      new WorkflowOrchestrator(i2).execute(null);
+      WorkflowEngine.signal('BulkWakeKey1', 'Go', '{}');
+      WorkflowEngine.signal('BulkWakeKey2', 'Go', '{}');
+      // Fan out both.
+      new WorkflowOrchestrator(i1).execute(null);
+      new WorkflowOrchestrator(i2).execute(null);
+      // Wait branches suspend on Resume.
+      new WorkflowOrchestrator(i1, 'StepContextSignalEngineTest.WakeWaitBranch')
+        .execute(null);
+      new WorkflowOrchestrator(i2, 'StepContextSignalEngineTest.WakeWaitBranch')
+        .execute(null);
 
-    WorkflowEngine.enqueuedBranchKeys.clear();
-    // One bulk signal for both parallel instances.
-    WorkflowEngine.signal(
-      new List<WorkflowEngine.SignalRequest>{
-        new WorkflowEngine.SignalRequest('BulkWakeKey1', 'Resume', null),
-        new WorkflowEngine.SignalRequest('BulkWakeKey2', 'Resume', null)
-      }
-    );
+      WorkflowEngine.enqueuedBranchKeys.clear();
+      // One bulk signal for both parallel instances.
+      WorkflowEngine.signal(
+        new List<WorkflowEngine.SignalRequest>{
+          new WorkflowEngine.SignalRequest('BulkWakeKey1', 'Resume', null),
+          new WorkflowEngine.SignalRequest('BulkWakeKey2', 'Resume', null)
+        }
+      );
 
-    System.assert(
-      WorkflowEngine.enqueuedBranchKeys.contains(
-        i1 + '::StepContextSignalEngineTest.WakeWaitBranch'
-      ),
-      'Bulk signal must wake instance 1 suspended branch by name. Keys: ' +
-      WorkflowEngine.enqueuedBranchKeys
-    );
-    System.assert(
-      WorkflowEngine.enqueuedBranchKeys.contains(
-        i2 + '::StepContextSignalEngineTest.WakeWaitBranch'
-      ),
-      'Bulk signal must wake instance 2 suspended branch by name. Keys: ' +
-      WorkflowEngine.enqueuedBranchKeys
-    );
+      System.assert(
+        WorkflowEngine.enqueuedBranchKeys.contains(
+          i1 + '::StepContextSignalEngineTest.WakeWaitBranch'
+        ),
+        'Bulk signal must wake instance 1 suspended branch by name. Keys: ' +
+        WorkflowEngine.enqueuedBranchKeys
+      );
+      System.assert(
+        WorkflowEngine.enqueuedBranchKeys.contains(
+          i2 + '::StepContextSignalEngineTest.WakeWaitBranch'
+        ),
+        'Bulk signal must wake instance 2 suspended branch by name. Keys: ' +
+        WorkflowEngine.enqueuedBranchKeys
+      );
+    }
   }
 
   // --- Rollback must not release a sibling's claim on an observed row (find 1) -
@@ -1532,36 +1553,36 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testYieldDoesNotReleaseSiblingClaimOnObservedRow() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.CalloutRollbackWorkflow',
-      'CalloutRollbackKey',
-      null
-    );
-    new WorkflowOrchestrator(instanceId).execute(null);
-    WorkflowEngine.signal('CalloutRollbackKey', 'Kick', '{}');
-    WorkflowEngine.signal('CalloutRollbackKey', 'Shared', '{"s":1}');
-    new WorkflowOrchestrator(instanceId).execute(null);
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.CalloutRollbackWorkflow',
+        'CalloutRollbackKey',
+        null
+      );
+      new WorkflowOrchestrator(instanceId).execute(null);
+      WorkflowEngine.signal('CalloutRollbackKey', 'Kick', '{}');
+      WorkflowEngine.signal('CalloutRollbackKey', 'Shared', '{"s":1}');
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    // The CalloutStep branch observes Shared, a sibling claims it, the branch
-    // yields. Its rollback must NOT flip the sibling's claim back to Received.
-    new WorkflowOrchestrator(
-        instanceId,
-        'StepContextSignalEngineTest.CalloutRollbackBranch'
-      )
-      .execute(null);
+      // The CalloutStep branch observes Shared, a sibling claims it, the branch
+      // yields. Its rollback must NOT flip the sibling's claim back to Received.
+      new WorkflowOrchestrator(
+          instanceId,
+          'StepContextSignalEngineTest.CalloutRollbackBranch'
+        )
+        .execute(null);
 
-    System.assertEquals(
-      'Processing',
-      [
-        SELECT Status__c
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Signal_Name__c = 'Shared'
-      ]
-      .Status__c,
-      'A yielding branch must not roll back a row it only observed (now a sibling claim)'
-    );
+      System.assertEquals(
+        'Processing',
+        [
+          SELECT Status__c
+          FROM Workflow_Signal__c
+          WHERE Workflow_Instance__c = :instanceId AND Signal_Name__c = 'Shared'
+        ]
+        .Status__c,
+        'A yielding branch must not roll back a row it only observed (now a sibling claim)'
+      );
+    }
   }
 
   // --- A named lookup must not falsely report absence after the row budget is
@@ -1600,65 +1621,67 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testNamedLookupNotFalselyAbsentAfterBudgetExhausted() {
-    // Shrink the cap so a single Noise row exhausts the budget.
-    WorkflowEngine.SERIAL_SIGNAL_ROW_CAP = 1;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Shrink the cap so a single Noise row exhausts the budget.
+      WorkflowEngine.SERIAL_SIGNAL_ROW_CAP = 1;
 
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.BudgetWorkflow',
-      'BudgetKey',
-      null
-    );
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.BudgetWorkflow',
+        'BudgetKey',
+        null
+      );
 
-    // Land signals as Received before the step runs: two of the noisy name and
-    // one of the name the step probes after exhausting its budget.
-    insert new List<Workflow_Signal__c>{
-      new Workflow_Signal__c(
-        Workflow_Instance__c = instanceId,
-        Signal_Name__c = 'Noise',
-        Payload__c = 'n1',
-        Status__c = 'Received'
-      ),
-      new Workflow_Signal__c(
-        Workflow_Instance__c = instanceId,
-        Signal_Name__c = 'Noise',
-        Payload__c = 'n2',
-        Status__c = 'Received'
-      ),
-      new Workflow_Signal__c(
-        Workflow_Instance__c = instanceId,
-        Signal_Name__c = 'Important',
-        Payload__c = 'imp',
-        Status__c = 'Received'
-      )
-    };
+      // Land signals as Received before the step runs: two of the noisy name and
+      // one of the name the step probes after exhausting its budget.
+      insert new List<Workflow_Signal__c>{
+        new Workflow_Signal__c(
+          Workflow_Instance__c = instanceId,
+          Signal_Name__c = 'Noise',
+          Payload__c = 'n1',
+          Status__c = 'Received'
+        ),
+        new Workflow_Signal__c(
+          Workflow_Instance__c = instanceId,
+          Signal_Name__c = 'Noise',
+          Payload__c = 'n2',
+          Status__c = 'Received'
+        ),
+        new Workflow_Signal__c(
+          Workflow_Instance__c = instanceId,
+          Signal_Name__c = 'Important',
+          Payload__c = 'imp',
+          Status__c = 'Received'
+        )
+      };
 
-    new WorkflowOrchestrator(instanceId).execute(null);
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    Workflow_Step_Execution__c stepExec = [
-      SELECT Output__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Step_Name__c = 'StepContextSignalEngineTest.BudgetReadStep'
-      ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
-    ];
-    System.assert(
-      stepExec.Output__c != null &&
-      stepExec.Output__c.contains('"noiseSeen":1'),
-      'The noisy read should have been capped to one row, got: ' +
-      stepExec.Output__c
-    );
-    System.assert(
-      stepExec.Output__c.contains('"importantPresent":true'),
-      'A named lookup after the row budget is spent must still find a Received signal (no false absence), got: ' +
-      stepExec.Output__c
-    );
-    System.assert(
-      stepExec.Output__c.contains('"importantListSize":1'),
-      'A list accessor after the row budget is spent must still return the pending signal (no empty false absence), got: ' +
-      stepExec.Output__c
-    );
+      Workflow_Step_Execution__c stepExec = [
+        SELECT Output__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = 'StepContextSignalEngineTest.BudgetReadStep'
+        ORDER BY CreatedDate DESC, Id DESC
+        LIMIT 1
+      ];
+      System.assert(
+        stepExec.Output__c != null &&
+        stepExec.Output__c.contains('"noiseSeen":1'),
+        'The noisy read should have been capped to one row, got: ' +
+        stepExec.Output__c
+      );
+      System.assert(
+        stepExec.Output__c.contains('"importantPresent":true'),
+        'A named lookup after the row budget is spent must still find a Received signal (no false absence), got: ' +
+        stepExec.Output__c
+      );
+      System.assert(
+        stepExec.Output__c.contains('"importantListSize":1'),
+        'A list accessor after the row budget is spent must still return the pending signal (no empty false absence), got: ' +
+        stepExec.Output__c
+      );
+    }
   }
 
   // --- Offloaded signal payloads resolve (in bulk) for list accessors --------
@@ -1682,62 +1705,75 @@ public class StepContextSignalEngineTest {
       for (StepContext.Signal s : sigs) {
         lens.add(s.payload == null ? -1 : s.payload.length());
       }
-      return StepResult.complete(null, new Map<String, Object>{ 'lens' => lens });
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{ 'lens' => lens }
+      );
     }
   }
 
   @IsTest
   static void testOffloadedSignalPayloadsResolvedForListRead() {
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.OffloadWorkflow',
-      'OffloadKey',
-      null
-    );
-    // Two signals whose payloads exceed the offload threshold, so each is stored
-    // as a ContentVersion marker rather than inline.
-    String big1 = 'a'.repeat(100001);
-    String big2 = 'b'.repeat(100001);
-    String marker1 = WorkflowEngine.savePayloadIfNeeded(instanceId, big1, 'Big1');
-    String marker2 = WorkflowEngine.savePayloadIfNeeded(instanceId, big2, 'Big2');
-    System.assert(
-      marker1.startsWith('{"$attachmentId":'),
-      'payload should have been offloaded to a marker'
-    );
-    insert new List<Workflow_Signal__c>{
-      new Workflow_Signal__c(
-        Workflow_Instance__c = instanceId,
-        Signal_Name__c = 'Big',
-        Payload__c = marker1,
-        Status__c = 'Received'
-      ),
-      new Workflow_Signal__c(
-        Workflow_Instance__c = instanceId,
-        Signal_Name__c = 'Big',
-        Payload__c = marker2,
-        Status__c = 'Received'
-      )
-    };
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.OffloadWorkflow',
+        'OffloadKey',
+        null
+      );
+      // Two signals whose payloads exceed the offload threshold, so each is stored
+      // as a ContentVersion marker rather than inline.
+      String big1 = 'a'.repeat(100001);
+      String big2 = 'b'.repeat(100001);
+      String marker1 = WorkflowEngine.savePayloadIfNeeded(
+        instanceId,
+        big1,
+        'Big1'
+      );
+      String marker2 = WorkflowEngine.savePayloadIfNeeded(
+        instanceId,
+        big2,
+        'Big2'
+      );
+      System.assert(
+        marker1.startsWith('{"$attachmentId":'),
+        'payload should have been offloaded to a marker'
+      );
+      insert new List<Workflow_Signal__c>{
+        new Workflow_Signal__c(
+          Workflow_Instance__c = instanceId,
+          Signal_Name__c = 'Big',
+          Payload__c = marker1,
+          Status__c = 'Received'
+        ),
+        new Workflow_Signal__c(
+          Workflow_Instance__c = instanceId,
+          Signal_Name__c = 'Big',
+          Payload__c = marker2,
+          Status__c = 'Received'
+        )
+      };
 
-    new WorkflowOrchestrator(instanceId).execute(null);
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    Workflow_Step_Execution__c stepExec = [
-      SELECT Output__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Step_Name__c = 'StepContextSignalEngineTest.OffloadReadStep'
-      ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
-    ];
-    // Both offloaded payloads must resolve to their full content (length 100001),
-    // not the short marker string -- proving bulk resolution returned the right
-    // value per row.
-    System.assert(
-      stepExec.Output__c.contains('100001,100001') ||
-      stepExec.Output__c.contains('100001, 100001'),
-      'Offloaded signal payloads must resolve to full content for a list read, got: ' +
-      stepExec.Output__c
-    );
+      Workflow_Step_Execution__c stepExec = [
+        SELECT Output__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = 'StepContextSignalEngineTest.OffloadReadStep'
+        ORDER BY CreatedDate DESC, Id DESC
+        LIMIT 1
+      ];
+      // Both offloaded payloads must resolve to their full content (length 100001),
+      // not the short marker string -- proving bulk resolution returned the right
+      // value per row.
+      System.assert(
+        stepExec.Output__c.contains('100001,100001') ||
+        stepExec.Output__c.contains('100001, 100001'),
+        'Offloaded signal payloads must resolve to full content for a list read, got: ' +
+        stepExec.Output__c
+      );
+    }
   }
 
   public class E2EYieldWaitStep implements WorkflowStep {
@@ -1766,58 +1802,63 @@ public class StepContextSignalEngineTest {
 
   @IsTest
   static void testE2EAutoReplayPreArrivedSignal() {
-    WorkflowEngine.disableQueueableInTest = true;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
 
-    // Publish signal BEFORE starting the workflow
-    WorkflowEngine.signal('E2E-CorrKey-999', 'E2EGo', '{"ready":true}');
+      // Publish signal BEFORE starting the workflow
+      WorkflowEngine.signal('E2E-CorrKey-999', 'E2EGo', '{"ready":true}');
 
-    // Verify it is captured as Unrouted
-    List<Workflow_Signal__c> unrouted = [
-      SELECT Status__c, Correlation_Key__c 
-      FROM Workflow_Signal__c 
-      WHERE Correlation_Key__c = 'E2E-CorrKey-999'
-    ];
-    System.assertEquals(1, unrouted.size());
-    System.assertEquals('Unrouted', unrouted[0].Status__c);
+      // Verify it is captured as Unrouted
+      List<Workflow_Signal__c> unrouted = [
+        SELECT Status__c, Correlation_Key__c
+        FROM Workflow_Signal__c
+        WHERE Correlation_Key__c = 'E2E-CorrKey-999'
+      ];
+      System.assertEquals(1, unrouted.size());
+      System.assertEquals('Unrouted', unrouted[0].Status__c);
 
-    // Start the workflow
-    Id instanceId = WorkflowEngine.start(
-      'StepContextSignalEngineTest.E2EYieldWaitWorkflow',
-      'E2E-CorrKey-999',
-      null
-    );
+      // Start the workflow
+      Id instanceId = WorkflowEngine.start(
+        'StepContextSignalEngineTest.E2EYieldWaitWorkflow',
+        'E2E-CorrKey-999',
+        null
+      );
 
-    // Run the orchestrator manually.
-    // The step runs, returns suspend(), and the suspension immediately redelivers the pre-arrived signal, reparents it, and resumes the instance.
-    new WorkflowOrchestrator(instanceId).execute(null);
+      // Run the orchestrator manually.
+      // The step runs, returns suspend(), and the suspension immediately redelivers the pre-arrived signal, reparents it, and resumes the instance.
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    // Verify the signal is now Received and mapped to the instance
-    Workflow_Signal__c reloadedSig = [
-      SELECT Status__c, Workflow_Instance__c
-      FROM Workflow_Signal__c
-      WHERE Id = :unrouted[0].Id
-    ];
-    System.assertEquals('Received', reloadedSig.Status__c);
-    System.assertEquals(instanceId, reloadedSig.Workflow_Instance__c);
+      // Verify the signal is now Received and mapped to the instance
+      Workflow_Signal__c reloadedSig = [
+        SELECT Status__c, Workflow_Instance__c
+        FROM Workflow_Signal__c
+        WHERE Id = :unrouted[0].Id
+      ];
+      System.assertEquals('Received', reloadedSig.Status__c);
+      System.assertEquals(instanceId, reloadedSig.Workflow_Instance__c);
 
-    // And verify the instance was woke up and status is Running
-    Workflow_Instance__c reloadedInst = [
-      SELECT Status__c, Current_Step__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-    ];
-    System.assertEquals('Running', reloadedInst.Status__c);
+      // And verify the instance was woke up and status is Running
+      Workflow_Instance__c reloadedInst = [
+        SELECT Status__c, Current_Step__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instanceId
+      ];
+      System.assertEquals('Running', reloadedInst.Status__c);
 
-    // Run the orchestrator again to execute the step with the signal present
-    new WorkflowOrchestrator(instanceId).execute(null);
+      // Run the orchestrator again to execute the step with the signal present
+      new WorkflowOrchestrator(instanceId).execute(null);
 
-    // Assert that the workflow reaches completion
-    Workflow_Instance__c finalInst = [
-      SELECT Status__c, Current_Step__c 
-      FROM Workflow_Instance__c 
-      WHERE Id = :instanceId
-    ];
-    System.assertEquals('Completed', finalInst.Status__c, 'Workflow should have reached completion');
+      // Assert that the workflow reaches completion
+      Workflow_Instance__c finalInst = [
+        SELECT Status__c, Current_Step__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instanceId
+      ];
+      System.assertEquals(
+        'Completed',
+        finalInst.Status__c,
+        'Workflow should have reached completion'
+      );
+    }
   }
 }
-

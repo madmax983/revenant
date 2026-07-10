@@ -30,74 +30,82 @@ private class WorkflowOutboundEventPublisherTest {
 
   @IsTest
   static void publishesEveryProvidedEvent() {
-    WorkflowOutboundEventPublisher.publishedEvents.clear();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowOutboundEventPublisher.publishedEvents.clear();
 
-    Test.startTest();
-    WorkflowOutboundEventPublisher.publish(sampleEvents(3));
-    Test.stopTest();
+      Test.startTest();
+      WorkflowOutboundEventPublisher.publish(sampleEvents(3));
+      Test.stopTest();
 
-    System.assertEquals(
-      3,
-      WorkflowOutboundEventPublisher.publishedEvents.size(),
-      'Every provided event must be published exactly once'
-    );
+      System.assertEquals(
+        3,
+        WorkflowOutboundEventPublisher.publishedEvents.size(),
+        'Every provided event must be published exactly once'
+      );
+    }
   }
 
   @IsTest
   static void nullAndEmptyAreNoOps() {
-    WorkflowOutboundEventPublisher.publishedEvents.clear();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowOutboundEventPublisher.publishedEvents.clear();
 
-    Test.startTest();
-    WorkflowOutboundEventPublisher.publish(null);
-    WorkflowOutboundEventPublisher.publish(new List<SObject>());
-    Test.stopTest();
+      Test.startTest();
+      WorkflowOutboundEventPublisher.publish(null);
+      WorkflowOutboundEventPublisher.publish(new List<SObject>());
+      Test.stopTest();
 
-    System.assertEquals(
-      0,
-      WorkflowOutboundEventPublisher.publishedEvents.size(),
-      'Null/empty input must publish nothing'
-    );
+      System.assertEquals(
+        0,
+        WorkflowOutboundEventPublisher.publishedEvents.size(),
+        'Null/empty input must publish nothing'
+      );
+    }
   }
 
   @IsTest
   static void publishFailureIsSwallowed() {
-    WorkflowOutboundEventPublisher.publishedEvents.clear();
-    WorkflowOutboundEventPublisher.throwTestException = true;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowOutboundEventPublisher.publishedEvents.clear();
+      WorkflowOutboundEventPublisher.throwTestException = true;
 
-    Test.startTest();
-    try {
-      WorkflowOutboundEventPublisher.publish(sampleEvents(1));
-    } catch (Exception e) {
-      System.assert(
-        false,
-        'A publish failure must be swallowed so it never rolls back the ' +
-          'Completed record, but it threw: ' +
-          e.getMessage()
-      );
-    } finally {
-      WorkflowOutboundEventPublisher.throwTestException = false;
+      Test.startTest();
+      try {
+        WorkflowOutboundEventPublisher.publish(sampleEvents(1));
+      } catch (Exception e) {
+        System.assert(
+          false,
+          'A publish failure must be swallowed so it never rolls back the ' +
+            'Completed record, but it threw: ' +
+            e.getMessage()
+        );
+      } finally {
+        WorkflowOutboundEventPublisher.throwTestException = false;
+      }
+      Test.stopTest();
     }
-    Test.stopTest();
   }
 
   @IsTest
   static void dmlBudgetGuardSkipsPublish() {
-    WorkflowOutboundEventPublisher.publishedEvents.clear();
-    WorkflowOutboundEventPublisher.forceDmlBudgetExhausted = true;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowOutboundEventPublisher.publishedEvents.clear();
+      WorkflowOutboundEventPublisher.forceDmlBudgetExhausted = true;
 
-    Test.startTest();
-    try {
-      WorkflowOutboundEventPublisher.publish(sampleEvents(2));
-    } finally {
-      WorkflowOutboundEventPublisher.forceDmlBudgetExhausted = false;
+      Test.startTest();
+      try {
+        WorkflowOutboundEventPublisher.publish(sampleEvents(2));
+      } finally {
+        WorkflowOutboundEventPublisher.forceDmlBudgetExhausted = false;
+      }
+      Test.stopTest();
+
+      System.assertEquals(
+        0,
+        WorkflowOutboundEventPublisher.publishedEvents.size(),
+        'When the DML budget is exhausted the publish must be skipped, never ' +
+        'spend the transaction last statement and risk rolling back the commit'
+      );
     }
-    Test.stopTest();
-
-    System.assertEquals(
-      0,
-      WorkflowOutboundEventPublisher.publishedEvents.size(),
-      'When the DML budget is exhausted the publish must be skipped, never ' +
-      'spend the transaction last statement and risk rolling back the commit'
-    );
   }
 }
