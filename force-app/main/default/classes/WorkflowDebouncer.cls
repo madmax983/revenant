@@ -264,12 +264,7 @@ public inherited sharing class WorkflowDebouncer {
               attributes.put(k, String.valueOf(raw.get(k)));
             }
           }
-        } catch (Exception ex) {
-          System.debug(
-            LoggingLevel.WARN,
-            'WorkflowDebouncer sweep failed to parse attributes JSON: ' +
-            ex.getMessage()
-          );
+        } catch (Exception ignored) {
         }
       }
 
@@ -294,18 +289,10 @@ public inherited sharing class WorkflowDebouncer {
       statesToDelete.addAll(dueStates);
     } catch (Exception ex) {
       Database.rollback(sp);
-      System.debug(
-        LoggingLevel.ERROR,
-        'WorkflowDebouncer sweep failed to bulk start: ' + ex.getMessage()
-      );
       // Fallback: start them individually
       for (Integer i = 0; i < startRequests.size(); i++) {
         // Halt if approaching SOQL or DML limits to prevent uncatchable governor exceptions
         if (Limits.getQueries() >= 90 || Limits.getDmlStatements() >= 135) {
-          System.debug(
-            LoggingLevel.WARN,
-            'WorkflowDebouncer sweep individual fallback halted to prevent Governor Limit exceptions.'
-          );
           break;
         }
         WorkflowEngine.StartRequest req = startRequests[i];
@@ -318,11 +305,6 @@ public inherited sharing class WorkflowDebouncer {
           statesToDelete.add(state);
         } catch (Exception innerEx) {
           Database.rollback(individualSp);
-          System.debug(
-            LoggingLevel.ERROR,
-            'WorkflowDebouncer sweep failed to start individual: ' +
-            innerEx.getMessage()
-          );
 
           Integer currentRetries = state.Retry_Count__c == null
             ? 0

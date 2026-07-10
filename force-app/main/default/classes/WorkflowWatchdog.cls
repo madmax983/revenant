@@ -79,11 +79,7 @@ public inherited sharing class WorkflowWatchdog implements Schedulable {
           WorkflowEngine.enqueueOrchestrators(new List<Id>{ inst.Id });
         }
       }
-    } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Failed to bootstrap WorkflowWatchdog: ' + ex.getMessage()
-      );
+    } catch (Exception ignored) {
     }
   }
 }

@@ -246,7 +246,9 @@ public with sharing class WorkflowScheduleController {
     }
 
     Id existingId = null;
-    if (fields.get('Id') != null && String.isNotBlank((String) fields.get('Id'))) {
+    if (
+      fields.get('Id') != null && String.isNotBlank((String) fields.get('Id'))
+    ) {
       existingId = (Id) fields.get('Id');
     }
 
@@ -330,27 +332,22 @@ public with sharing class WorkflowScheduleController {
             DateTime.now()
           )
         );
-      } catch (Exception e) {
-        System.debug(
-          LoggingLevel.WARN,
-          'saveSchedule: failed to seed cursor: ' + e.getMessage()
-        );
+      } catch (Exception ignored) {
       }
     }
 
     // Keep any armed dedicated CronTrigger consistent with the saved record.
-    if (existingId != null && WorkflowScheduleSweeper.isDedicatedJobArmed(sched.Id)) {
+    if (
+      existingId != null &&
+      WorkflowScheduleSweeper.isDedicatedJobArmed(sched.Id)
+    ) {
       if (!sched.Enabled__c || !sched.Dedicated_Slot__c) {
         // Edit turned off Enabled or Dedicated mode → tear down the orphaned job
         // (otherwise it keeps a scheduled-job slot and the abort action vanishes
         // from the row once Dedicated_Slot__c is false).
         try {
           WorkflowScheduleSweeper.unregisterDedicatedJob(sched.Id);
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'saveSchedule: failed to abort dedicated job: ' + e.getMessage()
-          );
+        } catch (Exception ignored) {
         }
       } else if (oldCron != cron) {
         // Still dedicated + enabled but the cadence changed → re-arm, since the
@@ -378,8 +375,7 @@ public with sharing class WorkflowScheduleController {
     // Remove any armed dedicated job first so nothing is orphaned.
     try {
       WorkflowScheduleSweeper.unregisterDedicatedJob(scheduleId);
-    } catch (Exception e) {
-      System.debug(LoggingLevel.WARN, 'unregister before delete: ' + e.getMessage());
+    } catch (Exception ignored) {
     }
     Workflow_Schedule__c sched = [
       SELECT Id
@@ -419,11 +415,7 @@ public with sharing class WorkflowScheduleController {
             DateTime.now()
           )
         );
-      } catch (Exception e) {
-        System.debug(
-          LoggingLevel.WARN,
-          'setEnabled: failed to recompute cursor: ' + e.getMessage()
-        );
+      } catch (Exception ignored) {
       }
     }
 
@@ -433,11 +425,7 @@ public with sharing class WorkflowScheduleController {
     if (!enabled && sched.Dedicated_Slot__c) {
       try {
         WorkflowScheduleSweeper.unregisterDedicatedJob(scheduleId);
-      } catch (Exception e) {
-        System.debug(
-          LoggingLevel.WARN,
-          'setEnabled: failed to abort dedicated job: ' + e.getMessage()
-        );
+      } catch (Exception ignored) {
       }
     }
   }
