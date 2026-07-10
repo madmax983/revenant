@@ -45,6 +45,43 @@ public inherited sharing class WorkflowDashboardController {
     'Failed'
   };
 
+  // Character length above which the dashboard shows a truncated preview. Payloads that
+  // are attachment-backed AND exceed this get a download link to the full ContentDocument.
+  @TestVisible
+  private static final Integer PAYLOAD_DISPLAY_LIMIT = 50000;
+
+  // Selectable trend windows for getDefinitionTrends, mapped to a span in hours.
+  // Blank/unrecognized keys fall back to TREND_DEFAULT_WINDOW.
+  private static final Map<String, Integer> TREND_WINDOW_HOURS = new Map<String, Integer>{
+    '1h' => 1,
+    '24h' => 24,
+    '7d' => 168
+  };
+  private static final String TREND_DEFAULT_WINDOW = '24h';
+
+  // Terminal statuses classified as a successful outcome by getDefinitionTrends.
+  // CompensationFailed is intentionally absent from FAILURE_STATUSES: it is a
+  // non-terminal status (WorkflowInstanceTrigger never stamps Terminal_At__c for
+  // it), so the windowed query can never surface such instances. getWorkflowStats'
+  // snapshot "failed" bucket does include CompensationFailed because it queries
+  // all instances without a Terminal_At__c filter.
+  private static final Set<String> SUCCESS_STATUSES = new Set<String>{
+    'Completed',
+    'ContinuedAsNew'
+  };
+  private static final Set<String> FAILURE_STATUSES = new Set<String>{
+    'Failed',
+    'Compensated',
+    'Cancelled'
+  };
+
+  @TestVisible
+  private static Boolean forceDefinitionFallback = false;
+
+  private static final Integer UNROUTED_CANDIDATE_CAP = 2000;
+
+  private static final Integer FAILURE_BREAKDOWN_CAP = 2000;
+
   private static void checkAuthorization() {
     if (FeatureManagement.checkPermission('Workflow_Admin')) {
       return;
@@ -94,11 +131,7 @@ public inherited sharing class WorkflowDashboardController {
           textValue
         );
         return (Id) marker.get('$attachmentId');
-      } catch (Exception ex) {
-        System.debug(
-          LoggingLevel.FINE,
-          'getAttachmentId parsing fallback: ' + ex.getMessage()
-        );
+      } catch (Exception ignored) {
       }
     }
     return null;
@@ -110,11 +143,6 @@ public inherited sharing class WorkflowDashboardController {
     }
     return val;
   }
-
-  // Character length above which the dashboard shows a truncated preview. Payloads that
-  // are attachment-backed AND exceed this get a download link to the full ContentDocument.
-  @TestVisible
-  private static final Integer PAYLOAD_DISPLAY_LIMIT = 50000;
 
   /**
    * Resolves a payload field for display: returns the (possibly truncated) text and, when
@@ -156,25 +184,30 @@ public inherited sharing class WorkflowDashboardController {
     Set<Id> attachmentIds = new Set<Id>();
 
     Id instInputId = getAttachmentId(instance.Input__c);
-    if (instInputId != null)
+    if (instInputId != null) {
       attachmentIds.add(instInputId);
+    }
 
     Id instOutputId = getAttachmentId(instance.Output__c);
-    if (instOutputId != null)
+    if (instOutputId != null) {
       attachmentIds.add(instOutputId);
+    }
 
     Id instProgressId = getAttachmentId(instance.Progress__c);
-    if (instProgressId != null)
+    if (instProgressId != null) {
       attachmentIds.add(instProgressId);
+    }
 
     for (Workflow_Step_Execution__c step : steps) {
       Id stepInputId = getAttachmentId(step.Input__c);
-      if (stepInputId != null)
+      if (stepInputId != null) {
         attachmentIds.add(stepInputId);
+      }
 
       Id stepOutputId = getAttachmentId(step.Output__c);
-      if (stepOutputId != null)
+      if (stepOutputId != null) {
         attachmentIds.add(stepOutputId);
+      }
     }
 
     Map<Id, String> attachmentIdToData = new Map<Id, String>();
@@ -183,7 +216,9 @@ public inherited sharing class WorkflowDashboardController {
       for (ContentDocumentLink cdl : [
         SELECT ContentDocumentId
         FROM ContentDocumentLink
-        WHERE ContentDocumentId IN :attachmentIds AND LinkedEntityId = :instance.Id
+        WHERE
+          ContentDocumentId IN :attachmentIds
+          AND LinkedEntityId = :instance.Id
         WITH SYSTEM_MODE
       ]) {
         verifiedAttachmentIds.add(cdl.ContentDocumentId);
@@ -257,7 +292,9 @@ public inherited sharing class WorkflowDashboardController {
       return;
     }
     try {
-      Map<String, Object> raw = (Map<String, Object>) JSON.deserializeUntyped(attributesFilterJson);
+      Map<String, Object> raw = (Map<String, Object>) JSON.deserializeUntyped(
+        attributesFilterJson
+      );
       if (raw == null || raw.isEmpty()) {
         return;
       }
@@ -298,7 +335,9 @@ public inherited sharing class WorkflowDashboardController {
             }
           }
         } else {
-          String target = (attributeFilter0 != null) ? attributeFilter0 : attributeFilter1;
+          String target = (attributeFilter0 != null)
+            ? attributeFilter0
+            : attributeFilter1;
           for (Workflow_Search_Attribute__c attr : [
             SELECT Workflow_Instance__c
             FROM Workflow_Search_Attribute__c
@@ -310,8 +349,7 @@ public inherited sharing class WorkflowDashboardController {
           }
         }
       }
-    } catch (Exception ex) {
-      System.debug(LoggingLevel.WARN, 'Failed to deserialize attributesFilterJson: ' + ex.getMessage());
+    } catch (Exception ignored) {
     }
   }
 
@@ -346,10 +384,14 @@ public inherited sharing class WorkflowDashboardController {
       );
     }
     if (attributeFilter0 != null) {
-      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter0)');
+      conditions.add(
+        'Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter0)'
+      );
     }
     if (attributeFilter1 != null) {
-      conditions.add('Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter1)');
+      conditions.add(
+        'Id IN (SELECT Workflow_Instance__c FROM Workflow_Search_Attribute__c WHERE Key_Value__c = :attributeFilter1)'
+      );
     }
     return conditions.isEmpty()
       ? ''
@@ -442,7 +484,14 @@ public inherited sharing class WorkflowDashboardController {
     String attributesFilterJson
   ) {
     checkAuthorization();
-    resolveMatchingAttributes(attributesFilterJson, false, workflowName, status, searchTerm, failureCategory);
+    resolveMatchingAttributes(
+      attributesFilterJson,
+      false,
+      workflowName,
+      status,
+      searchTerm,
+      failureCategory
+    );
 
     if (limitSize == null || limitSize <= 0) {
       limitSize = 50;
@@ -557,7 +606,14 @@ public inherited sharing class WorkflowDashboardController {
       : thresholdMinutes;
     stalledCutoff = Datetime.now().addMinutes(-threshold);
 
-    resolveMatchingAttributes(attributesFilterJson, true, workflowName, null, searchTerm, null);
+    resolveMatchingAttributes(
+      attributesFilterJson,
+      true,
+      workflowName,
+      null,
+      searchTerm,
+      null
+    );
 
     if (limitSize == null || limitSize <= 0) {
       limitSize = 50;
@@ -668,7 +724,14 @@ public inherited sharing class WorkflowDashboardController {
       : thresholdMinutes;
     stalledCutoff = Datetime.now().addMinutes(-threshold);
 
-    resolveMatchingAttributes(attributesFilterJson, true, workflowName, null, searchTerm, null);
+    resolveMatchingAttributes(
+      attributesFilterJson,
+      true,
+      workflowName,
+      null,
+      searchTerm,
+      null
+    );
 
     String query =
       'SELECT Id, Async_Job_Id__c, Sleep_Until__c, Status__c, LastModifiedDate ' +
@@ -740,20 +803,8 @@ public inherited sharing class WorkflowDashboardController {
         } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
           asyncIds.add(jobId);
         }
-      } catch (Exception ex) {
-        System.debug(
-          LoggingLevel.WARN,
-          'Failed to cast Async Job ID: ' +
-            jobIdStr +
-            ', error: ' +
-            ex.getMessage()
-        );
+      } catch (Exception ignored) {
       }
-    } else {
-      System.debug(
-        LoggingLevel.WARN,
-        'Invalid Async Job ID format: ' + jobIdStr
-      );
     }
   }
 
@@ -855,20 +906,9 @@ public inherited sharing class WorkflowDashboardController {
             return 'Watchdog';
           }
         } catch (Exception ex) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to cast Async Job ID: ' +
-              jobIdStr +
-              ', error: ' +
-              ex.getMessage()
-          );
           return 'Watchdog';
         }
       } else {
-        System.debug(
-          LoggingLevel.WARN,
-          'Invalid Async Job ID format: ' + jobIdStr
-        );
         return 'Watchdog';
       }
     } else if (inst.Sleep_Until__c != null) {
@@ -921,7 +961,14 @@ public inherited sharing class WorkflowDashboardController {
     String attributesFilterJson
   ) {
     checkAuthorization();
-    resolveMatchingAttributes(attributesFilterJson, false, workflowName, status, searchTerm, null);
+    resolveMatchingAttributes(
+      attributesFilterJson,
+      false,
+      workflowName,
+      status,
+      searchTerm,
+      null
+    );
 
     Map<String, Integer> results = new Map<String, Integer>{
       'total' => 0,
@@ -962,31 +1009,6 @@ public inherited sharing class WorkflowDashboardController {
     }
     return results;
   }
-
-  // Selectable trend windows for getDefinitionTrends, mapped to a span in hours.
-  // Blank/unrecognized keys fall back to TREND_DEFAULT_WINDOW.
-  private static final Map<String, Integer> TREND_WINDOW_HOURS = new Map<String, Integer>{
-    '1h' => 1,
-    '24h' => 24,
-    '7d' => 168
-  };
-  private static final String TREND_DEFAULT_WINDOW = '24h';
-
-  // Terminal statuses classified as a successful outcome by getDefinitionTrends.
-  // CompensationFailed is intentionally absent from FAILURE_STATUSES: it is a
-  // non-terminal status (WorkflowInstanceTrigger never stamps Terminal_At__c for
-  // it), so the windowed query can never surface such instances. getWorkflowStats'
-  // snapshot "failed" bucket does include CompensationFailed because it queries
-  // all instances without a Terminal_At__c filter.
-  private static final Set<String> SUCCESS_STATUSES = new Set<String>{
-    'Completed',
-    'ContinuedAsNew'
-  };
-  private static final Set<String> FAILURE_STATUSES = new Set<String>{
-    'Failed',
-    'Compensated',
-    'Cancelled'
-  };
 
   /**
    * Per-definition success-rate and throughput over a selectable recent window.
@@ -1240,20 +1262,9 @@ public inherited sharing class WorkflowDashboardController {
               }
             }
           } catch (Exception ex) {
-            System.debug(
-              LoggingLevel.WARN,
-              'Failed to cast Async Job ID: ' +
-                jobIdStr +
-                ', error: ' +
-                ex.getMessage()
-            );
             waitingOn = 'Watchdog';
           }
         } else {
-          System.debug(
-            LoggingLevel.WARN,
-            'Invalid Async Job ID format: ' + jobIdStr
-          );
           waitingOn = 'Watchdog';
         }
       } else if (instance.Sleep_Until__c != null) {
@@ -1275,11 +1286,7 @@ public inherited sharing class WorkflowDashboardController {
         for (Integer i = stack.size() - 1; i >= 0; i--) {
           pendingCompensations.add(stack[i]);
         }
-      } catch (Exception ex) {
-        System.debug(
-          LoggingLevel.WARN,
-          'Failed to parse Compensation_Stack__c: ' + ex.getMessage()
-        );
+      } catch (Exception ignored) {
       }
     }
 
@@ -1300,7 +1307,8 @@ public inherited sharing class WorkflowDashboardController {
         Fire_Time__c,
         CreatedDate
       FROM Workflow_Log__c
-      WHERE Workflow_Instance__c = :instanceId
+      WHERE
+        Workflow_Instance__c = :instanceId
         AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
       WITH SYSTEM_MODE
       ORDER BY Fire_Time__c DESC, CreatedDate DESC
@@ -1325,7 +1333,6 @@ public inherited sharing class WorkflowDashboardController {
       'attributes' => attributes,
       'breadcrumbs' => breadcrumbs
     };
-
   }
 
   /**
@@ -1336,9 +1343,6 @@ public inherited sharing class WorkflowDashboardController {
   @TestVisible
   private class DefinitionScanLimitException extends Exception {
   }
-
-  @TestVisible
-  private static Boolean forceDefinitionFallback = false;
 
   @AuraEnabled(cacheable=true)
   public static List<String> getDefinitions() {
@@ -1427,13 +1431,6 @@ public inherited sharing class WorkflowDashboardController {
     } catch (AuraHandledException ahe) {
       throw ahe;
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura startWorkflow failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       AuraHandledException ahe = new AuraHandledException(ex.getMessage());
       ahe.setMessage(ex.getMessage());
       throw ahe;
@@ -1446,13 +1443,6 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowEngine.retryWorkflow(instanceId);
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura retryWorkflowInstance failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -1478,13 +1468,6 @@ public inherited sharing class WorkflowDashboardController {
         searchTerm
       );
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura getRedriveEligibleCount failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -1542,13 +1525,6 @@ public inherited sharing class WorkflowDashboardController {
         'redriveInstanceId' => redriveInstanceId
       };
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura redriveMatchingInstances failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -1567,13 +1543,6 @@ public inherited sharing class WorkflowDashboardController {
     try {
       return BulkCancelWorkflow.countEligible(workflowName, status, searchTerm);
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura getCancelEligibleCount failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -1628,13 +1597,6 @@ public inherited sharing class WorkflowDashboardController {
         'cancelInstanceId' => cancelInstanceId
       };
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura cancelMatchingInstances failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -1660,13 +1622,6 @@ public inherited sharing class WorkflowDashboardController {
         WorkflowEngine.enqueueOrchestrators(new List<Id>{ inst.Id });
       }
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura resumeWorkflowInstance failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -1682,13 +1637,6 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowEngine.resumeCompensation(instanceId);
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura resumeCompensationInstance failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -1698,7 +1646,11 @@ public inherited sharing class WorkflowDashboardController {
    * that step's resolved output and resuming forward execution.
    */
   @AuraEnabled
-  public static void resumePastStepInstance(Id instanceId, String stepName, String suppliedOutputJson) {
+  public static void resumePastStepInstance(
+    Id instanceId,
+    String stepName,
+    String suppliedOutputJson
+  ) {
     checkAuthorization();
     if (
       !FeatureManagement.checkPermission('Workflow_Step_Skip') &&
@@ -1715,13 +1667,6 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowEngine.resumePastStep(instanceId, stepName, suppliedOutputJson);
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura resumePastStepInstance failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       AuraHandledException aex = new AuraHandledException(ex.getMessage());
       aex.setMessage(ex.getMessage());
       throw aex;
@@ -1734,13 +1679,6 @@ public inherited sharing class WorkflowDashboardController {
     try {
       return WorkflowEngine.compensate(instanceId);
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura compensateWorkflow failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -1751,13 +1689,6 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowEngine.cancel(instanceId, runCompensations);
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura cancelWorkflow failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -1793,13 +1724,6 @@ public inherited sharing class WorkflowDashboardController {
         payloadJson
       );
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura submitApproval failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -1844,11 +1768,7 @@ public inherited sharing class WorkflowDashboardController {
           requiredRole = (String) state.get('approvalRole');
           break;
         }
-      } catch (Exception ex) {
-        System.debug(
-          LoggingLevel.WARN,
-          'Malformed or oversized state payload ignored: ' + ex.getMessage()
-        );
+      } catch (Exception ignored) {
       }
     }
 
@@ -1956,12 +1876,7 @@ public inherited sharing class WorkflowDashboardController {
       List<Map<String, Object>> pausedDefs = new List<Map<String, Object>>();
       try {
         pausedDefs = getPausedDefinitions();
-      } catch (Exception ex) {
-        System.debug(
-          LoggingLevel.WARN,
-          'getWatchdogStatus: failed to load pausedDefinitions: ' +
-          ex.getMessage()
-        );
+      } catch (Exception ignored) {
       }
 
       return new Map<String, Object>{
@@ -1980,13 +1895,6 @@ public inherited sharing class WorkflowDashboardController {
         'pausedDefinitions' => pausedDefs
       };
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura getWatchdogStatus failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -1997,13 +1905,6 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowWatchdog.bootstrap();
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura enqueueWatchdog failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -2061,7 +1962,10 @@ public inherited sharing class WorkflowDashboardController {
         }
 
         if (NON_TERMINAL_STATUSES.contains(stat)) {
-          nonTerminalByVersion.put(verKey, nonTerminalByVersion.get(verKey) + 1);
+          nonTerminalByVersion.put(
+            verKey,
+            nonTerminalByVersion.get(verKey) + 1
+          );
         } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
           failedByVersion.put(verKey, failedByVersion.get(verKey) + 1);
         } else {
@@ -2076,7 +1980,8 @@ public inherited sharing class WorkflowDashboardController {
       for (Workflow_Instance__c inst : [
         SELECT Definition_Version__c
         FROM Workflow_Instance__c
-        WHERE Workflow_Name__c = :workflowName
+        WHERE
+          Workflow_Name__c = :workflowName
           AND Status__c NOT IN ('Completed', 'Cancelled', 'ContinuedAsNew')
         WITH SYSTEM_MODE
         LIMIT 5000
@@ -2118,7 +2023,8 @@ public inherited sharing class WorkflowDashboardController {
         for (AggregateResult ar : [
           SELECT Status__c, COUNT(Id) cnt
           FROM Workflow_Instance__c
-          WHERE Workflow_Name__c = :workflowName
+          WHERE
+            Workflow_Name__c = :workflowName
             AND Definition_Version__c = :ver
           WITH SYSTEM_MODE
           GROUP BY Status__c
@@ -2127,11 +2033,17 @@ public inherited sharing class WorkflowDashboardController {
           Integer count = (Integer) ar.get('cnt');
 
           if (NON_TERMINAL_STATUSES.contains(stat)) {
-            nonTerminalByVersion.put(verKey, nonTerminalByVersion.get(verKey) + count);
+            nonTerminalByVersion.put(
+              verKey,
+              nonTerminalByVersion.get(verKey) + count
+            );
           } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
             failedByVersion.put(verKey, failedByVersion.get(verKey) + count);
           } else {
-            terminalByVersion.put(verKey, terminalByVersion.get(verKey) + count);
+            terminalByVersion.put(
+              verKey,
+              terminalByVersion.get(verKey) + count
+            );
           }
         }
       }
@@ -2146,7 +2058,8 @@ public inherited sharing class WorkflowDashboardController {
         for (AggregateResult ar : [
           SELECT Status__c, COUNT(Id) cnt
           FROM Workflow_Instance__c
-          WHERE Workflow_Name__c = :workflowName
+          WHERE
+            Workflow_Name__c = :workflowName
             AND Definition_Version__c = NULL
           WITH SYSTEM_MODE
           GROUP BY Status__c
@@ -2155,11 +2068,17 @@ public inherited sharing class WorkflowDashboardController {
           Integer count = (Integer) ar.get('cnt');
 
           if (NON_TERMINAL_STATUSES.contains(stat)) {
-            nonTerminalByVersion.put(verKey, nonTerminalByVersion.get(verKey) + count);
+            nonTerminalByVersion.put(
+              verKey,
+              nonTerminalByVersion.get(verKey) + count
+            );
           } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
             failedByVersion.put(verKey, failedByVersion.get(verKey) + count);
           } else {
-            terminalByVersion.put(verKey, terminalByVersion.get(verKey) + count);
+            terminalByVersion.put(
+              verKey,
+              terminalByVersion.get(verKey) + count
+            );
           }
         }
       }
@@ -2185,8 +2104,11 @@ public inherited sharing class WorkflowDashboardController {
           'nonTerminalCount' => nonTerminal,
           'failedCount' => failed,
           'terminalCount' => terminal,
-          'totalCount' => nonTerminal + failed + terminal,
-          'safeToRetire' => nonTerminal == 0 && failed == 0
+          'totalCount' => nonTerminal +
+          failed +
+          terminal,
+          'safeToRetire' => nonTerminal == 0 &&
+          failed == 0
         }
       );
     }
@@ -2195,8 +2117,6 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   // ── Unrouted-signal dashboard methods ─────────────────────────────────────
-
-  private static final Integer UNROUTED_CANDIDATE_CAP = 2000;
 
   @AuraEnabled(cacheable=true)
   public static List<Map<String, Object>> getUnroutedSignals(
@@ -2297,13 +2217,6 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowPauseGate.pauseDefinition(workflowName, reason);
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura pauseDefinition failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -2318,13 +2231,6 @@ public inherited sharing class WorkflowDashboardController {
     try {
       WorkflowPauseGate.resumeDefinition(workflowName);
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura resumeDefinition failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -2415,13 +2321,6 @@ public inherited sharing class WorkflowDashboardController {
       }
       return result;
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura getPausedDefinitions failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
@@ -2485,18 +2384,9 @@ public inherited sharing class WorkflowDashboardController {
       }
       return result;
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura getConcurrencyStatus failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       throw new AuraHandledException(ex.getMessage());
     }
   }
-
-  private static final Integer FAILURE_BREAKDOWN_CAP = 2000;
 
   @AuraEnabled
   public static Map<String, Object> getWorkflowFailureBreakdown(
@@ -2727,9 +2617,13 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   @AuraEnabled
-  public static void injectSignal(Id instanceId, String signalName, String payloadJson) {
+  public static void injectSignal(
+    Id instanceId,
+    String signalName,
+    String payloadJson
+  ) {
     checkAuthorization();
-    
+
     if (
       !FeatureManagement.checkPermission('Workflow_Signal_Injection') &&
       !currentUserHasModifyAllData()
@@ -2744,13 +2638,17 @@ public inherited sharing class WorkflowDashboardController {
     }
 
     if (instanceId == null) {
-      AuraHandledException ex = new AuraHandledException('Instance ID is required.');
+      AuraHandledException ex = new AuraHandledException(
+        'Instance ID is required.'
+      );
       ex.setMessage('Instance ID is required.');
       throw ex;
     }
 
     if (String.isBlank(signalName)) {
-      AuraHandledException ex = new AuraHandledException('Signal name is required.');
+      AuraHandledException ex = new AuraHandledException(
+        'Signal name is required.'
+      );
       ex.setMessage('Signal name is required.');
       throw ex;
     }
@@ -2763,20 +2661,26 @@ public inherited sharing class WorkflowDashboardController {
       LIMIT 1
     ];
     if (instances.isEmpty()) {
-      AuraHandledException ex = new AuraHandledException('Workflow instance not found.');
+      AuraHandledException ex = new AuraHandledException(
+        'Workflow instance not found.'
+      );
       ex.setMessage('Workflow instance not found.');
       throw ex;
     }
-    
+
     Workflow_Instance__c inst = instances[0];
     if (inst.Status__c != 'Suspended') {
-      AuraHandledException ex = new AuraHandledException('Signal injection is only allowed on Suspended instances.');
+      AuraHandledException ex = new AuraHandledException(
+        'Signal injection is only allowed on Suspended instances.'
+      );
       ex.setMessage('Signal injection is only allowed on Suspended instances.');
       throw ex;
     }
 
     if (payloadJson != null && payloadJson.length() > 250000) {
-      AuraHandledException ex = new AuraHandledException('Payload size exceeds maximum allowed limit of 250KB.');
+      AuraHandledException ex = new AuraHandledException(
+        'Payload size exceeds maximum allowed limit of 250KB.'
+      );
       ex.setMessage('Payload size exceeds maximum allowed limit of 250KB.');
       throw ex;
     }
@@ -2788,14 +2692,20 @@ public inherited sharing class WorkflowDashboardController {
         if (parsed instanceof Map<String, Object>) {
           payloadMap = (Map<String, Object>) parsed;
         } else {
-          AuraHandledException ex = new AuraHandledException('Invalid payload JSON: Payload JSON must be a JSON object (e.g., {"key": "value"}).');
-          ex.setMessage('Invalid payload JSON: Payload JSON must be a JSON object (e.g., {"key": "value"}).');
+          AuraHandledException ex = new AuraHandledException(
+            'Invalid payload JSON: Payload JSON must be a JSON object (e.g., {"key": "value"}).'
+          );
+          ex.setMessage(
+            'Invalid payload JSON: Payload JSON must be a JSON object (e.g., {"key": "value"}).'
+          );
           throw ex;
         }
       } catch (AuraHandledException ex) {
         throw ex;
       } catch (Exception ex) {
-        AuraHandledException ex2 = new AuraHandledException('Invalid payload JSON: ' + ex.getMessage());
+        AuraHandledException ex2 = new AuraHandledException(
+          'Invalid payload JSON: ' + ex.getMessage()
+        );
         ex2.setMessage('Invalid payload JSON: ' + ex.getMessage());
         throw ex2;
       }
@@ -2812,13 +2722,6 @@ public inherited sharing class WorkflowDashboardController {
         JSON.serialize(payloadMap)
       );
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Aura injectSignal failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
       AuraHandledException aex = new AuraHandledException(ex.getMessage());
       aex.setMessage(ex.getMessage());
       throw aex;

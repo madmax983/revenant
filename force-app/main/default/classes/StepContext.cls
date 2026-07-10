@@ -1,4 +1,89 @@
 public inherited sharing class StepContext {
+  public static final Integer MAX_LOG_ENTRIES = 100;
+  public static final Integer MAX_MESSAGE_LENGTH = 4000;
+  public static final String LOG_TYPE_BREADCRUMB = 'StepBreadcrumb';
+
+  private List<Breadcrumb> breadcrumbs = new List<Breadcrumb>();
+
+  // 0-based sequence of this visit to `stepName` within this instance: the count
+  // of already-completed executions of the step when this context was built. It
+  // stays constant across retries/re-drives/resumes of the current (not yet
+  // completed) visit, and increments only when the engine loops back to the same
+  // step for a fresh visit. Populated by the engine; defaults to 0.
+  private Integer stepVisit = 0;
+  private static Double cachedAsyncFraction = null;
+
+  // True when this execution is the engine-routed timeout fallback (issue #35).
+  // Set by the engine via withCapturedValues; false by default for all normal runs.
+  private Boolean timeoutResume = false;
+
+  @TestVisible
+  private static Double mockQueryRowsFraction = null;
+  @TestVisible
+  private static Double mockAsyncExecutionsFraction = null;
+
+  // Capture-once state. capturedValues is loaded from Captured_Values__c on
+  // hydration and extended in-memory as once() is called. newCaptureKeys tracks
+  // which keys were added THIS execution so the engine can persist only when
+  // there is something new to write (avoids a no-op DML on every re-execution).
+  private Map<String, Object> capturedValues = new Map<String, Object>();
+  private Set<String> newCaptureKeys = new Set<String>();
+
+  // Named change marker (patch) state (issue #130)
+  private Map<String, Boolean> patchDecisionsCache = new Map<String, Boolean>();
+  private Set<String> completedStepsCache = new Set<String>();
+  private Boolean hasLoadedExecutions = false;
+  private DateTime instanceCreatedDate = null;
+  private DateTime classLastModified = null;
+
+  @TestVisible
+  private static DateTime mockInstanceCreatedDate = null;
+  @TestVisible
+  private static DateTime mockClassLastModified = null;
+
+  // Outbound domain events buffered via emit() during this execution (issue
+  // #64). The engine publishes them effectively-once, coupled to the step's
+  // COMPLETE/SPLIT transition commit; they are discarded (never published) on a
+  // yield/retry/suspend/rollback because the buffer lives only on this in-memory
+  // context, which is rebuilt fresh on every re-execution.
+  private List<SObject> pendingEmits = new List<SObject>();
+
+  // Progress snapshot state (issue #52). Set from within execute() or compensate()
+  // via reportProgress(). Buffered in-memory and read by the engine/orchestrator
+  // to persist onto Workflow_Instance__c.Progress__c at the transition checkpoint.
+  private String progressJson = null;
+  private Boolean progressReported = false;
+
+  private SignalSource signalSource;
+  // Full pending set, loaded lazily only when an unscoped accessor needs it.
+  private List<Signal> allSignals;
+  private Boolean allLoaded = false;
+  // True when the unscoped full-list read was truncated by the source row cap.
+  // The cached allSignals is then only a partial page, so named latest/list
+  // lookups must NOT be answered from it (they could miss a pending row and
+  // report a false absence) -- they fall through to the source instead.
+  private Boolean allReadCapped = false;
+  // Per-name full results, loaded lazily so a single named lookup does not pull
+  // every pending signal/payload on the instance. Keyed by lower-cased name.
+  private Map<String, List<Signal>> byNameCache = new Map<String, List<Signal>>();
+  // Names whose byNameCache list the source truncated (row-budget cap). Such a
+  // list is only the oldest page, so its last element is NOT necessarily the
+  // most-recent pending signal: latestFor() must not satisfy a latest lookup
+  // from it and instead asks the source for the true most-recent row.
+  private Set<String> partialNameKeys = new Set<String>();
+  // Per-name latest-only results for getSignal/hasSignal, so reading one
+  // decision never loads every duplicate payload. Keyed by lower-cased name.
+  private Map<String, Signal> latestByName = new Map<String, Signal>();
+  // Snapshot signals the step actually matched (saw a payload for). Only these
+  // drive engine-managed consumption -- a name that was probed but found absent
+  // must NOT consume a same-name signal that arrives later.
+  private Set<Id> matchedSignalIds = new Set<Id>();
+  private Set<String> matchedNames = new Set<String>();
+  // Subset of matchedSignalIds the source actually CLAIMED (exclusive Processing
+  // hold for this branch). Only these may be rolled back or consumed-while-
+  // Processing; merely-observed rows must never disturb a sibling's claim.
+  private Set<Id> claimedSignalIds = new Set<Id>();
+
   /**
    * Logging severity levels for step breadcrumbs.
    */
@@ -25,12 +110,6 @@ public inherited sharing class StepContext {
       this.message = message;
     }
   }
-
-  public static final Integer MAX_LOG_ENTRIES = 100;
-  public static final Integer MAX_MESSAGE_LENGTH = 4000;
-  public static final String LOG_TYPE_BREADCRUMB = 'StepBreadcrumb';
-
-  private List<Breadcrumb> breadcrumbs = new List<Breadcrumb>();
 
   /**
    * Logs a message at the specified level without any context.
@@ -180,14 +259,6 @@ public inherited sharing class StepContext {
    */
   public Datetime previousRunAt { get; private set; }
 
-  // 0-based sequence of this visit to `stepName` within this instance: the count
-  // of already-completed executions of the step when this context was built. It
-  // stays constant across retries/re-drives/resumes of the current (not yet
-  // completed) visit, and increments only when the engine loops back to the same
-  // step for a fresh visit. Populated by the engine; defaults to 0.
-  private Integer stepVisit = 0;
-  private static Double cachedAsyncFraction = null;
-
   /**
    * A stable, read-only idempotency key for this logical step execution.
    *
@@ -226,50 +297,9 @@ public inherited sharing class StepContext {
     }
   }
 
-  // True when this execution is the engine-routed timeout fallback (issue #35).
-  // Set by the engine via withCapturedValues; false by default for all normal runs.
-  private Boolean timeoutResume = false;
-
   public Boolean isTimeoutResume() {
     return timeoutResume == true;
   }
-
-  @TestVisible
-  private static Double mockQueryRowsFraction = null;
-  @TestVisible
-  private static Double mockAsyncExecutionsFraction = null;
-
-  // Capture-once state. capturedValues is loaded from Captured_Values__c on
-  // hydration and extended in-memory as once() is called. newCaptureKeys tracks
-  // which keys were added THIS execution so the engine can persist only when
-  // there is something new to write (avoids a no-op DML on every re-execution).
-  private Map<String, Object> capturedValues = new Map<String, Object>();
-  private Set<String> newCaptureKeys = new Set<String>();
-
-  // Named change marker (patch) state (issue #130)
-  private Map<String, Boolean> patchDecisionsCache = new Map<String, Boolean>();
-  private Set<String> completedStepsCache = new Set<String>();
-  private Boolean hasLoadedExecutions = false;
-  private DateTime instanceCreatedDate = null;
-  private DateTime classLastModified = null;
-
-  @TestVisible
-  private static DateTime mockInstanceCreatedDate = null;
-  @TestVisible
-  private static DateTime mockClassLastModified = null;
-
-  // Outbound domain events buffered via emit() during this execution (issue
-  // #64). The engine publishes them effectively-once, coupled to the step's
-  // COMPLETE/SPLIT transition commit; they are discarded (never published) on a
-  // yield/retry/suspend/rollback because the buffer lives only on this in-memory
-  // context, which is rebuilt fresh on every re-execution.
-  private List<SObject> pendingEmits = new List<SObject>();
-
-  // Progress snapshot state (issue #52). Set from within execute() or compensate()
-  // via reportProgress(). Buffered in-memory and read by the engine/orchestrator
-  // to persist onto Workflow_Instance__c.Progress__c at the transition checkpoint.
-  private String progressJson = null;
-  private Boolean progressReported = false;
 
   public void reportProgress(Decimal percentComplete, String message) {
     Map<String, Object> progressMap = new Map<String, Object>{
@@ -396,36 +426,6 @@ public inherited sharing class StepContext {
     Signal getLatestSignal(String signalName);
     Boolean readWasCapped();
   }
-
-  private SignalSource signalSource;
-  // Full pending set, loaded lazily only when an unscoped accessor needs it.
-  private List<Signal> allSignals;
-  private Boolean allLoaded = false;
-  // True when the unscoped full-list read was truncated by the source row cap.
-  // The cached allSignals is then only a partial page, so named latest/list
-  // lookups must NOT be answered from it (they could miss a pending row and
-  // report a false absence) -- they fall through to the source instead.
-  private Boolean allReadCapped = false;
-  // Per-name full results, loaded lazily so a single named lookup does not pull
-  // every pending signal/payload on the instance. Keyed by lower-cased name.
-  private Map<String, List<Signal>> byNameCache = new Map<String, List<Signal>>();
-  // Names whose byNameCache list the source truncated (row-budget cap). Such a
-  // list is only the oldest page, so its last element is NOT necessarily the
-  // most-recent pending signal: latestFor() must not satisfy a latest lookup
-  // from it and instead asks the source for the true most-recent row.
-  private Set<String> partialNameKeys = new Set<String>();
-  // Per-name latest-only results for getSignal/hasSignal, so reading one
-  // decision never loads every duplicate payload. Keyed by lower-cased name.
-  private Map<String, Signal> latestByName = new Map<String, Signal>();
-  // Snapshot signals the step actually matched (saw a payload for). Only these
-  // drive engine-managed consumption -- a name that was probed but found absent
-  // must NOT consume a same-name signal that arrives later.
-  private Set<Id> matchedSignalIds = new Set<Id>();
-  private Set<String> matchedNames = new Set<String>();
-  // Subset of matchedSignalIds the source actually CLAIMED (exclusive Processing
-  // hold for this branch). Only these may be rolled back or consumed-while-
-  // Processing; merely-observed rows must never disturb a sibling's claim.
-  private Set<Id> claimedSignalIds = new Set<Id>();
 
   public StepContext(
     Id workflowInstanceId,
@@ -1358,12 +1358,8 @@ public inherited sharing class StepContext {
             patchDecisionsCache.put(changeId, (Boolean) captures.get(k));
           }
         }
-      } catch (Exception e) {
+      } catch (Exception ignored) {
         // Ignore malformed JSON
-        System.debug(
-          LoggingLevel.FINEST,
-          'Ignore malformed JSON: ' + e.getMessage()
-        );
       }
     }
     hasLoadedExecutions = true;
@@ -1493,11 +1489,7 @@ public inherited sharing class StepContext {
       if (deserialized instanceof Map<String, Object>) {
         return (Map<String, Object>) deserialized;
       }
-    } catch (Exception e) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Failed to parse captured values JSON: ' + e.getMessage()
-      );
+    } catch (Exception ignored) {
     }
     return new Map<String, Object>();
   }
@@ -1696,11 +1688,7 @@ public inherited sharing class StepContext {
           ctx.maxAttempts = Integer.valueOf(
             ctx.capturedValues.get('__maxAttempts')
           );
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to parse __maxAttempts: ' + e.getMessage()
-          );
+        } catch (Exception ignored) {
         }
         ctx.capturedValues.remove('__maxAttempts');
       }
@@ -1721,11 +1709,7 @@ public inherited sharing class StepContext {
           ctx.attemptCount = Integer.valueOf(
             ctx.capturedValues.get('__attemptCount')
           );
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to parse __attemptCount: ' + e.getMessage()
-          );
+        } catch (Exception ignored) {
         }
         ctx.capturedValues.remove('__attemptCount');
       }
@@ -1879,13 +1863,8 @@ public inherited sharing class StepContext {
               targetKeyIndex.add(i);
               targetType.add('failedOutput');
             }
-          } catch (Exception ex) {
+          } catch (Exception ignored) {
             // Deserialization failure will be handled during outcome construction
-            System.debug(
-              LoggingLevel.FINE,
-              'Ignoring deserialization failure during bulk payload lookup: ' +
-              ex.getMessage()
-            );
           }
         }
       }
