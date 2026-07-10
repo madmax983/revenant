@@ -455,10 +455,7 @@ public inherited sharing class WorkflowTestHarness {
         return stepType.newInstance() instanceof CalloutStep;
       }
     } catch (Exception e) {
-      System.debug(
-        LoggingLevel.FINEST,
-        'Ignore callout step resolution failure: ' + e.getMessage()
-      );
+      return false;
     }
     return false;
   }
@@ -601,10 +598,7 @@ public inherited sharing class WorkflowTestHarness {
         }
       }
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.FINEST,
-        'Ignore JSON deserialization failure: ' + ex.getMessage()
-      );
+      return false;
     }
     return false;
   }
