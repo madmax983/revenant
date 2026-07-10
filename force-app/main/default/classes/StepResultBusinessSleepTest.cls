@@ -327,7 +327,7 @@ private class StepResultBusinessSleepTest {
       Integer startingQueries = Limits.getQueries();
 
       // 1. Initial default query
-      StepResult r1 = StepResult.sleep(1, 'Days', 'Default');
+      StepResult.sleep(1, 'Days', 'Default');
       Integer afterFirstQuery = Limits.getQueries();
       Assert.isTrue(
         afterFirstQuery > startingQueries,
@@ -335,7 +335,7 @@ private class StepResultBusinessSleepTest {
       );
 
       // 2. Secondary default query (hits cache)
-      StepResult r2 = StepResult.sleep(1, 'Days', 'Default');
+      StepResult.sleep(1, 'Days', 'Default');
       Assert.areEqual(
         afterFirstQuery,
         Limits.getQueries(),
@@ -343,7 +343,7 @@ private class StepResultBusinessSleepTest {
       );
 
       // 3. Named query matching default's actual name (hits cache)
-      StepResult r3 = StepResult.sleep(1, 'Days', defaultBh.Name);
+      StepResult.sleep(1, 'Days', defaultBh.Name);
       Assert.areEqual(
         afterFirstQuery,
         Limits.getQueries(),

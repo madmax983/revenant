@@ -5,7 +5,7 @@ public class WorkflowSchedulerTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Schedule the job
       Test.startTest();
-      String jobId = System.schedule(
+      System.schedule(
         'TestSchedulerJob',
         '0 0 0 * * ?',
         new WorkflowScheduler(

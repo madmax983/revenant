@@ -42,7 +42,7 @@ public class WorkflowSearchAttributesDashboardTest {
         new Map<String, String>{ 'region' => 'EU', 'tier' => 'enterprise' }
       );
 
-      Id instId2 = WorkflowEngine.start(
+      WorkflowEngine.start(
         'StepContextSignalEngineTest.PlainWaitWorkflow',
         'CK_FILT_2',
         null,

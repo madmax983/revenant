@@ -567,12 +567,7 @@ private class WorkflowEngineGetStatusTest {
 
       // A later, independent run reuses correlation key 'K' (root defaults to 'K'),
       // so it shares the chain root but is unrelated to K_run2.
-      Workflow_Instance__c independentK = makeInstance(
-        'Running',
-        'K',
-        null,
-        null
-      );
+      makeInstance('Running', 'K', null, null);
 
       // Two keys force the bulk path (a single-element list takes the single-key
       // fast path), which is where root-keyed conflation would occur.
@@ -918,12 +913,7 @@ private class WorkflowEngineGetStatusTest {
   @IsTest
   static void testBulkGetStatusByKeys_missingKeyYieldsNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'Completed',
-        'key-bulk-str-known2',
-        'v',
-        null
-      );
+      makeInstance('Completed', 'key-bulk-str-known2', 'v', null);
 
       List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
         new List<String>{ 'key-bulk-str-known2', 'key-not-exist-xyz987' }
@@ -942,12 +932,7 @@ private class WorkflowEngineGetStatusTest {
   @IsTest
   static void testBulkGetStatusByKeys_blankEntriesYieldNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'Completed',
-        'key-bulk-str-blank',
-        'v',
-        null
-      );
+      makeInstance('Completed', 'key-bulk-str-blank', 'v', null);
 
       List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
         new List<String>{ 'key-bulk-str-blank', '', null }

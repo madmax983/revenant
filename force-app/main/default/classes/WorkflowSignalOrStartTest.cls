@@ -594,7 +594,7 @@ public class WorkflowSignalOrStartTest {
 
       // 4. Send child completed signal for Child 2 (terminal, but Child 1 is still Pending)
       Test.startTest();
-      WorkflowEngine.StartResult result1 = WorkflowEngine.signalOrStart(
+      WorkflowEngine.signalOrStart(
         startReq,
         'ChildCompleted:ChildKey2',
         '{}',
@@ -614,7 +614,7 @@ public class WorkflowSignalOrStartTest {
       update as system child1;
 
       // Send child completed signal for Child 1 (all children are now terminal/ready)
-      WorkflowEngine.StartResult result2 = WorkflowEngine.signalOrStart(
+      WorkflowEngine.signalOrStart(
         startReq,
         'ChildCompleted:ChildKey1',
         '{}',
