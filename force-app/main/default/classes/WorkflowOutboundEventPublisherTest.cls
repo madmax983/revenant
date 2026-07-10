@@ -20,7 +20,9 @@ private class WorkflowOutboundEventPublisherTest {
     for (Integer i = 0; i < count; i++) {
       events.add(
         new Workflow_Lifecycle__e(
-          Workflow_Instance_Id__c = 'a00000000000000AAA',
+          Workflow_Instance_Id__c = TestIdFactory.generate(
+            Workflow_Instance__c.SObjectType
+          ),
           Status__c = 'Completed'
         )
       );

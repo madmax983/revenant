@@ -6,11 +6,7 @@ public class WorkflowWatchdogTest {
       WorkflowWatchdog.forceBootstrapInTest = true;
 
       Test.startTest();
-      String jobId = System.schedule(
-        'TestWatchdogJob',
-        '0 0 0 * * ?',
-        new WorkflowWatchdog()
-      );
+      System.schedule('TestWatchdogJob', '0 0 0 * * ?', new WorkflowWatchdog());
       Test.stopTest();
 
       // Verify watchdog instance was started
@@ -176,6 +172,25 @@ public class WorkflowWatchdogTest {
         )
       );
       Test.stopTest();
+
+      // After the sleep/retry/timeout jobs drain, the instance must still be a
+      // live, queryable record carrying a status (the jobs process it, never
+      // orphan or delete it).
+      Workflow_Instance__c processed = [
+        SELECT Id, Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :inst.Id
+      ];
+      System.assertEquals(
+        inst.Id,
+        processed.Id,
+        'Instance should still exist after the sleep/retry/timeout jobs run'
+      );
+      System.assertNotEquals(
+        null,
+        processed.Status__c,
+        'Instance should retain a status after async job processing'
+      );
     }
   }
 
@@ -1135,7 +1150,7 @@ public class WorkflowWatchdogTest {
       Workflow_Instance__c inst = new Workflow_Instance__c(
         Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
         Status__c = 'Running',
-        Async_Job_Id__c = '707Sv00001rOraj' // Dead/mock job ID
+        Async_Job_Id__c = TestIdFactory.generate(AsyncApexJob.SObjectType) // Dead/mock job ID
       );
       insert inst;
 
@@ -1327,7 +1342,7 @@ public class WorkflowWatchdogTest {
         Status__c = 'Running',
         Current_Step__c = 'WorkflowEngineTest.HappyStep1,WorkflowEngineTest.HappyStep2',
         Compensation_Stack__c = '["WorkflowEngineTest.HappyStep0"]',
-        Async_Job_Id__c = '707Sv00001rOraj' // Dead/mock job ID
+        Async_Job_Id__c = TestIdFactory.generate(AsyncApexJob.SObjectType) // Dead/mock job ID
       );
       insert inst;
       Test.setCreatedDate(inst.Id, DateTime.now().addMinutes(-15));

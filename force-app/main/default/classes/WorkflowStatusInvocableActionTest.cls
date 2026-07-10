@@ -347,7 +347,7 @@ public class WorkflowStatusInvocableActionTest {
       // A syntactically id-shaped but non-existent value must not fault the Flow.
       Test.startTest();
       List<WorkflowStatusInvocableAction.StatusResult> results = call(
-        'a00000000000000AAA'
+        TestIdFactory.generate(Workflow_Instance__c.SObjectType)
       );
       Test.stopTest();
 

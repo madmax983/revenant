@@ -1099,11 +1099,6 @@ public class WorkflowDashboardControllerTest {
       insert new List<ContentVersion>{ cv1, cv2, cv3, cv4 };
 
       // Query ContentDocumentId for each
-      List<ContentVersion> cvs = [
-        SELECT ContentDocumentId
-        FROM ContentVersion
-        WHERE Id IN (:cv1.Id, :cv2.Id, :cv3.Id, :cv4.Id)
-      ];
       Map<Id, Id> cvIdToDocId = new Map<Id, Id>();
       for (ContentVersion cv : [
         SELECT Id, ContentDocumentId
@@ -1424,7 +1419,7 @@ public class WorkflowDashboardControllerTest {
         Status__c = 'Suspended',
         Correlation_Key__c = 'TestResumeKey',
         Sleep_Until__c = DateTime.now().addMinutes(5),
-        Async_Job_Id__c = '08e000000000000AAA'
+        Async_Job_Id__c = TestIdFactory.generate(AsyncApexJob.SObjectType)
       );
       insert as system inst;
 

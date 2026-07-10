@@ -282,7 +282,7 @@ public class WorkflowFlowStepTest {
   static void testWorkflowFlowStepGuardedAgainstDoubleFire() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // 1. Create a StepContext for first execution
-      Id instanceId = '00D000000000001EAA';
+      Id instanceId = TestIdFactory.generate(Organization.SObjectType);
       StepContext ctx1 = new StepContext(
         instanceId,
         'MyWorkflow',
@@ -422,7 +422,7 @@ public class WorkflowFlowStepTest {
   @IsTest
   static void testWorkflowFlowStepBypassesMetadataCheckOnReplay() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Id instanceId = '00D000000000001EAA';
+      Id instanceId = TestIdFactory.generate(Organization.SObjectType);
 
       // Seed captured values with a cached output for a non-existent/deactivated flow.
       Map<String, Object> cachedOutputs = new Map<String, Object>{

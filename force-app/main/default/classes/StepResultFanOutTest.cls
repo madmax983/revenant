@@ -195,7 +195,7 @@ public class StepResultFanOutTest {
   @IsTest
   static void testGetChildOutcomes() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Id dummyInstanceId = '00D000000000001EAA';
+      Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
 
       List<StepContext.Signal> signals = new List<StepContext.Signal>{
         new StepContext.Signal(
