@@ -147,22 +147,22 @@ public with sharing class WorkflowValidator {
     }
     Set<String> declaredSet = new Set<String>(declaredSteps);
 
-    if (initialStepThrew) {
-      // Cannot evaluate the entry point further; already reported above.
-    } else if (String.isBlank(initialStep)) {
-      result.add(
-        INITIAL_STEP_BLANK,
-        workflowName,
-        'Workflow "' +
-          workflowName +
-          '" getInitialStep() is blank; the DAG has no entry point.'
-      );
-    } else if (!declaredSet.contains(initialStep)) {
-      result.add(
-        INITIAL_STEP_NOT_DECLARED,
-        initialStep,
-        'Initial step "' + initialStep + '" is not contained in getSteps().'
-      );
+    if (!initialStepThrew) {
+      if (String.isBlank(initialStep)) {
+        result.add(
+          INITIAL_STEP_BLANK,
+          workflowName,
+          'Workflow "' +
+            workflowName +
+            '" getInitialStep() is blank; the DAG has no entry point.'
+        );
+      } else if (!declaredSet.contains(initialStep)) {
+        result.add(
+          INITIAL_STEP_NOT_DECLARED,
+          initialStep,
+          'Initial step "' + initialStep + '" is not contained in getSteps().'
+        );
+      }
     }
 
     // (d) Duplicate declarations.
