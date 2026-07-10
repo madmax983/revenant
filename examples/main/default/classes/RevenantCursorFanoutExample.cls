@@ -224,6 +224,7 @@ public inherited sharing class RevenantCursorFanoutExample {
         );
       }
 
+      List<StepResult.ChildRequest> reqs = new List<StepResult.ChildRequest>();
       // Spawn child workflows in increments of chunkSize
       for (ChunkedCursorIterator partition : partitions) {
         Integer offset = partition.position;
@@ -240,16 +241,16 @@ public inherited sharing class RevenantCursorFanoutExample {
           '_' +
           ctx.workflowInstanceId;
 
-        // Start child workflow
-        WorkflowEngine.start(
-          'RevenantCursorFanoutExample.ProcessCursorChunkWorkflow',
-          childKey,
-          childInput,
-          ctx.workflowInstanceId
+        reqs.add(
+          new StepResult.ChildRequest(
+            'RevenantCursorFanoutExample.ProcessCursorChunkWorkflow',
+            childKey,
+            childInput
+          )
         );
       }
 
-      return StepResult.suspend();
+      return StepResult.startChildren(reqs);
     }
 
     /**
