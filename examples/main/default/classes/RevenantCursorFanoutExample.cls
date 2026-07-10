@@ -103,7 +103,7 @@ public inherited sharing class RevenantCursorFanoutExample {
     public StepResult execute(StepContext ctx) {
       ctx.reportProgress(10.0, 'Cursor opened; calculating partitions');
       // Construct query (using Accounts for demonstration)
-      String query = 'SELECT Id, Name FROM Account ORDER BY Name';
+      String query = 'SELECT Id, Name FROM Account ORDER BY Name, Id';
 
       // Chunk size defaults to 2 for the demo/tests, but can be overridden via the
       // workflow input (e.g. {"chunkSize": 50}) so a large dataset fans out into a
@@ -217,7 +217,7 @@ public inherited sharing class RevenantCursorFanoutExample {
 
       // Enforce parallel partition limit to prevent exceeding DML transaction limits
       if (partitions.size() > 100) {
-        throw new System.LimitException(
+        throw new WorkflowEngine.WorkflowException(
           'Too many partitions generated (' +
             partitions.size() +
             '). Parallel partition limit is 100 to prevent DML transaction limits.'
