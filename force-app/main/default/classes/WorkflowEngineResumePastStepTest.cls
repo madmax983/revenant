@@ -252,7 +252,7 @@ public class WorkflowEngineResumePastStepTest {
       // 4. Verify step 2 execution is recorded as OperatorSkipped (using exact casing)
       skipSkipTestStep2AndAssertOperatorSkipped(
         instanceId,
-        'workflowenginetestmocksa.skipteststep2'
+        'workflowenginemocksatest.skipteststep2'
       );
 
       // 5. Run next step execution (should resume and complete)
