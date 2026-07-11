@@ -4,15 +4,15 @@ public class StepContextTest {
   static void testConstructorAndProperties() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        '{"input": 1}',
-        '{"prev": 2}',
-        '{"state": 3}',
-        '{"wfInput": 4}'
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson('{"input": 1}')
+        .previousStepOutput('{"prev": 2}')
+        .stepStateJson('{"state": 3}')
+        .workflowInputJson('{"wfInput": 4}')
+        .build();
 
       System.assertEquals(dummyInstanceId, ctx.workflowInstanceId);
       System.assertEquals('TestWorkflow', ctx.workflowName);
@@ -29,16 +29,16 @@ public class StepContextTest {
   static void testConstructorWithVersion() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        '{"input": 1}',
-        '{"prev": 2}',
-        '{"state": 3}',
-        '{"wfInput": 4}',
-        3
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson('{"input": 1}')
+        .previousStepOutput('{"prev": 2}')
+        .stepStateJson('{"state": 3}')
+        .workflowInputJson('{"wfInput": 4}')
+        .workflowVersion(3)
+        .build();
 
       System.assertEquals(dummyInstanceId, ctx.workflowInstanceId);
       System.assertEquals('TestWorkflow', ctx.workflowName);
@@ -55,15 +55,15 @@ public class StepContextTest {
   static void testShouldYieldNormalConditions() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       // Under normal test execution conditions, limits should not be exceeded
       System.assertEquals(
@@ -78,15 +78,15 @@ public class StepContextTest {
   static void testShouldYieldQueryRowsThresholdExceeded() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       // Set mock to trigger SOQL query row limits checking logic
       StepContext.mockQueryRowsFraction = 0.81;
@@ -116,15 +116,15 @@ public class StepContextTest {
   static void testShouldYieldAsyncApexExecutionsLimit() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       // Set mock fraction above 80%
       StepContext.mockAsyncExecutionsFraction = 0.81;
@@ -162,16 +162,16 @@ public class StepContextTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
       // Construct via the existing 8-arg constructor (no signals supplied).
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .build();
 
       System.assertEquals(
         0,
@@ -217,17 +217,17 @@ public class StepContextTest {
         new StepContext.Signal(null, 'Second', '{"n":2}'),
         new StepContext.Signal(null, 'First', '{"n":3}')
       };
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        pending
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .pendingSignals(pending)
+        .build();
 
       List<StepContext.Signal> all = ctx.getSignals();
       System.assertEquals(3, all.size(), 'All pending signals must be exposed');
@@ -247,17 +247,17 @@ public class StepContextTest {
         new StepContext.Signal(null, 'Other', '{"x":1}'),
         new StepContext.Signal(null, 'Approval', '{"approved":false}')
       };
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        pending
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .pendingSignals(pending)
+        .build();
 
       StepContext.Signal latest = ctx.getSignal('Approval');
       System.assertEquals(true, latest.isPresent());
@@ -301,17 +301,17 @@ public class StepContextTest {
         new StepContext.Signal(sA.Id, 'Approval', sA.Payload__c),
         new StepContext.Signal(sB.Id, 'Other', sB.Payload__c)
       };
-      StepContext ctx = new StepContext(
-        inst.Id,
-        'X',
-        'Step',
-        null,
-        null,
-        null,
-        null,
-        1,
-        pending
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('X')
+        .stepName('Step')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .pendingSignals(pending)
+        .build();
 
       // Before observing anything, nothing is consumable.
       System.assertEquals(
@@ -366,17 +366,17 @@ public class StepContextTest {
         new StepContext.Signal(sA.Id, 'A', 'a'),
         new StepContext.Signal(sB.Id, 'B', 'b')
       };
-      StepContext ctx = new StepContext(
-        inst.Id,
-        'X',
-        'Step',
-        null,
-        null,
-        null,
-        null,
-        1,
-        pending
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('X')
+        .stepName('Step')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .pendingSignals(pending)
+        .build();
 
       // Reading the full list observes every pending signal.
       ctx.getSignals();
@@ -395,17 +395,17 @@ public class StepContextTest {
       List<StepContext.Signal> pending = new List<StepContext.Signal>{
         new StepContext.Signal(null, 'Real', '{"v":1}')
       };
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        pending
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .pendingSignals(pending)
+        .build();
 
       // A blank/null name must never fall through to the unscoped (all) query and
       // must not mark unrelated signals observed/consumable.
@@ -455,40 +455,34 @@ public class StepContextTest {
       // Oldest partial page for 'Evt' (budget-truncated); the true most-recent
       // 'Evt' row is NOT in this page.
       List<StepContext.Signal> oldestPage = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          null,
-          'Evt',
-          '{"seq":1}',
-          DateTime.now().addMinutes(-5)
-        ),
-        new StepContext.Signal(
-          null,
-          'Evt',
-          '{"seq":2}',
-          DateTime.now().addMinutes(-4)
-        )
+        new StepContext.Signal(null, 'Evt', '{"seq":1}')
+          .withCreatedDate(DateTime.now().addMinutes(-5)),
+        new StepContext.Signal(null, 'Evt', '{"seq":2}')
+          .withCreatedDate(DateTime.now().addMinutes(-4))
       };
       StepContext.Signal trueLatest = new StepContext.Signal(
-        null,
-        'Evt',
-        '{"seq":99}',
-        DateTime.now()
-      );
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        (StepContext.SignalSource) new FakeNameSource(
-          oldestPage,
-          trueLatest,
-          true
+          null,
+          'Evt',
+          '{"seq":99}'
         )
-      );
+        .withCreatedDate(DateTime.now());
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(
+          (StepContext.SignalSource) new FakeNameSource(
+            oldestPage,
+            trueLatest,
+            true
+          )
+        )
+        .build();
 
       // Read the (capped) list first; this populates the partial per-name cache.
       System.assertEquals(2, ctx.getSignals('Evt').size());
@@ -514,32 +508,26 @@ public class StepContextTest {
       // returns null. The branch still owns the rows, so getSignal must not report
       // a false absence (which would strand a suspend-on-absent branch).
       List<StepContext.Signal> claimedPage = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          null,
-          'Foo',
-          '{"seq":1}',
-          DateTime.now().addMinutes(-2),
-          true
-        ),
-        new StepContext.Signal(
-          null,
-          'Foo',
-          '{"seq":2}',
-          DateTime.now().addMinutes(-1),
-          true
-        )
+        new StepContext.Signal(null, 'Foo', '{"seq":1}')
+          .withCreatedDate(DateTime.now().addMinutes(-2))
+          .asClaimed(),
+        new StepContext.Signal(null, 'Foo', '{"seq":2}')
+          .withCreatedDate(DateTime.now().addMinutes(-1))
+          .asClaimed()
       };
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        (StepContext.SignalSource) new FakeNameSource(claimedPage, null, true)
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(
+          (StepContext.SignalSource) new FakeNameSource(claimedPage, null, true)
+        )
+        .build();
 
       System.assertEquals(2, ctx.getSignals('Foo').size());
 
@@ -564,37 +552,35 @@ public class StepContextTest {
       // A complete (uncapped) list: its last element IS the true latest, so the
       // cached list is trusted and getLatestSignal must NOT override it.
       List<StepContext.Signal> fullList = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          null,
-          'Evt',
-          '{"seq":1}',
-          DateTime.now().addMinutes(-2)
-        ),
-        new StepContext.Signal(
-          null,
-          'Evt',
-          '{"seq":2}',
-          DateTime.now().addMinutes(-1)
-        )
+        new StepContext.Signal(null, 'Evt', '{"seq":1}')
+          .withCreatedDate(DateTime.now().addMinutes(-2)),
+        new StepContext.Signal(null, 'Evt', '{"seq":2}')
+          .withCreatedDate(DateTime.now().addMinutes(-1))
       };
       // trueLatest differs so a regression that always consults the source fails.
       StepContext.Signal sentinel = new StepContext.Signal(
-        null,
-        'Evt',
-        '{"seq":99}',
-        DateTime.now()
-      );
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        (StepContext.SignalSource) new FakeNameSource(fullList, sentinel, false)
-      );
+          null,
+          'Evt',
+          '{"seq":99}'
+        )
+        .withCreatedDate(DateTime.now());
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(
+          (StepContext.SignalSource) new FakeNameSource(
+            fullList,
+            sentinel,
+            false
+          )
+        )
+        .build();
 
       System.assertEquals(2, ctx.getSignals('Evt').size());
       StepContext.Signal latest = ctx.getSignal('Evt');
@@ -614,40 +600,34 @@ public class StepContextTest {
       // that does NOT contain 'Important', while the source can still resolve the
       // true latest 'Important' row.
       List<StepContext.Signal> partialAll = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          null,
-          'Noise',
-          '{"n":1}',
-          DateTime.now().addMinutes(-3)
-        ),
-        new StepContext.Signal(
-          null,
-          'Noise',
-          '{"n":2}',
-          DateTime.now().addMinutes(-2)
-        )
+        new StepContext.Signal(null, 'Noise', '{"n":1}')
+          .withCreatedDate(DateTime.now().addMinutes(-3)),
+        new StepContext.Signal(null, 'Noise', '{"n":2}')
+          .withCreatedDate(DateTime.now().addMinutes(-2))
       };
       StepContext.Signal important = new StepContext.Signal(
-        null,
-        'Important',
-        '{"go":true}',
-        DateTime.now()
-      );
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        (StepContext.SignalSource) new FakeNameSource(
-          partialAll,
-          important,
-          true
+          null,
+          'Important',
+          '{"go":true}'
         )
-      );
+        .withCreatedDate(DateTime.now());
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(
+          (StepContext.SignalSource) new FakeNameSource(
+            partialAll,
+            important,
+            true
+          )
+        )
+        .build();
 
       // Unscoped read caps and only sees the Noise page.
       System.assertEquals(2, ctx.getSignals().size());
@@ -669,24 +649,20 @@ public class StepContextTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
       List<StepContext.Signal> pending = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          null,
-          'Approve:Order',
-          '{"ok":true}',
-          DateTime.now()
-        )
+        new StepContext.Signal(null, 'Approve:Order', '{"ok":true}')
+          .withCreatedDate(DateTime.now())
       };
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        pending
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .pendingSignals(pending)
+        .build();
 
       // Load the full list first (in-memory allLoaded path), then probe the name
       // with different casing. The source SOQL and lower-cased caches match names
@@ -757,30 +733,24 @@ public class StepContextTest {
         )
         .getKeyPrefix();
       List<StepContext.Signal> allRows = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          prefix + '000000000001',
-          'Foo',
-          '{"f":1}',
-          DateTime.now().addMinutes(-2)
-        ),
-        new StepContext.Signal(
-          prefix + '000000000002',
-          'Bar',
-          '{"b":1}',
-          DateTime.now().addMinutes(-1)
-        )
+        new StepContext.Signal(prefix + '000000000001', 'Foo', '{"f":1}')
+          .withCreatedDate(DateTime.now().addMinutes(-2)),
+        new StepContext.Signal(prefix + '000000000002', 'Bar', '{"b":1}')
+          .withCreatedDate(DateTime.now().addMinutes(-1))
       };
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        (StepContext.SignalSource) new ClaimingFakeSource(allRows)
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(
+          (StepContext.SignalSource) new ClaimingFakeSource(allRows)
+        )
+        .build();
 
       // Capped full read claims both rows and marks them for consumption.
       System.assertEquals(2, ctx.getSignals().size());
@@ -810,32 +780,33 @@ public class StepContextTest {
       // Capped page row (claimed) shares the timestamp with the source's latest
       // but has a LOWER id, so the source row is the true latest (Id DESC).
       List<StepContext.Signal> page = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          prefix + '000000000002',
-          'Foo',
-          '{"seq":2}',
-          ts,
-          true
-        )
+        new StepContext.Signal(prefix + '000000000002', 'Foo', '{"seq":2}')
+          .withCreatedDate(ts)
+          .asClaimed()
       };
       StepContext.Signal sourceLatest = new StepContext.Signal(
-        prefix + '000000000003',
-        'Foo',
-        '{"seq":3}',
-        ts,
-        false
-      );
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        (StepContext.SignalSource) new FakeNameSource(page, sourceLatest, true)
-      );
+          prefix + '000000000003',
+          'Foo',
+          '{"seq":3}'
+        )
+        .withCreatedDate(ts);
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(
+          (StepContext.SignalSource) new FakeNameSource(
+            page,
+            sourceLatest,
+            true
+          )
+        )
+        .build();
 
       ctx.getSignals('Foo');
       StepContext.Signal latest = ctx.getSignal('Foo');
@@ -860,25 +831,25 @@ public class StepContextTest {
       // operator re-drive (#1), and an at-least-once Workflow_Event__e resume all
       // re-build a context like this -> the key must be identical every time.
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext attemptA = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        '{"input":1}',
-        null,
-        null,
-        '{"wf":1}'
-      );
-      StepContext attemptB = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        '{"input":1}',
-        '{"prev":"changed"}',
-        '{"state":"changed"}',
-        '{"wf":1}',
-        9
-      );
+      StepContext attemptA = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson('{"input":1}')
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson('{"wf":1}')
+        .build();
+      StepContext attemptB = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson('{"input":1}')
+        .previousStepOutput('{"prev":"changed"}')
+        .stepStateJson('{"state":"changed"}')
+        .workflowInputJson('{"wf":1}')
+        .workflowVersion(9)
+        .build();
 
       System.assert(
         String.isNotBlank(attemptA.idempotencyKey),
@@ -896,24 +867,24 @@ public class StepContextTest {
   static void testIdempotencyKeyDistinctPerStep() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext stepA = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
-      StepContext stepB = new StepContext(
-        instanceId,
-        'WF',
-        'StepB',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext stepA = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
+      StepContext stepB = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepB')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       System.assertNotEquals(
         stepA.idempotencyKey,
         stepB.idempotencyKey,
@@ -928,24 +899,24 @@ public class StepContextTest {
       // The same step name across two different instances (e.g. two parallel
       // fan-out branch instances with different Parent_Instance__c, or the same
       // step in two separate runs) must observe different keys.
-      StepContext branchOne = new StepContext(
-        TestIdFactory.generate(Organization.SObjectType),
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
-      StepContext branchTwo = new StepContext(
-        TestIdFactory.generate(Organization.SObjectType),
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext branchOne = new StepContext.Builder()
+        .instanceId(TestIdFactory.generate(Organization.SObjectType))
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
+      StepContext branchTwo = new StepContext.Builder()
+        .instanceId(TestIdFactory.generate(Organization.SObjectType))
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       System.assertNotEquals(
         branchOne.idempotencyKey,
         branchTwo.idempotencyKey,
@@ -962,33 +933,33 @@ public class StepContextTest {
       // distinct from the forward execution key yet stable across compensation
       // retries.
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext forward = new StepContext(
-        instanceId,
-        'WF',
-        'ChargeStep',
-        null,
-        null,
-        null,
-        null
-      );
-      StepContext compensate = new StepContext(
-        instanceId,
-        'WF',
-        'ChargeStep_Compensate',
-        null,
-        null,
-        null,
-        null
-      );
-      StepContext compensateRetry = new StepContext(
-        instanceId,
-        'WF',
-        'ChargeStep_Compensate',
-        '{"different":"state"}',
-        null,
-        null,
-        null
-      );
+      StepContext forward = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('ChargeStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
+      StepContext compensate = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('ChargeStep_Compensate')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
+      StepContext compensateRetry = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('ChargeStep_Compensate')
+        .inputJson('{"different":"state"}')
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       System.assertNotEquals(
         forward.idempotencyKey,
@@ -1010,41 +981,41 @@ public class StepContextTest {
       // completed visit must observe a different key so distinct side effects are
       // not wrongly deduped; the engine supplies an incrementing visit sequence.
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext visitZero = new StepContext(
-        instanceId,
-        'WF',
-        'PollStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0
-      );
-      StepContext visitOne = new StepContext(
-        instanceId,
-        'WF',
-        'PollStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        1
-      );
+      StepContext visitZero = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('PollStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(0)
+        .build();
+      StepContext visitOne = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('PollStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(1)
+        .build();
       // A retry/re-drive/resume of the SAME visit rebuilds the context with the
       // same visit sequence even though other state differs.
-      StepContext visitOneRetry = new StepContext(
-        instanceId,
-        'WF',
-        'PollStep',
-        '{"changed":true}',
-        null,
-        null,
-        null,
-        1,
-        1
-      );
+      StepContext visitOneRetry = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('PollStep')
+        .inputJson('{"changed":true}')
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(1)
+        .build();
 
       System.assertNotEquals(
         visitZero.idempotencyKey,
@@ -1065,27 +1036,27 @@ public class StepContextTest {
       // The additive visit param defaults to 0, so the 8-arg constructor and the
       // 9-arg constructor with stepVisit=0 must yield the identical key.
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext defaulted = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1
-      );
-      StepContext explicitZero = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0
-      );
+      StepContext defaulted = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .build();
+      StepContext explicitZero = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(0)
+        .build();
       System.assertEquals(
         defaulted.idempotencyKey,
         explicitZero.idempotencyKey,
@@ -1097,16 +1068,16 @@ public class StepContextTest {
   @IsTest
   static void testPreviousRunAtNullByDefault() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      StepContext ctx = new StepContext(
-        TestIdFactory.generate(Organization.SObjectType),
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(TestIdFactory.generate(Organization.SObjectType))
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .build();
       System.assertNotEquals(null, ctx, 'Context should be constructed');
       System.assertEquals(
         null,
@@ -1120,19 +1091,19 @@ public class StepContextTest {
   static void testPreviousRunAtSetViaFullConstructor() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Datetime ts = Datetime.now().addMinutes(-5);
-      StepContext ctx = new StepContext(
-        TestIdFactory.generate(Organization.SObjectType),
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        ts
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(TestIdFactory.generate(Organization.SObjectType))
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(0)
+        .signalSource(null)
+        .previousRunAt(ts)
+        .build();
       System.assertEquals(
         ts,
         ctx.previousRunAt,
@@ -1161,15 +1132,15 @@ public class StepContextTest {
   static void testOnceFirstCallInvokesProducerAndReturnsValue() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       StringProducer p = new StringProducer('hello');
       Object result = ctx.once('myKey', p);
       System.assertEquals(
@@ -1189,15 +1160,15 @@ public class StepContextTest {
   static void testOnceSecondCallReturnsSameValueWithoutCallingProducer() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       StringProducer p = new StringProducer('stable');
       ctx.once('k', p);
       Object second = ctx.once('k', p);
@@ -1218,15 +1189,15 @@ public class StepContextTest {
   static void testOnceDistinctKeysAreIndependent() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       StringProducer pA = new StringProducer('alpha');
       StringProducer pB = new StringProducer('beta');
       Object a = ctx.once('keyA', pA);
@@ -1246,20 +1217,20 @@ public class StepContextTest {
       String priorJson = JSON.serialize(
         new Map<String, Object>{ 'refNumber' => 'REF-001' }
       );
-      StepContext ctx = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        priorJson
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(0)
+        .signalSource(null)
+        .previousRunAt(null)
+        .capturedValuesJson(priorJson)
+        .build();
       StringProducer p = new StringProducer('SHOULD-NOT-BE-CALLED');
       Object result = ctx.once('refNumber', p);
       System.assertEquals(
@@ -1279,15 +1250,15 @@ public class StepContextTest {
   static void testGetCapturedValuesJsonRoundTrips() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       ctx.once('k1', new StringProducer('v1'));
       ctx.once('k2', new StringProducer('v2'));
       String capturedJson = ctx.getCapturedValuesJson();
@@ -1303,15 +1274,15 @@ public class StepContextTest {
   static void testGetCapturedValuesJsonNullWhenNoCaptures() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       System.assertEquals(
         null,
         ctx.getCapturedValuesJson(),
@@ -1326,32 +1297,32 @@ public class StepContextTest {
       // Numbers and booleans JSON-round-trip to a consistent type so values are
       // byte-identical regardless of whether they come from in-memory or rehydrated.
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       ctx.once('num', new StringProducer('42'));
       String captured = ctx.getCapturedValuesJson();
       // Rehydrate into a new context
-      StepContext ctx2 = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        captured
-      );
+      StepContext ctx2 = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(0)
+        .signalSource(null)
+        .previousRunAt(null)
+        .capturedValuesJson(captured)
+        .build();
       StringProducer p2 = new StringProducer('different');
       Object v = ctx2.once('num', p2);
       System.assertEquals(
@@ -1371,15 +1342,15 @@ public class StepContextTest {
   static void testExposedRetryPropertiesAndDefaults() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       System.assertEquals(1, ctx.attempt, 'Default attempt should be 1');
       System.assertEquals(
         1,
@@ -1397,22 +1368,22 @@ public class StepContextTest {
   static void testExposedRetryPropertiesOverloads() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        null,
-        2,
-        5
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(0)
+        .signalSource(null)
+        .previousRunAt(null)
+        .capturedValuesJson(null)
+        .attempt(2)
+        .maxAttempts(5)
+        .build();
       System.assertEquals(2, ctx.attempt);
       System.assertEquals(5, ctx.maxAttempts);
       System.assert(!ctx.isFinalAttempt());
@@ -1429,20 +1400,20 @@ public class StepContextTest {
           '__maxAttempts' => 3
         }
       );
-      StepContext ctx = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        priorJson
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(0)
+        .signalSource(null)
+        .previousRunAt(null)
+        .capturedValuesJson(priorJson)
+        .build();
       System.assertEquals(1, ctx.attempt);
       System.assertEquals(3, ctx.maxAttempts);
       System.assert(!ctx.isFinalAttempt());
@@ -1466,22 +1437,22 @@ public class StepContextTest {
         }
       );
       // Hydrate
-      StepContext ctx = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        priorJson,
-        1, // attempt
-        3 // maxAttempts
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(0)
+        .signalSource(null)
+        .previousRunAt(null)
+        .capturedValuesJson(priorJson)
+        .attempt(1)
+        .maxAttempts(3)
+        .build();
       System.assertEquals(3, ctx.maxAttempts);
 
       // Simulate step execution yielding and capturing a new value
@@ -1512,20 +1483,20 @@ public class StepContextTest {
 
       // 1. Double/Decimal value parsed from JSON
       String decimalJson = '{"__maxAttempts":3.0}';
-      StepContext ctx = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        decimalJson
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(0)
+        .signalSource(null)
+        .previousRunAt(null)
+        .capturedValuesJson(decimalJson)
+        .build();
       System.assertEquals(
         3,
         ctx.maxAttempts,
@@ -1533,20 +1504,20 @@ public class StepContextTest {
       );
 
       // 2. Malformed JSON should not crash
-      StepContext ctx2 = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        '{"__maxAttempts":'
-      );
+      StepContext ctx2 = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(0)
+        .signalSource(null)
+        .previousRunAt(null)
+        .capturedValuesJson('{"__maxAttempts":')
+        .build();
       System.assertEquals(
         1,
         ctx2.maxAttempts,
@@ -1559,15 +1530,15 @@ public class StepContextTest {
   static void testReportProgress() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       System.assertEquals(false, ctx.isProgressReported());
       System.assertEquals(null, ctx.getProgressJson());
@@ -1626,17 +1597,17 @@ public class StepContextTest {
       );
       insert sig;
 
-      StepContext ctx = new StepContext(
-        inst.Id,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        new WorkflowEngine.PendingSignalSource(inst.Id)
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(new WorkflowEngine.PendingSignalSource(inst.Id))
+        .build();
 
       // Call getSignal first to populate cache with empty result (no signals present yet in the context cache)
       System.assertEquals(false, ctx.getSignal('Go').isPresent());
@@ -1648,17 +1619,17 @@ public class StepContextTest {
       );
 
       // Create a new context since the old one cached the empty signal list
-      ctx = new StepContext(
-        inst.Id,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        new WorkflowEngine.PendingSignalSource(inst.Id)
-      );
+      ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(new WorkflowEngine.PendingSignalSource(inst.Id))
+        .build();
       Test.stopTest();
 
       Workflow_Signal__c reloadedSig = [
@@ -1821,17 +1792,17 @@ public class StepContextTest {
       MapSignalSource fakeSource = new MapSignalSource(
         new Map<String, StepContext.Signal>()
       );
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        fakeSource
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(fakeSource)
+        .build();
 
       StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
       System.assertEquals(false, outcome.isPresent());
@@ -1854,17 +1825,17 @@ public class StepContextTest {
         )
       };
       MapSignalSource fakeSource = new MapSignalSource(sigs);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        fakeSource
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(fakeSource)
+        .build();
 
       StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
       System.assertEquals(true, outcome.isPresent());
@@ -1887,17 +1858,17 @@ public class StepContextTest {
         )
       };
       MapSignalSource fakeSource = new MapSignalSource(sigs);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        fakeSource
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(fakeSource)
+        .build();
 
       StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
       System.assertEquals(true, outcome.isPresent());
@@ -1920,17 +1891,17 @@ public class StepContextTest {
         )
       };
       MapSignalSource fakeSource = new MapSignalSource(sigs);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        fakeSource
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(fakeSource)
+        .build();
 
       StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
       System.assertEquals(true, outcome.isPresent());
@@ -1953,17 +1924,17 @@ public class StepContextTest {
         )
       };
       MapSignalSource fakeSource = new MapSignalSource(sigs);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        fakeSource
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(fakeSource)
+        .build();
 
       StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
       System.assertEquals(true, outcome.isPresent());
@@ -1993,17 +1964,17 @@ public class StepContextTest {
         )
       };
       MapSignalSource fakeSource = new MapSignalSource(sigs);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        fakeSource
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(fakeSource)
+        .build();
 
       StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
       System.assertEquals(true, outcome.isPresent());
@@ -2028,17 +1999,17 @@ public class StepContextTest {
       MapSignalSource fakeSource = new MapSignalSource(
         new Map<String, StepContext.Signal>()
       );
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        fakeSource
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .signalSource(fakeSource)
+        .build();
 
       StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
       System.assertEquals(false, outcome.isPresent());
@@ -2059,15 +2030,15 @@ public class StepContextTest {
   static void testLogApiBuffering() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       ctx.log(StepContext.Level.INFO, 'Info message');
       Map<String, Object> context = new Map<String, Object>{
@@ -2114,15 +2085,15 @@ public class StepContextTest {
   static void testLogCharacterTruncation() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       String message4000 = 'a'.repeat(4000);
       ctx.log(StepContext.Level.INFO, message4000);
@@ -2135,7 +2106,15 @@ public class StepContextTest {
       );
       System.assertEquals(message4000, crumbs[0].message);
 
-      ctx = new StepContext(dummyInstanceId, 'W', 'S', null, null, null, null);
+      ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       String message4001 = 'b'.repeat(4001);
       ctx.log(StepContext.Level.INFO, message4001);
       crumbs = ctx.getBreadcrumbs();
@@ -2151,7 +2130,15 @@ public class StepContextTest {
       );
 
       // Test with context
-      ctx = new StepContext(dummyInstanceId, 'W', 'S', null, null, null, null);
+      ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       Map<String, Object> context = new Map<String, Object>{ 'k' => 'v' };
       // base message + ' | Context: {"k":"v"}' has length: 3980 + 21 = 4001
       String msg3980 = 'c'.repeat(3980);
@@ -2170,15 +2157,15 @@ public class StepContextTest {
   static void testLogEntriesTruncation() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       for (Integer i = 0; i < 100; i++) {
         ctx.log(StepContext.Level.INFO, 'Entry ' + i);
@@ -2219,15 +2206,15 @@ public class StepContextTest {
   static void testLogNullOrEmptyMessage() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       ctx.log(StepContext.Level.INFO, null);
       ctx.log(StepContext.Level.WARN, '');
@@ -2250,15 +2237,15 @@ public class StepContextTest {
   static void testLogContextSerializationSafety() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       // Test circular reference catch
       Map<String, Object> circularMap = new Map<String, Object>();
@@ -2273,7 +2260,15 @@ public class StepContextTest {
       );
 
       // Test oversized value pre-check
-      ctx = new StepContext(dummyInstanceId, 'W', 'S', null, null, null, null);
+      ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       Map<String, Object> oversizedMap = new Map<String, Object>{
         'payload' => 'x'.repeat(4001)
       };
@@ -2294,15 +2289,15 @@ public class StepContextTest {
   static void testNullLogLevelDefaulting() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       ctx.log(null, 'null level message');
       List<StepContext.Breadcrumb> crumbs = ctx.getBreadcrumbs();
       System.assertEquals(1, crumbs.size());
@@ -2318,15 +2313,15 @@ public class StepContextTest {
   static void testPatchedBrandNewInstance() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       // First time decision is reached in a brand new instance
       Boolean isPatched = ctx.patched('change-1');
@@ -2354,20 +2349,20 @@ public class StepContextTest {
   static void testPatchedReplay() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = StepContext.withCapturedValues(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        1,
-        null,
-        null,
-        '{"__patch:change-1":true}'
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(1)
+        .signalSource(null)
+        .previousRunAt(null)
+        .capturedValuesJson('{"__patch:change-1":true}')
+        .build();
 
       // Decision is replayed
       Boolean isPatched = ctx.patched('change-1');
@@ -2411,15 +2406,15 @@ public class StepContextTest {
         Captured_Values__c = marker
       );
 
-      StepContext ctx = new StepContext(
-        inst.Id,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       // The offloaded patch decision should be resolved and read successfully as true
       Boolean isPatched = ctx.patched('change-offloaded');
@@ -2450,15 +2445,15 @@ public class StepContextTest {
         Status__c = 'Completed'
       );
 
-      StepContext ctx = new StepContext(
-        inst.Id,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       // The step has already completed in the past, so the patch decision should be false (not flipped retroactively)
       Boolean isPatched = ctx.patched('change-1');
@@ -2504,15 +2499,15 @@ public class StepContextTest {
           Captured_Values__c = '{"someValue":true}'
         );
 
-        StepContext ctx = new StepContext(
-          inst.Id,
-          'TestWorkflow',
-          'DownstreamStep',
-          null,
-          null,
-          null,
-          null
-        );
+        StepContext ctx = new StepContext.Builder()
+          .instanceId(inst.Id)
+          .workflowName('TestWorkflow')
+          .stepName('DownstreamStep')
+          .inputJson(null)
+          .previousStepOutput(null)
+          .stepStateJson(null)
+          .workflowInputJson(null)
+          .build();
 
         // DownstreamStep is running for the first time. Since instanceCreatedDate < classLastModified,
         // it must default to false (legacy).
@@ -2550,15 +2545,15 @@ public class StepContextTest {
           Captured_Values__c = '{"someValue":true}'
         );
 
-        StepContext ctx = new StepContext(
-          inst.Id,
-          'TestWorkflow',
-          'DownstreamStep',
-          null,
-          null,
-          null,
-          null
-        );
+        StepContext ctx = new StepContext.Builder()
+          .instanceId(inst.Id)
+          .workflowName('TestWorkflow')
+          .stepName('DownstreamStep')
+          .inputJson(null)
+          .previousStepOutput(null)
+          .stepStateJson(null)
+          .workflowInputJson(null)
+          .build();
 
         // Since instanceCreatedDate >= classLastModified, it is a brand-new instance, so it must default to true!
         Boolean isPatched = ctx.patched('change-1');
@@ -2593,15 +2588,15 @@ public class StepContextTest {
         );
         insert instA;
 
-        StepContext ctxA = new StepContext(
-          instA.Id,
-          'TestWorkflow',
-          'StepA',
-          null,
-          null,
-          null,
-          null
-        );
+        StepContext ctxA = new StepContext.Builder()
+          .instanceId(instA.Id)
+          .workflowName('TestWorkflow')
+          .stepName('StepA')
+          .inputJson(null)
+          .previousStepOutput(null)
+          .stepStateJson(null)
+          .workflowInputJson(null)
+          .build();
 
         // Since instanceCreatedDate < introducedAt, it must default to false (legacy)!
         System.assertEquals(false, ctxA.patched('change-date', introducedAt));
@@ -2622,15 +2617,15 @@ public class StepContextTest {
         );
         insert instB;
 
-        StepContext ctxB = new StepContext(
-          instB.Id,
-          'TestWorkflow',
-          'StepA',
-          null,
-          null,
-          null,
-          null
-        );
+        StepContext ctxB = new StepContext.Builder()
+          .instanceId(instB.Id)
+          .workflowName('TestWorkflow')
+          .stepName('StepA')
+          .inputJson(null)
+          .previousStepOutput(null)
+          .stepStateJson(null)
+          .workflowInputJson(null)
+          .build();
 
         // Since instanceCreatedDate >= introducedAt, it must default to true, even though instanceCreatedDate < classLastModified!
         System.assertEquals(true, ctxB.patched('change-date', introducedAt));
@@ -2647,20 +2642,20 @@ public class StepContextTest {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
 
       // Case 1: Patched is true, deprecated should pass silently
-      StepContext ctxTrue = StepContext.withCapturedValues(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        1,
-        null,
-        null,
-        '{"__patch:change-1":true}'
-      );
+      StepContext ctxTrue = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(1)
+        .signalSource(null)
+        .previousRunAt(null)
+        .capturedValuesJson('{"__patch:change-1":true}')
+        .build();
       try {
         ctxTrue.deprecated('change-1');
         // Pass
@@ -2669,20 +2664,20 @@ public class StepContextTest {
       }
 
       // Case 2: Patched is false, deprecated should throw WorkflowException
-      StepContext ctxFalse = StepContext.withCapturedValues(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        1,
-        null,
-        null,
-        '{"__patch:change-1":false}'
-      );
+      StepContext ctxFalse = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(1)
+        .signalSource(null)
+        .previousRunAt(null)
+        .capturedValuesJson('{"__patch:change-1":false}')
+        .build();
       try {
         ctxFalse.deprecated('change-1');
         System.assert(
@@ -2712,15 +2707,15 @@ public class StepContextTest {
       );
       insert inst;
 
-      StepContext ctx = new StepContext(
-        inst.Id,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       // Call patched. It will call loadExecutions(getCallingClassName())
       // which resolves the calling class to 'StepContextTest'.

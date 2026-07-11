@@ -1,4 +1,18 @@
 public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
+  // Title prefixes that mark a ContentDocument as engine-owned and therefore safe to
+  // purge. User-uploaded files (no matching prefix) are never deleted. Declared on the
+  // top-level class because Apex forbids static members on inner classes; the inner
+  // PurgeOldInstancesStep references it by simple name.
+  private static final Set<String> ALLOWED_PREFIXES = new Set<String>{
+    'Input_',
+    'Output_',
+    'State_',
+    'Resume_',
+    'ContinueInput_',
+    'Captures_',
+    'VerificationPayload'
+  };
+
   public List<String> getSteps() {
     return new List<String>{ 'CleanupWorkflow.PurgeOldInstancesStep' };
   }
@@ -15,60 +29,150 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
     public Integer deletedCount;
   }
 
-  public class PurgeOldInstancesStep implements WorkflowStep {
+  // Parsed, validated input parameters for a purge run.
+  private class PurgeParams {
+    public Integer retentionDays = 30;
+    public Integer batchSize = 200;
+  }
+
+  // Accumulated set of instances/documents selected for deletion this transaction.
+  private class PurgeChunk {
+    public List<Workflow_Instance__c> instancesToPurge = new List<Workflow_Instance__c>();
+    public Set<Id> instanceIdsToPurge = new Set<Id>();
+    public Set<Id> finalDocIdsToDelete = new Set<Id>();
+  }
+
+  // The document lookups needed to decide, per candidate instance, which files are
+  // engine-owned and unshared and therefore safe to delete.
+  private class DocIndex {
+    public Map<Id, List<Id>> instanceToDocIds = new Map<Id, List<Id>>();
+    public Set<Id> allDocIds = new Set<Id>();
+    public Map<Id, ContentDocument> docMap = new Map<Id, ContentDocument>();
+    public Map<Id, List<ContentDocumentLink>> docToLinksMap = new Map<Id, List<ContentDocumentLink>>();
+  }
+
+  // inherited sharing: the step runs in the engine's (caller's) context. Every SOQL
+  // uses WITH SYSTEM_MODE and every DML uses `as system`, so record access is already
+  // elevated deliberately where the purge needs it; the explicit keyword just satisfies
+  // the sharing-declaration requirement without widening or narrowing that behavior.
+  public inherited sharing class PurgeOldInstancesStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      // Parse input parameters
-      Integer retentionDays = 30;
-      Integer batchSize = 200;
-      if (String.isNotBlank(ctx.workflowInputJson)) {
-        Map<String, Object> input;
-        try {
-          input = (Map<String, Object>) JSON.deserializeUntyped(
-            ctx.workflowInputJson
-          );
-        } catch (Exception ex) {
-          throw new WorkflowEngine.WorkflowException(
-            'Malformed JSON in workflow input: ' + ex.getMessage()
-          );
-        }
-
-        if (input.containsKey('retentionDays')) {
-          try {
-            retentionDays = Integer.valueOf(input.get('retentionDays'));
-          } catch (Exception ex) {
-            throw new WorkflowEngine.WorkflowException(
-              'Invalid retentionDays parameter type: ' + ex.getMessage()
-            );
-          }
-          if (retentionDays < 0) {
-            throw new WorkflowEngine.WorkflowException(
-              'retentionDays parameter cannot be negative'
-            );
-          }
-        }
-
-        if (input.containsKey('batchSize')) {
-          try {
-            batchSize = Integer.valueOf(input.get('batchSize'));
-          } catch (Exception ex) {
-            throw new WorkflowEngine.WorkflowException(
-              'Invalid batchSize parameter type: ' + ex.getMessage()
-            );
-          }
-          if (batchSize <= 0) {
-            throw new WorkflowEngine.WorkflowException(
-              'batchSize parameter must be greater than zero'
-            );
-          }
-        }
-      }
+      PurgeParams params = parseParams(ctx.workflowInputJson);
 
       // Clamp batchSize to a maximum of 50
-      Integer clampedBatchSize = Math.min(batchSize, 50);
-      DateTime threshold = DateTime.now().addDays(-retentionDays);
+      Integer clampedBatchSize = Math.min(params.batchSize, 50);
+      DateTime threshold = DateTime.now().addDays(-params.retentionDays);
 
-      // Query candidate old terminal instances
-      List<Workflow_Instance__c> candidateInstances = [
+      List<Workflow_Instance__c> candidateInstances = queryCandidates(
+        threshold,
+        clampedBatchSize
+      );
+
+      PurgeState state = loadState(ctx.stepStateJson);
+
+      if (candidateInstances.isEmpty()) {
+        return StepResult.complete(null, state);
+      }
+
+      // 1-3. Map documents to candidate instances, select those documents, and query
+      //    all their links so we can verify a file is not shared elsewhere before
+      //    deleting it (prevents data loss).
+      DocIndex docIndex = buildDocIndex(candidateInstances);
+
+      // 4. Build chunk of instances to process in this transaction, bounding file
+      //    deletes to 100 max.
+      PurgeChunk chunk = buildPurgeChunk(candidateInstances, docIndex);
+
+      // 5. Delete qualified documents
+      deleteQualifiedDocs(chunk.finalDocIdsToDelete);
+
+      // 6. Delete associated signal records before deleting instances.
+      applyInstanceDeletion(chunk, state);
+
+      // Check if we still have remaining candidate instances that weren't processed in
+      // this batch due to the limit, or if we fetched a full batch which implies there
+      // could be more in the database.
+      Boolean hasMore =
+        (candidateInstances.size() > chunk.instancesToPurge.size()) ||
+        (candidateInstances.size() == clampedBatchSize);
+      if (hasMore) {
+        return StepResult.yield(JSON.serialize(state));
+      }
+
+      return StepResult.complete(null, state);
+    }
+
+    // ── Input parsing ──────────────────────────────────────────────────────────
+    private PurgeParams parseParams(String inputJson) {
+      PurgeParams params = new PurgeParams();
+      if (String.isBlank(inputJson)) {
+        return params;
+      }
+      Map<String, Object> input = deserializeInput(inputJson);
+      if (input.containsKey('retentionDays')) {
+        params.retentionDays = parseRetentionDays(input.get('retentionDays'));
+      }
+      if (input.containsKey('batchSize')) {
+        params.batchSize = parseBatchSize(input.get('batchSize'));
+      }
+      return params;
+    }
+
+    private Map<String, Object> deserializeInput(String inputJson) {
+      try {
+        return (Map<String, Object>) JSON.deserializeUntyped(inputJson);
+      } catch (Exception ex) {
+        throw new WorkflowEngine.WorkflowException(
+          'Malformed JSON in workflow input: ' + ex.getMessage()
+        );
+      }
+    }
+
+    private Integer parseRetentionDays(Object raw) {
+      Integer value = toInt(raw, 'retentionDays');
+      if (value < 0) {
+        throw new WorkflowEngine.WorkflowException(
+          'retentionDays parameter cannot be negative'
+        );
+      }
+      return value;
+    }
+
+    private Integer parseBatchSize(Object raw) {
+      Integer value = toInt(raw, 'batchSize');
+      if (value <= 0) {
+        throw new WorkflowEngine.WorkflowException(
+          'batchSize parameter must be greater than zero'
+        );
+      }
+      return value;
+    }
+
+    private Integer toInt(Object raw, String label) {
+      try {
+        return Integer.valueOf(raw);
+      } catch (Exception ex) {
+        throw new WorkflowEngine.WorkflowException(
+          'Invalid ' + label + ' parameter type: ' + ex.getMessage()
+        );
+      }
+    }
+
+    // ── State + candidate selection ──────────────────────────────────────────────
+    private PurgeState loadState(String stepStateJson) {
+      PurgeState state = new PurgeState();
+      state.deletedCount = 0;
+      if (String.isNotBlank(stepStateJson)) {
+        state = (PurgeState) JSON.deserialize(stepStateJson, PurgeState.class);
+      }
+      return state;
+    }
+
+    private List<Workflow_Instance__c> queryCandidates(
+      DateTime threshold,
+      Integer clampedBatchSize
+    ) {
+      return [
         SELECT Id
         FROM Workflow_Instance__c
         WHERE
@@ -83,198 +187,201 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
         WITH SYSTEM_MODE
         LIMIT :clampedBatchSize
       ];
+    }
 
-      PurgeState state = new PurgeState();
-      state.deletedCount = 0;
-      if (String.isNotBlank(ctx.stepStateJson)) {
-        state = (PurgeState) JSON.deserialize(
-          ctx.stepStateJson,
-          PurgeState.class
-        );
-      }
+    // ── Document mapping ─────────────────────────────────────────────────────────
+    // Maps candidate instances to their documents, then loads those documents and every
+    // link on them so sharing can be checked before deletion.
+    private DocIndex buildDocIndex(
+      List<Workflow_Instance__c> candidateInstances
+    ) {
+      DocIndex idx = new DocIndex();
 
-      if (candidateInstances.isEmpty()) {
-        return StepResult.complete(null, state);
-      }
-
-      // 1. Map documents to candidate instances to limit queries
       Set<Id> candidateInstanceIds = new Set<Id>();
       for (Workflow_Instance__c inst : candidateInstances) {
         candidateInstanceIds.add(inst.Id);
       }
 
-      List<ContentDocumentLink> links = [
+      for (ContentDocumentLink link : [
         SELECT ContentDocumentId, LinkedEntityId
         FROM ContentDocumentLink
         WHERE LinkedEntityId IN :candidateInstanceIds
         WITH SYSTEM_MODE
-      ];
-
-      Map<Id, List<Id>> instanceToDocIdsMap = new Map<Id, List<Id>>();
-      Set<Id> allDocIds = new Set<Id>();
-      for (ContentDocumentLink link : links) {
-        if (!instanceToDocIdsMap.containsKey(link.LinkedEntityId)) {
-          instanceToDocIdsMap.put(link.LinkedEntityId, new List<Id>());
+      ]) {
+        if (!idx.instanceToDocIds.containsKey(link.LinkedEntityId)) {
+          idx.instanceToDocIds.put(link.LinkedEntityId, new List<Id>());
         }
-        instanceToDocIdsMap.get(link.LinkedEntityId)
+        idx.instanceToDocIds.get(link.LinkedEntityId)
           .add(link.ContentDocumentId);
-        allDocIds.add(link.ContentDocumentId);
+        idx.allDocIds.add(link.ContentDocumentId);
       }
 
-      // 2. Select documents and perform prefix check to prevent data loss
-      Map<Id, ContentDocument> docMap = new Map<Id, ContentDocument>();
-      if (!allDocIds.isEmpty()) {
-        List<ContentDocument> docs = [
-          SELECT Id, Title
-          FROM ContentDocument
-          WHERE Id IN :allDocIds
-          WITH SYSTEM_MODE
-        ];
-        for (ContentDocument doc : docs) {
-          docMap.put(doc.Id, doc);
+      loadDocs(idx);
+      loadDocLinks(idx);
+      return idx;
+    }
+
+    private void loadDocs(DocIndex idx) {
+      if (idx.allDocIds.isEmpty()) {
+        return;
+      }
+      for (ContentDocument doc : [
+        SELECT Id, Title
+        FROM ContentDocument
+        WHERE Id IN :idx.allDocIds
+        WITH SYSTEM_MODE
+      ]) {
+        idx.docMap.put(doc.Id, doc);
+      }
+    }
+
+    private void loadDocLinks(DocIndex idx) {
+      if (idx.allDocIds.isEmpty()) {
+        return;
+      }
+      for (ContentDocumentLink cdl : [
+        SELECT ContentDocumentId, LinkedEntityId
+        FROM ContentDocumentLink
+        WHERE ContentDocumentId IN :idx.allDocIds
+        WITH SYSTEM_MODE
+      ]) {
+        if (!idx.docToLinksMap.containsKey(cdl.ContentDocumentId)) {
+          idx.docToLinksMap.put(
+            cdl.ContentDocumentId,
+            new List<ContentDocumentLink>()
+          );
         }
+        idx.docToLinksMap.get(cdl.ContentDocumentId).add(cdl);
       }
+    }
 
-      Set<String> allowedPrefixes = new Set<String>{
-        'Input_',
-        'Output_',
-        'State_',
-        'Resume_',
-        'ContinueInput_',
-        'Captures_',
-        'VerificationPayload'
-      };
-
-      // 3. Query all links for candidate documents to verify they are not shared elsewhere
-      Map<Id, List<ContentDocumentLink>> docToLinksMap = new Map<Id, List<ContentDocumentLink>>();
-      if (!allDocIds.isEmpty()) {
-        List<ContentDocumentLink> docLinks = [
-          SELECT ContentDocumentId, LinkedEntityId
-          FROM ContentDocumentLink
-          WHERE ContentDocumentId IN :allDocIds
-          WITH SYSTEM_MODE
-        ];
-        for (ContentDocumentLink cdl : docLinks) {
-          if (!docToLinksMap.containsKey(cdl.ContentDocumentId)) {
-            docToLinksMap.put(
-              cdl.ContentDocumentId,
-              new List<ContentDocumentLink>()
-            );
-          }
-          docToLinksMap.get(cdl.ContentDocumentId).add(cdl);
-        }
-      }
-
-      // 4. Build chunk of instances to process in this transaction, bounding file deletes to 100 max
-      List<Workflow_Instance__c> instancesToPurge = new List<Workflow_Instance__c>();
-      Set<Id> instanceIdsToPurge = new Set<Id>();
-      Set<Id> finalDocIdsToDelete = new Set<Id>();
+    // ── Purge-chunk selection ────────────────────────────────────────────────────
+    private PurgeChunk buildPurgeChunk(
+      List<Workflow_Instance__c> candidateInstances,
+      DocIndex idx
+    ) {
+      PurgeChunk chunk = new PurgeChunk();
 
       for (Workflow_Instance__c inst : candidateInstances) {
-        List<Id> docIds = instanceToDocIdsMap.get(inst.Id);
+        List<Id> docIds = idx.instanceToDocIds.get(inst.Id);
         Integer docCount = (docIds != null) ? docIds.size() : 0;
 
-        // Bounded processing: if processing this instance would exceed our soft transaction cap of 100 deleted documents,
-        // we defer it to the next yield chunk. We allow the first instance to exceed this soft cap to guarantee forward progress.
+        // Bounded processing: if processing this instance would exceed our soft
+        // transaction cap of 100 deleted documents, defer it to the next yield chunk.
+        // The first instance is allowed to exceed this soft cap to guarantee forward
+        // progress.
         if (
-          !instancesToPurge.isEmpty() &&
-          (finalDocIdsToDelete.size() + docCount) > 100
+          !chunk.instancesToPurge.isEmpty() &&
+          (chunk.finalDocIdsToDelete.size() + docCount) > 100
         ) {
           break;
         }
 
-        instancesToPurge.add(inst);
-        instanceIdsToPurge.add(inst.Id);
+        chunk.instancesToPurge.add(inst);
+        chunk.instanceIdsToPurge.add(inst.Id);
 
-        if (docIds != null) {
-          for (Id docId : docIds) {
-            ContentDocument doc = docMap.get(docId);
-            if (doc == null) {
-              continue;
-            }
+        collectDeletableDocs(docIds, idx, chunk);
+      }
 
-            // A. Title/Prefix Check
-            Boolean isEngineOwned = false;
-            for (String prefix : allowedPrefixes) {
-              if (doc.Title != null && doc.Title.startsWith(prefix)) {
-                isEngineOwned = true;
-                break;
-              }
-            }
+      return chunk;
+    }
 
-            if (!isEngineOwned) {
-              continue; // Do not delete user files
-            }
-
-            // B. Shared Link Check (check if shared outside this batch of purged instances)
-            Boolean isSharedElsewhere = false;
-            List<ContentDocumentLink> cdls = docToLinksMap.get(docId);
-            if (cdls != null) {
-              for (ContentDocumentLink cdl : cdls) {
-                Id linkedId = cdl.LinkedEntityId;
-                String sObjType = linkedId.getSObjectType()
-                  .getDescribe(SObjectDescribeOptions.DEFERRED)
-                  .getName();
-                // Ignore the default User link created on file upload
-                if (sObjType == 'User') {
-                  continue;
-                }
-                // If it is linked to any record other than a Workflow_Instance__c that is also being deleted in this batch:
-                if (
-                  sObjType != 'Workflow_Instance__c' ||
-                  !instanceIdsToPurge.contains(linkedId)
-                ) {
-                  isSharedElsewhere = true;
-                  break;
-                }
-              }
-            }
-
-            if (!isSharedElsewhere) {
-              finalDocIdsToDelete.add(docId);
-            }
-          }
+    private void collectDeletableDocs(
+      List<Id> docIds,
+      DocIndex idx,
+      PurgeChunk chunk
+    ) {
+      if (docIds == null) {
+        return;
+      }
+      for (Id docId : docIds) {
+        ContentDocument doc = idx.docMap.get(docId);
+        if (doc == null) {
+          continue;
+        }
+        // A. Title/Prefix Check — never delete user files
+        if (!isEngineOwned(doc)) {
+          continue;
+        }
+        // B. Shared Link Check — skip files still shared outside this purge batch
+        if (
+          !isSharedElsewhere(docId, idx.docToLinksMap, chunk.instanceIdsToPurge)
+        ) {
+          chunk.finalDocIdsToDelete.add(docId);
         }
       }
+    }
 
-      // 5. Delete qualified documents
-      if (!finalDocIdsToDelete.isEmpty()) {
-        List<ContentDocument> docsToDelete = [
-          SELECT Id
-          FROM ContentDocument
-          WHERE Id IN :finalDocIdsToDelete
-          WITH SYSTEM_MODE
-        ];
-        delete as system docsToDelete;
-      }
-
-      // 6. Delete associated signal records before deleting instances.
-      //    Workflow_Signal__c.Workflow_Instance__c is now a Lookup with SetNull
-      //    (not a cascade-delete MasterDetail), so signals must be deleted explicitly.
-      if (!instancesToPurge.isEmpty()) {
-        List<Workflow_Signal__c> signalsToDelete = [
-          SELECT Id
-          FROM Workflow_Signal__c
-          WHERE Workflow_Instance__c IN :instanceIdsToPurge
-          WITH SYSTEM_MODE
-        ];
-        if (!signalsToDelete.isEmpty()) {
-          delete as system signalsToDelete;
+    private Boolean isEngineOwned(ContentDocument doc) {
+      for (String prefix : ALLOWED_PREFIXES) {
+        if (doc.Title != null && doc.Title.startsWith(prefix)) {
+          return true;
         }
-        delete as system instancesToPurge;
-        state.deletedCount += instancesToPurge.size();
       }
+      return false;
+    }
 
-      // Check if we still have remaining candidate instances that weren't processed in this batch due to the limit,
-      // or if we fetched a full batch which implies there could be more in the database.
-      Boolean hasMore =
-        (candidateInstances.size() > instancesToPurge.size()) ||
-        (candidateInstances.size() == clampedBatchSize);
-      if (hasMore) {
-        return StepResult.yield(JSON.serialize(state));
+    private Boolean isSharedElsewhere(
+      Id docId,
+      Map<Id, List<ContentDocumentLink>> docToLinksMap,
+      Set<Id> instanceIdsToPurge
+    ) {
+      List<ContentDocumentLink> cdls = docToLinksMap.get(docId);
+      if (cdls == null) {
+        return false;
       }
+      for (ContentDocumentLink cdl : cdls) {
+        Id linkedId = cdl.LinkedEntityId;
+        String sObjType = linkedId.getSObjectType()
+          .getDescribe(SObjectDescribeOptions.DEFERRED)
+          .getName();
+        // Ignore the default User link created on file upload
+        if (sObjType == 'User') {
+          continue;
+        }
+        // Shared if linked to any record other than a Workflow_Instance__c that is
+        // also being deleted in this batch.
+        if (
+          sObjType != 'Workflow_Instance__c' ||
+          !instanceIdsToPurge.contains(linkedId)
+        ) {
+          return true;
+        }
+      }
+      return false;
+    }
 
-      return StepResult.complete(null, state);
+    // ── Deletion ─────────────────────────────────────────────────────────────────
+    private void deleteQualifiedDocs(Set<Id> finalDocIdsToDelete) {
+      if (finalDocIdsToDelete.isEmpty()) {
+        return;
+      }
+      List<ContentDocument> docsToDelete = [
+        SELECT Id
+        FROM ContentDocument
+        WHERE Id IN :finalDocIdsToDelete
+        WITH SYSTEM_MODE
+      ];
+      delete as system docsToDelete;
+    }
+
+    private void applyInstanceDeletion(PurgeChunk chunk, PurgeState state) {
+      if (chunk.instancesToPurge.isEmpty()) {
+        return;
+      }
+      // Workflow_Signal__c.Workflow_Instance__c is a Lookup with SetNull (not a
+      // cascade-delete MasterDetail), so signals must be deleted explicitly first.
+      List<Workflow_Signal__c> signalsToDelete = [
+        SELECT Id
+        FROM Workflow_Signal__c
+        WHERE Workflow_Instance__c IN :chunk.instanceIdsToPurge
+        WITH SYSTEM_MODE
+      ];
+      if (!signalsToDelete.isEmpty()) {
+        delete as system signalsToDelete;
+      }
+      delete as system chunk.instancesToPurge;
+      state.deletedCount += chunk.instancesToPurge.size();
     }
   }
 }

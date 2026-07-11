@@ -74,7 +74,8 @@ private class StepResultBusinessSleepTest {
       Long expectedSeconds =
         (expectedWake.getTime() - startTime.getTime()) / 1000L;
 
-      StepResult r = StepResult.sleep(2, 'Hours', defaultBh.Name, 'state_abc');
+      StepResult r = StepResult.sleep(2, 'Hours', defaultBh.Name)
+        .withStepState('state_abc');
 
       Assert.areEqual(
         StepResult.ActionType.SLEEP,

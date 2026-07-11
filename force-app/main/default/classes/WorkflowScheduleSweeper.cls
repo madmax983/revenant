@@ -47,19 +47,109 @@ public inherited sharing class WorkflowScheduleSweeper {
     String overlapPolicy;
   }
 
+  /**
+   * Bundles the identity of a single dedicated-slot fire (the schedule, the window
+   * instant, the correlation key for that window, and the log type). Grouped into a
+   * value object so the shared fire path takes a single argument rather than a long
+   * parameter list. Public so WorkflowScheduleJob can populate it.
+   */
+  public class FireContext {
+    public Workflow_Schedule__c sched;
+    public DateTime fireTime;
+    public String corrKey;
+    public String logType;
+  }
+
+  // Mutable working set threaded through the 0-slot sweep helpers so each stage can
+  // append to the shared update/log/start buffers without long parameter lists.
+  private class SweepState {
+    DateTime now;
+    List<DueItem> dueItems = new List<DueItem>();
+    List<Workflow_Schedule__c> toUpdate = new List<Workflow_Schedule__c>();
+    List<Workflow_Log__c> logsToUpsert = new List<Workflow_Log__c>();
+    List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
+    List<DueItem> starting = new List<DueItem>();
+    Set<String> blockedPrefixes;
+  }
+
+  // Assembles the fields of one fire's audit log. Bundled into a single value
+  // object so buildLog needs no long parameter list. logType null → LOG_TYPE.
+  private class LogSpec {
+    Workflow_Schedule__c sched;
+    String corrKey;
+    DateTime fireTime;
+    String logType;
+    String outcome;
+    Id instanceId;
+    String message;
+
+    LogSpec(DueItem item, String outcome) {
+      this.sched = item.sched;
+      this.corrKey = item.corrKey;
+      this.fireTime = item.fireTime;
+      this.outcome = outcome;
+    }
+
+    LogSpec(FireContext ctx, String outcome) {
+      this.sched = ctx.sched;
+      this.corrKey = ctx.corrKey;
+      this.fireTime = ctx.fireTime;
+      this.logType = ctx.logType;
+      this.outcome = outcome;
+    }
+  }
+
   // ── Public API ─────────────────────────────────────────────────────────────
 
   /**
    * Main sweep entry point. Called by WorkflowEngine.processWatchdogHeartbeat().
    */
   public static void sweep() {
-    DateTime now = DateTime.now();
+    List<Workflow_Schedule__c> schedules = loadDueSchedules(DateTime.now());
+    if (schedules.isEmpty()) {
+      return;
+    }
 
-    // Only rows that are actually due (or never fired) enter the batch, ordered
-    // least-recently-due first. Next_Fire_Window__c is a server-side cursor: a
-    // handled low-cadence schedule's next window is in the future, so it filters
-    // out and cannot pin the batch and starve higher-cadence schedules.
-    List<Workflow_Schedule__c> schedules = [
+    SweepState state = new SweepState();
+    state.now = DateTime.now();
+
+    // Phase 1: determine which schedules are due (cheap, no per-row SOQL/DML).
+    for (Workflow_Schedule__c sched : schedules) {
+      classifyForSweep(sched, state);
+    }
+
+    if (state.dueItems.isEmpty()) {
+      // Nothing to fire, but flush any cursor backfills queued above.
+      flushUpdates(state.toUpdate);
+      return;
+    }
+
+    // Phase 2: bulk-resolve which Skip schedules are blocked by an active prior run.
+    state.blockedPrefixes = computeBlockedPrefixes(state.dueItems);
+
+    // Phase 3: build a single bulk start for everything that should start.
+    for (DueItem item : state.dueItems) {
+      planDueItem(item, state);
+    }
+
+    if (!state.requests.isEmpty()) {
+      startAndRecord(state);
+    }
+
+    flushUpdates(state.toUpdate);
+    if (!state.logsToUpsert.isEmpty()) {
+      upsert as system state.logsToUpsert Fire_Key__c;
+    }
+  }
+
+  /**
+   * Loads the due (or never-fired) 0-slot schedules for this sweep, ordered
+   * least-recently-due first. Next_Fire_Window__c is a server-side cursor: a handled
+   * low-cadence schedule's next window is in the future, so it filters out and cannot
+   * pin the batch and starve higher-cadence schedules.
+   */
+  private static List<Workflow_Schedule__c> loadDueSchedules(DateTime now) {
+    return [
       SELECT
         Id,
         Name,
@@ -81,69 +171,47 @@ public inherited sharing class WorkflowScheduleSweeper {
       ORDER BY Next_Fire_Window__c ASC NULLS FIRST, Name ASC
       LIMIT :sweepBatchSize
     ];
+  }
 
-    if (schedules.isEmpty()) {
-      return;
-    }
-
-    List<Workflow_Schedule__c> toUpdate = new List<Workflow_Schedule__c>();
-    List<Workflow_Log__c> logsToUpsert = new List<Workflow_Log__c>();
-
-    // Phase 1: determine which schedules are due (cheap, no per-row SOQL/DML).
-    List<DueItem> dueItems = new List<DueItem>();
-    for (Workflow_Schedule__c sched : schedules) {
-      try {
-        DateTime fireTime = WorkflowCronEvaluator.previousFireTime(
-          sched.Cron_Expression__c,
-          now
+  /**
+   * Classifies one schedule for the sweep: either queues a cursor-only update (park
+   * an impossible cron, backfill a handled window, or seed a never-fired pre-creation
+   * window) or appends a DueItem to fire. Per-item exceptions are swallowed so one bad
+   * schedule cannot abort the whole heartbeat batch.
+   */
+  private static void classifyForSweep(
+    Workflow_Schedule__c sched,
+    SweepState state
+  ) {
+    try {
+      DateTime fireTime = WorkflowCronEvaluator.previousFireTime(
+        sched.Cron_Expression__c,
+        state.now
+      );
+      if (fireTime == null) {
+        // Syntactically valid but impossible cron (e.g. "0 0 31 2 *") never
+        // yields a window, so previousFireTime walks the full lookback and
+        // returns null. Leaving the cursor null would re-select this row on
+        // every heartbeat (NULLS FIRST) and starve real schedules behind the
+        // batch limit. Park it a day out with an Invalid outcome so it rotates
+        // out; a later edit via saveSchedule resets the cursor to re-arm it.
+        state.toUpdate.add(
+          new Workflow_Schedule__c(
+            Id = sched.Id,
+            Next_Fire_Window__c = state.now.addDays(1),
+            Last_Outcome__c = 'Invalid cron'
+          )
         );
-        if (fireTime == null) {
-          // Syntactically valid but impossible cron (e.g. "0 0 31 2 *") never
-          // yields a window, so previousFireTime walks the full lookback and
-          // returns null. Leaving the cursor null would re-select this row on
-          // every heartbeat (NULLS FIRST) and starve real schedules behind the
-          // batch limit. Park it a day out with an Invalid outcome so it rotates
-          // out; a later edit via saveSchedule resets the cursor to re-arm it.
-          toUpdate.add(
-            new Workflow_Schedule__c(
-              Id = sched.Id,
-              Next_Fire_Window__c = now.addDays(1),
-              Last_Outcome__c = 'Invalid cron'
-            )
-          );
-          continue;
-        }
-        if (
-          sched.Last_Fired_Window__c != null &&
-          sched.Last_Fired_Window__c == fireTime
-        ) {
-          // Window already handled. Backfill the cursor if it's missing so this row
-          // rotates out of future batches instead of being re-selected every sweep.
-          if (sched.Next_Fire_Window__c == null) {
-            toUpdate.add(
-              new Workflow_Schedule__c(
-                Id = sched.Id,
-                Next_Fire_Window__c = nextWindow(
-                  sched.Cron_Expression__c,
-                  fireTime
-                )
-              )
-            );
-          }
-          continue;
-        }
-        if (
-          sched.Last_Fired_Window__c == null &&
-          fireTime < truncateToMinute(sched.CreatedDate)
-        ) {
-          // Never-fired schedule whose most-recent window predates the record's
-          // creation MINUTE (e.g. an hourly schedule created via Setup at 14:37 — the
-          // 14:00 window is before it existed). Compared at minute granularity so an
-          // every-minute schedule created mid-minute still fires that same minute's
-          // window. UI-created schedules seed the cursor at save, so this only affects
-          // direct inserts. Don't fire a pre-creation window; just seed the cursor to
-          // the next future window and rotate out.
-          toUpdate.add(
+        return;
+      }
+      if (
+        sched.Last_Fired_Window__c != null &&
+        sched.Last_Fired_Window__c == fireTime
+      ) {
+        // Window already handled. Backfill the cursor if it's missing so this row
+        // rotates out of future batches instead of being re-selected every sweep.
+        if (sched.Next_Fire_Window__c == null) {
+          state.toUpdate.add(
             new Workflow_Schedule__c(
               Id = sched.Id,
               Next_Fire_Window__c = nextWindow(
@@ -152,172 +220,137 @@ public inherited sharing class WorkflowScheduleSweeper {
               )
             )
           );
-          continue;
         }
-        DueItem item = new DueItem();
-        item.sched = sched;
-        item.fireTime = fireTime;
-        item.prefix = effectivePrefix(sched);
-        item.corrKey = item.prefix + '_' + fireTime.formatGmt('yyyyMMddHHmm');
-        item.overlapPolicy = String.isNotBlank(sched.Overlap_Policy__c)
-          ? sched.Overlap_Policy__c
-          : 'Skip';
-        dueItems.add(item);
-      } catch (Exception ignored) {
+        return;
       }
+      if (
+        sched.Last_Fired_Window__c == null &&
+        fireTime < truncateToMinute(sched.CreatedDate)
+      ) {
+        // Never-fired schedule whose most-recent window predates the record's
+        // creation MINUTE (e.g. an hourly schedule created via Setup at 14:37 — the
+        // 14:00 window is before it existed). Compared at minute granularity so an
+        // every-minute schedule created mid-minute still fires that same minute's
+        // window. UI-created schedules seed the cursor at save, so this only affects
+        // direct inserts. Don't fire a pre-creation window; just seed the cursor to
+        // the next future window and rotate out.
+        state.toUpdate.add(
+          new Workflow_Schedule__c(
+            Id = sched.Id,
+            Next_Fire_Window__c = nextWindow(sched.Cron_Expression__c, fireTime)
+          )
+        );
+        return;
+      }
+      state.dueItems.add(buildDueItem(sched, fireTime));
+    } catch (Exception ignored) {
     }
+  }
 
-    if (dueItems.isEmpty()) {
-      // Nothing to fire, but flush any cursor backfills queued above.
-      if (!toUpdate.isEmpty()) {
-        update as system toUpdate;
-      }
+  /** Builds the DueItem (prefix + correlation key + overlap policy) for a fire. */
+  private static DueItem buildDueItem(
+    Workflow_Schedule__c sched,
+    DateTime fireTime
+  ) {
+    DueItem item = new DueItem();
+    item.sched = sched;
+    item.fireTime = fireTime;
+    item.prefix = effectivePrefix(sched);
+    item.corrKey = item.prefix + '_' + fireTime.formatGmt('yyyyMMddHHmm');
+    item.overlapPolicy = String.isNotBlank(sched.Overlap_Policy__c)
+      ? sched.Overlap_Policy__c
+      : 'Skip';
+    return item;
+  }
+
+  /**
+   * Plans a single due item: records a Skipped log (overlap-blocked) or an Error log
+   * (unknown workflow / bad input JSON) and advances the cursor, or otherwise queues a
+   * bulk StartRequest. resolveInput is isolated per item so one malformed schedule
+   * cannot abort the batch.
+   */
+  private static void planDueItem(DueItem item, SweepState state) {
+    if (
+      item.overlapPolicy == 'Skip' &&
+      state.blockedPrefixes.contains(item.prefix)
+    ) {
+      LogSpec spec = new LogSpec(item, 'Skipped');
+      spec.message = 'Prior run still active';
+      state.logsToUpsert.add(buildLog(spec));
+      state.toUpdate.add(advanceRow(item, 'Skipped'));
       return;
     }
-
-    // Phase 2: bulk-resolve which Skip schedules are blocked by an active prior run.
-    Set<String> blockedPrefixes = computeBlockedPrefixes(dueItems);
-
-    // Phase 3: build a single bulk start for everything that should start.
-    List<WorkflowEngine.StartRequest> requests = new List<WorkflowEngine.StartRequest>();
-    List<DueItem> starting = new List<DueItem>();
-    for (DueItem item : dueItems) {
-      if (
-        item.overlapPolicy == 'Skip' && blockedPrefixes.contains(item.prefix)
-      ) {
-        logsToUpsert.add(
-          buildLog(
-            item.sched,
-            item.corrKey,
-            item.fireTime,
-            'Skipped',
-            null,
-            'Prior run still active'
-          )
-        );
-        toUpdate.add(
-          new Workflow_Schedule__c(
-            Id = item.sched.Id,
-            Last_Fired_Window__c = item.fireTime,
-            Last_Outcome__c = 'Skipped',
-            Next_Fire_Window__c = nextWindow(
-              item.sched.Cron_Expression__c,
-              item.fireTime
-            )
-          )
-        );
-      } else {
-        // Validate the workflow definition resolves before starting. A schedule
-        // created outside the manager with a typo in Workflow_Name__c would
-        // otherwise be handed to startOrGet, which builds a Pending instance even
-        // when Type.forName can't resolve a class — recording a phantom "Started"
-        // that only fails asynchronously. Record an Error and rotate the row out.
-        if (!isValidWorkflowName(item.sched.Workflow_Name__c)) {
-          logsToUpsert.add(
-            buildLog(
-              item.sched,
-              item.corrKey,
-              item.fireTime,
-              'Error',
-              null,
-              'Unknown workflow definition: ' + item.sched.Workflow_Name__c
-            )
-          );
-          toUpdate.add(
-            new Workflow_Schedule__c(
-              Id = item.sched.Id,
-              Last_Fired_Window__c = item.fireTime,
-              Last_Outcome__c = 'Error',
-              Next_Fire_Window__c = nextWindow(
-                item.sched.Cron_Expression__c,
-                item.fireTime
-              )
-            )
-          );
-          continue;
-        }
-        // resolveInput can throw if Input_Json__c is malformed (a schedule can be
-        // created/edited via Setup or Object Manager, bypassing saveSchedule's JSON
-        // validation). Isolate it per item so one bad schedule cannot abort the whole
-        // heartbeat batch and block unrelated due schedules from starting.
-        Object resolvedInput;
-        try {
-          resolvedInput = resolveInput(item.sched, item.fireTime);
-        } catch (Exception ex) {
-          logsToUpsert.add(
-            buildLog(
-              item.sched,
-              item.corrKey,
-              item.fireTime,
-              'Error',
-              null,
-              'Invalid input JSON: ' + ex.getMessage()
-            )
-          );
-          toUpdate.add(
-            new Workflow_Schedule__c(
-              Id = item.sched.Id,
-              Last_Fired_Window__c = item.fireTime,
-              Last_Outcome__c = 'Error',
-              Next_Fire_Window__c = nextWindow(
-                item.sched.Cron_Expression__c,
-                item.fireTime
-              )
-            )
-          );
-          continue;
-        }
-        requests.add(
-          new WorkflowEngine.StartRequest(
-            item.sched.Workflow_Name__c,
-            item.corrKey,
-            resolvedInput
-          )
-        );
-        starting.add(item);
-      }
+    // Validate the workflow definition resolves before starting. A schedule created
+    // outside the manager with a typo in Workflow_Name__c would otherwise be handed
+    // to startOrGet, which builds a Pending instance even when Type.forName can't
+    // resolve a class — recording a phantom "Started" that only fails asynchronously.
+    if (!isValidWorkflowName(item.sched.Workflow_Name__c)) {
+      LogSpec spec = new LogSpec(item, 'Error');
+      spec.message =
+        'Unknown workflow definition: ' + item.sched.Workflow_Name__c;
+      state.logsToUpsert.add(buildLog(spec));
+      state.toUpdate.add(advanceRow(item, 'Error'));
+      return;
     }
-
-    if (!requests.isEmpty()) {
-      List<WorkflowEngine.StartResult> results = WorkflowEngine.startOrGet(
-        requests
-      );
-      for (Integer i = 0; i < starting.size(); i++) {
-        DueItem item = starting[i];
-        WorkflowEngine.StartResult sr = results[i];
-        Boolean isNew = sr != null && sr.isNew;
-        String outcome = isNew ? 'Started' : 'Deduped';
-        if (isNew) {
-          logsToUpsert.add(
-            buildLog(
-              item.sched,
-              item.corrKey,
-              item.fireTime,
-              outcome,
-              sr.instanceId,
-              null
-            )
-          );
-        }
-        toUpdate.add(
-          new Workflow_Schedule__c(
-            Id = item.sched.Id,
-            Last_Fired_Window__c = item.fireTime,
-            Last_Outcome__c = outcome,
-            Next_Fire_Window__c = nextWindow(
-              item.sched.Cron_Expression__c,
-              item.fireTime
-            )
-          )
-        );
-      }
+    // resolveInput can throw if Input_Json__c is malformed (a schedule can be
+    // created/edited via Setup or Object Manager, bypassing saveSchedule's JSON
+    // validation).
+    Object resolvedInput;
+    try {
+      resolvedInput = resolveInput(item.sched, item.fireTime);
+    } catch (Exception ex) {
+      LogSpec spec = new LogSpec(item, 'Error');
+      spec.message = 'Invalid input JSON: ' + ex.getMessage();
+      state.logsToUpsert.add(buildLog(spec));
+      state.toUpdate.add(advanceRow(item, 'Error'));
+      return;
     }
+    state.requests.add(
+      new WorkflowEngine.StartRequest(
+        item.sched.Workflow_Name__c,
+        item.corrKey,
+        resolvedInput
+      )
+    );
+    state.starting.add(item);
+  }
 
+  /** Runs the bulk start and records Started/Deduped logs + cursor advances. */
+  private static void startAndRecord(SweepState state) {
+    List<WorkflowEngine.StartResult> results = WorkflowEngine.startOrGet(
+      state.requests
+    );
+    for (Integer i = 0; i < state.starting.size(); i++) {
+      DueItem item = state.starting[i];
+      WorkflowEngine.StartResult sr = results[i];
+      Boolean isNew = sr != null && sr.isNew;
+      String outcome = isNew ? 'Started' : 'Deduped';
+      if (isNew) {
+        LogSpec spec = new LogSpec(item, outcome);
+        spec.instanceId = sr.instanceId;
+        state.logsToUpsert.add(buildLog(spec));
+      }
+      state.toUpdate.add(advanceRow(item, outcome));
+    }
+  }
+
+  /** Builds the cursor-advancing update row (last/next window + outcome) for a fire. */
+  private static Workflow_Schedule__c advanceRow(DueItem item, String outcome) {
+    return new Workflow_Schedule__c(
+      Id = item.sched.Id,
+      Last_Fired_Window__c = item.fireTime,
+      Last_Outcome__c = outcome,
+      Next_Fire_Window__c = nextWindow(
+        item.sched.Cron_Expression__c,
+        item.fireTime
+      )
+    );
+  }
+
+  /** Single-guarded bulk update for the sweep's queued cursor/state changes. */
+  private static void flushUpdates(List<Workflow_Schedule__c> toUpdate) {
     if (!toUpdate.isEmpty()) {
       update as system toUpdate;
-    }
-    if (!logsToUpsert.isEmpty()) {
-      upsert as system logsToUpsert Fire_Key__c;
     }
   }
 
@@ -398,16 +431,15 @@ public inherited sharing class WorkflowScheduleSweeper {
       resolveInput(sched, now)
     );
 
-    Workflow_Log__c log = buildLog(
-      sched,
-      corrKey,
-      now,
-      'Started',
-      sr.instanceId,
-      'Manual run'
-    );
-    log.Log_Type__c = 'ScheduleManualFire';
-    upsert as system log Fire_Key__c;
+    FireContext ctx = new FireContext();
+    ctx.sched = sched;
+    ctx.fireTime = now;
+    ctx.corrKey = corrKey;
+    ctx.logType = 'ScheduleManualFire';
+    LogSpec spec = new LogSpec(ctx, 'Started');
+    spec.instanceId = sr.instanceId;
+    spec.message = 'Manual run';
+    upsert as system buildLog(spec) Fire_Key__c;
 
     return sr.instanceId;
   }
@@ -491,29 +523,18 @@ public inherited sharing class WorkflowScheduleSweeper {
    * dedicated-slot WorkflowScheduleJob so dedicated fires honour Skip and keep the
    * same state/audit trail as the 0-slot sweep.
    */
-  public static void fireScheduled(
-    Workflow_Schedule__c sched,
-    DateTime fireTime,
-    String corrKey,
-    String logType
-  ) {
+  public static void fireScheduled(FireContext ctx) {
+    Workflow_Schedule__c sched = ctx.sched;
     String overlap = String.isNotBlank(sched.Overlap_Policy__c)
       ? sched.Overlap_Policy__c
       : 'Skip';
     String prefix = effectivePrefix(sched);
 
-    if (overlap == 'Skip' && hasActivePriorRun(prefix, corrKey)) {
-      Workflow_Log__c skipLog = buildLog(
-        sched,
-        corrKey,
-        fireTime,
-        'Skipped',
-        null,
-        'Prior run still active'
-      );
-      skipLog.Log_Type__c = logType;
-      upsert as system skipLog Fire_Key__c;
-      updateState(sched.Id, fireTime, 'Skipped', sched.Cron_Expression__c);
+    if (overlap == 'Skip' && hasActivePriorRun(prefix, ctx.corrKey)) {
+      LogSpec spec = new LogSpec(ctx, 'Skipped');
+      spec.message = 'Prior run still active';
+      upsert as system buildLog(spec) Fire_Key__c;
+      updateState(ctx, 'Skipped');
       return;
     }
 
@@ -522,48 +543,32 @@ public inherited sharing class WorkflowScheduleSweeper {
     // tick with stale UI state. Record an Error and advance instead of throwing.
     if (!isValidWorkflowName(sched.Workflow_Name__c)) {
       recordError(
-        sched,
-        corrKey,
-        fireTime,
-        logType,
+        ctx,
         'Unknown workflow definition: ' + sched.Workflow_Name__c
       );
       return;
     }
     Object resolvedInput;
     try {
-      resolvedInput = resolveInput(sched, fireTime);
+      resolvedInput = resolveInput(sched, ctx.fireTime);
     } catch (Exception ex) {
-      recordError(
-        sched,
-        corrKey,
-        fireTime,
-        logType,
-        'Invalid input JSON: ' + ex.getMessage()
-      );
+      recordError(ctx, 'Invalid input JSON: ' + ex.getMessage());
       return;
     }
 
     WorkflowEngine.StartResult sr = WorkflowEngine.startOrGet(
       sched.Workflow_Name__c,
-      corrKey,
+      ctx.corrKey,
       resolvedInput
     );
     Boolean isNew = sr != null && sr.isNew;
     String outcome = isNew ? 'Started' : 'Deduped';
     if (isNew) {
-      Workflow_Log__c log = buildLog(
-        sched,
-        corrKey,
-        fireTime,
-        outcome,
-        sr.instanceId,
-        null
-      );
-      log.Log_Type__c = logType;
-      upsert as system log Fire_Key__c;
+      LogSpec spec = new LogSpec(ctx, outcome);
+      spec.instanceId = sr.instanceId;
+      upsert as system buildLog(spec) Fire_Key__c;
     }
-    updateState(sched.Id, fireTime, outcome, sched.Cron_Expression__c);
+    updateState(ctx, outcome);
   }
 
   /**
@@ -589,24 +594,11 @@ public inherited sharing class WorkflowScheduleSweeper {
   // ── Private helpers ────────────────────────────────────────────────────────
 
   /** Records an Error outcome (single log + state advance) for a failed fire. */
-  private static void recordError(
-    Workflow_Schedule__c sched,
-    String corrKey,
-    DateTime fireTime,
-    String logType,
-    String message
-  ) {
-    Workflow_Log__c errLog = buildLog(
-      sched,
-      corrKey,
-      fireTime,
-      'Error',
-      null,
-      message
-    );
-    errLog.Log_Type__c = logType;
-    upsert as system errLog Fire_Key__c;
-    updateState(sched.Id, fireTime, 'Error', sched.Cron_Expression__c);
+  private static void recordError(FireContext ctx, String message) {
+    LogSpec spec = new LogSpec(ctx, 'Error');
+    spec.message = message;
+    upsert as system buildLog(spec) Fire_Key__c;
+    updateState(ctx, 'Error');
   }
 
   /**
@@ -626,43 +618,61 @@ public inherited sharing class WorkflowScheduleSweeper {
       }
     }
 
-    Set<String> blocked = new Set<String>();
     if (skipByPrefix.isEmpty()) {
-      return blocked;
+      return new Set<String>();
     }
 
     Map<String, Object> binds = new Map<String, Object>();
-    List<String> ors = new List<String>();
-    Integer i = 0;
-    for (String prefix : skipByPrefix.keySet()) {
-      String key = 'p' + i;
-      // Coarse pre-filter only; the exact startsWith below guarantees correctness.
-      binds.put(key, prefix + '_%');
-      ors.add('Correlation_Key__c LIKE :' + key);
-      i++;
-    }
-
-    String soql =
-      'SELECT Correlation_Key__c FROM Workflow_Instance__c ' +
-      'WHERE Active_Correlation_Key__c != null AND (' +
-      String.join(ors, ' OR ') +
-      ')';
-
+    String soql = buildActivePriorRunQuery(skipByPrefix.keySet(), binds);
     List<Workflow_Instance__c> active = Database.queryWithBinds(
       soql,
       binds,
       AccessLevel.SYSTEM_MODE
     );
 
+    return collectBlockedPrefixes(active, skipByPrefix.values());
+  }
+
+  /**
+   * Builds the coarse LIKE-per-prefix query for in-flight instances, populating the
+   * bind map. The exact startsWith filter in collectBlockedPrefixes guarantees
+   * correctness, so this pre-filter can be broad.
+   */
+  private static String buildActivePriorRunQuery(
+    Set<String> prefixes,
+    Map<String, Object> binds
+  ) {
+    List<String> ors = new List<String>();
+    Integer i = 0;
+    for (String prefix : prefixes) {
+      String key = 'p' + i;
+      binds.put(key, prefix + '_%');
+      ors.add('Correlation_Key__c LIKE :' + key);
+      i++;
+    }
+    return 'SELECT Correlation_Key__c FROM Workflow_Instance__c ' +
+      'WHERE Active_Correlation_Key__c != null AND (' +
+      String.join(ors, ' OR ') +
+      ')';
+  }
+
+  /**
+   * From the coarse query result, returns the set of Skip prefixes that have an
+   * ACTIVE instance from a DIFFERENT window (a prior run still in flight). Prefixes/
+   * keys are compared case-insensitively (the prefix field is caseSensitive=false and
+   * SOQL LIKE ignores case) so an admin re-casing a prefix still recognises a prior run.
+   */
+  private static Set<String> collectBlockedPrefixes(
+    List<Workflow_Instance__c> active,
+    List<DueItem> skipItems
+  ) {
+    Set<String> blocked = new Set<String>();
     for (Workflow_Instance__c inst : active) {
       if (inst.Correlation_Key__c == null) {
         continue;
       }
-      // Prefixes/keys are case-insensitive (the prefix field is caseSensitive=false
-      // and SOQL LIKE ignores case), so compare lowercased — an admin re-casing a
-      // prefix must still recognise an in-flight prior run under Skip.
       String lcKey = inst.Correlation_Key__c.toLowerCase();
-      for (DueItem item : skipByPrefix.values()) {
+      for (DueItem item : skipItems) {
         if (
           lcKey.startsWith(item.prefix.toLowerCase() + '_') &&
           inst.Correlation_Key__c != item.corrKey
@@ -719,17 +729,15 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /** Advances a schedule's last/next window state after a fire. Single-row DML. */
-  private static void updateState(
-    Id scheduleId,
-    DateTime firedWindow,
-    String outcome,
-    String cron
-  ) {
+  private static void updateState(FireContext ctx, String outcome) {
     update as system new Workflow_Schedule__c(
-      Id = scheduleId,
-      Last_Fired_Window__c = firedWindow,
+      Id = ctx.sched.Id,
+      Last_Fired_Window__c = ctx.fireTime,
       Last_Outcome__c = outcome,
-      Next_Fire_Window__c = nextWindow(cron, firedWindow)
+      Next_Fire_Window__c = nextWindow(
+        ctx.sched.Cron_Expression__c,
+        ctx.fireTime
+      )
     );
   }
 
@@ -754,26 +762,19 @@ public inherited sharing class WorkflowScheduleSweeper {
     }
   }
 
-  private static Workflow_Log__c buildLog(
-    Workflow_Schedule__c sched,
-    String corrKey,
-    DateTime fireTime,
-    String outcome,
-    Id instanceId,
-    String message
-  ) {
+  private static Workflow_Log__c buildLog(LogSpec spec) {
     return new Workflow_Log__c(
-      Fire_Key__c = corrKey + ':' + outcome,
-      Log_Type__c = LOG_TYPE,
+      Fire_Key__c = spec.corrKey + ':' + spec.outcome,
+      Log_Type__c = String.isNotBlank(spec.logType) ? spec.logType : LOG_TYPE,
       Level__c = LEVEL_INFO,
-      Outcome__c = outcome,
-      Schedule__c = sched.Id,
-      Schedule_Name__c = sched.Name,
-      Workflow_Name__c = sched.Workflow_Name__c,
-      Correlation_Key__c = corrKey,
-      Fire_Time__c = fireTime,
-      Workflow_Instance__c = instanceId,
-      Message__c = message
+      Outcome__c = spec.outcome,
+      Schedule__c = spec.sched.Id,
+      Schedule_Name__c = spec.sched.Name,
+      Workflow_Name__c = spec.sched.Workflow_Name__c,
+      Correlation_Key__c = spec.corrKey,
+      Fire_Time__c = spec.fireTime,
+      Workflow_Instance__c = spec.instanceId,
+      Message__c = spec.message
     );
   }
 

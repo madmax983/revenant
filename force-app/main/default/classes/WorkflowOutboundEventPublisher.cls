@@ -81,33 +81,45 @@ public inherited sharing class WorkflowOutboundEventPublisher {
     }
 
     try {
-      // Never spend the transaction's last DML statement or DML rows here.
-      // EventBus.publish consumes a DML statement AND one DML row per event;
-      // over budget it throws an uncatchable System.LimitException that would
-      // roll back the Completed write. Drop the best-effort publish instead.
-      if (
-        forceDmlBudgetExhausted ||
-        Limits.getDmlStatements() + 1 + dmlStatementReserve >
-        Limits.getLimitDmlStatements() ||
-        Limits.getDmlRows() + events.size() + dmlRowReserve >
-        Limits.getLimitDmlRows()
-      ) {
+      if (wouldExceedDmlBudget(events.size())) {
         return;
       }
-
-      if (Test.isRunningTest() && throwTestException) {
-        throw new WorkflowEngine.WorkflowException(
-          'Simulated EventBus.publish failure'
-        );
-      }
-
-      EventBus.publish(events);
-      if (Test.isRunningTest()) {
-        publishedEvents.addAll(events);
-      }
+      dispatch(events);
     } catch (Exception ignored) {
       // Fire-and-forget: log and swallow. A publish failure must never roll back
       // the Completed write, fail the instance, or break the RUN_STEP chain.
+    }
+  }
+
+  /**
+   * True when publishing eventCount events would spend the transaction's last
+   * DML statement or DML rows. EventBus.publish consumes a DML statement AND one
+   * DML row per event; over budget it throws an uncatchable System.LimitException
+   * that would roll back the Completed write, so the best-effort publish is
+   * dropped instead.
+   */
+  private static Boolean wouldExceedDmlBudget(Integer eventCount) {
+    return forceDmlBudgetExhausted ||
+      Limits.getDmlStatements() + 1 + dmlStatementReserve >
+      Limits.getLimitDmlStatements() ||
+      Limits.getDmlRows() + eventCount + dmlRowReserve >
+      Limits.getLimitDmlRows();
+  }
+
+  /**
+   * Publishes the events to the event bus, capturing them for test assertions in
+   * test context and honoring the injected failure hook.
+   */
+  private static void dispatch(List<SObject> events) {
+    if (Test.isRunningTest() && throwTestException) {
+      throw new WorkflowEngine.WorkflowException(
+        'Simulated EventBus.publish failure'
+      );
+    }
+
+    EventBus.publish(events);
+    if (Test.isRunningTest()) {
+      publishedEvents.addAll(events);
     }
   }
 }

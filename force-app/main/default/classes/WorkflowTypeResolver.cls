@@ -28,81 +28,111 @@ public inherited sharing class WorkflowTypeResolver {
   }
 
   private static Type doResolve(String name, String contextNamespace) {
-    Type t = null;
-
-    // 1. Try namespace-qualified resolution first if the name contains a dot
-    if (name.contains('.')) {
-      String ns = name.substringBefore('.');
-      String localName = name.substringAfter('.');
-
-      // Under simulation: map simulated package namespace to local empty namespace
-      if (simulateNamespacedContext && ns == getPackageNamespace()) {
-        t = Type.forName('', localName);
-      } else {
-        t = Type.forName(ns, localName);
-      }
-      if (t != null) {
-        return t;
-      }
+    // Each strategy returns a resolved Type or null; the first non-null wins,
+    // in the same priority order as the original inline fallback chain.
+    Type t = resolveDotQualified(name);
+    if (t != null) {
+      return t;
     }
 
-    // 2. Try context namespace first if provided (resolves collision in subscriber namespace)
-    if (contextNamespace != null) {
-      t = Type.forName(contextNamespace, name);
-      if (t != null) {
-        return t;
-      }
+    t = resolveByContextNamespace(name, contextNamespace);
+    if (t != null) {
+      return t;
     }
 
-    // 3. Try standard/caller resolution
-    if (!simulateNamespacedContext) {
-      // Try single-arg Type.forName (package namespace or caller namespace)
-      t = Type.forName(name);
-      if (t != null) {
-        return t;
-      }
-    } else {
-      // Simulated packaged context: only allow resolving classes
-      // that are explicitly prefixed with the simulated package namespace.
-      String pkg = getPackageNamespace();
-      if (String.isNotBlank(pkg) && name.startsWith(pkg + '.')) {
-        t = Type.forName(name.substringAfter(pkg + '.'));
-        if (t != null) {
-          return t;
-        }
-      }
+    t = resolveByCallerOrSimulatedPackage(name);
+    if (t != null) {
+      return t;
     }
 
-    // 4. Try local namespace fallback (subscriber namespace)
+    // Local namespace fallback (subscriber namespace).
     t = Type.forName('', name);
     if (t != null) {
       return t;
     }
 
-    // 5. Try package namespace fallback
+    t = resolveByPackageNamespace(name);
+    if (t != null) {
+      return t;
+    }
+
+    return resolveSandboxPortability(name);
+  }
+
+  /**
+   * Strategy 1: namespace-qualified resolution when the name contains a dot.
+   * Under simulation, a name prefixed with the simulated package namespace maps
+   * to the local (empty) namespace.
+   */
+  private static Type resolveDotQualified(String name) {
+    if (!name.contains('.')) {
+      return null;
+    }
+    String ns = name.substringBefore('.');
+    String localName = name.substringAfter('.');
+    if (simulateNamespacedContext && ns == getPackageNamespace()) {
+      return Type.forName('', localName);
+    }
+    return Type.forName(ns, localName);
+  }
+
+  /**
+   * Strategy 2: context namespace, when provided (resolves a collision in the
+   * subscriber namespace).
+   */
+  private static Type resolveByContextNamespace(
+    String name,
+    String contextNamespace
+  ) {
+    if (contextNamespace == null) {
+      return null;
+    }
+    return Type.forName(contextNamespace, name);
+  }
+
+  /**
+   * Strategy 3: standard/caller resolution. Outside simulation this is the
+   * single-arg Type.forName (package or caller namespace); under simulation only
+   * names explicitly prefixed with the simulated package namespace resolve.
+   */
+  private static Type resolveByCallerOrSimulatedPackage(String name) {
+    if (!simulateNamespacedContext) {
+      return Type.forName(name);
+    }
+    String pkg = getPackageNamespace();
+    if (String.isNotBlank(pkg) && name.startsWith(pkg + '.')) {
+      return Type.forName(name.substringAfter(pkg + '.'));
+    }
+    return null;
+  }
+
+  /** Strategy 5: package namespace fallback. */
+  private static Type resolveByPackageNamespace(String name) {
     String packageNamespace = getPackageNamespace();
     if (String.isNotBlank(packageNamespace)) {
-      t = Type.forName(packageNamespace, name);
-      if (t != null) {
-        return t;
-      }
+      return Type.forName(packageNamespace, name);
     }
+    return null;
+  }
 
-    // 6. Sandbox portability fallback: if name has namespace but resolution failed, try stripping it
-    if (name.contains('.')) {
-      String localName = name.substringAfter('.');
-      t = Type.forName('', localName);
-      if (t != null) {
-        return t;
-      }
-      if (String.isNotBlank(packageNamespace)) {
-        t = Type.forName(packageNamespace, localName);
-        if (t != null) {
-          return t;
-        }
-      }
+  /**
+   * Strategy 6: sandbox portability fallback. When a namespaced name failed to
+   * resolve, retry with the namespace stripped against the local and package
+   * namespaces.
+   */
+  private static Type resolveSandboxPortability(String name) {
+    if (!name.contains('.')) {
+      return null;
     }
-
+    String localName = name.substringAfter('.');
+    Type t = Type.forName('', localName);
+    if (t != null) {
+      return t;
+    }
+    String packageNamespace = getPackageNamespace();
+    if (String.isNotBlank(packageNamespace)) {
+      return Type.forName(packageNamespace, localName);
+    }
     return null;
   }
 

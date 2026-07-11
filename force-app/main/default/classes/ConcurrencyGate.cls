@@ -62,10 +62,41 @@ public inherited sharing class ConcurrencyGate {
     // and admitted is true, the workflow is unbounded and no counter was touched.
     public Boolean slotConsumed { get; private set; }
 
-    public AdmissionResult(Boolean admitted, Boolean slotConsumed) {
-      this.admitted = admitted;
-      this.slotConsumed = slotConsumed;
+    // Constructed only through the intent-named factories on the enclosing class so
+    // the two outcome flags can never be passed in a confusing/mismatched order.
+    // The factories live on the top-level class because Apex forbids static members
+    // on inner classes.
+    private AdmissionResult() {
+      this.admitted = false;
+      this.slotConsumed = false;
     }
+  }
+
+  // Intent-named AdmissionResult factories. Declared on the top-level class (Apex
+  // forbids static members on inner classes) and used only internally by tryAcquire.
+
+  // Admitted because the workflow is unbounded — no counter was touched.
+  private static AdmissionResult unbounded() {
+    AdmissionResult r = new AdmissionResult();
+    r.admitted = true;
+    r.slotConsumed = false;
+    return r;
+  }
+
+  // Admitted after consuming a real slot on a bounded workflow.
+  private static AdmissionResult acquired() {
+    AdmissionResult r = new AdmissionResult();
+    r.admitted = true;
+    r.slotConsumed = true;
+    return r;
+  }
+
+  // Rejected — the ceiling is full, no slot consumed.
+  private static AdmissionResult rejected() {
+    AdmissionResult r = new AdmissionResult();
+    r.admitted = false;
+    r.slotConsumed = false;
+    return r;
   }
 
   /**
@@ -164,7 +195,7 @@ public inherited sharing class ConcurrencyGate {
   public static AdmissionResult tryAcquire(String workflowName) {
     Integer ceiling = getCeiling(workflowName);
     if (ceiling == null) {
-      return new AdmissionResult(true, false); // unbounded
+      return unbounded();
     }
 
     Concurrency_State__c state = lockOrProvision(workflowName);
@@ -175,9 +206,9 @@ public inherited sharing class ConcurrencyGate {
     if (inFlight < ceiling) {
       state.In_Flight_Count__c = inFlight + 1;
       update as system state;
-      return new AdmissionResult(true, true);
+      return acquired();
     }
-    return new AdmissionResult(false, false);
+    return rejected();
   }
 
   /**
@@ -206,8 +237,30 @@ public inherited sharing class ConcurrencyGate {
     // with. Apex Map lookups are case-sensitive, though, so a differently-cased key
     // would miss the count and silently skip the decrement (leaking a slot). Fold the
     // requested counts into a case-normalized map and look up by the same normalization.
+    Map<String, Integer> normalizedCounts = normalizeCounts(countsByWorkflow);
+    List<Concurrency_State__c> states = [
+      SELECT Workflow_Definition__c, In_Flight_Count__c
+      FROM Concurrency_State__c
+      WHERE Workflow_Definition__c IN :keys
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+    List<Concurrency_State__c> toUpdate = applyRelease(
+      states,
+      normalizedCounts
+    );
+    if (!toUpdate.isEmpty()) {
+      update as system toUpdate;
+    }
+  }
+
+  // Folds the requested per-workflow release counts into a case-normalized (lower-cased)
+  // map, summing counts whose keys differ only by casing and skipping null counts.
+  private static Map<String, Integer> normalizeCounts(
+    Map<String, Integer> countsByWorkflow
+  ) {
     Map<String, Integer> normalizedCounts = new Map<String, Integer>();
-    for (String key : keys) {
+    for (String key : countsByWorkflow.keySet()) {
       Integer c = countsByWorkflow.get(key);
       if (c == null) {
         continue;
@@ -218,13 +271,15 @@ public inherited sharing class ConcurrencyGate {
         (normalizedCounts.containsKey(nk) ? normalizedCounts.get(nk) : 0) + c
       );
     }
-    List<Concurrency_State__c> states = [
-      SELECT Workflow_Definition__c, In_Flight_Count__c
-      FROM Concurrency_State__c
-      WHERE Workflow_Definition__c IN :keys
-      WITH SYSTEM_MODE
-      FOR UPDATE
-    ];
+    return normalizedCounts;
+  }
+
+  // Decrements each locked counter row by its normalized release count, floored at zero,
+  // returning the rows that should be updated.
+  private static List<Concurrency_State__c> applyRelease(
+    List<Concurrency_State__c> states,
+    Map<String, Integer> normalizedCounts
+  ) {
     List<Concurrency_State__c> toUpdate = new List<Concurrency_State__c>();
     for (Concurrency_State__c state : states) {
       Integer current = (state.In_Flight_Count__c == null)
@@ -237,9 +292,7 @@ public inherited sharing class ConcurrencyGate {
       state.In_Flight_Count__c = next < 0 ? 0 : next;
       toUpdate.add(state);
     }
-    if (!toUpdate.isEmpty()) {
-      update as system toUpdate;
-    }
+    return toUpdate;
   }
 
   /**
@@ -258,20 +311,7 @@ public inherited sharing class ConcurrencyGate {
   }
 
   private static void reconcileAll(Set<String> onlyWorkflows) {
-    List<Concurrency_State__c> states = (onlyWorkflows == null)
-      ? [
-          SELECT Workflow_Definition__c, In_Flight_Count__c
-          FROM Concurrency_State__c
-          WITH SYSTEM_MODE
-          FOR UPDATE
-        ]
-      : [
-          SELECT Workflow_Definition__c, In_Flight_Count__c
-          FROM Concurrency_State__c
-          WHERE Workflow_Definition__c IN :onlyWorkflows
-          WITH SYSTEM_MODE
-          FOR UPDATE
-        ];
+    List<Concurrency_State__c> states = loadStatesForReconcile(onlyWorkflows);
     if (states.isEmpty()) {
       return;
     }
@@ -281,11 +321,50 @@ public inherited sharing class ConcurrencyGate {
       workflowNames.add(state.Workflow_Definition__c);
     }
 
-    // One aggregate yields the true non-terminal slot-holder count per workflow.
-    // Key the counts case-insensitively: Workflow_Definition__c is a case-insensitive
-    // unique field, so instances started with differing casing all map to one state
-    // row, but a case-sensitive Apex lookup would miss them and wrongly reset the
-    // counter to 0. Fold each group into a normalized (lower-cased) key, summing.
+    Map<String, Integer> trueCounts = computeTrueCounts(workflowNames);
+    List<Concurrency_State__c> toUpdate = applyReconciledCounts(
+      states,
+      trueCounts
+    );
+    if (!toUpdate.isEmpty()) {
+      update as system toUpdate;
+    }
+  }
+
+  // Locks every counter row (or only the requested subset) for reconciliation. The
+  // unscoped read has a LIMIT ceiling equal to the SOQL row cap so it stays inside the
+  // AvoidNonRestrictiveQueries guard while returning the identical result set — the
+  // counter table holds one row per configured workflow definition, far below the cap,
+  // and a query returning more than the cap would already fail without the LIMIT.
+  private static List<Concurrency_State__c> loadStatesForReconcile(
+    Set<String> onlyWorkflows
+  ) {
+    if (onlyWorkflows == null) {
+      return [
+        SELECT Workflow_Definition__c, In_Flight_Count__c
+        FROM Concurrency_State__c
+        WITH SYSTEM_MODE
+        LIMIT 50000
+        FOR UPDATE
+      ];
+    }
+    return [
+      SELECT Workflow_Definition__c, In_Flight_Count__c
+      FROM Concurrency_State__c
+      WHERE Workflow_Definition__c IN :onlyWorkflows
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+  }
+
+  // One aggregate yields the true non-terminal slot-holder count per workflow.
+  // Key the counts case-insensitively: Workflow_Definition__c is a case-insensitive
+  // unique field, so instances started with differing casing all map to one state
+  // row, but a case-sensitive Apex lookup would miss them and wrongly reset the
+  // counter to 0. Fold each group into a normalized (lower-cased) key, summing.
+  private static Map<String, Integer> computeTrueCounts(
+    Set<String> workflowNames
+  ) {
     Map<String, Integer> trueCounts = new Map<String, Integer>();
     for (AggregateResult ar : [
       SELECT Workflow_Name__c wf, COUNT(Id) cnt
@@ -304,7 +383,15 @@ public inherited sharing class ConcurrencyGate {
         (trueCounts.containsKey(nk) ? trueCounts.get(nk) : 0) + cnt
       );
     }
+    return trueCounts;
+  }
 
+  // Resets each counter row to its reconciled truth, returning only the rows whose
+  // stored value actually changed (or was null).
+  private static List<Concurrency_State__c> applyReconciledCounts(
+    List<Concurrency_State__c> states,
+    Map<String, Integer> trueCounts
+  ) {
     List<Concurrency_State__c> toUpdate = new List<Concurrency_State__c>();
     for (Concurrency_State__c state : states) {
       String stateKey = state.Workflow_Definition__c.toLowerCase();
@@ -319,9 +406,7 @@ public inherited sharing class ConcurrencyGate {
         toUpdate.add(state);
       }
     }
-    if (!toUpdate.isEmpty()) {
-      update as system toUpdate;
-    }
+    return toUpdate;
   }
 
   /**
@@ -330,18 +415,7 @@ public inherited sharing class ConcurrencyGate {
    * loses the unique-key race is caught and the winner's row is re-locked.
    */
   private static Concurrency_State__c lockOrProvision(String workflowName) {
-    List<Concurrency_State__c> states;
-    if (Test.isRunningTest() && simulateDuplicateOnInsert) {
-      states = new List<Concurrency_State__c>();
-    } else {
-      states = [
-        SELECT In_Flight_Count__c
-        FROM Concurrency_State__c
-        WHERE Workflow_Definition__c = :workflowName
-        WITH SYSTEM_MODE
-        FOR UPDATE
-      ];
-    }
+    List<Concurrency_State__c> states = lockExistingState(workflowName);
     if (!states.isEmpty()) {
       return states[0];
     }
@@ -354,26 +428,53 @@ public inherited sharing class ConcurrencyGate {
       insert as system state;
       return state;
     } catch (DmlException e) {
-      Boolean isDuplicate = e.getMessage().contains('DUPLICATE_VALUE');
-      for (Integer i = 0; !isDuplicate && i < e.getNumDml(); i++) {
-        if (e.getDmlType(i) == StatusCode.DUPLICATE_VALUE) {
-          isDuplicate = true;
-        }
-      }
-      if (!isDuplicate) {
-        throw e;
-      }
-      List<Concurrency_State__c> existing = [
-        SELECT In_Flight_Count__c
-        FROM Concurrency_State__c
-        WHERE Workflow_Definition__c = :workflowName
-        WITH SYSTEM_MODE
-        FOR UPDATE
-      ];
-      if (existing.isEmpty()) {
-        throw e;
-      }
-      return existing[0];
+      return recoverProvisionRace(e, workflowName);
     }
+  }
+
+  // Locks the existing counter row for a workflow (empty list = none yet). Honors the
+  // test hook that simulates a lost provision race by returning no row.
+  private static List<Concurrency_State__c> lockExistingState(
+    String workflowName
+  ) {
+    if (Test.isRunningTest() && simulateDuplicateOnInsert) {
+      return new List<Concurrency_State__c>();
+    }
+    return [
+      SELECT In_Flight_Count__c
+      FROM Concurrency_State__c
+      WHERE Workflow_Definition__c = :workflowName
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+  }
+
+  // Recovers from a concurrent first-use insert that lost the unique-key race: on a
+  // DUPLICATE_VALUE the winner's row is re-locked and returned; any other DML error is
+  // rethrown.
+  private static Concurrency_State__c recoverProvisionRace(
+    DmlException e,
+    String workflowName
+  ) {
+    Boolean isDuplicate = e.getMessage().contains('DUPLICATE_VALUE');
+    for (Integer i = 0; !isDuplicate && i < e.getNumDml(); i++) {
+      if (e.getDmlType(i) == StatusCode.DUPLICATE_VALUE) {
+        isDuplicate = true;
+      }
+    }
+    if (!isDuplicate) {
+      throw e;
+    }
+    List<Concurrency_State__c> existing = [
+      SELECT In_Flight_Count__c
+      FROM Concurrency_State__c
+      WHERE Workflow_Definition__c = :workflowName
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+    if (existing.isEmpty()) {
+      throw e;
+    }
+    return existing[0];
   }
 }

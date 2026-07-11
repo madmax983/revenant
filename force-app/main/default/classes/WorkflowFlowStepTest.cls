@@ -4,15 +4,15 @@ public class WorkflowFlowStepTest {
   static void testWorkflowFlowStepNullInput() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowFlowStep step = new WorkflowFlowStep();
-      StepContext ctx = new StepContext(
-        null,
-        'MyWorkflow',
-        'MyStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(null)
+        .workflowName('MyWorkflow')
+        .stepName('MyStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       Test.startTest();
       Boolean caught = false;
@@ -39,15 +39,15 @@ public class WorkflowFlowStepTest {
   static void testWorkflowFlowStepInvalidInputType() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowFlowStep step = new WorkflowFlowStep();
-      StepContext ctx = new StepContext(
-        null,
-        'MyWorkflow',
-        'MyStep',
-        'Not a JSON Map',
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(null)
+        .workflowName('MyWorkflow')
+        .stepName('MyStep')
+        .inputJson('Not a JSON Map')
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       Test.startTest();
       Boolean caught = false;
@@ -74,15 +74,15 @@ public class WorkflowFlowStepTest {
   static void testWorkflowFlowStepNullJsonInput() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowFlowStep step = new WorkflowFlowStep();
-      StepContext ctx = new StepContext(
-        null,
-        'MyWorkflow',
-        'MyStep',
-        'null',
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(null)
+        .workflowName('MyWorkflow')
+        .stepName('MyStep')
+        .inputJson('null')
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       Test.startTest();
       Boolean caught = false;
@@ -109,15 +109,15 @@ public class WorkflowFlowStepTest {
   static void testWorkflowFlowStepMissingFlowName() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowFlowStep step = new WorkflowFlowStep();
-      StepContext ctx = new StepContext(
-        null,
-        'MyWorkflow',
-        'MyStep',
-        '{"variables": {}}',
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(null)
+        .workflowName('MyWorkflow')
+        .stepName('MyStep')
+        .inputJson('{"variables": {}}')
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       Test.startTest();
       Boolean caught = false;
@@ -146,15 +146,15 @@ public class WorkflowFlowStepTest {
       WorkflowFlowStep step = new WorkflowFlowStep();
 
       // Test flowName as an integer
-      StepContext ctxInt = new StepContext(
-        null,
-        'MyWorkflow',
-        'MyStep',
-        '{"flowName": 123, "variables": {}}',
-        null,
-        null,
-        null
-      );
+      StepContext ctxInt = new StepContext.Builder()
+        .instanceId(null)
+        .workflowName('MyWorkflow')
+        .stepName('MyStep')
+        .inputJson('{"flowName": 123, "variables": {}}')
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       Test.startTest();
       Boolean caughtInt = false;
@@ -170,15 +170,15 @@ public class WorkflowFlowStepTest {
       }
 
       // Test flowName as an array/list
-      StepContext ctxArray = new StepContext(
-        null,
-        'MyWorkflow',
-        'MyStep',
-        '{"flowName": ["TestFlow"], "variables": {}}',
-        null,
-        null,
-        null
-      );
+      StepContext ctxArray = new StepContext.Builder()
+        .instanceId(null)
+        .workflowName('MyWorkflow')
+        .stepName('MyStep')
+        .inputJson('{"flowName": ["TestFlow"], "variables": {}}')
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       Boolean caughtArray = false;
       try {
@@ -208,15 +208,17 @@ public class WorkflowFlowStepTest {
   static void testWorkflowFlowStepNonExistentFlow() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowFlowStep step = new WorkflowFlowStep();
-      StepContext ctx = new StepContext(
-        null,
-        'MyWorkflow',
-        'MyStep',
-        '{"flowName": "NonExistentFlowName_xyz", "variables": {"myVar": "test"}, "outputs": ["outVar"]}',
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(null)
+        .workflowName('MyWorkflow')
+        .stepName('MyStep')
+        .inputJson(
+          '{"flowName": "NonExistentFlowName_xyz", "variables": {"myVar": "test"}, "outputs": ["outVar"]}'
+        )
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       Test.startTest();
       Boolean caught = false;
@@ -243,15 +245,17 @@ public class WorkflowFlowStepTest {
   static void testWorkflowFlowStepSuccess() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowFlowStep step = new WorkflowFlowStep();
-      StepContext ctx = new StepContext(
-        null,
-        'MyWorkflow',
-        'MyStep',
-        '{"flowName": "Test_Autolaunched_Flow", "variables": {"inputVal": "HelloFlow"}}',
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(null)
+        .workflowName('MyWorkflow')
+        .stepName('MyStep')
+        .inputJson(
+          '{"flowName": "Test_Autolaunched_Flow", "variables": {"inputVal": "HelloFlow"}}'
+        )
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       Test.startTest();
       StepResult result = step.execute(ctx);
@@ -283,15 +287,17 @@ public class WorkflowFlowStepTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // 1. Create a StepContext for first execution
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx1 = new StepContext(
-        instanceId,
-        'MyWorkflow',
-        'MyStep',
-        '{"flowName": "Test_Side_Effect_Flow", "variables": {"accountName": "TDD_Flow_Guard_Test"}}',
-        null,
-        null,
-        null
-      );
+      StepContext ctx1 = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('MyWorkflow')
+        .stepName('MyStep')
+        .inputJson(
+          '{"flowName": "Test_Side_Effect_Flow", "variables": {"accountName": "TDD_Flow_Guard_Test"}}'
+        )
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       // Verify initial count of Accounts with that name
       System.assertEquals(
@@ -316,20 +322,22 @@ public class WorkflowFlowStepTest {
       System.assertNotEquals(null, capturedJson);
 
       // 4. Create StepContext for second execution, seeded with the captured values from the first execution
-      StepContext ctx2 = StepContext.withCapturedValues(
-        instanceId,
-        'MyWorkflow',
-        'MyStep',
-        '{"flowName": "Test_Side_Effect_Flow", "variables": {"accountName": "TDD_Flow_Guard_Test"}}',
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        capturedJson
-      );
+      StepContext ctx2 = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('MyWorkflow')
+        .stepName('MyStep')
+        .inputJson(
+          '{"flowName": "Test_Side_Effect_Flow", "variables": {"accountName": "TDD_Flow_Guard_Test"}}'
+        )
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(0)
+        .signalSource(null)
+        .previousRunAt(null)
+        .capturedValuesJson(capturedJson)
+        .build();
 
       // 5. Second execution
       StepResult result2 = step.execute(ctx2);
@@ -368,15 +376,17 @@ public class WorkflowFlowStepTest {
   static void testWorkflowFlowStepInvalidVariablesType() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowFlowStep step = new WorkflowFlowStep();
-      StepContext ctx = new StepContext(
-        null,
-        'MyWorkflow',
-        'MyStep',
-        '{"flowName": "Test_Autolaunched_Flow", "variables": "invalid_string_type"}',
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(null)
+        .workflowName('MyWorkflow')
+        .stepName('MyStep')
+        .inputJson(
+          '{"flowName": "Test_Autolaunched_Flow", "variables": "invalid_string_type"}'
+        )
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       Test.startTest();
       Boolean caught = false;
@@ -401,15 +411,15 @@ public class WorkflowFlowStepTest {
   static void testWorkflowFlowStepOmittedVariables() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowFlowStep step = new WorkflowFlowStep();
-      StepContext ctx = new StepContext(
-        null,
-        'MyWorkflow',
-        'MyStep',
-        '{"flowName": "Test_Autolaunched_Flow"}',
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(null)
+        .workflowName('MyWorkflow')
+        .stepName('MyStep')
+        .inputJson('{"flowName": "Test_Autolaunched_Flow"}')
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       Test.startTest();
       StepResult result = step.execute(ctx);
@@ -435,20 +445,20 @@ public class WorkflowFlowStepTest {
 
       // Create a context for the re-execution with the non-existent flow name in the input JSON,
       // pre-seeded with the captured values.
-      StepContext ctx = StepContext.withCapturedValues(
-        instanceId,
-        'MyWorkflow',
-        'MyStep',
-        '{"flowName": "NonExistent_Or_Deactivated_Flow"}',
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        capturedJson
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('MyWorkflow')
+        .stepName('MyStep')
+        .inputJson('{"flowName": "NonExistent_Or_Deactivated_Flow"}')
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .workflowVersion(1)
+        .stepVisit(0)
+        .signalSource(null)
+        .previousRunAt(null)
+        .capturedValuesJson(capturedJson)
+        .build();
 
       WorkflowFlowStep step = new WorkflowFlowStep();
 

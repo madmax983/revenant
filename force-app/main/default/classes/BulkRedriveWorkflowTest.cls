@@ -40,15 +40,15 @@ public class BulkRedriveWorkflowTest {
    * persisted yield state (null on first run); `inputJson` is the operator filter.
    */
   private static StepContext ctxFor(String inputJson, String stateJson) {
-    return new StepContext(
-      null,
-      'BulkRedriveWorkflow',
-      'BulkRedriveWorkflow.BulkRedriveStep',
-      null,
-      null,
-      stateJson,
-      inputJson
-    );
+    return new StepContext.Builder()
+      .instanceId(null)
+      .workflowName('BulkRedriveWorkflow')
+      .stepName('BulkRedriveWorkflow.BulkRedriveStep')
+      .inputJson(null)
+      .previousStepOutput(null)
+      .stepStateJson(stateJson)
+      .workflowInputJson(inputJson)
+      .build();
   }
 
   private static Integer countByStatus(String status) {

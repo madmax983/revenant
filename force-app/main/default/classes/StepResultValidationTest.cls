@@ -159,7 +159,8 @@ private class StepResultValidationTest {
       }
 
       try {
-        StepResult.waitForApproval(null, 'Manager', 10, 'StepB');
+        StepResult.waitForApproval(null, 'Manager')
+          .withApprovalTimeout(10, 'StepB');
         Assert.fail(
           'Should have thrown IllegalArgumentException for null key in timeout overload'
         );
@@ -171,7 +172,8 @@ private class StepResultValidationTest {
       }
 
       try {
-        StepResult.waitForApproval('key', 'Manager', 10, ' ');
+        StepResult.waitForApproval('key', 'Manager')
+          .withApprovalTimeout(10, ' ');
         Assert.fail(
           'Should have thrown IllegalArgumentException for blank timeoutStep'
         );
@@ -183,7 +185,8 @@ private class StepResultValidationTest {
       }
 
       try {
-        StepResult.waitForApproval('key', 'Manager', -5, 'StepB');
+        StepResult.waitForApproval('key', 'Manager')
+          .withApprovalTimeout(-5, 'StepB');
         Assert.fail(
           'Should have thrown IllegalArgumentException for negative timeoutSeconds'
         );

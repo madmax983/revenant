@@ -337,17 +337,21 @@ export default class WorkflowDashboard extends LightningElement {
   // refreshInstances so the query construction lives in one place.
   _loadStatsAndCounts(instancesPromise) {
     const statsPromise = getWorkflowStats({
-      workflowName: this.selectedWorkflow,
-      status: this.selectedStatus,
-      searchTerm: this.searchTerm,
-      attributesFilterJson: this.attributesFilterJson,
+      criteria: {
+        workflowName: this.selectedWorkflow,
+        status: this.selectedStatus,
+        searchTerm: this.searchTerm,
+        attributesFilterJson: this.attributesFilterJson,
+      },
     });
 
     const stalledCountPromise = getStalledCount({
-      workflowName: this.selectedWorkflow,
-      searchTerm: this.searchTerm,
-      thresholdMinutes: null,
-      attributesFilterJson: this.attributesFilterJson,
+      criteria: {
+        workflowName: this.selectedWorkflow,
+        searchTerm: this.searchTerm,
+        thresholdMinutes: null,
+        attributesFilterJson: this.attributesFilterJson,
+      },
     }).catch((error) => {
       console.error("Stalled count query failed:", error);
       return { count: 0, capped: false };
@@ -388,23 +392,27 @@ export default class WorkflowDashboard extends LightningElement {
 
     const instancesPromise = this.showingStalled
       ? getStalledInstances({
-          workflowName: this.selectedWorkflow,
-          searchTerm: this.searchTerm,
-          thresholdMinutes: null,
-          limitSize: currentLimit,
-          offsetSize: currentOffset,
-          cacheBuster: this.cacheBuster,
-          attributesFilterJson: this.attributesFilterJson,
+          criteria: {
+            workflowName: this.selectedWorkflow,
+            searchTerm: this.searchTerm,
+            thresholdMinutes: null,
+            limitSize: currentLimit,
+            offsetSize: currentOffset,
+            cacheBuster: this.cacheBuster,
+            attributesFilterJson: this.attributesFilterJson,
+          },
         })
       : getFilteredInstances({
-          workflowName: this.selectedWorkflow,
-          status: this.selectedStatus,
-          searchTerm: this.searchTerm,
-          failureCategory: this.selectedFailureCategory,
-          limitSize: currentLimit,
-          offsetSize: currentOffset,
-          cacheBuster: this.cacheBuster,
-          attributesFilterJson: this.attributesFilterJson,
+          criteria: {
+            workflowName: this.selectedWorkflow,
+            status: this.selectedStatus,
+            searchTerm: this.searchTerm,
+            failureCategory: this.selectedFailureCategory,
+            limitSize: currentLimit,
+            offsetSize: currentOffset,
+            cacheBuster: this.cacheBuster,
+            attributesFilterJson: this.attributesFilterJson,
+          },
         });
 
     if (isAppend) {
@@ -500,23 +508,27 @@ export default class WorkflowDashboard extends LightningElement {
 
     const instancesPromise = this.showingStalled
       ? getStalledInstances({
-          workflowName: this.selectedWorkflow,
-          searchTerm: this.searchTerm,
-          thresholdMinutes: null,
-          limitSize: currentSize,
-          offsetSize: 0,
-          cacheBuster: this.cacheBuster,
-          attributesFilterJson: this.attributesFilterJson,
+          criteria: {
+            workflowName: this.selectedWorkflow,
+            searchTerm: this.searchTerm,
+            thresholdMinutes: null,
+            limitSize: currentSize,
+            offsetSize: 0,
+            cacheBuster: this.cacheBuster,
+            attributesFilterJson: this.attributesFilterJson,
+          },
         })
       : getFilteredInstances({
-          workflowName: this.selectedWorkflow,
-          status: this.selectedStatus,
-          searchTerm: this.searchTerm,
-          failureCategory: this.selectedFailureCategory,
-          limitSize: currentSize,
-          offsetSize: 0,
-          cacheBuster: this.cacheBuster,
-          attributesFilterJson: this.attributesFilterJson,
+          criteria: {
+            workflowName: this.selectedWorkflow,
+            status: this.selectedStatus,
+            searchTerm: this.searchTerm,
+            failureCategory: this.selectedFailureCategory,
+            limitSize: currentSize,
+            offsetSize: 0,
+            cacheBuster: this.cacheBuster,
+            attributesFilterJson: this.attributesFilterJson,
+          },
         });
 
     return this._loadStatsAndCounts(instancesPromise)
@@ -1191,10 +1203,12 @@ export default class WorkflowDashboard extends LightningElement {
     const buster = new Date().getTime().toString();
     Promise.all([
       getUnroutedSignals({
-        searchTerm: null,
-        limitSize: 50,
-        offsetSize: 0,
-        cacheBuster: buster,
+        criteria: {
+          searchTerm: null,
+          limitSize: 50,
+          offsetSize: 0,
+          cacheBuster: buster,
+        },
       }),
       getUnroutedSignalCount({ searchTerm: null }),
     ])
@@ -1743,7 +1757,6 @@ export default class WorkflowDashboard extends LightningElement {
       workflowName: this.cancelSnapshotName,
       status: this.cancelSnapshotStatus,
       searchTerm: this.cancelSnapshotSearchTerm,
-      runCompensations: false,
     })
       .then((outcome) => {
         if (!outcome) {
@@ -1793,8 +1806,10 @@ export default class WorkflowDashboard extends LightningElement {
     this.cancelModalOpen = false;
     this.loadingDetails = true;
     cancelWorkflow({
-      instanceId: this.selectedInstanceId,
-      runCompensations,
+      req: {
+        instanceId: this.selectedInstanceId,
+        runCompensations,
+      },
     })
       .then(() => {
         this.showToast(
@@ -1940,10 +1955,12 @@ export default class WorkflowDashboard extends LightningElement {
 
     this.loadingDetails = true;
     submitApproval({
-      instanceId: this.selectedInstanceId,
-      approvalKey: approvalKey,
-      approved: approved,
-      comments: this.approvalComments,
+      req: {
+        instanceId: this.selectedInstanceId,
+        approvalKey: approvalKey,
+        approved: approved,
+        comments: this.approvalComments,
+      },
     })
       .then(() => {
         this.showToast(

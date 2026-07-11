@@ -541,7 +541,6 @@ describe("c-workflow-dashboard bulk cancel", () => {
       workflowName: "",
       status: "",
       searchTerm: "",
-      runCompensations: false,
     });
 
     // Verify modal is closed
@@ -1715,7 +1714,9 @@ describe("c-workflow-dashboard business attributes filters", () => {
     // Verify getFilteredInstances was called with region=EU
     expect(getFilteredInstances).toHaveBeenCalledWith(
       expect.objectContaining({
-        attributesFilterJson: JSON.stringify({ region: "EU" }),
+        criteria: expect.objectContaining({
+          attributesFilterJson: JSON.stringify({ region: "EU" }),
+        }),
       }),
     );
 
@@ -1734,7 +1735,9 @@ describe("c-workflow-dashboard business attributes filters", () => {
     // Verify getFilteredInstances was called with empty attributesFilterJson
     expect(getFilteredInstances).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        attributesFilterJson: "",
+        criteria: expect.objectContaining({
+          attributesFilterJson: "",
+        }),
       }),
     );
 

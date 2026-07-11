@@ -78,11 +78,11 @@ public inherited sharing class WorkflowScheduleJob implements Schedulable {
     // Route through the shared fire path so dedicated fires honour the overlap
     // policy and record Last_Fired_Window__c / Last_Outcome__c + a fire log,
     // identically to the 0-slot sweep.
-    WorkflowScheduleSweeper.fireScheduled(
-      sched,
-      fireTime,
-      corrKey,
-      'ScheduleDedicatedFire'
-    );
+    WorkflowScheduleSweeper.FireContext fireCtx = new WorkflowScheduleSweeper.FireContext();
+    fireCtx.sched = sched;
+    fireCtx.fireTime = fireTime;
+    fireCtx.corrKey = corrKey;
+    fireCtx.logType = 'ScheduleDedicatedFire';
+    WorkflowScheduleSweeper.fireScheduled(fireCtx);
   }
 }
