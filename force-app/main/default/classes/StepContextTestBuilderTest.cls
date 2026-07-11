@@ -74,7 +74,7 @@ public class StepContextTestBuilderTest {
         .workflowVersion(3)
         .stepVisit(2)
         .previousRunAt(past)
-        .timeoutResume(true)
+        .timeoutResume()
         .attempt(3)
         .maxAttempts(5)
         .build();
@@ -135,8 +135,12 @@ public class StepContextTestBuilderTest {
   static void testSignalSeeding() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       StepContext ctx = new StepContextTestBuilder()
-        .addSignal('Approve:Order', '{"approved":true}')
-        .addSignal('Approve:Order', '{"approved":false}')
+        .addSignal(
+          new StepContext.Signal(null, 'Approve:Order', '{"approved":true}')
+        )
+        .addSignal(
+          new StepContext.Signal(null, 'Approve:Order', '{"approved":false}')
+        )
         .build();
 
       List<StepContext.Signal> signals = ctx.getSignals();

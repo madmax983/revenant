@@ -4,33 +4,67 @@ public class BulkCancelWorkflowTest {
   // Helpers
   // ==========================================
 
-  private static Workflow_Instance__c makeInstance(
-    String name,
-    String status,
-    String workflowName,
-    String compStack
-  ) {
-    Workflow_Instance__c inst = new Workflow_Instance__c(
-      Workflow_Name__c = workflowName,
-      Status__c = status,
-      Correlation_Key__c = name,
-      Input__c = '"InputData"',
-      Compensation_Stack__c = compStack
-    );
-    insert inst;
-    return inst;
+  // Fluent builder for the Workflow_Instance__c fixtures these tests insert,
+  // replacing a 4-parameter makeInstance() that tripped ExcessiveParameterList.
+  // Produces byte-identical records: key -> Correlation_Key__c, a fixed Input__c
+  // payload, and an optional compensation stack (null when never set).
+  private class InstanceBuilder {
+    private String correlationKey;
+    private String status;
+    private String workflowName;
+    private String compStack;
+
+    private InstanceBuilder key(String value) {
+      this.correlationKey = value;
+      return this;
+    }
+    private InstanceBuilder status(String value) {
+      this.status = value;
+      return this;
+    }
+    private InstanceBuilder workflow(String value) {
+      this.workflowName = value;
+      return this;
+    }
+    private InstanceBuilder compStack(String value) {
+      this.compStack = value;
+      return this;
+    }
+
+    private Workflow_Instance__c create() {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = this.workflowName,
+        Status__c = this.status,
+        Correlation_Key__c = this.correlationKey,
+        Input__c = '"InputData"',
+        Compensation_Stack__c = this.compStack
+      );
+      insert inst;
+      return inst;
+    }
   }
 
   private static StepContext ctxFor(String inputJson, String stateJson) {
     return new StepContext.Builder()
-      .instanceId(null)
       .workflowName('BulkCancelWorkflow')
       .stepName('BulkCancelWorkflow.BulkCancelStep')
-      .inputJson(null)
-      .previousStepOutput(null)
       .stepStateJson(stateJson)
       .workflowInputJson(inputJson)
       .build();
+  }
+
+  // Threads the operator filter into the chunk driver so each yielded
+  // transaction rebuilds its StepContext from the persisted step state.
+  private class ChunkCtxFactory implements BulkWorkflowTestHelpers.ChunkContextFactory {
+    private final String filter;
+
+    private ChunkCtxFactory(String filter) {
+      this.filter = filter;
+    }
+
+    public StepContext build(String stepStateJson) {
+      return ctxFor(filter, stepStateJson);
+    }
   }
 
   // ==========================================
@@ -55,16 +89,19 @@ public class BulkCancelWorkflowTest {
         'ContinuedAsNew'
       };
       for (String st : statuses) {
-        makeInstance(
-          'Inst_' + st,
-          st,
-          'WorkflowEngineTest.HappyWorkflow',
-          null
-        );
+        new InstanceBuilder()
+          .key('Inst_' + st)
+          .status(st)
+          .workflow('WorkflowEngineTest.HappyWorkflow')
+          .create();
       }
 
       // Seed BulkCancelWorkflow self instance (must be excluded)
-      makeInstance('SelfInstance', 'Running', 'BulkCancelWorkflow', null);
+      new InstanceBuilder()
+        .key('SelfInstance')
+        .status('Running')
+        .workflow('BulkCancelWorkflow')
+        .create();
 
       Test.startTest();
       Integer eligibleCount = BulkCancelWorkflow.countEligible('', '', '');
@@ -98,24 +135,21 @@ public class BulkCancelWorkflowTest {
   static void testCancelsEligibleInstances() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      makeInstance(
-        'ActivePending',
-        'Pending',
-        'WorkflowEngineTest.HappyWorkflow',
-        null
-      );
-      makeInstance(
-        'ActiveRunning',
-        'Running',
-        'WorkflowEngineTest.HappyWorkflow',
-        null
-      );
-      makeInstance(
-        'ActiveSuspended',
-        'Suspended',
-        'WorkflowEngineTest.HappyWorkflow',
-        null
-      );
+      new InstanceBuilder()
+        .key('ActivePending')
+        .status('Pending')
+        .workflow('WorkflowEngineTest.HappyWorkflow')
+        .create();
+      new InstanceBuilder()
+        .key('ActiveRunning')
+        .status('Running')
+        .workflow('WorkflowEngineTest.HappyWorkflow')
+        .create();
+      new InstanceBuilder()
+        .key('ActiveSuspended')
+        .status('Suspended')
+        .workflow('WorkflowEngineTest.HappyWorkflow')
+        .create();
 
       String filter = JSON.serialize(
         new Map<String, Object>{
@@ -171,12 +205,11 @@ public class BulkCancelWorkflowTest {
       BulkCancelWorkflow.defaultChunkSize = 2;
       try {
         for (Integer i = 0; i < 5; i++) {
-          makeInstance(
-            'Chunk_' + i,
-            'Running',
-            'WorkflowEngineTest.HappyWorkflow',
-            null
-          );
+          new InstanceBuilder()
+            .key('Chunk_' + i)
+            .status('Running')
+            .workflow('WorkflowEngineTest.HappyWorkflow')
+            .create();
         }
         String filter = JSON.serialize(
           new Map<String, Object>{
@@ -187,24 +220,11 @@ public class BulkCancelWorkflowTest {
           }
         );
 
-        Test.startTest();
-        BulkCancelWorkflow.BulkCancelStep step = new BulkCancelWorkflow.BulkCancelStep();
-        StepResult r1 = step.execute(ctxFor(filter, null));
-        System.assertEquals(
-          StepResult.ActionType.YIELD,
-          r1.action,
-          'A selection larger than one chunk must yield to a fresh transaction'
+        StepResult r3 = BulkWorkflowTestHelpers.driveTwoYieldsThenComplete(
+          new BulkCancelWorkflow.BulkCancelStep(),
+          new ChunkCtxFactory(filter)
         );
-        StepResult r2 = step.execute(ctxFor(filter, r1.stepStateJson));
-        System.assertEquals(StepResult.ActionType.YIELD, r2.action);
-        StepResult r3 = step.execute(ctxFor(filter, r2.stepStateJson));
-        Test.stopTest();
 
-        System.assertEquals(
-          StepResult.ActionType.COMPLETE,
-          r3.action,
-          'Final chunk completes the cancel'
-        );
         Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
           r3.outputJson
         );
@@ -232,27 +252,25 @@ public class BulkCancelWorkflowTest {
   static void testOneFailureDoesNotAbortRest() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      makeInstance(
-        'GoodA',
-        'Running',
-        'WorkflowEngineTest.HappyWorkflow',
-        null
-      );
-      makeInstance(
-        'GoodB',
-        'Running',
-        'WorkflowEngineTest.HappyWorkflow',
-        null
-      );
+      new InstanceBuilder()
+        .key('GoodA')
+        .status('Running')
+        .workflow('WorkflowEngineTest.HappyWorkflow')
+        .create();
+      new InstanceBuilder()
+        .key('GoodB')
+        .status('Running')
+        .workflow('WorkflowEngineTest.HappyWorkflow')
+        .create();
 
       // Poison instance: Status__c = 'CompensationFailed' and malformed json compensation stack
       // so WorkflowEngine.cancel throws a JSON deserialization exception.
-      makeInstance(
-        'Poison',
-        'CompensationFailed',
-        'WorkflowEngineTest.HappyWorkflow',
-        '{ this is not valid json'
-      );
+      new InstanceBuilder()
+        .key('Poison')
+        .status('CompensationFailed')
+        .workflow('WorkflowEngineTest.HappyWorkflow')
+        .compStack('{ this is not valid json')
+        .create();
 
       String filter = JSON.serialize(
         new Map<String, Object>{
@@ -299,12 +317,11 @@ public class BulkCancelWorkflowTest {
   static void testZeroEligibleCompletesCleanly() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      makeInstance(
-        'NothingToDo',
-        'Completed',
-        'WorkflowEngineTest.HappyWorkflow',
-        null
-      );
+      new InstanceBuilder()
+        .key('NothingToDo')
+        .status('Completed')
+        .workflow('WorkflowEngineTest.HappyWorkflow')
+        .create();
 
       String filter = JSON.serialize(
         new Map<String, Object>{
@@ -332,18 +349,16 @@ public class BulkCancelWorkflowTest {
   static void testEndToEndViaEngine() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      makeInstance(
-        'E2E_A',
-        'Running',
-        'WorkflowEngineTest.HappyWorkflow',
-        null
-      );
-      makeInstance(
-        'E2E_B',
-        'Running',
-        'WorkflowEngineTest.HappyWorkflow',
-        null
-      );
+      new InstanceBuilder()
+        .key('E2E_A')
+        .status('Running')
+        .workflow('WorkflowEngineTest.HappyWorkflow')
+        .create();
+      new InstanceBuilder()
+        .key('E2E_B')
+        .status('Running')
+        .workflow('WorkflowEngineTest.HappyWorkflow')
+        .create();
 
       WorkflowEngine.disableQueueableInTest = false;
       Test.startTest();
@@ -390,12 +405,11 @@ public class BulkCancelWorkflowTest {
   static void testControllerMethods() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      makeInstance(
-        'CtrlA',
-        'Running',
-        'WorkflowEngineTest.HappyWorkflow',
-        null
-      );
+      new InstanceBuilder()
+        .key('CtrlA')
+        .status('Running')
+        .workflow('WorkflowEngineTest.HappyWorkflow')
+        .create();
 
       Test.startTest();
       Integer count = WorkflowDashboardController.getCancelEligibleCount(

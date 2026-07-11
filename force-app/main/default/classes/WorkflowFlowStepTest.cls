@@ -35,37 +35,46 @@ public class WorkflowFlowStepTest {
     }
   }
 
+  // Shared driver: executes WorkflowFlowStep with the given input JSON and returns
+  // the thrown WorkflowException message (or null if none was thrown). Consolidates
+  // the StepContext construction and execute/try-catch block previously duplicated
+  // across the invalid-input-type and null-json-input tests. Assertions stay in the
+  // callers so each test documents its own expectations.
+  private static String captureInvalidInputMessage(String inputJson) {
+    WorkflowFlowStep step = new WorkflowFlowStep();
+    StepContext ctx = new StepContext.Builder()
+      .instanceId(null)
+      .workflowName('MyWorkflow')
+      .stepName('MyStep')
+      .inputJson(inputJson)
+      .previousStepOutput(null)
+      .stepStateJson(null)
+      .workflowInputJson(null)
+      .build();
+
+    Test.startTest();
+    String message = null;
+    try {
+      step.execute(ctx);
+    } catch (WorkflowEngine.WorkflowException ex) {
+      message = ex.getMessage();
+    }
+    Test.stopTest();
+    return message;
+  }
+
   @IsTest
   static void testWorkflowFlowStepInvalidInputType() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowFlowStep step = new WorkflowFlowStep();
-      StepContext ctx = new StepContext.Builder()
-        .instanceId(null)
-        .workflowName('MyWorkflow')
-        .stepName('MyStep')
-        .inputJson('Not a JSON Map')
-        .previousStepOutput(null)
-        .stepStateJson(null)
-        .workflowInputJson(null)
-        .build();
-
-      Test.startTest();
-      Boolean caught = false;
-      try {
-        step.execute(ctx);
-      } catch (WorkflowEngine.WorkflowException ex) {
-        caught = true;
-        System.assert(
-          ex.getMessage().contains('Input must be a valid JSON object'),
-          'Exception message should contain "Input must be a valid JSON object", but got: ' +
-          ex.getMessage()
-        );
-      }
-      Test.stopTest();
-
+      String message = captureInvalidInputMessage('Not a JSON Map');
       System.assert(
-        caught,
+        message != null,
         'Expected WorkflowEngine.WorkflowException to be thrown'
+      );
+      System.assert(
+        message.contains('Input must be a valid JSON object'),
+        'Exception message should contain "Input must be a valid JSON object", but got: ' +
+        message
       );
     }
   }
@@ -73,34 +82,15 @@ public class WorkflowFlowStepTest {
   @IsTest
   static void testWorkflowFlowStepNullJsonInput() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowFlowStep step = new WorkflowFlowStep();
-      StepContext ctx = new StepContext.Builder()
-        .instanceId(null)
-        .workflowName('MyWorkflow')
-        .stepName('MyStep')
-        .inputJson('null')
-        .previousStepOutput(null)
-        .stepStateJson(null)
-        .workflowInputJson(null)
-        .build();
-
-      Test.startTest();
-      Boolean caught = false;
-      try {
-        step.execute(ctx);
-      } catch (WorkflowEngine.WorkflowException ex) {
-        caught = true;
-        System.assert(
-          ex.getMessage().contains('Input must be a valid JSON object'),
-          'Exception message should contain "Input must be a valid JSON object", but got: ' +
-          ex.getMessage()
-        );
-      }
-      Test.stopTest();
-
+      String message = captureInvalidInputMessage('null');
       System.assert(
-        caught,
+        message != null,
         'Expected WorkflowEngine.WorkflowException to be thrown'
+      );
+      System.assert(
+        message.contains('Input must be a valid JSON object'),
+        'Exception message should contain "Input must be a valid JSON object", but got: ' +
+        message
       );
     }
   }

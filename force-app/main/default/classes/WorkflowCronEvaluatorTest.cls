@@ -13,7 +13,7 @@ public class WorkflowCronEvaluatorTest {
   // ── Exact-minute anchor ──────────────────────────────────────────────────
 
   @IsTest
-  static void testHourly_onTheHour() {
+  static void testHourlyOnTheHour() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // "0 * * * *" fires at :00 of every hour. Previous fire from 14:37 = 14:00.
       DateTime result = WorkflowCronEvaluator.previousFireTime(
@@ -29,7 +29,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testHourly_exactlyOnFire() {
+  static void testHourlyExactlyOnFire() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // When now IS a fire minute, return it (previous fire ≤ now).
       DateTime onFire = DateTime.newInstanceGmt(2026, 6, 17, 14, 0, 0);
@@ -64,7 +64,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testEvery15Minutes_onStep() {
+  static void testEvery15MinutesOnStep() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Exactly at :45 → return :45.
       DateTime onStep = DateTime.newInstanceGmt(2026, 6, 17, 14, 45, 0);
@@ -83,7 +83,7 @@ public class WorkflowCronEvaluatorTest {
   // ── Daily ─────────────────────────────────────────────────────────────────
 
   @IsTest
-  static void testDaily_beforeFireTime() {
+  static void testDailyBeforeFireTime() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // "0 2 * * *" fires at 02:00 daily. 14:37 → same-day 02:00.
       DateTime result = WorkflowCronEvaluator.previousFireTime(
@@ -99,7 +99,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testDaily_beforeMidnight() {
+  static void testDailyBeforeMidnight() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Now is 01:30 → today 02:00 hasn't fired yet → previous fire = yesterday 02:00.
       DateTime before = DateTime.newInstanceGmt(2026, 6, 17, 1, 30, 0);
@@ -118,7 +118,7 @@ public class WorkflowCronEvaluatorTest {
   // ── Day-of-month ──────────────────────────────────────────────────────────
 
   @IsTest
-  static void testDayOfMonth_currentMonth() {
+  static void testDayOfMonthCurrentMonth() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // "0 0 15 * *" fires at midnight on the 15th. On Jun 17 → Jun 15.
       DateTime result = WorkflowCronEvaluator.previousFireTime(
@@ -134,7 +134,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testDayOfMonth_previousMonth() {
+  static void testDayOfMonthPreviousMonth() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Now is Jun 10 → haven't hit the 15th this month → May 15.
       DateTime before15 = DateTime.newInstanceGmt(2026, 6, 10, 12, 0, 0);
@@ -153,7 +153,7 @@ public class WorkflowCronEvaluatorTest {
   // ── Day-of-week ───────────────────────────────────────────────────────────
 
   @IsTest
-  static void testDayOfWeek_monday() {
+  static void testDayOfWeekMonday() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // "0 9 * * 1" fires at 09:00 every Monday. Jun 17 is a Wednesday.
       // Previous Monday = Jun 15.
@@ -170,7 +170,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testDayOfWeek_wednesday_beforeFireHour() {
+  static void testDayOfWeekWednesdayBeforeFireHour() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Now is Wednesday 08:00. The 09:00 fire today hasn't happened yet.
       // Previous fire = last Wednesday = Jun 10.
@@ -260,7 +260,7 @@ public class WorkflowCronEvaluatorTest {
   // ── Month filter ──────────────────────────────────────────────────────────
 
   @IsTest
-  static void testMonthFilter_currentMonth() {
+  static void testMonthFilterCurrentMonth() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // "0 12 1 6 *" fires at noon on June 1. Jun 17 → Jun 1 12:00.
       DateTime result = WorkflowCronEvaluator.previousFireTime(
@@ -276,7 +276,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testMonthFilter_previousYear() {
+  static void testMonthFilterPreviousYear() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // "0 12 1 3 *" fires at noon on March 1. On Jun 17 → this year's Mar 1.
       DateTime result = WorkflowCronEvaluator.previousFireTime(
@@ -294,7 +294,7 @@ public class WorkflowCronEvaluatorTest {
   // ── Invalid / never-match ─────────────────────────────────────────────────
 
   @IsTest
-  static void testInvalidCron_null() {
+  static void testInvalidCronNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       System.assertEquals(
         null,
@@ -305,7 +305,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testInvalidCron_empty() {
+  static void testInvalidCronEmpty() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       System.assertEquals(
         null,
@@ -316,7 +316,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testInvalidCron_wrongFieldCount() {
+  static void testInvalidCronWrongFieldCount() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       System.assertEquals(
         null,
@@ -327,7 +327,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testInvalidCron_outOfRange() {
+  static void testInvalidCronOutOfRange() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Minute 99 is invalid; should return null.
       System.assertEquals(
@@ -339,7 +339,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testNeverMatchCron_feb31() {
+  static void testNeverMatchCronFeb31() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Feb 31 never exists: should return null.
       DateTime result = WorkflowCronEvaluator.previousFireTime(
@@ -364,7 +364,7 @@ public class WorkflowCronEvaluatorTest {
   // ── Wildcard all ──────────────────────────────────────────────────────────
 
   @IsTest
-  static void testWildcardAll_returnsNow() {
+  static void testWildcardAllReturnsNow() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // "* * * * *" fires every minute; previous fire = now truncated to the minute.
       DateTime result = WorkflowCronEvaluator.previousFireTime(
@@ -426,7 +426,7 @@ public class WorkflowCronEvaluatorTest {
   // ── nextFireTime ────────────────────────────────────────────────────────────
 
   @IsTest
-  static void testNextFire_hourly() {
+  static void testNextFireHourly() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // "0 * * * *" → next fire from 14:37 = 15:00.
       DateTime result = WorkflowCronEvaluator.nextFireTime('0 * * * *', REF);
@@ -439,7 +439,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testNextFire_exactlyOnFire() {
+  static void testNextFireExactlyOnFire() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // When now IS a fire minute, return it (next fire ≥ now).
       DateTime onFire = DateTime.newInstanceGmt(2026, 6, 17, 15, 0, 0);
@@ -449,7 +449,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testNextFire_every15() {
+  static void testNextFireEvery15() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // "*/15 * * * *" → next fire from 14:37 = 14:45.
       DateTime result = WorkflowCronEvaluator.nextFireTime('*/15 * * * *', REF);
@@ -462,7 +462,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testNextFire_dailyRollToTomorrow() {
+  static void testNextFireDailyRollToTomorrow() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // "0 2 * * *" at 14:37 → today's 02:00 already passed → tomorrow 02:00.
       DateTime result = WorkflowCronEvaluator.nextFireTime('0 2 * * *', REF);
@@ -475,7 +475,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testNextFire_dayOfWeek() {
+  static void testNextFireDayOfWeek() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // "0 9 * * 1" (Mondays 09:00). Jun 17 is Wed → next Monday Jun 22.
       DateTime result = WorkflowCronEvaluator.nextFireTime('0 9 * * 1', REF);
@@ -488,7 +488,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testNextFire_invalidNull() {
+  static void testNextFireInvalidNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       System.assertEquals(
         null,
@@ -509,7 +509,7 @@ public class WorkflowCronEvaluatorTest {
   }
 
   @IsTest
-  static void testNextFire_monthRollover() {
+  static void testNextFireMonthRollover() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // "0 0 1 * *" first of month midnight. From Jun 17 → Jul 1 00:00.
       DateTime result = WorkflowCronEvaluator.nextFireTime('0 0 1 * *', REF);

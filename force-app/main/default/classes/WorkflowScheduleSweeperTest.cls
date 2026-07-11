@@ -7,21 +7,42 @@ public class WorkflowScheduleSweeperTest {
   private static final String TEST_WF = 'WorkflowEngineTest.HappyWorkflow';
   private static final String PREFIX = 'SchedTest';
 
-  private static Workflow_Schedule__c makeSchedule(
-    String name,
-    String cron,
-    Boolean enabled,
-    String overlapPolicy
-  ) {
-    return new Workflow_Schedule__c(
-      Name = name,
-      Workflow_Name__c = TEST_WF,
-      Cron_Expression__c = cron,
-      Correlation_Key_Prefix__c = name,
-      Enabled__c = enabled,
-      Overlap_Policy__c = overlapPolicy,
-      Dedicated_Slot__c = false
-    );
+  // Fluent builder replacing the former 4-parameter makeSchedule(...) helper.
+  // Produces byte-identical Workflow_Schedule__c records; callers set the two
+  // required values (name, cron) via the constructor and the remaining flags
+  // via chained setters.
+  private class Sched {
+    private String name;
+    private String cron;
+    private Boolean enabled;
+    private String overlap;
+
+    private Sched(String name, String cron) {
+      this.name = name;
+      this.cron = cron;
+    }
+
+    private Sched enabled(Boolean value) {
+      this.enabled = value;
+      return this;
+    }
+
+    private Sched overlap(String value) {
+      this.overlap = value;
+      return this;
+    }
+
+    private Workflow_Schedule__c build() {
+      return new Workflow_Schedule__c(
+        Name = name,
+        Workflow_Name__c = TEST_WF,
+        Cron_Expression__c = cron,
+        Correlation_Key_Prefix__c = name,
+        Enabled__c = enabled,
+        Overlap_Policy__c = overlap,
+        Dedicated_Slot__c = false
+      );
+    }
   }
 
   // ── AC2 / AC3: due fires exactly once, second sweep is a no-op ──────────
@@ -31,12 +52,10 @@ public class WorkflowScheduleSweeperTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
 
-      Workflow_Schedule__c sched = makeSchedule(
-        PREFIX + '1',
-        EVERY_MINUTE_CRON,
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched(PREFIX + '1', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       insert sched;
 
       Test.startTest();
@@ -83,12 +102,10 @@ public class WorkflowScheduleSweeperTest {
         now
       );
 
-      Workflow_Schedule__c sched = makeSchedule(
-        PREFIX + '2',
-        EVERY_MINUTE_CRON,
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched(PREFIX + '2', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       sched.Last_Fired_Window__c = fireTime;
       insert sched;
 
@@ -113,12 +130,10 @@ public class WorkflowScheduleSweeperTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       // Feb 31 never exists → previousFireTime returns null → sweep skips.
-      Workflow_Schedule__c sched = makeSchedule(
-        PREFIX + '3',
-        '0 0 31 2 *',
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched(PREFIX + '3', '0 0 31 2 *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       insert sched;
 
       WorkflowScheduleSweeper.sweep();
@@ -149,12 +164,10 @@ public class WorkflowScheduleSweeperTest {
         now
       );
 
-      Workflow_Schedule__c sched = makeSchedule(
-        PREFIX + '4',
-        EVERY_MINUTE_CRON,
-        true,
-        'Skip'
-      );
+      Workflow_Schedule__c sched = new Sched(PREFIX + '4', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Skip')
+        .build();
       insert sched;
 
       // Pre-insert an OLDER active instance (different key) so it looks like last run is still going.
@@ -210,12 +223,10 @@ public class WorkflowScheduleSweeperTest {
         now
       );
 
-      Workflow_Schedule__c sched = makeSchedule(
-        PREFIX + '5',
-        EVERY_MINUTE_CRON,
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched(PREFIX + '5', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       insert sched;
 
       // Older active instance still running.
@@ -265,12 +276,10 @@ public class WorkflowScheduleSweeperTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
 
-      Workflow_Schedule__c sched = makeSchedule(
-        PREFIX + '6',
-        EVERY_MINUTE_CRON,
-        false,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched(PREFIX + '6', EVERY_MINUTE_CRON)
+        .enabled(false)
+        .overlap('Allow')
+        .build();
       insert sched;
 
       WorkflowScheduleSweeper.sweep();
@@ -300,7 +309,10 @@ public class WorkflowScheduleSweeperTest {
       List<Workflow_Schedule__c> schedules = new List<Workflow_Schedule__c>();
       for (Integer i = 0; i < 5; i++) {
         schedules.add(
-          makeSchedule(PREFIX + 'ZS' + i, EVERY_MINUTE_CRON, true, 'Allow')
+          new Sched(PREFIX + 'ZS' + i, EVERY_MINUTE_CRON)
+            .enabled(true)
+            .overlap('Allow')
+            .build()
         );
       }
       insert schedules;
@@ -335,12 +347,10 @@ public class WorkflowScheduleSweeperTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
 
-      Workflow_Schedule__c sched = makeSchedule(
-        PREFIX + '7',
-        EVERY_MINUTE_CRON,
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched(PREFIX + '7', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       insert sched;
 
       // First sweep.
@@ -377,12 +387,10 @@ public class WorkflowScheduleSweeperTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
 
-      Workflow_Schedule__c sched = makeSchedule(
-        PREFIX + '8',
-        '0 2 * * *',
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched(PREFIX + '8', '0 2 * * *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       sched.Dedicated_Slot__c = true;
       insert sched;
 
@@ -451,12 +459,10 @@ public class WorkflowScheduleSweeperTest {
   static void testDedicatedJobAppliesSkipAndRecordsState() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Workflow_Schedule__c sched = makeSchedule(
-        'DedSkip',
-        '0 2 * * *',
-        true,
-        'Skip'
-      );
+      Workflow_Schedule__c sched = new Sched('DedSkip', '0 2 * * *')
+        .enabled(true)
+        .overlap('Skip')
+        .build();
       sched.Dedicated_Slot__c = true;
       insert sched;
 
@@ -513,12 +519,10 @@ public class WorkflowScheduleSweeperTest {
   static void testDedicatedJobRecordsStartedState() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Workflow_Schedule__c sched = makeSchedule(
-        'DedState',
-        '0 2 * * *',
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched('DedState', '0 2 * * *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       sched.Dedicated_Slot__c = true;
       insert sched;
 
@@ -594,12 +598,10 @@ public class WorkflowScheduleSweeperTest {
   static void testManualRunKeysUnique() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Workflow_Schedule__c sched = makeSchedule(
-        'ManyManual',
-        '0 2 * * *',
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched('ManyManual', '0 2 * * *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       insert sched;
 
       Test.startTest();
@@ -630,12 +632,10 @@ public class WorkflowScheduleSweeperTest {
   static void testCursorAdvancesPastHandledWindow() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Workflow_Schedule__c sched = makeSchedule(
-        'CursorAdv',
-        EVERY_MINUTE_CRON,
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched('CursorAdv', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       insert sched;
 
       Test.startTest();
@@ -665,12 +665,10 @@ public class WorkflowScheduleSweeperTest {
   static void testOverlapSkipCaseInsensitive() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Workflow_Schedule__c sched = makeSchedule(
-        'CaseJob',
-        EVERY_MINUTE_CRON,
-        true,
-        'Skip'
-      );
+      Workflow_Schedule__c sched = new Sched('CaseJob', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Skip')
+        .build();
       insert sched;
 
       // Prior active run keyed with a different-case prefix (correlation keys are
@@ -710,12 +708,10 @@ public class WorkflowScheduleSweeperTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
 
-      Workflow_Schedule__c sched = makeSchedule(
-        PREFIX + '9',
-        EVERY_MINUTE_CRON,
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched(PREFIX + '9', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       insert sched;
 
       Integer cronBefore = [SELECT COUNT() FROM CronTrigger];
@@ -749,12 +745,10 @@ public class WorkflowScheduleSweeperTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
 
-      Workflow_Schedule__c sched = makeSchedule(
-        PREFIX + 'RN',
-        '0 2 * * *',
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched(PREFIX + 'RN', '0 2 * * *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       insert sched;
 
       Test.startTest();
@@ -847,24 +841,18 @@ public class WorkflowScheduleSweeperTest {
       WorkflowEngine.disableQueueableInTest = true;
       WorkflowScheduleSweeper.sweepBatchSize = 2;
 
-      Workflow_Schedule__c a = makeSchedule(
-        'StarveA',
-        EVERY_MINUTE_CRON,
-        true,
-        'Allow'
-      );
-      Workflow_Schedule__c b = makeSchedule(
-        'StarveB',
-        EVERY_MINUTE_CRON,
-        true,
-        'Allow'
-      );
-      Workflow_Schedule__c c = makeSchedule(
-        'StarveC',
-        EVERY_MINUTE_CRON,
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c a = new Sched('StarveA', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .build();
+      Workflow_Schedule__c b = new Sched('StarveB', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .build();
+      Workflow_Schedule__c c = new Sched('StarveC', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       // A and B never fired (null window) → highest priority; C fired long ago.
       c.Last_Fired_Window__c = DateTime.now().addHours(-2);
       insert new List<Workflow_Schedule__c>{ a, b, c };
@@ -910,12 +898,10 @@ public class WorkflowScheduleSweeperTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
 
-      Workflow_Schedule__c sched = makeSchedule(
-        'Job',
-        EVERY_MINUTE_CRON,
-        true,
-        'Skip'
-      );
+      Workflow_Schedule__c sched = new Sched('Job', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Skip')
+        .build();
       insert sched;
 
       // Active instance for an UNRELATED prefix that the coarse "Job_%" LIKE matches
@@ -951,7 +937,7 @@ public class WorkflowScheduleSweeperTest {
   // ── toSalesforceCron: DOW remap + DOM/DOW rejection ───────────────────────
 
   @IsTest
-  static void testToSalesforceCron_dowRemap() {
+  static void testToSalesforceCronDowRemap() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       System.assertEquals(
         '0 0 9 ? * 2 *',
@@ -982,7 +968,7 @@ public class WorkflowScheduleSweeperTest {
   }
 
   @IsTest
-  static void testToSalesforceCron_rejectsDomAndDow() {
+  static void testToSalesforceCronRejectsDomAndDow() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Boolean threw = false;
       try {
@@ -1003,12 +989,10 @@ public class WorkflowScheduleSweeperTest {
   static void testDedicatedJobFires() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Workflow_Schedule__c sched = makeSchedule(
-        'DedJobOn',
-        '0 2 * * *',
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched('DedJobOn', '0 2 * * *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       sched.Dedicated_Slot__c = true;
       insert sched;
 
@@ -1032,12 +1016,10 @@ public class WorkflowScheduleSweeperTest {
   static void testDedicatedJobNoopWhenDisabled() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Workflow_Schedule__c sched = makeSchedule(
-        'DedJobOff',
-        '0 2 * * *',
-        false,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched('DedJobOff', '0 2 * * *')
+        .enabled(false)
+        .overlap('Allow')
+        .build();
       sched.Dedicated_Slot__c = true;
       insert sched;
 
@@ -1065,12 +1047,10 @@ public class WorkflowScheduleSweeperTest {
       WorkflowEngine.disableQueueableInTest = true;
       // "0 0 31 2 *" (Feb 31) is syntactically valid but never fires, so
       // previousFireTime returns null after the full lookback walk.
-      Workflow_Schedule__c impossible = makeSchedule(
-        'Impossible',
-        '0 0 31 2 *',
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c impossible = new Sched('Impossible', '0 0 31 2 *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       insert impossible;
 
       Test.startTest();
@@ -1119,18 +1099,14 @@ public class WorkflowScheduleSweeperTest {
 
       // Impossible cron sorts first (null cursor). Without parking, it would pin the
       // batch of 1 forever and a valid schedule would never fire.
-      Workflow_Schedule__c bad = makeSchedule(
-        'AImpossible',
-        '0 0 31 2 *',
-        true,
-        'Allow'
-      );
-      Workflow_Schedule__c good = makeSchedule(
-        'BValid',
-        EVERY_MINUTE_CRON,
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c bad = new Sched('AImpossible', '0 0 31 2 *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
+      Workflow_Schedule__c good = new Sched('BValid', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       insert new List<Workflow_Schedule__c>{ bad, good };
 
       Test.startTest();
@@ -1170,12 +1146,10 @@ public class WorkflowScheduleSweeperTest {
         Input_Json__c = '{not valid json'
       );
       // A healthy, due schedule that must still fire on the same heartbeat.
-      Workflow_Schedule__c good = makeSchedule(
-        'GoodJsonSched',
-        EVERY_MINUTE_CRON,
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c good = new Sched('GoodJsonSched', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       insert new List<Workflow_Schedule__c>{ bad, good };
 
       Test.startTest();
@@ -1235,12 +1209,10 @@ public class WorkflowScheduleSweeperTest {
   static void testUnknownWorkflowRecordsError() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Workflow_Schedule__c bad = makeSchedule(
-        'BadWf',
-        EVERY_MINUTE_CRON,
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c bad = new Sched('BadWf', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       bad.Workflow_Name__c = 'Nope.NotARealWorkflow123';
       insert bad;
 
@@ -1290,12 +1262,10 @@ public class WorkflowScheduleSweeperTest {
   static void testDedicatedJobUsesCronWindow() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Workflow_Schedule__c sched = makeSchedule(
-        'DedWindow',
-        '0 2 * * *',
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched('DedWindow', '0 2 * * *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       sched.Dedicated_Slot__c = true;
       insert sched;
 
@@ -1372,12 +1342,10 @@ public class WorkflowScheduleSweeperTest {
   @IsTest
   static void testDedicatedJobSelfAbortsWhenScheduleDeleted() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Schedule__c sched = makeSchedule(
-        'DedGone',
-        '0 2 * * *',
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched('DedGone', '0 2 * * *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       sched.Dedicated_Slot__c = true;
       insert sched;
       String jobName = WorkflowScheduleSweeper.dedicatedJobName(sched.Id);
@@ -1401,12 +1369,10 @@ public class WorkflowScheduleSweeperTest {
   @IsTest
   static void testDedicatedJobSelfAbortsWhenDisabledOutOfBand() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Schedule__c sched = makeSchedule(
-        'DedDisabledAbort',
-        '0 2 * * *',
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched('DedDisabledAbort', '0 2 * * *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       sched.Dedicated_Slot__c = true;
       insert sched;
       String jobName = WorkflowScheduleSweeper.dedicatedJobName(sched.Id);
@@ -1440,12 +1406,10 @@ public class WorkflowScheduleSweeperTest {
       // future. A future CreatedDate is itself an illegal state to update: the
       // platform stamps LastModifiedDate = now, which would precede CreatedDate and
       // throw FIELD_INTEGRITY_EXCEPTION when sweep() flushes the cursor seed.
-      Workflow_Schedule__c sched = makeSchedule(
-        'PreCreate',
-        '0 0 1 1 *',
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched('PreCreate', '0 0 1 1 *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       insert sched;
       // Created a minute ago: in the PAST (so the cursor-seed update is legal), yet
       // its most-recent fire window (last Jan 1) still predates the creation minute.
@@ -1482,12 +1446,10 @@ public class WorkflowScheduleSweeperTest {
   @IsTest
   static void testRunNowRejectsUnknownWorkflow() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Schedule__c sched = makeSchedule(
-        'RNBad',
-        '0 2 * * *',
-        true,
-        'Allow'
-      );
+      Workflow_Schedule__c sched = new Sched('RNBad', '0 2 * * *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
       sched.Workflow_Name__c = 'Nope.NotARealWorkflow123';
       insert sched;
 

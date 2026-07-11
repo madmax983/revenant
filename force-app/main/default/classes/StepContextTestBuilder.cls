@@ -7,17 +7,23 @@ public inherited sharing class StepContextTestBuilder {
   private String previousStepOutputVal;
   private String stepStateJsonVal;
   private String workflowInputJsonVal;
-  private Integer workflowVersionVal = 1;
-  private Integer stepVisitVal = 0;
-  private Datetime previousRunAtVal;
-  private Boolean timeoutResumeVal = false;
-  private Integer attemptVal = 1;
-  private Integer maxAttemptsVal = 1;
+  private ExecState exec = new ExecState();
   private Map<String, Object> capturedValues = new Map<String, Object>();
   private List<StepContext.Signal> pendingSignals = new List<StepContext.Signal>();
 
   private static Integer fakeIdSequence = 0;
   private static Map<SObjectType, String> keyPrefixCache = new Map<SObjectType, String>();
+
+  // Holder for the scalar execution-context fields, grouped to keep the
+  // builder's field footprint small while preserving identical behavior.
+  private class ExecState {
+    private Integer workflowVersionVal = 1;
+    private Integer stepVisitVal = 0;
+    private Datetime previousRunAtVal;
+    private Boolean timeoutResumeVal = false;
+    private Integer attemptVal = 1;
+    private Integer maxAttemptsVal = 1;
+  }
 
   public StepContextTestBuilder workflowInstanceId(Id val) {
     this.workflowInstanceIdVal = val;
@@ -44,13 +50,14 @@ public inherited sharing class StepContextTestBuilder {
     return this;
   }
 
-  public StepContextTestBuilder previousStepOutput(String val) {
-    this.previousStepOutputVal = val;
-    return this;
-  }
-
   public StepContextTestBuilder previousStepOutput(Object val) {
-    this.previousStepOutputVal = (val == null) ? null : JSON.serialize(val);
+    if (val == null) {
+      this.previousStepOutputVal = null;
+    } else if (val instanceof String) {
+      this.previousStepOutputVal = (String) val;
+    } else {
+      this.previousStepOutputVal = JSON.serialize(val);
+    }
     return this;
   }
 
@@ -75,37 +82,32 @@ public inherited sharing class StepContextTestBuilder {
   }
 
   public StepContextTestBuilder workflowVersion(Integer val) {
-    this.workflowVersionVal = val;
+    this.exec.workflowVersionVal = val;
     return this;
   }
 
   public StepContextTestBuilder stepVisit(Integer val) {
-    this.stepVisitVal = val;
+    this.exec.stepVisitVal = val;
     return this;
   }
 
   public StepContextTestBuilder previousRunAt(Datetime val) {
-    this.previousRunAtVal = val;
+    this.exec.previousRunAtVal = val;
     return this;
   }
 
-  public StepContextTestBuilder timeoutResume(Boolean val) {
-    this.timeoutResumeVal = val;
+  public StepContextTestBuilder timeoutResume() {
+    this.exec.timeoutResumeVal = true;
     return this;
   }
 
   public StepContextTestBuilder attempt(Integer val) {
-    this.attemptVal = val;
+    this.exec.attemptVal = val;
     return this;
   }
 
   public StepContextTestBuilder maxAttempts(Integer val) {
-    this.maxAttemptsVal = val;
-    return this;
-  }
-
-  public StepContextTestBuilder addSignal(String name, String payload) {
-    this.pendingSignals.add(new StepContext.Signal(null, name, payload));
+    this.exec.maxAttemptsVal = val;
     return this;
   }
 
@@ -174,12 +176,7 @@ public inherited sharing class StepContextTestBuilder {
     }
   }
 
-  public StepContext build() {
-    Id instanceId = this.workflowInstanceIdVal;
-    if (instanceId == null) {
-      instanceId = generateFakeId(Workflow_Instance__c.SObjectType);
-    }
-
+  private List<StepContext.Signal> finalizeSignals() {
     List<StepContext.Signal> finalSignals = new List<StepContext.Signal>();
     for (StepContext.Signal sig : this.pendingSignals) {
       if (sig.signalId == null) {
@@ -198,12 +195,15 @@ public inherited sharing class StepContextTestBuilder {
         finalSignals.add(sig);
       }
     }
+    return finalSignals;
+  }
 
-    StaticSignalSource source = new StaticSignalSource(finalSignals);
+  public StepContext build() {
+    Id instanceId = (this.workflowInstanceIdVal != null)
+      ? this.workflowInstanceIdVal
+      : generateFakeId(Workflow_Instance__c.SObjectType);
+    StaticSignalSource source = new StaticSignalSource(finalizeSignals());
 
-    Boolean timeoutResumeArg = this.timeoutResumeVal != null
-      ? this.timeoutResumeVal
-      : false;
     StepContext.Builder ctxBuilder = new StepContext.Builder()
       .instanceId(instanceId)
       .workflowName(
@@ -214,16 +214,14 @@ public inherited sharing class StepContextTestBuilder {
       .previousStepOutput(this.previousStepOutputVal)
       .stepStateJson(this.stepStateJsonVal)
       .workflowInputJson(this.workflowInputJsonVal)
-      .workflowVersion(
-        this.workflowVersionVal != null ? this.workflowVersionVal : 1
-      )
-      .stepVisit(this.stepVisitVal != null ? this.stepVisitVal : 0)
+      .workflowVersion(this.exec.workflowVersionVal)
+      .stepVisit(this.exec.stepVisitVal)
       .signalSource(source)
-      .previousRunAt(this.previousRunAtVal)
+      .previousRunAt(this.exec.previousRunAtVal)
       .capturedValuesMap(new Map<String, Object>(this.capturedValues))
-      .attempt(this.attemptVal != null ? this.attemptVal : 1)
-      .maxAttempts(this.maxAttemptsVal != null ? this.maxAttemptsVal : 1);
-    if (timeoutResumeArg) {
+      .attempt(this.exec.attemptVal)
+      .maxAttempts(this.exec.maxAttemptsVal);
+    if (this.exec.timeoutResumeVal) {
       ctxBuilder.markTimeoutResume();
     }
     return ctxBuilder.build();

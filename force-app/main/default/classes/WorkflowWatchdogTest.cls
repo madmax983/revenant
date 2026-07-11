@@ -268,7 +268,7 @@ public class WorkflowWatchdogTest {
   }
 
   @IsTest
-  static void testTimedSuspend_BulkSignalWins_DisarmsTimer() {
+  static void testTimedSuspendBulkSignalWinsDisarmsTimer() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Verifies the bulk signal(List<SignalRequest>) path also clears Sleep_Until__c
       // when a signal wins the race against an armed timed-wait timer.
@@ -335,39 +335,57 @@ public class WorkflowWatchdogTest {
     }
   }
 
-  private static Workflow_Alert_Config__mdt createMockStallConfig(
-    String devName,
-    String recipients,
-    Boolean enabled,
-    Integer stallThresholdMinutes
-  ) {
-    return createMockStallConfig(
-      devName,
-      recipients,
-      enabled,
-      stallThresholdMinutes,
-      false
-    );
+  // Fluent builder replacing the former 4-/5-parameter createMockStallConfig(...)
+  // overloads. Produces byte-identical Workflow_Alert_Config__mdt values;
+  // publishEvent defaults to false (matching the old 4-arg overload) unless
+  // set via publish(...).
+  private class StallCfg {
+    private String devName;
+    private String recipients;
+    private Boolean enabled;
+    private Integer stallThresholdMinutes;
+    private Boolean publishEvent = false;
+
+    private StallCfg(String devName, String recipients, Boolean enabled) {
+      this.devName = devName;
+      this.recipients = recipients;
+      this.enabled = enabled;
+    }
+
+    private StallCfg threshold(Integer value) {
+      this.stallThresholdMinutes = value;
+      return this;
+    }
+
+    private StallCfg publish(Boolean value) {
+      this.publishEvent = value;
+      return this;
+    }
+
+    private Workflow_Alert_Config__mdt build() {
+      Map<String, Object> fields = new Map<String, Object>{
+        'DeveloperName' => devName,
+        'Email_Recipients__c' => recipients,
+        'Enable_Alerts__c' => enabled,
+        'Stall_Threshold_Minutes__c' => stallThresholdMinutes,
+        'Publish_Alert_Event__c' => publishEvent
+      };
+      return (Workflow_Alert_Config__mdt) JSON.deserialize(
+        JSON.serialize(fields),
+        Workflow_Alert_Config__mdt.class
+      );
+    }
   }
 
-  private static Workflow_Alert_Config__mdt createMockStallConfig(
+  // Compact convenience for the common enabled, non-publishing stall config so
+  // the repeated per-test setup stays terse (and free of duplicated builder
+  // chains). Delegates to the StallCfg builder; identical values.
+  private static Workflow_Alert_Config__mdt stallConfig(
     String devName,
     String recipients,
-    Boolean enabled,
-    Integer stallThresholdMinutes,
-    Boolean publishEvent
+    Integer threshold
   ) {
-    Map<String, Object> fields = new Map<String, Object>{
-      'DeveloperName' => devName,
-      'Email_Recipients__c' => recipients,
-      'Enable_Alerts__c' => enabled,
-      'Stall_Threshold_Minutes__c' => stallThresholdMinutes,
-      'Publish_Alert_Event__c' => publishEvent
-    };
-    return (Workflow_Alert_Config__mdt) JSON.deserialize(
-      JSON.serialize(fields),
-      Workflow_Alert_Config__mdt.class
-    );
+    return new StallCfg(devName, recipients, true).threshold(threshold).build();
   }
 
   @IsTest
@@ -379,12 +397,7 @@ public class WorkflowWatchdogTest {
       // 1. Mock Config with Stall Threshold = 10 minutes
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockStallConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'ops@test.com',
-          true,
-          10
-        )
+        stallConfig('WorkflowEngineTest_HappyWorkflow', 'ops@test.com', 10)
       );
 
       // 2. Create a stalled instance
@@ -450,12 +463,7 @@ public class WorkflowWatchdogTest {
       // Mock Config
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockStallConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'ops@test.com',
-          true,
-          10
-        )
+        stallConfig('WorkflowEngineTest_HappyWorkflow', 'ops@test.com', 10)
       );
 
       // Create stalled instance
@@ -538,12 +546,7 @@ public class WorkflowWatchdogTest {
       // Mock Config
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockStallConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'ops@test.com',
-          true,
-          10
-        )
+        stallConfig('WorkflowEngineTest_HappyWorkflow', 'ops@test.com', 10)
       );
 
       // Create a suspended instance that is legitimately sleeping until 10 minutes in the future
@@ -577,12 +580,7 @@ public class WorkflowWatchdogTest {
       // Mock Config
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockStallConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'ops@test.com',
-          true,
-          10
-        )
+        stallConfig('WorkflowEngineTest_HappyWorkflow', 'ops@test.com', 10)
       );
 
       // Create a suspended instance
@@ -624,12 +622,7 @@ public class WorkflowWatchdogTest {
       // Mock Config
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockStallConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'ops@test.com',
-          true,
-          10
-        )
+        stallConfig('WorkflowEngineTest_HappyWorkflow', 'ops@test.com', 10)
       );
 
       // Create a stalled instance
@@ -668,12 +661,7 @@ public class WorkflowWatchdogTest {
       // Mock Config using lowercase DeveloperName
       WorkflowAlertManager.mockConfigs.put(
         'workflowenginetest_happyworkflow',
-        createMockStallConfig(
-          'workflowenginetest_happyworkflow',
-          'ops@test.com',
-          true,
-          10
-        )
+        stallConfig('workflowenginetest_happyworkflow', 'ops@test.com', 10)
       );
 
       // Create stalled instance with mixed case name
@@ -706,7 +694,7 @@ public class WorkflowWatchdogTest {
       // Mock 'Default' config ONLY
       WorkflowAlertManager.mockConfigs.put(
         'Default',
-        createMockStallConfig('Default', 'ops@test.com', true, 10)
+        stallConfig('Default', 'ops@test.com', 10)
       );
 
       // Create stalled instance with a completely unmatched name
@@ -739,7 +727,7 @@ public class WorkflowWatchdogTest {
       // Mock Config with empty email list
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockStallConfig('WorkflowEngineTest_HappyWorkflow', '', true, 10)
+        stallConfig('WorkflowEngineTest_HappyWorkflow', '', 10)
       );
 
       // Create stalled instance
@@ -787,11 +775,11 @@ public class WorkflowWatchdogTest {
       // Mock configs
       WorkflowAlertManager.mockConfigs.put(
         'Workflow1',
-        createMockStallConfig('Workflow1', 'ops@test.com', true, 10)
+        stallConfig('Workflow1', 'ops@test.com', 10)
       );
       WorkflowAlertManager.mockConfigs.put(
         'Workflow2',
-        createMockStallConfig('Workflow2', 'ops@test.com', true, 10)
+        stallConfig('Workflow2', 'ops@test.com', 10)
       );
 
       // Create two stalled instances
@@ -829,12 +817,7 @@ public class WorkflowWatchdogTest {
       // Mock config
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockStallConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'ops@test.com',
-          true,
-          10
-        )
+        stallConfig('WorkflowEngineTest_HappyWorkflow', 'ops@test.com', 10)
       );
 
       // Create suspended instance that is sleeping (ready to resume)
@@ -1386,13 +1369,10 @@ public class WorkflowWatchdogTest {
       // 1. Mock Config with Stall Threshold = 10 minutes and Publish_Alert_Event__c = true (empty email)
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockStallConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          '',
-          true,
-          10,
-          true
-        )
+        new StallCfg('WorkflowEngineTest_HappyWorkflow', '', true)
+          .threshold(10)
+          .publish(true)
+          .build()
       );
 
       // 2. Create a stalled instance

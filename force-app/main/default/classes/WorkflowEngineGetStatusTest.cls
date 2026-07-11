@@ -4,48 +4,72 @@ private class WorkflowEngineGetStatusTest {
 
   // ─── helpers ─────────────────────────────────────────────────────────────
 
-  private static Workflow_Instance__c makeInstance(
-    String status,
-    String correlationKey,
-    String output,
-    String errorMessage
-  ) {
-    Workflow_Instance__c inst = new Workflow_Instance__c(
-      Workflow_Name__c = 'WorkflowEngineGetStatusTest.StubWorkflow',
-      Status__c = status,
-      Correlation_Key__c = correlationKey,
-      Output__c = output,
-      Error_Message__c = errorMessage
-    );
-    // Active instances carry Active_Correlation_Key__c; terminal ones have it cleared.
-    if (
-      new Set<String>{
-          'Pending',
-          'Running',
-          'Suspended',
-          'Compensating',
-          'Cancelling',
-          'CompensationFailed'
-        }
-        .contains(status)
-    ) {
-      inst.Active_Correlation_Key__c = correlationKey;
+  // Fluent builder replaces a wide positional helper: same records, no long
+  // parameter list. build() inserts and returns the instance.
+  private class InstanceBuilder {
+    private String status;
+    private String correlationKey;
+    private String output;
+    private String errorMessage;
+
+    private InstanceBuilder status(String value) {
+      this.status = value;
+      return this;
     }
-    insert as system inst;
-    return inst;
+
+    private InstanceBuilder correlationKey(String value) {
+      this.correlationKey = value;
+      return this;
+    }
+
+    private InstanceBuilder output(String value) {
+      this.output = value;
+      return this;
+    }
+
+    private InstanceBuilder errorMessage(String value) {
+      this.errorMessage = value;
+      return this;
+    }
+
+    private Workflow_Instance__c build() {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowEngineGetStatusTest.StubWorkflow',
+        Status__c = status,
+        Correlation_Key__c = correlationKey,
+        Output__c = output,
+        Error_Message__c = errorMessage
+      );
+      // Active instances carry Active_Correlation_Key__c; terminal ones have it cleared.
+      if (
+        new Set<String>{
+            'Pending',
+            'Running',
+            'Suspended',
+            'Compensating',
+            'Cancelling',
+            'CompensationFailed'
+          }
+          .contains(status)
+      ) {
+        inst.Active_Correlation_Key__c = correlationKey;
+      }
+      insert as system inst;
+      return inst;
+    }
   }
 
   // ─── getStatus(Id) ────────────────────────────────────────────────────────
 
   @IsTest
-  static void testGetStatusById_Completed() {
+  static void testGetStatusByIdCompleted() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'Completed',
-        'key-completed-1',
-        '{"result":true}',
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-completed-1')
+        .output('{"result":true}')
+        .errorMessage(null)
+        .build();
 
       Test.startTest();
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
@@ -66,14 +90,14 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusById_Running_outputIsNull() {
+  static void testGetStatusByIdRunningOutputIsNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'Running',
-        'key-running-1',
-        null,
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Running')
+        .correlationKey('key-running-1')
+        .output(null)
+        .errorMessage(null)
+        .build();
 
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
 
@@ -89,14 +113,14 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusById_Suspended_outputIsNull() {
+  static void testGetStatusByIdSuspendedOutputIsNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'Suspended',
-        'key-suspended-1',
-        null,
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Suspended')
+        .correlationKey('key-suspended-1')
+        .output(null)
+        .errorMessage(null)
+        .build();
 
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
 
@@ -106,14 +130,14 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusById_Failed_errorMessagePopulated() {
+  static void testGetStatusByIdFailedErrorMessagePopulated() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'Failed',
-        'key-failed-1',
-        null,
-        'NullPointerException on line 42'
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Failed')
+        .correlationKey('key-failed-1')
+        .output(null)
+        .errorMessage('NullPointerException on line 42')
+        .build();
 
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
 
@@ -124,14 +148,14 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusById_Cancelled_isTerminal() {
+  static void testGetStatusByIdCancelledIsTerminal() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'Cancelled',
-        'key-cancelled-1',
-        null,
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Cancelled')
+        .correlationKey('key-cancelled-1')
+        .output(null)
+        .errorMessage(null)
+        .build();
 
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
 
@@ -140,14 +164,14 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusById_Compensated_isTerminal() {
+  static void testGetStatusByIdCompensatedIsTerminal() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'Compensated',
-        'key-compensated-1',
-        null,
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Compensated')
+        .correlationKey('key-compensated-1')
+        .output(null)
+        .errorMessage(null)
+        .build();
 
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
 
@@ -156,14 +180,14 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusById_CompensationFailed_notTerminal() {
+  static void testGetStatusByIdCompensationFailedNotTerminal() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'CompensationFailed',
-        'key-compfailed-1',
-        null,
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('CompensationFailed')
+        .correlationKey('key-compfailed-1')
+        .output(null)
+        .errorMessage(null)
+        .build();
 
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
 
@@ -176,7 +200,7 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusById_NotFound_returnsNull() {
+  static void testGetStatusByIdNotFoundReturnsNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Use a well-formed but non-existent Id (same key prefix as Workflow_Instance__c)
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
@@ -191,15 +215,15 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusById_Completed_blankOutput_terminalFlag() {
+  static void testGetStatusByIdCompletedBlankOutputTerminalFlag() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // AC4: isTerminal=true + blank output is different from a running instance
-      Workflow_Instance__c inst = makeInstance(
-        'Completed',
-        'key-blank-output-1',
-        '',
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-blank-output-1')
+        .output('')
+        .errorMessage(null)
+        .build();
 
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
 
@@ -215,14 +239,14 @@ private class WorkflowEngineGetStatusTest {
   // ─── getStatus(String) ────────────────────────────────────────────────────
 
   @IsTest
-  static void testGetStatusByKey_ActiveInstance() {
+  static void testGetStatusByKeyActiveInstance() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'Running',
-        'key-by-string-active',
-        null,
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Running')
+        .correlationKey('key-by-string-active')
+        .output(null)
+        .errorMessage(null)
+        .build();
 
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
         'key-by-string-active'
@@ -235,14 +259,14 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusByKey_TerminalInstance() {
+  static void testGetStatusByKeyTerminalInstance() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'Completed',
-        'key-by-string-done',
-        '{"done":1}',
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-by-string-done')
+        .output('{"done":1}')
+        .errorMessage(null)
+        .build();
 
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
         'key-by-string-done'
@@ -255,16 +279,21 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusByKey_PrefersActiveOverTerminal() {
+  static void testGetStatusByKeyPrefersActiveOverTerminal() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Same correlation key: one terminal, one active -- active should win
-      makeInstance('Completed', 'key-prefer-active', '{"old":true}', null);
-      Workflow_Instance__c activeInst = makeInstance(
-        'Running',
-        'key-prefer-active',
-        null,
-        null
-      );
+      new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-prefer-active')
+        .output('{"old":true}')
+        .errorMessage(null)
+        .build();
+      Workflow_Instance__c activeInst = new InstanceBuilder()
+        .status('Running')
+        .correlationKey('key-prefer-active')
+        .output(null)
+        .errorMessage(null)
+        .build();
 
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
         'key-prefer-active'
@@ -279,7 +308,7 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusByKey_NotFound_returnsNull() {
+  static void testGetStatusByKeyNotFoundReturnsNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
         'key-does-not-exist-xyz123'
@@ -290,7 +319,7 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusByKey_Blank_returnsNull() {
+  static void testGetStatusByKeyBlankReturnsNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       System.assertEquals(null, WorkflowEngine.getStatus(''));
       System.assertEquals(null, WorkflowEngine.getStatus((String) null));
@@ -298,16 +327,16 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusByKey_CaseInsensitive() {
+  static void testGetStatusByKeyCaseInsensitive() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Correlation key fields are case-insensitive; a differently-cased lookup must
       // still resolve the stored instance.
-      Workflow_Instance__c inst = makeInstance(
-        'Completed',
-        'Order-123',
-        '{"ci":true}',
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('Order-123')
+        .output('{"ci":true}')
+        .errorMessage(null)
+        .build();
 
       WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus('order-123');
 
@@ -322,7 +351,7 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusByKey_FollowsContinueAsNewViaRoot() {
+  static void testGetStatusByKeyFollowsContinueAsNewViaRoot() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Predecessor handed off via ContinuedAsNew (terminal-ish, no active key).
       Workflow_Instance__c predecessor = new Workflow_Instance__c(
@@ -358,7 +387,7 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusByKey_FollowsMultiGenerationChainFromIntermediateKey() {
+  static void testGetStatusByKeyFollowsMultiGenerationChainFromIntermediateKey() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Chain: A (ContinuedAsNew) → A_run2 (ContinuedAsNew) → A_run3 (Completed).
       // Every generation shares Root_Correlation_Key__c = 'A'.
@@ -410,7 +439,7 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testBulkGetStatusByKeys_hotKeyDoesNotStarveOthers() {
+  static void testBulkGetStatusByKeysHotKeyDoesNotStarveOthers() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Shrink the row cap so one hot key would fill a single global-LIMIT scan; the
       // per-key resolution must still resolve the other requested key (not return
@@ -428,28 +457,36 @@ private class WorkflowEngineGetStatusTest {
       Datetime base = System.now();
 
       // Cold key: a single, older terminal run.
-      Workflow_Instance__c cold = makeInstance(
-        'Completed',
-        'cold-key',
-        '{"c":1}',
-        null
-      );
+      Workflow_Instance__c cold = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('cold-key')
+        .output('{"c":1}')
+        .errorMessage(null)
+        .build();
       cold.Terminal_At__c = base.addHours(-1);
       update as system cold;
       Test.setCreatedDate(cold.Id, base.addHours(-1));
 
       // Hot key: several newer terminal runs that would dominate an ordered scan.
       // Distinct CreatedDates (-3, -2, -1 min) so only the newest is the group max.
+      // Build the rows and their target created-dates in the loop, then apply the
+      // update once in bulk (no per-iteration DML) before backdating each row.
+      List<Workflow_Instance__c> hotRuns = new List<Workflow_Instance__c>();
+      List<Datetime> hotCreatedDates = new List<Datetime>();
       for (Integer i = 0; i < 3; i++) {
-        Workflow_Instance__c hot = makeInstance(
-          'Completed',
-          'hot-key',
-          '{"h":' + i + '}',
-          null
-        );
+        Workflow_Instance__c hot = new InstanceBuilder()
+          .status('Completed')
+          .correlationKey('hot-key')
+          .output('{"h":' + i + '}')
+          .errorMessage(null)
+          .build();
         hot.Terminal_At__c = base;
-        update as system hot;
-        Test.setCreatedDate(hot.Id, base.addMinutes(-(3 - i)));
+        hotRuns.add(hot);
+        hotCreatedDates.add(base.addMinutes(-(3 - i)));
+      }
+      update as system hotRuns;
+      for (Integer i = 0; i < hotRuns.size(); i++) {
+        Test.setCreatedDate(hotRuns[i].Id, hotCreatedDates[i]);
       }
 
       List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
@@ -470,7 +507,7 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testBulkGetStatusByKeys_followsChainWhenPollingRootKey() {
+  static void testBulkGetStatusByKeysFollowsChainWhenPollingRootKey() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // gen1 hands off (ContinuedAsNew); the successor carries a different
       // correlation key but the shared root. The bulk path matches the polled root
@@ -509,25 +546,25 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testBulkGetStatusByKeys_resolvesRootlessLegacyInstance() {
+  static void testBulkGetStatusByKeysResolvesRootlessLegacyInstance() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Simulate a legacy row created before the Root_Correlation_Key__c default: the
       // trigger only defaults on insert, so null it out via a follow-up update.
-      Workflow_Instance__c legacy = makeInstance(
-        'Completed',
-        'legacy-rootless',
-        '{"legacy":true}',
-        null
-      );
+      Workflow_Instance__c legacy = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('legacy-rootless')
+        .output('{"legacy":true}')
+        .errorMessage(null)
+        .build();
       legacy.Root_Correlation_Key__c = null;
       update as system legacy;
 
-      Workflow_Instance__c other = makeInstance(
-        'Running',
-        'other-key',
-        null,
-        null
-      );
+      Workflow_Instance__c other = new InstanceBuilder()
+        .status('Running')
+        .correlationKey('other-key')
+        .output(null)
+        .errorMessage(null)
+        .build();
 
       List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
         new List<String>{ 'legacy-rootless', 'other-key' }
@@ -546,7 +583,7 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testBulkGetStatusByKeys_doesNotConflateReusedRoot() {
+  static void testBulkGetStatusByKeysDoesNotConflateReusedRoot() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Chain: K (ContinuedAsNew) → K_run2 (Completed). Both share root 'K'.
       Workflow_Instance__c gen1 = new Workflow_Instance__c(
@@ -567,7 +604,12 @@ private class WorkflowEngineGetStatusTest {
 
       // A later, independent run reuses correlation key 'K' (root defaults to 'K'),
       // so it shares the chain root but is unrelated to K_run2.
-      makeInstance('Running', 'K', null, null);
+      new InstanceBuilder()
+        .status('Running')
+        .correlationKey('K')
+        .output(null)
+        .errorMessage(null)
+        .build();
 
       // Two keys force the bulk path (a single-element list takes the single-key
       // fast path), which is where root-keyed conflation would occur.
@@ -587,15 +629,15 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testBulkGetStatusByKeys_expandsRootlessLegacyHandoff() {
+  static void testBulkGetStatusByKeysExpandsRootlessLegacyHandoff() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Legacy predecessor: blank root (pre-default), already handed off.
-      Workflow_Instance__c legacy = makeInstance(
-        'ContinuedAsNew',
-        'legacy-chain',
-        null,
-        null
-      );
+      Workflow_Instance__c legacy = new InstanceBuilder()
+        .status('ContinuedAsNew')
+        .correlationKey('legacy-chain')
+        .output(null)
+        .errorMessage(null)
+        .build();
       legacy.Root_Correlation_Key__c = null;
       update as system legacy;
 
@@ -628,16 +670,16 @@ private class WorkflowEngineGetStatusTest {
   // ─── Offload rehydration (AC3 + AC7) ─────────────────────────────────────
 
   @IsTest
-  static void testGetStatusById_OffloadedOutput_rehydratesTransparently() {
+  static void testGetStatusByIdOffloadedOutputRehydratesTransparently() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       String bigPayload = 'A'.repeat(110001);
 
-      Workflow_Instance__c inst = makeInstance(
-        'Completed',
-        'key-offload-id',
-        null,
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-offload-id')
+        .output(null)
+        .errorMessage(null)
+        .build();
       // Offload via the engine's own helper so the marker format is identical
       String marker = WorkflowEngine.savePayloadIfNeeded(
         inst.Id,
@@ -674,14 +716,14 @@ private class WorkflowEngineGetStatusTest {
   // ─── SOQL / DML bounds (AC5) ──────────────────────────────────────────────
 
   @IsTest
-  static void testGetStatusById_governorBounds_noOffload() {
+  static void testGetStatusByIdGovernorBoundsNoOffload() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'Completed',
-        'key-gov-noop',
-        '{"x":1}',
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-gov-noop')
+        .output('{"x":1}')
+        .errorMessage(null)
+        .build();
 
       Integer queriesBefore = Limits.getQueries();
       Integer dmlBefore = Limits.getDmlStatements();
@@ -699,15 +741,15 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testGetStatusById_governorBounds_offloadedOutput() {
+  static void testGetStatusByIdGovernorBoundsOffloadedOutput() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       String bigPayload = 'B'.repeat(110001);
-      Workflow_Instance__c inst = makeInstance(
-        'Completed',
-        'key-gov-offload',
-        null,
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-gov-offload')
+        .output(null)
+        .errorMessage(null)
+        .build();
       String marker = WorkflowEngine.savePayloadIfNeeded(
         inst.Id,
         bigPayload,
@@ -735,26 +777,26 @@ private class WorkflowEngineGetStatusTest {
   // ─── Bulk getStatus(List of Id) ──────────────────────────────────────────
 
   @IsTest
-  static void testBulkGetStatusByIds_mixed() {
+  static void testBulkGetStatusByIdsMixed() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c completed = makeInstance(
-        'Completed',
-        'key-bulk-id-done',
-        '{"bulk":1}',
-        null
-      );
-      Workflow_Instance__c running = makeInstance(
-        'Running',
-        'key-bulk-id-run',
-        null,
-        null
-      );
-      Workflow_Instance__c failed = makeInstance(
-        'Failed',
-        'key-bulk-id-fail',
-        null,
-        'err'
-      );
+      Workflow_Instance__c completed = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-bulk-id-done')
+        .output('{"bulk":1}')
+        .errorMessage(null)
+        .build();
+      Workflow_Instance__c running = new InstanceBuilder()
+        .status('Running')
+        .correlationKey('key-bulk-id-run')
+        .output(null)
+        .errorMessage(null)
+        .build();
+      Workflow_Instance__c failed = new InstanceBuilder()
+        .status('Failed')
+        .correlationKey('key-bulk-id-fail')
+        .output(null)
+        .errorMessage('err')
+        .build();
 
       List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
         new List<Id>{ completed.Id, running.Id, failed.Id }
@@ -773,14 +815,14 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testBulkGetStatusByIds_unknownIdYieldsNull() {
+  static void testBulkGetStatusByIdsUnknownIdYieldsNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'Completed',
-        'key-bulk-id-known',
-        'out',
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-bulk-id-known')
+        .output('out')
+        .errorMessage(null)
+        .build();
       Id unknownId = (Id) (Workflow_Instance__c.SObjectType.getDescribe(
           SObjectDescribeOptions.DEFERRED
         )
@@ -801,7 +843,7 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testBulkGetStatusByIds_emptyList() {
+  static void testBulkGetStatusByIdsEmptyList() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
         new List<Id>()
@@ -811,23 +853,23 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testBulkGetStatusByIds_offloadedOutputs_singleContentVersionQuery() {
+  static void testBulkGetStatusByIdsOffloadedOutputsSingleContentVersionQuery() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       String big1 = 'X'.repeat(110001);
       String big2 = 'Y'.repeat(110001);
 
-      Workflow_Instance__c inst1 = makeInstance(
-        'Completed',
-        'key-bulk-off-1',
-        null,
-        null
-      );
-      Workflow_Instance__c inst2 = makeInstance(
-        'Completed',
-        'key-bulk-off-2',
-        null,
-        null
-      );
+      Workflow_Instance__c inst1 = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-bulk-off-1')
+        .output(null)
+        .errorMessage(null)
+        .build();
+      Workflow_Instance__c inst2 = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-bulk-off-2')
+        .output(null)
+        .errorMessage(null)
+        .build();
 
       inst1.Output__c = WorkflowEngine.savePayloadIfNeeded(
         inst1.Id,
@@ -860,20 +902,20 @@ private class WorkflowEngineGetStatusTest {
   // ─── Bulk getStatus(List of String) ──────────────────────────────────────
 
   @IsTest
-  static void testBulkGetStatusByKeys_mixed() {
+  static void testBulkGetStatusByKeysMixed() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c done = makeInstance(
-        'Completed',
-        'key-bulk-str-done',
-        '{"k":2}',
-        null
-      );
-      Workflow_Instance__c running = makeInstance(
-        'Running',
-        'key-bulk-str-run',
-        null,
-        null
-      );
+      Workflow_Instance__c done = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-bulk-str-done')
+        .output('{"k":2}')
+        .errorMessage(null)
+        .build();
+      Workflow_Instance__c running = new InstanceBuilder()
+        .status('Running')
+        .correlationKey('key-bulk-str-run')
+        .output(null)
+        .errorMessage(null)
+        .build();
 
       List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
         new List<String>{ 'key-bulk-str-done', 'key-bulk-str-run' }
@@ -888,15 +930,20 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testBulkGetStatusByKeys_prefersActiveOverTerminal() {
+  static void testBulkGetStatusByKeysPrefersActiveOverTerminal() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      makeInstance('Completed', 'key-bulk-prefer', 'old', null);
-      Workflow_Instance__c activeInst = makeInstance(
-        'Running',
-        'key-bulk-prefer',
-        null,
-        null
-      );
+      new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-bulk-prefer')
+        .output('old')
+        .errorMessage(null)
+        .build();
+      Workflow_Instance__c activeInst = new InstanceBuilder()
+        .status('Running')
+        .correlationKey('key-bulk-prefer')
+        .output(null)
+        .errorMessage(null)
+        .build();
 
       List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
         new List<String>{ 'key-bulk-prefer' }
@@ -911,9 +958,14 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testBulkGetStatusByKeys_missingKeyYieldsNull() {
+  static void testBulkGetStatusByKeysMissingKeyYieldsNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      makeInstance('Completed', 'key-bulk-str-known2', 'v', null);
+      new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-bulk-str-known2')
+        .output('v')
+        .errorMessage(null)
+        .build();
 
       List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
         new List<String>{ 'key-bulk-str-known2', 'key-not-exist-xyz987' }
@@ -930,9 +982,14 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testBulkGetStatusByKeys_blankEntriesYieldNull() {
+  static void testBulkGetStatusByKeysBlankEntriesYieldNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      makeInstance('Completed', 'key-bulk-str-blank', 'v', null);
+      new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-bulk-str-blank')
+        .output('v')
+        .errorMessage(null)
+        .build();
 
       List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
         new List<String>{ 'key-bulk-str-blank', '', null }
@@ -946,7 +1003,7 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testBulkGetStatusByKeys_emptyList() {
+  static void testBulkGetStatusByKeysEmptyList() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
         new List<String>()
@@ -956,15 +1013,15 @@ private class WorkflowEngineGetStatusTest {
   }
 
   @IsTest
-  static void testBulkGetStatusByKeys_governorBounds_offloaded() {
+  static void testBulkGetStatusByKeysGovernorBoundsOffloaded() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       String big = 'Z'.repeat(110001);
-      Workflow_Instance__c inst = makeInstance(
-        'Completed',
-        'key-bulk-str-gov',
-        null,
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-bulk-str-gov')
+        .output(null)
+        .errorMessage(null)
+        .build();
       inst.Output__c = WorkflowEngine.savePayloadIfNeeded(
         inst.Id,
         big,
@@ -998,12 +1055,12 @@ private class WorkflowEngineGetStatusTest {
   @IsTest
   static void testSingleDelegatesConsistentWithBulk() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c inst = makeInstance(
-        'Completed',
-        'key-delegate-check',
-        '{"consistent":true}',
-        null
-      );
+      Workflow_Instance__c inst = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-delegate-check')
+        .output('{"consistent":true}')
+        .errorMessage(null)
+        .build();
 
       WorkflowEngine.WorkflowStatus single = WorkflowEngine.getStatus(inst.Id);
       List<WorkflowEngine.WorkflowStatus> bulkResults = WorkflowEngine.getStatus(
@@ -1017,7 +1074,7 @@ private class WorkflowEngineGetStatusTest {
     }
   }
 
-  // ─── Stub workflow inner class (required by makeInstance Workflow_Name__c) ─
+  // ─── Stub workflow inner class (required by InstanceBuilder Workflow_Name__c) ─
   // Not actually executed; here so the class name resolves in this test context.
   public class StubWorkflow {
   }
