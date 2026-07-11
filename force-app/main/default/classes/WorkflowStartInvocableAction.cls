@@ -58,85 +58,12 @@ public inherited sharing class WorkflowStartInvocableAction {
     for (Integer i = 0; i < requests.size(); i++) {
       StartRequest req = requests[i];
       if (req == null) {
-        StartResult res = new StartResult();
-        res.workflowInstanceId = null;
-        res.isNew = null;
-        results[i] = res;
-        continue;
-      }
-
-      if (req.debounceSeconds != null) {
-        if (req.debounceSeconds < 0) {
-          throw new WorkflowEngine.WorkflowException(
-            'Debounce seconds must be non-negative.'
-          );
-        }
-        if (String.isNotBlank(req.inputJson)) {
-          try {
-            JSON.deserializeUntyped(req.inputJson);
-          } catch (Exception ex) {
-            throw new WorkflowEngine.WorkflowException(
-              'Invalid Input JSON: ' + ex.getMessage()
-            );
-          }
-        }
-        WorkflowDebouncer.validateAttributesJson(req.attributesJson);
-        debounceRequests.add(
-          new WorkflowDebouncer.DebounceRequest(
-            req.workflowName,
-            req.correlationKey,
-            req.inputJson,
-            req.debounceSeconds,
-            req.maxWaitSeconds,
-            req.attributesJson,
-            req.causationId
-          )
-        );
-        StartResult res = new StartResult();
-        res.workflowInstanceId = null;
-        res.isNew = false;
-        results[i] = res;
+        results[i] = nullResult();
+      } else if (req.debounceSeconds != null) {
+        debounceRequests.add(toDebounceRequest(req));
+        results[i] = debouncedResult();
       } else {
-        Object input = null;
-        if (String.isNotBlank(req.inputJson)) {
-          try {
-            input = JSON.deserializeUntyped(req.inputJson);
-          } catch (Exception ex) {
-            throw new WorkflowEngine.WorkflowException(
-              'Invalid Input JSON: ' + ex.getMessage()
-            );
-          }
-        }
-        Map<String, String> attributes = null;
-        if (String.isNotBlank(req.attributesJson)) {
-          attributes = new Map<String, String>();
-          try {
-            Object deserialized = JSON.deserializeUntyped(req.attributesJson);
-            if (deserialized instanceof Map<String, Object>) {
-              Map<String, Object> raw = (Map<String, Object>) deserialized;
-              for (String k : raw.keySet()) {
-                attributes.put(k, String.valueOf(raw.get(k)));
-              }
-            } else {
-              throw new WorkflowEngine.WorkflowException(
-                'Attributes JSON must represent a key-value object.'
-              );
-            }
-          } catch (Exception ex) {
-            throw new WorkflowEngine.WorkflowException(
-              'Invalid Attributes JSON: ' + ex.getMessage()
-            );
-          }
-        }
-        WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
-          req.workflowName,
-          req.correlationKey,
-          input,
-          attributes
-        );
-        startReq.inputJson = req.inputJson;
-        startReq.causationId = req.causationId;
-        engineRequests.add(startReq);
+        engineRequests.add(toEngineRequest(req));
         engineRequestIndices.add(i);
       }
     }
@@ -145,22 +72,85 @@ public inherited sharing class WorkflowStartInvocableAction {
       WorkflowDebouncer.startDebounced(debounceRequests);
     }
 
-    if (!engineRequests.isEmpty()) {
-      List<WorkflowEngine.StartResult> engineResults = WorkflowEngine.startOrGet(
-        engineRequests
-      );
-      for (Integer j = 0; j < engineResults.size(); j++) {
-        WorkflowEngine.StartResult engineResult = engineResults[j];
-        Integer origIndex = engineRequestIndices[j];
-        StartResult res = new StartResult();
-        res.workflowInstanceId = engineResult == null
-          ? null
-          : engineResult.instanceId;
-        res.isNew = engineResult == null ? null : engineResult.isNew;
-        results[origIndex] = res;
-      }
-    }
+    applyEngineResults(engineRequests, engineRequestIndices, results);
 
     return results;
+  }
+
+  private static WorkflowDebouncer.DebounceRequest toDebounceRequest(
+    StartRequest req
+  ) {
+    if (req.debounceSeconds < 0) {
+      throw new WorkflowEngine.WorkflowException(
+        'Debounce seconds must be non-negative.'
+      );
+    }
+    // Validate the input JSON (result discarded; deferred deserialization).
+    WorkflowInvocableInputParser.parseInputJson(req.inputJson);
+    WorkflowDebouncer.validateAttributesJson(req.attributesJson);
+
+    WorkflowDebouncer.DebounceRequest debounceReq = new WorkflowDebouncer.DebounceRequest();
+    debounceReq.workflowName = req.workflowName;
+    debounceReq.correlationKey = req.correlationKey;
+    debounceReq.inputJson = req.inputJson;
+    debounceReq.debounceSeconds = req.debounceSeconds;
+    debounceReq.maxWaitSeconds = req.maxWaitSeconds;
+    debounceReq.attributesJson = req.attributesJson;
+    debounceReq.causationId = req.causationId;
+    return debounceReq;
+  }
+
+  private static WorkflowEngine.StartRequest toEngineRequest(StartRequest req) {
+    Object input = WorkflowInvocableInputParser.parseInputJson(req.inputJson);
+    Map<String, String> attributes = WorkflowInvocableInputParser.parseAttributesJson(
+      req.attributesJson
+    );
+
+    WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
+      req.workflowName,
+      req.correlationKey,
+      input,
+      attributes
+    );
+    startReq.inputJson = req.inputJson;
+    startReq.causationId = req.causationId;
+    return startReq;
+  }
+
+  private static void applyEngineResults(
+    List<WorkflowEngine.StartRequest> engineRequests,
+    List<Integer> engineRequestIndices,
+    List<StartResult> results
+  ) {
+    if (engineRequests.isEmpty()) {
+      return;
+    }
+    List<WorkflowEngine.StartResult> engineResults = WorkflowEngine.startOrGet(
+      engineRequests
+    );
+    for (Integer j = 0; j < engineResults.size(); j++) {
+      WorkflowEngine.StartResult engineResult = engineResults[j];
+      Integer origIndex = engineRequestIndices[j];
+      StartResult res = new StartResult();
+      res.workflowInstanceId = engineResult == null
+        ? null
+        : engineResult.instanceId;
+      res.isNew = engineResult == null ? null : engineResult.isNew;
+      results[origIndex] = res;
+    }
+  }
+
+  private static StartResult nullResult() {
+    StartResult res = new StartResult();
+    res.workflowInstanceId = null;
+    res.isNew = null;
+    return res;
+  }
+
+  private static StartResult debouncedResult() {
+    StartResult res = new StartResult();
+    res.workflowInstanceId = null;
+    res.isNew = false;
+    return res;
   }
 }

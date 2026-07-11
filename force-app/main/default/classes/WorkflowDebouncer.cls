@@ -7,87 +7,14 @@ public inherited sharing class WorkflowDebouncer {
     public Integer maxWaitSeconds;
     public String attributesJson;
     public String causationId;
-
-    public DebounceRequest(
-      String workflowName,
-      String correlationKey,
-      String inputJson,
-      Integer debounceSeconds,
-      Integer maxWaitSeconds
-    ) {
-      this(
-        workflowName,
-        correlationKey,
-        inputJson,
-        debounceSeconds,
-        maxWaitSeconds,
-        null,
-        null
-      );
-    }
-
-    public DebounceRequest(
-      String workflowName,
-      String correlationKey,
-      String inputJson,
-      Integer debounceSeconds,
-      Integer maxWaitSeconds,
-      String attributesJson,
-      String causationId
-    ) {
-      this.workflowName = workflowName;
-      this.correlationKey = correlationKey;
-      this.inputJson = inputJson;
-      this.debounceSeconds = debounceSeconds;
-      this.maxWaitSeconds = maxWaitSeconds;
-      this.attributesJson = attributesJson;
-      this.causationId = causationId;
-    }
   }
 
-  /**
-   * Public Apex entry point delegating to the bulk implementation.
-   */
-  public static void startDebounced(
-    String workflowName,
-    String correlationKey,
-    String inputJson,
-    Integer debounceSeconds,
-    Integer maxWaitSeconds
-  ) {
-    startDebounced(
-      workflowName,
-      correlationKey,
-      inputJson,
-      debounceSeconds,
-      maxWaitSeconds,
-      null,
-      null
-    );
-  }
-
-  public static void startDebounced(
-    String workflowName,
-    String correlationKey,
-    String inputJson,
-    Integer debounceSeconds,
-    Integer maxWaitSeconds,
-    String attributesJson,
-    String causationId
-  ) {
-    startDebounced(
-      new List<DebounceRequest>{
-        new DebounceRequest(
-          workflowName,
-          correlationKey,
-          inputJson,
-          debounceSeconds,
-          maxWaitSeconds,
-          attributesJson,
-          causationId
-        )
-      }
-    );
+  private class SweepContext {
+    List<Debounce_State__c> dueStates;
+    List<WorkflowEngine.StartRequest> startRequests;
+    Datetime now;
+    List<Debounce_State__c> toDelete = new List<Debounce_State__c>();
+    List<Debounce_State__c> toUpdate = new List<Debounce_State__c>();
   }
 
   /**
@@ -98,47 +25,44 @@ public inherited sharing class WorkflowDebouncer {
       return;
     }
 
-    Datetime now = WorkflowEngine.mockNow != null
-      ? WorkflowEngine.mockNow
-      : Datetime.now();
+    Datetime now = currentTime();
 
     Set<String> debounceKeys = new Set<String>();
-    List<DebounceRequest> validRequests = new List<DebounceRequest>();
+    List<DebounceRequest> validRequests = collectValidRequests(
+      requests,
+      debounceKeys
+    );
 
+    if (validRequests.isEmpty()) {
+      return;
+    }
+
+    Map<String, Debounce_State__c> existingMap = loadExistingStates(
+      debounceKeys
+    );
+    Map<String, Debounce_State__c> statesToUpsert = buildStatesToUpsert(
+      validRequests,
+      existingMap,
+      now
+    );
+
+    if (!statesToUpsert.isEmpty()) {
+      upsert as system statesToUpsert.values() Debounce_Key__c;
+    }
+  }
+
+  private static List<DebounceRequest> collectValidRequests(
+    List<DebounceRequest> requests,
+    Set<String> debounceKeys
+  ) {
+    List<DebounceRequest> validRequests = new List<DebounceRequest>();
     for (DebounceRequest req : requests) {
       if (req == null) {
         continue;
       }
-      if (String.isBlank(req.workflowName)) {
-        throw new WorkflowEngine.WorkflowException(
-          'Workflow name is required.'
-        );
-      }
-      if (String.isBlank(req.correlationKey)) {
-        throw new WorkflowEngine.WorkflowException(
-          'Correlation key is required.'
-        );
-      }
-      if (req.correlationKey.length() > 200) {
-        throw new WorkflowEngine.WorkflowException(
-          'Correlation key length cannot exceed 200 characters.'
-        );
-      }
-      if (req.debounceSeconds == null || req.debounceSeconds < 0) {
-        throw new WorkflowEngine.WorkflowException(
-          'Debounce seconds must be non-negative.'
-        );
-      }
-      if (req.maxWaitSeconds != null && req.maxWaitSeconds < 0) {
-        throw new WorkflowEngine.WorkflowException(
-          'Max wait seconds must be non-negative.'
-        );
-      }
-      if (String.isNotBlank(req.inputJson) && req.inputJson.length() > 131072) {
-        throw new WorkflowEngine.WorkflowException(
-          'Input JSON payload exceeds maximum size limit of 131,072 characters.'
-        );
-      }
+      validateRequestIdentity(req);
+      validateRequestTiming(req);
+      validateRequestPayloadSize(req);
       validateAttributesJson(req.attributesJson);
 
       debounceKeys.add(
@@ -146,12 +70,51 @@ public inherited sharing class WorkflowDebouncer {
       );
       validRequests.add(req);
     }
+    return validRequests;
+  }
 
-    if (validRequests.isEmpty()) {
-      return;
+  private static void validateRequestIdentity(DebounceRequest req) {
+    if (String.isBlank(req.workflowName)) {
+      throw new WorkflowEngine.WorkflowException('Workflow name is required.');
     }
+    if (String.isBlank(req.correlationKey)) {
+      throw new WorkflowEngine.WorkflowException(
+        'Correlation key is required.'
+      );
+    }
+    if (req.correlationKey.length() > 200) {
+      throw new WorkflowEngine.WorkflowException(
+        'Correlation key length cannot exceed 200 characters.'
+      );
+    }
+  }
 
-    List<Debounce_State__c> existingStates = [
+  private static void validateRequestTiming(DebounceRequest req) {
+    if (req.debounceSeconds == null || req.debounceSeconds < 0) {
+      throw new WorkflowEngine.WorkflowException(
+        'Debounce seconds must be non-negative.'
+      );
+    }
+    if (req.maxWaitSeconds != null && req.maxWaitSeconds < 0) {
+      throw new WorkflowEngine.WorkflowException(
+        'Max wait seconds must be non-negative.'
+      );
+    }
+  }
+
+  private static void validateRequestPayloadSize(DebounceRequest req) {
+    if (String.isNotBlank(req.inputJson) && req.inputJson.length() > 131072) {
+      throw new WorkflowEngine.WorkflowException(
+        'Input JSON payload exceeds maximum size limit of 131,072 characters.'
+      );
+    }
+  }
+
+  private static Map<String, Debounce_State__c> loadExistingStates(
+    Set<String> debounceKeys
+  ) {
+    Map<String, Debounce_State__c> existingMap = new Map<String, Debounce_State__c>();
+    for (Debounce_State__c state : [
       SELECT
         Id,
         Debounce_Key__c,
@@ -163,71 +126,98 @@ public inherited sharing class WorkflowDebouncer {
       WHERE Debounce_Key__c IN :debounceKeys
       WITH SYSTEM_MODE
       FOR UPDATE
-    ];
-
-    Map<String, Debounce_State__c> existingMap = new Map<String, Debounce_State__c>();
-    for (Debounce_State__c state : existingStates) {
+    ]) {
       existingMap.put(state.Debounce_Key__c.toLowerCase(), state);
     }
+    return existingMap;
+  }
 
+  private static Map<String, Debounce_State__c> buildStatesToUpsert(
+    List<DebounceRequest> validRequests,
+    Map<String, Debounce_State__c> existingMap,
+    Datetime now
+  ) {
     Map<String, Debounce_State__c> statesToUpsert = new Map<String, Debounce_State__c>();
-
     for (DebounceRequest req : validRequests) {
       String key = generateDebounceKey(req.workflowName, req.correlationKey);
 
       Debounce_State__c state = statesToUpsert.get(key);
       if (state == null) {
-        Debounce_State__c dbState = existingMap.get(key);
-        if (dbState != null) {
-          state = dbState;
-          if (state.Retry_Count__c != null && state.Retry_Count__c > 0) {
-            state.First_Triggered_At__c = now;
-            state.Retry_Count__c = 0;
-            state.Error_Message__c = null;
-          }
-        } else {
-          state = new Debounce_State__c(
-            Debounce_Key__c = key,
-            Workflow_Name__c = req.workflowName,
-            Correlation_Key__c = req.correlationKey,
-            First_Triggered_At__c = now
-          );
-        }
+        state = resolveBaseState(existingMap.get(key), req, now);
       }
 
-      Datetime proposedFireAt = now.addSeconds(req.debounceSeconds);
-
-      if (req.maxWaitSeconds != null && req.maxWaitSeconds > 0) {
-        Datetime maxFireAt = state.First_Triggered_At__c.addSeconds(
-          req.maxWaitSeconds
-        );
-        if (proposedFireAt > maxFireAt) {
-          proposedFireAt = maxFireAt;
-        }
-      }
-
-      state.Fire_At__c = proposedFireAt;
+      state.Fire_At__c = computeFireAt(state, req, now);
       state.Input_Json__c = req.inputJson;
       state.Attributes_Json__c = req.attributesJson;
       state.Causation_Id__c = req.causationId;
 
       statesToUpsert.put(key, state);
     }
+    return statesToUpsert;
+  }
 
-    if (!statesToUpsert.isEmpty()) {
-      upsert as system statesToUpsert.values() Debounce_Key__c;
+  private static Debounce_State__c resolveBaseState(
+    Debounce_State__c dbState,
+    DebounceRequest req,
+    Datetime now
+  ) {
+    if (dbState == null) {
+      return new Debounce_State__c(
+        Debounce_Key__c = generateDebounceKey(
+          req.workflowName,
+          req.correlationKey
+        ),
+        Workflow_Name__c = req.workflowName,
+        Correlation_Key__c = req.correlationKey,
+        First_Triggered_At__c = now
+      );
     }
+    if (dbState.Retry_Count__c != null && dbState.Retry_Count__c > 0) {
+      dbState.First_Triggered_At__c = now;
+      dbState.Retry_Count__c = 0;
+      dbState.Error_Message__c = null;
+    }
+    return dbState;
+  }
+
+  private static Datetime computeFireAt(
+    Debounce_State__c state,
+    DebounceRequest req,
+    Datetime now
+  ) {
+    Datetime proposedFireAt = now.addSeconds(req.debounceSeconds);
+    if (req.maxWaitSeconds != null && req.maxWaitSeconds > 0) {
+      Datetime maxFireAt = state.First_Triggered_At__c.addSeconds(
+        req.maxWaitSeconds
+      );
+      if (proposedFireAt > maxFireAt) {
+        proposedFireAt = maxFireAt;
+      }
+    }
+    return proposedFireAt;
   }
 
   /**
    * Sweeps and fires due debounce states, deleting them after starting.
    */
   public static void sweep() {
-    Datetime now = WorkflowEngine.mockNow != null
-      ? WorkflowEngine.mockNow
-      : Datetime.now();
+    Datetime now = currentTime();
 
-    List<Debounce_State__c> dueStates = [
+    List<Debounce_State__c> dueStates = loadDueStates(now);
+    if (dueStates.isEmpty()) {
+      return;
+    }
+
+    SweepContext ctx = new SweepContext();
+    ctx.dueStates = dueStates;
+    ctx.startRequests = buildStartRequests(dueStates);
+    ctx.now = now;
+
+    fireDueStates(ctx);
+  }
+
+  private static List<Debounce_State__c> loadDueStates(Datetime now) {
+    return [
       SELECT
         Id,
         Workflow_Name__c,
@@ -244,29 +234,16 @@ public inherited sharing class WorkflowDebouncer {
       ORDER BY Fire_At__c ASC, Id ASC
       LIMIT 100
     ];
+  }
 
-    if (dueStates.isEmpty()) {
-      return;
-    }
-
+  private static List<WorkflowEngine.StartRequest> buildStartRequests(
+    List<Debounce_State__c> dueStates
+  ) {
     List<WorkflowEngine.StartRequest> startRequests = new List<WorkflowEngine.StartRequest>();
     for (Debounce_State__c state : dueStates) {
-      Map<String, String> attributes = null;
-      if (String.isNotBlank(state.Attributes_Json__c)) {
-        attributes = new Map<String, String>();
-        try {
-          Object deserialized = JSON.deserializeUntyped(
-            state.Attributes_Json__c
-          );
-          if (deserialized instanceof Map<String, Object>) {
-            Map<String, Object> raw = (Map<String, Object>) deserialized;
-            for (String k : raw.keySet()) {
-              attributes.put(k, String.valueOf(raw.get(k)));
-            }
-          }
-        } catch (Exception ignored) {
-        }
-      }
+      Map<String, String> attributes = WorkflowInvocableInputParser.parseAttributesJsonLenient(
+        state.Attributes_Json__c
+      );
 
       // Pass null to input since we set inputJson directly, saving CPU deserialization cycles.
       WorkflowEngine.StartRequest req = new WorkflowEngine.StartRequest(
@@ -279,65 +256,91 @@ public inherited sharing class WorkflowDebouncer {
       req.causationId = state.Causation_Id__c;
       startRequests.add(req);
     }
+    return startRequests;
+  }
 
-    List<Debounce_State__c> statesToDelete = new List<Debounce_State__c>();
-    List<Debounce_State__c> statesToUpdate = new List<Debounce_State__c>();
-
+  private static void fireDueStates(SweepContext ctx) {
     Savepoint sp = Database.setSavepoint();
     try {
-      WorkflowEngine.startOrGet(startRequests);
-      statesToDelete.addAll(dueStates);
+      WorkflowEngine.startOrGet(ctx.startRequests);
+      ctx.toDelete.addAll(ctx.dueStates);
     } catch (Exception ex) {
       Database.rollback(sp);
       // Fallback: start them individually
-      for (Integer i = 0; i < startRequests.size(); i++) {
-        // Halt if approaching SOQL or DML limits to prevent uncatchable governor exceptions
-        if (Limits.getQueries() >= 90 || Limits.getDmlStatements() >= 135) {
-          break;
-        }
-        WorkflowEngine.StartRequest req = startRequests[i];
-        Debounce_State__c state = dueStates[i];
-        Savepoint individualSp = Database.setSavepoint();
-        try {
-          WorkflowEngine.startOrGet(
-            new List<WorkflowEngine.StartRequest>{ req }
-          );
-          statesToDelete.add(state);
-        } catch (Exception innerEx) {
-          Database.rollback(individualSp);
-
-          Integer currentRetries = state.Retry_Count__c == null
-            ? 0
-            : (Integer) state.Retry_Count__c;
-          currentRetries++;
-          state.Retry_Count__c = currentRetries;
-
-          String errMsg = innerEx.getMessage();
-          if (innerEx.getStackTraceString() != null) {
-            errMsg += '\n' + innerEx.getStackTraceString();
-          }
-          if (errMsg.length() > 32768) {
-            errMsg = errMsg.substring(0, 32768);
-          }
-          state.Error_Message__c = errMsg;
-
-          if (currentRetries >= 3) {
-            state.Fire_At__c = now.addYears(100); // Quarantine
-          } else {
-            // Exponential backoff retry in 1 or 2 minutes
-            state.Fire_At__c = now.addSeconds(currentRetries * 60);
-          }
-          statesToUpdate.add(state);
-        }
-      }
+      fireIndividually(ctx);
     } finally {
-      if (!statesToDelete.isEmpty()) {
-        delete as system statesToDelete;
+      if (!ctx.toDelete.isEmpty()) {
+        delete as system ctx.toDelete;
       }
-      if (!statesToUpdate.isEmpty()) {
-        update as system statesToUpdate;
+      if (!ctx.toUpdate.isEmpty()) {
+        update as system ctx.toUpdate;
       }
     }
+  }
+
+  private static void fireIndividually(SweepContext ctx) {
+    for (Integer i = 0; i < ctx.startRequests.size(); i++) {
+      // Halt if approaching SOQL or DML limits to prevent uncatchable governor exceptions
+      if (Limits.getQueries() >= 90 || Limits.getDmlStatements() >= 135) {
+        break;
+      }
+      Debounce_State__c state = ctx.dueStates[i];
+      if (startIndividual(ctx.startRequests[i], state, ctx.now)) {
+        ctx.toDelete.add(state);
+      } else {
+        ctx.toUpdate.add(state);
+      }
+    }
+  }
+
+  private static Boolean startIndividual(
+    WorkflowEngine.StartRequest req,
+    Debounce_State__c state,
+    Datetime now
+  ) {
+    Savepoint individualSp = Database.setSavepoint();
+    try {
+      WorkflowEngine.startOrGet(new List<WorkflowEngine.StartRequest>{ req });
+      return true;
+    } catch (Exception innerEx) {
+      Database.rollback(individualSp);
+      recordRetry(state, innerEx, now);
+      return false;
+    }
+  }
+
+  private static void recordRetry(
+    Debounce_State__c state,
+    Exception innerEx,
+    Datetime now
+  ) {
+    Integer currentRetries = state.Retry_Count__c == null
+      ? 0
+      : (Integer) state.Retry_Count__c;
+    currentRetries++;
+    state.Retry_Count__c = currentRetries;
+
+    String errMsg = innerEx.getMessage();
+    if (innerEx.getStackTraceString() != null) {
+      errMsg += '\n' + innerEx.getStackTraceString();
+    }
+    if (errMsg.length() > 32768) {
+      errMsg = errMsg.substring(0, 32768);
+    }
+    state.Error_Message__c = errMsg;
+
+    if (currentRetries >= 3) {
+      state.Fire_At__c = now.addYears(100); // Quarantine
+    } else {
+      // Exponential backoff retry in 1 or 2 minutes
+      state.Fire_At__c = now.addSeconds(currentRetries * 60);
+    }
+  }
+
+  private static Datetime currentTime() {
+    return WorkflowEngine.mockNow != null
+      ? WorkflowEngine.mockNow
+      : Datetime.now();
   }
 
   public static String generateDebounceKey(
@@ -350,61 +353,12 @@ public inherited sharing class WorkflowDebouncer {
     return EncodingUtil.convertToHex(Crypto.generateDigest('MD5', keyBlob));
   }
 
+  /**
+   * Validates an attributes JSON payload against the engine's structural and
+   * size limits. Delegates to the shared parser; retained as a public entry
+   * point for existing callers.
+   */
   public static void validateAttributesJson(String attributesJson) {
-    if (String.isBlank(attributesJson)) {
-      return;
-    }
-    if (attributesJson.length() > 131072) {
-      throw new WorkflowEngine.WorkflowException(
-        'Attributes JSON payload exceeds maximum size limit of 131,072 characters.'
-      );
-    }
-    Object deserialized;
-    try {
-      deserialized = JSON.deserializeUntyped(attributesJson);
-    } catch (Exception ex) {
-      throw new WorkflowEngine.WorkflowException(
-        'Invalid Attributes JSON: ' + ex.getMessage()
-      );
-    }
-    if (!(deserialized instanceof Map<String, Object>)) {
-      throw new WorkflowEngine.WorkflowException(
-        'Attributes JSON must represent a key-value object.'
-      );
-    }
-    Map<String, Object> raw = (Map<String, Object>) deserialized;
-    if (raw.size() > WorkflowEngine.MAX_ATTRIBUTES_PER_INSTANCE) {
-      throw new WorkflowEngine.WorkflowException(
-        'Attribute count exceeds maximum limit of ' +
-        WorkflowEngine.MAX_ATTRIBUTES_PER_INSTANCE
-      );
-    }
-    for (String key : raw.keySet()) {
-      if (String.isBlank(key)) {
-        throw new WorkflowEngine.WorkflowException(
-          'Attribute key cannot be blank'
-        );
-      }
-      if (key.length() > WorkflowEngine.MAX_ATTRIBUTE_KEY_LENGTH) {
-        throw new WorkflowEngine.WorkflowException(
-          'Attribute key length exceeds maximum limit of ' +
-            WorkflowEngine.MAX_ATTRIBUTE_KEY_LENGTH +
-            ' characters: ' +
-            key
-        );
-      }
-      String val = raw.get(key) == null ? null : String.valueOf(raw.get(key));
-      if (
-        val != null &&
-        val.length() > WorkflowEngine.MAX_ATTRIBUTE_VALUE_LENGTH
-      ) {
-        throw new WorkflowEngine.WorkflowException(
-          'Attribute value length exceeds maximum limit of ' +
-            WorkflowEngine.MAX_ATTRIBUTE_VALUE_LENGTH +
-            ' characters: ' +
-            val
-        );
-      }
-    }
+    WorkflowInvocableInputParser.validateAttributesJson(attributesJson);
   }
 }

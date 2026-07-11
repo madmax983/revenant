@@ -1401,11 +1401,13 @@ public inherited sharing class WorkflowEngine {
     String inputJson,
     Integer debounceSeconds
   ) {
-    WorkflowDebouncer.startDebounced(
+    startDebounced(
       workflowName,
       correlationKey,
       inputJson,
       debounceSeconds,
+      null,
+      null,
       null
     );
   }
@@ -1420,7 +1422,7 @@ public inherited sharing class WorkflowEngine {
     Integer debounceSeconds,
     Integer maxWaitSeconds
   ) {
-    WorkflowDebouncer.startDebounced(
+    startDebounced(
       workflowName,
       correlationKey,
       inputJson,
@@ -1443,14 +1445,16 @@ public inherited sharing class WorkflowEngine {
     String attributesJson,
     String causationId
   ) {
+    WorkflowDebouncer.DebounceRequest debounceReq = new WorkflowDebouncer.DebounceRequest();
+    debounceReq.workflowName = workflowName;
+    debounceReq.correlationKey = correlationKey;
+    debounceReq.inputJson = inputJson;
+    debounceReq.debounceSeconds = debounceSeconds;
+    debounceReq.maxWaitSeconds = maxWaitSeconds;
+    debounceReq.attributesJson = attributesJson;
+    debounceReq.causationId = causationId;
     WorkflowDebouncer.startDebounced(
-      workflowName,
-      correlationKey,
-      inputJson,
-      debounceSeconds,
-      maxWaitSeconds,
-      attributesJson,
-      causationId
+      new List<WorkflowDebouncer.DebounceRequest>{ debounceReq }
     );
   }
 
