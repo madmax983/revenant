@@ -679,7 +679,11 @@ public inherited sharing class WorkflowAlertManager {
         if (!Test.isRunningTest()) {
           Messaging.sendEmail(emailsToSend, false);
         }
-      } catch (Exception ignored) {
+      } catch (Exception ex) {
+        WorkflowLog.error(
+          'StallAlert',
+          'Bulk stall email dispatch failed: ' + ex.getMessage()
+        );
       }
       sentEmailsCount += emailsToSend.size();
     }
