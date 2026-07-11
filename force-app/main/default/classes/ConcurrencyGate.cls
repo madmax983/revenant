@@ -62,36 +62,41 @@ public inherited sharing class ConcurrencyGate {
     // and admitted is true, the workflow is unbounded and no counter was touched.
     public Boolean slotConsumed { get; private set; }
 
-    // Constructed only through the intent-named factories below so the two
-    // outcome flags can never be passed in a confusing/mismatched order.
+    // Constructed only through the intent-named factories on the enclosing class so
+    // the two outcome flags can never be passed in a confusing/mismatched order.
+    // The factories live on the top-level class because Apex forbids static members
+    // on inner classes.
     private AdmissionResult() {
       this.admitted = false;
       this.slotConsumed = false;
     }
+  }
 
-    // Admitted because the workflow is unbounded — no counter was touched.
-    public static AdmissionResult unbounded() {
-      AdmissionResult r = new AdmissionResult();
-      r.admitted = true;
-      r.slotConsumed = false;
-      return r;
-    }
+  // Intent-named AdmissionResult factories. Declared on the top-level class (Apex
+  // forbids static members on inner classes) and used only internally by tryAcquire.
 
-    // Admitted after consuming a real slot on a bounded workflow.
-    public static AdmissionResult acquired() {
-      AdmissionResult r = new AdmissionResult();
-      r.admitted = true;
-      r.slotConsumed = true;
-      return r;
-    }
+  // Admitted because the workflow is unbounded — no counter was touched.
+  private static AdmissionResult unbounded() {
+    AdmissionResult r = new AdmissionResult();
+    r.admitted = true;
+    r.slotConsumed = false;
+    return r;
+  }
 
-    // Rejected — the ceiling is full, no slot consumed.
-    public static AdmissionResult rejected() {
-      AdmissionResult r = new AdmissionResult();
-      r.admitted = false;
-      r.slotConsumed = false;
-      return r;
-    }
+  // Admitted after consuming a real slot on a bounded workflow.
+  private static AdmissionResult acquired() {
+    AdmissionResult r = new AdmissionResult();
+    r.admitted = true;
+    r.slotConsumed = true;
+    return r;
+  }
+
+  // Rejected — the ceiling is full, no slot consumed.
+  private static AdmissionResult rejected() {
+    AdmissionResult r = new AdmissionResult();
+    r.admitted = false;
+    r.slotConsumed = false;
+    return r;
   }
 
   /**
@@ -190,7 +195,7 @@ public inherited sharing class ConcurrencyGate {
   public static AdmissionResult tryAcquire(String workflowName) {
     Integer ceiling = getCeiling(workflowName);
     if (ceiling == null) {
-      return AdmissionResult.unbounded();
+      return unbounded();
     }
 
     Concurrency_State__c state = lockOrProvision(workflowName);
@@ -201,9 +206,9 @@ public inherited sharing class ConcurrencyGate {
     if (inFlight < ceiling) {
       state.In_Flight_Count__c = inFlight + 1;
       update as system state;
-      return AdmissionResult.acquired();
+      return acquired();
     }
-    return AdmissionResult.rejected();
+    return rejected();
   }
 
   /**

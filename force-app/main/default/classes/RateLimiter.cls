@@ -10,27 +10,32 @@ public inherited sharing class RateLimiter {
     public Boolean isAllowed { get; private set; }
     public Integer sleepDurationSeconds { get; private set; }
 
-    // Constructed only through the intent-named factories below.
+    // Constructed only through the intent-named factories on the enclosing class.
+    // The factories live on the top-level class because Apex forbids static members
+    // on inner classes.
     private AcquireResult() {
       this.isAllowed = false;
       this.sleepDurationSeconds = 0;
     }
+  }
 
-    // A token was consumed; the caller may proceed immediately.
-    public static AcquireResult allowed() {
-      AcquireResult r = new AcquireResult();
-      r.isAllowed = true;
-      r.sleepDurationSeconds = 0;
-      return r;
-    }
+  // Intent-named AcquireResult factories. Declared on the top-level class (Apex forbids
+  // static members on inner classes) and used only internally by acquire().
 
-    // No token available; the caller should back off for sleepDurationSeconds.
-    public static AcquireResult throttled(Integer sleepDurationSeconds) {
-      AcquireResult r = new AcquireResult();
-      r.isAllowed = false;
-      r.sleepDurationSeconds = sleepDurationSeconds;
-      return r;
-    }
+  // A token was consumed; the caller may proceed immediately.
+  private static AcquireResult allowed() {
+    AcquireResult r = new AcquireResult();
+    r.isAllowed = true;
+    r.sleepDurationSeconds = 0;
+    return r;
+  }
+
+  // No token available; the caller should back off for sleepDurationSeconds.
+  private static AcquireResult throttled(Integer sleepDurationSeconds) {
+    AcquireResult r = new AcquireResult();
+    r.isAllowed = false;
+    r.sleepDurationSeconds = sleepDurationSeconds;
+    return r;
   }
 
   /**
@@ -160,7 +165,7 @@ public inherited sharing class RateLimiter {
       state.Tokens_Remaining__c = currentTokens - 1.0;
       state.Last_Refill_Time_Ms__c = now;
       update as system state;
-      return AcquireResult.allowed();
+      return allowed();
     }
 
     // NOTE: We intentionally do NOT update the database record when consumption fails.
@@ -173,6 +178,6 @@ public inherited sharing class RateLimiter {
     Decimal waitTime = (1.0 - currentTokens) / config.Refill_Rate_Per_Second__c;
     Double jitter = 0.5 + (Math.random() * 1.0); // 0.5 to 1.5 seconds jitter
     Integer sleepSecs = (Integer) Math.ceil(waitTime + jitter);
-    return AcquireResult.throttled(sleepSecs);
+    return throttled(sleepSecs);
   }
 }

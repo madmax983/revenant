@@ -1,4 +1,18 @@
 public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
+  // Title prefixes that mark a ContentDocument as engine-owned and therefore safe to
+  // purge. User-uploaded files (no matching prefix) are never deleted. Declared on the
+  // top-level class because Apex forbids static members on inner classes; the inner
+  // PurgeOldInstancesStep references it by simple name.
+  private static final Set<String> ALLOWED_PREFIXES = new Set<String>{
+    'Input_',
+    'Output_',
+    'State_',
+    'Resume_',
+    'ContinueInput_',
+    'Captures_',
+    'VerificationPayload'
+  };
+
   public List<String> getSteps() {
     return new List<String>{ 'CleanupWorkflow.PurgeOldInstancesStep' };
   }
@@ -42,18 +56,6 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
   // elevated deliberately where the purge needs it; the explicit keyword just satisfies
   // the sharing-declaration requirement without widening or narrowing that behavior.
   public inherited sharing class PurgeOldInstancesStep implements WorkflowStep {
-    // Title prefixes that mark a ContentDocument as engine-owned and therefore safe to
-    // purge. User-uploaded files (no matching prefix) are never deleted.
-    private static final Set<String> ALLOWED_PREFIXES = new Set<String>{
-      'Input_',
-      'Output_',
-      'State_',
-      'Resume_',
-      'ContinueInput_',
-      'Captures_',
-      'VerificationPayload'
-    };
-
     public StepResult execute(StepContext ctx) {
       PurgeParams params = parseParams(ctx.workflowInputJson);
 
