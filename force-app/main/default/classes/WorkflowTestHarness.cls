@@ -50,6 +50,25 @@ public inherited sharing class WorkflowTestHarness {
 
   private final WorkflowHarnessContext ctx;
 
+  /**
+   * When true, the harness stops auto-resuming sleep/retry waits (it no longer
+   * skips the wake timer for a Suspended-with-Sleep_Until__c instance), so the
+   * author can assert the parked sleeping/retrying state before firing it
+   * explicitly. The value is forwarded into the shared context (which the driving
+   * collaborators read) on every advancing call.
+   */
+  public Boolean disableAutoTimeSkip = false;
+
+  /**
+   * Returns the shared context after forwarding the caller-settable
+   * disableAutoTimeSkip flag into it, so the collaborators that read the context
+   * see the author's latest choice at drive time. Used by every advancing call.
+   */
+  private WorkflowHarnessContext ctxSynced() {
+    ctx.disableAutoTimeSkip = disableAutoTimeSkip;
+    return ctx;
+  }
+
   public class HarnessException extends Exception {
   }
 
@@ -94,7 +113,7 @@ public inherited sharing class WorkflowTestHarness {
    * nothing is advanceable, it returns the current result unchanged.
    */
   public Result step() {
-    return WorkflowHarnessDriver.stepOnce(ctx);
+    return WorkflowHarnessDriver.stepOnce(ctxSynced());
   }
 
   /**
@@ -107,19 +126,19 @@ public inherited sharing class WorkflowTestHarness {
    */
   public Result driveUntilStep(String stepName) {
     return WorkflowHarnessDriver.driveUntilStep(
-      ctx,
+      ctxSynced(),
       stepName,
       DEFAULT_MAX_HOPS
     );
   }
 
   public Result driveUntilStep(String stepName, Integer maxHops) {
-    return WorkflowHarnessDriver.driveUntilStep(ctx, stepName, maxHops);
+    return WorkflowHarnessDriver.driveUntilStep(ctxSynced(), stepName, maxHops);
   }
 
   /** Drives to the next stable state using the default hop budget. */
   public Result drive() {
-    return WorkflowHarnessDriver.drive(ctx, DEFAULT_MAX_HOPS);
+    return WorkflowHarnessDriver.drive(ctxSynced(), DEFAULT_MAX_HOPS);
   }
 
   /**
@@ -128,7 +147,7 @@ public inherited sharing class WorkflowTestHarness {
    * suspend. Throws HarnessException if it cannot stabilize within maxHops.
    */
   public Result drive(Integer maxHops) {
-    return WorkflowHarnessDriver.drive(ctx, maxHops);
+    return WorkflowHarnessDriver.drive(ctxSynced(), maxHops);
   }
 
   /**
@@ -143,7 +162,7 @@ public inherited sharing class WorkflowTestHarness {
   ) {
     ctx.scannedInstanceIds.clear();
     WorkflowEngine.signal(correlationKey, signalName, payload);
-    return WorkflowHarnessDriver.drive(ctx, DEFAULT_MAX_HOPS);
+    return WorkflowHarnessDriver.drive(ctxSynced(), DEFAULT_MAX_HOPS);
   }
 
   /**
@@ -158,7 +177,7 @@ public inherited sharing class WorkflowTestHarness {
 
   public Result fireTimeout(String stepName, Integer maxHops) {
     new WorkflowTimeoutJob(ctx.rootInstanceId, stepName).executeInternal();
-    return WorkflowHarnessDriver.drive(ctx, maxHops);
+    return WorkflowHarnessDriver.drive(ctxSynced(), maxHops);
   }
 
   /** Returns the current inspectable result without advancing the workflow. */
@@ -191,18 +210,26 @@ public inherited sharing class WorkflowTestHarness {
   }
 
   public Result fireSleep(String stepName) {
-    return WorkflowHarnessSleepFire.fireSleep(ctx, stepName, DEFAULT_MAX_HOPS);
+    return WorkflowHarnessSleepFire.fireSleep(
+      ctxSynced(),
+      stepName,
+      DEFAULT_MAX_HOPS
+    );
   }
 
   public Result fireSleep(String stepName, Integer maxHops) {
-    return WorkflowHarnessSleepFire.fireSleep(ctx, stepName, maxHops);
+    return WorkflowHarnessSleepFire.fireSleep(ctxSynced(), stepName, maxHops);
   }
 
   public Result fireRetry(String stepName) {
-    return WorkflowHarnessSleepFire.fireRetry(ctx, stepName, DEFAULT_MAX_HOPS);
+    return WorkflowHarnessSleepFire.fireRetry(
+      ctxSynced(),
+      stepName,
+      DEFAULT_MAX_HOPS
+    );
   }
 
   public Result fireRetry(String stepName, Integer maxHops) {
-    return WorkflowHarnessSleepFire.fireRetry(ctx, stepName, maxHops);
+    return WorkflowHarnessSleepFire.fireRetry(ctxSynced(), stepName, maxHops);
   }
 }
