@@ -7,7 +7,8 @@ import getWorkflowDefinitions from '@salesforce/apex/WorkflowScheduleController.
 import previewCron from '@salesforce/apex/WorkflowScheduleController.previewCron';
 import saveSchedule from '@salesforce/apex/WorkflowScheduleController.saveSchedule';
 import deleteSchedule from '@salesforce/apex/WorkflowScheduleController.deleteSchedule';
-import setEnabled from '@salesforce/apex/WorkflowScheduleController.setEnabled';
+import enableSchedule from '@salesforce/apex/WorkflowScheduleController.enableSchedule';
+import disableSchedule from '@salesforce/apex/WorkflowScheduleController.disableSchedule';
 import runNow from '@salesforce/apex/WorkflowScheduleController.runNow';
 import registerDedicatedJob from '@salesforce/apex/WorkflowScheduleController.registerDedicatedJob';
 import unregisterDedicatedJob from '@salesforce/apex/WorkflowScheduleController.unregisterDedicatedJob';
@@ -234,7 +235,8 @@ export default class WorkflowScheduleManager extends LightningElement {
     }
 
     doToggleEnabled(row) {
-        setEnabled({ scheduleId: row.Id, enabled: !row.Enabled__c })
+        const toggle = row.Enabled__c ? disableSchedule : enableSchedule;
+        toggle({ scheduleId: row.Id })
             .then(() => {
                 this.toast(
                     'Updated',
