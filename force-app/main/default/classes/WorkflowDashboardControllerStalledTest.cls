@@ -190,11 +190,10 @@ public class WorkflowDashboardControllerStalledTest {
           countThrew = true;
         }
         try {
-          WorkflowDashboardController.cancelMatchingInstances(
+          WorkflowDashboardController.cancelMatchingInstancesWithCompensations(
             '',
             'Running',
-            '',
-            true
+            ''
           );
           System.assert(
             false,
