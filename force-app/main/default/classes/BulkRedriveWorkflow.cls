@@ -35,6 +35,10 @@
  *    Workflow_Name__c, so a future "re-drive all Failed" sweep can never
  *    re-drive a previously-failed re-drive instance and build a self-replaying
  *    loop with governor limits as the only brake.
+ *
+ * The eligible-selection SOQL is shared with BulkCancelWorkflow through
+ * BulkWorkflowSelector; only the recoverable-status set and the self-exclusion
+ * name differ between the two jobs.
  */
 public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition {
   /**
@@ -60,6 +64,12 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
   // Capped at 4 because of Salesforce Apex's hard limit of 5 savepoints per transaction, leaving 1 slot for safety/triggers.
   public static Integer defaultChunkSize = 4;
 
+  private enum RedriveOutcome {
+    REDRIVEN,
+    SKIPPED,
+    ERRORED
+  }
+
   // ---- WorkflowDefinition ----
 
   public List<String> getSteps() {
@@ -77,20 +87,14 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
   // ---- Eligible-selection helpers (single source of truth) ----
 
   /**
-   * Resolves the effective status set for the selection. Honors the operator's
-   * status filter but intersects it with the recoverable set, so filtering to a
-   * non-recoverable status (e.g. Completed) yields nothing.
+   * Shared selection surface. Injects this job's recoverable-status set and its
+   * self-exclusion name into the one shared selector implementation.
    */
-  private static List<String> effectiveStatuses(String status) {
-    List<String> result = new List<String>();
-    if (String.isNotBlank(status)) {
-      if (RECOVERABLE_STATUSES.contains(status)) {
-        result.add(status);
-      }
-    } else {
-      result.addAll(RECOVERABLE_STATUSES);
-    }
-    return result;
+  private static BulkWorkflowSelector selector() {
+    return new BulkWorkflowSelector(
+      RECOVERABLE_STATUSES,
+      REDRIVER_WORKFLOW_NAME
+    );
   }
 
   /**
@@ -104,262 +108,36 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
     String status,
     String searchTerm
   ) {
-    List<String> effStatuses = effectiveStatuses(status);
-    if (effStatuses.isEmpty()) {
-      return 0;
-    }
-    String excludeName = REDRIVER_WORKFLOW_NAME;
-    String likeTerm = String.isNotBlank(searchTerm)
-      ? '%' + searchTerm + '%'
-      : null;
-
-    if (String.isBlank(workflowName)) {
-      if (likeTerm == null) {
-        return [
-          SELECT COUNT()
-          FROM Workflow_Instance__c
-          WHERE Status__c IN :effStatuses AND Workflow_Name__c != :excludeName
-          WITH SYSTEM_MODE
-        ];
-      } else {
-        return [
-          SELECT COUNT()
-          FROM Workflow_Instance__c
-          WHERE
-            Status__c IN :effStatuses
-            AND Workflow_Name__c != :excludeName
-            AND (Name LIKE :likeTerm
-            OR Correlation_Key__c LIKE :likeTerm
-            OR Workflow_Name__c LIKE :likeTerm
-            OR Error_Message__c LIKE :likeTerm)
-          WITH SYSTEM_MODE
-        ];
-      }
-    } else {
-      if (likeTerm == null) {
-        return [
-          SELECT COUNT()
-          FROM Workflow_Instance__c
-          WHERE
-            Status__c IN :effStatuses
-            AND Workflow_Name__c != :excludeName
-            AND Workflow_Name__c = :workflowName
-          WITH SYSTEM_MODE
-        ];
-      } else {
-        return [
-          SELECT COUNT()
-          FROM Workflow_Instance__c
-          WHERE
-            Status__c IN :effStatuses
-            AND Workflow_Name__c != :excludeName
-            AND Workflow_Name__c = :workflowName
-            AND (Name LIKE :likeTerm
-            OR Correlation_Key__c LIKE :likeTerm
-            OR Workflow_Name__c LIKE :likeTerm
-            OR Error_Message__c LIKE :likeTerm)
-          WITH SYSTEM_MODE
-        ];
-      }
-    }
-  }
-
-  /**
-   * Returns up to `chunkSize` eligible instance Ids ordered by Id, starting
-   * strictly after `afterId` (the cursor). Ordering by Id gives a stable,
-   * resumable cursor across yield boundaries.
-   */
-  public static List<Id> fetchEligibleChunk(
-    String workflowName,
-    String status,
-    String searchTerm,
-    Id afterId,
-    Integer chunkSize
-  ) {
-    List<String> effStatuses = effectiveStatuses(status);
-    if (effStatuses.isEmpty()) {
-      return new List<Id>();
-    }
-    String excludeName = REDRIVER_WORKFLOW_NAME;
-    String likeTerm = String.isNotBlank(searchTerm)
-      ? '%' + searchTerm + '%'
-      : null;
-    Integer lim = chunkSize;
-
-    List<Workflow_Instance__c> rows;
-    if (afterId == null) {
-      if (String.isBlank(workflowName)) {
-        if (likeTerm == null) {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE Status__c IN :effStatuses AND Workflow_Name__c != :excludeName
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        } else {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND (Name LIKE :likeTerm
-              OR Correlation_Key__c LIKE :likeTerm
-              OR Workflow_Name__c LIKE :likeTerm
-              OR Error_Message__c LIKE :likeTerm)
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        }
-      } else {
-        if (likeTerm == null) {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND Workflow_Name__c = :workflowName
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        } else {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND Workflow_Name__c = :workflowName
-              AND (Name LIKE :likeTerm
-              OR Correlation_Key__c LIKE :likeTerm
-              OR Workflow_Name__c LIKE :likeTerm
-              OR Error_Message__c LIKE :likeTerm)
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        }
-      }
-    } else {
-      if (String.isBlank(workflowName)) {
-        if (likeTerm == null) {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND Id > :afterId
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        } else {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND Id > :afterId
-              AND (Name LIKE :likeTerm
-              OR Correlation_Key__c LIKE :likeTerm
-              OR Workflow_Name__c LIKE :likeTerm
-              OR Error_Message__c LIKE :likeTerm)
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        }
-      } else {
-        if (likeTerm == null) {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND Id > :afterId
-              AND Workflow_Name__c = :workflowName
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        } else {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND Id > :afterId
-              AND Workflow_Name__c = :workflowName
-              AND (Name LIKE :likeTerm
-              OR Correlation_Key__c LIKE :likeTerm
-              OR Workflow_Name__c LIKE :likeTerm
-              OR Error_Message__c LIKE :likeTerm)
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        }
-      }
-    }
-
-    List<Id> ids = new List<Id>();
-    for (Workflow_Instance__c inst : rows) {
-      ids.add(inst.Id);
-    }
-    return ids;
+    return selector()
+      .count(
+        new BulkWorkflowSelector.Criteria(workflowName, status, searchTerm)
+      );
   }
 
   // ---- The re-drive step ----
 
-  public class BulkRedriveStep implements WorkflowStep {
+  public inherited sharing class BulkRedriveStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      // Hydrate state: on the first run the persisted state is empty, so seed it
-      // from the operator's filter (the workflow input). On resume, the yield
-      // state carries the cursor and running tallies forward.
-      Map<String, Object> state;
-      if (String.isNotBlank(ctx.stepStateJson)) {
-        state = (Map<String, Object>) JSON.deserializeUntyped(
-          ctx.stepStateJson
-        );
-      } else {
-        state = new Map<String, Object>();
-        if (String.isNotBlank(ctx.workflowInputJson)) {
-          Map<String, Object> filter = (Map<String, Object>) JSON.deserializeUntyped(
-            ctx.workflowInputJson
-          );
-          state.put('workflowName', filter.get('workflowName'));
-          state.put('status', filter.get('status'));
-          state.put('searchTerm', filter.get('searchTerm'));
-        }
-      }
+      Map<String, Object> state = BulkWorkflowStepState.hydrate(
+        ctx,
+        new List<String>{ 'workflowName', 'status', 'searchTerm' }
+      );
 
       String workflowName = (String) state.get('workflowName');
       String status = (String) state.get('status');
       String searchTerm = (String) state.get('searchTerm');
-      Id afterId = state.get('lastId') != null
-        ? (Id) (String) state.get('lastId')
-        : null;
-      Integer redriven = intOf(state.get('redriven'));
-      Integer skipped = intOf(state.get('skipped'));
-      Integer errored = intOf(state.get('errored'));
+      Id afterId = BulkWorkflowStepState.cursorFrom(state);
+      Integer redriven = BulkWorkflowStepState.intOf(state.get('redriven'));
+      Integer skipped = BulkWorkflowStepState.intOf(state.get('skipped'));
+      Integer errored = BulkWorkflowStepState.intOf(state.get('errored'));
 
       Integer chunkSize = defaultChunkSize;
-      List<Id> chunk = fetchEligibleChunk(
-        workflowName,
-        status,
-        searchTerm,
-        afterId,
-        chunkSize
-      );
+      List<Id> chunk = selector()
+        .fetchChunk(
+          new BulkWorkflowSelector.Criteria(workflowName, status, searchTerm),
+          afterId,
+          chunkSize
+        );
 
       Integer processed = 0;
       for (Id instId : chunk) {
@@ -369,23 +147,16 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
         if (ctx.shouldYield()) {
           break;
         }
-        Savepoint sp = Database.setSavepoint();
-        try {
-          WorkflowEngine.retryWorkflow(instId);
-          redriven++;
-        } catch (WorkflowEngine.WorkflowException wex) {
-          Database.rollback(sp);
-          if (
-            wex.getMessage() != null &&
-            wex.getMessage().contains('Failed status')
-          ) {
+        switch on redriveOne(instId) {
+          when REDRIVEN {
+            redriven++;
+          }
+          when SKIPPED {
             skipped++;
-          } else {
+          }
+          when else {
             errored++;
           }
-        } catch (Exception ex) {
-          Database.rollback(sp);
-          errored++;
         }
         afterId = instId;
         processed++;
@@ -414,7 +185,41 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
         return StepResult.yield(JSON.serialize(state));
       }
 
-      Map<String, Object> summary = new Map<String, Object>{
+      return StepResult.complete(
+        null,
+        buildSummary(redriven, skipped, errored)
+      );
+    }
+
+    /**
+     * Re-drives a single instance inside its own savepoint. A retryWorkflow
+     * failure rolls back that instance's partial writes; a "Failed status" guard
+     * rejection is a benign skip, anything else is counted as an error — leaving
+     * the peers already re-driven in this chunk untouched.
+     */
+    private RedriveOutcome redriveOne(Id instId) {
+      Savepoint sp = Database.setSavepoint();
+      try {
+        WorkflowEngine.retryWorkflow(instId);
+        return RedriveOutcome.REDRIVEN;
+      } catch (WorkflowEngine.WorkflowException wex) {
+        Database.rollback(sp);
+        Boolean noLongerFailed =
+          wex.getMessage() != null &&
+          wex.getMessage().contains('Failed status');
+        return noLongerFailed ? RedriveOutcome.SKIPPED : RedriveOutcome.ERRORED;
+      } catch (Exception ex) {
+        Database.rollback(sp);
+        return RedriveOutcome.ERRORED;
+      }
+    }
+
+    private Map<String, Object> buildSummary(
+      Integer redriven,
+      Integer skipped,
+      Integer errored
+    ) {
+      return new Map<String, Object>{
         'redriven' => redriven,
         'skipped' => skipped,
         'errored' => errored,
@@ -422,11 +227,6 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
         skipped +
         errored
       };
-      return StepResult.complete(null, summary);
-    }
-
-    private Integer intOf(Object o) {
-      return o == null ? 0 : Integer.valueOf(String.valueOf(o));
     }
   }
 }

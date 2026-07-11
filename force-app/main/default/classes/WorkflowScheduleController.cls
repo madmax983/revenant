@@ -222,11 +222,51 @@ public with sharing class WorkflowScheduleController {
     checkAuthorization();
 
     String cron = (String) fields.get('Cron_Expression__c');
+    String prefix = (String) fields.get('Correlation_Key_Prefix__c');
+    validateScheduleInput(cron, (String) fields.get('Input_Json__c'), prefix);
+
+    Id existingId = resolveExistingId(fields);
+    // Capture the prior cron so we can re-arm an already-armed dedicated job if the
+    // cadence changes (System.schedule can't be updated in place).
+    String oldCron = loadOldCron(existingId);
+    assertUniquePrefix(prefix, existingId);
+
+    Workflow_Schedule__c sched = buildScheduleRecord(fields, existingId);
+    try {
+      upsert as user sched;
+    } catch (Exception e) {
+      throwAura('Could not save schedule: ' + e.getMessage());
+    }
+
+    // Recompute the engine-managed cursor on create or whenever the cron changes.
+    // sweep() only selects rows whose Next_Fire_Window__c is null or <= now, so a
+    // stale cursor from the prior cron (e.g. next month for a monthly schedule)
+    // would keep an edited every-minute schedule filtered out until that old date.
+    // Pointing the cursor at the new cron's next window both fixes that and gives
+    // the list view an immediate "next run" without a per-row evaluator scan.
+    if (existingId == null || oldCron != cron) {
+      reseedCursor(sched.Id, cron, 'ScheduleSave');
+    }
+
+    // Keep any armed dedicated CronTrigger consistent with the saved record.
+    if (
+      existingId != null &&
+      WorkflowScheduleSweeper.isDedicatedJobArmed(sched.Id)
+    ) {
+      syncDedicatedJob(sched, oldCron, cron);
+    }
+    return sched.Id;
+  }
+
+  /** Validates the cron, optional input JSON, and correlation-key prefix. Throws. */
+  private static void validateScheduleInput(
+    String cron,
+    String inputJson,
+    String prefix
+  ) {
     if (!WorkflowCronEvaluator.isValidCron(cron)) {
       throwAura('Invalid cron expression: ' + cron);
     }
-
-    String inputJson = (String) fields.get('Input_Json__c');
     if (String.isNotBlank(inputJson)) {
       try {
         JSON.deserializeUntyped(inputJson);
@@ -234,8 +274,6 @@ public with sharing class WorkflowScheduleController {
         throwAura('Input JSON is not valid JSON: ' + e.getMessage());
       }
     }
-
-    String prefix = (String) fields.get('Correlation_Key_Prefix__c');
     if (String.isBlank(prefix)) {
       throwAura('Correlation Key Prefix is required.');
     }
@@ -244,32 +282,38 @@ public with sharing class WorkflowScheduleController {
     if (prefix.length() > 80) {
       throwAura('Correlation Key Prefix must be 80 characters or fewer.');
     }
+  }
 
-    Id existingId = null;
+  /** Extracts the update-target Id from the incoming field map, or null on create. */
+  private static Id resolveExistingId(Map<String, Object> fields) {
     if (
       fields.get('Id') != null && String.isNotBlank((String) fields.get('Id'))
     ) {
-      existingId = (Id) fields.get('Id');
+      return (Id) fields.get('Id');
     }
+    return null;
+  }
 
-    // Capture the prior cron so we can re-arm an already-armed dedicated job if the
-    // cadence changes (System.schedule can't be updated in place).
-    String oldCron = null;
-    if (existingId != null) {
-      List<Workflow_Schedule__c> existing = [
-        SELECT Cron_Expression__c
-        FROM Workflow_Schedule__c
-        WHERE Id = :existingId
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (!existing.isEmpty()) {
-        oldCron = existing[0].Cron_Expression__c;
-      }
+  /** Reads the currently-persisted cron for an edit, or null on create/missing row. */
+  private static String loadOldCron(Id existingId) {
+    if (existingId == null) {
+      return null;
     }
+    List<Workflow_Schedule__c> existing = [
+      SELECT Cron_Expression__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :existingId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    return existing.isEmpty() ? null : existing[0].Cron_Expression__c;
+  }
 
-    // Enforce prefix uniqueness with a friendly message (the field is also unique
-    // at the database level as a backstop).
+  /**
+   * Enforces correlation-key-prefix uniqueness with a friendly message (the field is
+   * also unique at the database level as a backstop). Throws on a collision.
+   */
+  private static void assertUniquePrefix(String prefix, Id existingId) {
     List<Workflow_Schedule__c> dupes;
     if (existingId == null) {
       dupes = [
@@ -295,86 +339,68 @@ public with sharing class WorkflowScheduleController {
           '". Prefixes must be unique.'
       );
     }
+  }
 
+  /** Maps the incoming field map onto a Workflow_Schedule__c for upsert. */
+  private static Workflow_Schedule__c buildScheduleRecord(
+    Map<String, Object> fields,
+    Id existingId
+  ) {
     Workflow_Schedule__c sched = new Workflow_Schedule__c();
     if (existingId != null) {
       sched.Id = existingId;
     }
     sched.Name = (String) fields.get('Name');
     sched.Workflow_Name__c = (String) fields.get('Workflow_Name__c');
-    sched.Cron_Expression__c = cron;
-    sched.Correlation_Key_Prefix__c = prefix;
-    sched.Input_Json__c = inputJson;
+    sched.Cron_Expression__c = (String) fields.get('Cron_Expression__c');
+    sched.Correlation_Key_Prefix__c = (String) fields.get(
+      'Correlation_Key_Prefix__c'
+    );
+    sched.Input_Json__c = (String) fields.get('Input_Json__c');
     sched.Enabled__c = toBool(fields.get('Enabled__c'));
     sched.Overlap_Policy__c = (String) fields.get('Overlap_Policy__c');
     sched.Dedicated_Slot__c = toBool(fields.get('Dedicated_Slot__c'));
+    return sched;
+  }
 
-    try {
-      upsert as user sched;
-    } catch (Exception e) {
-      throwAura('Could not save schedule: ' + e.getMessage());
-    }
-
-    // Recompute the engine-managed cursor on create or whenever the cron changes.
-    // sweep() only selects rows whose Next_Fire_Window__c is null or <= now, so a
-    // stale cursor from the prior cron (e.g. next month for a monthly schedule)
-    // would keep an edited every-minute schedule filtered out until that old date.
-    // Pointing the cursor at the new cron's next window both fixes that and gives
-    // the list view an immediate "next run" without a per-row evaluator scan.
-    // Written in SYSTEM mode: the field is read-only to admins (so it can't be
-    // tampered with via raw record edits to silently suppress fires).
-    if (existingId == null || oldCron != cron) {
+  /**
+   * Keeps an armed dedicated CronTrigger consistent with the just-saved record: tears
+   * it down if the edit turned off Enabled or Dedicated mode, or re-arms it (abort +
+   * register) if still dedicated/enabled but the cadence changed.
+   */
+  private static void syncDedicatedJob(
+    Workflow_Schedule__c sched,
+    String oldCron,
+    String cron
+  ) {
+    if (!sched.Enabled__c || !sched.Dedicated_Slot__c) {
+      // Edit turned off Enabled or Dedicated mode → tear down the orphaned job
+      // (otherwise it keeps a scheduled-job slot and the abort action vanishes
+      // from the row once Dedicated_Slot__c is false).
       try {
-        update as system new Workflow_Schedule__c(
-          Id = sched.Id,
-          Next_Fire_Window__c = WorkflowCronEvaluator.nextFireTime(
-            cron,
-            DateTime.now()
-          )
-        );
+        WorkflowScheduleSweeper.unregisterDedicatedJob(sched.Id);
       } catch (Exception ex) {
         WorkflowLog.error(
           'ScheduleSave',
-          'Failed to seed cursor: ' + ex.getMessage()
+          'Failed to abort dedicated job: ' + ex.getMessage()
+        );
+      }
+    } else if (oldCron != cron) {
+      // Still dedicated + enabled but the cadence changed → re-arm, since the
+      // live CronTrigger would otherwise keep firing on the old cron behind a
+      // UI that still shows the schedule as armed.
+      try {
+        WorkflowScheduleSweeper.unregisterDedicatedJob(sched.Id);
+        WorkflowScheduleSweeper.registerDedicatedJob(sched.Id);
+      } catch (Exception e) {
+        throwAura(
+          'Schedule saved, but its dedicated job could not be re-armed with the ' +
+            'new cron (' +
+            e.getMessage() +
+            '). Abort and re-arm it manually.'
         );
       }
     }
-
-    // Keep any armed dedicated CronTrigger consistent with the saved record.
-    if (
-      existingId != null &&
-      WorkflowScheduleSweeper.isDedicatedJobArmed(sched.Id)
-    ) {
-      if (!sched.Enabled__c || !sched.Dedicated_Slot__c) {
-        // Edit turned off Enabled or Dedicated mode → tear down the orphaned job
-        // (otherwise it keeps a scheduled-job slot and the abort action vanishes
-        // from the row once Dedicated_Slot__c is false).
-        try {
-          WorkflowScheduleSweeper.unregisterDedicatedJob(sched.Id);
-        } catch (Exception ex) {
-          WorkflowLog.error(
-            'ScheduleSave',
-            'Failed to abort dedicated job: ' + ex.getMessage()
-          );
-        }
-      } else if (oldCron != cron) {
-        // Still dedicated + enabled but the cadence changed → re-arm, since the
-        // live CronTrigger would otherwise keep firing on the old cron behind a
-        // UI that still shows the schedule as armed.
-        try {
-          WorkflowScheduleSweeper.unregisterDedicatedJob(sched.Id);
-          WorkflowScheduleSweeper.registerDedicatedJob(sched.Id);
-        } catch (Exception e) {
-          throwAura(
-            'Schedule saved, but its dedicated job could not be re-armed with the ' +
-              'new cron (' +
-              e.getMessage() +
-              '). Abort and re-arm it manually.'
-          );
-        }
-      }
-    }
-    return sched.Id;
   }
 
   @AuraEnabled
@@ -400,17 +426,11 @@ public with sharing class WorkflowScheduleController {
   }
 
   @AuraEnabled
-  public static void setEnabled(Id scheduleId, Boolean enabled) {
+  public static void enableSchedule(Id scheduleId) {
     checkAuthorization();
-    Workflow_Schedule__c sched = [
-      SELECT Id, Enabled__c, Dedicated_Slot__c, Cron_Expression__c
-      FROM Workflow_Schedule__c
-      WHERE Id = :scheduleId
-      WITH USER_MODE
-      LIMIT 1
-    ];
+    Workflow_Schedule__c sched = loadScheduleForToggle(scheduleId);
     Boolean wasEnabled = sched.Enabled__c;
-    sched.Enabled__c = enabled;
+    sched.Enabled__c = true;
     update as user sched;
 
     // Re-enabling after a pause: recompute the cursor so the next sweep waits for
@@ -418,27 +438,22 @@ public with sharing class WorkflowScheduleController {
     // elapsed while the schedule was disabled (e.g. a nightly schedule re-enabled
     // at 10:00 should not fire that day's 02:00 run). Written in system mode since
     // the cursor field is read-only to admins.
-    if (enabled && !wasEnabled) {
-      try {
-        update as system new Workflow_Schedule__c(
-          Id = scheduleId,
-          Next_Fire_Window__c = WorkflowCronEvaluator.nextFireTime(
-            sched.Cron_Expression__c,
-            DateTime.now()
-          )
-        );
-      } catch (Exception ex) {
-        WorkflowLog.error(
-          'ScheduleToggle',
-          'Failed to recompute cursor: ' + ex.getMessage()
-        );
-      }
+    if (!wasEnabled) {
+      reseedCursor(scheduleId, sched.Cron_Expression__c, 'ScheduleToggle');
     }
+  }
+
+  @AuraEnabled
+  public static void disableSchedule(Id scheduleId) {
+    checkAuthorization();
+    Workflow_Schedule__c sched = loadScheduleForToggle(scheduleId);
+    sched.Enabled__c = false;
+    update as user sched;
 
     // Disabling a dedicated schedule must also tear down its CronTrigger so it
     // stops firing immediately (the job re-checks Enabled__c too, but this avoids
     // a lingering scheduled job entirely).
-    if (!enabled && sched.Dedicated_Slot__c) {
+    if (sched.Dedicated_Slot__c) {
       try {
         WorkflowScheduleSweeper.unregisterDedicatedJob(scheduleId);
       } catch (Exception ex) {
@@ -447,6 +462,43 @@ public with sharing class WorkflowScheduleController {
           'Failed to abort dedicated job: ' + ex.getMessage()
         );
       }
+    }
+  }
+
+  private static Workflow_Schedule__c loadScheduleForToggle(Id scheduleId) {
+    return [
+      SELECT Id, Enabled__c, Dedicated_Slot__c, Cron_Expression__c
+      FROM Workflow_Schedule__c
+      WHERE Id = :scheduleId
+      WITH USER_MODE
+      LIMIT 1
+    ];
+  }
+
+  /**
+   * (Re)computes the engine-managed Next_Fire_Window__c cursor for a schedule from
+   * its cron. Written in SYSTEM mode since the cursor field is read-only to admins.
+   * logSource distinguishes the caller (schedule save vs enable/disable toggle) in
+   * any error log.
+   */
+  private static void reseedCursor(
+    Id scheduleId,
+    String cron,
+    String logSource
+  ) {
+    try {
+      update as system new Workflow_Schedule__c(
+        Id = scheduleId,
+        Next_Fire_Window__c = WorkflowCronEvaluator.nextFireTime(
+          cron,
+          DateTime.now()
+        )
+      );
+    } catch (Exception ex) {
+      WorkflowLog.error(
+        logSource,
+        'Failed to recompute cursor: ' + ex.getMessage()
+      );
     }
   }
 

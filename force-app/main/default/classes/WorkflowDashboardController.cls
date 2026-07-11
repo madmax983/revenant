@@ -145,24 +145,40 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
+   * Carries the resolved attachment bodies plus the download descriptors accumulated
+   * while resolving an instance's payload fields, so resolveAndRecordPayload can take a
+   * single context object instead of a long parameter list.
+   */
+  private class PayloadResolution {
+    Map<Id, String> attachmentIdToData;
+    Map<String, Object> payloadFiles;
+
+    PayloadResolution(Map<Id, String> attachmentIdToData) {
+      this.attachmentIdToData = attachmentIdToData;
+      this.payloadFiles = new Map<String, Object>();
+    }
+  }
+
+  /**
    * Resolves a payload field for display: returns the (possibly truncated) text and, when
    * the value is attachment-backed and was truncated, records a download descriptor for
-   * the full ContentDocument under fieldKey in payloadFiles so the UI can offer the file.
+   * the full ContentDocument under fieldKey in res.payloadFiles so the UI can offer the file.
    */
   private static String resolveAndRecordPayload(
     String textValue,
     String fieldKey,
-    Map<Id, String> attachmentIdToData,
-    Map<String, Object> payloadFiles
+    PayloadResolution res
   ) {
     if (String.isBlank(textValue)) {
       return textValue;
     }
     Id attachmentId = getAttachmentId(textValue);
-    if (attachmentId != null && attachmentIdToData.containsKey(attachmentId)) {
-      String full = attachmentIdToData.get(attachmentId);
+    if (
+      attachmentId != null && res.attachmentIdToData.containsKey(attachmentId)
+    ) {
+      String full = res.attachmentIdToData.get(attachmentId);
       if (full != null && full.length() > PAYLOAD_DISPLAY_LIMIT) {
-        payloadFiles.put(
+        res.payloadFiles.put(
           fieldKey,
           new Map<String, Object>{
             'contentDocumentId' => attachmentId,
@@ -177,114 +193,119 @@ public inherited sharing class WorkflowDashboardController {
     return truncatePayload(textValue);
   }
 
-  private static Map<String, Object> resolvePayloadsInBulk(
+  private static void addAttachmentId(Set<Id> attachmentIds, String textValue) {
+    Id attachmentId = getAttachmentId(textValue);
+    if (attachmentId != null) {
+      attachmentIds.add(attachmentId);
+    }
+  }
+
+  private static Set<Id> collectPayloadAttachmentIds(
     Workflow_Instance__c instance,
     List<Workflow_Step_Execution__c> steps
   ) {
     Set<Id> attachmentIds = new Set<Id>();
-
-    Id instInputId = getAttachmentId(instance.Input__c);
-    if (instInputId != null) {
-      attachmentIds.add(instInputId);
-    }
-
-    Id instOutputId = getAttachmentId(instance.Output__c);
-    if (instOutputId != null) {
-      attachmentIds.add(instOutputId);
-    }
-
-    Id instProgressId = getAttachmentId(instance.Progress__c);
-    if (instProgressId != null) {
-      attachmentIds.add(instProgressId);
-    }
-
+    addAttachmentId(attachmentIds, instance.Input__c);
+    addAttachmentId(attachmentIds, instance.Output__c);
+    addAttachmentId(attachmentIds, instance.Progress__c);
     for (Workflow_Step_Execution__c step : steps) {
-      Id stepInputId = getAttachmentId(step.Input__c);
-      if (stepInputId != null) {
-        attachmentIds.add(stepInputId);
-      }
-
-      Id stepOutputId = getAttachmentId(step.Output__c);
-      if (stepOutputId != null) {
-        attachmentIds.add(stepOutputId);
-      }
+      addAttachmentId(attachmentIds, step.Input__c);
+      addAttachmentId(attachmentIds, step.Output__c);
     }
+    return attachmentIds;
+  }
 
+  private static Set<Id> verifyAttachmentLinks(
+    Set<Id> attachmentIds,
+    Id linkedEntityId
+  ) {
+    Set<Id> verifiedAttachmentIds = new Set<Id>();
+    for (ContentDocumentLink cdl : [
+      SELECT ContentDocumentId
+      FROM ContentDocumentLink
+      WHERE
+        ContentDocumentId IN :attachmentIds
+        AND LinkedEntityId = :linkedEntityId
+      WITH SYSTEM_MODE
+    ]) {
+      verifiedAttachmentIds.add(cdl.ContentDocumentId);
+    }
+    return verifiedAttachmentIds;
+  }
+
+  private static Map<Id, String> loadAttachmentData(
+    Set<Id> attachmentIds,
+    Id linkedEntityId
+  ) {
     Map<Id, String> attachmentIdToData = new Map<Id, String>();
-    if (!attachmentIds.isEmpty()) {
-      Set<Id> verifiedAttachmentIds = new Set<Id>();
-      for (ContentDocumentLink cdl : [
-        SELECT ContentDocumentId
-        FROM ContentDocumentLink
-        WHERE
-          ContentDocumentId IN :attachmentIds
-          AND LinkedEntityId = :instance.Id
-        WITH SYSTEM_MODE
-      ]) {
-        verifiedAttachmentIds.add(cdl.ContentDocumentId);
-      }
-
-      if (!verifiedAttachmentIds.isEmpty()) {
-        for (ContentVersion cv : [
-          SELECT ContentDocumentId, VersionData
-          FROM ContentVersion
-          WHERE ContentDocumentId IN :verifiedAttachmentIds AND IsLatest = TRUE
-          WITH SYSTEM_MODE
-        ]) {
-          if (cv.VersionData != null) {
-            attachmentIdToData.put(
-              cv.ContentDocumentId,
-              cv.VersionData.toString()
-            );
-          }
-        }
+    if (attachmentIds.isEmpty()) {
+      return attachmentIdToData;
+    }
+    Set<Id> verifiedAttachmentIds = verifyAttachmentLinks(
+      attachmentIds,
+      linkedEntityId
+    );
+    if (verifiedAttachmentIds.isEmpty()) {
+      return attachmentIdToData;
+    }
+    for (ContentVersion cv : [
+      SELECT ContentDocumentId, VersionData
+      FROM ContentVersion
+      WHERE ContentDocumentId IN :verifiedAttachmentIds AND IsLatest = TRUE
+      WITH SYSTEM_MODE
+    ]) {
+      if (cv.VersionData != null) {
+        attachmentIdToData.put(cv.ContentDocumentId, cv.VersionData.toString());
       }
     }
+    return attachmentIdToData;
+  }
 
-    Map<String, Object> payloadFiles = new Map<String, Object>();
+  private static Map<String, Object> resolvePayloadsInBulk(
+    Workflow_Instance__c instance,
+    List<Workflow_Step_Execution__c> steps
+  ) {
+    Set<Id> attachmentIds = collectPayloadAttachmentIds(instance, steps);
+    Map<Id, String> attachmentIdToData = loadAttachmentData(
+      attachmentIds,
+      instance.Id
+    );
+    PayloadResolution res = new PayloadResolution(attachmentIdToData);
+
     instance.Input__c = resolveAndRecordPayload(
       instance.Input__c,
       'instance.Input',
-      attachmentIdToData,
-      payloadFiles
+      res
     );
     instance.Output__c = resolveAndRecordPayload(
       instance.Output__c,
       'instance.Output',
-      attachmentIdToData,
-      payloadFiles
+      res
     );
     instance.Progress__c = resolveAndRecordPayload(
       instance.Progress__c,
       'instance.Progress',
-      attachmentIdToData,
-      payloadFiles
+      res
     );
     for (Workflow_Step_Execution__c step : steps) {
       step.Input__c = resolveAndRecordPayload(
         step.Input__c,
         'step.' + step.Id + '.Input',
-        attachmentIdToData,
-        payloadFiles
+        res
       );
       step.Output__c = resolveAndRecordPayload(
         step.Output__c,
         'step.' + step.Id + '.Output',
-        attachmentIdToData,
-        payloadFiles
+        res
       );
     }
-    return payloadFiles;
+    return res.payloadFiles;
   }
 
-  private static void resolveMatchingAttributes(
-    String attributesFilterJson,
-    Boolean isStalled,
-    String workflowName,
-    String status,
-    String searchTerm,
-    String failureCategory
-  ) {
+  // Resolves attributeFilter0/1 (and resets filterInstanceIds) from the filter JSON
+  // for the non-stalled queries, which express the attribute match as inline SOQL
+  // semi-joins in buildWhereClause. Malformed JSON is treated as "no attribute filter".
+  private static void resolveMatchingAttributes(String attributesFilterJson) {
     attributeFilter0 = null;
     attributeFilter1 = null;
     filterInstanceIds = new Set<Id>();
@@ -309,76 +330,77 @@ public inherited sharing class WorkflowDashboardController {
       if (targetKeyValues.size() > 1) {
         attributeFilter1 = targetKeyValues[1];
       }
+    } catch (Exception ignored) {
+    }
+  }
 
-      // Populate filterInstanceIds only when we are doing a stalled query (which has SOQL semi-join limits)
-      if (isStalled && (attributeFilter0 != null || attributeFilter1 != null)) {
-        if (attributeFilter0 != null && attributeFilter1 != null) {
-          Set<Id> ids0 = new Set<Id>();
-          for (Workflow_Search_Attribute__c attr : [
-            SELECT Workflow_Instance__c
-            FROM Workflow_Search_Attribute__c
-            WHERE Key_Value__c = :attributeFilter0
-            WITH SYSTEM_MODE
-            LIMIT 10000
-          ]) {
-            ids0.add(attr.Workflow_Instance__c);
-          }
-          for (Workflow_Search_Attribute__c attr : [
-            SELECT Workflow_Instance__c
-            FROM Workflow_Search_Attribute__c
-            WHERE Key_Value__c = :attributeFilter1
-            WITH SYSTEM_MODE
-            LIMIT 10000
-          ]) {
-            if (ids0.contains(attr.Workflow_Instance__c)) {
-              filterInstanceIds.add(attr.Workflow_Instance__c);
-            }
-          }
-        } else {
-          String target = (attributeFilter0 != null)
-            ? attributeFilter0
-            : attributeFilter1;
-          for (Workflow_Search_Attribute__c attr : [
-            SELECT Workflow_Instance__c
-            FROM Workflow_Search_Attribute__c
-            WHERE Key_Value__c = :target
-            WITH SYSTEM_MODE
-            LIMIT 10000
-          ]) {
-            filterInstanceIds.add(attr.Workflow_Instance__c);
+  // Attribute resolution for the stalled list/count, which cannot express the
+  // attribute match inline (the stalled WHERE already uses two anti-join sub-selects
+  // and SOQL caps sub-selects at 2). Resolves the same attributeFilter0/1, then
+  // pre-queries the matching instance ids into filterInstanceIds for the WHERE bind.
+  private static void resolveMatchingAttributesForStalled(
+    String attributesFilterJson
+  ) {
+    resolveMatchingAttributes(attributesFilterJson);
+    if (attributeFilter0 == null && attributeFilter1 == null) {
+      return;
+    }
+    try {
+      if (attributeFilter0 != null && attributeFilter1 != null) {
+        Set<Id> ids0 = queryAttributeInstanceIds(attributeFilter0);
+        for (Id instanceId : queryAttributeInstanceIds(attributeFilter1)) {
+          if (ids0.contains(instanceId)) {
+            filterInstanceIds.add(instanceId);
           }
         }
+      } else {
+        String target = (attributeFilter0 != null)
+          ? attributeFilter0
+          : attributeFilter1;
+        filterInstanceIds.addAll(queryAttributeInstanceIds(target));
       }
     } catch (Exception ignored) {
     }
   }
 
-  private static String buildWhereClause(
-    String workflowName,
-    String status,
-    String searchTerm
-  ) {
-    return buildWhereClause(workflowName, status, searchTerm, null);
+  private static Set<Id> queryAttributeInstanceIds(String keyValue) {
+    Set<Id> ids = new Set<Id>();
+    for (Workflow_Search_Attribute__c attr : [
+      SELECT Workflow_Instance__c
+      FROM Workflow_Search_Attribute__c
+      WHERE Key_Value__c = :keyValue
+      WITH SYSTEM_MODE
+      LIMIT 10000
+    ]) {
+      ids.add(attr.Workflow_Instance__c);
+    }
+    return ids;
   }
 
-  private static String buildWhereClause(
-    String workflowName,
-    String status,
-    String searchTerm,
-    String failureCategory
-  ) {
+  // Lightweight holder for the instance-list filter fields, so buildWhereClause takes a
+  // single argument. The condition strings bind to the caller's locals (:workflowName,
+  // :status, :searchTerm, :failureCategory), which retain those names, plus the class
+  // statics :likeTerm / :attributeFilter0 / :attributeFilter1.
+  private class InstanceFilter {
+    String workflowName;
+    String status;
+    String searchTerm;
+    String failureCategory;
+  }
+
+  private static String buildWhereClause(InstanceFilter f) {
     List<String> conditions = new List<String>();
-    if (String.isNotBlank(workflowName)) {
+    if (String.isNotBlank(f.workflowName)) {
       conditions.add('Workflow_Name__c = :workflowName');
     }
-    if (String.isNotBlank(status)) {
+    if (String.isNotBlank(f.status)) {
       conditions.add('Status__c = :status');
     }
-    if (String.isNotBlank(failureCategory)) {
+    if (String.isNotBlank(f.failureCategory)) {
       conditions.add('Failure_Category__c = :failureCategory');
     }
-    if (String.isNotBlank(searchTerm)) {
-      likeTerm = '%' + searchTerm + '%';
+    if (String.isNotBlank(f.searchTerm)) {
+      likeTerm = '%' + f.searchTerm + '%';
       conditions.add(
         '(Name LIKE :likeTerm OR Correlation_Key__c LIKE :likeTerm OR Workflow_Name__c LIKE :likeTerm OR Error_Message__c LIKE :likeTerm)'
       );
@@ -431,102 +453,79 @@ public inherited sharing class WorkflowDashboardController {
     return String.join(conditions, ' AND ');
   }
 
-  public static List<Map<String, Object>> getFilteredInstances(
-    String workflowName,
-    String status,
-    String searchTerm,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
-  ) {
-    return getFilteredInstances(
-      workflowName,
-      status,
-      searchTerm,
-      null,
-      limitSize,
-      offsetSize,
-      cacheBuster,
-      null
-    );
+  // Query criteria for the filtered-instance list and the workflow-stat rollup. Field-based
+  // (@AuraEnabled properties) so the LWC and tests populate it by assignment; a wide
+  // constructor would re-introduce the long parameter list this wrapper removes. Unset
+  // fields default to null, reproducing the previous shorter overloads.
+  public class InstanceQuery {
+    @AuraEnabled
+    public String workflowName;
+    @AuraEnabled
+    public String status;
+    @AuraEnabled
+    public String searchTerm;
+    @AuraEnabled
+    public String failureCategory;
+    @AuraEnabled
+    public Integer limitSize;
+    @AuraEnabled
+    public Integer offsetSize;
+    @AuraEnabled
+    public String cacheBuster;
+    @AuraEnabled
+    public String attributesFilterJson;
   }
 
-  public static List<Map<String, Object>> getFilteredInstances(
-    String workflowName,
-    String status,
-    String searchTerm,
-    String failureCategory,
+  // Runs the filtered-instance SOQL for getFilteredInstances. The bind tokens
+  // (:workflowName, :status, :failureCategory emitted by buildWhereClause, and
+  // :limitSize / :offsetSize in the ORDER BY) resolve against this method's local
+  // scope, so the caller passes the clamped page bounds in.
+  private static List<Workflow_Instance__c> queryFilteredInstances(
+    InstanceQuery criteria,
     Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
+    Integer offsetSize
   ) {
-    return getFilteredInstances(
-      workflowName,
-      status,
-      searchTerm,
-      failureCategory,
-      limitSize,
-      offsetSize,
-      cacheBuster,
-      null
-    );
-  }
+    String workflowName = criteria.workflowName;
+    String status = criteria.status;
+    String failureCategory = criteria.failureCategory;
 
-  @AuraEnabled(cacheable=true)
-  public static List<Map<String, Object>> getFilteredInstances(
-    String workflowName,
-    String status,
-    String searchTerm,
-    String failureCategory,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster,
-    String attributesFilterJson
-  ) {
-    checkAuthorization();
-    resolveMatchingAttributes(
-      attributesFilterJson,
-      false,
-      workflowName,
-      status,
-      searchTerm,
-      failureCategory
-    );
-
-    if (limitSize == null || limitSize <= 0) {
-      limitSize = 50;
-    } else if (limitSize > 100) {
-      limitSize = 100;
-    }
-
-    if (offsetSize == null || offsetSize < 0) {
-      offsetSize = 0;
-    } else if (offsetSize > 2000) {
-      offsetSize = 2000;
-    }
+    InstanceFilter f = new InstanceFilter();
+    f.workflowName = workflowName;
+    f.status = status;
+    f.searchTerm = criteria.searchTerm;
+    f.failureCategory = failureCategory;
 
     String query =
       'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c, Deadline_At__c, Failure_Category__c ' +
       'FROM Workflow_Instance__c' +
-      buildWhereClause(workflowName, status, searchTerm, failureCategory);
+      buildWhereClause(f) +
+      ' ORDER BY CreatedDate DESC LIMIT :limitSize OFFSET :offsetSize';
 
-    query += ' ORDER BY CreatedDate DESC LIMIT :limitSize OFFSET :offsetSize';
+    return Database.query(query, AccessLevel.SYSTEM_MODE);
+  }
 
-    List<Workflow_Instance__c> instances = Database.query(
-      query,
-      AccessLevel.SYSTEM_MODE
+  @AuraEnabled(cacheable=true)
+  public static List<Map<String, Object>> getFilteredInstances(
+    InstanceQuery criteria
+  ) {
+    checkAuthorization();
+    resolveMatchingAttributes(criteria.attributesFilterJson);
+
+    Integer limitSize = clampListLimit(criteria.limitSize);
+    Integer offsetSize = clampListOffset(criteria.offsetSize);
+    List<Workflow_Instance__c> instances = queryFilteredInstances(
+      criteria,
+      limitSize,
+      offsetSize
     );
 
-    Set<Id> cronIds = new Set<Id>();
-    Set<Id> asyncIds = new Set<Id>();
     Set<Id> pageIds = new Set<Id>();
     for (Workflow_Instance__c inst : instances) {
       pageIds.add(inst.Id);
-      collectJobId(inst.Async_Job_Id__c, cronIds, asyncIds);
     }
-
-    Set<Id> activeCronIds = queryActiveCronIds(cronIds);
-    Set<Id> activeAsyncIds = queryActiveAsyncIds(asyncIds);
+    Set<Id> activeCronIds = new Set<Id>();
+    Set<Id> activeAsyncIds = new Set<Id>();
+    loadActiveJobIds(instances, activeCronIds, activeAsyncIds);
     Set<Id> instancesWithStepTimeout = queryInstancesWithStepTimeout(pageIds);
     Set<Id> instancesWithPendingStep = queryInstancesWithPendingStep(pageIds);
 
@@ -537,32 +536,16 @@ public inherited sharing class WorkflowDashboardController {
       Long idleMinutes = TERMINAL_STATUSES.contains(inst.Status__c)
         ? null
         : Math.max(0L, (nowMs - inst.LastModifiedDate.getTime()) / 60000L);
-      Boolean stalled = computeStalled(
-        inst,
-        waitingOn,
-        instancesWithStepTimeout,
-        instancesWithPendingStep,
-        idleMinutes,
-        WorkflowEngine.staleThresholdMinutes
-      );
+      StallSignals sig = new StallSignals();
+      sig.hasStepTimeout = instancesWithStepTimeout.contains(inst.Id);
+      sig.hasPendingStep = instancesWithPendingStep.contains(inst.Id);
+      sig.idleMinutes = idleMinutes;
+      sig.thresholdMinutes = WorkflowEngine.staleThresholdMinutes;
+      Boolean stalled = computeStalled(inst, waitingOn, sig);
 
-      Map<String, Object> m = new Map<String, Object>{
-        'Id' => inst.Id,
-        'Name' => inst.Name,
-        'Workflow_Name__c' => inst.Workflow_Name__c,
-        'Status__c' => inst.Status__c,
-        'Correlation_Key__c' => inst.Correlation_Key__c,
-        'CreatedDate' => inst.CreatedDate,
-        'LastModifiedDate' => inst.LastModifiedDate,
-        'Error_Message__c' => inst.Error_Message__c,
-        'Async_Job_Id__c' => inst.Async_Job_Id__c,
-        'Sleep_Until__c' => inst.Sleep_Until__c,
-        'Deadline_At__c' => inst.Deadline_At__c,
-        'Failure_Category__c' => inst.Failure_Category__c,
-        'waitingOn' => waitingOn,
-        'idleMinutes' => idleMinutes,
-        'stalled' => stalled
-      };
+      Map<String, Object> m = buildInstanceRow(inst, waitingOn, idleMinutes);
+      m.put('stalled', stalled);
+      m.put('Failure_Category__c', inst.Failure_Category__c);
       results.add(m);
     }
     return results;
@@ -571,55 +554,45 @@ public inherited sharing class WorkflowDashboardController {
   // cacheBuster is unused in Apex; it only varies the client-side cache key so a
   // dashboard refresh re-queries instead of serving a stale cached list (mirrors
   // getFilteredInstances).
-  public static List<Map<String, Object>> getStalledInstances(
-    String workflowName,
-    String searchTerm,
-    Integer thresholdMinutes,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
-  ) {
-    return getStalledInstances(
-      workflowName,
-      searchTerm,
-      thresholdMinutes,
-      limitSize,
-      offsetSize,
-      cacheBuster,
-      null
-    );
+  // Query criteria shared by the stalled-instance list and the stalled count. Field-based
+  // (@AuraEnabled properties) so the LWC and tests populate it by assignment. getStalledCount
+  // ignores the pagination fields (limitSize/offsetSize/cacheBuster); getStalledInstances uses
+  // them. Unset fields default to null, reproducing the previous shorter overloads.
+  public class StalledQuery {
+    @AuraEnabled
+    public String workflowName;
+    @AuraEnabled
+    public String searchTerm;
+    @AuraEnabled
+    public Integer thresholdMinutes;
+    @AuraEnabled
+    public Integer limitSize;
+    @AuraEnabled
+    public Integer offsetSize;
+    @AuraEnabled
+    public String cacheBuster;
+    @AuraEnabled
+    public String attributesFilterJson;
   }
 
   @AuraEnabled(cacheable=true)
   public static List<Map<String, Object>> getStalledInstances(
-    String workflowName,
-    String searchTerm,
-    Integer thresholdMinutes,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster,
-    String attributesFilterJson
+    StalledQuery criteria
   ) {
     checkAuthorization();
-    Integer threshold = (thresholdMinutes == null)
+    // Local named to match the :workflowName bind token emitted by buildStalledWhereClause,
+    // which resolves against this method's scope.
+    String workflowName = criteria.workflowName;
+    String searchTerm = criteria.searchTerm;
+    Integer threshold = (criteria.thresholdMinutes == null)
       ? WorkflowEngine.staleThresholdMinutes
-      : thresholdMinutes;
+      : criteria.thresholdMinutes;
     stalledCutoff = Datetime.now().addMinutes(-threshold);
 
-    resolveMatchingAttributes(
-      attributesFilterJson,
-      true,
-      workflowName,
-      null,
-      searchTerm,
-      null
-    );
+    resolveMatchingAttributesForStalled(criteria.attributesFilterJson);
 
-    if (limitSize == null || limitSize <= 0) {
-      limitSize = 50;
-    } else if (limitSize > 100) {
-      limitSize = 100;
-    }
+    Integer limitSize = clampListLimit(criteria.limitSize);
+    Integer offsetSize = criteria.offsetSize;
     if (offsetSize == null || offsetSize < 0) {
       offsetSize = 0;
     }
@@ -635,60 +608,22 @@ public inherited sharing class WorkflowDashboardController {
       AccessLevel.SYSTEM_MODE
     );
 
-    Set<Id> cronIds = new Set<Id>();
-    Set<Id> asyncIds = new Set<Id>();
-    for (Workflow_Instance__c inst : candidates) {
-      collectJobId(inst.Async_Job_Id__c, cronIds, asyncIds);
-    }
-
-    Set<Id> activeCronIds = queryActiveCronIds(cronIds);
-    Set<Id> activeAsyncIds = queryActiveAsyncIds(asyncIds);
-    // Step-timeout and pending-step instances are already excluded by the WHERE clause
-    // anti-joins, so pass empty sets to computeStalled.
-    Set<Id> noStepTimeout = new Set<Id>();
-    Set<Id> noPendingStep = new Set<Id>();
-
-    Long nowMs = Datetime.now().getTime();
     // Filter to genuinely stalled rows FIRST, then paginate, so the in-memory
     // job-liveness filter (which SOQL cannot express) never returns a short page
     // that would make the LWC stop paging before later stalled rows are reached.
+    List<StalledCandidate> stalled = filterStalledCandidates(
+      candidates,
+      threshold
+    );
     List<Map<String, Object>> stalledRows = new List<Map<String, Object>>();
-    for (Workflow_Instance__c inst : candidates) {
-      String waitingOn = computeWaitingOn(inst, activeCronIds, activeAsyncIds);
-      Long idleMinutes = Math.max(
-        0L,
-        (nowMs - inst.LastModifiedDate.getTime()) / 60000L
+    for (StalledCandidate sc : stalled) {
+      Map<String, Object> row = buildInstanceRow(
+        sc.inst,
+        sc.waitingOn,
+        sc.idleMinutes
       );
-      if (
-        !computeStalled(
-          inst,
-          waitingOn,
-          noStepTimeout,
-          noPendingStep,
-          idleMinutes,
-          threshold
-        )
-      ) {
-        continue;
-      }
-      stalledRows.add(
-        new Map<String, Object>{
-          'Id' => inst.Id,
-          'Name' => inst.Name,
-          'Workflow_Name__c' => inst.Workflow_Name__c,
-          'Status__c' => inst.Status__c,
-          'Correlation_Key__c' => inst.Correlation_Key__c,
-          'CreatedDate' => inst.CreatedDate,
-          'LastModifiedDate' => inst.LastModifiedDate,
-          'Error_Message__c' => inst.Error_Message__c,
-          'Async_Job_Id__c' => inst.Async_Job_Id__c,
-          'Sleep_Until__c' => inst.Sleep_Until__c,
-          'Deadline_At__c' => inst.Deadline_At__c,
-          'waitingOn' => waitingOn,
-          'idleMinutes' => idleMinutes,
-          'stalled' => true
-        }
-      );
+      row.put('stalled', true);
+      stalledRows.add(row);
     }
 
     List<Map<String, Object>> results = new List<Map<String, Object>>();
@@ -703,35 +638,19 @@ public inherited sharing class WorkflowDashboardController {
     return results;
   }
 
-  public static Map<String, Object> getStalledCount(
-    String workflowName,
-    String searchTerm,
-    Integer thresholdMinutes
-  ) {
-    return getStalledCount(workflowName, searchTerm, thresholdMinutes, null);
-  }
-
   @AuraEnabled
-  public static Map<String, Object> getStalledCount(
-    String workflowName,
-    String searchTerm,
-    Integer thresholdMinutes,
-    String attributesFilterJson
-  ) {
+  public static Map<String, Object> getStalledCount(StalledQuery criteria) {
     checkAuthorization();
-    Integer threshold = (thresholdMinutes == null)
+    // Local named to match the :workflowName bind token emitted by buildStalledWhereClause,
+    // which resolves against this method's scope.
+    String workflowName = criteria.workflowName;
+    String searchTerm = criteria.searchTerm;
+    Integer threshold = (criteria.thresholdMinutes == null)
       ? WorkflowEngine.staleThresholdMinutes
-      : thresholdMinutes;
+      : criteria.thresholdMinutes;
     stalledCutoff = Datetime.now().addMinutes(-threshold);
 
-    resolveMatchingAttributes(
-      attributesFilterJson,
-      true,
-      workflowName,
-      null,
-      searchTerm,
-      null
-    );
+    resolveMatchingAttributesForStalled(criteria.attributesFilterJson);
 
     String query =
       'SELECT Id, Async_Job_Id__c, Sleep_Until__c, Status__c, LastModifiedDate ' +
@@ -745,40 +664,7 @@ public inherited sharing class WorkflowDashboardController {
     );
     Boolean capped = candidates.size() >= STALLED_CANDIDATE_CAP;
 
-    Set<Id> cronIds = new Set<Id>();
-    Set<Id> asyncIds = new Set<Id>();
-    for (Workflow_Instance__c inst : candidates) {
-      collectJobId(inst.Async_Job_Id__c, cronIds, asyncIds);
-    }
-
-    Set<Id> activeCronIds = queryActiveCronIds(cronIds);
-    Set<Id> activeAsyncIds = queryActiveAsyncIds(asyncIds);
-    // Step-timeout and pending-step instances are excluded by the WHERE clause anti-joins.
-    Set<Id> noStepTimeout = new Set<Id>();
-    Set<Id> noPendingStep = new Set<Id>();
-
-    Long nowMs = Datetime.now().getTime();
-    Integer count = 0;
-    for (Workflow_Instance__c inst : candidates) {
-      String waitingOn = computeWaitingOn(inst, activeCronIds, activeAsyncIds);
-      Long idleMinutes = Math.max(
-        0L,
-        (nowMs - inst.LastModifiedDate.getTime()) / 60000L
-      );
-      if (
-        computeStalled(
-          inst,
-          waitingOn,
-          noStepTimeout,
-          noPendingStep,
-          idleMinutes,
-          threshold
-        )
-      ) {
-        count++;
-      }
-    }
-
+    Integer count = filterStalledCandidates(candidates, threshold).size();
     return new Map<String, Object>{ 'count' => count, 'capped' => capped };
   }
 
@@ -876,6 +762,70 @@ public inherited sharing class WorkflowDashboardController {
     return result;
   }
 
+  // Clamps a caller-supplied page size to [1, 100], defaulting blank/non-positive to 50.
+  private static Integer clampListLimit(Integer limitSize) {
+    if (limitSize == null || limitSize <= 0) {
+      return 50;
+    }
+    return limitSize > 100 ? 100 : limitSize;
+  }
+
+  // Clamps a caller-supplied offset to [0, 2000], defaulting blank/negative to 0.
+  private static Integer clampListOffset(Integer offsetSize) {
+    if (offsetSize == null || offsetSize < 0) {
+      return 0;
+    }
+    return offsetSize > 2000 ? 2000 : offsetSize;
+  }
+
+  // True when the string is plausibly a 15/18-char CronTrigger (08e) or
+  // AsyncApexJob (707) id.
+  private static Boolean isJobIdShaped(String jobIdStr) {
+    return (jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
+      (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'));
+  }
+
+  // Collects the active cron/async job ids referenced by the given instances into the
+  // supplied (initially empty) sets. Shared by the filtered/stalled list and count paths.
+  private static void loadActiveJobIds(
+    List<Workflow_Instance__c> instances,
+    Set<Id> activeCronIds,
+    Set<Id> activeAsyncIds
+  ) {
+    Set<Id> cronIds = new Set<Id>();
+    Set<Id> asyncIds = new Set<Id>();
+    for (Workflow_Instance__c inst : instances) {
+      collectJobId(inst.Async_Job_Id__c, cronIds, asyncIds);
+    }
+    activeCronIds.addAll(queryActiveCronIds(cronIds));
+    activeAsyncIds.addAll(queryActiveAsyncIds(asyncIds));
+  }
+
+  // Builds the display row shared by the filtered and stalled instance lists. The caller
+  // adds the 'stalled' flag (and getFilteredInstances also adds Failure_Category__c, which
+  // the stalled query does not select), so neither is included here.
+  private static Map<String, Object> buildInstanceRow(
+    Workflow_Instance__c inst,
+    String waitingOn,
+    Long idleMinutes
+  ) {
+    return new Map<String, Object>{
+      'Id' => inst.Id,
+      'Name' => inst.Name,
+      'Workflow_Name__c' => inst.Workflow_Name__c,
+      'Status__c' => inst.Status__c,
+      'Correlation_Key__c' => inst.Correlation_Key__c,
+      'CreatedDate' => inst.CreatedDate,
+      'LastModifiedDate' => inst.LastModifiedDate,
+      'Error_Message__c' => inst.Error_Message__c,
+      'Async_Job_Id__c' => inst.Async_Job_Id__c,
+      'Sleep_Until__c' => inst.Sleep_Until__c,
+      'Deadline_At__c' => inst.Deadline_At__c,
+      'waitingOn' => waitingOn,
+      'idleMinutes' => idleMinutes
+    };
+  }
+
   private static String computeWaitingOn(
     Workflow_Instance__c inst,
     Set<Id> activeCronIds,
@@ -885,45 +835,62 @@ public inherited sharing class WorkflowDashboardController {
       return null;
     }
     if (String.isNotBlank(inst.Async_Job_Id__c)) {
-      String jobIdStr = inst.Async_Job_Id__c;
-      if (
-        (jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
-        (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))
-      ) {
-        try {
-          Id jobId = (Id) jobIdStr;
-          if (
-            jobId.getSobjectType() == CronTrigger.SObjectType &&
-            activeCronIds.contains(jobId)
-          ) {
-            return 'Scheduled Job';
-          } else if (
-            jobId.getSobjectType() == AsyncApexJob.SObjectType &&
-            activeAsyncIds.contains(jobId)
-          ) {
-            return 'Delayed Queueable';
-          } else {
-            return 'Watchdog';
-          }
-        } catch (Exception ex) {
-          return 'Watchdog';
-        }
-      } else {
-        return 'Watchdog';
-      }
-    } else if (inst.Sleep_Until__c != null) {
+      return classifyActiveJobWait(
+        inst.Async_Job_Id__c,
+        activeCronIds,
+        activeAsyncIds
+      );
+    }
+    if (inst.Sleep_Until__c != null) {
       return 'Watchdog';
     }
     return null;
   }
 
+  // Maps a Suspended instance's job id to what it is waiting on, using the pre-queried
+  // active-job id sets. A live scheduled cron → 'Scheduled Job', a live queueable →
+  // 'Delayed Queueable'; anything else (dead job, non-job id, cast failure) → 'Watchdog'.
+  private static String classifyActiveJobWait(
+    String jobIdStr,
+    Set<Id> activeCronIds,
+    Set<Id> activeAsyncIds
+  ) {
+    if (!isJobIdShaped(jobIdStr)) {
+      return 'Watchdog';
+    }
+    try {
+      Id jobId = (Id) jobIdStr;
+      if (
+        jobId.getSobjectType() == CronTrigger.SObjectType &&
+        activeCronIds.contains(jobId)
+      ) {
+        return 'Scheduled Job';
+      }
+      if (
+        jobId.getSobjectType() == AsyncApexJob.SObjectType &&
+        activeAsyncIds.contains(jobId)
+      ) {
+        return 'Delayed Queueable';
+      }
+      return 'Watchdog';
+    } catch (Exception ex) {
+      return 'Watchdog';
+    }
+  }
+
+  // Per-instance signals feeding computeStalled, bundled so the check takes a single
+  // context object instead of a long parameter list.
+  private class StallSignals {
+    Boolean hasStepTimeout;
+    Boolean hasPendingStep;
+    Long idleMinutes;
+    Integer thresholdMinutes;
+  }
+
   private static Boolean computeStalled(
     Workflow_Instance__c inst,
     String waitingOn,
-    Set<Id> instancesWithStepTimeout,
-    Set<Id> instancesWithPendingStep,
-    Long idleMinutes,
-    Integer thresholdMinutes
+    StallSignals sig
   ) {
     if (inst.Status__c != 'Suspended') {
       return false;
@@ -934,41 +901,74 @@ public inherited sharing class WorkflowDashboardController {
     if (inst.Sleep_Until__c != null) {
       return false;
     }
-    if (instancesWithStepTimeout.contains(inst.Id)) {
+    if (sig.hasStepTimeout) {
       return false;
     }
     // Signal/approval/child-completion waits park a Pending step-exec row;
     // exclude them so only true orphans (no resume mechanism at all) are flagged.
-    if (instancesWithPendingStep.contains(inst.Id)) {
+    if (sig.hasPendingStep) {
       return false;
     }
-    return idleMinutes > thresholdMinutes;
+    return sig.idleMinutes > sig.thresholdMinutes;
   }
 
-  public static Map<String, Integer> getWorkflowStats(
-    String workflowName,
-    String status,
-    String searchTerm
+  // A candidate that passed the in-memory stalled check, carrying the derived display
+  // values so callers can build rows without recomputing (and re-querying) job liveness.
+  private class StalledCandidate {
+    Workflow_Instance__c inst;
+    String waitingOn;
+    Long idleMinutes;
+
+    StalledCandidate(
+      Workflow_Instance__c inst,
+      String waitingOn,
+      Long idleMinutes
+    ) {
+      this.inst = inst;
+      this.waitingOn = waitingOn;
+      this.idleMinutes = idleMinutes;
+    }
+  }
+
+  // Shared stalled-detection for the stalled list and count: resolves job liveness once
+  // for the candidate set, then returns those genuinely stalled. Step-timeout and
+  // pending-step instances are already excluded by the stalled WHERE-clause anti-joins,
+  // so those signals are false here.
+  private static List<StalledCandidate> filterStalledCandidates(
+    List<Workflow_Instance__c> candidates,
+    Integer threshold
   ) {
-    return getWorkflowStats(workflowName, status, searchTerm, null);
+    Set<Id> activeCronIds = new Set<Id>();
+    Set<Id> activeAsyncIds = new Set<Id>();
+    loadActiveJobIds(candidates, activeCronIds, activeAsyncIds);
+
+    Long nowMs = Datetime.now().getTime();
+    List<StalledCandidate> stalled = new List<StalledCandidate>();
+    for (Workflow_Instance__c inst : candidates) {
+      String waitingOn = computeWaitingOn(inst, activeCronIds, activeAsyncIds);
+      Long idleMinutes = Math.max(
+        0L,
+        (nowMs - inst.LastModifiedDate.getTime()) / 60000L
+      );
+      StallSignals sig = new StallSignals();
+      sig.hasStepTimeout = false;
+      sig.hasPendingStep = false;
+      sig.idleMinutes = idleMinutes;
+      sig.thresholdMinutes = threshold;
+      if (computeStalled(inst, waitingOn, sig)) {
+        stalled.add(new StalledCandidate(inst, waitingOn, idleMinutes));
+      }
+    }
+    return stalled;
   }
 
+  // Reuses InstanceQuery (the getFilteredInstances criteria); this rollup reads only
+  // workflowName/status/searchTerm/attributesFilterJson and ignores the pagination and
+  // failureCategory fields.
   @AuraEnabled
-  public static Map<String, Integer> getWorkflowStats(
-    String workflowName,
-    String status,
-    String searchTerm,
-    String attributesFilterJson
-  ) {
+  public static Map<String, Integer> getWorkflowStats(InstanceQuery criteria) {
     checkAuthorization();
-    resolveMatchingAttributes(
-      attributesFilterJson,
-      false,
-      workflowName,
-      status,
-      searchTerm,
-      null
-    );
+    resolveMatchingAttributes(criteria.attributesFilterJson);
 
     Map<String, Integer> results = new Map<String, Integer>{
       'total' => 0,
@@ -977,37 +977,63 @@ public inherited sharing class WorkflowDashboardController {
       'failed' => 0
     };
 
+    // Locals named to match the :workflowName / :status bind tokens emitted by
+    // buildWhereClause, which resolve against this method's scope.
+    String workflowName = criteria.workflowName;
+    String status = criteria.status;
+    String searchTerm = criteria.searchTerm;
+
+    InstanceFilter f = new InstanceFilter();
+    f.workflowName = workflowName;
+    f.status = status;
+    f.searchTerm = searchTerm;
+
     String query =
       'SELECT Status__c, COUNT(Id) cnt FROM Workflow_Instance__c' +
-      buildWhereClause(workflowName, status, searchTerm) +
+      buildWhereClause(f) +
       ' GROUP BY Status__c';
 
     for (AggregateResult ar : Database.query(query, AccessLevel.SYSTEM_MODE)) {
-      String stat = (String) ar.get('Status__c');
-      Integer count = (Integer) ar.get('cnt');
-      results.put('total', results.get('total') + count);
-
-      if (
-        stat == 'Pending' ||
-        stat == 'Running' ||
-        stat == 'Suspended' ||
-        stat == 'Compensating' ||
-        stat == 'Cancelling' ||
-        stat == 'Paused'
-      ) {
-        results.put('active', results.get('active') + count);
-      } else if (stat == 'Completed' || stat == 'ContinuedAsNew') {
-        results.put('completed', results.get('completed') + count);
-      } else if (
-        stat == 'Failed' ||
-        stat == 'CompensationFailed' ||
-        stat == 'Compensated' ||
-        stat == 'Cancelled'
-      ) {
-        results.put('failed', results.get('failed') + count);
-      }
+      bucketWorkflowStat(
+        results,
+        (String) ar.get('Status__c'),
+        (Integer) ar.get('cnt')
+      );
     }
     return results;
+  }
+
+  // Adds a per-status aggregate count into the total plus its active/completed/failed
+  // bucket (statuses outside the three buckets still count toward total only).
+  private static void bucketWorkflowStat(
+    Map<String, Integer> results,
+    String stat,
+    Integer count
+  ) {
+    results.put('total', results.get('total') + count);
+    if (isActiveStat(stat)) {
+      results.put('active', results.get('active') + count);
+    } else if (stat == 'Completed' || stat == 'ContinuedAsNew') {
+      results.put('completed', results.get('completed') + count);
+    } else if (isFailedStat(stat)) {
+      results.put('failed', results.get('failed') + count);
+    }
+  }
+
+  private static Boolean isActiveStat(String stat) {
+    return stat == 'Pending' ||
+      stat == 'Running' ||
+      stat == 'Suspended' ||
+      stat == 'Compensating' ||
+      stat == 'Cancelling' ||
+      stat == 'Paused';
+  }
+
+  private static Boolean isFailedStat(String stat) {
+    return stat == 'Failed' ||
+      stat == 'CompensationFailed' ||
+      stat == 'Compensated' ||
+      stat == 'Cancelled';
   }
 
   /**
@@ -1141,43 +1167,7 @@ public inherited sharing class WorkflowDashboardController {
       ex.setMessage('instanceId is required.');
       throw ex;
     }
-    List<Workflow_Instance__c> instanceList = [
-      SELECT
-        Id,
-        Name,
-        Workflow_Name__c,
-        Status__c,
-        Correlation_Key__c,
-        Input__c,
-        Output__c,
-        Current_Step__c,
-        Error_Message__c,
-        CreatedDate,
-        Parent_Instance__c,
-        Parent_Instance__r.Name,
-        Previous_Instance__c,
-        Previous_Instance__r.Name,
-        Compensated_By__c,
-        Compensated_By__r.Name,
-        Async_Job_Id__c,
-        Sleep_Until__c,
-        Compensation_Stack__c,
-        Deadline_At__c,
-        Failure_Category__c,
-        Progress__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    if (instanceList.isEmpty()) {
-      AuraHandledException ex = new AuraHandledException(
-        'Workflow instance not found: ' + instanceId
-      );
-      ex.setMessage('Workflow instance not found: ' + instanceId);
-      throw ex;
-    }
-    Workflow_Instance__c instance = instanceList[0];
+    Workflow_Instance__c instance = loadInstanceDetailRecord(instanceId);
 
     List<Workflow_Step_Execution__c> steps = [
       SELECT
@@ -1220,75 +1210,6 @@ public inherited sharing class WorkflowDashboardController {
       WITH SYSTEM_MODE
       LIMIT 1
     ];
-    String waitingOn = null;
-    if (instance.Status__c == 'Suspended') {
-      if (String.isNotBlank(instance.Async_Job_Id__c)) {
-        String jobIdStr = instance.Async_Job_Id__c;
-        if (
-          (jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
-          (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))
-        ) {
-          try {
-            Id jobId = (Id) jobIdStr;
-            if (jobId.getSobjectType() == CronTrigger.SObjectType) {
-              List<CronTrigger> cronJobs = [
-                SELECT Id
-                FROM CronTrigger
-                WHERE
-                  Id = :jobId
-                  AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING')
-                WITH SYSTEM_MODE
-                LIMIT 1
-              ];
-              if (!cronJobs.isEmpty()) {
-                waitingOn = 'Scheduled Job';
-              } else {
-                waitingOn = 'Watchdog';
-              }
-            } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
-              List<AsyncApexJob> asyncJobs = [
-                SELECT Id
-                FROM AsyncApexJob
-                WHERE
-                  Id = :jobId
-                  AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing')
-                WITH SYSTEM_MODE
-                LIMIT 1
-              ];
-              if (!asyncJobs.isEmpty()) {
-                waitingOn = 'Delayed Queueable';
-              } else {
-                waitingOn = 'Watchdog';
-              }
-            }
-          } catch (Exception ex) {
-            waitingOn = 'Watchdog';
-          }
-        } else {
-          waitingOn = 'Watchdog';
-        }
-      } else if (instance.Sleep_Until__c != null) {
-        waitingOn = 'Watchdog';
-      }
-    }
-
-    // Derive the un-run remainder of the LIFO compensation stack so a stalled
-    // ("rollback incomplete") saga can show, at a glance, how many and which forward
-    // steps still have un-reversed side effects — no manual JSON inspection required.
-    // The stack is presented top-of-stack first (next to be compensated).
-    List<String> pendingCompensations = new List<String>();
-    if (String.isNotBlank(instance.Compensation_Stack__c)) {
-      try {
-        List<String> stack = (List<String>) JSON.deserialize(
-          instance.Compensation_Stack__c,
-          List<String>.class
-        );
-        for (Integer i = stack.size() - 1; i >= 0; i--) {
-          pendingCompensations.add(stack[i]);
-        }
-      } catch (Exception ignored) {
-      }
-    }
 
     List<Workflow_Search_Attribute__c> attributes = [
       SELECT Key__c, Value__c
@@ -1298,41 +1219,175 @@ public inherited sharing class WorkflowDashboardController {
       ORDER BY Key__c ASC
     ];
 
-    List<Workflow_Log__c> breadcrumbs = [
-      SELECT
-        Id,
-        Level__c,
-        Message__c,
-        Correlation_Key__c,
-        Fire_Time__c,
-        CreatedDate
-      FROM Workflow_Log__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
-      WITH SYSTEM_MODE
-      ORDER BY Fire_Time__c DESC, CreatedDate DESC
-      LIMIT 1000
-    ];
-    // Reverse back to ascending order for chronological UI presentation
-    List<Workflow_Log__c> chronologicalBreadcrumbs = new List<Workflow_Log__c>();
-    for (Integer i = breadcrumbs.size() - 1; i >= 0; i--) {
-      chronologicalBreadcrumbs.add(breadcrumbs[i]);
-    }
-    breadcrumbs = chronologicalBreadcrumbs;
+    // Breadcrumbs are queried newest-first (to keep the most recent 1000 under the LIMIT)
+    // then reversed back to ascending order for chronological UI presentation.
+    List<Workflow_Log__c> breadcrumbs = toChronological(
+      [
+        SELECT
+          Id,
+          Level__c,
+          Message__c,
+          Correlation_Key__c,
+          Fire_Time__c,
+          CreatedDate
+        FROM Workflow_Log__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Log_Type__c = :StepContext.LOG_TYPE_BREADCRUMB
+        WITH SYSTEM_MODE
+        ORDER BY Fire_Time__c DESC, CreatedDate DESC
+        LIMIT 1000
+      ]
+    );
+
+    List<String> pendingCompensations = parsePendingCompensations(instance);
 
     return new Map<String, Object>{
       'instance' => instance,
       'steps' => steps,
       'children' => children,
       'successor' => successors.isEmpty() ? null : successors[0],
-      'waitingOn' => waitingOn,
+      'waitingOn' => computeDetailWaitingOn(instance),
       'pendingCompensationCount' => pendingCompensations.size(),
       'pendingCompensations' => pendingCompensations,
       'payloadFiles' => payloadFiles,
       'attributes' => attributes,
       'breadcrumbs' => breadcrumbs
     };
+  }
+
+  private static Workflow_Instance__c loadInstanceDetailRecord(Id instanceId) {
+    List<Workflow_Instance__c> instanceList = [
+      SELECT
+        Id,
+        Name,
+        Workflow_Name__c,
+        Status__c,
+        Correlation_Key__c,
+        Input__c,
+        Output__c,
+        Current_Step__c,
+        Error_Message__c,
+        CreatedDate,
+        Parent_Instance__c,
+        Parent_Instance__r.Name,
+        Previous_Instance__c,
+        Previous_Instance__r.Name,
+        Compensated_By__c,
+        Compensated_By__r.Name,
+        Async_Job_Id__c,
+        Sleep_Until__c,
+        Compensation_Stack__c,
+        Deadline_At__c,
+        Failure_Category__c,
+        Progress__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    if (instanceList.isEmpty()) {
+      AuraHandledException ex = new AuraHandledException(
+        'Workflow instance not found: ' + instanceId
+      );
+      ex.setMessage('Workflow instance not found: ' + instanceId);
+      throw ex;
+    }
+    return instanceList[0];
+  }
+
+  // Detail-view "waiting on" resolution. Unlike computeWaitingOn (which uses pre-queried
+  // active-job id sets for a page of instances), this checks the single instance's job
+  // liveness directly, since the detail view loads one record.
+  private static String computeDetailWaitingOn(Workflow_Instance__c instance) {
+    if (instance.Status__c != 'Suspended') {
+      return null;
+    }
+    if (String.isNotBlank(instance.Async_Job_Id__c)) {
+      return classifyDetailJobWait(instance.Async_Job_Id__c);
+    }
+    if (instance.Sleep_Until__c != null) {
+      return 'Watchdog';
+    }
+    return null;
+  }
+
+  private static String classifyDetailJobWait(String jobIdStr) {
+    if (!isJobIdShaped(jobIdStr)) {
+      return 'Watchdog';
+    }
+    try {
+      Id jobId = (Id) jobIdStr;
+      if (jobId.getSobjectType() == CronTrigger.SObjectType) {
+        return isCronJobActive(jobId) ? 'Scheduled Job' : 'Watchdog';
+      }
+      if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
+        return isAsyncJobActive(jobId) ? 'Delayed Queueable' : 'Watchdog';
+      }
+      return null;
+    } catch (Exception ex) {
+      return 'Watchdog';
+    }
+  }
+
+  private static Boolean isCronJobActive(Id jobId) {
+    return ![
+        SELECT Id
+        FROM CronTrigger
+        WHERE
+          Id = :jobId
+          AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING')
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ]
+      .isEmpty();
+  }
+
+  private static Boolean isAsyncJobActive(Id jobId) {
+    return ![
+        SELECT Id
+        FROM AsyncApexJob
+        WHERE
+          Id = :jobId
+          AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing')
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ]
+      .isEmpty();
+  }
+
+  // Derives the un-run remainder of the LIFO compensation stack so a stalled
+  // ("rollback incomplete") saga can show, at a glance, how many and which forward
+  // steps still have un-reversed side effects — no manual JSON inspection required.
+  // The stack is presented top-of-stack first (next to be compensated).
+  private static List<String> parsePendingCompensations(
+    Workflow_Instance__c instance
+  ) {
+    List<String> pendingCompensations = new List<String>();
+    if (String.isBlank(instance.Compensation_Stack__c)) {
+      return pendingCompensations;
+    }
+    try {
+      List<String> stack = (List<String>) JSON.deserialize(
+        instance.Compensation_Stack__c,
+        List<String>.class
+      );
+      for (Integer i = stack.size() - 1; i >= 0; i--) {
+        pendingCompensations.add(stack[i]);
+      }
+    } catch (Exception ignored) {
+    }
+    return pendingCompensations;
+  }
+
+  private static List<Workflow_Log__c> toChronological(
+    List<Workflow_Log__c> breadcrumbs
+  ) {
+    List<Workflow_Log__c> chronological = new List<Workflow_Log__c>();
+    for (Integer i = breadcrumbs.size() - 1; i >= 0; i--) {
+      chronological.add(breadcrumbs[i]);
+    }
+    return chronological;
   }
 
   /**
@@ -1556,11 +1611,45 @@ public inherited sharing class WorkflowDashboardController {
   public static Map<String, Object> cancelMatchingInstances(
     String workflowName,
     String status,
-    String searchTerm,
-    Boolean runCompensations
+    String searchTerm
+  ) {
+    return startBulkCancel(
+      new Map<String, Object>{
+        'workflowName' => workflowName,
+        'status' => status,
+        'searchTerm' => searchTerm,
+        'runCompensations' => false
+      }
+    );
+  }
+
+  @AuraEnabled
+  public static Map<String, Object> cancelMatchingInstancesWithCompensations(
+    String workflowName,
+    String status,
+    String searchTerm
+  ) {
+    return startBulkCancel(
+      new Map<String, Object>{
+        'workflowName' => workflowName,
+        'status' => status,
+        'searchTerm' => searchTerm,
+        'runCompensations' => true
+      }
+    );
+  }
+
+  // Shared bulk-cancel launcher. The filter map already carries the operator's
+  // workflowName/status/searchTerm plus the runCompensations flag; the BulkCancelWorkflow
+  // instance reads it to page and cancel the matching set asynchronously.
+  private static Map<String, Object> startBulkCancel(
+    Map<String, Object> filter
   ) {
     checkAuthorization();
     try {
+      String workflowName = (String) filter.get('workflowName');
+      String status = (String) filter.get('status');
+      String searchTerm = (String) filter.get('searchTerm');
       Integer eligibleCount = BulkCancelWorkflow.countEligible(
         workflowName,
         status,
@@ -1574,12 +1663,6 @@ public inherited sharing class WorkflowDashboardController {
         };
       }
 
-      Map<String, Object> filter = new Map<String, Object>{
-        'workflowName' => workflowName,
-        'status' => status,
-        'searchTerm' => searchTerm,
-        'runCompensations' => runCompensations
-      };
       String correlationKey =
         'BulkCancel_' +
         DateTime.now().getTime() +
@@ -1683,32 +1766,50 @@ public inherited sharing class WorkflowDashboardController {
     }
   }
 
+  // Request wrapper for cancelWorkflow so the runCompensations flag is an @AuraEnabled
+  // property rather than a Boolean method parameter (the LWC populates it from the
+  // cancel modal's dataset).
+  public class CancelRequest {
+    @AuraEnabled
+    public Id instanceId;
+    @AuraEnabled
+    public Boolean runCompensations;
+  }
+
   @AuraEnabled
-  public static void cancelWorkflow(Id instanceId, Boolean runCompensations) {
+  public static void cancelWorkflow(CancelRequest req) {
     checkAuthorization();
     try {
-      WorkflowEngine.cancel(instanceId, runCompensations);
+      WorkflowEngine.cancel(req.instanceId, req.runCompensations);
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
     }
   }
 
+  // Request wrapper for submitApproval: keeps the single @AuraEnabled endpoint (the LWC
+  // wraps its existing fields) while moving the approved flag off the parameter list.
+  public class ApprovalRequest {
+    @AuraEnabled
+    public Id instanceId;
+    @AuraEnabled
+    public String approvalKey;
+    @AuraEnabled
+    public Boolean approved;
+    @AuraEnabled
+    public String comments;
+  }
+
   @AuraEnabled
-  public static void submitApproval(
-    Id instanceId,
-    String approvalKey,
-    Boolean approved,
-    String comments
-  ) {
+  public static void submitApproval(ApprovalRequest req) {
     checkAuthorization();
     // Enforce the approval gate's designated role BEFORE recording the decision, so a
     // dashboard admin cannot approve a gate they were not assigned to. Thrown before the
     // try/catch below so the specific message is not flattened into a generic one.
-    enforceApprovalRole(instanceId, approvalKey);
+    enforceApprovalRole(req.instanceId, req.approvalKey);
     try {
       Map<String, Object> payload = new Map<String, Object>{
-        'approved' => approved,
-        'comments' => comments,
+        'approved' => req.approved,
+        'comments' => req.comments,
         // Record the immutable User Id (and username) as the authoritative approver
         // identity for the audit trail; the display name alone is mutable and not unique.
         'approverId' => UserInfo.getUserId(),
@@ -1716,10 +1817,10 @@ public inherited sharing class WorkflowDashboardController {
         'approver' => UserInfo.getName()
       };
       String payloadJson = JSON.serialize(payload);
-      String signalName = 'Approve:' + approvalKey;
+      String signalName = 'Approve:' + req.approvalKey;
 
       WorkflowEngine.signal(
-        String.valueOf(instanceId),
+        String.valueOf(req.instanceId),
         signalName,
         payloadJson
       );
@@ -1738,8 +1839,36 @@ public inherited sharing class WorkflowDashboardController {
     if (instanceId == null) {
       return;
     }
-    String requiredRole = null;
-    Boolean gateFound = false;
+    // A non-blank role is only ever returned for a matched, still-pending gate, so
+    // checking the role alone reproduces the previous "gateFound && role" guard.
+    String requiredRole = findRequiredApprovalRole(instanceId, approvalKey);
+    if (
+      String.isNotBlank(requiredRole) &&
+      !FeatureManagement.checkPermission(requiredRole) &&
+      !currentUserHasModifyAllData()
+    ) {
+      AuraHandledException ex = new AuraHandledException(
+        'Unauthorized: this approval requires the "' +
+          requiredRole +
+          '" permission.'
+      );
+      ex.setMessage(
+        'Unauthorized: this approval requires the "' +
+          requiredRole +
+          '" permission.'
+      );
+      throw ex;
+    }
+  }
+
+  // Returns the approvalRole designated by the most recent pending approval gate whose
+  // key matches approvalKey (which may be null/blank when the gate designates no role),
+  // or null when no pending gate matches. Stops at the first matching gate, mirroring
+  // the previous inline scan.
+  private static String findRequiredApprovalRole(
+    Id instanceId,
+    String approvalKey
+  ) {
     for (Workflow_Step_Execution__c se : [
       SELECT Output__c
       FROM Workflow_Step_Execution__c
@@ -1764,32 +1893,12 @@ public inherited sharing class WorkflowDashboardController {
           approvalKey != null &&
           approvalKey.equalsIgnoreCase(stateKey)
         ) {
-          gateFound = true;
-          requiredRole = (String) state.get('approvalRole');
-          break;
+          return (String) state.get('approvalRole');
         }
       } catch (Exception ignored) {
       }
     }
-
-    if (
-      gateFound &&
-      String.isNotBlank(requiredRole) &&
-      !FeatureManagement.checkPermission(requiredRole) &&
-      !currentUserHasModifyAllData()
-    ) {
-      AuraHandledException ex = new AuraHandledException(
-        'Unauthorized: this approval requires the "' +
-          requiredRole +
-          '" permission.'
-      );
-      ex.setMessage(
-        'Unauthorized: this approval requires the "' +
-          requiredRole +
-          '" permission.'
-      );
-      throw ex;
-    }
+    return null;
   }
 
   @AuraEnabled
@@ -1813,24 +1922,18 @@ public inherited sharing class WorkflowDashboardController {
         ORDER BY CreatedDate DESC
         LIMIT 5
       ];
-      Boolean isRunning = false;
-      Workflow_Instance__c latestWatchdog = null;
-      if (!watchdogInstances.isEmpty()) {
-        latestWatchdog = watchdogInstances[0];
-        String status = latestWatchdog.Status__c;
-        if (
-          status == 'Pending' ||
-          status == 'Running' ||
-          status == 'Suspended'
-        ) {
-          isRunning = true;
-        }
-      }
+      Workflow_Instance__c latestWatchdog = watchdogInstances.isEmpty()
+        ? null
+        : watchdogInstances[0];
 
+      // Total scheduled jobs. The bound is well above the platform ceiling on
+      // CronTrigger rows (scheduled Apex is capped at 100), so it never truncates the
+      // real count; it only satisfies the "queries must be bounded" rule.
       Integer scheduledJobsCount = [
         SELECT COUNT()
         FROM CronTrigger
         WITH SYSTEM_MODE
+        LIMIT 50000
       ];
 
       Integer sleepingInstances = [
@@ -1847,27 +1950,6 @@ public inherited sharing class WorkflowDashboardController {
         WITH SYSTEM_MODE
       ];
 
-      Map<String, System.OrgLimit> limitsMap = System.OrgLimits.getMap();
-      Integer dailyAsyncValue = 0;
-      Integer dailyAsyncLimit = 0;
-      Boolean hasElasticLimit = false;
-      Integer elasticAsyncValue = 0;
-      Integer elasticAsyncLimit = 0;
-
-      if (limitsMap.containsKey('DailyAsyncApexExecutions')) {
-        System.OrgLimit limitObj = limitsMap.get('DailyAsyncApexExecutions');
-        dailyAsyncValue = limitObj.getValue();
-        dailyAsyncLimit = limitObj.getLimit();
-      }
-      if (limitsMap.containsKey('DailyAsyncApexElasticExecutions')) {
-        System.OrgLimit limitObj = limitsMap.get(
-          'DailyAsyncApexElasticExecutions'
-        );
-        hasElasticLimit = true;
-        elasticAsyncValue = limitObj.getValue();
-        elasticAsyncLimit = limitObj.getLimit();
-      }
-
       Map<String, Object> config = new Map<String, Object>{
         'Use_Dynamic_Scheduling__c' => WorkflowEngine.useDynamicScheduling,
         'Watchdog_Delay_Minutes__c' => WorkflowEngine.watchdogDelayMinutes
@@ -1879,24 +1961,58 @@ public inherited sharing class WorkflowDashboardController {
       } catch (Exception ignored) {
       }
 
-      return new Map<String, Object>{
-        'isRunning' => isRunning,
+      Map<String, Object> result = new Map<String, Object>{
+        'isRunning' => isWatchdogRunning(watchdogInstances),
         'latestJob' => latestWatchdog,
         'recentJobs' => watchdogInstances,
         'scheduledJobsCount' => scheduledJobsCount,
         'sleepingInstances' => sleepingInstances,
         'pendingTimeouts' => pendingTimeouts,
         'config' => config,
-        'dailyAsyncValue' => dailyAsyncValue,
-        'dailyAsyncLimit' => dailyAsyncLimit,
-        'hasElasticLimit' => hasElasticLimit,
-        'elasticAsyncValue' => elasticAsyncValue,
-        'elasticAsyncLimit' => elasticAsyncLimit,
         'pausedDefinitions' => pausedDefs
       };
+      result.putAll(readAsyncLimits());
+      return result;
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
     }
+  }
+
+  private static Boolean isWatchdogRunning(
+    List<Workflow_Instance__c> watchdogInstances
+  ) {
+    if (watchdogInstances.isEmpty()) {
+      return false;
+    }
+    String status = watchdogInstances[0].Status__c;
+    return status == 'Pending' || status == 'Running' || status == 'Suspended';
+  }
+
+  // Reads the async-apex org limits into the dashboard's status keys. Missing limits
+  // (e.g. no elastic-executions limit on this org) leave their defaults in place.
+  private static Map<String, Object> readAsyncLimits() {
+    Map<String, System.OrgLimit> limitsMap = System.OrgLimits.getMap();
+    Map<String, Object> result = new Map<String, Object>{
+      'dailyAsyncValue' => 0,
+      'dailyAsyncLimit' => 0,
+      'hasElasticLimit' => false,
+      'elasticAsyncValue' => 0,
+      'elasticAsyncLimit' => 0
+    };
+    if (limitsMap.containsKey('DailyAsyncApexExecutions')) {
+      System.OrgLimit limitObj = limitsMap.get('DailyAsyncApexExecutions');
+      result.put('dailyAsyncValue', limitObj.getValue());
+      result.put('dailyAsyncLimit', limitObj.getLimit());
+    }
+    if (limitsMap.containsKey('DailyAsyncApexElasticExecutions')) {
+      System.OrgLimit limitObj = limitsMap.get(
+        'DailyAsyncApexElasticExecutions'
+      );
+      result.put('hasElasticLimit', true);
+      result.put('elasticAsyncValue', limitObj.getValue());
+      result.put('elasticAsyncLimit', limitObj.getLimit());
+    }
+    return result;
   }
 
   @AuraEnabled
@@ -1930,10 +2046,7 @@ public inherited sharing class WorkflowDashboardController {
       return new List<Map<String, Object>>();
     }
 
-    Map<String, Integer> nonTerminalByVersion = new Map<String, Integer>();
-    Map<String, Integer> failedByVersion = new Map<String, Integer>();
-    Map<String, Integer> terminalByVersion = new Map<String, Integer>();
-    Map<String, Integer> versionKeyToInt = new Map<String, Integer>();
+    VersionDrainAccumulator acc = new VersionDrainAccumulator();
 
     Integer totalCount = [
       SELECT COUNT()
@@ -1943,189 +2056,215 @@ public inherited sharing class WorkflowDashboardController {
     ];
 
     if (totalCount <= 40000) {
-      for (Workflow_Instance__c inst : [
-        SELECT Definition_Version__c, Status__c
-        FROM Workflow_Instance__c
-        WHERE Workflow_Name__c = :workflowName
-        WITH SYSTEM_MODE
-      ]) {
-        Decimal verDecimal = inst.Definition_Version__c;
-        Integer ver = verDecimal == null ? null : verDecimal.intValue();
-        String verKey = ver == null ? 'null' : String.valueOf(ver);
-        String stat = inst.Status__c;
-
-        if (!nonTerminalByVersion.containsKey(verKey)) {
-          nonTerminalByVersion.put(verKey, 0);
-          failedByVersion.put(verKey, 0);
-          terminalByVersion.put(verKey, 0);
-          versionKeyToInt.put(verKey, ver);
-        }
-
-        if (NON_TERMINAL_STATUSES.contains(stat)) {
-          nonTerminalByVersion.put(
-            verKey,
-            nonTerminalByVersion.get(verKey) + 1
-          );
-        } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
-          failedByVersion.put(verKey, failedByVersion.get(verKey) + 1);
-        } else {
-          terminalByVersion.put(verKey, terminalByVersion.get(verKey) + 1);
-        }
-      }
+      accumulateVersionDrainByScan(workflowName, acc);
     } else {
-      Set<Decimal> versionDecimals = new Set<Decimal>();
-      Boolean hasNullVersion = false;
+      accumulateVersionDrainByAggregate(workflowName, acc);
+    }
 
-      // Query active/failed runs to extract version numbers
-      for (Workflow_Instance__c inst : [
-        SELECT Definition_Version__c
+    return acc.toRows();
+  }
+
+  // Accumulates per-version (non-terminal / failed / clean-terminal) instance counts for
+  // getVersionDrain and renders the sorted display rows. Centralizing the status-bucketing
+  // keeps the two collection strategies (full scan vs. aggregate) from duplicating it.
+  private class VersionDrainAccumulator {
+    Map<String, Integer> nonTerminal = new Map<String, Integer>();
+    Map<String, Integer> failed = new Map<String, Integer>();
+    Map<String, Integer> terminal = new Map<String, Integer>();
+    Map<String, Integer> versionKeyToInt = new Map<String, Integer>();
+
+    void ensureVersion(String verKey, Integer verInt) {
+      if (!nonTerminal.containsKey(verKey)) {
+        nonTerminal.put(verKey, 0);
+        failed.put(verKey, 0);
+        terminal.put(verKey, 0);
+        versionKeyToInt.put(verKey, verInt);
+      }
+    }
+
+    void bucket(String verKey, String stat, Integer count) {
+      if (NON_TERMINAL_STATUSES.contains(stat)) {
+        nonTerminal.put(verKey, nonTerminal.get(verKey) + count);
+      } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
+        failed.put(verKey, failed.get(verKey) + count);
+      } else {
+        terminal.put(verKey, terminal.get(verKey) + count);
+      }
+    }
+
+    List<Map<String, Object>> toRows() {
+      // Sort version keys numerically (null sorts last)
+      List<String> sortedKeys = new List<String>(nonTerminal.keySet());
+      sortedKeys.sort();
+      Integer nullKeyIdx = sortedKeys.indexOf('null');
+      if (nullKeyIdx != -1) {
+        sortedKeys.remove(nullKeyIdx);
+        sortedKeys.add('null');
+      }
+
+      List<Map<String, Object>> rows = new List<Map<String, Object>>();
+      for (String verKey : sortedKeys) {
+        Integer nt = nonTerminal.get(verKey);
+        Integer fl = failed.get(verKey);
+        Integer tm = terminal.get(verKey);
+        rows.add(
+          new Map<String, Object>{
+            'version' => versionKeyToInt.get(verKey),
+            'nonTerminalCount' => nt,
+            'failedCount' => fl,
+            'terminalCount' => tm,
+            'totalCount' => nt +
+            fl +
+            tm,
+            'safeToRetire' => nt == 0 &&
+            fl == 0
+          }
+        );
+      }
+      return rows;
+    }
+  }
+
+  // Small definitions: a single full row scan buckets every instance by version + status.
+  private static void accumulateVersionDrainByScan(
+    String workflowName,
+    VersionDrainAccumulator acc
+  ) {
+    for (Workflow_Instance__c inst : [
+      SELECT Definition_Version__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Workflow_Name__c = :workflowName
+      WITH SYSTEM_MODE
+    ]) {
+      Decimal verDecimal = inst.Definition_Version__c;
+      Integer ver = verDecimal == null ? null : verDecimal.intValue();
+      String verKey = ver == null ? 'null' : String.valueOf(ver);
+      acc.ensureVersion(verKey, ver);
+      acc.bucket(verKey, inst.Status__c, 1);
+    }
+  }
+
+  // Large definitions: avoid materializing every row. Discover the observed versions via
+  // two bounded queries, then bucket each version's status counts with a SINGLE GROUP BY
+  // aggregate over just those versions (previously one aggregate per version in a loop).
+  private static void accumulateVersionDrainByAggregate(
+    String workflowName,
+    VersionDrainAccumulator acc
+  ) {
+    Set<Decimal> versionDecimals = new Set<Decimal>();
+    Boolean hasNullVersion = discoverDrainVersions(
+      workflowName,
+      versionDecimals
+    );
+
+    for (Decimal ver : versionDecimals) {
+      Integer verInt = ver == null ? null : ver.intValue();
+      acc.ensureVersion(String.valueOf(verInt), verInt);
+    }
+
+    if (!versionDecimals.isEmpty()) {
+      for (AggregateResult ar : [
+        SELECT Definition_Version__c ver, Status__c, COUNT(Id) cnt
         FROM Workflow_Instance__c
         WHERE
           Workflow_Name__c = :workflowName
-          AND Status__c NOT IN ('Completed', 'Cancelled', 'ContinuedAsNew')
+          AND Definition_Version__c IN :versionDecimals
         WITH SYSTEM_MODE
-        LIMIT 5000
+        GROUP BY Definition_Version__c, Status__c
       ]) {
-        if (inst.Definition_Version__c != null) {
-          versionDecimals.add(inst.Definition_Version__c);
-        } else {
-          hasNullVersion = true;
-        }
+        Decimal verDecimal = (Decimal) ar.get('ver');
+        Integer verInt = verDecimal == null ? null : verDecimal.intValue();
+        acc.bucket(
+          String.valueOf(verInt),
+          (String) ar.get('Status__c'),
+          (Integer) ar.get('cnt')
+        );
       }
+    }
 
-      // Query recent runs to find other versions
-      for (Workflow_Instance__c inst : [
-        SELECT Definition_Version__c
+    if (hasNullVersion) {
+      acc.ensureVersion('null', null);
+      for (AggregateResult ar : [
+        SELECT Status__c, COUNT(Id) cnt
         FROM Workflow_Instance__c
-        WHERE Workflow_Name__c = :workflowName
+        WHERE Workflow_Name__c = :workflowName AND Definition_Version__c = NULL
         WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC
-        LIMIT 10000
+        GROUP BY Status__c
       ]) {
-        if (inst.Definition_Version__c != null) {
-          versionDecimals.add(inst.Definition_Version__c);
-        } else {
-          hasNullVersion = true;
-        }
-      }
-
-      List<Decimal> versionsToQuery = new List<Decimal>(versionDecimals);
-
-      for (Decimal ver : versionsToQuery) {
-        Integer verInt = ver == null ? null : ver.intValue();
-        String verKey = String.valueOf(verInt);
-
-        nonTerminalByVersion.put(verKey, 0);
-        failedByVersion.put(verKey, 0);
-        terminalByVersion.put(verKey, 0);
-        versionKeyToInt.put(verKey, verInt);
-
-        for (AggregateResult ar : [
-          SELECT Status__c, COUNT(Id) cnt
-          FROM Workflow_Instance__c
-          WHERE
-            Workflow_Name__c = :workflowName
-            AND Definition_Version__c = :ver
-          WITH SYSTEM_MODE
-          GROUP BY Status__c
-        ]) {
-          String stat = (String) ar.get('Status__c');
-          Integer count = (Integer) ar.get('cnt');
-
-          if (NON_TERMINAL_STATUSES.contains(stat)) {
-            nonTerminalByVersion.put(
-              verKey,
-              nonTerminalByVersion.get(verKey) + count
-            );
-          } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
-            failedByVersion.put(verKey, failedByVersion.get(verKey) + count);
-          } else {
-            terminalByVersion.put(
-              verKey,
-              terminalByVersion.get(verKey) + count
-            );
-          }
-        }
-      }
-
-      if (hasNullVersion) {
-        String verKey = 'null';
-        nonTerminalByVersion.put(verKey, 0);
-        failedByVersion.put(verKey, 0);
-        terminalByVersion.put(verKey, 0);
-        versionKeyToInt.put(verKey, null);
-
-        for (AggregateResult ar : [
-          SELECT Status__c, COUNT(Id) cnt
-          FROM Workflow_Instance__c
-          WHERE
-            Workflow_Name__c = :workflowName
-            AND Definition_Version__c = NULL
-          WITH SYSTEM_MODE
-          GROUP BY Status__c
-        ]) {
-          String stat = (String) ar.get('Status__c');
-          Integer count = (Integer) ar.get('cnt');
-
-          if (NON_TERMINAL_STATUSES.contains(stat)) {
-            nonTerminalByVersion.put(
-              verKey,
-              nonTerminalByVersion.get(verKey) + count
-            );
-          } else if (RECOVERABLE_TERMINAL_STATUSES.contains(stat)) {
-            failedByVersion.put(verKey, failedByVersion.get(verKey) + count);
-          } else {
-            terminalByVersion.put(
-              verKey,
-              terminalByVersion.get(verKey) + count
-            );
-          }
-        }
+        acc.bucket(
+          'null',
+          (String) ar.get('Status__c'),
+          (Integer) ar.get('cnt')
+        );
       }
     }
+  }
 
-    // Sort version keys numerically (null sorts last)
-    List<String> sortedKeys = new List<String>(nonTerminalByVersion.keySet());
-    sortedKeys.sort();
-    Integer nullKeyIdx = sortedKeys.indexOf('null');
-    if (nullKeyIdx != -1) {
-      sortedKeys.remove(nullKeyIdx);
-      sortedKeys.add('null');
+  // Populates versionDecimals with the non-null Definition_Version__c values observed in
+  // the active/failed slice (up to 5000) and the most recent 10000 runs; returns true if
+  // any null-version instance was seen.
+  private static Boolean discoverDrainVersions(
+    String workflowName,
+    Set<Decimal> versionDecimals
+  ) {
+    Boolean hasNullVersion = false;
+    for (Workflow_Instance__c inst : [
+      SELECT Definition_Version__c
+      FROM Workflow_Instance__c
+      WHERE
+        Workflow_Name__c = :workflowName
+        AND Status__c NOT IN ('Completed', 'Cancelled', 'ContinuedAsNew')
+      WITH SYSTEM_MODE
+      LIMIT 5000
+    ]) {
+      if (inst.Definition_Version__c != null) {
+        versionDecimals.add(inst.Definition_Version__c);
+      } else {
+        hasNullVersion = true;
+      }
     }
-
-    List<Map<String, Object>> results = new List<Map<String, Object>>();
-    for (String verKey : sortedKeys) {
-      Integer nonTerminal = nonTerminalByVersion.get(verKey);
-      Integer failed = failedByVersion.get(verKey);
-      Integer terminal = terminalByVersion.get(verKey);
-      results.add(
-        new Map<String, Object>{
-          'version' => versionKeyToInt.get(verKey),
-          'nonTerminalCount' => nonTerminal,
-          'failedCount' => failed,
-          'terminalCount' => terminal,
-          'totalCount' => nonTerminal +
-          failed +
-          terminal,
-          'safeToRetire' => nonTerminal == 0 &&
-          failed == 0
-        }
-      );
+    for (Workflow_Instance__c inst : [
+      SELECT Definition_Version__c
+      FROM Workflow_Instance__c
+      WHERE Workflow_Name__c = :workflowName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+      LIMIT 10000
+    ]) {
+      if (inst.Definition_Version__c != null) {
+        versionDecimals.add(inst.Definition_Version__c);
+      } else {
+        hasNullVersion = true;
+      }
     }
-
-    return results;
+    return hasNullVersion;
   }
 
   // ── Unrouted-signal dashboard methods ─────────────────────────────────────
 
+  // Query criteria for the unrouted-signal list. Field-based (@AuraEnabled properties) so the
+  // LWC and tests populate it by assignment. cacheBuster only varies the client-side cache key
+  // and is unused in Apex.
+  public class UnroutedQuery {
+    @AuraEnabled
+    public String searchTerm;
+    @AuraEnabled
+    public Integer limitSize;
+    @AuraEnabled
+    public Integer offsetSize;
+    @AuraEnabled
+    public String cacheBuster;
+  }
+
   @AuraEnabled(cacheable=true)
   public static List<Map<String, Object>> getUnroutedSignals(
-    String searchTerm,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
+    UnroutedQuery criteria
   ) {
     checkAuthorization();
+
+    String searchTerm = criteria.searchTerm;
+    Integer limitSize = criteria.limitSize;
+    Integer offsetSize = criteria.offsetSize;
 
     Integer lim = (limitSize == null ||
       limitSize <= 0)
@@ -2243,79 +2382,31 @@ public inherited sharing class WorkflowDashboardController {
   public static List<Map<String, Object>> getPausedDefinitions() {
     checkAuthorization();
     try {
+      // Bound the scan well above any realistic paused-definition count (one row per
+      // paused definition) so the result is never truncated; satisfies the bounded-query
+      // rule without altering the set the dashboard shows.
       List<Workflow_Pause_State__c> pauseRecords = [
         SELECT Workflow_Name__c, Reason__c, CreatedById, CreatedDate
         FROM Workflow_Pause_State__c
         WITH SYSTEM_MODE
         ORDER BY CreatedDate ASC
+        LIMIT 50000
       ];
 
       if (pauseRecords.isEmpty()) {
         return new List<Map<String, Object>>();
       }
 
-      // Collect all paused def names (including * which covers everything)
-      Set<String> pausedNames = new Set<String>();
-      Boolean wildcardPaused = false;
-      for (Workflow_Pause_State__c r : pauseRecords) {
-        pausedNames.add(r.Workflow_Name__c);
-        if (r.Workflow_Name__c == '*') {
-          wildcardPaused = true;
-        }
-      }
-
-      // Count parked instances per definition (or all if wildcard)
-      List<AggregateResult> counts;
-      if (wildcardPaused) {
-        counts = [
-          SELECT Workflow_Name__c, COUNT(Id) cnt
-          FROM Workflow_Instance__c
-          WHERE Status__c = 'Paused'
-          WITH SYSTEM_MODE
-          GROUP BY Workflow_Name__c
-        ];
-      } else {
-        counts = [
-          SELECT Workflow_Name__c, COUNT(Id) cnt
-          FROM Workflow_Instance__c
-          WHERE Status__c = 'Paused' AND Workflow_Name__c IN :pausedNames
-          WITH SYSTEM_MODE
-          GROUP BY Workflow_Name__c
-        ];
-      }
-      Map<String, Integer> countByDef = new Map<String, Integer>();
-      Integer totalParked = 0;
-      for (AggregateResult ar : counts) {
-        String name = (String) ar.get('Workflow_Name__c');
-        // Grouped COUNT(Id) is returned as Integer in this org (see getWorkflowStats);
-        // a Decimal cast throws TypeException as soon as a definition has parked rows.
-        Integer cnt = (Integer) ar.get('cnt');
-        // Workflow_Name__c is a case-insensitive external id, so the SOQL filter
-        // above matches a pause record against instances of any casing, but an
-        // Apex Map key is case-sensitive. Normalize the key (and the lookup
-        // below) to lower case so a pause record created with different casing
-        // than its instances still resolves its parked count instead of 0.
-        countByDef.put(name == null ? null : name.toLowerCase(), cnt);
-        totalParked += cnt;
-      }
+      ParkedCounts parked = countParkedByDefinition(pauseRecords);
 
       List<Map<String, Object>> result = new List<Map<String, Object>>();
       for (Workflow_Pause_State__c r : pauseRecords) {
-        Integer parked;
-        if (r.Workflow_Name__c == '*') {
-          parked = totalParked;
-        } else {
-          String key = r.Workflow_Name__c == null
-            ? null
-            : r.Workflow_Name__c.toLowerCase();
-          parked = countByDef.containsKey(key) ? countByDef.get(key) : 0;
-        }
         result.add(
           new Map<String, Object>{
             'workflowName' => r.Workflow_Name__c,
             'reason' => r.Reason__c,
             'pausedAt' => r.CreatedDate,
-            'parkedCount' => parked
+            'parkedCount' => parked.forRecord(r)
           }
         );
       }
@@ -2323,6 +2414,77 @@ public inherited sharing class WorkflowDashboardController {
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
     }
+  }
+
+  // Parked (Paused-status) instance counts per definition, plus the org-wide total used
+  // when a wildcard ('*') pause is present.
+  private class ParkedCounts {
+    Map<String, Integer> countByDef = new Map<String, Integer>();
+    Integer totalParked = 0;
+
+    Integer forRecord(Workflow_Pause_State__c r) {
+      if (r.Workflow_Name__c == '*') {
+        return totalParked;
+      }
+      // Workflow_Name__c is a case-insensitive external id but an Apex Map key is
+      // case-sensitive, so look up by the same lower-cased key used when building the map.
+      String key = r.Workflow_Name__c == null
+        ? null
+        : r.Workflow_Name__c.toLowerCase();
+      return countByDef.containsKey(key) ? countByDef.get(key) : 0;
+    }
+  }
+
+  private static ParkedCounts countParkedByDefinition(
+    List<Workflow_Pause_State__c> pauseRecords
+  ) {
+    Set<String> pausedNames = new Set<String>();
+    Boolean wildcardPaused = false;
+    for (Workflow_Pause_State__c r : pauseRecords) {
+      pausedNames.add(r.Workflow_Name__c);
+      if (r.Workflow_Name__c == '*') {
+        wildcardPaused = true;
+      }
+    }
+
+    List<AggregateResult> counts = wildcardPaused
+      ? queryParkedCountsAll()
+      : queryParkedCountsFor(pausedNames);
+
+    ParkedCounts parked = new ParkedCounts();
+    for (AggregateResult ar : counts) {
+      String name = (String) ar.get('Workflow_Name__c');
+      // Grouped COUNT(Id) is returned as Integer in this org (see getWorkflowStats);
+      // a Decimal cast throws TypeException as soon as a definition has parked rows.
+      Integer cnt = (Integer) ar.get('cnt');
+      // Normalize the key to lower case (mirrored in ParkedCounts.forRecord) so a pause
+      // record created with different casing than its instances still resolves its count.
+      parked.countByDef.put(name == null ? null : name.toLowerCase(), cnt);
+      parked.totalParked += cnt;
+    }
+    return parked;
+  }
+
+  private static List<AggregateResult> queryParkedCountsAll() {
+    return [
+      SELECT Workflow_Name__c, COUNT(Id) cnt
+      FROM Workflow_Instance__c
+      WHERE Status__c = 'Paused'
+      WITH SYSTEM_MODE
+      GROUP BY Workflow_Name__c
+    ];
+  }
+
+  private static List<AggregateResult> queryParkedCountsFor(
+    Set<String> pausedNames
+  ) {
+    return [
+      SELECT Workflow_Name__c, COUNT(Id) cnt
+      FROM Workflow_Instance__c
+      WHERE Status__c = 'Paused' AND Workflow_Name__c IN :pausedNames
+      WITH SYSTEM_MODE
+      GROUP BY Workflow_Name__c
+    ];
   }
 
   /**
@@ -2336,11 +2498,14 @@ public inherited sharing class WorkflowDashboardController {
   public static List<Map<String, Object>> getConcurrencyStatus() {
     checkAuthorization();
     try {
+      // Bounded well above any realistic governed-workflow count (one row per durable
+      // Concurrency_State__c counter) so the result set is never truncated.
       List<Concurrency_State__c> states = [
         SELECT Workflow_Definition__c, In_Flight_Count__c
         FROM Concurrency_State__c
         WITH SYSTEM_MODE
         ORDER BY Workflow_Definition__c ASC
+        LIMIT 50000
       ];
       if (states.isEmpty()) {
         return new List<Map<String, Object>>();
@@ -2406,70 +2571,13 @@ public inherited sharing class WorkflowDashboardController {
       };
     }
 
-    Datetime since = null;
-    if (
-      String.isNotBlank(timeWindow) &&
-      TREND_WINDOW_HOURS.containsKey(timeWindow)
-    ) {
-      Integer windowHours = TREND_WINDOW_HOURS.get(timeWindow);
-      since = Datetime.now().addHours(-windowHours);
-    }
+    Datetime since = resolveWindowStart(timeWindow);
+    List<Workflow_Step_Execution__c> steps = queryFailedSteps(
+      workflowName,
+      since
+    );
 
-    List<Workflow_Step_Execution__c> steps;
-    if (since != null) {
-      steps = [
-        SELECT
-          Step_Name__c,
-          Error_Details__c,
-          Workflow_Instance__c,
-          Workflow_Instance__r.Name,
-          CreatedDate
-        FROM Workflow_Step_Execution__c
-        WHERE
-          Workflow_Instance__r.Workflow_Name__c = :workflowName
-          AND Status__c = 'Failed'
-          AND CreatedDate >= :since
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC
-        LIMIT :FAILURE_BREAKDOWN_CAP
-      ];
-    } else {
-      steps = [
-        SELECT
-          Step_Name__c,
-          Error_Details__c,
-          Workflow_Instance__c,
-          Workflow_Instance__r.Name,
-          CreatedDate
-        FROM Workflow_Step_Execution__c
-        WHERE
-          Workflow_Instance__r.Workflow_Name__c = :workflowName
-          AND Status__c = 'Failed'
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC
-        LIMIT :FAILURE_BREAKDOWN_CAP
-      ];
-    }
-
-    Map<String, StepFailureGroup> stepGroups = new Map<String, StepFailureGroup>();
-
-    for (Workflow_Step_Execution__c se : steps) {
-      String stepName = se.Step_Name__c;
-      if (String.isBlank(stepName)) {
-        stepName = 'Unknown Step';
-      }
-
-      StepFailureGroup stepGroup = stepGroups.get(stepName);
-      if (stepGroup == null) {
-        stepGroup = new StepFailureGroup(stepName);
-        stepGroups.put(stepName, stepGroup);
-      }
-      stepGroup.addFailure(se);
-    }
-
-    List<StepFailureGroup> sortedSteps = stepGroups.values();
-    sortedSteps.sort();
-
+    List<StepFailureGroup> sortedSteps = groupFailuresByStep(steps);
     List<Map<String, Object>> stepList = new List<Map<String, Object>>();
     for (StepFailureGroup sg : sortedSteps) {
       stepList.add(sg.toMap());
@@ -2485,46 +2593,115 @@ public inherited sharing class WorkflowDashboardController {
     };
   }
 
+  // Resolves the start of a recognized trend window (blank/unknown → null = "all time").
+  private static Datetime resolveWindowStart(String timeWindow) {
+    if (
+      String.isBlank(timeWindow) || !TREND_WINDOW_HOURS.containsKey(timeWindow)
+    ) {
+      return null;
+    }
+    return Datetime.now().addHours(-TREND_WINDOW_HOURS.get(timeWindow));
+  }
+
+  private static List<Workflow_Step_Execution__c> queryFailedSteps(
+    String workflowName,
+    Datetime since
+  ) {
+    if (since != null) {
+      return [
+        SELECT
+          Step_Name__c,
+          Error_Details__c,
+          Workflow_Instance__c,
+          Workflow_Instance__r.Name,
+          CreatedDate
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__r.Workflow_Name__c = :workflowName
+          AND Status__c = 'Failed'
+          AND CreatedDate >= :since
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC
+        LIMIT :FAILURE_BREAKDOWN_CAP
+      ];
+    }
+    return [
+      SELECT
+        Step_Name__c,
+        Error_Details__c,
+        Workflow_Instance__c,
+        Workflow_Instance__r.Name,
+        CreatedDate
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__r.Workflow_Name__c = :workflowName
+        AND Status__c = 'Failed'
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+      LIMIT :FAILURE_BREAKDOWN_CAP
+    ];
+  }
+
+  private static List<StepFailureGroup> groupFailuresByStep(
+    List<Workflow_Step_Execution__c> steps
+  ) {
+    Map<String, StepFailureGroup> stepGroups = new Map<String, StepFailureGroup>();
+    for (Workflow_Step_Execution__c se : steps) {
+      String stepName = String.isBlank(se.Step_Name__c)
+        ? 'Unknown Step'
+        : se.Step_Name__c;
+      StepFailureGroup stepGroup = stepGroups.get(stepName);
+      if (stepGroup == null) {
+        stepGroup = new StepFailureGroup(stepName);
+        stepGroups.put(stepName, stepGroup);
+      }
+      stepGroup.addFailure(se);
+    }
+    List<StepFailureGroup> sortedSteps = stepGroups.values();
+    sortedSteps.sort();
+    return sortedSteps;
+  }
+
   @TestVisible
   private static String getNormalizedSignature(String errorDetails) {
     if (String.isBlank(errorDetails)) {
       return 'Unknown Error';
     }
-    String signature = errorDetails.split('\n')[0];
-    if (String.isBlank(signature)) {
-      signature = 'Unknown Error';
+    String normalized = errorDetails.split('\n')[0];
+    if (String.isBlank(normalized)) {
+      normalized = 'Unknown Error';
     }
 
     // Normalize UUIDs
-    signature = signature.replaceAll(
+    normalized = normalized.replaceAll(
       '\\b[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}\\b',
       '[UUID]'
     );
 
     // Normalize Datetimes
-    signature = signature.replaceAll(
+    normalized = normalized.replaceAll(
       '\\b\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?\\b',
       '[DATETIME]'
     );
 
     // Normalize Dates
-    signature = signature.replaceAll('\\b\\d{4}-\\d{2}-\\d{2}\\b', '[DATE]');
+    normalized = normalized.replaceAll('\\b\\d{4}-\\d{2}-\\d{2}\\b', '[DATE]');
 
     // Normalize Salesforce IDs containing at least one digit
-    signature = signature.replaceAll(
+    normalized = normalized.replaceAll(
       '\\b(?=[a-zA-Z0-9]*[0-9])[a-zA-Z0-9]{15,18}\\b',
       '[ID]'
     );
 
     // Normalize standalone numbers
-    signature = signature.replaceAll('\\b\\d+\\b', '[NUM]');
+    normalized = normalized.replaceAll('\\b\\d+\\b', '[NUM]');
 
-    signature = signature.trim();
-    if (signature.length() > 255) {
-      signature = signature.substring(0, 252) + '...';
+    normalized = normalized.trim();
+    if (normalized.length() > 255) {
+      normalized = normalized.substring(0, 252) + '...';
     }
 
-    return signature;
+    return normalized;
   }
 
   private class StepFailureGroup implements Comparable {
@@ -2623,94 +2800,17 @@ public inherited sharing class WorkflowDashboardController {
     String payloadJson
   ) {
     checkAuthorization();
-
-    if (
-      !FeatureManagement.checkPermission('Workflow_Signal_Injection') &&
-      !currentUserHasModifyAllData()
-    ) {
-      AuraHandledException ex = new AuraHandledException(
-        'Unauthorized: this action requires the "Workflow_Signal_Injection" permission.'
-      );
-      ex.setMessage(
-        'Unauthorized: this action requires the "Workflow_Signal_Injection" permission.'
-      );
-      throw ex;
-    }
+    validateSignalInjectionPermission();
 
     if (instanceId == null) {
-      AuraHandledException ex = new AuraHandledException(
-        'Instance ID is required.'
-      );
-      ex.setMessage('Instance ID is required.');
-      throw ex;
+      throw auraError('Instance ID is required.');
     }
-
     if (String.isBlank(signalName)) {
-      AuraHandledException ex = new AuraHandledException(
-        'Signal name is required.'
-      );
-      ex.setMessage('Signal name is required.');
-      throw ex;
+      throw auraError('Signal name is required.');
     }
+    requireInjectableInstance(instanceId);
 
-    List<Workflow_Instance__c> instances = [
-      SELECT Status__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    if (instances.isEmpty()) {
-      AuraHandledException ex = new AuraHandledException(
-        'Workflow instance not found.'
-      );
-      ex.setMessage('Workflow instance not found.');
-      throw ex;
-    }
-
-    Workflow_Instance__c inst = instances[0];
-    if (inst.Status__c != 'Suspended') {
-      AuraHandledException ex = new AuraHandledException(
-        'Signal injection is only allowed on Suspended instances.'
-      );
-      ex.setMessage('Signal injection is only allowed on Suspended instances.');
-      throw ex;
-    }
-
-    if (payloadJson != null && payloadJson.length() > 250000) {
-      AuraHandledException ex = new AuraHandledException(
-        'Payload size exceeds maximum allowed limit of 250KB.'
-      );
-      ex.setMessage('Payload size exceeds maximum allowed limit of 250KB.');
-      throw ex;
-    }
-
-    Map<String, Object> payloadMap = new Map<String, Object>();
-    if (String.isNotBlank(payloadJson)) {
-      try {
-        Object parsed = JSON.deserializeUntyped(payloadJson);
-        if (parsed instanceof Map<String, Object>) {
-          payloadMap = (Map<String, Object>) parsed;
-        } else {
-          AuraHandledException ex = new AuraHandledException(
-            'Invalid payload JSON: Payload JSON must be a JSON object (e.g., {"key": "value"}).'
-          );
-          ex.setMessage(
-            'Invalid payload JSON: Payload JSON must be a JSON object (e.g., {"key": "value"}).'
-          );
-          throw ex;
-        }
-      } catch (AuraHandledException ex) {
-        throw ex;
-      } catch (Exception ex) {
-        AuraHandledException ex2 = new AuraHandledException(
-          'Invalid payload JSON: ' + ex.getMessage()
-        );
-        ex2.setMessage('Invalid payload JSON: ' + ex.getMessage());
-        throw ex2;
-      }
-    }
-
+    Map<String, Object> payloadMap = parseInjectionPayload(payloadJson);
     payloadMap.put('operatorId', UserInfo.getUserId());
     payloadMap.put('operatorUsername', UserInfo.getUserName());
     payloadMap.put('operator', UserInfo.getName());
@@ -2722,9 +2822,69 @@ public inherited sharing class WorkflowDashboardController {
         JSON.serialize(payloadMap)
       );
     } catch (Exception ex) {
-      AuraHandledException aex = new AuraHandledException(ex.getMessage());
-      aex.setMessage(ex.getMessage());
-      throw aex;
+      throw auraError(ex.getMessage());
+    }
+  }
+
+  // Builds an AuraHandledException whose getMessage() returns the supplied text (the
+  // explicit setMessage is required so the specific message survives to the client
+  // instead of the generic "Script-thrown exception").
+  private static AuraHandledException auraError(String message) {
+    AuraHandledException ex = new AuraHandledException(message);
+    ex.setMessage(message);
+    return ex;
+  }
+
+  private static void validateSignalInjectionPermission() {
+    if (
+      !FeatureManagement.checkPermission('Workflow_Signal_Injection') &&
+      !currentUserHasModifyAllData()
+    ) {
+      throw auraError(
+        'Unauthorized: this action requires the "Workflow_Signal_Injection" permission.'
+      );
+    }
+  }
+
+  private static void requireInjectableInstance(Id instanceId) {
+    List<Workflow_Instance__c> instances = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    if (instances.isEmpty()) {
+      throw auraError('Workflow instance not found.');
+    }
+    if (instances[0].Status__c != 'Suspended') {
+      throw auraError(
+        'Signal injection is only allowed on Suspended instances.'
+      );
+    }
+  }
+
+  private static Map<String, Object> parseInjectionPayload(String payloadJson) {
+    if (payloadJson != null && payloadJson.length() > 250000) {
+      throw auraError('Payload size exceeds maximum allowed limit of 250KB.');
+    }
+    if (String.isBlank(payloadJson)) {
+      return new Map<String, Object>();
+    }
+    Object parsed = deserializePayloadObject(payloadJson);
+    if (parsed instanceof Map<String, Object>) {
+      return (Map<String, Object>) parsed;
+    }
+    throw auraError(
+      'Invalid payload JSON: Payload JSON must be a JSON object (e.g., {"key": "value"}).'
+    );
+  }
+
+  private static Object deserializePayloadObject(String payloadJson) {
+    try {
+      return JSON.deserializeUntyped(payloadJson);
+    } catch (Exception ex) {
+      throw auraError('Invalid payload JSON: ' + ex.getMessage());
     }
   }
 }

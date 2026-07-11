@@ -64,6 +64,15 @@ public inherited sharing class StepResult {
   private static final Integer MAX_INTEGER = 2147483647;
   private static final Long MAX_LONG = 9223372036854775807L;
 
+  // Lower-cased unit spellings that route a business sleep through the
+  // BusinessHours calendar-day scan (all others are fixed-length multiples).
+  private static final Set<String> BUSINESS_DAY_UNITS = new Set<String>{
+    'days',
+    'business days',
+    'day',
+    'business day'
+  };
+
   private static final Map<String, BusinessHours> BUSINESS_HOURS_BY_NAME = new Map<String, BusinessHours>();
   private static final Map<Id, Long> MS_PER_BUSINESS_DAY_BY_BH_ID = new Map<Id, Long>();
 
@@ -318,6 +327,25 @@ public inherited sharing class StepResult {
     return result;
   }
 
+  /** The calendar's time zone key, defaulting to GMT when unset. */
+  private static String timeZoneKeyOf(BusinessHours bh) {
+    return String.isNotBlank(bh.TimeZoneSidKey) ? bh.TimeZoneSidKey : 'GMT';
+  }
+
+  /**
+   * The instant the calendar-day scan should begin: the given start when the
+   * calendar has no Id (mock) or start is already within business hours,
+   * otherwise the next business-hours start after it.
+   */
+  private static DateTime businessScanStart(BusinessHours bh, DateTime start) {
+    if (bh.Id == null) {
+      return start;
+    }
+    return BusinessHours.isWithin(bh.Id, start)
+      ? start
+      : BusinessHours.nextStartDate(bh.Id, start);
+  }
+
   @TestVisible
   private static Long getMillisecondsForDays(
     BusinessHours selectedBusinessHours,
@@ -327,15 +355,8 @@ public inherited sharing class StepResult {
     if (days == null || days <= 0) {
       return 0L;
     }
-    String tz = String.isNotBlank(selectedBusinessHours.TimeZoneSidKey)
-      ? selectedBusinessHours.TimeZoneSidKey
-      : 'GMT';
-    DateTime current = start;
-    if (selectedBusinessHours.Id != null) {
-      current = BusinessHours.isWithin(selectedBusinessHours.Id, start)
-        ? start
-        : BusinessHours.nextStartDate(selectedBusinessHours.Id, start);
-    }
+    String tz = timeZoneKeyOf(selectedBusinessHours);
+    DateTime current = businessScanStart(selectedBusinessHours, start);
     Date currentDate = Date.valueOf(current.format('yyyy-MM-dd', tz));
     Long totalMs = 0;
     Integer daysAdded = 0;
@@ -477,14 +498,32 @@ public inherited sharing class StepResult {
     String unit,
     String businessHoursName
   ) {
-    return sleep(amount, unit, businessHoursName, null);
+    validateBusinessSleepArgs(amount, unit, businessHoursName);
+
+    StepResult result = new StepResult();
+    result.action = ActionType.SLEEP;
+    result.sleepDurationSeconds = businessSleepSeconds(
+      amount,
+      unit,
+      businessHoursName
+    );
+    return result;
   }
 
-  public static StepResult sleep(
+  /**
+   * Attaches durable step state (opaque JSON, persisted across the wait) to this
+   * result, returning it for fluent chaining — e.g.
+   * StepResult.sleep(2, 'Hours', 'Default').withStepState(json).
+   */
+  public StepResult withStepState(String stepStateJson) {
+    this.stepStateJson = stepStateJson;
+    return this;
+  }
+
+  private static void validateBusinessSleepArgs(
     Integer amount,
     String unit,
-    String businessHoursName,
-    String stepStateJson
+    String businessHoursName
   ) {
     if (amount == null || amount < 0) {
       throw new IllegalArgumentException(
@@ -501,16 +540,54 @@ public inherited sharing class StepResult {
         'StepResult.sleep: businessHoursName must not be blank'
       );
     }
+  }
 
+  /**
+   * Resolves the named BusinessHours calendar, converts amount/unit to a
+   * millisecond interval, and returns the clamped whole-second wait until the
+   * business-hours-adjusted wake time.
+   */
+  private static Integer businessSleepSeconds(
+    Integer amount,
+    String unit,
+    String businessHoursName
+  ) {
     BusinessHours selectedBusinessHours = getBusinessHours(businessHoursName);
-
     DateTime now = getCurrentDateTime();
-    Long intervalMs;
+
     String unitLower = unit.toLowerCase().trim();
+    Long intervalMs = isBusinessDaysUnit(unitLower)
+      ? getMillisecondsForDays(selectedBusinessHours, now, amount)
+      : nonDayUnitMillis(unitLower, amount, unit);
+
+    // Safety check against overflow in intervalMs
+    if (intervalMs < 0) {
+      intervalMs = MAX_LONG; // Cap at max value if it wrapped
+    }
+
+    DateTime wakeTime = BusinessHours.add(
+      selectedBusinessHours.Id,
+      now,
+      intervalMs
+    );
+    return clampedSleepSeconds(now, wakeTime);
+  }
+
+  private static Boolean isBusinessDaysUnit(String unitLower) {
+    return BUSINESS_DAY_UNITS.contains(unitLower);
+  }
+
+  /**
+   * Converts a non-day unit (hours/minutes/seconds and their variants) to
+   * milliseconds, throwing for an unsupported unit.
+   */
+  private static Long nonDayUnitMillis(
+    String unitLower,
+    Integer amount,
+    String unit
+  ) {
+    Long intervalMs;
     switch on unitLower {
-      when 'days', 'business days', 'day', 'business day' {
-        intervalMs = getMillisecondsForDays(selectedBusinessHours, now, amount);
-      }
       when 'hours', 'business hours', 'hour', 'business hour' {
         intervalMs = (Long) amount * MILLISECONDS_IN_HOUR;
       }
@@ -526,32 +603,18 @@ public inherited sharing class StepResult {
         );
       }
     }
+    return intervalMs;
+  }
 
-    // Safety checks against overflow in intervalMs
-    if (intervalMs < 0) {
-      intervalMs = MAX_LONG; // Cap at max value if it wrapped
-    }
-
-    DateTime wakeTime = BusinessHours.add(
-      selectedBusinessHours.Id,
-      now,
-      intervalMs
-    );
-
+  private static Integer clampedSleepSeconds(DateTime now, DateTime wakeTime) {
     Long diffMs = wakeTime.getTime() - now.getTime();
     if (diffMs < 0) {
       diffMs = 0L;
     }
     Long sleepSecondsLong = diffMs / 1000L;
-    Integer sleepSeconds = sleepSecondsLong > MAX_INTEGER
+    return sleepSecondsLong > MAX_INTEGER
       ? MAX_INTEGER
       : (Integer) sleepSecondsLong;
-
-    StepResult result = new StepResult();
-    result.action = ActionType.SLEEP;
-    result.sleepDurationSeconds = sleepSeconds;
-    result.stepStateJson = stepStateJson;
-    return result;
   }
 
   public static StepResult startChild(
@@ -625,17 +688,17 @@ public inherited sharing class StepResult {
     return r;
   }
 
-  public static StepResult waitForApproval(
-    String key,
-    String role,
+  /**
+   * Arms a durable timeout on this WAIT_FOR_APPROVAL result, returning it for
+   * fluent chaining — e.g.
+   * StepResult.waitForApproval(key, role).withApprovalTimeout(60, 'TimeoutStep').
+   * If the deadline elapses before the approval, the engine routes to
+   * timeoutStep.
+   */
+  public StepResult withApprovalTimeout(
     Integer timeoutSeconds,
     String timeoutStep
   ) {
-    if (String.isBlank(key)) {
-      throw new IllegalArgumentException(
-        'StepResult.waitForApproval: key must not be blank'
-      );
-    }
     if (String.isBlank(timeoutStep)) {
       throw new IllegalArgumentException(
         'StepResult.waitForApproval: timeoutStep must not be blank'
@@ -646,13 +709,9 @@ public inherited sharing class StepResult {
         'StepResult.waitForApproval: timeoutSeconds must be a positive integer'
       );
     }
-    StepResult r = new StepResult();
-    r.action = ActionType.WAIT_FOR_APPROVAL;
-    r.approvalKey = key;
-    r.approvalRole = role;
-    r.timeoutSeconds = timeoutSeconds;
-    r.timeoutStep = timeoutStep;
-    return r;
+    this.timeoutSeconds = timeoutSeconds;
+    this.timeoutStep = timeoutStep;
+    return this;
   }
 
   public static StepResult split(List<String> stepNames) {
@@ -763,20 +822,21 @@ public inherited sharing class StepResult {
   }
 
   private static Boolean isJsonLike(String trimmed) {
-    if (
-      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+    return hasJsonDelimiters(trimmed) ||
+      trimmed == 'true' ||
+      trimmed == 'false' ||
+      trimmed == 'null' ||
+      // Match standard integer or float patterns in JSON
+      Pattern.matches('^-?\\d+(\\.\\d+)?([eE][+-]?\\d+)?$', trimmed);
+  }
+
+  /**
+   * True when the trimmed value is wrapped in matching JSON object, array, or
+   * string delimiters.
+   */
+  private static Boolean hasJsonDelimiters(String trimmed) {
+    return (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
       (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
-      (trimmed.startsWith('"') && trimmed.endsWith('"'))
-    ) {
-      return true;
-    }
-    if (trimmed == 'true' || trimmed == 'false' || trimmed == 'null') {
-      return true;
-    }
-    // Match standard integer or float patterns in JSON
-    if (Pattern.matches('^-?\\d+(\\.\\d+)?([eE][+-]?\\d+)?$', trimmed)) {
-      return true;
-    }
-    return false;
+      (trimmed.startsWith('"') && trimmed.endsWith('"'));
   }
 }

@@ -1401,11 +1401,13 @@ public inherited sharing class WorkflowEngine {
     String inputJson,
     Integer debounceSeconds
   ) {
-    WorkflowDebouncer.startDebounced(
+    startDebounced(
       workflowName,
       correlationKey,
       inputJson,
       debounceSeconds,
+      null,
+      null,
       null
     );
   }
@@ -1420,7 +1422,7 @@ public inherited sharing class WorkflowEngine {
     Integer debounceSeconds,
     Integer maxWaitSeconds
   ) {
-    WorkflowDebouncer.startDebounced(
+    startDebounced(
       workflowName,
       correlationKey,
       inputJson,
@@ -1443,14 +1445,16 @@ public inherited sharing class WorkflowEngine {
     String attributesJson,
     String causationId
   ) {
+    WorkflowDebouncer.DebounceRequest debounceReq = new WorkflowDebouncer.DebounceRequest();
+    debounceReq.workflowName = workflowName;
+    debounceReq.correlationKey = correlationKey;
+    debounceReq.inputJson = inputJson;
+    debounceReq.debounceSeconds = debounceSeconds;
+    debounceReq.maxWaitSeconds = maxWaitSeconds;
+    debounceReq.attributesJson = attributesJson;
+    debounceReq.causationId = causationId;
     WorkflowDebouncer.startDebounced(
-      workflowName,
-      correlationKey,
-      inputJson,
-      debounceSeconds,
-      maxWaitSeconds,
-      attributesJson,
-      causationId
+      new List<WorkflowDebouncer.DebounceRequest>{ debounceReq }
     );
   }
 
@@ -4248,25 +4252,29 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    StepContext context = StepContext.withCapturedValuesMap(
-      instanceId,
-      instance.Workflow_Name__c,
-      activeStepName,
-      resolvedInput,
-      resolvePayload(prevOutput),
-      resolvedState,
-      resolvePayload(instance.Input__c),
-      instance.Definition_Version__c != null
-        ? (Integer) instance.Definition_Version__c
-        : 1,
-      stepVisit,
-      signalSrc,
-      instance.Previous_Run_At__c,
-      capturesMap,
-      isTimeoutResume,
-      attempt,
-      maxAttempts
-    );
+    StepContext.Builder contextBuilder = new StepContext.Builder()
+      .instanceId(instanceId)
+      .workflowName(instance.Workflow_Name__c)
+      .stepName(activeStepName)
+      .inputJson(resolvedInput)
+      .previousStepOutput(resolvePayload(prevOutput))
+      .stepStateJson(resolvedState)
+      .workflowInputJson(resolvePayload(instance.Input__c))
+      .workflowVersion(
+        instance.Definition_Version__c != null
+          ? (Integer) instance.Definition_Version__c
+          : 1
+      )
+      .stepVisit(stepVisit)
+      .signalSource(signalSrc)
+      .previousRunAt(instance.Previous_Run_At__c)
+      .capturedValuesMap(capturesMap)
+      .attempt(attempt)
+      .maxAttempts(maxAttempts);
+    if (isTimeoutResume) {
+      contextBuilder.markTimeoutResume();
+    }
+    StepContext context = contextBuilder.build();
 
     // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts.
     // A CalloutStep performs a synchronous, payload-driven HTTP callout inside
@@ -4525,11 +4533,11 @@ public inherited sharing class WorkflowEngine {
       for (Integer i = 0; i < rows.size(); i++) {
         out.add(
           new StepContext.Signal(
-            rows[i].Id,
-            rows[i].Signal_Name__c,
-            resolvedPayloads[i],
-            rows[i].CreatedDate
-          )
+              rows[i].Id,
+              rows[i].Signal_Name__c,
+              resolvedPayloads[i]
+            )
+            .withCreatedDate(rows[i].CreatedDate)
         );
       }
       return out;
@@ -4641,12 +4649,12 @@ public inherited sharing class WorkflowEngine {
           // claimed = true: this branch now exclusively owns the row.
           result.add(
             new StepContext.Signal(
-              claimedRows[i].Id,
-              claimedRows[i].Signal_Name__c,
-              resolvedPayloads[i],
-              claimedRows[i].CreatedDate,
-              true
-            )
+                claimedRows[i].Id,
+                claimedRows[i].Signal_Name__c,
+                resolvedPayloads[i]
+              )
+              .withCreatedDate(claimedRows[i].CreatedDate)
+              .asClaimed()
           );
         }
         return result;
@@ -4691,11 +4699,11 @@ public inherited sharing class WorkflowEngine {
           capped = true;
           Workflow_Signal__c c = candidates[0];
           return new StepContext.Signal(
-            c.Id,
-            c.Signal_Name__c,
-            resolvePayload(c.Payload__c),
-            c.CreatedDate
-          );
+              c.Id,
+              c.Signal_Name__c,
+              resolvePayload(c.Payload__c)
+            )
+            .withCreatedDate(c.CreatedDate);
         }
         // Try to claim each candidate newest-first; if a sibling wins the race on
         // the newest row, fall back to the next-newest still-Received row instead
@@ -4718,12 +4726,12 @@ public inherited sharing class WorkflowEngine {
           claimStatementBudget -= 1;
           // claimed = true: this branch now exclusively owns the row.
           return new StepContext.Signal(
-            cand.Id,
-            cand.Signal_Name__c,
-            resolvePayload(cand.Payload__c),
-            cand.CreatedDate,
-            true
-          );
+              cand.Id,
+              cand.Signal_Name__c,
+              resolvePayload(cand.Payload__c)
+            )
+            .withCreatedDate(cand.CreatedDate)
+            .asClaimed();
         }
         // Every candidate in this page was claimed by a sibling between query and
         // lock; those rows are now Processing and drop out of the next query, so
@@ -4764,11 +4772,11 @@ public inherited sharing class WorkflowEngine {
       return null;
     }
     return new StepContext.Signal(
-      records[0].Id,
-      records[0].Signal_Name__c,
-      resolvePayload(records[0].Payload__c),
-      records[0].CreatedDate
-    );
+        records[0].Id,
+        records[0].Signal_Name__c,
+        resolvePayload(records[0].Payload__c)
+      )
+      .withCreatedDate(records[0].CreatedDate);
   }
 
   /**
@@ -4825,11 +4833,11 @@ public inherited sharing class WorkflowEngine {
     for (Integer i = 0; i < records.size(); i++) {
       signals.add(
         new StepContext.Signal(
-          records[i].Id,
-          records[i].Signal_Name__c,
-          resolvedPayloads[i],
-          records[i].CreatedDate
-        )
+            records[i].Id,
+            records[i].Signal_Name__c,
+            resolvedPayloads[i]
+          )
+          .withCreatedDate(records[i].CreatedDate)
       );
     }
     return signals;
@@ -9271,24 +9279,26 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    StepContext context = StepContext.withCapturedValuesMap(
-      instance.Id,
-      instance.Workflow_Name__c,
-      compensationStepLogName,
-      resolvePayload(stepExec.Input__c),
-      resolvePayload(prevOutput),
-      resolvePayload(stepExec.Output__c),
-      resolvePayload(instance.Input__c),
-      instance.Definition_Version__c != null
-        ? (Integer) instance.Definition_Version__c
-        : 1,
-      compensateVisit,
-      new PendingSignalSource(instance.Id),
-      instance.Previous_Run_At__c,
-      capturesMap,
-      attempt,
-      maxAttempts
-    );
+    StepContext context = new StepContext.Builder()
+      .instanceId(instance.Id)
+      .workflowName(instance.Workflow_Name__c)
+      .stepName(compensationStepLogName)
+      .inputJson(resolvePayload(stepExec.Input__c))
+      .previousStepOutput(resolvePayload(prevOutput))
+      .stepStateJson(resolvePayload(stepExec.Output__c))
+      .workflowInputJson(resolvePayload(instance.Input__c))
+      .workflowVersion(
+        instance.Definition_Version__c != null
+          ? (Integer) instance.Definition_Version__c
+          : 1
+      )
+      .stepVisit(compensateVisit)
+      .signalSource(new PendingSignalSource(instance.Id))
+      .previousRunAt(instance.Previous_Run_At__c)
+      .capturedValuesMap(capturesMap)
+      .attempt(attempt)
+      .maxAttempts(maxAttempts)
+      .build();
 
     // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts.
     // As in the forward execute() path, a CalloutStep performs a synchronous,

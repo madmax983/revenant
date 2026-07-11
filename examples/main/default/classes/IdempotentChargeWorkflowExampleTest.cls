@@ -79,15 +79,15 @@ public class IdempotentChargeWorkflowExampleTest {
       );
       insert replayAudit;
 
-      StepContext ctx = new StepContext(
-        instanceId,
-        'IdempotentChargeWorkflowExample.ChargeWorkflow',
-        stepName,
-        '{"amountCents":4200}',
-        null,
-        null,
-        '{"amountCents":4200}'
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('IdempotentChargeWorkflowExample.ChargeWorkflow')
+        .stepName(stepName)
+        .inputJson('{"amountCents":4200}')
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson('{"amountCents":4200}')
+        .build();
 
       // AC: the key is NOT derived from the per-attempt step-execution record Id.
       System.assertNotEquals(
@@ -139,28 +139,28 @@ public class IdempotentChargeWorkflowExampleTest {
     Id instanceId = '00D000000000009';
     String stepName = 'IdempotentChargeWorkflowExample.ChargePaymentStep';
 
-    StepContext visitZero = new StepContext(
-      instanceId,
-      'IdempotentChargeWorkflowExample.ChargeWorkflow',
-      stepName,
-      '{"amountCents":500}',
-      null,
-      null,
-      '{"amountCents":500}',
-      1,
-      0
-    );
-    StepContext visitOne = new StepContext(
-      instanceId,
-      'IdempotentChargeWorkflowExample.ChargeWorkflow',
-      stepName,
-      '{"amountCents":500}',
-      null,
-      null,
-      '{"amountCents":500}',
-      1,
-      1
-    );
+    StepContext visitZero = new StepContext.Builder()
+      .instanceId(instanceId)
+      .workflowName('IdempotentChargeWorkflowExample.ChargeWorkflow')
+      .stepName(stepName)
+      .inputJson('{"amountCents":500}')
+      .previousStepOutput(null)
+      .stepStateJson(null)
+      .workflowInputJson('{"amountCents":500}')
+      .workflowVersion(1)
+      .stepVisit(0)
+      .build();
+    StepContext visitOne = new StepContext.Builder()
+      .instanceId(instanceId)
+      .workflowName('IdempotentChargeWorkflowExample.ChargeWorkflow')
+      .stepName(stepName)
+      .inputJson('{"amountCents":500}')
+      .previousStepOutput(null)
+      .stepStateJson(null)
+      .workflowInputJson('{"amountCents":500}')
+      .workflowVersion(1)
+      .stepVisit(1)
+      .build();
 
     Map<String, Object> outZero = (Map<String, Object>) JSON.deserializeUntyped(
       new IdempotentChargeWorkflowExample.ChargePaymentStep()

@@ -53,65 +53,48 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
 
     List<WorkflowEngine.SignalOrStartRequest> engineRequests = new List<WorkflowEngine.SignalOrStartRequest>();
     for (SignalOrStartRequest req : requests) {
-      if (req == null) {
-        engineRequests.add(null);
-        continue;
-      }
-      Object input = null;
-      if (String.isNotBlank(req.inputJson)) {
-        try {
-          input = JSON.deserializeUntyped(req.inputJson);
-        } catch (Exception ex) {
-          throw new WorkflowEngine.WorkflowException(
-            'Invalid Input JSON: ' + ex.getMessage()
-          );
-        }
-      }
-      Map<String, String> attributes = null;
-      if (String.isNotBlank(req.attributesJson)) {
-        attributes = new Map<String, String>();
-        try {
-          Object deserialized = JSON.deserializeUntyped(req.attributesJson);
-          if (deserialized instanceof Map<String, Object>) {
-            Map<String, Object> raw = (Map<String, Object>) deserialized;
-            for (String k : raw.keySet()) {
-              attributes.put(k, String.valueOf(raw.get(k)));
-            }
-          } else {
-            throw new WorkflowEngine.WorkflowException(
-              'Attributes JSON must represent a key-value object.'
-            );
-          }
-        } catch (Exception ex) {
-          throw new WorkflowEngine.WorkflowException(
-            'Invalid Attributes JSON: ' + ex.getMessage()
-          );
-        }
-      }
-
-      WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
-        req.workflowName,
-        req.correlationKey,
-        input,
-        attributes
-      );
-      startReq.inputJson = req.inputJson;
-      startReq.causationId = req.causationId;
-
-      WorkflowEngine.SignalOrStartRequest engineReq = new WorkflowEngine.SignalOrStartRequest(
-        startReq,
-        req.signalName,
-        req.payloadJson,
-        req.idempotencyKey
-      );
-
-      engineRequests.add(engineReq);
+      engineRequests.add(toEngineRequest(req));
     }
 
     List<WorkflowEngine.StartResult> engineResults = WorkflowEngine.signalOrStart(
       engineRequests
     );
 
+    return toResults(engineResults);
+  }
+
+  private static WorkflowEngine.SignalOrStartRequest toEngineRequest(
+    SignalOrStartRequest req
+  ) {
+    if (req == null) {
+      return null;
+    }
+
+    Object input = WorkflowInvocableInputParser.parseInputJson(req.inputJson);
+    Map<String, String> attributes = WorkflowInvocableInputParser.parseAttributesJson(
+      req.attributesJson
+    );
+
+    WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
+      req.workflowName,
+      req.correlationKey,
+      input,
+      attributes
+    );
+    startReq.inputJson = req.inputJson;
+    startReq.causationId = req.causationId;
+
+    return new WorkflowEngine.SignalOrStartRequest(
+      startReq,
+      req.signalName,
+      req.payloadJson,
+      req.idempotencyKey
+    );
+  }
+
+  private static List<SignalOrStartResult> toResults(
+    List<WorkflowEngine.StartResult> engineResults
+  ) {
     List<SignalOrStartResult> results = new List<SignalOrStartResult>();
     for (WorkflowEngine.StartResult engineResult : engineResults) {
       SignalOrStartResult res = new SignalOrStartResult();

@@ -18,6 +18,12 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
   // Capped at 4 because of Salesforce Apex's hard limit of 5 savepoints per transaction, leaving 1 slot for safety/triggers.
   public static Integer defaultChunkSize = 4;
 
+  private enum CancelOutcome {
+    CANCELLED,
+    SKIPPED,
+    ERRORED
+  }
+
   // ---- WorkflowDefinition ----
 
   public List<String> getSteps() {
@@ -34,16 +40,13 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
 
   // ---- Eligible-selection helpers ----
 
-  private static List<String> effectiveStatuses(String status) {
-    List<String> result = new List<String>();
-    if (String.isNotBlank(status)) {
-      if (ELIGIBLE_STATUSES.contains(status)) {
-        result.add(status);
-      }
-    } else {
-      result.addAll(ELIGIBLE_STATUSES);
-    }
-    return result;
+  /**
+   * Shared selection surface. The eligible-status set and the self-exclusion
+   * name are this job's only variance from BulkRedriveWorkflow, so both are
+   * injected into the one shared selector implementation.
+   */
+  private static BulkWorkflowSelector selector() {
+    return new BulkWorkflowSelector(ELIGIBLE_STATUSES, CANCELER_WORKFLOW_NAME);
   }
 
   public static Integer countEligible(
@@ -51,308 +54,170 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
     String status,
     String searchTerm
   ) {
-    List<String> effStatuses = effectiveStatuses(status);
-    if (effStatuses.isEmpty()) {
-      return 0;
-    }
-    String excludeName = CANCELER_WORKFLOW_NAME;
-    String likeTerm = String.isNotBlank(searchTerm)
-      ? '%' + searchTerm + '%'
-      : null;
-
-    if (String.isBlank(workflowName)) {
-      if (likeTerm == null) {
-        return [
-          SELECT COUNT()
-          FROM Workflow_Instance__c
-          WHERE Status__c IN :effStatuses AND Workflow_Name__c != :excludeName
-          WITH SYSTEM_MODE
-        ];
-      } else {
-        return [
-          SELECT COUNT()
-          FROM Workflow_Instance__c
-          WHERE
-            Status__c IN :effStatuses
-            AND Workflow_Name__c != :excludeName
-            AND (Name LIKE :likeTerm
-            OR Correlation_Key__c LIKE :likeTerm
-            OR Workflow_Name__c LIKE :likeTerm
-            OR Error_Message__c LIKE :likeTerm)
-          WITH SYSTEM_MODE
-        ];
-      }
-    } else {
-      if (likeTerm == null) {
-        return [
-          SELECT COUNT()
-          FROM Workflow_Instance__c
-          WHERE
-            Status__c IN :effStatuses
-            AND Workflow_Name__c != :excludeName
-            AND Workflow_Name__c = :workflowName
-          WITH SYSTEM_MODE
-        ];
-      } else {
-        return [
-          SELECT COUNT()
-          FROM Workflow_Instance__c
-          WHERE
-            Status__c IN :effStatuses
-            AND Workflow_Name__c != :excludeName
-            AND Workflow_Name__c = :workflowName
-            AND (Name LIKE :likeTerm
-            OR Correlation_Key__c LIKE :likeTerm
-            OR Workflow_Name__c LIKE :likeTerm
-            OR Error_Message__c LIKE :likeTerm)
-          WITH SYSTEM_MODE
-        ];
-      }
-    }
-  }
-
-  public static List<Id> fetchEligibleChunk(
-    String workflowName,
-    String status,
-    String searchTerm,
-    Id afterId,
-    Integer chunkSize
-  ) {
-    List<String> effStatuses = effectiveStatuses(status);
-    if (effStatuses.isEmpty()) {
-      return new List<Id>();
-    }
-    String excludeName = CANCELER_WORKFLOW_NAME;
-    String likeTerm = String.isNotBlank(searchTerm)
-      ? '%' + searchTerm + '%'
-      : null;
-    Integer lim = chunkSize;
-
-    List<Workflow_Instance__c> rows;
-    if (afterId == null) {
-      if (String.isBlank(workflowName)) {
-        if (likeTerm == null) {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE Status__c IN :effStatuses AND Workflow_Name__c != :excludeName
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        } else {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND (Name LIKE :likeTerm
-              OR Correlation_Key__c LIKE :likeTerm
-              OR Workflow_Name__c LIKE :likeTerm
-              OR Error_Message__c LIKE :likeTerm)
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        }
-      } else {
-        if (likeTerm == null) {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND Workflow_Name__c = :workflowName
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        } else {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND Workflow_Name__c = :workflowName
-              AND (Name LIKE :likeTerm
-              OR Correlation_Key__c LIKE :likeTerm
-              OR Workflow_Name__c LIKE :likeTerm
-              OR Error_Message__c LIKE :likeTerm)
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        }
-      }
-    } else {
-      if (String.isBlank(workflowName)) {
-        if (likeTerm == null) {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND Id > :afterId
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        } else {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND Id > :afterId
-              AND (Name LIKE :likeTerm
-              OR Correlation_Key__c LIKE :likeTerm
-              OR Workflow_Name__c LIKE :likeTerm
-              OR Error_Message__c LIKE :likeTerm)
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        }
-      } else {
-        if (likeTerm == null) {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND Id > :afterId
-              AND Workflow_Name__c = :workflowName
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        } else {
-          rows = [
-            SELECT Id
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c IN :effStatuses
-              AND Workflow_Name__c != :excludeName
-              AND Id > :afterId
-              AND Workflow_Name__c = :workflowName
-              AND (Name LIKE :likeTerm
-              OR Correlation_Key__c LIKE :likeTerm
-              OR Workflow_Name__c LIKE :likeTerm
-              OR Error_Message__c LIKE :likeTerm)
-            WITH SYSTEM_MODE
-            ORDER BY Id ASC
-            LIMIT :lim
-          ];
-        }
-      }
-    }
-
-    List<Id> ids = new List<Id>();
-    for (Workflow_Instance__c inst : rows) {
-      ids.add(inst.Id);
-    }
-    return ids;
+    return selector()
+      .count(
+        new BulkWorkflowSelector.Criteria(workflowName, status, searchTerm)
+      );
   }
 
   // ---- The cancel step ----
 
-  public class BulkCancelStep implements WorkflowStep {
-    public StepResult execute(StepContext ctx) {
-      Map<String, Object> state;
-      if (String.isNotBlank(ctx.stepStateJson)) {
-        state = (Map<String, Object>) JSON.deserializeUntyped(
-          ctx.stepStateJson
-        );
-      } else {
-        state = new Map<String, Object>();
-        if (String.isNotBlank(ctx.workflowInputJson)) {
-          Map<String, Object> filter = (Map<String, Object>) JSON.deserializeUntyped(
-            ctx.workflowInputJson
-          );
-          state.put('workflowName', filter.get('workflowName'));
-          state.put('status', filter.get('status'));
-          state.put('searchTerm', filter.get('searchTerm'));
-          state.put('runCompensations', filter.get('runCompensations'));
-        }
-      }
+  /**
+   * Mutable per-execution progress: the resumable cursor plus the running
+   * cancelled / skipped / errored tallies and how many rows this pass handled.
+   */
+  private class Progress {
+    Id afterId;
+    Integer cancelled = 0;
+    Integer skipped = 0;
+    Integer errored = 0;
+    Integer processed = 0;
+  }
 
+  public inherited sharing class BulkCancelStep implements WorkflowStep {
+    public StepResult execute(StepContext ctx) {
+      Map<String, Object> state = BulkWorkflowStepState.hydrate(
+        ctx,
+        new List<String>{
+          'workflowName',
+          'status',
+          'searchTerm',
+          'runCompensations'
+        }
+      );
       String workflowName = (String) state.get('workflowName');
       String status = (String) state.get('status');
       String searchTerm = (String) state.get('searchTerm');
-      Boolean runCompensations = state.get('runCompensations') == true;
-      Id afterId = state.get('lastId') != null
-        ? (Id) (String) state.get('lastId')
-        : null;
-      Integer cancelled = intOf(state.get('cancelled'));
-      Integer skipped = intOf(state.get('skipped'));
-      Integer errored = intOf(state.get('errored'));
-
       Integer chunkSize = defaultChunkSize;
-      List<Id> chunk = fetchEligibleChunk(
-        workflowName,
-        status,
-        searchTerm,
-        afterId,
-        chunkSize
-      );
 
-      Integer processed = 0;
-      for (Id instId : chunk) {
-        if (ctx.shouldYield()) {
-          break;
-        }
-        Savepoint sp = Database.setSavepoint();
-        try {
-          List<Workflow_Instance__c> toCancel = [
-            SELECT Status__c
-            FROM Workflow_Instance__c
-            WHERE Id = :instId
-            WITH SYSTEM_MODE
-            FOR UPDATE
-          ];
-          if (
-            !toCancel.isEmpty() &&
-            ELIGIBLE_STATUSES.contains(toCancel[0].Status__c)
-          ) {
-            WorkflowEngine.cancel(instId, runCompensations);
-            cancelled++;
-          } else {
-            skipped++;
-          }
-        } catch (Exception ex) {
-          Database.rollback(sp);
-          errored++;
-        }
-        afterId = instId;
-        processed++;
+      List<Id> chunk = selector()
+        .fetchChunk(
+          new BulkWorkflowSelector.Criteria(workflowName, status, searchTerm),
+          BulkWorkflowStepState.cursorFrom(state),
+          chunkSize
+        );
 
-        if (ctx.shouldYield()) {
-          break;
-        }
-      }
+      Progress p = processChunk(ctx, chunk, state);
 
-      state.put('workflowName', workflowName);
-      state.put('status', status);
-      state.put('searchTerm', searchTerm);
-      state.put('runCompensations', runCompensations);
-      state.put('lastId', afterId == null ? null : String.valueOf(afterId));
-      state.put('cancelled', cancelled);
-      state.put('skipped', skipped);
-      state.put('errored', errored);
+      // The filter keys (workflowName/status/runCompensations/...) are already
+      // carried in `state` by BulkWorkflowStepState.hydrate and never mutated, so
+      // only the cursor and tallies need to be written back before serializing.
+      state.put('lastId', p.afterId == null ? null : String.valueOf(p.afterId));
+      state.put('cancelled', p.cancelled);
+      state.put('skipped', p.skipped);
+      state.put('errored', p.errored);
 
       Boolean moreRemain =
-        (processed < chunk.size()) || (chunk.size() == chunkSize);
+        (p.processed < chunk.size()) || (chunk.size() == chunkSize);
       if (moreRemain) {
         return StepResult.yield(JSON.serialize(state));
       }
 
-      Map<String, Object> summary = new Map<String, Object>{
+      return StepResult.complete(
+        null,
+        buildSummary(p.cancelled, p.skipped, p.errored)
+      );
+    }
+
+    /**
+     * Processes one chunk: locks the whole (<= chunkSize) chunk once up front
+     * (one FOR UPDATE instead of one query per instance), then cancels each
+     * still-eligible instance in its own savepoint, advancing the cursor and
+     * tallies. Yields early (breaks) when the governor budget runs low.
+     */
+    private Progress processChunk(
+      StepContext ctx,
+      List<Id> chunk,
+      Map<String, Object> state
+    ) {
+      Boolean runCompensations = state.get('runCompensations') == true;
+      Map<Id, String> statusById = lockStatuses(chunk);
+
+      Progress p = new Progress();
+      p.afterId = BulkWorkflowStepState.cursorFrom(state);
+      p.cancelled = BulkWorkflowStepState.intOf(state.get('cancelled'));
+      p.skipped = BulkWorkflowStepState.intOf(state.get('skipped'));
+      p.errored = BulkWorkflowStepState.intOf(state.get('errored'));
+
+      for (Id instId : chunk) {
+        if (ctx.shouldYield()) {
+          break;
+        }
+        // Each cancel keeps its own savepoint (see cancelOne), so one poison
+        // instance rolls back only itself — never the peers already cancelled.
+        switch on cancelOne(instId, statusById.get(instId), runCompensations) {
+          when CANCELLED {
+            p.cancelled++;
+          }
+          when SKIPPED {
+            p.skipped++;
+          }
+          when else {
+            p.errored++;
+          }
+        }
+        p.afterId = instId;
+        p.processed++;
+
+        if (ctx.shouldYield()) {
+          break;
+        }
+      }
+      return p;
+    }
+
+    /**
+     * One bulk FOR UPDATE read of the chunk, returning each instance's current
+     * status keyed by Id. Locking the tiny chunk in a single query preserves the
+     * pre-cancel status recheck while keeping SOQL out of the per-instance loop.
+     */
+    private Map<Id, String> lockStatuses(List<Id> ids) {
+      Map<Id, String> statusById = new Map<Id, String>();
+      if (ids.isEmpty()) {
+        return statusById;
+      }
+      for (Workflow_Instance__c inst : [
+        SELECT Id, Status__c
+        FROM Workflow_Instance__c
+        WHERE Id IN :ids
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ]) {
+        statusById.put(inst.Id, inst.Status__c);
+      }
+      return statusById;
+    }
+
+    /**
+     * Cancels a single instance inside its own savepoint. A still-eligible
+     * instance is cancelled; anything no longer eligible (or missing) is skipped;
+     * any failure rolls back that instance's partial writes and is counted as an
+     * error, leaving peers untouched.
+     */
+    private CancelOutcome cancelOne(
+      Id instId,
+      String currentStatus,
+      Boolean runCompensations
+    ) {
+      if (currentStatus == null || !ELIGIBLE_STATUSES.contains(currentStatus)) {
+        return CancelOutcome.SKIPPED;
+      }
+      Savepoint sp = Database.setSavepoint();
+      try {
+        WorkflowEngine.cancel(instId, runCompensations);
+        return CancelOutcome.CANCELLED;
+      } catch (Exception ex) {
+        Database.rollback(sp);
+        return CancelOutcome.ERRORED;
+      }
+    }
+
+    private Map<String, Object> buildSummary(
+      Integer cancelled,
+      Integer skipped,
+      Integer errored
+    ) {
+      return new Map<String, Object>{
         'cancelled' => cancelled,
         'skipped' => skipped,
         'errored' => errored,
@@ -360,11 +225,6 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
         skipped +
         errored
       };
-      return StepResult.complete(null, summary);
-    }
-
-    private Integer intOf(Object o) {
-      return o == null ? 0 : Integer.valueOf(String.valueOf(o));
     }
   }
 }

@@ -222,7 +222,7 @@ public class WorkflowScheduleControllerTest {
       insert sched;
 
       Test.startTest();
-      WorkflowScheduleController.setEnabled(sched.Id, true);
+      WorkflowScheduleController.enableSchedule(sched.Id);
       Test.stopTest();
 
       Workflow_Schedule__c after = [
@@ -244,7 +244,7 @@ public class WorkflowScheduleControllerTest {
       insert sched;
 
       Test.startTest();
-      WorkflowScheduleController.setEnabled(sched.Id, false);
+      WorkflowScheduleController.disableSchedule(sched.Id);
       Workflow_Schedule__c afterToggle = [
         SELECT Enabled__c
         FROM Workflow_Schedule__c
@@ -461,7 +461,7 @@ public class WorkflowScheduleControllerTest {
       ];
       System.assertEquals(1, armed, 'Dedicated job should be armed');
 
-      WorkflowScheduleController.setEnabled(sched.Id, false);
+      WorkflowScheduleController.disableSchedule(sched.Id);
       Test.stopTest();
 
       Integer afterDisable = [

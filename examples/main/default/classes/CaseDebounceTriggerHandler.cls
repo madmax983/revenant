@@ -21,15 +21,13 @@ public inherited sharing class CaseDebounceTriggerHandler {
         };
 
         // Collect bulk debounce request: debounce for 5 seconds
-        debounceRequests.add(
-          new WorkflowDebouncer.DebounceRequest(
-            'CaseDebounceWorkflowExample',
-            'Case_Debounce_' + c.Id,
-            JSON.serialize(input),
-            5, // debounceSeconds
-            null // maxWaitSeconds
-          )
-        );
+        WorkflowDebouncer.DebounceRequest debounceReq = new WorkflowDebouncer.DebounceRequest();
+        debounceReq.workflowName = 'CaseDebounceWorkflowExample';
+        debounceReq.correlationKey = 'Case_Debounce_' + c.Id;
+        debounceReq.inputJson = JSON.serialize(input);
+        debounceReq.debounceSeconds = 5;
+        debounceReq.maxWaitSeconds = null;
+        debounceRequests.add(debounceReq);
       }
     }
 

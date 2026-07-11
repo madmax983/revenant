@@ -1,5 +1,77 @@
 @IsTest
 public class WorkflowSearchAttributesDashboardTest {
+  // Query-wrapper builders: assemble the WorkflowDashboardController read-method request
+  // objects by field assignment (a 1:1 repackaging of the former positional arguments).
+  private static WorkflowDashboardController.InstanceQuery iqOf(
+    String workflowName,
+    String status,
+    String searchTerm,
+    String failureCategory,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster,
+    String attributesFilterJson
+  ) {
+    WorkflowDashboardController.InstanceQuery q = new WorkflowDashboardController.InstanceQuery();
+    q.workflowName = workflowName;
+    q.status = status;
+    q.searchTerm = searchTerm;
+    q.failureCategory = failureCategory;
+    q.limitSize = limitSize;
+    q.offsetSize = offsetSize;
+    q.cacheBuster = cacheBuster;
+    q.attributesFilterJson = attributesFilterJson;
+    return q;
+  }
+
+  private static WorkflowDashboardController.InstanceQuery sqOf(
+    String workflowName,
+    String status,
+    String searchTerm,
+    String attributesFilterJson
+  ) {
+    WorkflowDashboardController.InstanceQuery q = new WorkflowDashboardController.InstanceQuery();
+    q.workflowName = workflowName;
+    q.status = status;
+    q.searchTerm = searchTerm;
+    q.attributesFilterJson = attributesFilterJson;
+    return q;
+  }
+
+  private static WorkflowDashboardController.StalledQuery stalledOf(
+    String workflowName,
+    String searchTerm,
+    Integer thresholdMinutes,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster,
+    String attributesFilterJson
+  ) {
+    WorkflowDashboardController.StalledQuery q = new WorkflowDashboardController.StalledQuery();
+    q.workflowName = workflowName;
+    q.searchTerm = searchTerm;
+    q.thresholdMinutes = thresholdMinutes;
+    q.limitSize = limitSize;
+    q.offsetSize = offsetSize;
+    q.cacheBuster = cacheBuster;
+    q.attributesFilterJson = attributesFilterJson;
+    return q;
+  }
+
+  private static WorkflowDashboardController.StalledQuery countOf(
+    String workflowName,
+    String searchTerm,
+    Integer thresholdMinutes,
+    String attributesFilterJson
+  ) {
+    WorkflowDashboardController.StalledQuery q = new WorkflowDashboardController.StalledQuery();
+    q.workflowName = workflowName;
+    q.searchTerm = searchTerm;
+    q.thresholdMinutes = thresholdMinutes;
+    q.attributesFilterJson = attributesFilterJson;
+    return q;
+  }
+
   @IsTest
   static void testGetInstanceDetailsAttributes() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
@@ -59,14 +131,7 @@ public class WorkflowSearchAttributesDashboardTest {
       Test.startTest();
       // 1. Filter by region=EU
       List<Map<String, Object>> res1 = WorkflowDashboardController.getFilteredInstances(
-        null,
-        null,
-        null,
-        null,
-        10,
-        0,
-        null,
-        '{"region":"EU"}'
+        iqOf(null, null, null, null, 10, 0, null, '{"region":"EU"}')
       );
       System.assertEquals(
         2,
@@ -82,14 +147,16 @@ public class WorkflowSearchAttributesDashboardTest {
 
       // 2. Filter by region=EU AND tier=enterprise (AND combination)
       List<Map<String, Object>> res2 = WorkflowDashboardController.getFilteredInstances(
-        null,
-        null,
-        null,
-        null,
-        10,
-        0,
-        null,
-        '{"region":"EU","tier":"enterprise"}'
+        iqOf(
+          null,
+          null,
+          null,
+          null,
+          10,
+          0,
+          null,
+          '{"region":"EU","tier":"enterprise"}'
+        )
       );
       System.assertEquals(
         1,
@@ -100,23 +167,13 @@ public class WorkflowSearchAttributesDashboardTest {
 
       // 3. Filter by non-existent key
       List<Map<String, Object>> res3 = WorkflowDashboardController.getFilteredInstances(
-        null,
-        null,
-        null,
-        null,
-        10,
-        0,
-        null,
-        '{"nonexistent":"val"}'
+        iqOf(null, null, null, null, 10, 0, null, '{"nonexistent":"val"}')
       );
       System.assertEquals(0, res3.size(), 'Should find 0 instances');
 
       // 4. Test stats filter
       Map<String, Integer> stats = WorkflowDashboardController.getWorkflowStats(
-        null,
-        null,
-        null,
-        '{"region":"EU","tier":"enterprise"}'
+        sqOf(null, null, null, '{"region":"EU","tier":"enterprise"}')
       );
       System.assertEquals(1, stats.get('total'), 'Stats total should be 1');
       Test.stopTest();
@@ -150,13 +207,7 @@ public class WorkflowSearchAttributesDashboardTest {
       Test.startTest();
       // 1. Get stalled list with matching filter region=EU
       List<Map<String, Object>> stalledList1 = WorkflowDashboardController.getStalledInstances(
-        null,
-        null,
-        -1,
-        10,
-        0,
-        null,
-        '{"region":"EU"}'
+        stalledOf(null, null, -1, 10, 0, null, '{"region":"EU"}')
       );
       System.assertEquals(
         1,
@@ -167,22 +218,13 @@ public class WorkflowSearchAttributesDashboardTest {
 
       // 2. Get stalled count with matching filter region=EU
       Map<String, Object> countRes1 = WorkflowDashboardController.getStalledCount(
-        null,
-        null,
-        -1,
-        '{"region":"EU"}'
+        countOf(null, null, -1, '{"region":"EU"}')
       );
       System.assertEquals(1, countRes1.get('count'), 'Count should be 1');
 
       // 3. Get stalled list with mismatching filter region=US
       List<Map<String, Object>> stalledList2 = WorkflowDashboardController.getStalledInstances(
-        null,
-        null,
-        -1,
-        10,
-        0,
-        null,
-        '{"region":"US"}'
+        stalledOf(null, null, -1, 10, 0, null, '{"region":"US"}')
       );
       System.assertEquals(
         0,

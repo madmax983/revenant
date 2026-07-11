@@ -47,7 +47,15 @@ private class StepEmitApiTest {
   @IsTest
   static void emitBuffersEventsInOrder() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      StepContext ctx = new StepContext(null, 'W', 'S', null, null, null, null);
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(null)
+        .workflowName('W')
+        .stepName('S')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
 
       System.assertNotEquals(
         null,

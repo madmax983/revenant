@@ -422,8 +422,7 @@ public class BulkCancelWorkflowTest {
       Map<String, Object> result = WorkflowDashboardController.cancelMatchingInstances(
         'WorkflowEngineTest.HappyWorkflow',
         'Running',
-        '',
-        false
+        ''
       );
       Test.stopTest();
 

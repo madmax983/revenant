@@ -126,10 +126,15 @@ public inherited sharing class WorkflowPauseGate {
     // Delete pause records
     List<Workflow_Pause_State__c> toDelete;
     if (workflowName == '*') {
+      // Org-wide resume: every pause record. Bounded by the SOQL row cap (the pause
+      // table holds at most one row per paused definition plus the '*' sentinel, far
+      // below it) so the LIMIT satisfies AvoidNonRestrictiveQueries while returning the
+      // identical result set.
       toDelete = [
         SELECT Id
         FROM Workflow_Pause_State__c
         WITH SYSTEM_MODE
+        LIMIT 50000
       ];
     } else {
       // Resume only the named definition. A wildcard ('*') pause is org-wide
@@ -176,27 +181,7 @@ public inherited sharing class WorkflowPauseGate {
   // Each call re-queries only still-Paused rows, so already-resumed instances
   // (now Running) are naturally excluded — no offset paging needed.
   private static Boolean resumeParkedChunk(String workflowName) {
-    List<Workflow_Instance__c> parked;
-    if (workflowName == '*') {
-      parked = [
-        SELECT Id, Current_Step__c, Status__c, Compensation_Stack__c
-        FROM Workflow_Instance__c
-        WHERE Status__c = 'Paused'
-        WITH SYSTEM_MODE
-        LIMIT :resumeChunkSize
-        FOR UPDATE
-      ];
-    } else {
-      parked = [
-        SELECT Id, Current_Step__c, Status__c, Compensation_Stack__c
-        FROM Workflow_Instance__c
-        WHERE Status__c = 'Paused' AND Workflow_Name__c = :workflowName
-        WITH SYSTEM_MODE
-        LIMIT :resumeChunkSize
-        FOR UPDATE
-      ];
-    }
-
+    List<Workflow_Instance__c> parked = loadParkedChunk(workflowName);
     if (parked.isEmpty()) {
       return false;
     }
@@ -220,14 +205,54 @@ public inherited sharing class WorkflowPauseGate {
     }
     update as system toUpdate;
 
-    // Reserve the queueable slot for the next drain chunk BEFORE re-arming timeouts.
-    // reArmTimeoutsForResume enqueues best-effort timeout queueables that can consume
-    // every available slot; the drain is load-bearing (skipping it strands the parked
-    // backlog), so it must claim its slot first. The timeout jobs that follow fall back
-    // to System.schedule when no slot remains and retain their watchdog Timeout_At__c
-    // safety net. Both callers (resumeDefinition and ResumeChunkQueueable) route the
-    // continuation through here so the reservation is applied uniformly and guarded.
     Boolean moreRemain = parked.size() == resumeChunkSize;
+    enqueueDrainContinuation(workflowName, moreRemain);
+
+    // Re-arm step timeouts BEFORE enqueueing the resumed workers, so a delayed worker
+    // (or a step that defers its pre-exec DML) still has an enforced watchdog deadline.
+    WorkflowEngine.reArmTimeoutsForResume(toUpdate);
+
+    enqueueResumedWorkers(serialIds, parallelInsts);
+
+    return moreRemain;
+  }
+
+  // Selects up to resumeChunkSize still-Paused instances for the scope, locking them so
+  // concurrent drains don't double-resume.
+  private static List<Workflow_Instance__c> loadParkedChunk(
+    String workflowName
+  ) {
+    if (workflowName == '*') {
+      return [
+        SELECT Id, Current_Step__c, Status__c, Compensation_Stack__c
+        FROM Workflow_Instance__c
+        WHERE Status__c = 'Paused'
+        WITH SYSTEM_MODE
+        LIMIT :resumeChunkSize
+        FOR UPDATE
+      ];
+    }
+    return [
+      SELECT Id, Current_Step__c, Status__c, Compensation_Stack__c
+      FROM Workflow_Instance__c
+      WHERE Status__c = 'Paused' AND Workflow_Name__c = :workflowName
+      WITH SYSTEM_MODE
+      LIMIT :resumeChunkSize
+      FOR UPDATE
+    ];
+  }
+
+  // Reserve the queueable slot for the next drain chunk BEFORE re-arming timeouts.
+  // reArmTimeoutsForResume enqueues best-effort timeout queueables that can consume
+  // every available slot; the drain is load-bearing (skipping it strands the parked
+  // backlog), so it must claim its slot first. The timeout jobs that follow fall back
+  // to System.schedule when no slot remains and retain their watchdog Timeout_At__c
+  // safety net. Both callers (resumeDefinition and ResumeChunkQueueable) route the
+  // continuation through here so the reservation is applied uniformly and guarded.
+  private static void enqueueDrainContinuation(
+    String workflowName,
+    Boolean moreRemain
+  ) {
     if (
       moreRemain &&
       !Test.isRunningTest() &&
@@ -235,11 +260,14 @@ public inherited sharing class WorkflowPauseGate {
     ) {
       System.enqueueJob(new ResumeChunkQueueable(workflowName));
     }
+  }
 
-    // Re-arm step timeouts BEFORE enqueueing the resumed workers, so a delayed worker
-    // (or a step that defers its pre-exec DML) still has an enforced watchdog deadline.
-    WorkflowEngine.reArmTimeoutsForResume(toUpdate);
-
+  // Enqueues the resumed workers: serial instances via the engine's bulk orchestrator
+  // enqueue, parallel (multi-branch) instances via per-branch fan-out.
+  private static void enqueueResumedWorkers(
+    List<Id> serialIds,
+    List<Workflow_Instance__c> parallelInsts
+  ) {
     // Honor the engine's test opt-out so a suite asserting only the
     // Paused -> Running resume transition is not carried to completion by a
     // worker draining at Test.stopTest() (mirrors the watchdog enqueue guards).
@@ -252,8 +280,6 @@ public inherited sharing class WorkflowPauseGate {
     if (!parallelInsts.isEmpty()) {
       enqueueResumeBulkParallel(parallelInsts);
     }
-
-    return moreRemain;
   }
 
   // Drains the remaining parked-instance backlog for a resumed scope in chunks,
@@ -265,10 +291,45 @@ public inherited sharing class WorkflowPauseGate {
       this.workflowName = workflowName;
     }
     public void execute(QueueableContext ctx) {
+      // Attach a finalizer so an unhandled failure mid-drain is surfaced to the log
+      // sink rather than vanishing. The finalizer runs even if execute() throws.
+      System.attachFinalizer(new ResumeChunkFinalizer(this.workflowName));
       // resumeParkedChunk chains the next continuation itself (reserving the single
       // queueable slot allowed in this context for the drain ahead of best-effort
       // timeout jobs), so no re-chain is needed here.
       resumeParkedChunk(this.workflowName);
+    }
+  }
+
+  // Best-effort failure sink for the parked-instance drain. On an unhandled exception in
+  // ResumeChunkQueueable the drain chain would otherwise stop silently, stranding the
+  // remaining Paused backlog; this records the failure so operators can see it. The
+  // success path is untouched (it only acts on UNHANDLED_EXCEPTION).
+  public class ResumeChunkFinalizer implements Finalizer {
+    private final String workflowName;
+    public ResumeChunkFinalizer(String workflowName) {
+      this.workflowName = workflowName;
+    }
+    public void execute(FinalizerContext ctx) {
+      if (
+        ctx == null ||
+        ctx.getResult() != ParentJobResult.UNHANDLED_EXCEPTION
+      ) {
+        return;
+      }
+      Exception ex = ctx.getException();
+      String detail = (ex == null) ? 'unknown error' : ex.getMessage();
+      // WorkflowLog.error swallows its own DML failures, so this stays best-effort.
+      WorkflowLog.error(
+        'WorkflowPauseGate.ResumeChunkQueueable',
+        'Parked-instance resume drain failed for scope "' +
+          workflowName +
+          '": ' +
+          detail,
+        null,
+        null,
+        workflowName
+      );
     }
   }
 
@@ -295,10 +356,14 @@ public inherited sharing class WorkflowPauseGate {
   }
 
   private static void loadCache() {
+    // Every pause record feeds the transaction cache. Bounded by the SOQL row cap (one
+    // row per paused definition plus the '*' sentinel, far below it) so the LIMIT
+    // satisfies AvoidNonRestrictiveQueries while returning the identical result set.
     List<Workflow_Pause_State__c> records = [
       SELECT Workflow_Name__c
       FROM Workflow_Pause_State__c
       WITH SYSTEM_MODE
+      LIMIT 50000
     ];
     cachedPausedNames = new Set<String>();
     for (Workflow_Pause_State__c r : records) {
@@ -316,18 +381,30 @@ public inherited sharing class WorkflowPauseGate {
   }
 
   // Fan-out a resume enqueue per unfinished parallel branch (mirrors the logic
-  // in WorkflowEngine.enqueueResumeBulk but called from outside the engine).
+  // in WorkflowEngine.enqueueResumeBulk but called from outside the engine). The
+  // production path collects one RUN_STEP event per branch and publishes them in a
+  // single EventBus.publish; the test path dispatches per branch directly.
   private static void enqueueResumeBulkParallel(
     List<Workflow_Instance__c> instances
   ) {
-    List<Workflow_Event__e> events = new List<Workflow_Event__e>();
-    Set<String> branchKeys = new Set<String>();
+    Map<String, String> latestStatusByKey = resolveLatestBranchStatus(
+      instances
+    );
+    List<Workflow_Event__e> events = collectResumeBranchEvents(
+      instances,
+      latestStatusByKey
+    );
+    publishResumeEvents(events);
+  }
 
-    // Current_Step__c retains every branch name until the join, including ones
-    // whose step row is already Completed. Resolve the latest status per
-    // (instance, branch) so completed branches are skipped — driving a no-op
-    // worker per finished branch would waste the resume publish/DML budget and
-    // could roll back the resume (mirrors WorkflowEngine.enqueueResumeBulk).
+  // Current_Step__c retains every branch name until the join, including ones
+  // whose step row is already Completed. Resolve the latest status per
+  // (instance, branch) so completed branches can be skipped — driving a no-op
+  // worker per finished branch would waste the resume publish/DML budget and
+  // could roll back the resume (mirrors WorkflowEngine.enqueueResumeBulk).
+  private static Map<String, String> resolveLatestBranchStatus(
+    List<Workflow_Instance__c> instances
+  ) {
     Set<Id> instanceIds = new Set<Id>();
     Set<String> branchNames = new Set<String>();
     for (Workflow_Instance__c inst : instances) {
@@ -336,6 +413,7 @@ public inherited sharing class WorkflowPauseGate {
         branchNames.add(branch.trim());
       }
     }
+
     Map<String, String> latestStatusByKey = new Map<String, String>();
     for (Workflow_Step_Execution__c se : [
       SELECT Workflow_Instance__c, Step_Name__c, Status__c
@@ -351,49 +429,77 @@ public inherited sharing class WorkflowPauseGate {
         latestStatusByKey.put(statusKey, se.Status__c);
       }
     }
+    return latestStatusByKey;
+  }
 
+  // Walks each instance's branches once, skipping completed and duplicate branches, and
+  // dispatches a worker for each unfinished branch. Returns the RUN_STEP events to be
+  // published (empty in test context, where dispatchBranch enqueues directly instead).
+  private static List<Workflow_Event__e> collectResumeBranchEvents(
+    List<Workflow_Instance__c> instances,
+    Map<String, String> latestStatusByKey
+  ) {
+    List<Workflow_Event__e> events = new List<Workflow_Event__e>();
+    Set<String> branchKeys = new Set<String>();
     for (Workflow_Instance__c inst : instances) {
-      List<String> branches = inst.Current_Step__c.split(',');
-      for (String branch : branches) {
-        String key = inst.Id + '|' + branch.trim();
+      for (String branch : inst.Current_Step__c.split(',')) {
+        String trimmed = branch.trim();
+        String key = inst.Id + '|' + trimmed;
         if (latestStatusByKey.get(key) == 'Completed') {
           continue; // branch already finished — no worker needed
         }
-        if (!branchKeys.contains(key)) {
-          branchKeys.add(key);
-          if (!Test.isRunningTest()) {
-            events.add(
-              new Workflow_Event__e(
-                Workflow_Instance_Id__c = inst.Id,
-                Event_Type__c = 'RUN_STEP',
-                Payload__c = branch.trim()
-              )
-            );
-          } else {
-            if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
-              System.enqueueJob(
-                new WorkflowOrchestrator(inst.Id, branch.trim())
-              );
-            }
-          }
+        if (branchKeys.contains(key)) {
+          continue; // already dispatched this (instance, branch)
         }
+        branchKeys.add(key);
+        dispatchBranch(inst.Id, trimmed, events);
       }
     }
-    if (!events.isEmpty()) {
-      List<Database.SaveResult> results = EventBus.publish(events);
-      for (Database.SaveResult sr : results) {
-        if (!sr.isSuccess()) {
-          // A rejected branch event would leave that branch Running with no worker
-          // to drive it. Surface the failure so the resume transaction rolls back
-          // rather than silently stranding parked branches.
-          String msg = (sr.getErrors() != null && !sr.getErrors().isEmpty())
-            ? sr.getErrors()[0].getMessage()
-            : 'unknown error';
-          throw new PauseException(
-            'Failed to publish resume event for a parallel branch: ' + msg
-          );
-        }
+    return events;
+  }
+
+  // Dispatches a single resumed branch. In production it accumulates a RUN_STEP event
+  // for the caller's bulk publish; in test context platform events don't deliver
+  // synchronously, so it enqueues the orchestrator directly (there is no bulk enqueue
+  // API — jobs are inherently one-per-call). Isolating one branch's dispatch keeps the
+  // caller a clean collect-loop.
+  private static void dispatchBranch(
+    Id instanceId,
+    String branch,
+    List<Workflow_Event__e> events
+  ) {
+    if (!Test.isRunningTest()) {
+      events.add(
+        new Workflow_Event__e(
+          Workflow_Instance_Id__c = instanceId,
+          Event_Type__c = 'RUN_STEP',
+          Payload__c = branch
+        )
+      );
+      return;
+    }
+    if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+      System.enqueueJob(new WorkflowOrchestrator(instanceId, branch));
+    }
+  }
+
+  // Publishes the collected resume events in one call and fails the transaction if any
+  // branch event is rejected — a rejected event would leave that branch Running with no
+  // worker to drive it, so surfacing it rolls back the resume rather than stranding it.
+  private static void publishResumeEvents(List<Workflow_Event__e> events) {
+    if (events.isEmpty()) {
+      return;
+    }
+    for (Database.SaveResult sr : EventBus.publish(events)) {
+      if (sr.isSuccess()) {
+        continue;
       }
+      String msg = (sr.getErrors() != null && !sr.getErrors().isEmpty())
+        ? sr.getErrors()[0].getMessage()
+        : 'unknown error';
+      throw new PauseException(
+        'Failed to publish resume event for a parallel branch: ' + msg
+      );
     }
   }
 }

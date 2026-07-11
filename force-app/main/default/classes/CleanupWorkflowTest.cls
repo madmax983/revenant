@@ -309,15 +309,15 @@ public class CleanupWorkflowTest {
           Input__c = '{malformed json}'
         );
         insert instMalformed;
-        StepContext ctx = new StepContext(
-          instMalformed.Id,
-          'CleanupWorkflow',
-          'CleanupWorkflow.PurgeOldInstancesStep',
-          null,
-          null,
-          null,
-          instMalformed.Input__c
-        );
+        StepContext ctx = new StepContext.Builder()
+          .instanceId(instMalformed.Id)
+          .workflowName('CleanupWorkflow')
+          .stepName('CleanupWorkflow.PurgeOldInstancesStep')
+          .inputJson(null)
+          .previousStepOutput(null)
+          .stepStateJson(null)
+          .workflowInputJson(instMalformed.Input__c)
+          .build();
         new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
         System.assert(false, 'Should throw exception on malformed JSON');
       } catch (Exception ex) {
@@ -335,15 +335,15 @@ public class CleanupWorkflowTest {
           Input__c = '{"retentionDays":"not-an-integer"}'
         );
         insert instBadType;
-        StepContext ctx = new StepContext(
-          instBadType.Id,
-          'CleanupWorkflow',
-          'CleanupWorkflow.PurgeOldInstancesStep',
-          null,
-          null,
-          null,
-          instBadType.Input__c
-        );
+        StepContext ctx = new StepContext.Builder()
+          .instanceId(instBadType.Id)
+          .workflowName('CleanupWorkflow')
+          .stepName('CleanupWorkflow.PurgeOldInstancesStep')
+          .inputJson(null)
+          .previousStepOutput(null)
+          .stepStateJson(null)
+          .workflowInputJson(instBadType.Input__c)
+          .build();
         new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
         System.assert(
           false,
@@ -364,15 +364,15 @@ public class CleanupWorkflowTest {
           Input__c = '{"retentionDays":-5}'
         );
         insert instNeg;
-        StepContext ctx = new StepContext(
-          instNeg.Id,
-          'CleanupWorkflow',
-          'CleanupWorkflow.PurgeOldInstancesStep',
-          null,
-          null,
-          null,
-          instNeg.Input__c
-        );
+        StepContext ctx = new StepContext.Builder()
+          .instanceId(instNeg.Id)
+          .workflowName('CleanupWorkflow')
+          .stepName('CleanupWorkflow.PurgeOldInstancesStep')
+          .inputJson(null)
+          .previousStepOutput(null)
+          .stepStateJson(null)
+          .workflowInputJson(instNeg.Input__c)
+          .build();
         new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
         System.assert(
           false,
@@ -394,15 +394,15 @@ public class CleanupWorkflowTest {
           Input__c = '{"batchSize":0}'
         );
         insert instZero;
-        StepContext ctx = new StepContext(
-          instZero.Id,
-          'CleanupWorkflow',
-          'CleanupWorkflow.PurgeOldInstancesStep',
-          null,
-          null,
-          null,
-          instZero.Input__c
-        );
+        StepContext ctx = new StepContext.Builder()
+          .instanceId(instZero.Id)
+          .workflowName('CleanupWorkflow')
+          .stepName('CleanupWorkflow.PurgeOldInstancesStep')
+          .inputJson(null)
+          .previousStepOutput(null)
+          .stepStateJson(null)
+          .workflowInputJson(instZero.Input__c)
+          .build();
         new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
         System.assert(false, 'Should throw exception on zero batchSize');
       } catch (Exception ex) {
@@ -421,15 +421,15 @@ public class CleanupWorkflowTest {
           Input__c = '{"batchSize":"not-an-integer"}'
         );
         insert instBadBatchType;
-        StepContext ctx = new StepContext(
-          instBadBatchType.Id,
-          'CleanupWorkflow',
-          'CleanupWorkflow.PurgeOldInstancesStep',
-          null,
-          null,
-          null,
-          instBadBatchType.Input__c
-        );
+        StepContext ctx = new StepContext.Builder()
+          .instanceId(instBadBatchType.Id)
+          .workflowName('CleanupWorkflow')
+          .stepName('CleanupWorkflow.PurgeOldInstancesStep')
+          .inputJson(null)
+          .previousStepOutput(null)
+          .stepStateJson(null)
+          .workflowInputJson(instBadBatchType.Input__c)
+          .build();
         new CleanupWorkflow.PurgeOldInstancesStep().execute(ctx);
         System.assert(
           false,
@@ -548,16 +548,16 @@ public class CleanupWorkflowTest {
 
       // Execute the purge step on this instance
       CleanupWorkflow.PurgeOldInstancesStep purgeStep = new CleanupWorkflow.PurgeOldInstancesStep();
-      StepContext purgeCtx = new StepContext(
-        instA.Id,
-        'CleanupWorkflow',
-        'CleanupWorkflow.PurgeOldInstancesStep',
-        null,
-        null,
-        null,
-        '{"retentionDays":30,"batchSize":10}',
-        1
-      );
+      StepContext purgeCtx = new StepContext.Builder()
+        .instanceId(instA.Id)
+        .workflowName('CleanupWorkflow')
+        .stepName('CleanupWorkflow.PurgeOldInstancesStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson('{"retentionDays":30,"batchSize":10}')
+        .workflowVersion(1)
+        .build();
 
       Test.startTest();
       StepResult purgeResult = purgeStep.execute(purgeCtx);

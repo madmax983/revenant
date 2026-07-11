@@ -89,33 +89,44 @@ public inherited sharing class WorkflowLifecyclePublisher {
       if (events.isEmpty()) {
         return;
       }
-
-      // Never spend the transaction's last DML statement or DML rows here.
-      // EventBus.publish consumes a DML statement AND one DML row per event; over
-      // budget either throws an uncatchable System.LimitException that would roll
-      // back the terminal-state write — defeating the fire-and-forget contract
-      // precisely for high-limit workflows. Drop the best-effort events instead.
-      if (
-        forceDmlBudgetExhausted ||
-        Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
-        Limits.getDmlRows() + events.size() > Limits.getLimitDmlRows()
-      ) {
+      if (wouldExceedDmlBudget(events.size())) {
         return;
       }
-
-      if (Test.isRunningTest() && throwTestException) {
-        throw new WorkflowEngine.WorkflowException(
-          'Simulated EventBus.publish failure'
-        );
-      }
-
-      EventBus.publish(events);
-      if (Test.isRunningTest()) {
-        publishedEvents.addAll(events);
-      }
+      dispatch(events);
     } catch (Exception ignored) {
       // Fire-and-forget: log and swallow. A publish failure must never roll back
       // the terminal-state write, fail the instance, or break the RUN_STEP chain.
+    }
+  }
+
+  /**
+   * True when publishing eventCount events would spend the transaction's last
+   * DML statement or DML rows. EventBus.publish consumes a DML statement AND one
+   * DML row per event; over budget it throws an uncatchable System.LimitException
+   * that would roll back the terminal-state write — defeating the fire-and-forget
+   * contract precisely for high-limit workflows — so the best-effort events are
+   * dropped instead.
+   */
+  private static Boolean wouldExceedDmlBudget(Integer eventCount) {
+    return forceDmlBudgetExhausted ||
+      Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
+      Limits.getDmlRows() + eventCount > Limits.getLimitDmlRows();
+  }
+
+  /**
+   * Publishes the events to the event bus, capturing them for test assertions in
+   * test context and honoring the injected failure hook.
+   */
+  private static void dispatch(List<Workflow_Lifecycle__e> events) {
+    if (Test.isRunningTest() && throwTestException) {
+      throw new WorkflowEngine.WorkflowException(
+        'Simulated EventBus.publish failure'
+      );
+    }
+
+    EventBus.publish(events);
+    if (Test.isRunningTest()) {
+      publishedEvents.addAll(events);
     }
   }
 
@@ -124,72 +135,84 @@ public inherited sharing class WorkflowLifecyclePublisher {
   ) {
     List<Workflow_Lifecycle__e> events = new List<Workflow_Lifecycle__e>();
     for (Workflow_Instance__c instance : instances) {
-      if (instance == null || instance.Id == null) {
-        continue;
+      Workflow_Lifecycle__e event = buildEvent(instance);
+      if (event != null) {
+        events.add(event);
       }
-      // Read every optional field through getPopulatedFieldsAsMap so a caller that
-      // passed an under-queried SObject yields a null field rather than an
-      // SObjectException — the publish can never throw and roll back the terminal
-      // write because of a missing field.
-      Map<String, Object> f = instance.getPopulatedFieldsAsMap();
-      String status = (String) f.get('Status__c');
-      if (!EMITTING_TERMINAL_STATUSES.contains(status)) {
-        continue;
-      }
-
-      // Prefer the instance's Terminal_At__c (stamped by the trigger at the actual
-      // transition, so the event reconciles exactly with the record) and fall back
-      // to now() only if the field wasn't populated on the in-memory record.
-      Object terminalAtObj = f.get('Terminal_At__c');
-      Datetime terminalAt = (terminalAtObj != null)
-        ? (Datetime) terminalAtObj
-        : System.now();
-
-      // Dedupe on (instanceId + status + terminalAt) so a Failed→retry→Failed
-      // sequence in the same transaction still emits two events — different
-      // Terminal_At__c stamps mean different transitions — while a plain duplicate
-      // publish call for the exact same transition is collapsed to one.
-      String transitionKey =
-        instance.Id +
-        '|' +
-        status +
-        '|' +
-        String.valueOf(terminalAt);
-      if (publishedTransitionKeys.contains(transitionKey)) {
-        continue;
-      }
-      publishedTransitionKeys.add(transitionKey);
-
-      Boolean isSuccess = (status == 'Completed');
-
-      // Carry the chain root key, falling back to the instance's own correlation
-      // key for in-flight instances created before Root_Correlation_Key__c existed
-      // (the field is only defaulted on insert, so legacy rows have it blank).
-      String correlationKey = (String) f.get('Correlation_Key__c');
-      String rootKey = (String) f.get('Root_Correlation_Key__c');
-      if (String.isBlank(rootKey)) {
-        rootKey = correlationKey;
-      }
-
-      events.add(
-        new Workflow_Lifecycle__e(
-          Workflow_Instance_Id__c = instance.Id,
-          Correlation_Key__c = correlationKey,
-          Root_Correlation_Key__c = rootKey,
-          Workflow_Name__c = (String) f.get('Workflow_Name__c'),
-          Status__c = status,
-          Is_Success__c = isSuccess,
-          Terminal_At__c = terminalAt,
-          Failure_Detail__c = isSuccess
-            ? null
-            : truncate(
-                (String) f.get('Error_Message__c'),
-                FAILURE_DETAIL_MAX_LENGTH
-              )
-        )
-      );
     }
     return events;
+  }
+
+  /**
+   * Builds the lifecycle event for a single instance, or returns null when the
+   * instance is not in an emitting terminal state or its transition was already
+   * published in this transaction.
+   */
+  private static Workflow_Lifecycle__e buildEvent(
+    Workflow_Instance__c instance
+  ) {
+    if (instance == null || instance.Id == null) {
+      return null;
+    }
+    // Read every optional field through getPopulatedFieldsAsMap so a caller that
+    // passed an under-queried SObject yields a null field rather than an
+    // SObjectException — the publish can never throw and roll back the terminal
+    // write because of a missing field.
+    Map<String, Object> f = instance.getPopulatedFieldsAsMap();
+    String status = (String) f.get('Status__c');
+    if (!EMITTING_TERMINAL_STATUSES.contains(status)) {
+      return null;
+    }
+
+    // Prefer the instance's Terminal_At__c (stamped by the trigger at the actual
+    // transition, so the event reconciles exactly with the record) and fall back
+    // to now() only if the field wasn't populated on the in-memory record.
+    Object terminalAtObj = f.get('Terminal_At__c');
+    Datetime terminalAt = (terminalAtObj != null)
+      ? (Datetime) terminalAtObj
+      : System.now();
+
+    // Dedupe on (instanceId + status + terminalAt) so a Failed→retry→Failed
+    // sequence in the same transaction still emits two events — different
+    // Terminal_At__c stamps mean different transitions — while a plain duplicate
+    // publish call for the exact same transition is collapsed to one.
+    String transitionKey =
+      instance.Id +
+      '|' +
+      status +
+      '|' +
+      String.valueOf(terminalAt);
+    if (publishedTransitionKeys.contains(transitionKey)) {
+      return null;
+    }
+    publishedTransitionKeys.add(transitionKey);
+
+    Boolean isSuccess = (status == 'Completed');
+
+    // Carry the chain root key, falling back to the instance's own correlation
+    // key for in-flight instances created before Root_Correlation_Key__c existed
+    // (the field is only defaulted on insert, so legacy rows have it blank).
+    String correlationKey = (String) f.get('Correlation_Key__c');
+    String rootKey = (String) f.get('Root_Correlation_Key__c');
+    if (String.isBlank(rootKey)) {
+      rootKey = correlationKey;
+    }
+
+    return new Workflow_Lifecycle__e(
+      Workflow_Instance_Id__c = instance.Id,
+      Correlation_Key__c = correlationKey,
+      Root_Correlation_Key__c = rootKey,
+      Workflow_Name__c = (String) f.get('Workflow_Name__c'),
+      Status__c = status,
+      Is_Success__c = isSuccess,
+      Terminal_At__c = terminalAt,
+      Failure_Detail__c = isSuccess
+        ? null
+        : truncate(
+            (String) f.get('Error_Message__c'),
+            FAILURE_DETAIL_MAX_LENGTH
+          )
+    );
   }
 
   private static String truncate(String value, Integer maxLength) {
