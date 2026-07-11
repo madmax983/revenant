@@ -51,6 +51,20 @@ public class BulkRedriveWorkflowTest {
     );
   }
 
+  // Threads the operator filter into the chunk driver so each yielded
+  // transaction rebuilds its StepContext from the persisted step state.
+  private class ChunkCtxFactory implements BulkWorkflowTestHelpers.ChunkContextFactory {
+    private final String filter;
+
+    private ChunkCtxFactory(String filter) {
+      this.filter = filter;
+    }
+
+    public StepContext build(String stepStateJson) {
+      return ctxFor(filter, stepStateJson);
+    }
+  }
+
   private static Integer countByStatus(String status) {
     return [
       SELECT COUNT()
@@ -115,6 +129,7 @@ public class BulkRedriveWorkflowTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       // Only Failed is operator-recoverable. Everything else must be untouched.
+      List<Workflow_Instance__c> seeded = new List<Workflow_Instance__c>();
       for (
         String st : new List<String>{
           'Completed',
@@ -127,13 +142,16 @@ public class BulkRedriveWorkflowTest {
           'Compensated'
         }
       ) {
-        insert new Workflow_Instance__c(
-          Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
-          Status__c = st,
-          Correlation_Key__c = 'Excl_' + st,
-          Current_Step__c = 'WorkflowEngineTest.HappyStep1'
+        seeded.add(
+          new Workflow_Instance__c(
+            Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+            Status__c = st,
+            Correlation_Key__c = 'Excl_' + st,
+            Current_Step__c = 'WorkflowEngineTest.HappyStep1'
+          )
         );
       }
+      insert seeded;
 
       String filter = JSON.serialize(
         new Map<String, Object>{
@@ -276,24 +294,11 @@ public class BulkRedriveWorkflowTest {
           }
         );
 
-        Test.startTest();
-        BulkRedriveWorkflow.BulkRedriveStep step = new BulkRedriveWorkflow.BulkRedriveStep();
-        StepResult r1 = step.execute(ctxFor(filter, null));
-        System.assertEquals(
-          StepResult.ActionType.YIELD,
-          r1.action,
-          'A selection larger than one chunk must yield to a fresh transaction'
+        StepResult r3 = BulkWorkflowTestHelpers.driveTwoYieldsThenComplete(
+          new BulkRedriveWorkflow.BulkRedriveStep(),
+          new ChunkCtxFactory(filter)
         );
-        StepResult r2 = step.execute(ctxFor(filter, r1.stepStateJson));
-        System.assertEquals(StepResult.ActionType.YIELD, r2.action);
-        StepResult r3 = step.execute(ctxFor(filter, r2.stepStateJson));
-        Test.stopTest();
 
-        System.assertEquals(
-          StepResult.ActionType.COMPLETE,
-          r3.action,
-          'Final chunk completes the re-drive'
-        );
         Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
           r3.outputJson
         );

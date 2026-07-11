@@ -1,46 +1,75 @@
 @IsTest
 public class WorkflowAlertManagerTest {
-  private static Workflow_Alert_Config__mdt createMockConfig(
-    String devName,
-    String recipients,
-    Boolean enabled,
-    Integer consecutiveLimit,
-    Integer failLimit,
-    Integer windowMin
-  ) {
-    return createMockConfig(
-      devName,
-      recipients,
-      enabled,
-      consecutiveLimit,
-      failLimit,
-      windowMin,
-      false
-    );
+  // Fluent builder replacing the former 6-/7-parameter createMockConfig(...)
+  // overloads. Produces byte-identical Workflow_Alert_Config__mdt values;
+  // publishEvent defaults to false (matching the old 6-arg overload) unless
+  // set via publish(...).
+  private class AlertCfg {
+    private String devName;
+    private String recipients;
+    private Boolean enabled;
+    private Integer consecutiveLimit;
+    private Integer failLimit;
+    private Integer windowMin;
+    private Boolean publishEvent = false;
+
+    private AlertCfg(String devName, String recipients, Boolean enabled) {
+      this.devName = devName;
+      this.recipients = recipients;
+      this.enabled = enabled;
+    }
+
+    private AlertCfg consecutive(Integer value) {
+      this.consecutiveLimit = value;
+      return this;
+    }
+
+    private AlertCfg failCount(Integer value) {
+      this.failLimit = value;
+      return this;
+    }
+
+    private AlertCfg window(Integer value) {
+      this.windowMin = value;
+      return this;
+    }
+
+    private AlertCfg publish(Boolean value) {
+      this.publishEvent = value;
+      return this;
+    }
+
+    private Workflow_Alert_Config__mdt build() {
+      Map<String, Object> fields = new Map<String, Object>{
+        'DeveloperName' => devName,
+        'Email_Recipients__c' => recipients,
+        'Enable_Alerts__c' => enabled,
+        'Consecutive_Failures_Limit__c' => consecutiveLimit,
+        'Failure_Count_Limit__c' => failLimit,
+        'Time_Window_Minutes__c' => windowMin,
+        'Publish_Alert_Event__c' => publishEvent
+      };
+      return (Workflow_Alert_Config__mdt) JSON.deserialize(
+        JSON.serialize(fields),
+        Workflow_Alert_Config__mdt.class
+      );
+    }
   }
 
-  private static Workflow_Alert_Config__mdt createMockConfig(
+  // Compact convenience for the common config with no failure-count limits and
+  // no event publishing, so the repeated per-test setup stays terse (and free
+  // of duplicated builder chains). Delegates to the AlertCfg builder; identical
+  // values.
+  private static Workflow_Alert_Config__mdt alertConfig(
     String devName,
     String recipients,
-    Boolean enabled,
-    Integer consecutiveLimit,
-    Integer failLimit,
-    Integer windowMin,
-    Boolean publishEvent
+    Boolean enabled
   ) {
-    Map<String, Object> fields = new Map<String, Object>{
-      'DeveloperName' => devName,
-      'Email_Recipients__c' => recipients,
-      'Enable_Alerts__c' => enabled,
-      'Consecutive_Failures_Limit__c' => consecutiveLimit,
-      'Failure_Count_Limit__c' => failLimit,
-      'Time_Window_Minutes__c' => windowMin,
-      'Publish_Alert_Event__c' => publishEvent
-    };
-    return (Workflow_Alert_Config__mdt) JSON.deserialize(
-      JSON.serialize(fields),
-      Workflow_Alert_Config__mdt.class
-    );
+    return new AlertCfg(devName, recipients, enabled)
+      .consecutive(null)
+      .failCount(null)
+      .window(null)
+      .build();
   }
 
   @IsTest
@@ -49,13 +78,10 @@ public class WorkflowAlertManagerTest {
       // Mock Config
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
+        alertConfig(
           'WorkflowEngineTest_HappyWorkflow',
           'test@example.com',
-          true,
-          null,
-          null,
-          null
+          true
         )
       );
       WorkflowAlertManager.sentEmailsCount = 0;
@@ -93,14 +119,7 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'Default',
-        createMockConfig(
-          'Default',
-          'default@example.com',
-          true,
-          null,
-          null,
-          null
-        )
+        alertConfig('Default', 'default@example.com', true)
       );
       WorkflowAlertManager.sentEmailsCount = 0;
 
@@ -140,14 +159,7 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         expectedTruncatedDevName,
-        createMockConfig(
-          expectedTruncatedDevName,
-          'longname@example.com',
-          true,
-          null,
-          null,
-          null
-        )
+        alertConfig(expectedTruncatedDevName, 'longname@example.com', true)
       );
       WorkflowAlertManager.sentEmailsCount = 0;
 
@@ -180,13 +192,10 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
+        alertConfig(
           'WorkflowEngineTest_HappyWorkflow',
           'test@example.com',
-          false,
-          null,
-          null,
-          null
+          false
         )
       );
       WorkflowAlertManager.sentEmailsCount = 0;
@@ -220,14 +229,7 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          '',
-          true,
-          null,
-          null,
-          null
-        )
+        alertConfig('WorkflowEngineTest_HappyWorkflow', '', true)
       );
       WorkflowAlertManager.sentEmailsCount = 0;
 
@@ -260,14 +262,15 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'test@example.com',
-          true,
-          3,
-          null,
-          null
-        )
+        new AlertCfg(
+            'WorkflowEngineTest_HappyWorkflow',
+            'test@example.com',
+            true
+          )
+          .consecutive(3)
+          .failCount(null)
+          .window(null)
+          .build()
       );
       WorkflowAlertManager.sentEmailsCount = 0;
 
@@ -364,14 +367,15 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'test@example.com',
-          true,
-          null,
-          2,
-          10
-        )
+        new AlertCfg(
+            'WorkflowEngineTest_HappyWorkflow',
+            'test@example.com',
+            true
+          )
+          .consecutive(null)
+          .failCount(2)
+          .window(10)
+          .build()
       );
       WorkflowAlertManager.sentEmailsCount = 0;
 
@@ -424,13 +428,10 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
+        alertConfig(
           'WorkflowEngineTest_HappyWorkflow',
           'test@example.com',
-          true,
-          null,
-          null,
-          null
+          true
         )
       );
       WorkflowAlertManager.sentEmailsCount = 0;
@@ -485,13 +486,10 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
+        alertConfig(
           'WorkflowEngineTest_HappyWorkflow',
           'timeout@example.com',
-          true,
-          null,
-          null,
-          null
+          true
         )
       );
       WorkflowAlertManager.sentEmailsCount = 0;
@@ -535,13 +533,10 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
+        alertConfig(
           'WorkflowEngineTest_HappyWorkflow',
           'test@example.com',
-          true,
-          null,
-          null,
-          null
+          true
         )
       );
       WorkflowAlertManager.sentEmailsCount = 0;
@@ -588,14 +583,7 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         truncatedDevName,
-        createMockConfig(
-          truncatedDevName,
-          'test@example.com',
-          true,
-          null,
-          null,
-          null
-        )
+        alertConfig(truncatedDevName, 'test@example.com', true)
       );
       WorkflowAlertManager.sentEmailsCount = 0;
 
@@ -667,14 +655,15 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'test@example.com',
-          true,
-          null,
-          1,
-          10
-        )
+        new AlertCfg(
+            'WorkflowEngineTest_HappyWorkflow',
+            'test@example.com',
+            true
+          )
+          .consecutive(null)
+          .failCount(1)
+          .window(10)
+          .build()
       );
       WorkflowAlertManager.sentEmailsCount = 0;
 
@@ -715,14 +704,15 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'test@example.com',
-          true,
-          null,
-          1,
-          10
-        )
+        new AlertCfg(
+            'WorkflowEngineTest_HappyWorkflow',
+            'test@example.com',
+            true
+          )
+          .consecutive(null)
+          .failCount(1)
+          .window(10)
+          .build()
       );
       WorkflowAlertManager.sentEmailsCount = 0;
 
@@ -796,15 +786,16 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'test@example.com',
-          true,
-          3,
-          null,
-          null,
-          true
-        )
+        new AlertCfg(
+            'WorkflowEngineTest_HappyWorkflow',
+            'test@example.com',
+            true
+          )
+          .consecutive(3)
+          .failCount(null)
+          .window(null)
+          .publish(true)
+          .build()
       );
       WorkflowAlertManager.sentEmailsCount = 0;
       WorkflowAlertManager.publishedEvents.clear();
@@ -867,15 +858,16 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'test@example.com',
-          true,
-          null,
-          2,
-          10,
-          true
-        )
+        new AlertCfg(
+            'WorkflowEngineTest_HappyWorkflow',
+            'test@example.com',
+            true
+          )
+          .consecutive(null)
+          .failCount(2)
+          .window(10)
+          .publish(true)
+          .build()
       );
       WorkflowAlertManager.sentEmailsCount = 0;
       WorkflowAlertManager.publishedEvents.clear();
@@ -934,15 +926,16 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'test@example.com',
-          true,
-          null,
-          null,
-          null,
-          true
-        )
+        new AlertCfg(
+            'WorkflowEngineTest_HappyWorkflow',
+            'test@example.com',
+            true
+          )
+          .consecutive(null)
+          .failCount(null)
+          .window(null)
+          .publish(true)
+          .build()
       );
       WorkflowAlertManager.sentEmailsCount = 0;
       WorkflowAlertManager.publishedEvents.clear();
@@ -994,15 +987,12 @@ public class WorkflowAlertManagerTest {
       // Publish true, but recipients empty
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          '',
-          true,
-          null,
-          null,
-          null,
-          true
-        )
+        new AlertCfg('WorkflowEngineTest_HappyWorkflow', '', true)
+          .consecutive(null)
+          .failCount(null)
+          .window(null)
+          .publish(true)
+          .build()
       );
       WorkflowAlertManager.sentEmailsCount = 0;
       WorkflowAlertManager.publishedEvents.clear();
@@ -1051,15 +1041,16 @@ public class WorkflowAlertManagerTest {
       // Publish false, recipients filled
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          'test@example.com',
-          true,
-          null,
-          null,
-          null,
-          false
-        )
+        new AlertCfg(
+            'WorkflowEngineTest_HappyWorkflow',
+            'test@example.com',
+            true
+          )
+          .consecutive(null)
+          .failCount(null)
+          .window(null)
+          .publish(false)
+          .build()
       );
       WorkflowAlertManager.sentEmailsCount = 0;
       WorkflowAlertManager.publishedEvents.clear();
@@ -1100,15 +1091,12 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.mockConfigs.clear();
       WorkflowAlertManager.mockConfigs.put(
         'WorkflowEngineTest_HappyWorkflow',
-        createMockConfig(
-          'WorkflowEngineTest_HappyWorkflow',
-          '',
-          true,
-          null,
-          null,
-          null,
-          true
-        )
+        new AlertCfg('WorkflowEngineTest_HappyWorkflow', '', true)
+          .consecutive(null)
+          .failCount(null)
+          .window(null)
+          .publish(true)
+          .build()
       );
       WorkflowAlertManager.sentEmailsCount = 0;
       WorkflowAlertManager.publishedEvents.clear();
