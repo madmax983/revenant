@@ -242,12 +242,12 @@ public class WorkflowDashboardControllerTest {
       insert inst;
 
       Test.startTest();
-      WorkflowDashboardController.submitApproval(
-        inst.Id,
-        'ExpenseApproval',
-        true,
-        'Looks good'
-      );
+      WorkflowDashboardController.ApprovalRequest approvalReq = new WorkflowDashboardController.ApprovalRequest();
+      approvalReq.instanceId = inst.Id;
+      approvalReq.approvalKey = 'ExpenseApproval';
+      approvalReq.approved = true;
+      approvalReq.comments = 'Looks good';
+      WorkflowDashboardController.submitApproval(approvalReq);
       Test.stopTest();
 
       // Deliver Platform Event
@@ -279,7 +279,10 @@ public class WorkflowDashboardControllerTest {
       insert inst;
 
       Test.startTest();
-      WorkflowDashboardController.cancelWorkflow(inst.Id, false);
+      WorkflowDashboardController.CancelRequest cancelReq = new WorkflowDashboardController.CancelRequest();
+      cancelReq.instanceId = inst.Id;
+      cancelReq.runCompensations = false;
+      WorkflowDashboardController.cancelWorkflow(cancelReq);
       Test.stopTest();
 
       Workflow_Instance__c updatedInst = [
@@ -948,7 +951,10 @@ public class WorkflowDashboardControllerTest {
 
         // 7. cancelWorkflow
         try {
-          WorkflowDashboardController.cancelWorkflow(null, false);
+          WorkflowDashboardController.CancelRequest cancelReq = new WorkflowDashboardController.CancelRequest();
+          cancelReq.instanceId = null;
+          cancelReq.runCompensations = false;
+          WorkflowDashboardController.cancelWorkflow(cancelReq);
           System.assert(
             false,
             'Expected AuraHandledException for cancelWorkflow'
@@ -963,7 +969,12 @@ public class WorkflowDashboardControllerTest {
 
         // 8. submitApproval
         try {
-          WorkflowDashboardController.submitApproval(null, '', false, '');
+          WorkflowDashboardController.ApprovalRequest approvalReq = new WorkflowDashboardController.ApprovalRequest();
+          approvalReq.instanceId = null;
+          approvalReq.approvalKey = '';
+          approvalReq.approved = false;
+          approvalReq.comments = '';
+          WorkflowDashboardController.submitApproval(approvalReq);
           System.assert(
             false,
             'Expected AuraHandledException for submitApproval'
@@ -1606,12 +1617,12 @@ public class WorkflowDashboardControllerTest {
       System.runAs(stdUser) {
         Boolean threw = false;
         try {
-          WorkflowDashboardController.submitApproval(
-            inst.Id,
-            'ExpenseApproval',
-            true,
-            'Approving without the role'
-          );
+          WorkflowDashboardController.ApprovalRequest approvalReq = new WorkflowDashboardController.ApprovalRequest();
+          approvalReq.instanceId = inst.Id;
+          approvalReq.approvalKey = 'ExpenseApproval';
+          approvalReq.approved = true;
+          approvalReq.comments = 'Approving without the role';
+          WorkflowDashboardController.submitApproval(approvalReq);
         } catch (AuraHandledException e) {
           threw = true;
           System.assert(
@@ -1831,11 +1842,10 @@ public class WorkflowDashboardControllerTest {
           countThrew = true;
         }
         try {
-          WorkflowDashboardController.cancelMatchingInstances(
+          WorkflowDashboardController.cancelMatchingInstancesWithCompensations(
             '',
             'Running',
-            '',
-            true
+            ''
           );
           System.assert(
             false,

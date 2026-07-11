@@ -541,7 +541,6 @@ describe("c-workflow-dashboard bulk cancel", () => {
       workflowName: "",
       status: "",
       searchTerm: "",
-      runCompensations: false,
     });
 
     // Verify modal is closed

@@ -1743,7 +1743,6 @@ export default class WorkflowDashboard extends LightningElement {
       workflowName: this.cancelSnapshotName,
       status: this.cancelSnapshotStatus,
       searchTerm: this.cancelSnapshotSearchTerm,
-      runCompensations: false,
     })
       .then((outcome) => {
         if (!outcome) {
@@ -1793,8 +1792,10 @@ export default class WorkflowDashboard extends LightningElement {
     this.cancelModalOpen = false;
     this.loadingDetails = true;
     cancelWorkflow({
-      instanceId: this.selectedInstanceId,
-      runCompensations,
+      req: {
+        instanceId: this.selectedInstanceId,
+        runCompensations,
+      },
     })
       .then(() => {
         this.showToast(
@@ -1940,10 +1941,12 @@ export default class WorkflowDashboard extends LightningElement {
 
     this.loadingDetails = true;
     submitApproval({
-      instanceId: this.selectedInstanceId,
-      approvalKey: approvalKey,
-      approved: approved,
-      comments: this.approvalComments,
+      req: {
+        instanceId: this.selectedInstanceId,
+        approvalKey: approvalKey,
+        approved: approved,
+        comments: this.approvalComments,
+      },
     })
       .then(() => {
         this.showToast(
