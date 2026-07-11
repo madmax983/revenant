@@ -76,7 +76,15 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
 
   public inherited sharing class BulkCancelStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      Map<String, Object> state = hydrateState(ctx);
+      Map<String, Object> state = BulkWorkflowStepState.hydrate(
+        ctx,
+        new List<String>{
+          'workflowName',
+          'status',
+          'searchTerm',
+          'runCompensations'
+        }
+      );
       String workflowName = (String) state.get('workflowName');
       String status = (String) state.get('status');
       String searchTerm = (String) state.get('searchTerm');
@@ -85,15 +93,15 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
       List<Id> chunk = selector()
         .fetchChunk(
           new BulkWorkflowSelector.Criteria(workflowName, status, searchTerm),
-          cursorFrom(state),
+          BulkWorkflowStepState.cursorFrom(state),
           chunkSize
         );
 
       Progress p = processChunk(ctx, chunk, state);
 
       // The filter keys (workflowName/status/runCompensations/...) are already
-      // carried in `state` by hydrateState and never mutated, so only the cursor
-      // and tallies need to be written back before serializing.
+      // carried in `state` by BulkWorkflowStepState.hydrate and never mutated, so
+      // only the cursor and tallies need to be written back before serializing.
       state.put('lastId', p.afterId == null ? null : String.valueOf(p.afterId));
       state.put('cancelled', p.cancelled);
       state.put('skipped', p.skipped);
@@ -126,10 +134,10 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
       Map<Id, String> statusById = lockStatuses(chunk);
 
       Progress p = new Progress();
-      p.afterId = cursorFrom(state);
-      p.cancelled = intOf(state.get('cancelled'));
-      p.skipped = intOf(state.get('skipped'));
-      p.errored = intOf(state.get('errored'));
+      p.afterId = BulkWorkflowStepState.cursorFrom(state);
+      p.cancelled = BulkWorkflowStepState.intOf(state.get('cancelled'));
+      p.skipped = BulkWorkflowStepState.intOf(state.get('skipped'));
+      p.errored = BulkWorkflowStepState.intOf(state.get('errored'));
 
       for (Id instId : chunk) {
         if (ctx.shouldYield()) {
@@ -156,35 +164,6 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
         }
       }
       return p;
-    }
-
-    private Id cursorFrom(Map<String, Object> state) {
-      return state.get('lastId') != null
-        ? (Id) (String) state.get('lastId')
-        : null;
-    }
-
-    /**
-     * Hydrates step state: on the first run the persisted state is empty, so
-     * seed it from the operator's filter (the workflow input); on resume, the
-     * yield state carries the cursor and running tallies forward.
-     */
-    private Map<String, Object> hydrateState(StepContext ctx) {
-      if (String.isNotBlank(ctx.stepStateJson)) {
-        return (Map<String, Object>) JSON.deserializeUntyped(ctx.stepStateJson);
-      }
-      Map<String, Object> state = new Map<String, Object>();
-      if (String.isBlank(ctx.workflowInputJson)) {
-        return state;
-      }
-      Map<String, Object> filter = (Map<String, Object>) JSON.deserializeUntyped(
-        ctx.workflowInputJson
-      );
-      state.put('workflowName', filter.get('workflowName'));
-      state.put('status', filter.get('status'));
-      state.put('searchTerm', filter.get('searchTerm'));
-      state.put('runCompensations', filter.get('runCompensations'));
-      return state;
     }
 
     /**
@@ -246,10 +225,6 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
         skipped +
         errored
       };
-    }
-
-    private Integer intOf(Object o) {
-      return o == null ? 0 : Integer.valueOf(String.valueOf(o));
     }
   }
 }

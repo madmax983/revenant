@@ -118,17 +118,18 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
 
   public inherited sharing class BulkRedriveStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      Map<String, Object> state = hydrateState(ctx);
+      Map<String, Object> state = BulkWorkflowStepState.hydrate(
+        ctx,
+        new List<String>{ 'workflowName', 'status', 'searchTerm' }
+      );
 
       String workflowName = (String) state.get('workflowName');
       String status = (String) state.get('status');
       String searchTerm = (String) state.get('searchTerm');
-      Id afterId = state.get('lastId') != null
-        ? (Id) (String) state.get('lastId')
-        : null;
-      Integer redriven = intOf(state.get('redriven'));
-      Integer skipped = intOf(state.get('skipped'));
-      Integer errored = intOf(state.get('errored'));
+      Id afterId = BulkWorkflowStepState.cursorFrom(state);
+      Integer redriven = BulkWorkflowStepState.intOf(state.get('redriven'));
+      Integer skipped = BulkWorkflowStepState.intOf(state.get('skipped'));
+      Integer errored = BulkWorkflowStepState.intOf(state.get('errored'));
 
       Integer chunkSize = defaultChunkSize;
       List<Id> chunk = selector()
@@ -191,28 +192,6 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
     }
 
     /**
-     * Hydrates step state: on the first run the persisted state is empty, so
-     * seed it from the operator's filter (the workflow input); on resume, the
-     * yield state carries the cursor and running tallies forward.
-     */
-    private Map<String, Object> hydrateState(StepContext ctx) {
-      if (String.isNotBlank(ctx.stepStateJson)) {
-        return (Map<String, Object>) JSON.deserializeUntyped(ctx.stepStateJson);
-      }
-      Map<String, Object> state = new Map<String, Object>();
-      if (String.isBlank(ctx.workflowInputJson)) {
-        return state;
-      }
-      Map<String, Object> filter = (Map<String, Object>) JSON.deserializeUntyped(
-        ctx.workflowInputJson
-      );
-      state.put('workflowName', filter.get('workflowName'));
-      state.put('status', filter.get('status'));
-      state.put('searchTerm', filter.get('searchTerm'));
-      return state;
-    }
-
-    /**
      * Re-drives a single instance inside its own savepoint. A retryWorkflow
      * failure rolls back that instance's partial writes; a "Failed status" guard
      * rejection is a benign skip, anything else is counted as an error — leaving
@@ -248,10 +227,6 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
         skipped +
         errored
       };
-    }
-
-    private Integer intOf(Object o) {
-      return o == null ? 0 : Integer.valueOf(String.valueOf(o));
     }
   }
 }

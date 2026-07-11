@@ -20,8 +20,10 @@
  * Returns null if the expression is invalid, the reference DateTime is null,
  * or no matching instant can be found within a ~4-year window.
  *
- * Field parsing is delegated to CronFieldParser. The backward ("previous") and
- * forward ("next") searches share a single direction-parameterised walk.
+ * Field parsing is delegated to CronFieldParser; nearest-value searches and UTC
+ * calendar-boundary navigation are delegated to CronMath. The backward
+ * ("previous") and forward ("next") searches share a single
+ * direction-parameterised walk.
  */
 public inherited sharing class WorkflowCronEvaluator {
   // Maximum days to look back/ahead before giving up (prevents governor timeout).
@@ -66,7 +68,7 @@ public inherited sharing class WorkflowCronEvaluator {
       return null;
     }
 
-    DateTime candidate = truncateToMinute(now);
+    DateTime candidate = CronMath.truncateToMinute(now);
 
     for (Integer d = 0; d <= MAX_LOOKBACK_DAYS; d++) {
       if (!f.months.contains(candidate.monthGmt())) {
@@ -74,7 +76,7 @@ public inherited sharing class WorkflowCronEvaluator {
         continue;
       }
 
-      if (!dayMatches(f, candidate.dayGmt(), dowOf(candidate))) {
+      if (!dayMatches(f, candidate.dayGmt(), CronMath.dowOf(candidate))) {
         candidate = adjacentDayStart(candidate, forward);
         continue;
       }
@@ -100,8 +102,8 @@ public inherited sharing class WorkflowCronEvaluator {
   ) {
     Integer curHour = candidate.hourGmt();
     Integer matchHour = forward
-      ? earliestAbove(f.hours, curHour)
-      : latestBelow(f.hours, curHour);
+      ? CronMath.earliestAbove(f.hours, curHour)
+      : CronMath.latestBelow(f.hours, curHour);
     if (matchHour == -1) {
       return null;
     }
@@ -110,10 +112,10 @@ public inherited sharing class WorkflowCronEvaluator {
       ? candidate.minuteGmt()
       : (forward ? 0 : 59);
     Integer matchMinute = forward
-      ? earliestAbove(f.minutes, startMinute)
-      : latestBelow(f.minutes, startMinute);
+      ? CronMath.earliestAbove(f.minutes, startMinute)
+      : CronMath.latestBelow(f.minutes, startMinute);
 
-    DateTime dayStart = midnight(candidate);
+    DateTime dayStart = CronMath.midnight(candidate);
     if (matchMinute != -1) {
       return dayStart.addHours(matchHour).addMinutes(matchMinute);
     }
@@ -133,11 +135,11 @@ public inherited sharing class WorkflowCronEvaluator {
     if (matchHour == 0) {
       return null;
     }
-    Integer prevHour = latestBelow(f.hours, matchHour - 1);
+    Integer prevHour = CronMath.latestBelow(f.hours, matchHour - 1);
     if (prevHour == -1) {
       return null;
     }
-    Integer prevMin = latestBelow(f.minutes, 59);
+    Integer prevMin = CronMath.latestBelow(f.minutes, 59);
     if (prevMin == -1) {
       return null;
     }
@@ -150,11 +152,11 @@ public inherited sharing class WorkflowCronEvaluator {
     DateTime dayStart,
     Integer matchHour
   ) {
-    Integer nextHour = earliestAbove(f.hours, matchHour + 1);
+    Integer nextHour = CronMath.earliestAbove(f.hours, matchHour + 1);
     if (nextHour == -1) {
       return null;
     }
-    Integer firstMin = earliestAbove(f.minutes, 0);
+    Integer firstMin = CronMath.earliestAbove(f.minutes, 0);
     if (firstMin == -1) {
       return null;
     }
@@ -189,8 +191,8 @@ public inherited sharing class WorkflowCronEvaluator {
     Integer year = candidate.yearGmt();
     Integer month = candidate.monthGmt();
     return forward
-      ? firstOfNextMonth(year, month)
-      : firstOfMonth(year, month).addSeconds(-60);
+      ? CronMath.firstOfNextMonth(year, month)
+      : CronMath.firstOfMonth(year, month).addSeconds(-60);
   }
 
   // Adjacent day boundary: end of the previous day (backwards, 23:59) or start
@@ -199,71 +201,7 @@ public inherited sharing class WorkflowCronEvaluator {
     DateTime candidate,
     Boolean forward
   ) {
-    DateTime dayStart = midnight(candidate);
+    DateTime dayStart = CronMath.midnight(candidate);
     return forward ? dayStart.addDays(1) : dayStart.addSeconds(-60);
-  }
-
-  // Truncates a DateTime to the start of its current minute (UTC).
-  private static DateTime truncateToMinute(DateTime dt) {
-    return DateTime.newInstanceGmt(
-      dt.yearGmt(),
-      dt.monthGmt(),
-      dt.dayGmt(),
-      dt.hourGmt(),
-      dt.minuteGmt(),
-      0
-    );
-  }
-
-  // Midnight (00:00:00 UTC) of the given DateTime's calendar day.
-  private static DateTime midnight(DateTime dt) {
-    return DateTime.newInstanceGmt(
-      dt.yearGmt(),
-      dt.monthGmt(),
-      dt.dayGmt(),
-      0,
-      0,
-      0
-    );
-  }
-
-  // formatGmt('u') is ISO-8601 day-of-week: Mon=1 … Sun=7. Math.mod(u, 7)
-  // maps that to cron convention 0=Sun … 6=Sat (Sun: 7→0, Mon..Sat: 1..6).
-  private static Integer dowOf(DateTime candidate) {
-    return Math.mod(Integer.valueOf(candidate.formatGmt('u')), 7);
-  }
-
-  // Returns the largest value in the set that is ≤ maxVal, or -1 if none.
-  private static Integer latestBelow(Set<Integer> vals, Integer maxVal) {
-    Integer best = -1;
-    for (Integer v : vals) {
-      if (v <= maxVal && v > best) {
-        best = v;
-      }
-    }
-    return best;
-  }
-
-  // Returns the smallest value in the set that is ≥ minVal, or -1 if none.
-  private static Integer earliestAbove(Set<Integer> vals, Integer minVal) {
-    Integer best = -1;
-    for (Integer v : vals) {
-      if (v >= minVal && (best == -1 || v < best)) {
-        best = v;
-      }
-    }
-    return best;
-  }
-
-  // Returns the DateTime for the 1st of the given month at 00:00:00 UTC.
-  private static DateTime firstOfMonth(Integer year, Integer month) {
-    return DateTime.newInstanceGmt(year, month, 1, 0, 0, 0);
-  }
-
-  // Returns the 1st of the month after the given year/month at 00:00:00 UTC.
-  private static DateTime firstOfNextMonth(Integer year, Integer month) {
-    Integer nextYear = (month == 12) ? year + 1 : year;
-    Integer nextMonth = (month == 12) ? 1 : month + 1;
-    return DateTime.newInstanceGmt(nextYear, nextMonth, 1, 0, 0, 0);
   }
 }
