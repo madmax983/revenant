@@ -10,19 +10,46 @@
 public class WorkflowSignalIdempotencyTest {
   // ── Inline workflow: suspends until 'Approve' signal, then completes ────────
 
+  /**
+   * @description Test fixture workflow that suspends on a single step until an
+   * 'Approve' signal arrives, then completes.
+   */
   public class WaitWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the single WaitStep.
+     * @return The one-element list naming WaitStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowSignalIdempotencyTest.WaitStep' };
     }
+    /**
+     * @description Returns the sole WaitStep as the entry point.
+     * @return The name of the initial step.
+     */
     public String getInitialStep() {
       return 'WorkflowSignalIdempotencyTest.WaitStep';
     }
+    /**
+     * @description Terminates after the single step.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, marking the workflow complete.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Fixture step that completes once the 'Approve' signal is present,
+   * otherwise suspends awaiting it.
+   */
   public class WaitStep implements WorkflowStep {
+    /**
+     * @description Completes when the 'Approve' signal has arrived, else suspends.
+     * @param ctx The durable step context used to poll for the signal.
+     * @return A complete result once approved, or a suspend result otherwise.
+     */
     public StepResult execute(StepContext ctx) {
       if (ctx.getSignal('Approve').isPresent()) {
         return StepResult.complete(null, '{"approved":true}');
@@ -35,19 +62,47 @@ public class WorkflowSignalIdempotencyTest {
   // Stays active after an 'Approve' lands, so the pre-arrival-to-active dedup
   // boundary can be exercised without the instance completing first.
 
+  /**
+   * @description Test fixture workflow that suspends until a 'Go' signal, ignoring
+   * 'Approve' so the pre-arrival-to-active dedup boundary can be exercised while the
+   * instance stays active.
+   */
   public class WaitForGoWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the single WaitForGoStep.
+     * @return The one-element list naming WaitForGoStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowSignalIdempotencyTest.WaitForGoStep' };
     }
+    /**
+     * @description Returns the sole WaitForGoStep as the entry point.
+     * @return The name of the initial step.
+     */
     public String getInitialStep() {
       return 'WorkflowSignalIdempotencyTest.WaitForGoStep';
     }
+    /**
+     * @description Terminates after the single step.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, marking the workflow complete.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Fixture step that completes once the 'Go' signal is present,
+   * otherwise suspends awaiting it.
+   */
   public class WaitForGoStep implements WorkflowStep {
+    /**
+     * @description Completes when the 'Go' signal has arrived, else suspends.
+     * @param ctx The durable step context used to poll for the signal.
+     * @return A complete result once signalled, or a suspend result otherwise.
+     */
     public StepResult execute(StepContext ctx) {
       if (ctx.getSignal('Go').isPresent()) {
         return StepResult.complete(null, null);

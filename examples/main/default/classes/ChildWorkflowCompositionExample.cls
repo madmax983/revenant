@@ -37,6 +37,10 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
   // PARENT WORKFLOW DEFINITION
   // ---------------------------------------------------------------------------
 
+  /**
+   * @description Returns the ordered step names composing the parent loan workflow.
+   * @return The request-credit-check, approve, decline, and failure-handling step names.
+   */
   public List<String> getSteps() {
     return new List<String>{
       'ChildWorkflowCompositionExample.RequestCreditCheckStep',
@@ -46,14 +50,20 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
     };
   }
 
+  /**
+   * @description Returns the step the parent workflow begins with.
+   * @return The request-credit-check step name.
+   */
   public String getInitialStep() {
     return 'ChildWorkflowCompositionExample.RequestCreditCheckStep';
   }
 
   /**
-   * RequestCreditCheckStep decides the branch by embedding the next step name in
-   * its COMPLETE result (the ApprovalSignalWorkflowExample branching pattern).
-   * ApproveLoanStep and DeclineLoanStep are terminal — null ends the workflow.
+   * @description Routes to the branch RequestCreditCheckStep chose by embedding the
+   * next step name in its COMPLETE result; the approve/decline steps are terminal.
+   * @param currentStepName The name of the step that just completed.
+   * @param stepResult The result of the completed step, carrying the chosen next step.
+   * @return The next step name set by the credit-check step, or null to end the workflow.
    */
   public String getNextStep(String currentStepName, StepResult stepResult) {
     if (
@@ -89,6 +99,12 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
    *              is re-run (not a new step) when the child completes.
    */
   public class RequestCreditCheckStep implements WorkflowStep {
+    /**
+     * @description Launches the CreditCheck child on first run and suspends; on the
+     * child's completion signal reads the score, decides the branch, and completes.
+     * @param ctx The durable step context exposing the child outcome and workflow input.
+     * @return startChild while awaiting the child, or COMPLETE routing to the decision branch.
+     */
     public StepResult execute(StepContext ctx) {
       String childKey = 'CreditCheck_' + ctx.workflowInstanceId;
       StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
@@ -148,7 +164,15 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
     }
   }
 
+  /**
+   * @description Terminal step reached when the credit score meets the threshold.
+   */
   public class ApproveLoanStep implements WorkflowStep {
+    /**
+     * @description Records the loan-approved decision and ends the workflow.
+     * @param ctx The durable step context supplying the credit-check decision input.
+     * @return A COMPLETE result carrying the approval decision and applicant details.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.inputJson
@@ -165,7 +189,15 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
     }
   }
 
+  /**
+   * @description Terminal step reached when the credit score is below the threshold.
+   */
   public class DeclineLoanStep implements WorkflowStep {
+    /**
+     * @description Records the loan-declined decision and ends the workflow.
+     * @param ctx The durable step context supplying the credit-check decision input.
+     * @return A COMPLETE result carrying the decline decision and applicant details.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.inputJson
@@ -186,17 +218,35 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
   // CHILD WORKFLOW DEFINITION
   // ---------------------------------------------------------------------------
 
+  /**
+   * @description Child workflow definition that computes a credit score in a single
+   * step and completes, signaling its parent.
+   */
   public class CreditCheckWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the sole step composing the child workflow.
+     * @return A one-element list naming the compute-credit-score step.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'ChildWorkflowCompositionExample.ComputeCreditScoreStep'
       };
     }
 
+    /**
+     * @description Returns the step the child workflow begins with.
+     * @return The compute-credit-score step name.
+     */
     public String getInitialStep() {
       return 'ChildWorkflowCompositionExample.ComputeCreditScoreStep';
     }
 
+    /**
+     * @description Terminal single-step child workflow: there is no successor step.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return Always null, ending the child workflow after the scoring step.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
@@ -219,6 +269,13 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
    *   Low  score: income=20 000,  amount=200 000 → 600+20−40  = 580  (<680, declined)
    */
   public class ComputeCreditScoreStep implements WorkflowStep {
+    /**
+     * @description Computes the applicant's credit score from the forwarded input
+     * using the deterministic formula, throwing for the 'FailMe' applicant to
+     * exercise the parent's child-failure branch.
+     * @param ctx The durable step context supplying the applicant input JSON.
+     * @return A COMPLETE result carrying the clamped credit score and applicant name.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.workflowInputJson
@@ -250,7 +307,16 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
     }
   }
 
+  /**
+   * @description Fallback step reached when the child credit check failed, was
+   * cancelled, or timed out, applying the parent's failure-handling logic.
+   */
   public class HandleCreditCheckFailureStep implements WorkflowStep {
+    /**
+     * @description Records the child-failure fallback decision and ends the workflow.
+     * @param ctx The durable step context supplying the child failure status and error.
+     * @return A COMPLETE result carrying the failed decision and error details.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.inputJson

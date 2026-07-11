@@ -7,6 +7,13 @@
  */
 @IsTest
 public inherited sharing class WorkflowHarnessDriver {
+  /**
+   * @description Advances the first advanceable instance in the tree by exactly
+   * one hop, delivering pending events before and after, and returns the
+   * resulting harness snapshot.
+   * @param ctx The harness context identifying the workflow tree to advance.
+   * @return The harness Result captured after the single hop.
+   */
   public static WorkflowTestHarness.Result stepOnce(
     WorkflowHarnessContext ctx
   ) {
@@ -22,6 +29,15 @@ public inherited sharing class WorkflowHarnessDriver {
     return WorkflowHarnessCore.buildResult(ctx);
   }
 
+  /**
+   * @description Repeatedly advances the workflow tree until the named step is
+   * reached, the workflow terminates, or the hop budget is exhausted (throwing if
+   * the step was never reached within the budget).
+   * @param ctx The harness context identifying the workflow tree to drive.
+   * @param stepName The target step name to drive toward.
+   * @param maxHops The maximum number of hops to spend this call.
+   * @return The harness Result once the target step or a terminal state is reached.
+   */
   public static WorkflowTestHarness.Result driveUntilStep(
     WorkflowHarnessContext ctx,
     String stepName,
@@ -88,6 +104,14 @@ public inherited sharing class WorkflowHarnessDriver {
     );
   }
 
+  /**
+   * @description Drives the whole workflow tree until it stabilizes (every
+   * instance terminal or genuinely signal-suspended), delivering pending events
+   * between hops, and fails loudly if work remains once the hop budget is spent.
+   * @param ctx The harness context identifying the workflow tree to drive.
+   * @param maxHops The maximum number of hops to spend before asserting stabilization.
+   * @return The harness Result once the tree stabilizes within the budget.
+   */
   public static WorkflowTestHarness.Result drive(
     WorkflowHarnessContext ctx,
     Integer maxHops

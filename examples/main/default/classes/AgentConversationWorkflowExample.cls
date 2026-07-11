@@ -38,7 +38,16 @@ public with sharing class AgentConversationWorkflowExample {
 
   // ── Workflow definition ────────────────────────────────────────────────────
 
+  /**
+   * @description The durable definition of the multi-turn agent conversation,
+   * routing linearly from the opening turn through the follow-up suspend, the
+   * continuation turn, and the terminal completion step.
+   */
   public class AgentConversationWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the ordered step names comprising the conversation.
+     * @return The list of InitialTurn, AwaitFollowUp, ContinuationTurn, and ConversationComplete step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'AgentConversationWorkflowExample.InitialTurnStep',
@@ -48,10 +57,20 @@ public with sharing class AgentConversationWorkflowExample {
       };
     }
 
+    /**
+     * @description Names the step the engine runs first for a new instance.
+     * @return The InitialTurnStep step name.
+     */
     public String getInitialStep() {
       return 'AgentConversationWorkflowExample.InitialTurnStep';
     }
 
+    /**
+     * @description Advances linearly through the conversation steps.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return The next step name, or null once ConversationCompleteStep terminates the workflow.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       if (currentStep == 'AgentConversationWorkflowExample.InitialTurnStep') {
         return 'AgentConversationWorkflowExample.AwaitFollowUpStep';
@@ -79,6 +98,12 @@ public with sharing class AgentConversationWorkflowExample {
    * minutes or hours have passed between turns.
    */
   public class InitialTurnStep implements WorkflowStep {
+    /**
+     * @description Sends the user's opening message to the agent and stores the
+     * returned sessionId so a later turn can rejoin the same conversation.
+     * @param ctx The durable step context supplying the agentDeveloperName and userMessage input.
+     * @return A completed StepResult carrying the agent name, sessionId, and initial response.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = parseJson(ctx.inputJson);
       String agentDevName = (String) input.get('agentDeveloperName');
@@ -119,6 +144,12 @@ public with sharing class AgentConversationWorkflowExample {
    * Or from any Apex that has the instance ID (trigger, flow action, etc.).
    */
   public class AwaitFollowUpStep implements WorkflowStep {
+    /**
+     * @description Suspends until a 'FollowUp' signal arrives, then consumes it and
+     * threads the follow-up message plus stored sessionId to the continuation turn.
+     * @param ctx The durable step context supplying the prior output and instance id for the signal query.
+     * @return A suspend StepResult while awaiting the signal, else a completed result with the follow-up message.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> prevOutput = parseJson(ctx.inputJson);
       String agentDevName = (String) prevOutput.get('agentDeveloperName');
@@ -162,6 +193,12 @@ public with sharing class AgentConversationWorkflowExample {
    * the agent remembers everything from Step 1 without re-sending it.
    */
   public class ContinuationTurnStep implements WorkflowStep {
+    /**
+     * @description Continues the conversation in the same agent session by replaying
+     * the stored sessionId, so the agent retains the earlier turn's context.
+     * @param ctx The durable step context supplying the agent name, sessionId, and follow-up message.
+     * @return A completed StepResult carrying the (possibly refreshed) sessionId and final response.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = parseJson(ctx.inputJson);
       String agentDevName = (String) input.get('agentDeveloperName');
@@ -189,6 +226,12 @@ public with sharing class AgentConversationWorkflowExample {
    * Step 4: Record the final resolution.
    */
   public class ConversationCompleteStep implements WorkflowStep {
+    /**
+     * @description Records the final resolution of the conversation, carrying the
+     * last agent response and session forward as the terminal output.
+     * @param ctx The durable step context supplying the final response and sessionId.
+     * @return A completed StepResult marking the conversation resolved.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = parseJson(ctx.inputJson);
       return StepResult.complete(
@@ -212,6 +255,7 @@ public with sharing class AgentConversationWorkflowExample {
    * @param userMessage         Message to send this turn
    * @param sessionId           Existing session to continue, or null for a new session
    * @param mockResponseIndex   Which entry in mockAgentResponses to use in tests
+   * @return The agent's response wrapper (mocked in tests), including its sessionId.
    */
   private static AgentResponse invokeAgent(
     String agentDeveloperName,

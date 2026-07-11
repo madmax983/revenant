@@ -1,42 +1,102 @@
 @IsTest
 public class WorkflowDeadlineTest {
+  /**
+   * @description Single-step workflow fixture with a 60-second execution deadline,
+   * used to verify the engine stamps and enforces Deadline_At__c.
+   */
   public class TestDeadlineWorkflow implements WorkflowDefinition, ExecutionTimeoutConfigurable {
+    /**
+     * @description Returns the sole fixture step name.
+     * @return A one-element list naming the test step.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowDeadlineTest.TestStep' };
     }
+    /**
+     * @description Returns the step the fixture begins with.
+     * @return The test step name.
+     */
     public String getInitialStep() {
       return 'WorkflowDeadlineTest.TestStep';
     }
+    /**
+     * @description Terminal single-step fixture: there is no successor step.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return Always null, ending the workflow.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
+    /**
+     * @description Declares the workflow's overall execution deadline.
+     * @return The deadline in seconds from start.
+     */
     public Integer getExecutionTimeoutSeconds() {
       return 60; // 1 minute deadline
     }
   }
 
+  /**
+   * @description Trivial step fixture that completes immediately.
+   */
   public class TestStep implements WorkflowStep {
+    /**
+     * @description Completes with a fixed output.
+     * @param ctx The durable step context for this execution.
+     * @return A COMPLETE result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'Done');
     }
   }
 
+  /**
+   * @description Single-step workflow fixture with a 120-second deadline whose step
+   * continues-as-new, used to verify the successor inherits a fresh deadline.
+   */
   public class TestContinueWorkflow implements WorkflowDefinition, ExecutionTimeoutConfigurable {
+    /**
+     * @description Returns the sole fixture step name.
+     * @return A one-element list naming the continue step.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowDeadlineTest.TestContinueStep' };
     }
+    /**
+     * @description Returns the step the fixture begins with.
+     * @return The continue step name.
+     */
     public String getInitialStep() {
       return 'WorkflowDeadlineTest.TestContinueStep';
     }
+    /**
+     * @description Terminal single-step fixture: there is no successor step.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return Always null, ending the workflow.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
+    /**
+     * @description Declares the workflow's overall execution deadline.
+     * @return The deadline in seconds from start.
+     */
     public Integer getExecutionTimeoutSeconds() {
       return 120; // 2 minute deadline
     }
   }
 
+  /**
+   * @description Step fixture that continues-as-new to spawn a successor run.
+   */
   public class TestContinueStep implements WorkflowStep {
+    /**
+     * @description Continues-as-new, spawning a fresh successor instance.
+     * @param ctx The durable step context for this execution.
+     * @return A continue-as-new result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.continueAsNew(null, null);
     }
@@ -207,25 +267,60 @@ public class WorkflowDeadlineTest {
     }
   }
 
+  /**
+   * @description Single-step workflow fixture with a compensatable step and a
+   * 30-second deadline, used to verify deadline expiry triggers compensation.
+   */
   public class TestCompWorkflow implements WorkflowDefinition, ExecutionTimeoutConfigurable {
+    /**
+     * @description Returns the sole fixture step name.
+     * @return A one-element list naming the compensatable step.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowDeadlineTest.TestCompensatableStep' };
     }
+    /**
+     * @description Returns the step the fixture begins with.
+     * @return The compensatable step name.
+     */
     public String getInitialStep() {
       return 'WorkflowDeadlineTest.TestCompensatableStep';
     }
+    /**
+     * @description Terminal single-step fixture: there is no successor step.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return Always null, ending the workflow.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
+    /**
+     * @description Declares the workflow's overall execution deadline.
+     * @return The deadline in seconds from start.
+     */
     public Integer getExecutionTimeoutSeconds() {
       return 30;
     }
   }
 
+  /**
+   * @description Compensatable step fixture whose execute and compensate both succeed.
+   */
   public class TestCompensatableStep implements CompensatableStep {
+    /**
+     * @description Completes the forward action successfully.
+     * @param ctx The durable step context for this execution.
+     * @return A COMPLETE result marking success.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'Done');
     }
+    /**
+     * @description Completes the compensating action successfully.
+     * @param ctx The durable step context for this execution.
+     * @return A COMPLETE result marking compensation.
+     */
     public StepResult compensate(StepContext ctx) {
       return StepResult.complete(null, 'Compensated');
     }

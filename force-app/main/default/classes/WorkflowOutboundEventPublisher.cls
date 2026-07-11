@@ -71,9 +71,10 @@ public inherited sharing class WorkflowOutboundEventPublisher {
   private static Integer dmlRowReserve = 20;
 
   /**
-   * Publishes the given outbound events. Safe to call with null/empty (no-op).
-   * Any failure is logged and swallowed so it cannot disrupt the workflow
+   * @description Publishes the given outbound events. Safe to call with null/empty
+   * (no-op). Any failure is logged and swallowed so it cannot disrupt the workflow
    * transaction.
+   * @param events The buffered outbound Platform Events to publish, or null/empty.
    */
   public static void publish(List<SObject> events) {
     if (events == null || events.isEmpty()) {
@@ -92,11 +93,13 @@ public inherited sharing class WorkflowOutboundEventPublisher {
   }
 
   /**
-   * True when publishing eventCount events would spend the transaction's last
-   * DML statement or DML rows. EventBus.publish consumes a DML statement AND one
-   * DML row per event; over budget it throws an uncatchable System.LimitException
-   * that would roll back the Completed write, so the best-effort publish is
-   * dropped instead.
+   * @description True when publishing eventCount events would spend the
+   * transaction's last DML statement or DML rows. EventBus.publish consumes a DML
+   * statement AND one DML row per event; over budget it throws an uncatchable
+   * System.LimitException that would roll back the Completed write, so the
+   * best-effort publish is dropped instead.
+   * @param eventCount The number of events that would be published.
+   * @return True if publishing would breach the reserved DML statement/row budget.
    */
   private static Boolean wouldExceedDmlBudget(Integer eventCount) {
     return forceDmlBudgetExhausted ||
@@ -107,8 +110,9 @@ public inherited sharing class WorkflowOutboundEventPublisher {
   }
 
   /**
-   * Publishes the events to the event bus, capturing them for test assertions in
-   * test context and honoring the injected failure hook.
+   * @description Publishes the events to the event bus, capturing them for test
+   * assertions in test context and honoring the injected failure hook.
+   * @param events The outbound Platform Events to hand to EventBus.publish.
    */
   private static void dispatch(List<SObject> events) {
     if (Test.isRunningTest() && throwTestException) {

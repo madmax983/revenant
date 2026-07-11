@@ -28,6 +28,12 @@ public inherited sharing class BulkWorkflowSelector {
     public String status;
     public String searchTerm;
 
+    /**
+     * @description Builds a selection filter from the dashboard's three inputs.
+     * @param workflowName The workflow developer name to restrict to, or blank for any.
+     * @param status An explicit status filter, or blank to include all eligible statuses.
+     * @param searchTerm A free-text term matched against name, correlation key, workflow name, and error message.
+     */
     public Criteria(String workflowName, String status, String searchTerm) {
       this.workflowName = workflowName;
       this.status = status;
@@ -35,6 +41,12 @@ public inherited sharing class BulkWorkflowSelector {
     }
   }
 
+  /**
+   * @description Creates a selector for one bulk job by injecting the status set it treats
+   * as eligible and the workflow name it must exclude (its own, the ouroboros guard).
+   * @param eligibleStatuses The instance statuses this bulk job is allowed to act on.
+   * @param excludeWorkflowName The workflow name to exclude so the job never selects itself.
+   */
   public BulkWorkflowSelector(
     Set<String> eligibleStatuses,
     String excludeWorkflowName
@@ -44,9 +56,11 @@ public inherited sharing class BulkWorkflowSelector {
   }
 
   /**
-   * Resolves the effective status set: an explicit status filter is honored but
-   * intersected with the eligible set (so filtering to a non-eligible status
-   * yields nothing), while a blank filter expands to the full eligible set.
+   * @description Resolves the effective status set: an explicit status filter is honored
+   * but intersected with the eligible set (so filtering to a non-eligible status yields
+   * nothing), while a blank filter expands to the full eligible set.
+   * @param status The operator-supplied status filter, or blank for all eligible statuses.
+   * @return The statuses to query, empty when the requested status is not eligible.
    */
   private List<String> effectiveStatuses(String status) {
     List<String> result = new List<String>();
@@ -59,8 +73,10 @@ public inherited sharing class BulkWorkflowSelector {
   }
 
   /**
-   * Exact count of eligible instances matching the filter — the number shown to
-   * the operator for confirmation.
+   * @description Exact count of eligible instances matching the filter — the number shown
+   * to the operator for confirmation before a bulk action runs.
+   * @param c The selection criteria to count against.
+   * @return The number of matching eligible instances, or zero when no status is eligible.
    */
   public Integer count(Criteria c) {
     List<String> effStatuses = effectiveStatuses(c.status);
@@ -79,9 +95,13 @@ public inherited sharing class BulkWorkflowSelector {
   }
 
   /**
-   * Up to `chunkSize` eligible instance Ids ordered by Id, starting strictly
-   * after `afterId`. Ordering by Id gives a stable, resumable cursor across
-   * yield boundaries.
+   * @description Fetches up to `chunkSize` eligible instance Ids ordered by Id, starting
+   * strictly after `afterId`. Ordering by Id gives a stable, resumable cursor across
+   * batch yield boundaries.
+   * @param c The selection criteria to fetch against.
+   * @param afterId The exclusive lower-bound Id cursor; pass null to start from the beginning.
+   * @param chunkSize The maximum number of Ids to return in this page.
+   * @return The matching instance Ids in ascending Id order, empty when no status is eligible.
    */
   public List<Id> fetchChunk(Criteria c, Id afterId, Integer chunkSize) {
     List<String> effStatuses = effectiveStatuses(c.status);
@@ -108,9 +128,13 @@ public inherited sharing class BulkWorkflowSelector {
   }
 
   /**
-   * Builds the shared WHERE body and populates `binds` (which the caller has
-   * already seeded with the `statuses` bind). Optional clauses are appended as
-   * guard-driven fragments rather than through a combinatorial if/else tree.
+   * @description Builds the shared WHERE body and populates `binds` (which the caller has
+   * already seeded with the `statuses` bind). Optional clauses are appended as guard-driven
+   * fragments rather than through a combinatorial if/else tree, and every value is bound.
+   * @param c The selection criteria supplying the optional workflow-name and search filters.
+   * @param afterId The exclusive Id cursor to append as a keyset clause, or null to omit it.
+   * @param binds The bind map to populate; mutated in place with each clause's bound values.
+   * @return The composed WHERE clause body (without the leading WHERE keyword).
    */
   private String buildWhere(Criteria c, Id afterId, Map<String, Object> binds) {
     binds.put('excludeName', excludeWorkflowName);

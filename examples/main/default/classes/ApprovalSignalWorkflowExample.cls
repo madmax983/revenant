@@ -20,6 +20,10 @@ public inherited sharing class ApprovalSignalWorkflowExample implements Workflow
    */
   public static final String DECISION_SIGNAL = 'Approve:' + APPROVAL_KEY;
 
+  /**
+   * @description Returns the ordered step names composing this approval workflow.
+   * @return The request-approval, approve, and reject step names.
+   */
   public List<String> getSteps() {
     return new List<String>{
       'ApprovalSignalWorkflowExample.RequestApprovalStep',
@@ -28,10 +32,21 @@ public inherited sharing class ApprovalSignalWorkflowExample implements Workflow
     };
   }
 
+  /**
+   * @description Returns the step the workflow begins with.
+   * @return The request-approval step name.
+   */
   public String getInitialStep() {
     return 'ApprovalSignalWorkflowExample.RequestApprovalStep';
   }
 
+  /**
+   * @description Routes to the branch the approval step chose by reading the next
+   * step name embedded in its result; the terminal steps end the workflow.
+   * @param currentStepName The name of the step that just completed.
+   * @param stepResult The result of the completed step, carrying the chosen next step.
+   * @return The next step name set by the approval step, or null to end the workflow.
+   */
   public String getNextStep(String currentStepName, StepResult stepResult) {
     // The approval step decides the branch by setting the next step name on its
     // result; the terminal approve/reject steps end the workflow.
@@ -43,7 +58,17 @@ public inherited sharing class ApprovalSignalWorkflowExample implements Workflow
 
   // --- STEP DEFINITIONS ---
 
+  /**
+   * @description Suspends waiting for an approval decision, then on resume reads the
+   * decision signal and routes to the approve or reject branch.
+   */
   public class RequestApprovalStep implements WorkflowStep {
+    /**
+     * @description Waits for approval on first run; once the decision signal arrives,
+     * branches to the approve or reject step based on the payload.
+     * @param ctx The durable step context exposing the decision signal that woke the step.
+     * @return waitForApproval while pending, or COMPLETE routing to the approve/reject step.
+     */
     public StepResult execute(StepContext ctx) {
       // One accessor: read the decision that woke us, if any.
       StepContext.Signal decision = ctx.getSignal(DECISION_SIGNAL);
@@ -73,7 +98,15 @@ public inherited sharing class ApprovalSignalWorkflowExample implements Workflow
     }
   }
 
+  /**
+   * @description Terminal step reached when the request was approved.
+   */
   public class ApproveStep implements WorkflowStep {
+    /**
+     * @description Records the approved outcome and ends the workflow.
+     * @param ctx The durable step context for this execution.
+     * @return A COMPLETE result carrying the approved outcome.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -82,7 +115,15 @@ public inherited sharing class ApprovalSignalWorkflowExample implements Workflow
     }
   }
 
+  /**
+   * @description Terminal step reached when the request was rejected.
+   */
   public class RejectStep implements WorkflowStep {
+    /**
+     * @description Records the rejected outcome, carrying through any supplied reason.
+     * @param ctx The durable step context supplying the workflow input.
+     * @return A COMPLETE result carrying the rejected outcome and reason.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = String.isNotBlank(ctx.inputJson)
         ? (Map<String, Object>) JSON.deserializeUntyped(ctx.inputJson)

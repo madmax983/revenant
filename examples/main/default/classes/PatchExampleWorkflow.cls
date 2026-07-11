@@ -8,7 +8,16 @@
  * 3. Using deprecated('retired-patch') to retire older paths safely.
  */
 public inherited sharing class PatchExampleWorkflow {
+  /**
+   * @description The saga workflow definition whose routing evolves via the
+   * 'insert-flight' patch marker, optionally inserting BookFlight between BookHotel
+   * and BookCar.
+   */
   public class PatchSagaWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the ordered step names comprising the booking saga.
+     * @return The list of BookHotel, BookFlight, and BookCar step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'PatchExampleWorkflow.BookHotel',
@@ -17,10 +26,21 @@ public inherited sharing class PatchExampleWorkflow {
       };
     }
 
+    /**
+     * @description Names the step the engine runs first for a new instance.
+     * @return The BookHotel step name.
+     */
     public String getInitialStep() {
       return 'PatchExampleWorkflow.BookHotel';
     }
 
+    /**
+     * @description Routes to the next step, branching after BookHotel to include
+     * BookFlight only when the completed step signalled insertFlight in its output.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step, whose output drives the branch.
+     * @return The next step name, or null when the saga is complete.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       if (currentStepName == 'PatchExampleWorkflow.BookHotel') {
         if (result.outputJson != null) {
@@ -43,7 +63,17 @@ public inherited sharing class PatchExampleWorkflow {
     }
   }
 
+  /**
+   * @description Books the hotel and, via the 'insert-flight' patch marker, decides
+   * whether newer instances route through BookFlight; compensates by cancelling.
+   */
   public class BookHotel implements WorkflowStep, CompensatableStep {
+    /**
+     * @description Books the hotel, reads the 'insert-flight' patch to flag flight
+     * insertion for routing, and demonstrates deprecated() throwing on retired patches.
+     * @param ctx The durable step context exposing patched()/deprecated() and input.
+     * @return A completed StepResult carrying hotelBooked and the insertFlight flag.
+     */
     public StepResult execute(StepContext ctx) {
       // Determine if we should insert the flight step.
       // Brand new instances get true; in-flight instances past this point get false.
@@ -65,6 +95,12 @@ public inherited sharing class PatchExampleWorkflow {
       );
     }
 
+    /**
+     * @description Compensates the hotel booking by recording its cancellation
+     * when the saga unwinds.
+     * @param ctx The durable step context for the compensation invocation.
+     * @return A completed StepResult carrying hotelCancelled.
+     */
     public StepResult compensate(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -73,7 +109,16 @@ public inherited sharing class PatchExampleWorkflow {
     }
   }
 
+  /**
+   * @description The patch-inserted flight-booking step, present only on instances
+   * routed through it by the 'insert-flight' marker; compensates by cancelling.
+   */
   public class BookFlight implements WorkflowStep, CompensatableStep {
+    /**
+     * @description Books the flight.
+     * @param ctx The durable step context for this execution.
+     * @return A completed StepResult carrying flightBooked.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -81,6 +126,12 @@ public inherited sharing class PatchExampleWorkflow {
       );
     }
 
+    /**
+     * @description Compensates the flight booking by recording its cancellation
+     * when the saga unwinds.
+     * @param ctx The durable step context for the compensation invocation.
+     * @return A completed StepResult carrying flightCancelled.
+     */
     public StepResult compensate(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -89,7 +140,17 @@ public inherited sharing class PatchExampleWorkflow {
     }
   }
 
+  /**
+   * @description Books the car, upgrading the class when the 'insert-flight' patch
+   * indicates a flight was booked; compensates by cancelling.
+   */
   public class BookCar implements WorkflowStep, CompensatableStep {
+    /**
+     * @description Books the car, choosing a Luxury SUV when the 'insert-flight'
+     * patch is active and an Economy Sedan otherwise.
+     * @param ctx The durable step context exposing the patched() marker.
+     * @return A completed StepResult carrying carBooked and the chosen carType.
+     */
     public StepResult execute(StepContext ctx) {
       Boolean hasFlight = ctx.patched('insert-flight');
       String carType = hasFlight ? 'Luxury SUV' : 'Economy Sedan';
@@ -100,6 +161,12 @@ public inherited sharing class PatchExampleWorkflow {
       );
     }
 
+    /**
+     * @description Compensates the car booking by recording its cancellation when
+     * the saga unwinds.
+     * @param ctx The durable step context for the compensation invocation.
+     * @return A completed StepResult carrying carCancelled.
+     */
     public StepResult compensate(StepContext ctx) {
       return StepResult.complete(
         null,

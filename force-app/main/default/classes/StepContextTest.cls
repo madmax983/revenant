@@ -15,12 +15,26 @@ public class StepContextTest {
       this.trueLatest = trueLatest;
       this.capped = capped;
     }
+    /**
+     * @description Returns the fixed (possibly partial) page regardless of name.
+     * @param signalName The requested signal name (ignored by this double).
+     * @return A clone of the configured page.
+     */
     public List<StepContext.Signal> getPendingSignals(String signalName) {
       return page.clone();
     }
+    /**
+     * @description Returns the configured true-latest row regardless of name.
+     * @param signalName The requested signal name (ignored by this double).
+     * @return The configured latest signal.
+     */
     public StepContext.Signal getLatestSignal(String signalName) {
       return trueLatest;
     }
+    /**
+     * @description Reports the configured capped flag.
+     * @return The configured capped value.
+     */
     public Boolean readWasCapped() {
       return capped;
     }
@@ -32,6 +46,12 @@ public class StepContextTest {
     private ClaimingFakeSource(List<StepContext.Signal> allRows) {
       this.allRows = allRows;
     }
+    /**
+     * @description Returns unclaimed rows matching the name (or all when blank),
+     * claiming each returned row so a later read no longer sees it.
+     * @param signalName The signal name to match, or blank for all.
+     * @return The matching, newly-claimed rows.
+     */
     public List<StepContext.Signal> getPendingSignals(String signalName) {
       List<StepContext.Signal> out = new List<StepContext.Signal>();
       for (StepContext.Signal s : allRows) {
@@ -48,6 +68,11 @@ public class StepContextTest {
       }
       return out;
     }
+    /**
+     * @description Returns the newest still-unclaimed row matching the name.
+     * @param signalName The signal name to match.
+     * @return The latest unclaimed matching row, or null when none remain.
+     */
     public StepContext.Signal getLatestSignal(String signalName) {
       StepContext.Signal latest = null;
       for (StepContext.Signal s : allRows) {
@@ -60,6 +85,10 @@ public class StepContextTest {
       }
       return latest;
     }
+    /**
+     * @description Always models a budget-truncated read.
+     * @return Always true.
+     */
     public Boolean readWasCapped() {
       return true;
     }

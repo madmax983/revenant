@@ -30,24 +30,32 @@ public inherited sharing class WorkflowCronEvaluator {
   private static final Integer MAX_LOOKBACK_DAYS = 1461; // ~4 years
 
   /**
-   * Most-recent fire instant at or before `now`, or null if invalid / no match
-   * within the lookback window.
+   * @description Computes the most-recent fire instant at or before `now` for the given
+   * cron expression.
+   * @param cronExpr The 5-field cron expression to evaluate.
+   * @param now The UTC reference instant to search backwards from.
+   * @return The matching fire time, or null if the expression is invalid or no match falls within the lookback window.
    */
   public static DateTime previousFireTime(String cronExpr, DateTime now) {
     return fireTime(cronExpr, now, false);
   }
 
   /**
-   * Next fire instant at or after `now`, or null if invalid / no match within
-   * the lookahead window. Useful for "next run" previews in the UI.
+   * @description Computes the next fire instant at or after `now`, useful for "next run"
+   * previews in the UI.
+   * @param cronExpr The 5-field cron expression to evaluate.
+   * @param now The UTC reference instant to search forwards from.
+   * @return The matching fire time, or null if the expression is invalid or no match falls within the lookahead window.
    */
   public static DateTime nextFireTime(String cronExpr, DateTime now) {
     return fireTime(cronExpr, now, true);
   }
 
   /**
-   * Returns true when the expression has exactly 5 fields that all parse to a
-   * non-empty value set. Cheap validity check for editor input.
+   * @description Cheap validity check for editor input: true when the expression has
+   * exactly 5 fields that all parse to a non-empty value set.
+   * @param cronExpr The candidate cron expression to validate.
+   * @return True if the expression parses to five valid fields, otherwise false.
    */
   public static Boolean isValidCron(String cronExpr) {
     return CronFieldParser.parse(cronExpr) != null;

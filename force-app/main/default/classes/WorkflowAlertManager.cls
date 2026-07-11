@@ -1,3 +1,9 @@
+/**
+ * @description Central alerting service for workflow failures and stalls, resolving
+ * per-workflow alert configuration and dispatching notifications over email and the
+ * Workflow_Alert__e platform event. All dispatch is best-effort and budget-aware so
+ * alerting can never roll back or break the engine's terminal-state writes.
+ */
 public inherited sharing class WorkflowAlertManager {
   @TestVisible
   private static Map<String, Workflow_Alert_Config__mdt> mockConfigs = new Map<String, Workflow_Alert_Config__mdt>();
@@ -24,7 +30,9 @@ public inherited sharing class WorkflowAlertManager {
   // Request / value objects (keep parameter lists short and self-documenting).
   // ---------------------------------------------------------------------------
 
-  // Inputs required to build a Workflow_Alert__e platform event.
+  /**
+   * @description Inputs required to build a Workflow_Alert__e platform event.
+   */
   public class AlertEventRequest {
     public Workflow_Instance__c instance;
     public Workflow_Alert_Config__mdt config;
@@ -32,7 +40,9 @@ public inherited sharing class WorkflowAlertManager {
     public String alertReason;
   }
 
-  // Inputs required to build a stall alert email.
+  /**
+   * @description Inputs required to build a stall alert email.
+   */
   public class StallAlertRequest {
     public Workflow_Instance__c instance;
     public Workflow_Alert_Config__mdt config;
@@ -72,7 +82,11 @@ public inherited sharing class WorkflowAlertManager {
   // ---------------------------------------------------------------------------
 
   /**
-   * Inspects configuration and thresholds, and sends an email alert and/or platform event if needed.
+   * @description Inspects the workflow's alert configuration and failure thresholds and, when
+   * a threshold is breached, dispatches an email alert and/or platform event. Failures are
+   * swallowed so alerting never disrupts the caller.
+   * @param instance The failed workflow instance to evaluate and alert on.
+   * @param errorMsg The error detail to include in the alert.
    */
   public static void sendAlert(Workflow_Instance__c instance, String errorMsg) {
     try {
@@ -381,7 +395,10 @@ public inherited sharing class WorkflowAlertManager {
   }
 
   /**
-   * Builds a stall alert email message without sending it.
+   * @description Builds a stall alert email message without sending it, returning null when
+   * alerting is disabled, no recipients are configured, or construction fails.
+   * @param request The stall alert inputs (instance, config, idle and threshold minutes).
+   * @return A ready-to-send email message, or null when no email should be sent.
    */
   public static Messaging.SingleEmailMessage buildStallEmail(
     StallAlertRequest request
@@ -509,7 +526,9 @@ public inherited sharing class WorkflowAlertManager {
   // ---------------------------------------------------------------------------
 
   /**
-   * Retrieves active alert configurations (both for production query and unit test mock configs).
+   * @description Retrieves alert configurations that have stall detection enabled, sourcing
+   * from injected mock configs under test and the custom metadata otherwise.
+   * @return The active configs that have a positive stall threshold.
    */
   @TestVisible
   private static List<Workflow_Alert_Config__mdt> getActiveStallConfigs() {
@@ -531,7 +550,12 @@ public inherited sharing class WorkflowAlertManager {
   }
 
   /**
-   * Performs case-insensitive and name-truncation (40-char limit) lookup matching for workflow configurations.
+   * @description Resolves the stall config for a workflow using case-insensitive matching
+   * against the sanitized developer name, its 40-character truncation, and a Default
+   * fallback.
+   * @param workflowName The workflow name to resolve a config for.
+   * @param activeConfigs The candidate active stall configs to match against.
+   * @return The matching config, the Default config, or null when none applies.
    */
   @TestVisible
   private static Workflow_Alert_Config__mdt resolveStallConfig(

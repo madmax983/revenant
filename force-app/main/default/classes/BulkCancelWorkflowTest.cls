@@ -62,6 +62,12 @@ public class BulkCancelWorkflowTest {
       this.filter = filter;
     }
 
+    /**
+     * @description Rebuilds a StepContext for the next chunk transaction from the
+     * persisted step state, re-threading the captured operator filter.
+     * @param stepStateJson The serialized step state persisted across the yield.
+     * @return A StepContext seeded with the filter and restored step state.
+     */
     public StepContext build(String stepStateJson) {
       return ctxFor(filter, stepStateJson);
     }

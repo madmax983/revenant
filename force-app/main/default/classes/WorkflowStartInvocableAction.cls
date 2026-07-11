@@ -1,4 +1,13 @@
+/**
+ * @description Invocable entry point that lets Flow and other declarative tools
+ * start (or debounce) Revenant workflow instances, translating declarative
+ * requests into WorkflowEngine or WorkflowDebouncer calls.
+ */
 public inherited sharing class WorkflowStartInvocableAction {
+  /**
+   * @description Invocable input describing one workflow to start: its name,
+   * correlation key, optional input/attributes JSON, and optional debounce window.
+   */
   public class StartRequest {
     @InvocableVariable(label='Workflow Name' required=true)
     public String workflowName;
@@ -25,6 +34,10 @@ public inherited sharing class WorkflowStartInvocableAction {
     public Integer maxWaitSeconds;
   }
 
+  /**
+   * @description Invocable output for one start request, carrying the resulting
+   * workflow instance Id and whether it was newly created or deduplicated.
+   */
   public class StartResult {
     @InvocableVariable(label='Workflow Instance ID')
     public Id workflowInstanceId;
@@ -41,6 +54,13 @@ public inherited sharing class WorkflowStartInvocableAction {
     category='Revenant Workflows'
     description='Initiates a Revenant durable workflow instance'
   )
+  /**
+   * @description Bulk invocable that starts a workflow instance per request,
+   * routing debounced requests to WorkflowDebouncer and the rest to the engine,
+   * and returns one result per input positionally aligned to the requests.
+   * @param requests The list of start requests, one per Flow invocation row.
+   * @return A list of results aligned by index to the input requests.
+   */
   public static List<StartResult> startWorkflow(List<StartRequest> requests) {
     if (requests == null || requests.isEmpty()) {
       return new List<StartResult>();

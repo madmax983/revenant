@@ -28,10 +28,13 @@
  */
 public inherited sharing class WorkflowTransitionProbe {
   /**
-   * Runs the default and (where applicable) version-aware transition probes,
-   * appending any DANGLING_SUCCESSOR / CONTRACT_METHOD_THREW defects to result.
-   * The declared-name set is derived from declaredSteps exactly as the validator
-   * derives it (new Set&lt;String&gt;(declaredSteps)).
+   * @description Runs the default and (where applicable) version-aware transition
+   * probes, appending any DANGLING_SUCCESSOR / CONTRACT_METHOD_THREW defects to
+   * result. The declared-name set is derived from declaredSteps exactly as the
+   * validator derives it (new Set&lt;String&gt;(declaredSteps)).
+   * @param def The workflow definition whose routing is being probed.
+   * @param declaredSteps The step names declared by the definition's getSteps().
+   * @param result The validation result to which discovered defects are appended.
    */
   public static void probe(
     WorkflowDefinition def,
@@ -49,7 +52,13 @@ public inherited sharing class WorkflowTransitionProbe {
     }
   }
 
-  /** Drives the two-argument getNextStep for every declared step and probe. */
+  /**
+   * @description Drives the two-argument getNextStep for every declared step and
+   * COMPLETE-action probe result, flagging any returned successor not declared in
+   * getSteps() and swallowing author exceptions from getNextStep.
+   * @param def The workflow definition whose default routing is being probed.
+   * @param ctx The probe context holding declared steps, probes, and the result.
+   */
   private static void probeDefaultRouting(
     WorkflowDefinition def,
     ProbeContext ctx
@@ -69,10 +78,13 @@ public inherited sharing class WorkflowTransitionProbe {
   }
 
   /**
-   * Drives the three-argument getNextStep(current, result, version) for every
-   * version in 1..getLatestVersion(). A throw from getLatestVersion() means the
-   * workflow cannot start, so it is reported (the engine calls it before starting
-   * an instance) rather than silently skipping the versioned probe.
+   * @description Drives the three-argument getNextStep(current, result, version)
+   * for every version in 1..getLatestVersion(). A throw from getLatestVersion()
+   * means the workflow cannot start, so it is reported (the engine calls it before
+   * starting an instance) rather than silently skipping the versioned probe.
+   * @param vdef The versioned workflow definition whose per-version routing is
+   * probed.
+   * @param ctx The probe context holding declared steps, probes, and the result.
    */
   private static void probeVersionedRouting(
     VersionedWorkflow vdef,
@@ -113,8 +125,11 @@ public inherited sharing class WorkflowTransitionProbe {
   }
 
   /**
-   * Records a DANGLING_SUCCESSOR defect when a probed successor is non-blank and
-   * not declared in getSteps(), de-duplicating by successor name.
+   * @description Records a DANGLING_SUCCESSOR defect when a probed successor is
+   * non-blank and not declared in getSteps(), de-duplicating by successor name.
+   * @param stepName The declared step whose routing produced the successor.
+   * @param successor The successor step name returned by getNextStep.
+   * @param ctx The probe context holding the declared set, flagged set, and result.
    */
   private static void flagIfDangling(
     String stepName,

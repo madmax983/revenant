@@ -1,4 +1,15 @@
+/**
+ * @description Example trigger handler that starts a customer onboarding workflow for each
+ * Opportunity transitioning into 'Closed Won', demonstrating how to launch workflows from
+ * record changes in bulk.
+ */
 public inherited sharing class OpportunityTriggerHandler {
+  /**
+   * @description Starts an onboarding workflow in bulk for every Opportunity that just
+   * transitioned to 'Closed Won'.
+   * @param newOpps The updated Opportunity records from the trigger.
+   * @param oldOppsMap The prior state of the Opportunities keyed by Id.
+   */
   public static void handleAfterUpdate(
     List<Opportunity> newOpps,
     Map<Id, Opportunity> oldOppsMap

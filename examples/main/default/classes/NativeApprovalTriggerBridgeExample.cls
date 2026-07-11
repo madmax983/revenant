@@ -16,6 +16,8 @@ public inherited sharing class NativeApprovalTriggerBridgeExample {
    * custom key fields required) and runs its initial steps. (Note: the budget step and
    * saga/compensation shape already covered by NativeApprovalWorkflowExampleTest). Submits
    * the Case into the native Case.Revenant_Trigger_Approval_Example process.
+   *
+   * @param newCases The newly-inserted Cases to start a workflow for and submit for approval.
    */
   public static void handleAfterInsert(List<Case> newCases) {
     List<WorkflowEngine.StartRequest> startRequests = new List<WorkflowEngine.StartRequest>();
@@ -63,6 +65,9 @@ public inherited sharing class NativeApprovalTriggerBridgeExample {
    * the workflow directly, bypassing Flow entirely. JSON.serialize() builds the payload, so a
    * multi-line or quote-containing comment can never produce invalid JSON the way a
    * hand-assembled Flow-formula string could.
+   *
+   * @param newCases The updated Cases in trigger.new to inspect for approval decisions.
+   * @param oldCasesMap The prior Case state keyed by Id, used to detect status transitions.
    */
   public static void handleAfterUpdate(
     List<Case> newCases,

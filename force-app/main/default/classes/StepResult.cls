@@ -1,4 +1,12 @@
+/**
+ * @description Immutable directive a WorkflowStep returns to tell the engine what to do
+ * next — complete, yield, suspend, retry, sleep, split, start children, wait for approval,
+ * continue-as-new, or fail — built through the static factory methods on this class.
+ */
 public inherited sharing class StepResult {
+  /**
+   * @description Enumerates the kinds of transitions a step can request from the engine.
+   */
   public enum ActionType {
     COMPLETE,
     SUSPEND,
@@ -13,22 +21,39 @@ public inherited sharing class StepResult {
     START_CHILDREN
   }
 
+  /** @description The kind of transition this result requests. */
   public ActionType action { get; set; }
+  /** @description The name of the next step to run, when applicable. */
   public String nextStepName { get; set; }
+  /** @description The step's serialized output payload, or null. */
   public String outputJson { get; set; }
+  /** @description Opaque durable step state persisted across a yield/suspend/sleep. */
   public String stepStateJson { get; set; }
+  /** @description Fixed delay in seconds before a legacy fixed-interval retry. */
   public Integer retryAfterSeconds { get; set; }
+  /** @description The retry policy governing backoff and attempt limits. */
   public RetryPolicy retryPolicy { get; set; }
+  /** @description Duration in seconds the engine should sleep before resuming. */
   public Integer sleepDurationSeconds { get; set; }
+  /** @description Name of the child workflow to start, for START_CHILD. */
   public String childWorkflowName { get; set; }
+  /** @description Correlation key for the child workflow to start. */
   public String childCorrelationKey { get; set; }
+  /** @description Serialized input passed to the child workflow. */
   public String childInputJson { get; set; }
+  /** @description Approval signal key the step waits on, for WAIT_FOR_APPROVAL. */
   public String approvalKey { get; set; }
+  /** @description Role authorized to satisfy the pending approval. */
   public String approvalRole { get; set; }
+  /** @description Step names to run in parallel, for SPLIT. */
   public List<String> parallelStepNames { get; set; }
+  /** @description Serialized input shared by the parallel branches. */
   public String parallelInputJson { get; set; }
+  /** @description Serialized input seeding the continued-as-new instance. */
   public String nextInputJson { get; set; }
+  /** @description Custom correlation key for the continued-as-new instance. */
   public String newCorrelationKey { get; set; }
+  /** @description Child workflows to start together, for START_CHILDREN. */
   public List<ChildRequest> childRequests { get; set; }
 
   /**
@@ -43,14 +68,18 @@ public inherited sharing class StepResult {
 
   // Durable wait timeout (issue #35). When set, the engine arms Sleep_Until__c
   // and routes to timeoutStep if the deadline elapses before a signal/approval.
+  /** @description Deadline in seconds for a durable wait before routing to timeoutStep. */
   public Integer timeoutSeconds { get; set; }
+  /** @description Step to route to when the durable wait deadline elapses. */
   public String timeoutStep { get; set; }
 
   // Explicit terminal failure (issue #37). Populated by the fail() factories: a
   // deliberate, non-retryable business failure the author returns instead of
   // throwing. failureReason is the operator-readable message; failureDataJson is
   // optional structured data serialized for downstream compensation/alerting.
+  /** @description Operator-readable reason for a deliberate terminal failure. */
   public String failureReason { get; set; }
+  /** @description Optional serialized structured data accompanying the failure. */
   public String failureDataJson { get; set; }
 
   @TestVisible
@@ -76,6 +105,13 @@ public inherited sharing class StepResult {
   private static final Map<String, BusinessHours> BUSINESS_HOURS_BY_NAME = new Map<String, BusinessHours>();
   private static final Map<Id, Long> MS_PER_BUSINESS_DAY_BY_BH_ID = new Map<Id, Long>();
 
+  /**
+   * @description Completes the step, optionally routing to a named next step and carrying
+   * a serialized output payload.
+   * @param nextStepName The name of the next step to run, or null to let the definition decide.
+   * @param output The step output to serialize, or null for no output.
+   * @return A COMPLETE result carrying the next step and serialized output.
+   */
   public static StepResult complete(String nextStepName, Object output) {
     StepResult r = new StepResult();
     r.action = ActionType.COMPLETE;
@@ -85,15 +121,16 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * Completes the step and hands the engine one or more domain Platform Events
-   * to publish effectively-once when this COMPLETE transition commits (issue
-   * #64). Retries, yields, suspends, re-drives, and at-least-once resumes that
-   * re-run execute() before that commit publish nothing; a step already durably
-   * Completed never re-executes and so never re-emits.
-   *
-   * Authors choose their own __e type; the engine imposes no envelope. Delivery
-   * to subscribers remains at-least-once — the guarantee is effectively-once
-   * publication at the producer, so subscribers must stay idempotent.
+   * @description Completes the step and hands the engine one or more domain Platform
+   * Events to publish effectively-once when this COMPLETE transition commits (issue #64).
+   * Retries, yields, suspends, re-drives, and at-least-once resumes that re-run execute()
+   * before that commit publish nothing; a step already durably Completed never re-emits.
+   * Authors choose their own __e type; delivery to subscribers stays at-least-once, so
+   * subscribers must remain idempotent.
+   * @param nextStepName The name of the next step to run, or null.
+   * @param output The step output to serialize, or null for no output.
+   * @param events The outbound Platform Events to publish on commit.
+   * @return A COMPLETE result carrying the output and buffered outbound events.
    */
   public static StepResult complete(
     String nextStepName,
@@ -105,6 +142,12 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  /**
+   * @description Yields control back to the engine to re-drive the same step in a fresh
+   * transaction, persisting the given durable state so long-running work stays within limits.
+   * @param stepStateJson Opaque durable state carried into the next re-drive.
+   * @return A YIELD result carrying the persisted step state.
+   */
   public static StepResult yield(String stepStateJson) {
     StepResult r = new StepResult();
     r.action = ActionType.YIELD;
@@ -112,12 +155,21 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  /**
+   * @description Suspends the step indefinitely to await an external signal or approval.
+   * @return A SUSPEND result with no persisted state or timeout.
+   */
   public static StepResult suspend() {
     StepResult r = new StepResult();
     r.action = ActionType.SUSPEND;
     return r;
   }
 
+  /**
+   * @description Suspends the step to await an external signal, persisting durable state.
+   * @param stepStateJson Opaque durable state to persist while suspended.
+   * @return A SUSPEND result carrying the persisted step state.
+   */
   public static StepResult suspend(String stepStateJson) {
     StepResult r = new StepResult();
     r.action = ActionType.SUSPEND;
@@ -125,6 +177,13 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  /**
+   * @description Suspends the step with a durable timeout, routing to timeoutStep if the
+   * deadline elapses before a signal or approval arrives.
+   * @param timeoutSeconds Positive number of seconds before the wait times out.
+   * @param timeoutStep The non-blank step to route to on timeout.
+   * @return A SUSPEND result armed with the timeout and timeout step.
+   */
   public static StepResult suspend(Integer timeoutSeconds, String timeoutStep) {
     if (String.isBlank(timeoutStep)) {
       throw new IllegalArgumentException(
@@ -143,6 +202,12 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  /**
+   * @description Requests a retry of the step governed by the given retry policy's backoff
+   * and attempt limits.
+   * @param policy The non-null retry policy controlling delay and max attempts.
+   * @return A RETRY result carrying the retry policy.
+   */
   public static StepResult retry(RetryPolicy policy) {
     if (policy == null) {
       throw new IllegalArgumentException(
@@ -155,6 +220,12 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  /**
+   * @description Requests a retry after a fixed delay, wrapping it in a backwards-compatible
+   * fixed-interval retry policy.
+   * @param retryAfterSeconds The fixed delay in seconds before the retry.
+   * @return A RETRY result carrying a fixed-interval retry policy.
+   */
   public static StepResult retry(Integer retryAfterSeconds) {
     StepResult r = new StepResult();
     r.action = ActionType.RETRY;
@@ -163,6 +234,12 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  /**
+   * @description Sleeps durably for the given number of seconds before the engine resumes
+   * the step.
+   * @param seconds The non-negative number of seconds to sleep.
+   * @return A SLEEP result carrying the sleep duration.
+   */
   public static StepResult sleep(Integer seconds) {
     if (seconds == null || seconds < 0) {
       throw new IllegalArgumentException(
@@ -175,6 +252,13 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  /**
+   * @description Sleeps durably for the given number of seconds while persisting durable
+   * step state across the wait.
+   * @param seconds The non-negative number of seconds to sleep.
+   * @param stepStateJson Opaque durable state to persist while sleeping.
+   * @return A SLEEP result carrying the sleep duration and persisted state.
+   */
   public static StepResult sleep(Integer seconds, String stepStateJson) {
     if (seconds == null || seconds < 0) {
       throw new IllegalArgumentException(
@@ -327,15 +411,22 @@ public inherited sharing class StepResult {
     return result;
   }
 
-  /** The calendar's time zone key, defaulting to GMT when unset. */
+  /**
+   * @description The calendar's time zone key, defaulting to GMT when unset.
+   * @param bh The BusinessHours calendar to read the time zone from.
+   * @return The calendar's time zone key, or 'GMT' when blank.
+   */
   private static String timeZoneKeyOf(BusinessHours bh) {
     return String.isNotBlank(bh.TimeZoneSidKey) ? bh.TimeZoneSidKey : 'GMT';
   }
 
   /**
-   * The instant the calendar-day scan should begin: the given start when the
-   * calendar has no Id (mock) or start is already within business hours,
-   * otherwise the next business-hours start after it.
+   * @description The instant the calendar-day scan should begin: the given start when the
+   * calendar has no Id (mock) or start is already within business hours, otherwise the
+   * next business-hours start after it.
+   * @param bh The BusinessHours calendar defining working windows.
+   * @param start The candidate start instant for the scan.
+   * @return The adjusted instant at which the calendar-day scan should begin.
    */
   private static DateTime businessScanStart(BusinessHours bh, DateTime start) {
     if (bh.Id == null) {
@@ -493,6 +584,14 @@ public inherited sharing class StepResult {
       t.millisecond();
   }
 
+  /**
+   * @description Sleeps durably for a business-hours-aware duration, converting the given
+   * amount and unit against the named BusinessHours calendar to a wake time.
+   * @param amount The non-negative quantity of the unit to sleep.
+   * @param unit The unit of time (e.g. days, hours, minutes), optionally business-prefixed.
+   * @param businessHoursName The name of the BusinessHours calendar to resolve against.
+   * @return A SLEEP result whose duration reflects the business-hours-adjusted wake time.
+   */
   public static StepResult sleep(
     Integer amount,
     String unit,
@@ -511,9 +610,11 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * Attaches durable step state (opaque JSON, persisted across the wait) to this
-   * result, returning it for fluent chaining — e.g.
+   * @description Attaches durable step state (opaque JSON, persisted across the wait) to
+   * this result, returning it for fluent chaining — e.g.
    * StepResult.sleep(2, 'Hours', 'Default').withStepState(json).
+   * @param stepStateJson The opaque durable state to persist across the wait.
+   * @return This StepResult, for fluent chaining.
    */
   public StepResult withStepState(String stepStateJson) {
     this.stepStateJson = stepStateJson;
@@ -543,9 +644,13 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * Resolves the named BusinessHours calendar, converts amount/unit to a
+   * @description Resolves the named BusinessHours calendar, converts amount/unit to a
    * millisecond interval, and returns the clamped whole-second wait until the
    * business-hours-adjusted wake time.
+   * @param amount The quantity of the unit to sleep.
+   * @param unit The unit of time to convert.
+   * @param businessHoursName The name of the BusinessHours calendar to resolve.
+   * @return The clamped whole-second wait until the adjusted wake time.
    */
   private static Integer businessSleepSeconds(
     Integer amount,
@@ -578,8 +683,12 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * Converts a non-day unit (hours/minutes/seconds and their variants) to
+   * @description Converts a non-day unit (hours/minutes/seconds and their variants) to
    * milliseconds, throwing for an unsupported unit.
+   * @param unitLower The lower-cased, trimmed unit spelling to convert.
+   * @param amount The quantity of the unit.
+   * @param unit The original unit spelling, used in the error message.
+   * @return The interval in milliseconds for the given amount and unit.
    */
   private static Long nonDayUnitMillis(
     String unitLower,
@@ -617,6 +726,14 @@ public inherited sharing class StepResult {
       : (Integer) sleepSecondsLong;
   }
 
+  /**
+   * @description Starts a single child workflow as part of a saga, correlating it by key
+   * and passing the given input.
+   * @param childWorkflowName The non-blank name of the child workflow to start.
+   * @param childCorrelationKey The correlation key identifying the child instance.
+   * @param input The child input, serialized if needed.
+   * @return A START_CHILD result describing the child to start.
+   */
   public static StepResult startChild(
     String childWorkflowName,
     String childCorrelationKey,
@@ -635,11 +752,25 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  /**
+   * @description One child workflow to start when a step fans out to multiple children via
+   * startChildren.
+   */
   public class ChildRequest {
+    /** @description Name of the child workflow to start. */
     public String workflowName { get; set; }
+    /** @description Correlation key identifying the child instance. */
     public String correlationKey { get; set; }
+    /** @description Serialized input passed to the child workflow. */
     public String inputJson { get; set; }
 
+    /**
+     * @description Constructs a child request, validating the workflow name and serializing
+     * the input as needed.
+     * @param workflowName The non-blank name of the child workflow to start.
+     * @param correlationKey The correlation key identifying the child instance.
+     * @param input The child input, serialized if needed.
+     */
     public ChildRequest(
       String workflowName,
       String correlationKey,
@@ -656,6 +787,12 @@ public inherited sharing class StepResult {
     }
   }
 
+  /**
+   * @description Starts multiple child workflows together as a fan-out, validating that the
+   * list is non-empty and contains no null entries.
+   * @param children The non-empty list of child requests to start.
+   * @return A START_CHILDREN result carrying the child requests.
+   */
   public static StepResult startChildren(List<ChildRequest> children) {
     if (children == null || children.isEmpty()) {
       throw new IllegalArgumentException(
@@ -675,6 +812,13 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  /**
+   * @description Suspends the step to wait for a human approval signal matching the given
+   * key, optionally restricted to a role.
+   * @param key The non-blank approval signal key to wait on.
+   * @param role The role authorized to approve, or null for any.
+   * @return A WAIT_FOR_APPROVAL result carrying the approval key and role.
+   */
   public static StepResult waitForApproval(String key, String role) {
     if (String.isBlank(key)) {
       throw new IllegalArgumentException(
@@ -689,11 +833,13 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * Arms a durable timeout on this WAIT_FOR_APPROVAL result, returning it for
+   * @description Arms a durable timeout on this WAIT_FOR_APPROVAL result, returning it for
    * fluent chaining — e.g.
-   * StepResult.waitForApproval(key, role).withApprovalTimeout(60, 'TimeoutStep').
-   * If the deadline elapses before the approval, the engine routes to
-   * timeoutStep.
+   * StepResult.waitForApproval(key, role).withApprovalTimeout(60, 'TimeoutStep'). If the
+   * deadline elapses before the approval, the engine routes to timeoutStep.
+   * @param timeoutSeconds Positive number of seconds before the approval times out.
+   * @param timeoutStep The non-blank step to route to on timeout.
+   * @return This StepResult, for fluent chaining.
    */
   public StepResult withApprovalTimeout(
     Integer timeoutSeconds,
@@ -714,6 +860,12 @@ public inherited sharing class StepResult {
     return this;
   }
 
+  /**
+   * @description Splits execution into parallel branches, one per named step, all running
+   * concurrently before the workflow joins.
+   * @param stepNames The non-empty list of step names to run in parallel.
+   * @return A SPLIT result carrying the parallel step names.
+   */
   public static StepResult split(List<String> stepNames) {
     if (stepNames == null || stepNames.isEmpty()) {
       throw new IllegalArgumentException(
@@ -733,6 +885,13 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  /**
+   * @description Splits execution into parallel branches, one per named step, sharing the
+   * given serialized input across all branches.
+   * @param stepNames The non-empty list of step names to run in parallel.
+   * @param input The shared branch input, serialized if needed.
+   * @return A SPLIT result carrying the parallel step names and shared input.
+   */
   public static StepResult split(List<String> stepNames, Object input) {
     if (stepNames == null || stepNames.isEmpty()) {
       throw new IllegalArgumentException(
@@ -753,6 +912,12 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  /**
+   * @description Continues the workflow as a fresh instance seeded with the given input,
+   * carrying over the current correlation key, to bound history growth on long-running loops.
+   * @param nextInput The input seeding the continued instance, serialized if needed.
+   * @return A CONTINUE_AS_NEW result carrying the next input.
+   */
   public static StepResult continueAsNew(Object nextInput) {
     StepResult r = new StepResult();
     r.action = ActionType.CONTINUE_AS_NEW;
@@ -761,6 +926,13 @@ public inherited sharing class StepResult {
     return r;
   }
 
+  /**
+   * @description Continues the workflow as a fresh instance seeded with the given input and
+   * a custom correlation key.
+   * @param nextInput The input seeding the continued instance, serialized if needed.
+   * @param customKey The correlation key to assign to the continued instance.
+   * @return A CONTINUE_AS_NEW result carrying the next input and correlation key.
+   */
   public static StepResult continueAsNew(Object nextInput, String customKey) {
     StepResult r = new StepResult();
     r.action = ActionType.CONTINUE_AS_NEW;
@@ -770,22 +942,25 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * Deliberately, terminally fails the step (issue #37). Returning this — rather
-   * than throwing — records the author's operator-readable reason as the failure
-   * (not an Apex stack trace) and stops the workflow in ZERO retry hops: the
-   * engine routes straight through the existing failure/compensation path,
-   * compensating (LIFO) when the instance has a Compensation_Stack__c or failing
-   * outright when it does not. This is Revenant's non-retryable / permanent-
-   * failure primitive: use it for business-rule violations the author knows will
-   * never succeed (e.g. "order already refunded", "KYC rejected").
+   * @description Deliberately, terminally fails the step (issue #37). Returning this —
+   * rather than throwing — records the author's operator-readable reason as the failure
+   * (not an Apex stack trace) and stops the workflow in ZERO retry hops: the engine routes
+   * straight through the failure/compensation path, compensating (LIFO) when the instance
+   * has a Compensation_Stack__c or failing outright when it does not. Use it for business-
+   * rule violations the author knows will never succeed (e.g. "order already refunded").
+   * @param reason The non-blank operator-readable failure reason.
+   * @return A FAIL result carrying the failure reason.
    */
   public static StepResult fail(String reason) {
     return fail(reason, null);
   }
 
   /**
-   * Same as fail(reason) but also carries structured failureData, persisted with
-   * the failing step for downstream inspection (compensation, alerting).
+   * @description Same as fail(reason) but also carries structured failureData, persisted
+   * with the failing step for downstream inspection (compensation, alerting).
+   * @param reason The non-blank operator-readable failure reason.
+   * @param failureData Structured failure data to serialize, or null.
+   * @return A FAIL result carrying the reason and serialized failure data.
    */
   public static StepResult fail(String reason, Object failureData) {
     if (String.isBlank(reason)) {
@@ -831,8 +1006,10 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * True when the trimmed value is wrapped in matching JSON object, array, or
+   * @description True when the trimmed value is wrapped in matching JSON object, array, or
    * string delimiters.
+   * @param trimmed The trimmed candidate string to inspect.
+   * @return True if the value has matching JSON delimiters, otherwise false.
    */
   private static Boolean hasJsonDelimiters(String trimmed) {
     return (trimmed.startsWith('{') && trimmed.endsWith('}')) ||

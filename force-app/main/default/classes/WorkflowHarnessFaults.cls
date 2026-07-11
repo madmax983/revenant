@@ -8,18 +8,42 @@
 public inherited sharing class WorkflowHarnessFaults {
   private final WorkflowHarnessContext ctx;
 
+  /**
+   * @description Binds this fault registrar to the harness context whose root
+   * instance id scopes and namespaces the injected fault keys.
+   * @param ctx The harness context owning the workflow run these faults apply to.
+   */
   public WorkflowHarnessFaults(WorkflowHarnessContext ctx) {
     this.ctx = ctx;
   }
 
+  /**
+   * @description Registers a permanent fault that makes the named step fail with the
+   * given message on every attempt until removed.
+   * @param stepName The fully-qualified step name to fault.
+   * @param message The failure message the injected fault raises.
+   */
   public void registerFault(String stepName, String message) {
     requireAndPut(stepName, new WorkflowEngine.FaultConfig(message, null));
   }
 
+  /**
+   * @description Registers a one-shot fault that makes the named step fail with the
+   * given message on its next attempt only, then lets it proceed normally.
+   * @param stepName The fully-qualified step name to fault once.
+   * @param message The failure message the injected fault raises.
+   */
   public void registerFaultOnce(String stepName, String message) {
     requireAndPut(stepName, new WorkflowEngine.FaultConfig(message, 1));
   }
 
+  /**
+   * @description Registers a fault that makes the named step fail with the given
+   * message for a bounded number of attempts before succeeding.
+   * @param stepName The fully-qualified step name to fault.
+   * @param message The failure message the injected fault raises.
+   * @param failCount The number of attempts to fail; must be greater than 0.
+   */
   public void registerFault(
     String stepName,
     String message,
@@ -38,6 +62,10 @@ public inherited sharing class WorkflowHarnessFaults {
     );
   }
 
+  /**
+   * @description Clears every injected fault owned by this run, i.e. all fault keys
+   * prefixed with this context's root instance id, leaving other runs' faults intact.
+   */
   public void removeFaults() {
     if (WorkflowEngine.injectedFaults == null) {
       return;

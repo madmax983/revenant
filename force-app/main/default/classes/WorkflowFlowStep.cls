@@ -1,6 +1,17 @@
+/**
+ * @description Built-in WorkflowStep that invokes a named Autolaunched Flow as a
+ * durable step, passing input variables through and capturing the Flow's outputs
+ * effectively-once via ctx.once so retries never re-run the Flow.
+ */
 public inherited sharing class WorkflowFlowStep implements WorkflowStep {
   private static final String ACTION_TYPE_FLOW = 'flow';
 
+  /**
+   * @description Parses the step input, resolves the target Flow and variables,
+   * and runs the Flow effectively-once, completing the step with its outputs.
+   * @param ctx The durable step context carrying the input JSON.
+   * @return A completed StepResult carrying the Flow's output parameters.
+   */
   public StepResult execute(StepContext ctx) {
     Map<String, Object> inputMap = parseInput(ctx);
     String flowName = extractFlowName(inputMap);
@@ -12,6 +23,9 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
    * Validates the step context and deserializes its inputJson into a JSON
    * object, throwing a WorkflowException for a null/blank input, malformed JSON,
    * or a non-object payload.
+   *
+   * @param ctx The step context carrying the input JSON.
+   * @return The deserialized input as a JSON object map.
    */
   private Map<String, Object> parseInput(StepContext ctx) {
     if (ctx == null || String.isBlank(ctx.inputJson)) {
@@ -37,7 +51,12 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
     return inputMap;
   }
 
-  /** Extracts and validates the required String flowName from the input map. */
+  /**
+   * @description Extracts and validates the required String flowName from the
+   * input map.
+   * @param inputMap The parsed step input.
+   * @return The validated flow API name.
+   */
   private String extractFlowName(Map<String, Object> inputMap) {
     Object flowNameObj = inputMap.get('flowName');
     if (
@@ -57,6 +76,9 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
   /**
    * Extracts the optional variables map from the input, defaulting to an empty
    * map. Rejects a present-but-non-object variables value.
+   *
+   * @param inputMap The parsed step input.
+   * @return The variables map to pass to the Flow; empty when unspecified.
    */
   private Map<String, Object> extractVariables(Map<String, Object> inputMap) {
     Map<String, Object> variables = null;
@@ -78,6 +100,11 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
   /**
    * Runs the flow effectively-once through ctx.once, re-throwing Workflow
    * exceptions verbatim and wrapping any other failure.
+   *
+   * @param ctx The step context, whose once() makes the run effectively-once.
+   * @param flowName The Flow API name to invoke.
+   * @param variables The input variables to pass to the Flow.
+   * @return A completed StepResult carrying the Flow's outputs.
    */
   private StepResult runFlow(
     StepContext ctx,
@@ -106,10 +133,20 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
     }
   }
 
+  /**
+   * @description CaptureProducer that actually validates and invokes the Flow.
+   * It runs at most once per logical step (inside ctx.once), so the Flow's
+   * side effects and outputs are captured effectively-once across retries.
+   */
   private inherited sharing class FlowExecutionProducer implements CaptureProducer {
     private String flowName;
     private Map<String, Object> variables;
 
+    /**
+     * @description Constructs the producer with the target Flow and its inputs.
+     * @param flowName The Flow API name to invoke.
+     * @param variables The input variables to pass to the Flow.
+     */
     public FlowExecutionProducer(
       String flowName,
       Map<String, Object> variables
@@ -118,6 +155,11 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
       this.variables = variables;
     }
 
+    /**
+     * @description Validates and invokes the Flow, returning its output
+     * parameters for capture.
+     * @return The Flow's output parameters as a map.
+     */
     public Object produce() {
       validateFlow();
       Invocable.Action.Result result = invokeFlow();
@@ -151,6 +193,8 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
     /**
      * Dynamically invokes the flow via the modern Invocable.Action API,
      * throwing a WorkflowException for a missing, null, or failed result.
+     *
+     * @return The successful invocation result.
      */
     private Invocable.Action.Result invokeFlow() {
       Invocable.Action action = Invocable.Action.createCustomAction(
@@ -181,6 +225,9 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
     /**
      * Builds the failure message for an unsuccessful invocation, appending the
      * first reported error when one is present.
+     *
+     * @param result The unsuccessful invocation result.
+     * @return The composed failure message.
      */
     private String failureMessage(Invocable.Action.Result result) {
       String errorMsg = 'Flow invocation failed';
@@ -190,7 +237,12 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
       return errorMsg;
     }
 
-    /** Reads the flow's output parameters, defaulting to an empty map. */
+    /**
+     * @description Reads the Flow's output parameters, defaulting to an empty
+     * map.
+     * @param result The successful invocation result.
+     * @return The Flow's output parameters, or an empty map when none.
+     */
     private Map<String, Object> extractOutputs(Invocable.Action.Result result) {
       Map<String, Object> outputsMap = result.getOutputParameters();
       if (outputsMap == null) {
