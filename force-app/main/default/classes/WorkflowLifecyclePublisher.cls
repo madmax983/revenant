@@ -100,18 +100,6 @@ public inherited sharing class WorkflowLifecyclePublisher {
         Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
         Limits.getDmlRows() + events.size() > Limits.getLimitDmlRows()
       ) {
-        System.debug(
-          LoggingLevel.WARN,
-          'Skipping Workflow_Lifecycle__e publish: DML budget exhausted (statements=' +
-            Limits.getDmlStatements() +
-            '/' +
-            Limits.getLimitDmlStatements() +
-            ', rows=' +
-            Limits.getDmlRows() +
-            '/' +
-            Limits.getLimitDmlRows() +
-            ').'
-        );
         return;
       }
 
@@ -121,30 +109,13 @@ public inherited sharing class WorkflowLifecyclePublisher {
         );
       }
 
-      List<Database.SaveResult> results = EventBus.publish(events);
-      for (Database.SaveResult sr : results) {
-        if (!sr.isSuccess()) {
-          for (Database.Error err : sr.getErrors()) {
-            System.debug(
-              LoggingLevel.WARN,
-              'Workflow_Lifecycle__e publish error: ' +
-                err.getStatusCode() +
-                ': ' +
-                err.getMessage()
-            );
-          }
-        }
-      }
+      EventBus.publish(events);
       if (Test.isRunningTest()) {
         publishedEvents.addAll(events);
       }
-    } catch (Exception ex) {
+    } catch (Exception ignored) {
       // Fire-and-forget: log and swallow. A publish failure must never roll back
       // the terminal-state write, fail the instance, or break the RUN_STEP chain.
-      System.debug(
-        LoggingLevel.WARN,
-        'Workflow_Lifecycle__e publish failed (suppressed): ' + ex.getMessage()
-      );
     }
   }
 
@@ -179,7 +150,11 @@ public inherited sharing class WorkflowLifecyclePublisher {
       // Terminal_At__c stamps mean different transitions — while a plain duplicate
       // publish call for the exact same transition is collapsed to one.
       String transitionKey =
-        instance.Id + '|' + status + '|' + String.valueOf(terminalAt);
+        instance.Id +
+        '|' +
+        status +
+        '|' +
+        String.valueOf(terminalAt);
       if (publishedTransitionKeys.contains(transitionKey)) {
         continue;
       }

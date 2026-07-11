@@ -33,7 +33,7 @@ public inherited sharing class WorkflowStatusInvocableAction {
   // Upper bound on ContinuedAsNew links walked forward, bounding SOQL usage so a
   // pathological/cyclic chain cannot exhaust query governor limits.
   @TestVisible
-  private static Integer MAX_CHAIN_DEPTH = 50;
+  private static Integer maxChainDepth = 50;
 
   private static final String OFFLOAD_MARKER_PREFIX = '{"$attachmentId":';
 
@@ -217,12 +217,12 @@ public inherited sharing class WorkflowStatusInvocableAction {
     //    the live generation by the active/latest preference above; this walk
     //    covers chains whose successor took a different key (e.g. the default
     //    `_runN` scheme). Bulk-safe: one SOQL per chain generation, never per row.
-    //    The walk is bounded by MAX_CHAIN_DEPTH because SOQL limits make an
+    //    The walk is bounded by maxChainDepth because SOQL limits make an
     //    unbounded link-by-link walk impossible; if a (typically perpetual,
     //    different-key) chain exceeds the bound we stop on the furthest generation
     //    reached, which is still a ContinuedAsNew row and is therefore reported as
     //    non-terminal / non-success -- never as a false completed outcome.
-    for (Integer depth = 0; depth < MAX_CHAIN_DEPTH; depth++) {
+    for (Integer depth = 0; depth < maxChainDepth; depth++) {
       Set<Id> predecessorIds = new Set<Id>();
       for (Integer i = 0; i < requests.size(); i++) {
         Workflow_Instance__c cur = resolved[i];
@@ -348,12 +348,7 @@ public inherited sharing class WorkflowStatusInvocableAction {
           textValue
         );
         return (Id) marker.get('$attachmentId');
-      } catch (Exception ex) {
-        System.debug(
-          LoggingLevel.FINE,
-          'Get Workflow Status: offload marker parse fallback: ' +
-          ex.getMessage()
-        );
+      } catch (Exception ignored) {
       }
     }
     return null;

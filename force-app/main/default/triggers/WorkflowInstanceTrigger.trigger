@@ -61,7 +61,10 @@ trigger WorkflowInstanceTrigger on Workflow_Instance__c(
     }
 
     // Clear failure category for non-failed states
-    if (instance.Status__c != 'Failed' && instance.Status__c != 'CompensationFailed') {
+    if (
+      instance.Status__c != 'Failed' &&
+      instance.Status__c != 'CompensationFailed'
+    ) {
       instance.Failure_Category__c = null;
     }
 
@@ -76,7 +79,9 @@ trigger WorkflowInstanceTrigger on Workflow_Instance__c(
       instance.Concurrency_Slot_Held__c == true
     ) {
       String wf = instance.Workflow_Name__c;
-      Integer prior = slotsToRelease.containsKey(wf) ? slotsToRelease.get(wf) : 0;
+      Integer prior = slotsToRelease.containsKey(wf)
+        ? slotsToRelease.get(wf)
+        : 0;
       slotsToRelease.put(wf, prior + 1);
       instance.Concurrency_Slot_Held__c = false;
       instance.Concurrency_Parked__c = false;
@@ -86,13 +91,9 @@ trigger WorkflowInstanceTrigger on Workflow_Instance__c(
   if (!slotsToRelease.isEmpty()) {
     try {
       ConcurrencyGate.releaseBulk(slotsToRelease);
-    } catch (Exception ex) {
+    } catch (Exception ignored) {
       // Fire-and-forget: a failed release must never roll back the terminal-state
       // write. The watchdog reconcile sweep reclaims any leaked slot.
-      System.debug(
-        LoggingLevel.WARN,
-        'Concurrency slot release failed (suppressed): ' + ex.getMessage()
-      );
     }
   }
 }

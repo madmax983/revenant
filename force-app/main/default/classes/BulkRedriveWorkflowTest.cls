@@ -262,8 +262,8 @@ public class BulkRedriveWorkflowTest {
   static void testYieldsAndResumesInChunks() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Integer original = BulkRedriveWorkflow.CHUNK_SIZE;
-      BulkRedriveWorkflow.CHUNK_SIZE = 2;
+      Integer original = BulkRedriveWorkflow.defaultChunkSize;
+      BulkRedriveWorkflow.defaultChunkSize = 2;
       try {
         for (Integer i = 0; i < 5; i++) {
           makeFailedInstance('Chunk_' + i);
@@ -304,7 +304,7 @@ public class BulkRedriveWorkflowTest {
         );
         System.assertEquals(5, countByStatus('Running'));
       } finally {
-        BulkRedriveWorkflow.CHUNK_SIZE = original;
+        BulkRedriveWorkflow.defaultChunkSize = original;
       }
     }
   }
@@ -313,8 +313,8 @@ public class BulkRedriveWorkflowTest {
   static void testOneFailureDoesNotAbortRest() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Integer original = BulkRedriveWorkflow.CHUNK_SIZE;
-      BulkRedriveWorkflow.CHUNK_SIZE = 10;
+      Integer original = BulkRedriveWorkflow.defaultChunkSize;
+      BulkRedriveWorkflow.defaultChunkSize = 10;
       try {
         makeFailedInstance('GoodA');
         makeFailedInstance('GoodB');
@@ -367,7 +367,7 @@ public class BulkRedriveWorkflowTest {
           'Errored instance is left Failed for re-inspection'
         );
       } finally {
-        BulkRedriveWorkflow.CHUNK_SIZE = original;
+        BulkRedriveWorkflow.defaultChunkSize = original;
       }
     }
   }

@@ -66,14 +66,7 @@ public inherited sharing class WorkflowAlertManager {
         );
         publishEvents(new List<Workflow_Alert__e>{ evt });
       }
-    } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Alert dispatch failed: ' +
-          ex.getMessage() +
-          '\n' +
-          ex.getStackTraceString()
-      );
+    } catch (Exception ignored) {
     }
   }
 
@@ -241,18 +234,6 @@ public inherited sharing class WorkflowAlertManager {
       Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
       Limits.getDmlRows() + events.size() > Limits.getLimitDmlRows()
     ) {
-      System.debug(
-        LoggingLevel.WARN,
-        'Skipping Workflow_Alert__e publish: DML budget exhausted (statements=' +
-          Limits.getDmlStatements() +
-          '/' +
-          Limits.getLimitDmlStatements() +
-          ', rows=' +
-          Limits.getDmlRows() +
-          '/' +
-          Limits.getLimitDmlRows() +
-          ').'
-      );
       return;
     }
 
@@ -261,11 +242,7 @@ public inherited sharing class WorkflowAlertManager {
     }
     try {
       EventBus.publish(events);
-    } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Failed to publish Workflow_Alert__e events: ' + ex.getMessage()
-      );
+    } catch (Exception ignored) {
     }
   }
 
@@ -352,11 +329,7 @@ public inherited sharing class WorkflowAlertManager {
       } else if (throwTestException) {
         throw new IllegalArgumentException('Simulated email exception');
       }
-    } catch (Exception e) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Email dispatch failed: ' + e.getMessage()
-      );
+    } catch (Exception ignored) {
     }
     sentEmailsCount += 1;
   }
@@ -453,10 +426,6 @@ public inherited sharing class WorkflowAlertManager {
 
       return mail;
     } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'Failed to build stall email: ' + ex.getMessage()
-      );
       return null;
     }
   }
@@ -710,11 +679,7 @@ public inherited sharing class WorkflowAlertManager {
         if (!Test.isRunningTest()) {
           Messaging.sendEmail(emailsToSend, false);
         }
-      } catch (Exception emailEx) {
-        System.debug(
-          LoggingLevel.ERROR,
-          'Bulk stall email dispatch failed: ' + emailEx.getMessage()
-        );
+      } catch (Exception ignored) {
       }
       sentEmailsCount += emailsToSend.size();
     }

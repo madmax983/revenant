@@ -58,7 +58,7 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
    */
   @TestVisible
   // Capped at 4 because of Salesforce Apex's hard limit of 5 savepoints per transaction, leaving 1 slot for safety/triggers.
-  public static Integer CHUNK_SIZE = 4;
+  public static Integer defaultChunkSize = 4;
 
   // ---- WorkflowDefinition ----
 
@@ -352,7 +352,7 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
       Integer skipped = intOf(state.get('skipped'));
       Integer errored = intOf(state.get('errored'));
 
-      Integer chunkSize = CHUNK_SIZE;
+      Integer chunkSize = defaultChunkSize;
       List<Id> chunk = fetchEligibleChunk(
         workflowName,
         status,
@@ -375,7 +375,10 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
           redriven++;
         } catch (WorkflowEngine.WorkflowException wex) {
           Database.rollback(sp);
-          if (wex.getMessage() != null && wex.getMessage().contains('Failed status')) {
+          if (
+            wex.getMessage() != null &&
+            wex.getMessage().contains('Failed status')
+          ) {
             skipped++;
           } else {
             errored++;

@@ -167,8 +167,8 @@ public class BulkCancelWorkflowTest {
   static void testYieldsAndResumesInChunks() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Integer original = BulkCancelWorkflow.CHUNK_SIZE;
-      BulkCancelWorkflow.CHUNK_SIZE = 2;
+      Integer original = BulkCancelWorkflow.defaultChunkSize;
+      BulkCancelWorkflow.defaultChunkSize = 2;
       try {
         for (Integer i = 0; i < 5; i++) {
           makeInstance(
@@ -223,7 +223,7 @@ public class BulkCancelWorkflowTest {
         ];
         System.assertEquals(5, cancelledCount);
       } finally {
-        BulkCancelWorkflow.CHUNK_SIZE = original;
+        BulkCancelWorkflow.defaultChunkSize = original;
       }
     }
   }

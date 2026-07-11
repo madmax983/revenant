@@ -46,6 +46,14 @@ public inherited sharing class ConcurrencyGate {
     'ContinuedAsNew'
   };
 
+  // Per-transaction, case-insensitive view of Concurrency_Config__mdt.getAll().
+  // getAll() keys by exact DeveloperName and Apex map keys are case-sensitive, but
+  // the durable state/release/reconcile paths key off the case-insensitive unique
+  // Workflow_Definition__c. Re-keying by lowercase DeveloperName makes a case-variant
+  // start resolve the same ceiling those paths already enforce, instead of missing
+  // the specific config and silently falling back to Default/unbounded.
+  private static Map<String, Concurrency_Config__mdt> normalizedConfigsByName;
+
   public class AdmissionResult {
     // True if the instance may proceed to execute (either it took a slot, or the
     // workflow is unbounded).
@@ -65,7 +73,9 @@ public inherited sharing class ConcurrencyGate {
    * workflow is unbounded (no specific record and no Default). Cached per transaction.
    */
   public static Integer getCeiling(String workflowName) {
-    if (String.isBlank(workflowName) || EXEMPT_WORKFLOWS.contains(workflowName)) {
+    if (
+      String.isBlank(workflowName) || EXEMPT_WORKFLOWS.contains(workflowName)
+    ) {
       return null;
     }
     if (ceilingCache.containsKey(workflowName)) {
@@ -79,7 +89,7 @@ public inherited sharing class ConcurrencyGate {
 
     Concurrency_Config__mdt config = resolveConfig(devName, truncatedDevName);
     Integer ceiling = (config != null &&
-        config.Max_Concurrent_Instances__c != null)
+      config.Max_Concurrent_Instances__c != null)
       ? (Integer) config.Max_Concurrent_Instances__c
       : null;
     // Fail open on a misconfigured ceiling. The CMDT field is a plain required
@@ -88,14 +98,6 @@ public inherited sharing class ConcurrencyGate {
     // non-positive ceiling as unbounded (with a warning) rather than silently
     // starving admissions — intentional blocking is what the pause feature is for.
     if (ceiling != null && ceiling < 1) {
-      System.debug(
-        LoggingLevel.WARN,
-        'ConcurrencyGate: ignoring non-positive Max_Concurrent_Instances__c (' +
-          ceiling +
-          ') for ' +
-          workflowName +
-          '; treating as unbounded.'
-      );
       ceiling = null;
     }
     ceilingCache.put(workflowName, ceiling);
@@ -135,14 +137,6 @@ public inherited sharing class ConcurrencyGate {
     }
     return config;
   }
-
-  // Per-transaction, case-insensitive view of Concurrency_Config__mdt.getAll().
-  // getAll() keys by exact DeveloperName and Apex map keys are case-sensitive, but
-  // the durable state/release/reconcile paths key off the case-insensitive unique
-  // Workflow_Definition__c. Re-keying by lowercase DeveloperName makes a case-variant
-  // start resolve the same ceiling those paths already enforce, instead of missing
-  // the specific config and silently falling back to Default/unbounded.
-  private static Map<String, Concurrency_Config__mdt> normalizedConfigsByName;
 
   private static Map<String, Concurrency_Config__mdt> getNormalizedConfigs() {
     if (normalizedConfigsByName == null) {
@@ -236,7 +230,9 @@ public inherited sharing class ConcurrencyGate {
       Integer current = (state.In_Flight_Count__c == null)
         ? 0
         : (Integer) state.In_Flight_Count__c;
-      Integer dec = normalizedCounts.get(state.Workflow_Definition__c.toLowerCase());
+      Integer dec = normalizedCounts.get(
+        state.Workflow_Definition__c.toLowerCase()
+      );
       Integer next = current - (dec == null ? 0 : dec);
       state.In_Flight_Count__c = next < 0 ? 0 : next;
       toUpdate.add(state);
@@ -296,7 +292,7 @@ public inherited sharing class ConcurrencyGate {
       FROM Workflow_Instance__c
       WHERE
         Workflow_Name__c IN :workflowNames
-        AND Concurrency_Slot_Held__c = true
+        AND Concurrency_Slot_Held__c = TRUE
         AND Status__c NOT IN :TERMINAL_STATUSES
       WITH SYSTEM_MODE
       GROUP BY Workflow_Name__c

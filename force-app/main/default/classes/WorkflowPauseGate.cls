@@ -18,9 +18,6 @@
  *   itself.
  */
 public inherited sharing class WorkflowPauseGate {
-  public class PauseException extends Exception {
-  }
-
   // Engine-internal workflow names that must never be paused.
   @TestVisible
   private static final Set<String> RESERVED_NAMES = new Set<String>{
@@ -38,7 +35,10 @@ public inherited sharing class WorkflowPauseGate {
   // remainder is drained by a chained Queueable. @TestVisible so tests can lower
   // it to exercise the chunk boundary without inserting hundreds of rows.
   @TestVisible
-  private static Integer RESUME_CHUNK_SIZE = 200;
+  private static Integer resumeChunkSize = 200;
+
+  public class PauseException extends Exception {
+  }
 
   // ──────────────────────────────────────────────────────────────────────────
   // FAST-PATH: any pause record exists at all?
@@ -170,7 +170,7 @@ public inherited sharing class WorkflowPauseGate {
     WorkflowWatchdog.bootstrap();
   }
 
-  // Flips up to RESUME_CHUNK_SIZE parked instances for the scope back to Running
+  // Flips up to resumeChunkSize parked instances for the scope back to Running
   // and re-enqueues them (serial via bulk publish, parallel via branch fan-out).
   // Returns true if a full chunk was processed, meaning more may remain to drain.
   // Each call re-queries only still-Paused rows, so already-resumed instances
@@ -183,7 +183,7 @@ public inherited sharing class WorkflowPauseGate {
         FROM Workflow_Instance__c
         WHERE Status__c = 'Paused'
         WITH SYSTEM_MODE
-        LIMIT :RESUME_CHUNK_SIZE
+        LIMIT :resumeChunkSize
         FOR UPDATE
       ];
     } else {
@@ -192,7 +192,7 @@ public inherited sharing class WorkflowPauseGate {
         FROM Workflow_Instance__c
         WHERE Status__c = 'Paused' AND Workflow_Name__c = :workflowName
         WITH SYSTEM_MODE
-        LIMIT :RESUME_CHUNK_SIZE
+        LIMIT :resumeChunkSize
         FOR UPDATE
       ];
     }
@@ -227,7 +227,7 @@ public inherited sharing class WorkflowPauseGate {
     // to System.schedule when no slot remains and retain their watchdog Timeout_At__c
     // safety net. Both callers (resumeDefinition and ResumeChunkQueueable) route the
     // continuation through here so the reservation is applied uniformly and guarded.
-    Boolean moreRemain = parked.size() == RESUME_CHUNK_SIZE;
+    Boolean moreRemain = parked.size() == resumeChunkSize;
     if (
       moreRemain &&
       !Test.isRunningTest() &&
