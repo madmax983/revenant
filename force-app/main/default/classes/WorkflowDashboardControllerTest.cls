@@ -1,5 +1,170 @@
 @IsTest
 public class WorkflowDashboardControllerTest {
+  // ── Query-wrapper builders ──────────────────────────────────────────────────
+  // Assemble the WorkflowDashboardController read-method request objects by field
+  // assignment, so each call site passes a single wrapper (a 1:1 repackaging of the
+  // former positional arguments — identical values, just wrapped). Overloads mirror
+  // the pre-refactor method signatures.
+  private static WorkflowDashboardController.InstanceQuery iqOf(
+    String workflowName,
+    String status,
+    String searchTerm,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster
+  ) {
+    return iqOf(
+      workflowName,
+      status,
+      searchTerm,
+      null,
+      limitSize,
+      offsetSize,
+      cacheBuster,
+      null
+    );
+  }
+
+  private static WorkflowDashboardController.InstanceQuery iqOf(
+    String workflowName,
+    String status,
+    String searchTerm,
+    String failureCategory,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster
+  ) {
+    return iqOf(
+      workflowName,
+      status,
+      searchTerm,
+      failureCategory,
+      limitSize,
+      offsetSize,
+      cacheBuster,
+      null
+    );
+  }
+
+  private static WorkflowDashboardController.InstanceQuery iqOf(
+    String workflowName,
+    String status,
+    String searchTerm,
+    String failureCategory,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster,
+    String attributesFilterJson
+  ) {
+    WorkflowDashboardController.InstanceQuery q = new WorkflowDashboardController.InstanceQuery();
+    q.workflowName = workflowName;
+    q.status = status;
+    q.searchTerm = searchTerm;
+    q.failureCategory = failureCategory;
+    q.limitSize = limitSize;
+    q.offsetSize = offsetSize;
+    q.cacheBuster = cacheBuster;
+    q.attributesFilterJson = attributesFilterJson;
+    return q;
+  }
+
+  private static WorkflowDashboardController.InstanceQuery sqOf(
+    String workflowName,
+    String status,
+    String searchTerm
+  ) {
+    return sqOf(workflowName, status, searchTerm, null);
+  }
+
+  private static WorkflowDashboardController.InstanceQuery sqOf(
+    String workflowName,
+    String status,
+    String searchTerm,
+    String attributesFilterJson
+  ) {
+    WorkflowDashboardController.InstanceQuery q = new WorkflowDashboardController.InstanceQuery();
+    q.workflowName = workflowName;
+    q.status = status;
+    q.searchTerm = searchTerm;
+    q.attributesFilterJson = attributesFilterJson;
+    return q;
+  }
+
+  private static WorkflowDashboardController.StalledQuery stalledOf(
+    String workflowName,
+    String searchTerm,
+    Integer thresholdMinutes,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster
+  ) {
+    return stalledOf(
+      workflowName,
+      searchTerm,
+      thresholdMinutes,
+      limitSize,
+      offsetSize,
+      cacheBuster,
+      null
+    );
+  }
+
+  private static WorkflowDashboardController.StalledQuery stalledOf(
+    String workflowName,
+    String searchTerm,
+    Integer thresholdMinutes,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster,
+    String attributesFilterJson
+  ) {
+    WorkflowDashboardController.StalledQuery q = new WorkflowDashboardController.StalledQuery();
+    q.workflowName = workflowName;
+    q.searchTerm = searchTerm;
+    q.thresholdMinutes = thresholdMinutes;
+    q.limitSize = limitSize;
+    q.offsetSize = offsetSize;
+    q.cacheBuster = cacheBuster;
+    q.attributesFilterJson = attributesFilterJson;
+    return q;
+  }
+
+  private static WorkflowDashboardController.StalledQuery countOf(
+    String workflowName,
+    String searchTerm,
+    Integer thresholdMinutes
+  ) {
+    return countOf(workflowName, searchTerm, thresholdMinutes, null);
+  }
+
+  private static WorkflowDashboardController.StalledQuery countOf(
+    String workflowName,
+    String searchTerm,
+    Integer thresholdMinutes,
+    String attributesFilterJson
+  ) {
+    WorkflowDashboardController.StalledQuery q = new WorkflowDashboardController.StalledQuery();
+    q.workflowName = workflowName;
+    q.searchTerm = searchTerm;
+    q.thresholdMinutes = thresholdMinutes;
+    q.attributesFilterJson = attributesFilterJson;
+    return q;
+  }
+
+  private static WorkflowDashboardController.UnroutedQuery unroutedOf(
+    String searchTerm,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster
+  ) {
+    WorkflowDashboardController.UnroutedQuery q = new WorkflowDashboardController.UnroutedQuery();
+    q.searchTerm = searchTerm;
+    q.limitSize = limitSize;
+    q.offsetSize = offsetSize;
+    q.cacheBuster = cacheBuster;
+    return q;
+  }
+
   @IsTest
   static void testGetInstancesAndDetails() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
@@ -38,12 +203,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        '',
-        10,
-        0,
-        ''
+        iqOf('', '', '', 10, 0, '')
       );
       Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(
         inst.Id
@@ -325,12 +485,7 @@ public class WorkflowDashboardControllerTest {
       Test.startTest();
       // 1. Test filtering by Workflow Name
       List<Map<String, Object>> resWorkflow = WorkflowDashboardController.getFilteredInstances(
-        'TestDefA',
-        '',
-        '',
-        10,
-        0,
-        'cb1'
+        iqOf('TestDefA', '', '', 10, 0, 'cb1')
       );
       System.assertEquals(
         2,
@@ -340,12 +495,7 @@ public class WorkflowDashboardControllerTest {
 
       // 2. Test filtering by Status
       List<Map<String, Object>> resStatus = WorkflowDashboardController.getFilteredInstances(
-        '',
-        'Running',
-        '',
-        10,
-        0,
-        'cb2'
+        iqOf('', 'Running', '', 10, 0, 'cb2')
       );
       System.assertEquals(
         1,
@@ -359,12 +509,7 @@ public class WorkflowDashboardControllerTest {
 
       // 3. Test filtering by Search Term on Correlation Key
       List<Map<String, Object>> resSearchKey = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        'Banana',
-        10,
-        0,
-        'cb3'
+        iqOf('', '', 'Banana', 10, 0, 'cb3')
       );
       System.assertEquals(
         1,
@@ -378,12 +523,7 @@ public class WorkflowDashboardControllerTest {
 
       // 4. Test filtering by Search Term case-insensitivity on Correlation Key
       List<Map<String, Object>> resSearchError = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        'banana',
-        10,
-        0,
-        'cb4'
+        iqOf('', '', 'banana', 10, 0, 'cb4')
       );
       System.assertEquals(
         1,
@@ -393,12 +533,7 @@ public class WorkflowDashboardControllerTest {
 
       // 5. Test pagination: limit and offset
       List<Map<String, Object>> page1 = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        '',
-        2,
-        0,
-        'cb5'
+        iqOf('', '', '', 2, 0, 'cb5')
       );
       System.assertEquals(
         2,
@@ -407,12 +542,7 @@ public class WorkflowDashboardControllerTest {
       );
 
       List<Map<String, Object>> page2 = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        '',
-        2,
-        2,
-        'cb6'
+        iqOf('', '', '', 2, 2, 'cb6')
       );
       System.assertEquals(
         1,
@@ -454,9 +584,7 @@ public class WorkflowDashboardControllerTest {
       Test.startTest();
       // 1. Get stats overall (no filters)
       Map<String, Integer> statsAll = WorkflowDashboardController.getWorkflowStats(
-        '',
-        '',
-        ''
+        sqOf('', '', '')
       );
       System.assertEquals(
         3,
@@ -481,9 +609,7 @@ public class WorkflowDashboardControllerTest {
 
       // 2. Get stats filtered by definition A
       Map<String, Integer> statsDefA = WorkflowDashboardController.getWorkflowStats(
-        'TestDefA',
-        '',
-        ''
+        sqOf('TestDefA', '', '')
       );
       System.assertEquals(2, statsDefA.get('total'));
       System.assertEquals(0, statsDefA.get('active'));
@@ -492,9 +618,7 @@ public class WorkflowDashboardControllerTest {
 
       // 3. Get stats filtered by search term
       Map<String, Integer> statsSearch = WorkflowDashboardController.getWorkflowStats(
-        '',
-        '',
-        'Banana'
+        sqOf('', '', 'Banana')
       );
       System.assertEquals(1, statsSearch.get('total'));
       System.assertEquals(1, statsSearch.get('failed'));
@@ -855,12 +979,7 @@ public class WorkflowDashboardControllerTest {
         // 1. getFilteredInstances
         try {
           WorkflowDashboardController.getFilteredInstances(
-            '',
-            '',
-            '',
-            10,
-            0,
-            ''
+            iqOf('', '', '', 10, 0, '')
           );
           System.assert(
             false,
@@ -876,7 +995,7 @@ public class WorkflowDashboardControllerTest {
 
         // 2. getWorkflowStats
         try {
-          WorkflowDashboardController.getWorkflowStats('', '', '');
+          WorkflowDashboardController.getWorkflowStats(sqOf('', '', ''));
           System.assert(
             false,
             'Expected AuraHandledException for getWorkflowStats'
@@ -1065,12 +1184,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> res = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        'xyz',
-        10,
-        0,
-        'cbError'
+        iqOf('', '', 'xyz', 10, 0, 'cbError')
       );
       Test.stopTest();
 
@@ -1437,12 +1551,7 @@ public class WorkflowDashboardControllerTest {
       // Test getFilteredInstances returns the computed waitingOn
       Test.startTest();
       List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
-        '',
-        'Suspended',
-        '',
-        10,
-        0,
-        ''
+        iqOf('', 'Suspended', '', 10, 0, '')
       );
       System.assertEquals(1, instances.size());
       // Since it's a fake ID and not active, it should fall back to 'Watchdog'
@@ -1481,20 +1590,10 @@ public class WorkflowDashboardControllerTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       List<Map<String, Object>> res1 = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        '',
-        -10,
-        -5,
-        ''
+        iqOf('', '', '', -10, -5, '')
       );
       List<Map<String, Object>> res2 = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        '',
-        500,
-        5000,
-        ''
+        iqOf('', '', '', 500, 5000, '')
       );
       Test.stopTest();
       System.assertNotEquals(null, res1);
@@ -1695,9 +1794,7 @@ public class WorkflowDashboardControllerTest {
       // The confirm-count must match what getWorkflowStats reports for the same
       // Failed filter (which, scoped to Failed only, is the failed bucket).
       Map<String, Integer> stats = WorkflowDashboardController.getWorkflowStats(
-        'WorkflowEngineTest.HappyWorkflow',
-        'Failed',
-        ''
+        sqOf('WorkflowEngineTest.HappyWorkflow', 'Failed', '')
       );
       Test.stopTest();
 
@@ -1883,12 +1980,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
-        '',
-        'Suspended',
-        '',
-        10,
-        0,
-        ''
+        iqOf('', 'Suspended', '', 10, 0, '')
       );
       Test.stopTest();
 
@@ -1929,12 +2021,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
-        '',
-        'Suspended',
-        '',
-        10,
-        0,
-        ''
+        iqOf('', 'Suspended', '', 10, 0, '')
       );
       Test.stopTest();
 
@@ -1962,12 +2049,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
-        '',
-        'Suspended',
-        '',
-        10,
-        0,
-        ''
+        iqOf('', 'Suspended', '', 10, 0, '')
       );
       Test.stopTest();
 
@@ -2003,12 +2085,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
-        '',
-        'Suspended',
-        '',
-        10,
-        0,
-        ''
+        iqOf('', 'Suspended', '', 10, 0, '')
       );
       Test.stopTest();
 
@@ -2040,12 +2117,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> stalled = WorkflowDashboardController.getStalledInstances(
-        '',
-        '',
-        -1,
-        10,
-        0,
-        ''
+        stalledOf('', '', -1, 10, 0, '')
       );
       Test.stopTest();
 
@@ -2077,12 +2149,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> stalled = WorkflowDashboardController.getStalledInstances(
-        '',
-        '',
-        null,
-        10,
-        0,
-        ''
+        stalledOf('', '', null, 10, 0, '')
       );
       Test.stopTest();
 
@@ -2106,12 +2173,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> stalled = WorkflowDashboardController.getStalledInstances(
-        '',
-        '',
-        -1,
-        10,
-        0,
-        ''
+        stalledOf('', '', -1, 10, 0, '')
       );
       Test.stopTest();
 
@@ -2165,28 +2227,13 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> page0 = WorkflowDashboardController.getStalledInstances(
-        '',
-        '',
-        -1,
-        1,
-        0,
-        ''
+        stalledOf('', '', -1, 1, 0, '')
       );
       List<Map<String, Object>> page1 = WorkflowDashboardController.getStalledInstances(
-        '',
-        '',
-        -1,
-        1,
-        1,
-        ''
+        stalledOf('', '', -1, 1, 1, '')
       );
       List<Map<String, Object>> page2 = WorkflowDashboardController.getStalledInstances(
-        '',
-        '',
-        -1,
-        1,
-        2,
-        ''
+        stalledOf('', '', -1, 1, 2, '')
       );
       Test.stopTest();
 
@@ -2250,9 +2297,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       Map<String, Object> result = WorkflowDashboardController.getStalledCount(
-        '',
-        '',
-        -1
+        countOf('', '', -1)
       );
       Test.stopTest();
 
@@ -2281,12 +2326,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
-        '',
-        'Running',
-        '',
-        10,
-        0,
-        ''
+        iqOf('', 'Running', '', 10, 0, '')
       );
       Test.stopTest();
 
@@ -2321,12 +2361,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
-        '',
-        'Completed',
-        '',
-        10,
-        0,
-        ''
+        iqOf('', 'Completed', '', 10, 0, '')
       );
       Test.stopTest();
 
@@ -2380,15 +2415,12 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       WorkflowDashboardController.getFilteredInstances(
-        '',
-        'Suspended',
-        '',
-        10,
-        0,
-        ''
+        iqOf('', 'Suspended', '', 10, 0, '')
       );
-      WorkflowDashboardController.getStalledInstances('', '', -1, 10, 0, '');
-      WorkflowDashboardController.getStalledCount('', '', -1);
+      WorkflowDashboardController.getStalledInstances(
+        stalledOf('', '', -1, 10, 0, '')
+      );
+      WorkflowDashboardController.getStalledCount(countOf('', '', -1));
       Test.stopTest();
 
       System.assertEquals(
@@ -2442,12 +2474,7 @@ public class WorkflowDashboardControllerTest {
         Test.startTest();
         try {
           WorkflowDashboardController.getStalledInstances(
-            '',
-            '',
-            -1,
-            10,
-            0,
-            ''
+            stalledOf('', '', -1, 10, 0, '')
           );
           System.assert(
             false,
@@ -2462,7 +2489,7 @@ public class WorkflowDashboardControllerTest {
         }
 
         try {
-          WorkflowDashboardController.getStalledCount('', '', -1);
+          WorkflowDashboardController.getStalledCount(countOf('', '', -1));
           System.assert(
             false,
             'Expected AuraHandledException for getStalledCount'
@@ -2504,12 +2531,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
-        '',
-        'Suspended',
-        '',
-        10,
-        0,
-        ''
+        iqOf('', 'Suspended', '', 10, 0, '')
       );
       Test.stopTest();
 
@@ -2544,12 +2566,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> stalled = WorkflowDashboardController.getStalledInstances(
-        '',
-        '',
-        -1,
-        10,
-        0,
-        ''
+        stalledOf('', '', -1, 10, 0, '')
       );
       Test.stopTest();
 
@@ -2592,9 +2609,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       Map<String, Object> result = WorkflowDashboardController.getStalledCount(
-        '',
-        '',
-        -1
+        countOf('', '', -1)
       );
       Test.stopTest();
 
@@ -2602,12 +2617,7 @@ public class WorkflowDashboardControllerTest {
       System.assert(count >= 1, 'At least the true zombie must be counted');
       // Verify the waiting instance's Id is not surfaced by getStalledInstances
       List<Map<String, Object>> stalledList = WorkflowDashboardController.getStalledInstances(
-        '',
-        '',
-        -1,
-        50,
-        0,
-        ''
+        stalledOf('', '', -1, 50, 0, '')
       );
       for (Map<String, Object> row : stalledList) {
         System.assertNotEquals(
@@ -3012,10 +3022,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> results = WorkflowDashboardController.getUnroutedSignals(
-        null,
-        10,
-        0,
-        ''
+        unroutedOf(null, 10, 0, '')
       );
       Test.stopTest();
 
@@ -3153,7 +3160,9 @@ public class WorkflowDashboardControllerTest {
 
       System.runAs(stdUser) {
         try {
-          WorkflowDashboardController.getUnroutedSignals(null, 10, 0, '');
+          WorkflowDashboardController.getUnroutedSignals(
+            unroutedOf(null, 10, 0, '')
+          );
           System.assert(false, 'Expected AuraHandledException');
         } catch (AuraHandledException e) {
           System.assert(
@@ -3353,34 +3362,19 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> filteredInsts = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        'O\'Connor',
-        10,
-        0,
-        ''
+        iqOf('', '', 'O\'Connor', 10, 0, '')
       );
 
       List<Map<String, Object>> stalledInsts = WorkflowDashboardController.getStalledInstances(
-        '',
-        'O\'Connor',
-        -1,
-        10,
-        0,
-        ''
+        stalledOf('', 'O\'Connor', -1, 10, 0, '')
       );
 
       Map<String, Object> stalledCountResult = WorkflowDashboardController.getStalledCount(
-        '',
-        'O\'Connor',
-        -1
+        countOf('', 'O\'Connor', -1)
       );
 
       List<Map<String, Object>> unroutedSigs = WorkflowDashboardController.getUnroutedSignals(
-        'O\'Connor',
-        10,
-        0,
-        ''
+        unroutedOf('O\'Connor', 10, 0, '')
       );
 
       Map<String, Object> unroutedCountResult = WorkflowDashboardController.getUnroutedSignalCount(
@@ -3442,15 +3436,9 @@ public class WorkflowDashboardControllerTest {
       insert testInstances;
 
       Test.startTest();
-      // Calls the 7-parameter WorkflowDashboardController.getFilteredInstances with failureCategory = 'TIMEOUT'
+      // Calls WorkflowDashboardController.getFilteredInstances with failureCategory = 'TIMEOUT'
       List<Map<String, Object>> resCategory = WorkflowDashboardController.getFilteredInstances(
-        '',
-        'Failed',
-        '',
-        'TIMEOUT',
-        10,
-        0,
-        'cb'
+        iqOf('', 'Failed', '', 'TIMEOUT', 10, 0, 'cb')
       );
 
       // Calls WorkflowDashboardController.getInstanceDetails for the first instance
@@ -3458,14 +3446,9 @@ public class WorkflowDashboardControllerTest {
         testInstances[0].Id
       );
 
-      // Calls the 6-parameter WorkflowDashboardController.getFilteredInstances with searchTerm = 'StepExceptionKey'
+      // Calls WorkflowDashboardController.getFilteredInstances with searchTerm = 'StepExceptionKey'
       List<Map<String, Object>> resSearch = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        'StepExceptionKey',
-        10,
-        0,
-        'cb'
+        iqOf('', '', 'StepExceptionKey', 10, 0, 'cb')
       );
       Test.stopTest();
 

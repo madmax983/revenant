@@ -453,68 +453,46 @@ public inherited sharing class WorkflowDashboardController {
     return String.join(conditions, ' AND ');
   }
 
-  public static List<Map<String, Object>> getFilteredInstances(
-    String workflowName,
-    String status,
-    String searchTerm,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
-  ) {
-    return getFilteredInstances(
-      workflowName,
-      status,
-      searchTerm,
-      null,
-      limitSize,
-      offsetSize,
-      cacheBuster,
-      null
-    );
+  // Query criteria for the filtered-instance list and the workflow-stat rollup. Field-based
+  // (@AuraEnabled properties) so the LWC and tests populate it by assignment; a wide
+  // constructor would re-introduce the long parameter list this wrapper removes. Unset
+  // fields default to null, reproducing the previous shorter overloads.
+  public class InstanceQuery {
+    @AuraEnabled
+    public String workflowName;
+    @AuraEnabled
+    public String status;
+    @AuraEnabled
+    public String searchTerm;
+    @AuraEnabled
+    public String failureCategory;
+    @AuraEnabled
+    public Integer limitSize;
+    @AuraEnabled
+    public Integer offsetSize;
+    @AuraEnabled
+    public String cacheBuster;
+    @AuraEnabled
+    public String attributesFilterJson;
   }
 
-  public static List<Map<String, Object>> getFilteredInstances(
-    String workflowName,
-    String status,
-    String searchTerm,
-    String failureCategory,
+  // Runs the filtered-instance SOQL for getFilteredInstances. The bind tokens
+  // (:workflowName, :status, :failureCategory emitted by buildWhereClause, and
+  // :limitSize / :offsetSize in the ORDER BY) resolve against this method's local
+  // scope, so the caller passes the clamped page bounds in.
+  private static List<Workflow_Instance__c> queryFilteredInstances(
+    InstanceQuery criteria,
     Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
+    Integer offsetSize
   ) {
-    return getFilteredInstances(
-      workflowName,
-      status,
-      searchTerm,
-      failureCategory,
-      limitSize,
-      offsetSize,
-      cacheBuster,
-      null
-    );
-  }
-
-  @AuraEnabled(cacheable=true)
-  public static List<Map<String, Object>> getFilteredInstances(
-    String workflowName,
-    String status,
-    String searchTerm,
-    String failureCategory,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster,
-    String attributesFilterJson
-  ) {
-    checkAuthorization();
-    resolveMatchingAttributes(attributesFilterJson);
-
-    limitSize = clampListLimit(limitSize);
-    offsetSize = clampListOffset(offsetSize);
+    String workflowName = criteria.workflowName;
+    String status = criteria.status;
+    String failureCategory = criteria.failureCategory;
 
     InstanceFilter f = new InstanceFilter();
     f.workflowName = workflowName;
     f.status = status;
-    f.searchTerm = searchTerm;
+    f.searchTerm = criteria.searchTerm;
     f.failureCategory = failureCategory;
 
     String query =
@@ -523,9 +501,22 @@ public inherited sharing class WorkflowDashboardController {
       buildWhereClause(f) +
       ' ORDER BY CreatedDate DESC LIMIT :limitSize OFFSET :offsetSize';
 
-    List<Workflow_Instance__c> instances = Database.query(
-      query,
-      AccessLevel.SYSTEM_MODE
+    return Database.query(query, AccessLevel.SYSTEM_MODE);
+  }
+
+  @AuraEnabled(cacheable=true)
+  public static List<Map<String, Object>> getFilteredInstances(
+    InstanceQuery criteria
+  ) {
+    checkAuthorization();
+    resolveMatchingAttributes(criteria.attributesFilterJson);
+
+    Integer limitSize = clampListLimit(criteria.limitSize);
+    Integer offsetSize = clampListOffset(criteria.offsetSize);
+    List<Workflow_Instance__c> instances = queryFilteredInstances(
+      criteria,
+      limitSize,
+      offsetSize
     );
 
     Set<Id> pageIds = new Set<Id>();
@@ -563,44 +554,45 @@ public inherited sharing class WorkflowDashboardController {
   // cacheBuster is unused in Apex; it only varies the client-side cache key so a
   // dashboard refresh re-queries instead of serving a stale cached list (mirrors
   // getFilteredInstances).
-  public static List<Map<String, Object>> getStalledInstances(
-    String workflowName,
-    String searchTerm,
-    Integer thresholdMinutes,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
-  ) {
-    return getStalledInstances(
-      workflowName,
-      searchTerm,
-      thresholdMinutes,
-      limitSize,
-      offsetSize,
-      cacheBuster,
-      null
-    );
+  // Query criteria shared by the stalled-instance list and the stalled count. Field-based
+  // (@AuraEnabled properties) so the LWC and tests populate it by assignment. getStalledCount
+  // ignores the pagination fields (limitSize/offsetSize/cacheBuster); getStalledInstances uses
+  // them. Unset fields default to null, reproducing the previous shorter overloads.
+  public class StalledQuery {
+    @AuraEnabled
+    public String workflowName;
+    @AuraEnabled
+    public String searchTerm;
+    @AuraEnabled
+    public Integer thresholdMinutes;
+    @AuraEnabled
+    public Integer limitSize;
+    @AuraEnabled
+    public Integer offsetSize;
+    @AuraEnabled
+    public String cacheBuster;
+    @AuraEnabled
+    public String attributesFilterJson;
   }
 
   @AuraEnabled(cacheable=true)
   public static List<Map<String, Object>> getStalledInstances(
-    String workflowName,
-    String searchTerm,
-    Integer thresholdMinutes,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster,
-    String attributesFilterJson
+    StalledQuery criteria
   ) {
     checkAuthorization();
-    Integer threshold = (thresholdMinutes == null)
+    // Local named to match the :workflowName bind token emitted by buildStalledWhereClause,
+    // which resolves against this method's scope.
+    String workflowName = criteria.workflowName;
+    String searchTerm = criteria.searchTerm;
+    Integer threshold = (criteria.thresholdMinutes == null)
       ? WorkflowEngine.staleThresholdMinutes
-      : thresholdMinutes;
+      : criteria.thresholdMinutes;
     stalledCutoff = Datetime.now().addMinutes(-threshold);
 
-    resolveMatchingAttributesForStalled(attributesFilterJson);
+    resolveMatchingAttributesForStalled(criteria.attributesFilterJson);
 
-    limitSize = clampListLimit(limitSize);
+    Integer limitSize = clampListLimit(criteria.limitSize);
+    Integer offsetSize = criteria.offsetSize;
     if (offsetSize == null || offsetSize < 0) {
       offsetSize = 0;
     }
@@ -646,28 +638,19 @@ public inherited sharing class WorkflowDashboardController {
     return results;
   }
 
-  public static Map<String, Object> getStalledCount(
-    String workflowName,
-    String searchTerm,
-    Integer thresholdMinutes
-  ) {
-    return getStalledCount(workflowName, searchTerm, thresholdMinutes, null);
-  }
-
   @AuraEnabled
-  public static Map<String, Object> getStalledCount(
-    String workflowName,
-    String searchTerm,
-    Integer thresholdMinutes,
-    String attributesFilterJson
-  ) {
+  public static Map<String, Object> getStalledCount(StalledQuery criteria) {
     checkAuthorization();
-    Integer threshold = (thresholdMinutes == null)
+    // Local named to match the :workflowName bind token emitted by buildStalledWhereClause,
+    // which resolves against this method's scope.
+    String workflowName = criteria.workflowName;
+    String searchTerm = criteria.searchTerm;
+    Integer threshold = (criteria.thresholdMinutes == null)
       ? WorkflowEngine.staleThresholdMinutes
-      : thresholdMinutes;
+      : criteria.thresholdMinutes;
     stalledCutoff = Datetime.now().addMinutes(-threshold);
 
-    resolveMatchingAttributesForStalled(attributesFilterJson);
+    resolveMatchingAttributesForStalled(criteria.attributesFilterJson);
 
     String query =
       'SELECT Id, Async_Job_Id__c, Sleep_Until__c, Status__c, LastModifiedDate ' +
@@ -979,23 +962,13 @@ public inherited sharing class WorkflowDashboardController {
     return stalled;
   }
 
-  public static Map<String, Integer> getWorkflowStats(
-    String workflowName,
-    String status,
-    String searchTerm
-  ) {
-    return getWorkflowStats(workflowName, status, searchTerm, null);
-  }
-
+  // Reuses InstanceQuery (the getFilteredInstances criteria); this rollup reads only
+  // workflowName/status/searchTerm/attributesFilterJson and ignores the pagination and
+  // failureCategory fields.
   @AuraEnabled
-  public static Map<String, Integer> getWorkflowStats(
-    String workflowName,
-    String status,
-    String searchTerm,
-    String attributesFilterJson
-  ) {
+  public static Map<String, Integer> getWorkflowStats(InstanceQuery criteria) {
     checkAuthorization();
-    resolveMatchingAttributes(attributesFilterJson);
+    resolveMatchingAttributes(criteria.attributesFilterJson);
 
     Map<String, Integer> results = new Map<String, Integer>{
       'total' => 0,
@@ -1003,6 +976,12 @@ public inherited sharing class WorkflowDashboardController {
       'completed' => 0,
       'failed' => 0
     };
+
+    // Locals named to match the :workflowName / :status bind tokens emitted by
+    // buildWhereClause, which resolve against this method's scope.
+    String workflowName = criteria.workflowName;
+    String status = criteria.status;
+    String searchTerm = criteria.searchTerm;
 
     InstanceFilter f = new InstanceFilter();
     f.workflowName = workflowName;
@@ -2263,14 +2242,29 @@ public inherited sharing class WorkflowDashboardController {
 
   // ── Unrouted-signal dashboard methods ─────────────────────────────────────
 
+  // Query criteria for the unrouted-signal list. Field-based (@AuraEnabled properties) so the
+  // LWC and tests populate it by assignment. cacheBuster only varies the client-side cache key
+  // and is unused in Apex.
+  public class UnroutedQuery {
+    @AuraEnabled
+    public String searchTerm;
+    @AuraEnabled
+    public Integer limitSize;
+    @AuraEnabled
+    public Integer offsetSize;
+    @AuraEnabled
+    public String cacheBuster;
+  }
+
   @AuraEnabled(cacheable=true)
   public static List<Map<String, Object>> getUnroutedSignals(
-    String searchTerm,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
+    UnroutedQuery criteria
   ) {
     checkAuthorization();
+
+    String searchTerm = criteria.searchTerm;
+    Integer limitSize = criteria.limitSize;
+    Integer offsetSize = criteria.offsetSize;
 
     Integer lim = (limitSize == null ||
       limitSize <= 0)

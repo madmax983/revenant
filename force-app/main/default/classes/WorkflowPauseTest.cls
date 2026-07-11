@@ -20,6 +20,20 @@
  */
 @IsTest
 public class WorkflowPauseTest {
+  // Query-wrapper builder: assembles the WorkflowDashboardController.getWorkflowStats
+  // request object by field assignment (a 1:1 repackaging of the former positional args).
+  private static WorkflowDashboardController.InstanceQuery sqOf(
+    String workflowName,
+    String status,
+    String searchTerm
+  ) {
+    WorkflowDashboardController.InstanceQuery q = new WorkflowDashboardController.InstanceQuery();
+    q.workflowName = workflowName;
+    q.status = status;
+    q.searchTerm = searchTerm;
+    return q;
+  }
+
   // ============================================================
   // MOCK WORKFLOWS
   // ============================================================
@@ -2088,9 +2102,7 @@ public class WorkflowPauseTest {
 
       Test.startTest();
       Map<String, Integer> stats = WorkflowDashboardController.getWorkflowStats(
-        'WorkflowPauseTest.TwoStepWorkflow',
-        null,
-        null
+        sqOf('WorkflowPauseTest.TwoStepWorkflow', null, null)
       );
       Test.stopTest();
 
