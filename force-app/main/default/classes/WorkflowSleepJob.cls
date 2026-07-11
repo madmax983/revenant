@@ -26,7 +26,9 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     // Enqueue the next step execution
     if (Test.isRunningTest()) {
       if (!WorkflowEngine.disableQueueableInTest) {
-        System.enqueueJob(new WorkflowOrchestrator(this.instanceId, this.stepName));
+        System.enqueueJob(
+          new WorkflowOrchestrator(this.instanceId, this.stepName)
+        );
       }
     } else {
       WorkflowEngine.enqueueOrchestrator(this.instanceId, this.stepName);
@@ -41,7 +43,10 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     }
   }
 
-  private static Boolean checkAndClearSleepMarkers(Id instanceId, String stepName) {
+  private static Boolean checkAndClearSleepMarkers(
+    Id instanceId,
+    String stepName
+  ) {
     List<Workflow_Instance__c> insts = [
       SELECT Status__c, Sleep_Until__c
       FROM Workflow_Instance__c
@@ -63,7 +68,8 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
       List<Workflow_Step_Execution__c> steps = [
         SELECT Id
         FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c = :instanceId
+        WHERE
+          Workflow_Instance__c = :instanceId
           AND Step_Name__c = :stepName
           AND Status__c = 'Pending'
         WITH SYSTEM_MODE
@@ -97,6 +103,12 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     }
 
     public void execute(QueueableContext ctx) {
+      // Surface an unhandled failure of the sleep resume to the log sink rather than
+      // letting it vanish. The finalizer runs even if execute() throws.
+      System.attachFinalizer(
+        new SleepJobFinalizer(this.instanceId, this.stepName)
+      );
+
       // If the sleep has already been resumed by fireSleep or the watchdog, this queueable job is stale and must no-op.
       if (!checkAndClearSleepMarkers(this.instanceId, this.stepName)) {
         return;
@@ -104,7 +116,9 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
 
       if (Test.isRunningTest()) {
         if (!WorkflowEngine.disableQueueableInTest) {
-          System.enqueueJob(new WorkflowOrchestrator(this.instanceId, this.stepName));
+          System.enqueueJob(
+            new WorkflowOrchestrator(this.instanceId, this.stepName)
+          );
         }
       } else {
         WorkflowEngine.enqueueOrchestrator(this.instanceId, this.stepName);
@@ -112,6 +126,36 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
 
       // Schedule watchdog for the step we just resumed
       WorkflowEngine.scheduleTimeoutJobForInstance(this.instanceId);
+    }
+  }
+
+  // Best-effort failure sink for the sleep queueable. On an unhandled exception the sleep
+  // resume would otherwise fail silently and strand the suspended instance; this logs it.
+  // The success path is untouched (it only acts on UNHANDLED_EXCEPTION).
+  public inherited sharing class SleepJobFinalizer implements Finalizer {
+    private final Id instanceId;
+    private final String stepName;
+
+    public SleepJobFinalizer(Id instanceId, String stepName) {
+      this.instanceId = instanceId;
+      this.stepName = stepName;
+    }
+
+    public void execute(FinalizerContext ctx) {
+      if (
+        ctx == null ||
+        ctx.getResult() != ParentJobResult.UNHANDLED_EXCEPTION
+      ) {
+        return;
+      }
+      Exception ex = ctx.getException();
+      String detail = (ex == null) ? 'unknown error' : ex.getMessage();
+      // WorkflowLog.error swallows its own DML failures, so this stays best-effort.
+      WorkflowLog.error(
+        'WorkflowSleepJob.QueueableSleepJob',
+        'Sleep resume failed for step "' + stepName + '": ' + detail,
+        instanceId
+      );
     }
   }
 }
