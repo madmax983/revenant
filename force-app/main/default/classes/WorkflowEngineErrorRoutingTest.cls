@@ -5,7 +5,7 @@ public class WorkflowEngineErrorRoutingTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.BreadcrumbWorkflow',
+        'WorkflowEngineMocksATest.BreadcrumbWorkflow',
         'BreadcrumbKey',
         null
       );
@@ -31,7 +31,7 @@ public class WorkflowEngineErrorRoutingTest {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Step_Name__c = 'WorkflowEngineTestMocksB.BreadcrumbStep'
+          AND Step_Name__c = 'WorkflowEngineMocksBTest.BreadcrumbStep'
         LIMIT 1
       ];
 
@@ -61,7 +61,7 @@ public class WorkflowEngineErrorRoutingTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.RollbackWorkflow',
+        'WorkflowEngineMocksATest.RollbackWorkflow',
         'RollbackKey',
         null
       );
@@ -97,11 +97,11 @@ public class WorkflowEngineErrorRoutingTest {
   @IsTest
   static void testStepBreadcrumbsEffectivelyOnceOnRetry() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.retryBreadcrumbAttempt = 1;
+      WorkflowEngineMocksBTest.retryBreadcrumbAttempt = 1;
 
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.RetryBreadcrumbWorkflow',
+        'WorkflowEngineMocksBTest.RetryBreadcrumbWorkflow',
         'RetryBreadcrumbKey',
         null
       );
@@ -136,12 +136,12 @@ public class WorkflowEngineErrorRoutingTest {
   @IsTest
   static void testErrorRoutingOnCrash() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.routedStepsRun.clear();
-      WorkflowEngineTestMocksB.routedStepContextData.clear();
+      WorkflowEngineMocksBTest.routedStepsRun.clear();
+      WorkflowEngineMocksBTest.routedStepContextData.clear();
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.ErrorRoutedWorkflow',
+        'WorkflowEngineMocksBTest.ErrorRoutedWorkflow',
         'CrashKey',
         null
       );
@@ -149,12 +149,12 @@ public class WorkflowEngineErrorRoutingTest {
       try {
         WorkflowEngine.runStep(
           instanceId,
-          'WorkflowEngineTestMocksB.CrashStep'
+          'WorkflowEngineMocksBTest.CrashStep'
         );
       } catch (Exception ex) {
         WorkflowEngine.handleCrash(
           instanceId,
-          'WorkflowEngineTestMocksB.CrashStep',
+          'WorkflowEngineMocksBTest.CrashStep',
           ex
         );
       }
@@ -165,34 +165,34 @@ public class WorkflowEngineErrorRoutingTest {
         WHERE Id = :instanceId
       ];
       System.assertEquals(
-        'WorkflowEngineTestMocksA.NormalHandlerStep',
+        'WorkflowEngineMocksATest.NormalHandlerStep',
         inst.Current_Step__c
       );
       System.assertEquals('Running', inst.Status__c);
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksA.NormalHandlerStep'
+        'WorkflowEngineMocksATest.NormalHandlerStep'
       );
 
-      System.assertEquals(1, WorkflowEngineTestMocksB.routedStepsRun.size());
+      System.assertEquals(1, WorkflowEngineMocksBTest.routedStepsRun.size());
       System.assertEquals(
         'NormalHandlerStep',
-        WorkflowEngineTestMocksB.routedStepsRun[0]
+        WorkflowEngineMocksBTest.routedStepsRun[0]
       );
       System.assertEquals(
-        'WorkflowEngineTestMocksB.CrashStep',
-        WorkflowEngineTestMocksB.routedStepContextData.get('failedStepName')
+        'WorkflowEngineMocksBTest.CrashStep',
+        WorkflowEngineMocksBTest.routedStepContextData.get('failedStepName')
       );
       System.assert(
         String.valueOf(
-            WorkflowEngineTestMocksB.routedStepContextData.get('errorMessage')
+            WorkflowEngineMocksBTest.routedStepContextData.get('errorMessage')
           )
           .contains('Crash in execution')
       );
       System.assertEquals(
         1,
-        WorkflowEngineTestMocksB.routedStepContextData.get('attemptCount')
+        WorkflowEngineMocksBTest.routedStepContextData.get('attemptCount')
       );
     }
   }
@@ -200,12 +200,12 @@ public class WorkflowEngineErrorRoutingTest {
   @IsTest
   static void testErrorRoutingOnRetryExhaustion() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.routedStepsRun.clear();
-      WorkflowEngineTestMocksB.routedStepContextData.clear();
+      WorkflowEngineMocksBTest.routedStepsRun.clear();
+      WorkflowEngineMocksBTest.routedStepContextData.clear();
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.ErrorRoutedWorkflow',
+        'WorkflowEngineMocksBTest.ErrorRoutedWorkflow',
         'RetryExhaustKey',
         null
       );
@@ -215,17 +215,17 @@ public class WorkflowEngineErrorRoutingTest {
         FROM Workflow_Instance__c
         WHERE Id = :instanceId
       ];
-      inst.Current_Step__c = 'WorkflowEngineTestMocksB.RetryThenFailStep';
+      inst.Current_Step__c = 'WorkflowEngineMocksBTest.RetryThenFailStep';
       update inst;
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.RetryThenFailStep'
+        'WorkflowEngineMocksBTest.RetryThenFailStep'
       );
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.RetryThenFailStep'
+        'WorkflowEngineMocksBTest.RetryThenFailStep'
       );
 
       inst = [
@@ -234,34 +234,34 @@ public class WorkflowEngineErrorRoutingTest {
         WHERE Id = :instanceId
       ];
       System.assertEquals(
-        'WorkflowEngineTestMocksA.NormalHandlerStep',
+        'WorkflowEngineMocksATest.NormalHandlerStep',
         inst.Current_Step__c
       );
       System.assertEquals('Running', inst.Status__c);
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksA.NormalHandlerStep'
+        'WorkflowEngineMocksATest.NormalHandlerStep'
       );
 
-      System.assertEquals(1, WorkflowEngineTestMocksB.routedStepsRun.size());
+      System.assertEquals(1, WorkflowEngineMocksBTest.routedStepsRun.size());
       System.assertEquals(
         'NormalHandlerStep',
-        WorkflowEngineTestMocksB.routedStepsRun[0]
+        WorkflowEngineMocksBTest.routedStepsRun[0]
       );
       System.assertEquals(
-        'WorkflowEngineTestMocksB.RetryThenFailStep',
-        WorkflowEngineTestMocksB.routedStepContextData.get('failedStepName')
+        'WorkflowEngineMocksBTest.RetryThenFailStep',
+        WorkflowEngineMocksBTest.routedStepContextData.get('failedStepName')
       );
       System.assert(
         String.valueOf(
-            WorkflowEngineTestMocksB.routedStepContextData.get('errorMessage')
+            WorkflowEngineMocksBTest.routedStepContextData.get('errorMessage')
           )
           .contains('Failed after retry')
       );
       System.assertEquals(
         2,
-        WorkflowEngineTestMocksB.routedStepContextData.get('attemptCount')
+        WorkflowEngineMocksBTest.routedStepContextData.get('attemptCount')
       );
     }
   }
@@ -269,12 +269,12 @@ public class WorkflowEngineErrorRoutingTest {
   @IsTest
   static void testErrorRoutingOnExplicitFail() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.routedStepsRun.clear();
-      WorkflowEngineTestMocksB.routedStepContextData.clear();
+      WorkflowEngineMocksBTest.routedStepsRun.clear();
+      WorkflowEngineMocksBTest.routedStepContextData.clear();
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.ErrorRoutedWorkflow',
+        'WorkflowEngineMocksBTest.ErrorRoutedWorkflow',
         'ExplicitFailKey',
         null
       );
@@ -284,12 +284,12 @@ public class WorkflowEngineErrorRoutingTest {
         FROM Workflow_Instance__c
         WHERE Id = :instanceId
       ];
-      inst.Current_Step__c = 'WorkflowEngineTestMocksB.ExplicitFailStep';
+      inst.Current_Step__c = 'WorkflowEngineMocksBTest.ExplicitFailStep';
       update inst;
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.ExplicitFailStep'
+        'WorkflowEngineMocksBTest.ExplicitFailStep'
       );
 
       inst = [
@@ -298,34 +298,34 @@ public class WorkflowEngineErrorRoutingTest {
         WHERE Id = :instanceId
       ];
       System.assertEquals(
-        'WorkflowEngineTestMocksA.NormalHandlerStep',
+        'WorkflowEngineMocksATest.NormalHandlerStep',
         inst.Current_Step__c
       );
       System.assertEquals('Running', inst.Status__c);
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksA.NormalHandlerStep'
+        'WorkflowEngineMocksATest.NormalHandlerStep'
       );
 
-      System.assertEquals(1, WorkflowEngineTestMocksB.routedStepsRun.size());
+      System.assertEquals(1, WorkflowEngineMocksBTest.routedStepsRun.size());
       System.assertEquals(
         'NormalHandlerStep',
-        WorkflowEngineTestMocksB.routedStepsRun[0]
+        WorkflowEngineMocksBTest.routedStepsRun[0]
       );
       System.assertEquals(
-        'WorkflowEngineTestMocksB.ExplicitFailStep',
-        WorkflowEngineTestMocksB.routedStepContextData.get('failedStepName')
+        'WorkflowEngineMocksBTest.ExplicitFailStep',
+        WorkflowEngineMocksBTest.routedStepContextData.get('failedStepName')
       );
       System.assert(
         String.valueOf(
-            WorkflowEngineTestMocksB.routedStepContextData.get('errorMessage')
+            WorkflowEngineMocksBTest.routedStepContextData.get('errorMessage')
           )
           .contains('Explicit business failure')
       );
       System.assertEquals(
         1,
-        WorkflowEngineTestMocksB.routedStepContextData.get('attemptCount')
+        WorkflowEngineMocksBTest.routedStepContextData.get('attemptCount')
       );
     }
   }
@@ -333,18 +333,18 @@ public class WorkflowEngineErrorRoutingTest {
   @IsTest
   static void testHandlerItselfFailsFallsBack() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.routedStepsRun.clear();
+      WorkflowEngineMocksBTest.routedStepsRun.clear();
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.FailingHandlerWorkflow',
+        'WorkflowEngineMocksATest.FailingHandlerWorkflow',
         'HandlerFailKey',
         null
       );
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.ExplicitFailStep'
+        'WorkflowEngineMocksBTest.ExplicitFailStep'
       );
 
       Workflow_Instance__c inst = [
@@ -353,14 +353,14 @@ public class WorkflowEngineErrorRoutingTest {
         WHERE Id = :instanceId
       ];
       System.assertEquals(
-        'WorkflowEngineTestMocksB.FailingHandlerStep',
+        'WorkflowEngineMocksBTest.FailingHandlerStep',
         inst.Current_Step__c
       );
       System.assertEquals('Running', inst.Status__c);
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.FailingHandlerStep'
+        'WorkflowEngineMocksBTest.FailingHandlerStep'
       );
 
       inst = [
@@ -376,24 +376,24 @@ public class WorkflowEngineErrorRoutingTest {
   @IsTest
   static void testCompensationStackPreservedAcrossErrorRouting() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.routedStepsRun.clear();
-      WorkflowEngineTestMocksB.compensationsRun.clear();
+      WorkflowEngineMocksBTest.routedStepsRun.clear();
+      WorkflowEngineMocksBTest.compensationsRun.clear();
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.CompensatableErrorRoutedWorkflow',
+        'WorkflowEngineMocksBTest.CompensatableErrorRoutedWorkflow',
         'CompStackKey',
         null
       );
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.CompensatableForwardStep1'
+        'WorkflowEngineMocksBTest.CompensatableForwardStep1'
       );
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.ExplicitFailStep'
+        'WorkflowEngineMocksBTest.ExplicitFailStep'
       );
 
       Workflow_Instance__c inst = [
@@ -402,7 +402,7 @@ public class WorkflowEngineErrorRoutingTest {
         WHERE Id = :instanceId
       ];
       System.assertEquals(
-        'WorkflowEngineTestMocksA.NormalHandlerStep',
+        'WorkflowEngineMocksATest.NormalHandlerStep',
         inst.Current_Step__c
       );
       System.assertEquals('Running', inst.Status__c);
@@ -413,18 +413,18 @@ public class WorkflowEngineErrorRoutingTest {
       );
       System.assertEquals(1, stack.size());
       System.assertEquals(
-        'WorkflowEngineTestMocksB.CompensatableForwardStep1',
+        'WorkflowEngineMocksBTest.CompensatableForwardStep1',
         stack[0]
       );
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksA.NormalHandlerStep'
+        'WorkflowEngineMocksATest.NormalHandlerStep'
       );
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksA.CompensatableForwardStep2'
+        'WorkflowEngineMocksATest.CompensatableForwardStep2'
       );
 
       inst = [
@@ -438,11 +438,11 @@ public class WorkflowEngineErrorRoutingTest {
       );
       System.assertEquals(2, stack.size());
       System.assertEquals(
-        'WorkflowEngineTestMocksB.CompensatableForwardStep1',
+        'WorkflowEngineMocksBTest.CompensatableForwardStep1',
         stack[0]
       );
       System.assertEquals(
-        'WorkflowEngineTestMocksA.CompensatableForwardStep2',
+        'WorkflowEngineMocksATest.CompensatableForwardStep2',
         stack[1]
       );
 
@@ -461,12 +461,12 @@ public class WorkflowEngineErrorRoutingTest {
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksA.CompensatableForwardStep2_Compensate'
+        'WorkflowEngineMocksATest.CompensatableForwardStep2_Compensate'
       );
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.CompensatableForwardStep1_Compensate'
+        'WorkflowEngineMocksBTest.CompensatableForwardStep1_Compensate'
       );
 
       inst = [
@@ -475,14 +475,14 @@ public class WorkflowEngineErrorRoutingTest {
         WHERE Id = :instanceId
       ];
       System.assertEquals('Compensated', inst.Status__c);
-      System.assertEquals(2, WorkflowEngineTestMocksB.compensationsRun.size());
+      System.assertEquals(2, WorkflowEngineMocksBTest.compensationsRun.size());
       System.assertEquals(
         'CompensatableForwardStep2_Compensate',
-        WorkflowEngineTestMocksB.compensationsRun[0]
+        WorkflowEngineMocksBTest.compensationsRun[0]
       );
       System.assertEquals(
         'CompensatableForwardStep1_Compensate',
-        WorkflowEngineTestMocksB.compensationsRun[1]
+        WorkflowEngineMocksBTest.compensationsRun[1]
       );
     }
   }
@@ -490,19 +490,19 @@ public class WorkflowEngineErrorRoutingTest {
   @IsTest
   static void testParallelErrorRoutingSiblingCancellation() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.routedStepsRun.clear();
-      WorkflowEngineTestMocksB.compensationsRun.clear();
+      WorkflowEngineMocksBTest.routedStepsRun.clear();
+      WorkflowEngineMocksBTest.compensationsRun.clear();
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.ParallelErrorRoutedWorkflow',
+        'WorkflowEngineMocksATest.ParallelErrorRoutedWorkflow',
         'ParallelKey',
         null
       );
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksA.ParallelSpawnStep'
+        'WorkflowEngineMocksATest.ParallelSpawnStep'
       );
 
       Workflow_Instance__c inst = [
@@ -512,16 +512,16 @@ public class WorkflowEngineErrorRoutingTest {
       ];
       System.assert(
         inst.Current_Step__c.contains(
-          'WorkflowEngineTestMocksB.ExplicitFailStep'
+          'WorkflowEngineMocksBTest.ExplicitFailStep'
         )
       );
       System.assert(
-        inst.Current_Step__c.contains('WorkflowEngineTestMocksA.SiblingStep')
+        inst.Current_Step__c.contains('WorkflowEngineMocksATest.SiblingStep')
       );
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.ExplicitFailStep'
+        'WorkflowEngineMocksBTest.ExplicitFailStep'
       );
 
       Workflow_Step_Execution__c siblingExec = [
@@ -529,7 +529,7 @@ public class WorkflowEngineErrorRoutingTest {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Step_Name__c = 'WorkflowEngineTestMocksA.SiblingStep'
+          AND Step_Name__c = 'WorkflowEngineMocksATest.SiblingStep'
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
         LIMIT 1
@@ -542,14 +542,14 @@ public class WorkflowEngineErrorRoutingTest {
         WHERE Id = :instanceId
       ];
       System.assertEquals(
-        'WorkflowEngineTestMocksA.NormalHandlerStep',
+        'WorkflowEngineMocksATest.NormalHandlerStep',
         inst.Current_Step__c
       );
       System.assertEquals('Running', inst.Status__c);
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksA.SiblingStep'
+        'WorkflowEngineMocksATest.SiblingStep'
       );
 
       inst = [
@@ -558,7 +558,7 @@ public class WorkflowEngineErrorRoutingTest {
         WHERE Id = :instanceId
       ];
       System.assertEquals(
-        'WorkflowEngineTestMocksA.NormalHandlerStep',
+        'WorkflowEngineMocksATest.NormalHandlerStep',
         inst.Current_Step__c
       );
     }
@@ -567,19 +567,19 @@ public class WorkflowEngineErrorRoutingTest {
   @IsTest
   static void testStaleCompletionSignalRollback() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.routedStepsRun.clear();
-      WorkflowEngineTestMocksB.compensationsRun.clear();
+      WorkflowEngineMocksBTest.routedStepsRun.clear();
+      WorkflowEngineMocksBTest.compensationsRun.clear();
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.StaleSignalRollbackWorkflow',
+        'WorkflowEngineMocksATest.StaleSignalRollbackWorkflow',
         'ParallelKey',
         null
       );
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.StaleSpawnStep'
+        'WorkflowEngineMocksBTest.StaleSpawnStep'
       );
 
       // Insert a signal that the stale sibling step will claim
@@ -596,7 +596,7 @@ public class WorkflowEngineErrorRoutingTest {
       // causing handleStepResult to treat it as a stale completion.
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.StaleSignalSiblingStep'
+        'WorkflowEngineMocksBTest.StaleSignalSiblingStep'
       );
 
       // Verify that the signal's status is rolled back to Received
@@ -613,19 +613,19 @@ public class WorkflowEngineErrorRoutingTest {
   @IsTest
   static void testRetryExhaustedAttemptCount() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.routedStepsRun.clear();
-      WorkflowEngineTestMocksB.routedStepContextData.clear();
+      WorkflowEngineMocksBTest.routedStepsRun.clear();
+      WorkflowEngineMocksBTest.routedStepContextData.clear();
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.RetryExhaustedErrorRoutedWorkflow',
+        'WorkflowEngineMocksATest.RetryExhaustedErrorRoutedWorkflow',
         'RetryExhaustedKey',
         null
       );
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.RetryExhaustedFailureStep'
+        'WorkflowEngineMocksBTest.RetryExhaustedFailureStep'
       );
 
       Workflow_Instance__c inst = [
@@ -634,30 +634,30 @@ public class WorkflowEngineErrorRoutingTest {
         WHERE Id = :instanceId
       ];
       System.assertEquals(
-        'WorkflowEngineTestMocksA.NormalHandlerStep',
+        'WorkflowEngineMocksATest.NormalHandlerStep',
         inst.Current_Step__c
       );
       System.assertEquals('Running', inst.Status__c);
 
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksA.NormalHandlerStep'
+        'WorkflowEngineMocksATest.NormalHandlerStep'
       );
 
-      System.assertEquals(1, WorkflowEngineTestMocksB.routedStepsRun.size());
+      System.assertEquals(1, WorkflowEngineMocksBTest.routedStepsRun.size());
       System.assertEquals(
         'NormalHandlerStep',
-        WorkflowEngineTestMocksB.routedStepsRun[0]
+        WorkflowEngineMocksBTest.routedStepsRun[0]
       );
       System.assertEquals(
-        'WorkflowEngineTestMocksB.RetryExhaustedFailureStep',
-        (String) WorkflowEngineTestMocksB.routedStepContextData.get(
+        'WorkflowEngineMocksBTest.RetryExhaustedFailureStep',
+        (String) WorkflowEngineMocksBTest.routedStepContextData.get(
           'failedStepName'
         )
       );
       System.assertEquals(
         1,
-        (Integer) WorkflowEngineTestMocksB.routedStepContextData.get(
+        (Integer) WorkflowEngineMocksBTest.routedStepContextData.get(
           'attemptCount'
         )
       );
@@ -667,12 +667,12 @@ public class WorkflowEngineErrorRoutingTest {
   @IsTest
   static void testWatchdogTimeoutErrorRouting() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.routedStepsRun.clear();
-      WorkflowEngineTestMocksB.routedStepContextData.clear();
+      WorkflowEngineMocksBTest.routedStepsRun.clear();
+      WorkflowEngineMocksBTest.routedStepContextData.clear();
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.TimeoutErrorRoutedWorkflow',
+        'WorkflowEngineMocksBTest.TimeoutErrorRoutedWorkflow',
         'TimeoutRoutedKey',
         null
       );
@@ -686,7 +686,7 @@ public class WorkflowEngineErrorRoutingTest {
       ];
       // Simulate running state
       inst.Status__c = 'Running';
-      inst.Current_Step__c = 'WorkflowEngineTestMocksA.TimeoutFailureStep';
+      inst.Current_Step__c = 'WorkflowEngineMocksATest.TimeoutFailureStep';
       update inst;
 
       List<Workflow_Step_Execution__c> stepExecs = [
@@ -694,7 +694,7 @@ public class WorkflowEngineErrorRoutingTest {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Step_Name__c = 'WorkflowEngineTestMocksA.TimeoutFailureStep'
+          AND Step_Name__c = 'WorkflowEngineMocksATest.TimeoutFailureStep'
         LIMIT 1
       ];
       System.assert(!stepExecs.isEmpty());
@@ -713,7 +713,7 @@ public class WorkflowEngineErrorRoutingTest {
         WHERE Id = :instanceId
       ];
       System.assertEquals(
-        'WorkflowEngineTestMocksA.NormalHandlerStep',
+        'WorkflowEngineMocksATest.NormalHandlerStep',
         inst.Current_Step__c
       );
       System.assertEquals('Running', inst.Status__c);
@@ -725,7 +725,7 @@ public class WorkflowEngineErrorRoutingTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.PureRoutingWorkflow',
+        'WorkflowEngineMocksATest.PureRoutingWorkflow',
         'PureRoutingKey',
         null
       );
@@ -736,13 +736,13 @@ public class WorkflowEngineErrorRoutingTest {
   @IsTest
   static void testPreserveErrorMetadataAcrossHandlerCheckpoint() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.routedStepsRun.clear();
-      WorkflowEngineTestMocksB.routedStepContextData.clear();
-      WorkflowEngineTestMocksB.yieldingHandlerFirstRunDone = false;
+      WorkflowEngineMocksBTest.routedStepsRun.clear();
+      WorkflowEngineMocksBTest.routedStepContextData.clear();
+      WorkflowEngineMocksBTest.yieldingHandlerFirstRunDone = false;
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.YieldingHandlerWorkflow',
+        'WorkflowEngineMocksBTest.YieldingHandlerWorkflow',
         'YieldingKey',
         null
       );
@@ -750,13 +750,13 @@ public class WorkflowEngineErrorRoutingTest {
       // Fail the step and route to YieldingHandlerStep
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.RetryExhaustedFailureStep'
+        'WorkflowEngineMocksBTest.RetryExhaustedFailureStep'
       );
 
       // Run the YieldingHandlerStep (first execution -> returns Sleep, writes capture)
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksA.YieldingHandlerStep'
+        'WorkflowEngineMocksATest.YieldingHandlerStep'
       );
 
       Workflow_Instance__c inst = [
@@ -765,7 +765,7 @@ public class WorkflowEngineErrorRoutingTest {
         WHERE Id = :instanceId
       ];
       System.assertEquals(
-        'WorkflowEngineTestMocksA.YieldingHandlerStep',
+        'WorkflowEngineMocksATest.YieldingHandlerStep',
         inst.Current_Step__c
       );
       System.assertEquals('Suspended', inst.Status__c);
@@ -773,23 +773,23 @@ public class WorkflowEngineErrorRoutingTest {
       // Re-run the YieldingHandlerStep (second execution -> completes, reads capture)
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksA.YieldingHandlerStep'
+        'WorkflowEngineMocksATest.YieldingHandlerStep'
       );
 
-      System.assertEquals(1, WorkflowEngineTestMocksB.routedStepsRun.size());
+      System.assertEquals(1, WorkflowEngineMocksBTest.routedStepsRun.size());
       System.assertEquals(
         'YieldingHandlerStep',
-        WorkflowEngineTestMocksB.routedStepsRun[0]
+        WorkflowEngineMocksBTest.routedStepsRun[0]
       );
       System.assertEquals(
-        'WorkflowEngineTestMocksB.RetryExhaustedFailureStep',
-        (String) WorkflowEngineTestMocksB.routedStepContextData.get(
+        'WorkflowEngineMocksBTest.RetryExhaustedFailureStep',
+        (String) WorkflowEngineMocksBTest.routedStepContextData.get(
           'failedStepName'
         )
       );
       System.assertEquals(
         1,
-        (Integer) WorkflowEngineTestMocksB.routedStepContextData.get(
+        (Integer) WorkflowEngineMocksBTest.routedStepContextData.get(
           'attemptCount'
         )
       );
@@ -799,12 +799,12 @@ public class WorkflowEngineErrorRoutingTest {
   @IsTest
   static void testLoadErrorMetadataForRetryableHandler() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.routedStepsRun.clear();
-      WorkflowEngineTestMocksB.routedStepContextData.clear();
+      WorkflowEngineMocksBTest.routedStepsRun.clear();
+      WorkflowEngineMocksBTest.routedStepContextData.clear();
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.RetryableHandlerWorkflow',
+        'WorkflowEngineMocksBTest.RetryableHandlerWorkflow',
         'RetryableHandlerKey',
         null
       );
@@ -812,7 +812,7 @@ public class WorkflowEngineErrorRoutingTest {
       // Fail the step and route to RetryableHandlerStep
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.RetryExhaustedFailureStep'
+        'WorkflowEngineMocksBTest.RetryExhaustedFailureStep'
       );
 
       Workflow_Instance__c inst = [
@@ -821,7 +821,7 @@ public class WorkflowEngineErrorRoutingTest {
         WHERE Id = :instanceId
       ];
       System.assertEquals(
-        'WorkflowEngineTestMocksB.RetryableHandlerStep',
+        'WorkflowEngineMocksBTest.RetryableHandlerStep',
         inst.Current_Step__c
       );
       System.assertEquals('Running', inst.Status__c);
@@ -829,23 +829,23 @@ public class WorkflowEngineErrorRoutingTest {
       // Run the RetryableHandlerStep
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksB.RetryableHandlerStep'
+        'WorkflowEngineMocksBTest.RetryableHandlerStep'
       );
 
-      System.assertEquals(1, WorkflowEngineTestMocksB.routedStepsRun.size());
+      System.assertEquals(1, WorkflowEngineMocksBTest.routedStepsRun.size());
       System.assertEquals(
         'RetryableHandlerStep',
-        WorkflowEngineTestMocksB.routedStepsRun[0]
+        WorkflowEngineMocksBTest.routedStepsRun[0]
       );
       System.assertEquals(
-        'WorkflowEngineTestMocksB.RetryExhaustedFailureStep',
-        (String) WorkflowEngineTestMocksB.routedStepContextData.get(
+        'WorkflowEngineMocksBTest.RetryExhaustedFailureStep',
+        (String) WorkflowEngineMocksBTest.routedStepContextData.get(
           'failedStepName'
         )
       );
       System.assertEquals(
         1,
-        (Integer) WorkflowEngineTestMocksB.routedStepContextData.get(
+        (Integer) WorkflowEngineMocksBTest.routedStepContextData.get(
           'attemptCount'
         )
       );

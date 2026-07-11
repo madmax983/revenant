@@ -144,7 +144,7 @@ public class WorkflowEngineTest {
 
   public class TimeoutFallbackStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      WorkflowEngineTestMocksA.capturedIsTimeoutResume = ctx.isTimeoutResume();
+      WorkflowEngineMocksATest.capturedIsTimeoutResume = ctx.isTimeoutResume();
       return StepResult.complete(null, 'timedout');
     }
   }

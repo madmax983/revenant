@@ -235,8 +235,8 @@ public class WorkflowEngineCompensation1Test {
   static void testCompensationContextCarriesPreviousRunAt() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      WorkflowEngineTestMocksA.capturedCompensatePreviousRunAt = null;
-      WorkflowEngineTestMocksA.compensatePreviousRunAtCaptured = false;
+      WorkflowEngineMocksATest.capturedCompensatePreviousRunAt = null;
+      WorkflowEngineMocksATest.compensatePreviousRunAtCaptured = false;
 
       Datetime priorRun = Datetime.newInstanceGmt(2026, 1, 2, 3, 4, 5);
       Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -244,7 +244,7 @@ public class WorkflowEngineCompensation1Test {
         Status__c = 'Compensating',
         Compensation_Stack__c = JSON.serialize(
           new List<String>{
-            'WorkflowEngineTestMocksB.PreviousRunAtCompensatableStep'
+            'WorkflowEngineMocksBTest.PreviousRunAtCompensatableStep'
           }
         ),
         Input__c = '{"test": true}',
@@ -254,7 +254,7 @@ public class WorkflowEngineCompensation1Test {
 
       insert new Workflow_Step_Execution__c(
         Workflow_Instance__c = inst.Id,
-        Step_Name__c = 'WorkflowEngineTestMocksB.PreviousRunAtCompensatableStep',
+        Step_Name__c = 'WorkflowEngineMocksBTest.PreviousRunAtCompensatableStep',
         Status__c = 'Completed',
         Input__c = '{"stepInput": 1}',
         Output__c = '{"stepOutput": 2}'
@@ -265,12 +265,12 @@ public class WorkflowEngineCompensation1Test {
       Test.stopTest();
 
       System.assert(
-        WorkflowEngineTestMocksA.compensatePreviousRunAtCaptured,
+        WorkflowEngineMocksATest.compensatePreviousRunAtCaptured,
         'compensate() should have been invoked'
       );
       System.assertEquals(
         priorRun,
-        WorkflowEngineTestMocksA.capturedCompensatePreviousRunAt,
+        WorkflowEngineMocksATest.capturedCompensatePreviousRunAt,
         'compensate() must observe the instance Previous_Run_At__c, not null'
       );
     }
@@ -281,7 +281,7 @@ public class WorkflowEngineCompensation1Test {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.setMock(
         HttpCalloutMock.class,
-        new WorkflowEngineTestMocksA.CompOkMock()
+        new WorkflowEngineMocksATest.CompOkMock()
       );
       WorkflowEngine.disableQueueableInTest = true;
 
@@ -289,7 +289,7 @@ public class WorkflowEngineCompensation1Test {
         Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
         Status__c = 'Compensating',
         Compensation_Stack__c = JSON.serialize(
-          new List<String>{ 'WorkflowEngineTestMocksB.CalloutCompensationStep' }
+          new List<String>{ 'WorkflowEngineMocksBTest.CalloutCompensationStep' }
         ),
         Input__c = '{"test": true}'
       );
@@ -297,7 +297,7 @@ public class WorkflowEngineCompensation1Test {
 
       insert new Workflow_Step_Execution__c(
         Workflow_Instance__c = inst.Id,
-        Step_Name__c = 'WorkflowEngineTestMocksB.CalloutCompensationStep',
+        Step_Name__c = 'WorkflowEngineMocksBTest.CalloutCompensationStep',
         Status__c = 'Completed',
         Output__c = '{}'
       );
@@ -311,7 +311,7 @@ public class WorkflowEngineCompensation1Test {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :inst.Id
-          AND Step_Name__c = 'WorkflowEngineTestMocksB.CalloutCompensationStep_Compensate'
+          AND Step_Name__c = 'WorkflowEngineMocksBTest.CalloutCompensationStep_Compensate'
         ORDER BY CreatedDate DESC, Id DESC
         LIMIT 1
       ];
@@ -333,7 +333,7 @@ public class WorkflowEngineCompensation1Test {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.setMock(
         HttpCalloutMock.class,
-        new WorkflowEngineTestMocksA.CompOkMock()
+        new WorkflowEngineMocksATest.CompOkMock()
       );
       WorkflowEngine.disableQueueableInTest = true;
 
@@ -341,7 +341,7 @@ public class WorkflowEngineCompensation1Test {
         Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
         Status__c = 'Suspended',
         Compensation_Stack__c = JSON.serialize(
-          new List<String>{ 'WorkflowEngineTestMocksB.CalloutCompensationStep' }
+          new List<String>{ 'WorkflowEngineMocksBTest.CalloutCompensationStep' }
         ),
         Input__c = '{"test": true}'
       );
@@ -353,13 +353,13 @@ public class WorkflowEngineCompensation1Test {
       // Suspended instance is actually mid-rollback.
       insert new Workflow_Step_Execution__c(
         Workflow_Instance__c = inst.Id,
-        Step_Name__c = 'WorkflowEngineTestMocksB.CalloutCompensationStep',
+        Step_Name__c = 'WorkflowEngineMocksBTest.CalloutCompensationStep',
         Status__c = 'Completed',
         Output__c = '{}'
       );
       insert new Workflow_Step_Execution__c(
         Workflow_Instance__c = inst.Id,
-        Step_Name__c = 'WorkflowEngineTestMocksB.CalloutCompensationStep_Compensate',
+        Step_Name__c = 'WorkflowEngineMocksBTest.CalloutCompensationStep_Compensate',
         Status__c = 'Pending'
       );
 
@@ -380,7 +380,7 @@ public class WorkflowEngineCompensation1Test {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :inst.Id
-          AND Step_Name__c = 'WorkflowEngineTestMocksB.CalloutCompensationStep_Compensate'
+          AND Step_Name__c = 'WorkflowEngineMocksBTest.CalloutCompensationStep_Compensate'
         ORDER BY CreatedDate DESC, Id DESC
         LIMIT 1
       ];
@@ -404,7 +404,7 @@ public class WorkflowEngineCompensation1Test {
         Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
         Status__c = 'Compensating',
         Compensation_Stack__c = JSON.serialize(
-          new List<String>{ 'WorkflowEngineTestMocksB.CalloutCompensationStep' }
+          new List<String>{ 'WorkflowEngineMocksBTest.CalloutCompensationStep' }
         ),
         Input__c = '{}'
       );
@@ -431,7 +431,7 @@ public class WorkflowEngineCompensation1Test {
   static void testForwardStepNamedCompensateNotMisroutedAsCompensation() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.SuffixForwardWorkflow',
+        'WorkflowEngineMocksATest.SuffixForwardWorkflow',
         'SuffixKey',
         null
       );
@@ -466,7 +466,7 @@ public class WorkflowEngineCompensation1Test {
         Correlation_Key__c = 'CompKey',
         Compensation_Stack__c = JSON.serialize(
           new List<String>{
-            'WorkflowEngineTestMocksB.SignalWaitCompensationStep'
+            'WorkflowEngineMocksBTest.SignalWaitCompensationStep'
           }
         ),
         Input__c = '{"test": true}'
@@ -474,7 +474,7 @@ public class WorkflowEngineCompensation1Test {
       insert inst;
       insert new Workflow_Step_Execution__c(
         Workflow_Instance__c = inst.Id,
-        Step_Name__c = 'WorkflowEngineTestMocksB.SignalWaitCompensationStep',
+        Step_Name__c = 'WorkflowEngineMocksBTest.SignalWaitCompensationStep',
         Status__c = 'Completed',
         Output__c = '{}'
       );
@@ -505,7 +505,7 @@ public class WorkflowEngineCompensation1Test {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :inst.Id
-          AND Step_Name__c = 'WorkflowEngineTestMocksB.SignalWaitCompensationStep_Compensate'
+          AND Step_Name__c = 'WorkflowEngineMocksBTest.SignalWaitCompensationStep_Compensate'
         ORDER BY CreatedDate DESC, Id DESC
         LIMIT 1
       ];
@@ -522,14 +522,14 @@ public class WorkflowEngineCompensation1Test {
         Status__c = 'Compensating',
         Compensation_Stack__c = JSON.serialize(
           new List<String>{
-            'WorkflowEngineTestMocksA.CompensatableFailingStep'
+            'WorkflowEngineMocksATest.CompensatableFailingStep'
           }
         ),
         Input__c = '{"test": true}'
       );
       insert inst;
 
-      WorkflowEngineTestMocksA.compensationShouldFail = true;
+      WorkflowEngineMocksATest.compensationShouldFail = true;
 
       Test.startTest();
       // First execution - should result in RETRY and schedule a retry job
@@ -541,7 +541,7 @@ public class WorkflowEngineCompensation1Test {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :inst.Id
-          AND Step_Name__c = 'WorkflowEngineTestMocksA.CompensatableFailingStep_Compensate'
+          AND Step_Name__c = 'WorkflowEngineMocksATest.CompensatableFailingStep_Compensate'
       ];
       System.assertEquals(1, execs.size());
       System.assertEquals('Retrying', execs[0].Status__c);
@@ -585,7 +585,7 @@ public class WorkflowEngineCompensation1Test {
       System.assertEquals(2, failedExec.Retry_Count__c);
 
       // Now resume the stalled rollback from exactly the failed compensation point.
-      WorkflowEngineTestMocksA.compensationShouldFail = false;
+      WorkflowEngineMocksATest.compensationShouldFail = false;
 
       WorkflowEngine.resumeCompensation(inst.Id);
       WorkflowEngine.runStep(inst.Id, null); // Runs the fresh compensation attempt (completes)
@@ -614,7 +614,7 @@ public class WorkflowEngineCompensation1Test {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :inst.Id
-          AND Step_Name__c = 'WorkflowEngineTestMocksA.CompensatableFailingStep_Compensate'
+          AND Step_Name__c = 'WorkflowEngineMocksATest.CompensatableFailingStep_Compensate'
         ORDER BY CreatedDate ASC, Id ASC
       ];
       System.assertEquals(
@@ -737,7 +737,7 @@ public class WorkflowEngineCompensation1Test {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.SleepingWorkflow',
+        'WorkflowEngineMocksATest.SleepingWorkflow',
         'CancelKey3',
         null
       );
@@ -767,7 +767,7 @@ public class WorkflowEngineCompensation1Test {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Id parentId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.ParentWorkflow',
+        'WorkflowEngineMocksATest.ParentWorkflow',
         'CancelParent',
         null
       );
@@ -969,7 +969,7 @@ public class WorkflowEngineCompensation1Test {
         Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
         Status__c = 'Compensating',
         Compensation_Stack__c = JSON.serialize(
-          new List<String>{ 'WorkflowEngineTestMocksB.CompensatableCrashStep' }
+          new List<String>{ 'WorkflowEngineMocksBTest.CompensatableCrashStep' }
         ),
         Input__c = '{"test": true}'
       );
@@ -1005,7 +1005,7 @@ public class WorkflowEngineCompensation1Test {
       );
       System.assertEquals(1, stack.size());
       System.assertEquals(
-        'WorkflowEngineTestMocksB.CompensatableCrashStep',
+        'WorkflowEngineMocksBTest.CompensatableCrashStep',
         stack[0]
       );
     }
@@ -1023,14 +1023,14 @@ public class WorkflowEngineCompensation1Test {
         Error_Message__c = 'Cancelled by user. Compensating.',
         Compensation_Stack__c = JSON.serialize(
           new List<String>{
-            'WorkflowEngineTestMocksA.CompensatableFailingStep'
+            'WorkflowEngineMocksATest.CompensatableFailingStep'
           }
         ),
         Input__c = '{"test": true}'
       );
       insert inst;
 
-      WorkflowEngineTestMocksA.compensationShouldFail = true;
+      WorkflowEngineMocksATest.compensationShouldFail = true;
 
       Test.startTest();
       WorkflowEngine.runStep(inst.Id, null); // RETRY (attempt 1)
@@ -1050,7 +1050,7 @@ public class WorkflowEngineCompensation1Test {
       );
 
       // The transient failure clears; the operator resumes the rollback.
-      WorkflowEngineTestMocksA.compensationShouldFail = false;
+      WorkflowEngineMocksATest.compensationShouldFail = false;
       WorkflowEngine.resumeCompensation(inst.Id);
 
       // The resumed rollback must remain cancel-driven, with the 'Cancelled' marker

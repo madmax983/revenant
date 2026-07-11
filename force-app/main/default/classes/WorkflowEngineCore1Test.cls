@@ -48,7 +48,7 @@ public class WorkflowEngineCore1Test {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.YieldingWorkflow',
+        'WorkflowEngineMocksBTest.YieldingWorkflow',
         'YieldKey',
         null
       );
@@ -155,7 +155,7 @@ public class WorkflowEngineCore1Test {
       // Start a workflow that blocks on a signal
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.SignaledWorkflow',
+        'WorkflowEngineMocksBTest.SignaledWorkflow',
         'SignalKey',
         null
       );
@@ -168,7 +168,7 @@ public class WorkflowEngineCore1Test {
       ];
       System.assertEquals('Suspended', inst.Status__c);
       System.assertEquals(
-        'WorkflowEngineTestMocksA.SignaledStep',
+        'WorkflowEngineMocksATest.SignaledStep',
         inst.Current_Step__c
       );
 
@@ -215,7 +215,7 @@ public class WorkflowEngineCore1Test {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.CustomRetryWorkflow',
+        'WorkflowEngineMocksBTest.CustomRetryWorkflow',
         'RetryKey',
         null
       );
@@ -269,7 +269,7 @@ public class WorkflowEngineCore1Test {
   static void testCrashAndFinalizer() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.CrashingWorkflow',
+        'WorkflowEngineMocksATest.CrashingWorkflow',
         'CrashKey',
         null
       );
@@ -279,7 +279,7 @@ public class WorkflowEngineCore1Test {
         FROM Workflow_Instance__c
         WHERE Id = :instanceId
       ];
-      inst.Current_Step__c = 'WorkflowEngineTestMocksA.CrashingStep';
+      inst.Current_Step__c = 'WorkflowEngineMocksATest.CrashingStep';
       update inst;
 
       Boolean threw = false;
@@ -320,7 +320,7 @@ public class WorkflowEngineCore1Test {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.SleepingWorkflow',
+        'WorkflowEngineMocksATest.SleepingWorkflow',
         'SleepKey',
         null
       );
@@ -333,7 +333,7 @@ public class WorkflowEngineCore1Test {
       ];
       System.assertEquals('Suspended', inst.Status__c);
       System.assertEquals(
-        'WorkflowEngineTestMocksB.SleepingStep',
+        'WorkflowEngineMocksBTest.SleepingStep',
         inst.Current_Step__c
       );
 
@@ -367,7 +367,7 @@ public class WorkflowEngineCore1Test {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id parentId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.ParentWorkflow',
+        'WorkflowEngineMocksATest.ParentWorkflow',
         'ParentKey',
         null
       );
@@ -385,7 +385,7 @@ public class WorkflowEngineCore1Test {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :parentId
-          AND Step_Name__c = 'WorkflowEngineTestMocksB.ParentStep'
+          AND Step_Name__c = 'WorkflowEngineMocksBTest.ParentStep'
         LIMIT 1
       ];
       System.assertNotEquals(null, parentStep.Output__c);
@@ -393,7 +393,7 @@ public class WorkflowEngineCore1Test {
         parentStep.Output__c
       );
       System.assertEquals(
-        'WorkflowEngineTestMocksA.ChildWorkflow',
+        'WorkflowEngineMocksATest.ChildWorkflow',
         childInfo.get('childWorkflowName')
       );
       System.assertEquals('SubKey', childInfo.get('childCorrelationKey'));
@@ -453,7 +453,7 @@ public class WorkflowEngineCore1Test {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Start the workflow that will fail
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.FailingWorkflow',
+        'WorkflowEngineMocksATest.FailingWorkflow',
         'FailingKey',
         null
       );
@@ -481,7 +481,7 @@ public class WorkflowEngineCore1Test {
       System.assertEquals('Failed', stepExec.Status__c);
 
       // Now, trigger the retry! Change mock state to succeed
-      WorkflowEngineTestMocksA.shouldSucceedOnFailingStep = true;
+      WorkflowEngineMocksATest.shouldSucceedOnFailingStep = true;
 
       Test.startTest();
       WorkflowEngine.retryWorkflow(instanceId);
@@ -508,7 +508,7 @@ public class WorkflowEngineCore1Test {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Start a workflow instance
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.TimeoutWorkflow',
+        'WorkflowEngineMocksBTest.TimeoutWorkflow',
         'TimeoutKey',
         null
       );
@@ -575,7 +575,7 @@ public class WorkflowEngineCore1Test {
   static void testWorkflowApproval() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.ApprovalWorkflow',
+        'WorkflowEngineMocksATest.ApprovalWorkflow',
         'ApprovalKey',
         null
       );
@@ -590,7 +590,7 @@ public class WorkflowEngineCore1Test {
       ];
       System.assertEquals('Suspended', inst.Status__c);
       System.assertEquals(
-        'WorkflowEngineTestMocksA.ApprovalStep',
+        'WorkflowEngineMocksATest.ApprovalStep',
         inst.Current_Step__c
       );
 
@@ -599,7 +599,7 @@ public class WorkflowEngineCore1Test {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Step_Name__c = 'WorkflowEngineTestMocksA.ApprovalStep'
+          AND Step_Name__c = 'WorkflowEngineMocksATest.ApprovalStep'
         LIMIT 1
       ];
       System.assertEquals('Pending', stepExec.Status__c);
@@ -638,7 +638,7 @@ public class WorkflowEngineCore1Test {
   static void testParallelExecution() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.ParallelWorkflow',
+        'WorkflowEngineMocksBTest.ParallelWorkflow',
         'ParallelKey',
         null
       );
@@ -653,14 +653,14 @@ public class WorkflowEngineCore1Test {
       ];
       System.assertEquals('Running', inst.Status__c);
       System.assertEquals(
-        'WorkflowEngineTestMocksA.ParallelStep1,WorkflowEngineTestMocksA.ParallelStep2',
+        'WorkflowEngineMocksATest.ParallelStep1,WorkflowEngineMocksATest.ParallelStep2',
         inst.Current_Step__c
       );
 
       // Run ParallelStep1 manually
       new WorkflowOrchestrator(
           instanceId,
-          'WorkflowEngineTestMocksA.ParallelStep1'
+          'WorkflowEngineMocksATest.ParallelStep1'
         )
         .execute(null);
 
@@ -675,7 +675,7 @@ public class WorkflowEngineCore1Test {
       // Run ParallelStep2 manually
       new WorkflowOrchestrator(
           instanceId,
-          'WorkflowEngineTestMocksA.ParallelStep2'
+          'WorkflowEngineMocksATest.ParallelStep2'
         )
         .execute(null);
 
@@ -795,7 +795,7 @@ public class WorkflowEngineCore1Test {
 
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.LargePayloadWorkflow',
+        'WorkflowEngineMocksATest.LargePayloadWorkflow',
         'LargePayloadKey',
         largeInput
       );
@@ -908,7 +908,7 @@ public class WorkflowEngineCore1Test {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.DaemonWorkflow',
+        'WorkflowEngineMocksBTest.DaemonWorkflow',
         'DaemonKey',
         0
       );

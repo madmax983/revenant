@@ -6,7 +6,7 @@ public class WorkflowEngineCore3Test {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id run1Id = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.PreviousRunAtWorkflow',
+        'WorkflowEngineMocksATest.PreviousRunAtWorkflow',
         'PreviousRunAtKey',
         null
       );

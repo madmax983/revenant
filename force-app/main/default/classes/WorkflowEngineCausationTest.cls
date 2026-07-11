@@ -83,7 +83,7 @@ public class WorkflowEngineCausationTest {
 
       // Start with a causation ID
       WorkflowEngine.StartRequest req = new WorkflowEngine.StartRequest(
-        'WorkflowEngineTestMocksB.DaemonWorkflow',
+        'WorkflowEngineMocksBTest.DaemonWorkflow',
         'CausationDaemonKey',
         0
       );
@@ -240,7 +240,7 @@ public class WorkflowEngineCausationTest {
 
       // Start Child under Parent with blank causationId (so it has only Parent_Instance__c)
       WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
-        'WorkflowEngineTestMocksB.DaemonWorkflow',
+        'WorkflowEngineMocksBTest.DaemonWorkflow',
         'ChildDaemonKey',
         0,
         parentId
@@ -463,7 +463,7 @@ public class WorkflowEngineCausationTest {
 
       // 2. Start Child caused by 'ParentKeyReused'
       WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
-        'WorkflowEngineTestMocksB.DaemonWorkflow',
+        'WorkflowEngineMocksBTest.DaemonWorkflow',
         'ChildDaemonKey',
         (Object) 0
       );

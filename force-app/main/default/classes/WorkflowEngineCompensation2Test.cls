@@ -178,14 +178,14 @@ public class WorkflowEngineCompensation2Test {
         Status__c = 'Compensating',
         Compensation_Stack__c = JSON.serialize(
           new List<String>{
-            'WorkflowEngineTestMocksB.CompensatableCancelWordStep'
+            'WorkflowEngineMocksBTest.CompensatableCancelWordStep'
           }
         ),
         Input__c = '{"test": true}'
       );
       insert inst;
 
-      WorkflowEngineTestMocksA.cancelWordCompensationShouldFail = true;
+      WorkflowEngineMocksATest.cancelWordCompensationShouldFail = true;
 
       Test.startTest();
       WorkflowEngine.runStep(inst.Id, null); // compensate throws -> stalls
@@ -206,7 +206,7 @@ public class WorkflowEngineCompensation2Test {
         'This is a failure-driven rollback, not a user cancellation'
       );
 
-      WorkflowEngineTestMocksA.cancelWordCompensationShouldFail = false;
+      WorkflowEngineMocksATest.cancelWordCompensationShouldFail = false;
       WorkflowEngine.resumeCompensation(inst.Id);
 
       Workflow_Instance__c resumed = [

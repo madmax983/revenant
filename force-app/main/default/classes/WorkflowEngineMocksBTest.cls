@@ -1,5 +1,5 @@
 @IsTest
-public class WorkflowEngineTestMocksB {
+public class WorkflowEngineMocksBTest {
   public static List<Map<String, Object>> compensationObservedStates = new List<Map<String, Object>>();
   public static List<Map<String, Object>> loopObservedStates = new List<Map<String, Object>>();
   public static Integer loopCounter = 0;
@@ -11,10 +11,10 @@ public class WorkflowEngineTestMocksB {
 
   public class CalloutWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
-      return new List<String>{ 'WorkflowEngineTestMocksB.DirectCalloutStep' };
+      return new List<String>{ 'WorkflowEngineMocksBTest.DirectCalloutStep' };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksB.DirectCalloutStep';
+      return 'WorkflowEngineMocksBTest.DirectCalloutStep';
     }
     public String getNextStep(String currentStepName, StepResult result) {
       return null;
@@ -36,8 +36,8 @@ public class WorkflowEngineTestMocksB {
     public StepResult execute(StepContext ctx) {
       return StepResult.split(
         new List<String>{
-          'WorkflowEngineTestMocksA.LargeOutputStep',
-          'WorkflowEngineTestMocksA.ParallelStep2'
+          'WorkflowEngineMocksATest.LargeOutputStep',
+          'WorkflowEngineMocksATest.ParallelStep2'
         },
         'BranchInput'
       );
@@ -50,7 +50,7 @@ public class WorkflowEngineTestMocksB {
         ctx.inputJson
       );
       String val1 = (String) input.get(
-        'WorkflowEngineTestMocksA.LargeOutputStep'
+        'WorkflowEngineMocksATest.LargeOutputStep'
       );
       System.assertNotEquals(null, val1);
       System.assertEquals(110000, val1.length());
@@ -60,10 +60,10 @@ public class WorkflowEngineTestMocksB {
 
   public class YieldingWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
-      return new List<String>{ 'WorkflowEngineTestMocksB.YieldingStep' };
+      return new List<String>{ 'WorkflowEngineMocksBTest.YieldingStep' };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksB.YieldingStep';
+      return 'WorkflowEngineMocksBTest.YieldingStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
@@ -72,14 +72,14 @@ public class WorkflowEngineTestMocksB {
 
   public class YieldingStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      WorkflowEngineTestMocksA.YieldingChunkState state;
+      WorkflowEngineMocksATest.YieldingChunkState state;
       if (ctx.stepStateJson != null) {
-        state = (WorkflowEngineTestMocksA.YieldingChunkState) JSON.deserialize(
+        state = (WorkflowEngineMocksATest.YieldingChunkState) JSON.deserialize(
           ctx.stepStateJson,
-          WorkflowEngineTestMocksA.YieldingChunkState.class
+          WorkflowEngineMocksATest.YieldingChunkState.class
         );
       } else {
-        state = new WorkflowEngineTestMocksA.YieldingChunkState();
+        state = new WorkflowEngineMocksATest.YieldingChunkState();
         state.processed = 0;
         state.total = 3;
       }
@@ -94,7 +94,7 @@ public class WorkflowEngineTestMocksB {
 
   public class FailingStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      if (WorkflowEngineTestMocksA.shouldSucceedOnFailingStep) {
+      if (WorkflowEngineMocksATest.shouldSucceedOnFailingStep) {
         return StepResult.complete(null, 'SuccessAfterRetry');
       }
       RetryPolicy policy = new RetryPolicy();
@@ -117,10 +117,10 @@ public class WorkflowEngineTestMocksB {
 
   public class RetryingWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
-      return new List<String>{ 'WorkflowEngineTestMocksA.RetryingStep' };
+      return new List<String>{ 'WorkflowEngineMocksATest.RetryingStep' };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksA.RetryingStep';
+      return 'WorkflowEngineMocksATest.RetryingStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
@@ -129,10 +129,10 @@ public class WorkflowEngineTestMocksB {
 
   public class SignaledWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
-      return new List<String>{ 'WorkflowEngineTestMocksA.SignaledStep' };
+      return new List<String>{ 'WorkflowEngineMocksATest.SignaledStep' };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksA.SignaledStep';
+      return 'WorkflowEngineMocksATest.SignaledStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
@@ -141,10 +141,10 @@ public class WorkflowEngineTestMocksB {
 
   public class CustomRetryWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
-      return new List<String>{ 'WorkflowEngineTestMocksB.CustomRetryStep' };
+      return new List<String>{ 'WorkflowEngineMocksBTest.CustomRetryStep' };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksB.CustomRetryStep';
+      return 'WorkflowEngineMocksBTest.CustomRetryStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
@@ -163,7 +163,7 @@ public class WorkflowEngineTestMocksB {
     public StepResult execute(StepContext ctx) {
       if (ctx.stepStateJson != null) {
         return StepResult.complete(
-          'WorkflowEngineTestMocksB.AfterSleepStep',
+          'WorkflowEngineMocksBTest.AfterSleepStep',
           ctx.stepStateJson
         );
       }
@@ -202,7 +202,7 @@ public class WorkflowEngineTestMocksB {
         return StepResult.complete(null, 'ParentResult_' + childResult);
       }
       return StepResult.startChild(
-        'WorkflowEngineTestMocksA.ChildWorkflow',
+        'WorkflowEngineMocksATest.ChildWorkflow',
         'SubKey',
         'ChildInput'
       );
@@ -212,18 +212,18 @@ public class WorkflowEngineTestMocksB {
   public class ParallelWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
       return new List<String>{
-        'WorkflowEngineTestMocksA.SplitStep',
-        'WorkflowEngineTestMocksA.ParallelStep1',
-        'WorkflowEngineTestMocksA.ParallelStep2',
-        'WorkflowEngineTestMocksB.JoinStep'
+        'WorkflowEngineMocksATest.SplitStep',
+        'WorkflowEngineMocksATest.ParallelStep1',
+        'WorkflowEngineMocksATest.ParallelStep2',
+        'WorkflowEngineMocksBTest.JoinStep'
       };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksA.SplitStep';
+      return 'WorkflowEngineMocksATest.SplitStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
-      if (currentStepName == 'WorkflowEngineTestMocksA.SplitStep') {
-        return 'WorkflowEngineTestMocksB.JoinStep';
+      if (currentStepName == 'WorkflowEngineMocksATest.SplitStep') {
+        return 'WorkflowEngineMocksBTest.JoinStep';
       }
       return null;
     }
@@ -235,10 +235,10 @@ public class WorkflowEngineTestMocksB {
         ctx.inputJson
       );
       String out1 = (String) inputMap.get(
-        'WorkflowEngineTestMocksA.ParallelStep1'
+        'WorkflowEngineMocksATest.ParallelStep1'
       );
       String out2 = (String) inputMap.get(
-        'WorkflowEngineTestMocksA.ParallelStep2'
+        'WorkflowEngineMocksATest.ParallelStep2'
       );
       return StepResult.complete(null, out1 + '+' + out2);
     }
@@ -249,8 +249,8 @@ public class WorkflowEngineTestMocksB {
       return StepResult.complete(null, 'Success');
     }
     public StepResult compensate(StepContext ctx) {
-      WorkflowEngineTestMocksA.capturedCompensatePreviousRunAt = ctx.previousRunAt;
-      WorkflowEngineTestMocksA.compensatePreviousRunAtCaptured = true;
+      WorkflowEngineMocksATest.capturedCompensatePreviousRunAt = ctx.previousRunAt;
+      WorkflowEngineMocksATest.compensatePreviousRunAtCaptured = true;
       return StepResult.complete(null, 'Compensated');
     }
   }
@@ -296,11 +296,11 @@ public class WorkflowEngineTestMocksB {
   public class DaemonWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
       return new List<String>{
-        'WorkflowEngineTestMocksA.IncrementCounterStep'
+        'WorkflowEngineMocksATest.IncrementCounterStep'
       };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksA.IncrementCounterStep';
+      return 'WorkflowEngineMocksATest.IncrementCounterStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
@@ -347,7 +347,7 @@ public class WorkflowEngineTestMocksB {
       return StepResult.complete(null, 'Success');
     }
     public StepResult compensate(StepContext ctx) {
-      if (WorkflowEngineTestMocksA.cancelWordCompensationShouldFail) {
+      if (WorkflowEngineMocksATest.cancelWordCompensationShouldFail) {
         throw new WorkflowEngine.WorkflowException(
           'OrderCancelledException: the order was Cancelled upstream'
         );
@@ -359,12 +359,12 @@ public class WorkflowEngineTestMocksB {
   public class TimedApprovalWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
       return new List<String>{
-        'WorkflowEngineTestMocksA.TimedApprovalStep',
-        'WorkflowEngineTestMocksB.ApprovalTimeoutFallbackStep'
+        'WorkflowEngineMocksATest.TimedApprovalStep',
+        'WorkflowEngineMocksBTest.ApprovalTimeoutFallbackStep'
       };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksA.TimedApprovalStep';
+      return 'WorkflowEngineMocksATest.TimedApprovalStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
@@ -379,10 +379,10 @@ public class WorkflowEngineTestMocksB {
 
   public class RetryExposeWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
-      return new List<String>{ 'WorkflowEngineTestMocksA.RetryExposeStep' };
+      return new List<String>{ 'WorkflowEngineMocksATest.RetryExposeStep' };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksA.RetryExposeStep';
+      return 'WorkflowEngineMocksATest.RetryExposeStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
@@ -391,10 +391,10 @@ public class WorkflowEngineTestMocksB {
 
   public class DynamicRetryWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
-      return new List<String>{ 'WorkflowEngineTestMocksB.DynamicRetryStep' };
+      return new List<String>{ 'WorkflowEngineMocksBTest.DynamicRetryStep' };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksB.DynamicRetryStep';
+      return 'WorkflowEngineMocksBTest.DynamicRetryStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
@@ -403,7 +403,7 @@ public class WorkflowEngineTestMocksB {
 
   public class DynamicRetryStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      WorkflowEngineTestMocksA.dynamicObservedStates.add(
+      WorkflowEngineMocksATest.dynamicObservedStates.add(
         new Map<String, Object>{
           'attempt' => ctx.attempt,
           'maxAttempts' => ctx.maxAttempts,
@@ -423,7 +423,7 @@ public class WorkflowEngineTestMocksB {
     }
 
     public StepResult compensate(StepContext ctx) {
-      WorkflowEngineTestMocksB.compensationObservedStates.add(
+      WorkflowEngineMocksBTest.compensationObservedStates.add(
         new Map<String, Object>{
           'attempt' => ctx.attempt,
           'maxAttempts' => ctx.maxAttempts,
@@ -443,18 +443,18 @@ public class WorkflowEngineTestMocksB {
 
   public class LoopExposeStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      WorkflowEngineTestMocksB.loopObservedStates.add(
+      WorkflowEngineMocksBTest.loopObservedStates.add(
         new Map<String, Object>{
           'attempt' => ctx.attempt,
           'maxAttempts' => ctx.maxAttempts
         }
       );
-      WorkflowEngineTestMocksB.loopCounter++;
-      if (WorkflowEngineTestMocksB.loopCounter == 1) {
+      WorkflowEngineMocksBTest.loopCounter++;
+      if (WorkflowEngineMocksBTest.loopCounter == 1) {
         return StepResult.retry(new RetryPolicy(1, (Double) 1.0, 2));
-      } else if (WorkflowEngineTestMocksB.loopCounter == 2) {
+      } else if (WorkflowEngineMocksBTest.loopCounter == 2) {
         return StepResult.complete(
-          'WorkflowEngineTestMocksB.LoopExposeStep',
+          'WorkflowEngineMocksBTest.LoopExposeStep',
           'TransitionSelf'
         );
       }
@@ -470,7 +470,7 @@ public class WorkflowEngineTestMocksB {
       }
       ctx.reportProgress(50.0, 'Step 1: Done');
       return StepResult.complete(
-        'WorkflowEngineTestMocksA.ProgressStep2',
+        'WorkflowEngineMocksATest.ProgressStep2',
         'Output1'
       );
     }
@@ -479,20 +479,20 @@ public class WorkflowEngineTestMocksB {
   public class SkipTestWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
       return new List<String>{
-        'WorkflowEngineTestMocksA.SkipTestStep1',
-        'WorkflowEngineTestMocksA.SkipTestStep2',
-        'WorkflowEngineTestMocksB.SkipTestStep3'
+        'WorkflowEngineMocksATest.SkipTestStep1',
+        'WorkflowEngineMocksATest.SkipTestStep2',
+        'WorkflowEngineMocksBTest.SkipTestStep3'
       };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksA.SkipTestStep1';
+      return 'WorkflowEngineMocksATest.SkipTestStep1';
     }
     public String getNextStep(String currentStepName, StepResult result) {
-      if (currentStepName == 'WorkflowEngineTestMocksA.SkipTestStep1') {
-        return 'WorkflowEngineTestMocksA.SkipTestStep2';
+      if (currentStepName == 'WorkflowEngineMocksATest.SkipTestStep1') {
+        return 'WorkflowEngineMocksATest.SkipTestStep2';
       }
-      if (currentStepName == 'WorkflowEngineTestMocksA.SkipTestStep2') {
-        return 'WorkflowEngineTestMocksB.SkipTestStep3';
+      if (currentStepName == 'WorkflowEngineMocksATest.SkipTestStep2') {
+        return 'WorkflowEngineMocksBTest.SkipTestStep3';
       }
       return null;
     }
@@ -512,8 +512,8 @@ public class WorkflowEngineTestMocksB {
     public StepResult execute(StepContext ctx) {
       return StepResult.split(
         new List<String>{
-          'WorkflowEngineTestMocksB.SkipParallelA',
-          'WorkflowEngineTestMocksA.SkipParallelB'
+          'WorkflowEngineMocksBTest.SkipParallelA',
+          'WorkflowEngineMocksATest.SkipParallelB'
         },
         null
       );
@@ -531,10 +531,10 @@ public class WorkflowEngineTestMocksB {
 
   public class TerminalSkipWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
-      return new List<String>{ 'WorkflowEngineTestMocksB.TerminalSkipStep' };
+      return new List<String>{ 'WorkflowEngineMocksBTest.TerminalSkipStep' };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksB.TerminalSkipStep';
+      return 'WorkflowEngineMocksBTest.TerminalSkipStep';
     }
     public String getNextStep(String currentStepName, StepResult result) {
       return null;
@@ -550,21 +550,21 @@ public class WorkflowEngineTestMocksB {
   public class SkipThreeParallelWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
       return new List<String>{
-        'WorkflowEngineTestMocksA.SkipThreeParallelSplitStep',
-        'WorkflowEngineTestMocksB.SkipParallelA',
-        'WorkflowEngineTestMocksA.SkipParallelB',
-        'WorkflowEngineTestMocksA.SkipParallelC',
-        'WorkflowEngineTestMocksA.SkipParallelJoinStep3'
+        'WorkflowEngineMocksATest.SkipThreeParallelSplitStep',
+        'WorkflowEngineMocksBTest.SkipParallelA',
+        'WorkflowEngineMocksATest.SkipParallelB',
+        'WorkflowEngineMocksATest.SkipParallelC',
+        'WorkflowEngineMocksATest.SkipParallelJoinStep3'
       };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksA.SkipThreeParallelSplitStep';
+      return 'WorkflowEngineMocksATest.SkipThreeParallelSplitStep';
     }
     public String getNextStep(String currentStepName, StepResult result) {
       if (
-        currentStepName == 'WorkflowEngineTestMocksA.SkipThreeParallelSplitStep'
+        currentStepName == 'WorkflowEngineMocksATest.SkipThreeParallelSplitStep'
       ) {
-        return 'WorkflowEngineTestMocksA.SkipParallelJoinStep3';
+        return 'WorkflowEngineMocksATest.SkipParallelJoinStep3';
       }
       return null;
     }
@@ -573,21 +573,21 @@ public class WorkflowEngineTestMocksB {
   public class CompensatableParallelWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
       return new List<String>{
-        'WorkflowEngineTestMocksA.CompensatableParallelSplitStep',
-        'WorkflowEngineTestMocksA.CompensatableParallelA',
-        'WorkflowEngineTestMocksA.CompensatableParallelB',
-        'WorkflowEngineTestMocksB.CompensatableParallelJoinStep'
+        'WorkflowEngineMocksATest.CompensatableParallelSplitStep',
+        'WorkflowEngineMocksATest.CompensatableParallelA',
+        'WorkflowEngineMocksATest.CompensatableParallelB',
+        'WorkflowEngineMocksBTest.CompensatableParallelJoinStep'
       };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksA.CompensatableParallelSplitStep';
+      return 'WorkflowEngineMocksATest.CompensatableParallelSplitStep';
     }
     public String getNextStep(String currentStepName, StepResult result) {
       if (
         currentStepName ==
-        'WorkflowEngineTestMocksA.CompensatableParallelSplitStep'
+        'WorkflowEngineMocksATest.CompensatableParallelSplitStep'
       ) {
-        return 'WorkflowEngineTestMocksB.CompensatableParallelJoinStep';
+        return 'WorkflowEngineMocksBTest.CompensatableParallelJoinStep';
       }
       return null;
     }
@@ -620,10 +620,10 @@ public class WorkflowEngineTestMocksB {
 
   public class RetryBreadcrumbWorkflow implements WorkflowDefinition {
     public List<String> getSteps() {
-      return new List<String>{ 'WorkflowEngineTestMocksA.RetryBreadcrumbStep' };
+      return new List<String>{ 'WorkflowEngineMocksATest.RetryBreadcrumbStep' };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksA.RetryBreadcrumbStep';
+      return 'WorkflowEngineMocksATest.RetryBreadcrumbStep';
     }
     public String getNextStep(String currentStepName, StepResult result) {
       return null;
@@ -656,18 +656,18 @@ public class WorkflowEngineTestMocksB {
 
   public class FailingHandlerStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
-      WorkflowEngineTestMocksB.routedStepsRun.add('FailingHandlerStep');
+      WorkflowEngineMocksBTest.routedStepsRun.add('FailingHandlerStep');
       return StepResult.fail('Handler itself failed');
     }
   }
 
   public class CompensatableForwardStep1 implements CompensatableStep {
     public StepResult execute(StepContext ctx) {
-      WorkflowEngineTestMocksB.routedStepsRun.add('CompensatableForwardStep1');
+      WorkflowEngineMocksBTest.routedStepsRun.add('CompensatableForwardStep1');
       return StepResult.complete(null, 'Step1Output');
     }
     public StepResult compensate(StepContext ctx) {
-      WorkflowEngineTestMocksB.compensationsRun.add(
+      WorkflowEngineMocksBTest.compensationsRun.add(
         'CompensatableForwardStep1_Compensate'
       );
       return StepResult.complete(null, 'Compensate1Complete');
@@ -677,25 +677,25 @@ public class WorkflowEngineTestMocksB {
   public class ErrorRoutedWorkflow implements ErrorRoutingWorkflow {
     public List<String> getSteps() {
       return new List<String>{
-        'WorkflowEngineTestMocksB.CrashStep',
-        'WorkflowEngineTestMocksB.ExplicitFailStep',
-        'WorkflowEngineTestMocksB.RetryThenFailStep',
-        'WorkflowEngineTestMocksA.NormalHandlerStep'
+        'WorkflowEngineMocksBTest.CrashStep',
+        'WorkflowEngineMocksBTest.ExplicitFailStep',
+        'WorkflowEngineMocksBTest.RetryThenFailStep',
+        'WorkflowEngineMocksATest.NormalHandlerStep'
       };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksB.CrashStep';
+      return 'WorkflowEngineMocksBTest.CrashStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
     public String getErrorStep(String failedStepName, StepError error) {
       if (
-        failedStepName == 'WorkflowEngineTestMocksB.CrashStep' ||
-        failedStepName == 'WorkflowEngineTestMocksB.ExplicitFailStep' ||
-        failedStepName == 'WorkflowEngineTestMocksB.RetryThenFailStep'
+        failedStepName == 'WorkflowEngineMocksBTest.CrashStep' ||
+        failedStepName == 'WorkflowEngineMocksBTest.ExplicitFailStep' ||
+        failedStepName == 'WorkflowEngineMocksBTest.RetryThenFailStep'
       ) {
-        return 'WorkflowEngineTestMocksA.NormalHandlerStep';
+        return 'WorkflowEngineMocksATest.NormalHandlerStep';
       }
       return null;
     }
@@ -704,29 +704,29 @@ public class WorkflowEngineTestMocksB {
   public class CompensatableErrorRoutedWorkflow implements ErrorRoutingWorkflow {
     public List<String> getSteps() {
       return new List<String>{
-        'WorkflowEngineTestMocksB.CompensatableForwardStep1',
-        'WorkflowEngineTestMocksB.ExplicitFailStep',
-        'WorkflowEngineTestMocksA.NormalHandlerStep',
-        'WorkflowEngineTestMocksA.CompensatableForwardStep2'
+        'WorkflowEngineMocksBTest.CompensatableForwardStep1',
+        'WorkflowEngineMocksBTest.ExplicitFailStep',
+        'WorkflowEngineMocksATest.NormalHandlerStep',
+        'WorkflowEngineMocksATest.CompensatableForwardStep2'
       };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksB.CompensatableForwardStep1';
+      return 'WorkflowEngineMocksBTest.CompensatableForwardStep1';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       if (
-        currentStepName == 'WorkflowEngineTestMocksB.CompensatableForwardStep1'
+        currentStepName == 'WorkflowEngineMocksBTest.CompensatableForwardStep1'
       ) {
-        return 'WorkflowEngineTestMocksB.ExplicitFailStep';
+        return 'WorkflowEngineMocksBTest.ExplicitFailStep';
       }
-      if (currentStepName == 'WorkflowEngineTestMocksA.NormalHandlerStep') {
-        return 'WorkflowEngineTestMocksA.CompensatableForwardStep2';
+      if (currentStepName == 'WorkflowEngineMocksATest.NormalHandlerStep') {
+        return 'WorkflowEngineMocksATest.CompensatableForwardStep2';
       }
       return null;
     }
     public String getErrorStep(String failedStepName, StepError error) {
-      if (failedStepName == 'WorkflowEngineTestMocksB.ExplicitFailStep') {
-        return 'WorkflowEngineTestMocksA.NormalHandlerStep';
+      if (failedStepName == 'WorkflowEngineMocksBTest.ExplicitFailStep') {
+        return 'WorkflowEngineMocksATest.NormalHandlerStep';
       }
       return null;
     }
@@ -745,8 +745,8 @@ public class WorkflowEngineTestMocksB {
     public StepResult execute(StepContext ctx) {
       return StepResult.split(
         new List<String>{
-          'WorkflowEngineTestMocksB.ExplicitFailStep',
-          'WorkflowEngineTestMocksB.StaleSignalSiblingStep'
+          'WorkflowEngineMocksBTest.ExplicitFailStep',
+          'WorkflowEngineMocksBTest.StaleSignalSiblingStep'
         },
         null
       );
@@ -762,7 +762,7 @@ public class WorkflowEngineTestMocksB {
         WHERE Id = :ctx.workflowInstanceId
         FOR UPDATE
       ];
-      inst.Current_Step__c = 'WorkflowEngineTestMocksA.NormalHandlerStep';
+      inst.Current_Step__c = 'WorkflowEngineMocksATest.NormalHandlerStep';
       update as system inst;
       return StepResult.complete(null, 'StaleComplete');
     }
@@ -771,19 +771,19 @@ public class WorkflowEngineTestMocksB {
   public class TimeoutErrorRoutedWorkflow implements ErrorRoutingWorkflow {
     public List<String> getSteps() {
       return new List<String>{
-        'WorkflowEngineTestMocksA.TimeoutFailureStep',
-        'WorkflowEngineTestMocksA.NormalHandlerStep'
+        'WorkflowEngineMocksATest.TimeoutFailureStep',
+        'WorkflowEngineMocksATest.NormalHandlerStep'
       };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksA.TimeoutFailureStep';
+      return 'WorkflowEngineMocksATest.TimeoutFailureStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
     public String getErrorStep(String failedStepName, StepError error) {
-      if (failedStepName == 'WorkflowEngineTestMocksA.TimeoutFailureStep') {
-        return 'WorkflowEngineTestMocksA.NormalHandlerStep';
+      if (failedStepName == 'WorkflowEngineMocksATest.TimeoutFailureStep') {
+        return 'WorkflowEngineMocksATest.NormalHandlerStep';
       }
       return null;
     }
@@ -792,21 +792,21 @@ public class WorkflowEngineTestMocksB {
   public class YieldingHandlerWorkflow implements ErrorRoutingWorkflow {
     public List<String> getSteps() {
       return new List<String>{
-        'WorkflowEngineTestMocksB.RetryExhaustedFailureStep',
-        'WorkflowEngineTestMocksA.YieldingHandlerStep'
+        'WorkflowEngineMocksBTest.RetryExhaustedFailureStep',
+        'WorkflowEngineMocksATest.YieldingHandlerStep'
       };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksB.RetryExhaustedFailureStep';
+      return 'WorkflowEngineMocksBTest.RetryExhaustedFailureStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
     public String getErrorStep(String failedStepName, StepError error) {
       if (
-        failedStepName == 'WorkflowEngineTestMocksB.RetryExhaustedFailureStep'
+        failedStepName == 'WorkflowEngineMocksBTest.RetryExhaustedFailureStep'
       ) {
-        return 'WorkflowEngineTestMocksA.YieldingHandlerStep';
+        return 'WorkflowEngineMocksATest.YieldingHandlerStep';
       }
       return null;
     }
@@ -815,21 +815,21 @@ public class WorkflowEngineTestMocksB {
   public class RetryableHandlerWorkflow implements ErrorRoutingWorkflow {
     public List<String> getSteps() {
       return new List<String>{
-        'WorkflowEngineTestMocksB.RetryExhaustedFailureStep',
-        'WorkflowEngineTestMocksB.RetryableHandlerStep'
+        'WorkflowEngineMocksBTest.RetryExhaustedFailureStep',
+        'WorkflowEngineMocksBTest.RetryableHandlerStep'
       };
     }
     public String getInitialStep() {
-      return 'WorkflowEngineTestMocksB.RetryExhaustedFailureStep';
+      return 'WorkflowEngineMocksBTest.RetryExhaustedFailureStep';
     }
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
     public String getErrorStep(String failedStepName, StepError error) {
       if (
-        failedStepName == 'WorkflowEngineTestMocksB.RetryExhaustedFailureStep'
+        failedStepName == 'WorkflowEngineMocksBTest.RetryExhaustedFailureStep'
       ) {
-        return 'WorkflowEngineTestMocksB.RetryableHandlerStep';
+        return 'WorkflowEngineMocksBTest.RetryableHandlerStep';
       }
       return null;
     }
@@ -837,16 +837,16 @@ public class WorkflowEngineTestMocksB {
 
   public class RetryableHandlerStep implements WorkflowStep, RetryConfigurable {
     public StepResult execute(StepContext ctx) {
-      WorkflowEngineTestMocksB.routedStepsRun.add('RetryableHandlerStep');
-      WorkflowEngineTestMocksB.routedStepContextData.put(
+      WorkflowEngineMocksBTest.routedStepsRun.add('RetryableHandlerStep');
+      WorkflowEngineMocksBTest.routedStepContextData.put(
         'failedStepName',
         ctx.failedStepName
       );
-      WorkflowEngineTestMocksB.routedStepContextData.put(
+      WorkflowEngineMocksBTest.routedStepContextData.put(
         'errorMessage',
         ctx.errorMessage
       );
-      WorkflowEngineTestMocksB.routedStepContextData.put(
+      WorkflowEngineMocksBTest.routedStepContextData.put(
         'attemptCount',
         ctx.attemptCount
       );

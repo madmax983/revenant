@@ -19,7 +19,7 @@ public class WorkflowEngineRetryTelemetryTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.ProgressWorkflow',
+        'WorkflowEngineMocksATest.ProgressWorkflow',
         'ProgressKey',
         'InitialInput'
       );
@@ -120,10 +120,10 @@ public class WorkflowEngineRetryTelemetryTest {
   @IsTest
   static void testRetryAttemptProgressionAndFallback() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksA.observedAttemptStates.clear();
+      WorkflowEngineMocksATest.observedAttemptStates.clear();
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.RetryExposeWorkflow',
+        'WorkflowEngineMocksBTest.RetryExposeWorkflow',
         'ExposeKey',
         null
       );
@@ -134,49 +134,49 @@ public class WorkflowEngineRetryTelemetryTest {
       System.assertEquals('Completed', result.status);
       System.assertEquals(
         3,
-        WorkflowEngineTestMocksA.observedAttemptStates.size()
+        WorkflowEngineMocksATest.observedAttemptStates.size()
       );
 
       // Attempt 1
       System.assertEquals(
         1,
-        WorkflowEngineTestMocksA.observedAttemptStates[0].get('attempt')
+        WorkflowEngineMocksATest.observedAttemptStates[0].get('attempt')
       );
       System.assertEquals(
         3,
-        WorkflowEngineTestMocksA.observedAttemptStates[0].get('maxAttempts')
+        WorkflowEngineMocksATest.observedAttemptStates[0].get('maxAttempts')
       );
       System.assertEquals(
         false,
-        WorkflowEngineTestMocksA.observedAttemptStates[0].get('isFinalAttempt')
+        WorkflowEngineMocksATest.observedAttemptStates[0].get('isFinalAttempt')
       );
 
       // Attempt 2
       System.assertEquals(
         2,
-        WorkflowEngineTestMocksA.observedAttemptStates[1].get('attempt')
+        WorkflowEngineMocksATest.observedAttemptStates[1].get('attempt')
       );
       System.assertEquals(
         3,
-        WorkflowEngineTestMocksA.observedAttemptStates[1].get('maxAttempts')
+        WorkflowEngineMocksATest.observedAttemptStates[1].get('maxAttempts')
       );
       System.assertEquals(
         false,
-        WorkflowEngineTestMocksA.observedAttemptStates[1].get('isFinalAttempt')
+        WorkflowEngineMocksATest.observedAttemptStates[1].get('isFinalAttempt')
       );
 
       // Attempt 3 (Final attempt)
       System.assertEquals(
         3,
-        WorkflowEngineTestMocksA.observedAttemptStates[2].get('attempt')
+        WorkflowEngineMocksATest.observedAttemptStates[2].get('attempt')
       );
       System.assertEquals(
         3,
-        WorkflowEngineTestMocksA.observedAttemptStates[2].get('maxAttempts')
+        WorkflowEngineMocksATest.observedAttemptStates[2].get('maxAttempts')
       );
       System.assertEquals(
         true,
-        WorkflowEngineTestMocksA.observedAttemptStates[2].get('isFinalAttempt')
+        WorkflowEngineMocksATest.observedAttemptStates[2].get('isFinalAttempt')
       );
 
       // Verify persisted Retry Count agrees (2 retries performed before completing)
@@ -198,10 +198,10 @@ public class WorkflowEngineRetryTelemetryTest {
   @IsTest
   static void testDynamicRetryAttemptProgression() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksA.dynamicObservedStates.clear();
+      WorkflowEngineMocksATest.dynamicObservedStates.clear();
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.DynamicRetryWorkflow',
+        'WorkflowEngineMocksBTest.DynamicRetryWorkflow',
         'DynamicKey',
         null
       );
@@ -212,37 +212,37 @@ public class WorkflowEngineRetryTelemetryTest {
       System.assertEquals('Completed', result.status);
       System.assertEquals(
         3,
-        WorkflowEngineTestMocksA.dynamicObservedStates.size()
+        WorkflowEngineMocksATest.dynamicObservedStates.size()
       );
 
       // Attempt 1 (No policy resolved yet -> defaults to 1)
       System.assertEquals(
         1,
-        WorkflowEngineTestMocksA.dynamicObservedStates[0].get('attempt')
+        WorkflowEngineMocksATest.dynamicObservedStates[0].get('attempt')
       );
       System.assertEquals(
         1,
-        WorkflowEngineTestMocksA.dynamicObservedStates[0].get('maxAttempts')
+        WorkflowEngineMocksATest.dynamicObservedStates[0].get('maxAttempts')
       );
 
       // Attempt 2 (Policy was resolved on attempt 1 -> loaded from Captured_Values__c)
       System.assertEquals(
         2,
-        WorkflowEngineTestMocksA.dynamicObservedStates[1].get('attempt')
+        WorkflowEngineMocksATest.dynamicObservedStates[1].get('attempt')
       );
       System.assertEquals(
         3,
-        WorkflowEngineTestMocksA.dynamicObservedStates[1].get('maxAttempts')
+        WorkflowEngineMocksATest.dynamicObservedStates[1].get('maxAttempts')
       );
 
       // Attempt 3 (Policy was resolved on attempt 2 -> loaded from Captured_Values__c)
       System.assertEquals(
         3,
-        WorkflowEngineTestMocksA.dynamicObservedStates[2].get('attempt')
+        WorkflowEngineMocksATest.dynamicObservedStates[2].get('attempt')
       );
       System.assertEquals(
         3,
-        WorkflowEngineTestMocksA.dynamicObservedStates[2].get('maxAttempts')
+        WorkflowEngineMocksATest.dynamicObservedStates[2].get('maxAttempts')
       );
     }
   }
@@ -250,10 +250,10 @@ public class WorkflowEngineRetryTelemetryTest {
   @IsTest
   static void testCompensationRetryAttemptProgression() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.compensationObservedStates.clear();
+      WorkflowEngineMocksBTest.compensationObservedStates.clear();
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.CompensatableRetryWorkflow',
+        'WorkflowEngineMocksATest.CompensatableRetryWorkflow',
         'CompensateRetryKey',
         null
       );
@@ -264,38 +264,38 @@ public class WorkflowEngineRetryTelemetryTest {
       System.assertEquals('Compensated', result.status);
       System.assertEquals(
         2,
-        WorkflowEngineTestMocksB.compensationObservedStates.size()
+        WorkflowEngineMocksBTest.compensationObservedStates.size()
       );
 
       // Compensation Attempt 1
       System.assertEquals(
         1,
-        WorkflowEngineTestMocksB.compensationObservedStates[0].get('attempt')
+        WorkflowEngineMocksBTest.compensationObservedStates[0].get('attempt')
       );
       System.assertEquals(
         2,
-        WorkflowEngineTestMocksB.compensationObservedStates[0]
+        WorkflowEngineMocksBTest.compensationObservedStates[0]
           .get('maxAttempts')
       );
       System.assertEquals(
         false,
-        WorkflowEngineTestMocksB.compensationObservedStates[0]
+        WorkflowEngineMocksBTest.compensationObservedStates[0]
           .get('isFinalAttempt')
       );
 
       // Compensation Attempt 2 (Final attempt)
       System.assertEquals(
         2,
-        WorkflowEngineTestMocksB.compensationObservedStates[1].get('attempt')
+        WorkflowEngineMocksBTest.compensationObservedStates[1].get('attempt')
       );
       System.assertEquals(
         2,
-        WorkflowEngineTestMocksB.compensationObservedStates[1]
+        WorkflowEngineMocksBTest.compensationObservedStates[1]
           .get('maxAttempts')
       );
       System.assertEquals(
         true,
-        WorkflowEngineTestMocksB.compensationObservedStates[1]
+        WorkflowEngineMocksBTest.compensationObservedStates[1]
           .get('isFinalAttempt')
       );
     }
@@ -304,11 +304,11 @@ public class WorkflowEngineRetryTelemetryTest {
   @IsTest
   static void testRetryAttemptResetOnFreshVisit() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngineTestMocksB.loopObservedStates.clear();
-      WorkflowEngineTestMocksB.loopCounter = 0;
+      WorkflowEngineMocksBTest.loopObservedStates.clear();
+      WorkflowEngineMocksBTest.loopCounter = 0;
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.LoopExposeWorkflow',
+        'WorkflowEngineMocksATest.LoopExposeWorkflow',
         'LoopKey',
         null
       );
@@ -319,25 +319,25 @@ public class WorkflowEngineRetryTelemetryTest {
       System.assertEquals('Completed', result.status);
       System.assertEquals(
         3,
-        WorkflowEngineTestMocksB.loopObservedStates.size()
+        WorkflowEngineMocksBTest.loopObservedStates.size()
       );
 
       // First visit: attempt 1
       System.assertEquals(
         1,
-        WorkflowEngineTestMocksB.loopObservedStates[0].get('attempt')
+        WorkflowEngineMocksBTest.loopObservedStates[0].get('attempt')
       );
 
       // First visit: attempt 2 (retry)
       System.assertEquals(
         2,
-        WorkflowEngineTestMocksB.loopObservedStates[1].get('attempt')
+        WorkflowEngineMocksBTest.loopObservedStates[1].get('attempt')
       );
 
       // Second visit: resets to attempt 1
       System.assertEquals(
         1,
-        WorkflowEngineTestMocksB.loopObservedStates[2].get('attempt')
+        WorkflowEngineMocksBTest.loopObservedStates[2].get('attempt')
       );
     }
   }
@@ -411,7 +411,7 @@ public class WorkflowEngineRetryTelemetryTest {
 
       // Start a sleeping workflow to verify telemetry is populated on Pending status (sleep/suspension)
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.SleepingWorkflow',
+        'WorkflowEngineMocksATest.SleepingWorkflow',
         'TelemetrySleepKey',
         'InitialInput'
       );
@@ -460,7 +460,7 @@ public class WorkflowEngineRetryTelemetryTest {
       // Trigger handleCrash to verify telemetry is cleared/skipped during crashes
       WorkflowEngine.handleCrash(
         instanceId,
-        'WorkflowEngineTestMocksB.SleepingStep',
+        'WorkflowEngineMocksBTest.SleepingStep',
         new WorkflowEngine.WorkflowException('Test Exception')
       );
       List<Workflow_Step_Execution__c> crashedExecs = [
@@ -503,7 +503,7 @@ public class WorkflowEngineRetryTelemetryTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id parentId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.ParentWorkflow',
+        'WorkflowEngineMocksATest.ParentWorkflow',
         'ParentKey_Reentry',
         null
       );
@@ -569,14 +569,14 @@ public class WorkflowEngineRetryTelemetryTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id parentIdA = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.ParentWorkflow',
+        'WorkflowEngineMocksATest.ParentWorkflow',
         'ParentKey_A',
         null
       );
       new WorkflowOrchestrator(parentIdA).execute(null);
 
       Id parentIdB = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.ParentWorkflow',
+        'WorkflowEngineMocksATest.ParentWorkflow',
         'ParentKey_B',
         null
       );
@@ -621,7 +621,7 @@ public class WorkflowEngineRetryTelemetryTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id parentId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.ParentWorkflow',
+        'WorkflowEngineMocksATest.ParentWorkflow',
         'ParentKey_Reentry_Paused',
         null
       );

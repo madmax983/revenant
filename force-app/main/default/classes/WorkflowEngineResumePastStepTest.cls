@@ -16,7 +16,7 @@ public class WorkflowEngineResumePastStepTest {
     ];
     System.assertEquals('Failed', inst2.Status__c);
     System.assertEquals(
-      'WorkflowEngineTestMocksA.SkipTestStep2',
+      'WorkflowEngineMocksATest.SkipTestStep2',
       inst2.Current_Step__c
     );
 
@@ -33,7 +33,7 @@ public class WorkflowEngineResumePastStepTest {
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :instanceId
-        AND Step_Name__c = 'WorkflowEngineTestMocksA.SkipTestStep2'
+        AND Step_Name__c = 'WorkflowEngineMocksATest.SkipTestStep2'
       ORDER BY CreatedDate DESC, Id DESC
     ];
     System.assertEquals(2, stepExecs.size());
@@ -50,7 +50,7 @@ public class WorkflowEngineResumePastStepTest {
 
     new WorkflowOrchestrator(
         instanceId,
-        'WorkflowEngineTestMocksA.SkipParallelB'
+        'WorkflowEngineMocksATest.SkipParallelB'
       )
       .execute(null);
 
@@ -70,7 +70,7 @@ public class WorkflowEngineResumePastStepTest {
     Test.startTest();
     WorkflowEngine.resumePastStep(
       instanceId,
-      'WorkflowEngineTestMocksA.SkipParallelB',
+      'WorkflowEngineMocksATest.SkipParallelB',
       '{"val": "skippedParallelB"}'
     );
     Test.stopTest();
@@ -94,7 +94,7 @@ public class WorkflowEngineResumePastStepTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.SkipTestWorkflow',
+        'WorkflowEngineMocksBTest.SkipTestWorkflow',
         'SkipSerialKey',
         'InitialInput'
       );
@@ -108,7 +108,7 @@ public class WorkflowEngineResumePastStepTest {
       ];
       System.assertEquals('Running', inst1.Status__c);
       System.assertEquals(
-        'WorkflowEngineTestMocksA.SkipTestStep2',
+        'WorkflowEngineMocksATest.SkipTestStep2',
         inst1.Current_Step__c
       );
 
@@ -119,7 +119,7 @@ public class WorkflowEngineResumePastStepTest {
       // There should be 2 execs: the failed one and the OperatorSkipped one
       List<Workflow_Step_Execution__c> stepExecs = skipSkipTestStep2AndAssertOperatorSkipped(
         instanceId,
-        'WorkflowEngineTestMocksA.SkipTestStep2'
+        'WorkflowEngineMocksATest.SkipTestStep2'
       );
       System.assertEquals(
         '{"overrideVal": "skippedOutput"}',
@@ -138,7 +138,7 @@ public class WorkflowEngineResumePastStepTest {
       System.assert(
         logs[0]
           .Message__c.contains(
-            'skipped step WorkflowEngineTestMocksA.SkipTestStep2'
+            'skipped step WorkflowEngineMocksATest.SkipTestStep2'
           )
       );
 
@@ -175,7 +175,7 @@ public class WorkflowEngineResumePastStepTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.SkipParallelWorkflow',
+        'WorkflowEngineMocksATest.SkipParallelWorkflow',
         'SkipParallelSleepKey',
         'InitialInput'
       );
@@ -189,7 +189,7 @@ public class WorkflowEngineResumePastStepTest {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Step_Name__c = 'WorkflowEngineTestMocksB.SkipParallelA'
+          AND Step_Name__c = 'WorkflowEngineMocksBTest.SkipParallelA'
       ];
       System.assertEquals(1, stepExecs.size());
       stepExecs[0].Status__c = 'Pending';
@@ -238,7 +238,7 @@ public class WorkflowEngineResumePastStepTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.SkipTestWorkflow',
+        'WorkflowEngineMocksBTest.SkipTestWorkflow',
         'SkipCaseInsensitivityKey',
         'InitialInput'
       );
@@ -271,7 +271,7 @@ public class WorkflowEngineResumePastStepTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.SkipParallelWorkflow',
+        'WorkflowEngineMocksATest.SkipParallelWorkflow',
         'SkipParallelRetryingKey',
         'InitialInput'
       );
@@ -285,7 +285,7 @@ public class WorkflowEngineResumePastStepTest {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Step_Name__c = 'WorkflowEngineTestMocksB.SkipParallelA'
+          AND Step_Name__c = 'WorkflowEngineMocksBTest.SkipParallelA'
       ];
       System.assertEquals(1, stepExecs.size());
       stepExecs[0].Status__c = 'Retrying';
@@ -334,7 +334,7 @@ public class WorkflowEngineResumePastStepTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.SkipParallelWorkflow',
+        'WorkflowEngineMocksATest.SkipParallelWorkflow',
         'SkipParallelKey',
         'InitialInput'
       );
@@ -348,23 +348,23 @@ public class WorkflowEngineResumePastStepTest {
       ];
       System.assertEquals('Running', inst1.Status__c);
       System.assert(
-        inst1.Current_Step__c.contains('WorkflowEngineTestMocksB.SkipParallelA')
+        inst1.Current_Step__c.contains('WorkflowEngineMocksBTest.SkipParallelA')
       );
       System.assert(
-        inst1.Current_Step__c.contains('WorkflowEngineTestMocksA.SkipParallelB')
+        inst1.Current_Step__c.contains('WorkflowEngineMocksATest.SkipParallelB')
       );
 
       // 2. Run ParallelA -> completes successfully
       new WorkflowOrchestrator(
           instanceId,
-          'WorkflowEngineTestMocksB.SkipParallelA'
+          'WorkflowEngineMocksBTest.SkipParallelA'
         )
         .execute(null);
 
       // 3. Run ParallelB -> fails and fails the workflow instance
       new WorkflowOrchestrator(
           instanceId,
-          'WorkflowEngineTestMocksA.SkipParallelB'
+          'WorkflowEngineMocksATest.SkipParallelB'
         )
         .execute(null);
 
@@ -379,7 +379,7 @@ public class WorkflowEngineResumePastStepTest {
       Test.startTest();
       WorkflowEngine.resumePastStep(
         instanceId,
-        'WorkflowEngineTestMocksA.SkipParallelB',
+        'WorkflowEngineMocksATest.SkipParallelB',
         '{"val": "skippedParallelB"}'
       );
       Test.stopTest();
@@ -404,7 +404,7 @@ public class WorkflowEngineResumePastStepTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.SkipParallelWorkflow',
+        'WorkflowEngineMocksATest.SkipParallelWorkflow',
         'SkipParallelSignalKey',
         'InitialInput'
       );
@@ -415,21 +415,21 @@ public class WorkflowEngineResumePastStepTest {
       // 2. Run ParallelB -> fails and fails the workflow instance
       new WorkflowOrchestrator(
           instanceId,
-          'WorkflowEngineTestMocksA.SkipParallelB'
+          'WorkflowEngineMocksATest.SkipParallelB'
         )
         .execute(null);
 
       // 3. Resume past ParallelB (sets it to OperatorSkipped)
       WorkflowEngine.resumePastStep(
         instanceId,
-        'WorkflowEngineTestMocksA.SkipParallelB',
+        'WorkflowEngineMocksATest.SkipParallelB',
         '{"val": "skippedParallelB"}'
       );
 
       // 4. Try executing runStep directly on the skipped step ParallelB (simulating a signal or duplicate orchestrator run)
       WorkflowEngine.runStep(
         instanceId,
-        'WorkflowEngineTestMocksA.SkipParallelB'
+        'WorkflowEngineMocksATest.SkipParallelB'
       );
 
       // Verify status remains OperatorSkipped
@@ -438,7 +438,7 @@ public class WorkflowEngineResumePastStepTest {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Step_Name__c = 'WorkflowEngineTestMocksA.SkipParallelB'
+          AND Step_Name__c = 'WorkflowEngineMocksATest.SkipParallelB'
         ORDER BY CreatedDate DESC, Id DESC
       ];
       System.assertEquals(
@@ -455,7 +455,7 @@ public class WorkflowEngineResumePastStepTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.SkipThreeParallelWorkflow',
+        'WorkflowEngineMocksBTest.SkipThreeParallelWorkflow',
         'SkipThreeParallelSignalKey',
         'InitialInput'
       );
@@ -469,7 +469,7 @@ public class WorkflowEngineResumePastStepTest {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Step_Name__c = 'WorkflowEngineTestMocksB.SkipParallelA'
+          AND Step_Name__c = 'WorkflowEngineMocksBTest.SkipParallelA'
       ];
       stepExecsA[0].Status__c = 'Pending';
       stepExecsA[0].CPU_Time_Ms__c = 1;
@@ -478,14 +478,14 @@ public class WorkflowEngineResumePastStepTest {
       // 3. Run ParallelB -> fails and fails the workflow instance
       new WorkflowOrchestrator(
           instanceId,
-          'WorkflowEngineTestMocksA.SkipParallelB'
+          'WorkflowEngineMocksATest.SkipParallelB'
         )
         .execute(null);
 
       // 4. Run ParallelC -> fails as well
       new WorkflowOrchestrator(
           instanceId,
-          'WorkflowEngineTestMocksA.SkipParallelC'
+          'WorkflowEngineMocksATest.SkipParallelC'
         )
         .execute(null);
 
@@ -500,15 +500,15 @@ public class WorkflowEngineResumePastStepTest {
       // 5. Resume past ParallelB
       WorkflowEngine.resumePastStep(
         instanceId,
-        'WorkflowEngineTestMocksA.SkipParallelB',
+        'WorkflowEngineMocksATest.SkipParallelB',
         '{"val": "skippedParallelB"}'
       );
 
       // 6. Sibling C was reset and is now Pending. We set failParallelC to false and run it manually.
-      WorkflowEngineTestMocksA.failParallelC = false;
+      WorkflowEngineMocksATest.failParallelC = false;
       new WorkflowOrchestrator(
           instanceId,
-          'WorkflowEngineTestMocksA.SkipParallelC'
+          'WorkflowEngineMocksATest.SkipParallelC'
         )
         .execute(null);
 
@@ -531,7 +531,7 @@ public class WorkflowEngineResumePastStepTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = false;
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.SkipThreeParallelWorkflow',
+        'WorkflowEngineMocksBTest.SkipThreeParallelWorkflow',
         'SkipThreeParallelSignalKey2',
         'InitialInput'
       );
@@ -544,7 +544,7 @@ public class WorkflowEngineResumePastStepTest {
       // Sibling B fails and fails the workflow instance.
       new WorkflowOrchestrator(
           instanceId,
-          'WorkflowEngineTestMocksA.SkipParallelB'
+          'WorkflowEngineMocksATest.SkipParallelB'
         )
         .execute(null);
 
@@ -560,26 +560,26 @@ public class WorkflowEngineResumePastStepTest {
       // Since A is Pending but has never run (CPU_Time_Ms__c is null), it is NOT treated as parked.
       // So the parent should become 'Running' (not 'Suspended').
       // And A should be enqueued to run.
-      WorkflowEngineTestMocksA.failParallelC = false;
+      WorkflowEngineMocksATest.failParallelC = false;
 
       // Both A and C will be reset/enqueued in memory or as no-ops since disableQueueableInTest is true.
       // We run them manually to drive their execution synchronously.
       WorkflowEngine.resumePastStep(
         instanceId,
-        'WorkflowEngineTestMocksA.SkipParallelB',
+        'WorkflowEngineMocksATest.SkipParallelB',
         '{"val": "skippedParallelB"}'
       );
 
       // Run branch A and branch C manually. Wrap C in startTest/stopTest to execute the enqueued Join step.
       new WorkflowOrchestrator(
           instanceId,
-          'WorkflowEngineTestMocksB.SkipParallelA'
+          'WorkflowEngineMocksBTest.SkipParallelA'
         )
         .execute(null);
       Test.startTest();
       new WorkflowOrchestrator(
           instanceId,
-          'WorkflowEngineTestMocksA.SkipParallelC'
+          'WorkflowEngineMocksATest.SkipParallelC'
         )
         .execute(null);
       Test.stopTest();
@@ -600,7 +600,7 @@ public class WorkflowEngineResumePastStepTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.TerminalSkipWorkflow',
+        'WorkflowEngineMocksBTest.TerminalSkipWorkflow',
         'TerminalSkipKey',
         'InitialInput'
       );
@@ -633,7 +633,7 @@ public class WorkflowEngineResumePastStepTest {
       Test.startTest();
       WorkflowEngine.resumePastStep(
         instanceId,
-        'WorkflowEngineTestMocksB.TerminalSkipStep',
+        'WorkflowEngineMocksBTest.TerminalSkipStep',
         '{"overrideVal": "skippedOutput"}'
       );
       Test.stopTest();
@@ -660,9 +660,9 @@ public class WorkflowEngineResumePastStepTest {
 
       // 1. Insert a Failed instance of LoopExposeWorkflow
       Workflow_Instance__c inst = new Workflow_Instance__c(
-        Workflow_Name__c = 'WorkflowEngineTestMocksA.LoopExposeWorkflow',
+        Workflow_Name__c = 'WorkflowEngineMocksATest.LoopExposeWorkflow',
         Status__c = 'Failed',
-        Current_Step__c = 'WorkflowEngineTestMocksB.LoopExposeStep',
+        Current_Step__c = 'WorkflowEngineMocksBTest.LoopExposeStep',
         Correlation_Key__c = 'dynamic-skip-1'
       );
       insert inst;
@@ -670,7 +670,7 @@ public class WorkflowEngineResumePastStepTest {
       // 2. Insert a Failed step execution for LoopExposeStep
       Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c(
         Workflow_Instance__c = inst.Id,
-        Step_Name__c = 'WorkflowEngineTestMocksB.LoopExposeStep',
+        Step_Name__c = 'WorkflowEngineMocksBTest.LoopExposeStep',
         Status__c = 'Failed',
         Retry_Count__c = 0
       );
@@ -680,7 +680,7 @@ public class WorkflowEngineResumePastStepTest {
       try {
         WorkflowEngine.resumePastStep(
           inst.Id,
-          'WorkflowEngineTestMocksB.LoopExposeStep',
+          'WorkflowEngineMocksBTest.LoopExposeStep',
           '{}'
         );
         System.assert(false, 'Should have thrown a WorkflowException');
@@ -699,7 +699,7 @@ public class WorkflowEngineResumePastStepTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.SkipThreeParallelWorkflow',
+        'WorkflowEngineMocksBTest.SkipThreeParallelWorkflow',
         'SkipThreeParallelSignalKey3',
         'InitialInput'
       );
@@ -713,7 +713,7 @@ public class WorkflowEngineResumePastStepTest {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Step_Name__c = 'WorkflowEngineTestMocksB.SkipParallelA'
+          AND Step_Name__c = 'WorkflowEngineMocksBTest.SkipParallelA'
         LIMIT 1
       ];
       System.assertNotEquals(
@@ -730,14 +730,14 @@ public class WorkflowEngineResumePastStepTest {
       // Fail Sibling B to fail the workflow instance.
       new WorkflowOrchestrator(
           instanceId,
-          'WorkflowEngineTestMocksA.SkipParallelB'
+          'WorkflowEngineMocksATest.SkipParallelB'
         )
         .execute(null);
 
       // 3. Resume past ParallelB (the skip).
       WorkflowEngine.resumePastStep(
         instanceId,
-        'WorkflowEngineTestMocksA.SkipParallelB',
+        'WorkflowEngineMocksATest.SkipParallelB',
         '{"val": "skippedParallelB"}'
       );
 
@@ -766,7 +766,7 @@ public class WorkflowEngineResumePastStepTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.CompensatableParallelWorkflow',
+        'WorkflowEngineMocksBTest.CompensatableParallelWorkflow',
         'CompensatableParallelSignalKey',
         'InitialInput'
       );
@@ -780,7 +780,7 @@ public class WorkflowEngineResumePastStepTest {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Step_Name__c = 'WorkflowEngineTestMocksA.CompensatableParallelA'
+          AND Step_Name__c = 'WorkflowEngineMocksATest.CompensatableParallelA'
         LIMIT 1
       ];
       System.assertEquals(1, stepExecs.size());
@@ -802,7 +802,7 @@ public class WorkflowEngineResumePastStepTest {
       // At the end, in the `if (!allDone)` block, it should repark the instance as 'Suspended' since Sibling A is parked.
       new WorkflowOrchestrator(
           instanceId,
-          'WorkflowEngineTestMocksA.CompensatableParallelB'
+          'WorkflowEngineMocksATest.CompensatableParallelB'
         )
         .execute(null);
 

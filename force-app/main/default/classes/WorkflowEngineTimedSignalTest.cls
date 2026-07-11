@@ -336,7 +336,7 @@ public class WorkflowEngineTimedSignalTest {
       // A deliberately malformed definition is reported with every structural
       // defect, and a well-formed one (HappyWorkflow) passes clean.
       WorkflowValidator.ValidationResult bad = WorkflowValidator.validate(
-        'WorkflowEngineTestMocksA.MalformedValidatorWorkflow'
+        'WorkflowEngineMocksATest.MalformedValidatorWorkflow'
       );
       System.assertEquals(
         false,
@@ -371,7 +371,7 @@ public class WorkflowEngineTimedSignalTest {
   static void testTimedSuspendTimeoutWins() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      WorkflowEngineTestMocksA.capturedIsTimeoutResume = null;
+      WorkflowEngineMocksATest.capturedIsTimeoutResume = null;
 
       Id instanceId = WorkflowEngine.start(
         'WorkflowEngineTest.TimedSuspendWorkflow',
@@ -491,7 +491,7 @@ public class WorkflowEngineTimedSignalTest {
       // Assert isTimeoutResume() was true in the fallback step
       System.assertEquals(
         true,
-        WorkflowEngineTestMocksA.capturedIsTimeoutResume,
+        WorkflowEngineMocksATest.capturedIsTimeoutResume,
         'isTimeoutResume() must be true in the fallback step'
       );
 
@@ -605,7 +605,7 @@ public class WorkflowEngineTimedSignalTest {
   static void testTimedSuspendLateSignalAfterTimeoutIsNoOp() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      WorkflowEngineTestMocksA.capturedIsTimeoutResume = null;
+      WorkflowEngineMocksATest.capturedIsTimeoutResume = null;
 
       Id instanceId = WorkflowEngine.start(
         'WorkflowEngineTest.TimedSuspendWorkflow',
@@ -697,7 +697,7 @@ public class WorkflowEngineTimedSignalTest {
 
       // Untimed waitForApproval should leave Sleep_Until__c null
       Id approvalInstanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.ApprovalWorkflow',
+        'WorkflowEngineMocksATest.ApprovalWorkflow',
         'BackCompatApprovalKey',
         null
       );
@@ -723,7 +723,7 @@ public class WorkflowEngineTimedSignalTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Id instanceId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksB.TimedApprovalWorkflow',
+        'WorkflowEngineMocksBTest.TimedApprovalWorkflow',
         'TimedApprovalKey',
         null
       );
@@ -747,7 +747,7 @@ public class WorkflowEngineTimedSignalTest {
         FROM Workflow_Step_Execution__c
         WHERE
           Workflow_Instance__c = :instanceId
-          AND Step_Name__c = 'WorkflowEngineTestMocksA.TimedApprovalStep'
+          AND Step_Name__c = 'WorkflowEngineMocksATest.TimedApprovalStep'
         LIMIT 1
       ];
       System.assertEquals('Pending', waitExec.Status__c);
@@ -766,7 +766,7 @@ public class WorkflowEngineTimedSignalTest {
       System.assert(
         waitExec.Output__c.contains('"$timeoutStep"') &&
         waitExec.Output__c.contains(
-          'WorkflowEngineTestMocksB.ApprovalTimeoutFallbackStep'
+          'WorkflowEngineMocksBTest.ApprovalTimeoutFallbackStep'
         ),
         'Should contain $timeoutStep: ' + waitExec.Output__c
       );
@@ -783,7 +783,7 @@ public class WorkflowEngineTimedSignalTest {
       ];
       System.assertEquals('Running', inst.Status__c);
       System.assertEquals(
-        'WorkflowEngineTestMocksB.ApprovalTimeoutFallbackStep',
+        'WorkflowEngineMocksBTest.ApprovalTimeoutFallbackStep',
         inst.Current_Step__c
       );
       System.assertEquals(null, inst.Sleep_Until__c);
@@ -1045,7 +1045,7 @@ public class WorkflowEngineTimedSignalTest {
 
       // 1. Start Parent
       Id parentId = WorkflowEngine.start(
-        'WorkflowEngineTestMocksA.ParentWorkflow',
+        'WorkflowEngineMocksATest.ParentWorkflow',
         'ParentKey',
         null
       );
