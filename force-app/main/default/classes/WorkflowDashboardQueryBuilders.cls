@@ -39,6 +39,11 @@ public class WorkflowDashboardQueryBuilders {
       return this;
     }
 
+    public InstanceQueryBuilder attributesFilter(String attributesFilterJson) {
+      q.attributesFilterJson = attributesFilterJson;
+      return this;
+    }
+
     public InstanceQueryBuilder page(
       Integer limitSize,
       Integer offsetSize,
@@ -78,6 +83,11 @@ public class WorkflowDashboardQueryBuilders {
       q.limitSize = limitSize;
       q.offsetSize = offsetSize;
       q.cacheBuster = cacheBuster;
+      return this;
+    }
+
+    public StalledQueryBuilder attributesFilter(String attributesFilterJson) {
+      q.attributesFilterJson = attributesFilterJson;
       return this;
     }
 

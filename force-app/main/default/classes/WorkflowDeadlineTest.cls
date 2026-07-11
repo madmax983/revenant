@@ -1,43 +1,5 @@
 @IsTest
 public class WorkflowDeadlineTest {
-  // Query-wrapper builders: assemble the WorkflowDashboardController read-method request
-  // objects by field assignment (a 1:1 repackaging of the former positional arguments).
-  private static WorkflowDashboardController.InstanceQuery iqOf(
-    String workflowName,
-    String status,
-    String searchTerm,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
-  ) {
-    WorkflowDashboardController.InstanceQuery q = new WorkflowDashboardController.InstanceQuery();
-    q.workflowName = workflowName;
-    q.status = status;
-    q.searchTerm = searchTerm;
-    q.limitSize = limitSize;
-    q.offsetSize = offsetSize;
-    q.cacheBuster = cacheBuster;
-    return q;
-  }
-
-  private static WorkflowDashboardController.StalledQuery stalledOf(
-    String workflowName,
-    String searchTerm,
-    Integer thresholdMinutes,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
-  ) {
-    WorkflowDashboardController.StalledQuery q = new WorkflowDashboardController.StalledQuery();
-    q.workflowName = workflowName;
-    q.searchTerm = searchTerm;
-    q.thresholdMinutes = thresholdMinutes;
-    q.limitSize = limitSize;
-    q.offsetSize = offsetSize;
-    q.cacheBuster = cacheBuster;
-    return q;
-  }
-
   public class TestDeadlineWorkflow implements WorkflowDefinition, ExecutionTimeoutConfigurable {
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowDeadlineTest.TestStep' };
@@ -395,14 +357,14 @@ public class WorkflowDeadlineTest {
 
       // 1. Test getFilteredInstances
       List<Map<String, Object>> filtered = WorkflowDashboardController.getFilteredInstances(
-        iqOf(
-          'WorkflowDeadlineTest.TestDeadlineWorkflow',
-          'Suspended',
-          'Deadline-Dashboard-Test',
-          10,
-          0,
-          'buster'
-        )
+        WorkflowDashboardQueryBuilders.instanceQuery()
+          .filter(
+            'WorkflowDeadlineTest.TestDeadlineWorkflow',
+            'Suspended',
+            'Deadline-Dashboard-Test'
+          )
+          .page(10, 0, 'buster')
+          .build()
       );
       System.assert(
         !filtered.isEmpty(),
@@ -416,14 +378,14 @@ public class WorkflowDeadlineTest {
 
       // 2. Test getStalledInstances
       List<Map<String, Object>> stalled = WorkflowDashboardController.getStalledInstances(
-        stalledOf(
-          'WorkflowDeadlineTest.TestDeadlineWorkflow',
-          'Deadline-Dashboard-Test',
-          -1,
-          10,
-          0,
-          'buster'
-        )
+        WorkflowDashboardQueryBuilders.stalledQuery()
+          .criteria(
+            'WorkflowDeadlineTest.TestDeadlineWorkflow',
+            'Deadline-Dashboard-Test',
+            -1
+          )
+          .page(10, 0, 'buster')
+          .build()
       );
       System.assert(
         !stalled.isEmpty(),
