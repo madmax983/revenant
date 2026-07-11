@@ -699,15 +699,10 @@ public class WorkflowEngineCore1Test {
   @IsTest
   static void testStepContextShouldYield() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      StepContext ctx = new StepContext(
-        null,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
       // Under normal test conditions, limit usage is low, so shouldYield should return false
       System.assertEquals(false, ctx.shouldYield());
     }
@@ -862,16 +857,12 @@ public class WorkflowEngineCore1Test {
       // Run Cleanup/Purge step on this instance
       CleanupWorkflow.PurgeOldInstancesStep purgeStep = new CleanupWorkflow.PurgeOldInstancesStep();
 
-      StepContext purgeCtx = new StepContext(
-        null,
-        'CleanupWorkflow',
-        'CleanupWorkflow.PurgeOldInstancesStep',
-        null,
-        null,
-        null,
-        '{"retentionDays":0,"batchSize":100}',
-        1
-      );
+      StepContext purgeCtx = new StepContext.Builder()
+        .workflowName('CleanupWorkflow')
+        .stepName('CleanupWorkflow.PurgeOldInstancesStep')
+        .workflowInputJson('{"retentionDays":0,"batchSize":100}')
+        .workflowVersion(1)
+        .build();
 
       // Execute purge
       StepResult purgeResult = purgeStep.execute(purgeCtx);

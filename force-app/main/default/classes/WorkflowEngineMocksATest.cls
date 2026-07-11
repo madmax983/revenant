@@ -373,12 +373,11 @@ public class WorkflowEngineMocksATest {
         update signals[0];
         return StepResult.complete(null, 'approved');
       }
-      return StepResult.waitForApproval(
-        'TimedApproval',
-        'Manager',
-        60,
-        'WorkflowEngineMocksBTest.ApprovalTimeoutFallbackStep'
-      );
+      return StepResult.waitForApproval('TimedApproval', 'Manager')
+        .withApprovalTimeout(
+          60,
+          'WorkflowEngineMocksBTest.ApprovalTimeoutFallbackStep'
+        );
     }
   }
 
