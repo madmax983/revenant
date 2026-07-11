@@ -22,15 +22,15 @@ public class BulkCancelWorkflowTest {
   }
 
   private static StepContext ctxFor(String inputJson, String stateJson) {
-    return new StepContext(
-      null,
-      'BulkCancelWorkflow',
-      'BulkCancelWorkflow.BulkCancelStep',
-      null,
-      null,
-      stateJson,
-      inputJson
-    );
+    return new StepContext.Builder()
+      .instanceId(null)
+      .workflowName('BulkCancelWorkflow')
+      .stepName('BulkCancelWorkflow.BulkCancelStep')
+      .inputJson(null)
+      .previousStepOutput(null)
+      .stepStateJson(stateJson)
+      .workflowInputJson(inputJson)
+      .build();
   }
 
   // ==========================================

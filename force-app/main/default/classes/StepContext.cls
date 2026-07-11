@@ -135,74 +135,85 @@ public inherited sharing class StepContext {
       return;
     }
     if (this.breadcrumbs.size() == MAX_LOG_ENTRIES) {
-      this.breadcrumbs.add(
-        new Breadcrumb(
-          StepContext.Level.WARN,
-          '[TRUNCATED] Log limit of ' +
-            MAX_LOG_ENTRIES +
-            ' entries reached. Subsequent step logs are discarded.'
-        )
-      );
+      this.breadcrumbs.add(buildTruncationBreadcrumb());
       return;
     }
 
-    String formattedMessage = message;
-    if (logContext != null && !logContext.isEmpty()) {
-      if (logContext.size() > 50) {
-        formattedMessage =
-          (message != null ? message : 'null') +
-          ' | Context: [TRUNCATED] Map size limit of 50 entries exceeded.';
-      } else if (Limits.getHeapSize() > Limits.getLimitHeapSize() * 0.85) {
-        formattedMessage =
-          (message != null ? message : 'null') +
-          ' | Context: [TRUNCATED] JSON serialization bypassed due to heap pressure.';
-      } else {
-        Boolean hasHugeValue = false;
-        for (Object val : logContext.values()) {
-          if (
-            val instanceof String &&
-            ((String) val).length() > MAX_MESSAGE_LENGTH
-          ) {
-            hasHugeValue = true;
-            break;
-          }
-        }
-        if (hasHugeValue) {
-          formattedMessage =
-            (message != null ? message : 'null') +
-            ' | Context: [TRUNCATED] JSON serialization bypassed due to oversized string value.';
-        } else {
-          try {
-            String serializedContext = JSON.serialize(logContext);
-            if (serializedContext.length() > MAX_MESSAGE_LENGTH) {
-              serializedContext =
-                serializedContext.substring(0, MAX_MESSAGE_LENGTH) +
-                '... [TRUNCATED]';
-            }
-            formattedMessage =
-              (message != null ? message : 'null') +
-              ' | Context: ' +
-              serializedContext;
-          } catch (Exception ex) {
-            formattedMessage =
-              (message != null ? message : 'null') +
-              ' | Context: [TRUNCATED] JSON serialization failed: ' +
-              ex.getMessage();
-          }
-        }
+    String formattedMessage = appendContext(message, logContext);
+    formattedMessage = capMessageLength(formattedMessage);
+    this.breadcrumbs.add(new Breadcrumb(level, formattedMessage));
+  }
+
+  private static Breadcrumb buildTruncationBreadcrumb() {
+    return new Breadcrumb(
+      StepContext.Level.WARN,
+      '[TRUNCATED] Log limit of ' +
+        MAX_LOG_ENTRIES +
+        ' entries reached. Subsequent step logs are discarded.'
+    );
+  }
+
+  // Appends the serialized context (if any) to the message, applying the size,
+  // heap-pressure, oversized-value and serialization-failure guards in order.
+  private static String appendContext(
+    String message,
+    Map<String, Object> logContext
+  ) {
+    if (logContext == null || logContext.isEmpty()) {
+      return message;
+    }
+    String base = (message != null) ? message : 'null';
+    if (logContext.size() > 50) {
+      return base +
+        ' | Context: [TRUNCATED] Map size limit of 50 entries exceeded.';
+    }
+    if (Limits.getHeapSize() > Limits.getLimitHeapSize() * 0.85) {
+      return base +
+        ' | Context: [TRUNCATED] JSON serialization bypassed due to heap pressure.';
+    }
+    if (hasOversizedStringValue(logContext)) {
+      return base +
+        ' | Context: [TRUNCATED] JSON serialization bypassed due to oversized string value.';
+    }
+    return base + ' | Context: ' + serializeContext(logContext);
+  }
+
+  private static Boolean hasOversizedStringValue(
+    Map<String, Object> logContext
+  ) {
+    for (Object val : logContext.values()) {
+      if (
+        val instanceof String && ((String) val).length() > MAX_MESSAGE_LENGTH
+      ) {
+        return true;
       }
     }
+    return false;
+  }
 
+  private static String serializeContext(Map<String, Object> logContext) {
+    try {
+      String serializedContext = JSON.serialize(logContext);
+      if (serializedContext.length() > MAX_MESSAGE_LENGTH) {
+        serializedContext =
+          serializedContext.substring(0, MAX_MESSAGE_LENGTH) +
+          '... [TRUNCATED]';
+      }
+      return serializedContext;
+    } catch (Exception ex) {
+      return '[TRUNCATED] JSON serialization failed: ' + ex.getMessage();
+    }
+  }
+
+  private static String capMessageLength(String formattedMessage) {
     if (
       formattedMessage != null &&
       formattedMessage.length() > MAX_MESSAGE_LENGTH
     ) {
-      formattedMessage =
-        formattedMessage.substring(0, MAX_MESSAGE_LENGTH - 15) +
+      return formattedMessage.substring(0, MAX_MESSAGE_LENGTH - 15) +
         '... [TRUNCATED]';
     }
-
-    this.breadcrumbs.add(new Breadcrumb(level, formattedMessage));
+    return formattedMessage;
   }
 
   /**
@@ -348,36 +359,35 @@ public inherited sharing class StepContext {
     private Boolean present;
 
     public Signal(Id signalId, String name, String payload) {
-      this(signalId, name, payload, null, false);
-    }
-
-    public Signal(
-      Id signalId,
-      String name,
-      String payload,
-      Datetime createdDate
-    ) {
-      this(signalId, name, payload, createdDate, false);
-    }
-
-    public Signal(
-      Id signalId,
-      String name,
-      String payload,
-      Datetime createdDate,
-      Boolean claimed
-    ) {
       this.signalId = signalId;
       this.name = name;
       this.payload = payload;
-      this.createdDate = createdDate;
-      this.claimed = claimed;
+      this.createdDate = null;
+      this.claimed = false;
       this.present = true;
     }
 
     private Signal() {
       this.present = false;
       this.claimed = false;
+    }
+
+    /**
+     * Sets the arrival timestamp and returns this signal, so a caller can build
+     * a signal fluently without a long constructor parameter list.
+     */
+    public Signal withCreatedDate(Datetime createdDate) {
+      this.createdDate = createdDate;
+      return this;
+    }
+
+    /**
+     * Marks this signal as CLAIMED (exclusive Processing hold for this branch)
+     * and returns it. Intent-named alternative to a boolean constructor flag.
+     */
+    public Signal asClaimed() {
+      this.claimed = true;
+      return this;
     }
 
     /** True when this represents a real pending signal (not the empty result). */
@@ -427,248 +437,283 @@ public inherited sharing class StepContext {
     Boolean readWasCapped();
   }
 
-  public StepContext(
-    Id workflowInstanceId,
-    String workflowName,
-    String stepName,
-    String inputJson,
-    String previousStepOutput,
-    String stepStateJson,
-    String workflowInputJson
-  ) {
-    this(
-      workflowInstanceId,
-      workflowName,
-      stepName,
-      inputJson,
-      previousStepOutput,
-      stepStateJson,
-      workflowInputJson,
-      1
-    );
-  }
-
-  public StepContext(
-    Id workflowInstanceId,
-    String workflowName,
-    String stepName,
-    String inputJson,
-    String previousStepOutput,
-    String stepStateJson,
-    String workflowInputJson,
-    Integer workflowVersion
-  ) {
-    this(
-      workflowInstanceId,
-      workflowName,
-      stepName,
-      inputJson,
-      previousStepOutput,
-      stepStateJson,
-      workflowInputJson,
-      workflowVersion,
-      0
-    );
-  }
-
-  public StepContext(
-    Id workflowInstanceId,
-    String workflowName,
-    String stepName,
-    String inputJson,
-    String previousStepOutput,
-    String stepStateJson,
-    String workflowInputJson,
-    Integer workflowVersion,
-    Integer stepVisit
-  ) {
-    this.workflowInstanceId = workflowInstanceId;
-    this.workflowName = workflowName;
-    this.stepName = stepName;
-    this.inputJson = inputJson;
-    this.previousStepOutput = previousStepOutput;
-    this.stepStateJson = stepStateJson;
-    this.workflowInputJson = workflowInputJson;
-    this.workflowVersion = workflowVersion;
-    this.stepVisit = (stepVisit != null && stepVisit > 0) ? stepVisit : 0;
+  // Base constructor used by the Builder. Sets only the defaults that must hold
+  // when their fluent setter is never called; the Builder writes the remaining
+  // fields directly and finishBuild() applies the derived/hydration state.
+  private StepContext() {
+    this.workflowVersion = 1;
     this.attempt = 1;
     this.maxAttempts = 1;
   }
 
-  /**
-   * Explicit pending-signal list (used by tests): already resolved, so no lazy
-   * source load is needed. stepVisit defaults to 0.
-   */
-  public StepContext(
-    Id workflowInstanceId,
-    String workflowName,
-    String stepName,
-    String inputJson,
-    String previousStepOutput,
-    String stepStateJson,
-    String workflowInputJson,
-    Integer workflowVersion,
-    List<Signal> pendingSignals
-  ) {
-    this(
-      workflowInstanceId,
-      workflowName,
-      stepName,
-      inputJson,
-      previousStepOutput,
-      stepStateJson,
-      workflowInputJson,
-      workflowVersion,
-      0
-    );
-    this.allSignals = (pendingSignals != null)
-      ? pendingSignals
+  // Applies the derived (stepVisit normalization, pending signals) and hydration
+  // (attempt/maxAttempts/timeoutResume/captured values) state, reproducing the
+  // exact behavior of the former positional constructors and withCapturedValues*
+  // factories. Defaults leave the plain-constructor behavior unchanged.
+  private StepContext finishBuild(Builder b) {
+    this.stepVisit = (b.stepVisitVal != null &&
+      b.stepVisitVal > 0)
+      ? b.stepVisitVal
+      : 0;
+    this.attempt = 1;
+    this.maxAttempts = 1;
+    applyPendingSignals(b);
+    this.timeoutResume = (b.timeoutResumeVal == true);
+    if (b.attemptVal != null && b.attemptVal > 0) {
+      this.attempt = b.attemptVal;
+    }
+    if (b.maxAttemptsVal != null && b.maxAttemptsVal > 0) {
+      this.maxAttempts = b.maxAttemptsVal;
+    }
+    applyCapturedValues(b);
+    return this;
+  }
+
+  private void applyPendingSignals(Builder b) {
+    if (!b.pendingSignalsProvided) {
+      return;
+    }
+    // Explicit pending-signal list (used by tests): already resolved, so no
+    // lazy source load is needed.
+    this.allSignals = (b.pendingSignalsVal != null)
+      ? b.pendingSignalsVal
       : new List<Signal>();
     this.allLoaded = true;
   }
 
-  public StepContext(
-    Id workflowInstanceId,
-    String workflowName,
-    String stepName,
-    String inputJson,
-    String previousStepOutput,
-    String stepStateJson,
-    String workflowInputJson,
-    Integer workflowVersion,
-    SignalSource signalSource
-  ) {
-    this.workflowInstanceId = workflowInstanceId;
-    this.workflowName = workflowName;
-    this.stepName = stepName;
-    this.inputJson = inputJson;
-    this.previousStepOutput = previousStepOutput;
-    this.stepStateJson = stepStateJson;
-    this.workflowInputJson = workflowInputJson;
-    this.workflowVersion = workflowVersion;
-    // Defer loading until a signal accessor is actually called.
-    this.signalSource = signalSource;
-    this.attempt = 1;
-    this.maxAttempts = 1;
+  // Assigns the pre-parsed (or JSON-parsed) captured values and extracts the
+  // reserved retry/error bookkeeping keys, mirroring the former
+  // withCapturedValuesMap factory. No-op for the plain-constructor path.
+  private void applyCapturedValues(Builder b) {
+    Map<String, Object> cv = b.capturedValuesMapVal;
+    if (cv == null && b.capturesJsonProvided) {
+      cv = parseCaptures(b.capturedValuesJsonVal);
+    }
+    if (cv == null) {
+      return;
+    }
+    this.capturedValues = cv;
+    extractReservedCaptures();
+  }
+
+  private void extractReservedCaptures() {
+    if (this.capturedValues.containsKey('__maxAttempts')) {
+      try {
+        this.maxAttempts = Integer.valueOf(
+          this.capturedValues.get('__maxAttempts')
+        );
+      } catch (Exception ignored) {
+      }
+      this.capturedValues.remove('__maxAttempts');
+    }
+    if (this.capturedValues.containsKey('__failedStepName')) {
+      this.failedStepName = String.valueOf(
+        this.capturedValues.get('__failedStepName')
+      );
+      this.capturedValues.remove('__failedStepName');
+    }
+    if (this.capturedValues.containsKey('__errorMessage')) {
+      this.errorMessage = String.valueOf(
+        this.capturedValues.get('__errorMessage')
+      );
+      this.capturedValues.remove('__errorMessage');
+    }
+    if (this.capturedValues.containsKey('__attemptCount')) {
+      try {
+        this.attemptCount = Integer.valueOf(
+          this.capturedValues.get('__attemptCount')
+        );
+      } catch (Exception ignored) {
+      }
+      this.capturedValues.remove('__attemptCount');
+    }
   }
 
   /**
-   * Full engine context: carries both the idempotency stepVisit and a lazy
-   * SignalSource. Used by the engine when building execute()/compensate()
-   * contexts so a step gets a stable idempotency key AND can read signals.
+   * Fluent construction path for StepContext. Every construction parameter is
+   * supplied through a single-value setter so no method carries a long
+   * parameter list. Unset values keep the historical defaults (workflowVersion
+   * = 1, stepVisit = 0, attempt/maxAttempts = 1, timeoutResume = false).
+   *
+   * Public so the engine and step-author tests can build contexts directly; the
+   * former positional StepContext(...) constructors and withCapturedValues*
+   * factories routed through this same path.
    */
-  public StepContext(
-    Id workflowInstanceId,
-    String workflowName,
-    String stepName,
-    String inputJson,
-    String previousStepOutput,
-    String stepStateJson,
-    String workflowInputJson,
-    Integer workflowVersion,
-    Integer stepVisit,
-    SignalSource signalSource
-  ) {
-    this(
-      workflowInstanceId,
-      workflowName,
-      stepName,
-      inputJson,
-      previousStepOutput,
-      stepStateJson,
-      workflowInputJson,
-      workflowVersion,
-      signalSource
-    );
-    this.stepVisit = (stepVisit != null && stepVisit > 0) ? stepVisit : 0;
-  }
+  public class Builder {
+    // The context under construction. Simple, non-derived fields are written
+    // straight onto it; only the values that need normalization or deferred
+    // hydration are held on the Builder itself, keeping its field count small.
+    private StepContext ctx = new StepContext();
+    private Integer stepVisitVal = 0;
+    private List<Signal> pendingSignalsVal;
+    private Boolean pendingSignalsProvided = false;
+    private Map<String, Object> capturedValuesMapVal;
+    private String capturedValuesJsonVal;
+    private Boolean capturesJsonProvided = false;
+    private Boolean timeoutResumeVal = false;
+    private Integer attemptVal = 1;
+    private Integer maxAttemptsVal = 1;
 
-  /**
-   * Full engine context with continuation metadata. Carries the stepVisit
-   * sequence, a lazy SignalSource, and the previousRunAt timestamp for
-   * ContinueAsNew chains (null for the first instance in a chain).
-   */
-  public StepContext(
-    Id workflowInstanceId,
-    String workflowName,
-    String stepName,
-    String inputJson,
-    String previousStepOutput,
-    String stepStateJson,
-    String workflowInputJson,
-    Integer workflowVersion,
-    Integer stepVisit,
-    SignalSource signalSource,
-    Datetime previousRunAt
-  ) {
-    this(
-      workflowInstanceId,
-      workflowName,
-      stepName,
-      inputJson,
-      previousStepOutput,
-      stepStateJson,
-      workflowInputJson,
-      workflowVersion,
-      stepVisit,
-      signalSource
-    );
-    this.previousRunAt = previousRunAt;
+    public Builder instanceId(Id val) {
+      ctx.workflowInstanceId = val;
+      return this;
+    }
+
+    public Builder workflowName(String val) {
+      ctx.workflowName = val;
+      return this;
+    }
+
+    public Builder stepName(String val) {
+      ctx.stepName = val;
+      return this;
+    }
+
+    public Builder inputJson(String val) {
+      ctx.inputJson = val;
+      return this;
+    }
+
+    public Builder previousStepOutput(String val) {
+      ctx.previousStepOutput = val;
+      return this;
+    }
+
+    public Builder stepStateJson(String val) {
+      ctx.stepStateJson = val;
+      return this;
+    }
+
+    public Builder workflowInputJson(String val) {
+      ctx.workflowInputJson = val;
+      return this;
+    }
+
+    public Builder workflowVersion(Integer val) {
+      ctx.workflowVersion = val;
+      return this;
+    }
+
+    public Builder stepVisit(Integer val) {
+      this.stepVisitVal = val;
+      return this;
+    }
+
+    public Builder signalSource(SignalSource val) {
+      // Defer loading until a signal accessor is actually called.
+      ctx.signalSource = val;
+      return this;
+    }
+
+    public Builder pendingSignals(List<Signal> val) {
+      this.pendingSignalsVal = val;
+      this.pendingSignalsProvided = true;
+      return this;
+    }
+
+    public Builder previousRunAt(Datetime val) {
+      ctx.previousRunAt = val;
+      return this;
+    }
+
+    public Builder capturedValuesMap(Map<String, Object> val) {
+      this.capturedValuesMapVal = val;
+      return this;
+    }
+
+    public Builder capturedValuesJson(String val) {
+      this.capturedValuesJsonVal = val;
+      this.capturesJsonProvided = true;
+      return this;
+    }
+
+    public Builder attempt(Integer val) {
+      this.attemptVal = val;
+      return this;
+    }
+
+    public Builder maxAttempts(Integer val) {
+      this.maxAttemptsVal = val;
+      return this;
+    }
+
+    /** Marks this context as the engine-routed timeout fallback (issue #35). */
+    public Builder markTimeoutResume() {
+      this.timeoutResumeVal = true;
+      return this;
+    }
+
+    public StepContext build() {
+      return ctx.finishBuild(this);
+    }
   }
 
   // Resolves the full pending set lazily so a step that never touches signals
   // pays no query/heap cost for unrelated unconsumed signals on the instance.
   private List<Signal> loadAll() {
-    if (!allLoaded) {
-      List<Signal> loaded = (signalSource != null)
-        ? signalSource.getPendingSignals(null)
-        : null;
-      // Remember whether this full read was truncated, so named lookups don't
-      // treat the partial page as the authoritative pending set.
-      this.allReadCapped =
-        (signalSource != null) && signalSource.readWasCapped();
-      List<Signal> all = (loaded != null) ? loaded : new List<Signal>();
-      // A parallel-branch source claims rows it returns (Received -> Processing),
-      // so a row already claimed by an earlier named accessor is no longer in the
-      // source's Received view. Merge those cached claims back in so the full
-      // list stays consistent with everything this context has observed/claimed.
-      Set<Id> present = new Set<Id>();
-      for (Signal s : all) {
-        if (s.signalId != null) {
-          present.add(s.signalId);
-        }
-      }
-      for (Signal cached : latestByName.values()) {
-        if (
-          cached != null &&
-          cached.isPresent() &&
-          cached.signalId != null &&
-          !present.contains(cached.signalId)
-        ) {
-          all.add(cached);
-          present.add(cached.signalId);
-        }
-      }
-      for (List<Signal> cachedList : byNameCache.values()) {
-        for (Signal cached : cachedList) {
-          if (
-            cached != null &&
-            cached.signalId != null &&
-            !present.contains(cached.signalId)
-          ) {
-            all.add(cached);
-            present.add(cached.signalId);
-          }
-        }
-      }
-      // Re-sort into arrival order: merged-in claims (out of the source's
-      // Received view) must not simply trail the still-Received rows, which
-      // would violate the accessor's arrival-order contract.
-      all.sort();
-      this.allSignals = all;
-      this.allLoaded = true;
+    if (allLoaded) {
+      return this.allSignals;
     }
+    List<Signal> loaded = (signalSource != null)
+      ? signalSource.getPendingSignals(null)
+      : null;
+    // Remember whether this full read was truncated, so named lookups don't
+    // treat the partial page as the authoritative pending set.
+    this.allReadCapped = (signalSource != null) && signalSource.readWasCapped();
+    List<Signal> all = (loaded != null) ? loaded : new List<Signal>();
+    // A parallel-branch source claims rows it returns (Received -> Processing),
+    // so a row already claimed by an earlier named accessor is no longer in the
+    // source's Received view. Merge those cached claims back in so the full
+    // list stays consistent with everything this context has observed/claimed.
+    Set<Id> present = collectPresentIds(all);
+    mergeCachedClaimsInto(all, present);
+    // Re-sort into arrival order: merged-in claims (out of the source's
+    // Received view) must not simply trail the still-Received rows, which
+    // would violate the accessor's arrival-order contract.
+    all.sort();
+    this.allSignals = all;
+    this.allLoaded = true;
     return this.allSignals;
+  }
+
+  private static Set<Id> collectPresentIds(List<Signal> signals) {
+    Set<Id> present = new Set<Id>();
+    for (Signal s : signals) {
+      if (s.signalId != null) {
+        present.add(s.signalId);
+      }
+    }
+    return present;
+  }
+
+  // Merges rows this branch already claimed (latest-per-name and named-list
+  // caches) back into `all`, skipping ids already present. Mutates both args.
+  private void mergeCachedClaimsInto(List<Signal> all, Set<Id> present) {
+    for (Signal cached : latestByName.values()) {
+      if (cached != null && cached.isPresent()) {
+        addUnseen(all, present, cached);
+      }
+    }
+    for (List<Signal> cachedList : byNameCache.values()) {
+      for (Signal cached : cachedList) {
+        addUnseen(all, present, cached);
+      }
+    }
+  }
+
+  private static void addUnseen(
+    List<Signal> all,
+    Set<Id> present,
+    Signal cached
+  ) {
+    if (
+      cached != null &&
+      cached.signalId != null &&
+      !present.contains(cached.signalId)
+    ) {
+      all.add(cached);
+      present.add(cached.signalId);
+    }
   }
 
   // Resolves just the signals matching a name. When the full set is already
@@ -685,72 +730,86 @@ public inherited sharing class StepContext {
     // read holds a partial page, so a name beyond it would look absent; fall
     // through to the source's per-name accessor instead.
     if (allLoaded && !allReadCapped) {
-      List<Signal> matches = new List<Signal>();
-      for (Signal s : allSignals) {
-        // Case-insensitive to match the source SOQL (Text field equality) and
-        // the lower-cased per-name caches; a case-only difference must not make
-        // an already-delivered signal look absent.
-        if (s.name != null && s.name.equalsIgnoreCase(signalName)) {
-          matches.add(s);
-        }
-      }
-      return matches;
+      return filterByName(allSignals, signalName);
     }
     String key = signalName.toLowerCase();
     if (!byNameCache.containsKey(key)) {
-      List<Signal> loaded = (signalSource != null)
-        ? signalSource.getPendingSignals(signalName)
-        : null;
-      // If the source truncated this read, the cached list is a partial (oldest)
-      // page, so latestFor() must not treat its last row as the true latest.
-      if (signalSource != null && signalSource.readWasCapped()) {
-        partialNameKeys.add(key);
-      }
-      List<Signal> matches = (loaded != null) ? loaded : new List<Signal>();
-      Set<Id> present = new Set<Id>();
-      for (Signal s : matches) {
-        if (s.signalId != null) {
-          present.add(s.signalId);
-        }
-      }
-      // Merge back rows this branch already claimed out of the source's Received
-      // view but still owns and has marked for consumption, so neither a
-      // guard-then-read pattern nor a capped full read drops a matched payload
-      // from the named list (otherwise the step could complete -- consuming the
-      // ids -- without the named accessor ever returning them):
-      //  - the per-name latest claimed by an earlier getSignal/hasSignal, and
-      //  - matching rows from a capped full-set read (allSignals; reached here
-      //    only when allReadCapped, since a complete full set returns above).
-      List<Signal> reclaim = new List<Signal>();
-      Signal cachedLatest = latestByName.get(key);
-      if (cachedLatest != null && cachedLatest.isPresent()) {
-        reclaim.add(cachedLatest);
-      }
-      if (allLoaded) {
-        for (Signal s : allSignals) {
-          if (s.name != null && s.name.equalsIgnoreCase(signalName)) {
-            reclaim.add(s);
-          }
-        }
-      }
-      Boolean merged = false;
-      for (Signal s : reclaim) {
-        if (s.signalId != null && present.contains(s.signalId)) {
-          continue;
-        }
-        matches.add(s);
-        if (s.signalId != null) {
-          present.add(s.signalId);
-        }
-        merged = true;
-      }
-      if (merged) {
-        // Keep arrival order after merging the claimed rows back in.
-        matches.sort();
-      }
-      byNameCache.put(key, matches);
+      byNameCache.put(key, loadNamedMatches(key, signalName));
     }
     return byNameCache.get(key);
+  }
+
+  // Case-insensitive filter matching the source SOQL (Text field equality) and
+  // the lower-cased per-name caches; a case-only difference must not make an
+  // already-delivered signal look absent.
+  private static List<Signal> filterByName(
+    List<Signal> signals,
+    String signalName
+  ) {
+    List<Signal> matches = new List<Signal>();
+    for (Signal s : signals) {
+      if (s.name != null && s.name.equalsIgnoreCase(signalName)) {
+        matches.add(s);
+      }
+    }
+    return matches;
+  }
+
+  // Loads the per-name matches from the source and merges back rows this branch
+  // already claimed, so neither a guard-then-read pattern nor a capped full read
+  // drops a matched payload from the named list.
+  private List<Signal> loadNamedMatches(String key, String signalName) {
+    List<Signal> loaded = (signalSource != null)
+      ? signalSource.getPendingSignals(signalName)
+      : null;
+    // If the source truncated this read, the cached list is a partial (oldest)
+    // page, so latestFor() must not treat its last row as the true latest.
+    if (signalSource != null && signalSource.readWasCapped()) {
+      partialNameKeys.add(key);
+    }
+    List<Signal> matches = (loaded != null) ? loaded : new List<Signal>();
+    // Reclaim candidates: the per-name latest claimed by an earlier
+    // getSignal/hasSignal, and matching rows from a capped full-set read
+    // (reached here only when allReadCapped, since a complete full set returns
+    // above).
+    if (mergeReclaims(matches, reclaimCandidates(key, signalName))) {
+      // Keep arrival order after merging the claimed rows back in.
+      matches.sort();
+    }
+    return matches;
+  }
+
+  // Appends candidates not already present (by id) to `matches`. Returns true
+  // when at least one row was merged.
+  private static Boolean mergeReclaims(
+    List<Signal> matches,
+    List<Signal> candidates
+  ) {
+    Set<Id> present = collectPresentIds(matches);
+    Boolean merged = false;
+    for (Signal s : candidates) {
+      if (s.signalId != null && present.contains(s.signalId)) {
+        continue;
+      }
+      matches.add(s);
+      if (s.signalId != null) {
+        present.add(s.signalId);
+      }
+      merged = true;
+    }
+    return merged;
+  }
+
+  private List<Signal> reclaimCandidates(String key, String signalName) {
+    List<Signal> reclaim = new List<Signal>();
+    Signal cachedLatest = latestByName.get(key);
+    if (cachedLatest != null && cachedLatest.isPresent()) {
+      reclaim.add(cachedLatest);
+    }
+    if (allLoaded) {
+      reclaim.addAll(filterByName(allSignals, signalName));
+    }
+    return reclaim;
   }
 
   // Resolves only the most-recent signal matching a name, loading just that one
@@ -765,14 +824,7 @@ public inherited sharing class StepContext {
     // the true latest (or the name may be missing entirely); fall through to the
     // source's getLatestSignal for the authoritative most-recent row.
     if (allLoaded && !allReadCapped) {
-      Signal latest = null;
-      for (Signal s : allSignals) {
-        // Case-insensitive, matching the source SOQL and lower-cased caches.
-        if (s.name != null && s.name.equalsIgnoreCase(signalName)) {
-          latest = s;
-        }
-      }
-      return latest;
+      return newestInList(allSignals, signalName);
     }
     String key = signalName.toLowerCase();
     // Only trust a cached per-name list for the latest when it is complete. A
@@ -789,29 +841,47 @@ public inherited sharing class StepContext {
         (signalSource != null) ? signalSource.getLatestSignal(signalName) : null
       );
     }
-    Signal sourceLatest = latestByName.get(key);
+    return reconcileLatest(latestByName.get(key), key, signalName);
+  }
 
-    // We only reach here when a read was capped (the full set is partial, or
-    // this name's page was truncated). In a parallel branch a capped read has
-    // already CLAIMED its rows (Received -> Processing), so the source's
-    // getLatestSignal -- which sees only still-Received rows -- can miss them and
-    // report a false absence, stranding a suspend-on-absent branch whose signal
-    // is sitting in its own claimed page. Recover this branch's newest matching
-    // cached row and return the later-arriving of it and the source result.
-    Signal cachedLatest = newestCachedMatch(key, signalName);
-    if (cachedLatest != null) {
-      if (sourceLatest == null || !sourceLatest.isPresent()) {
-        return cachedLatest;
+  // Case-insensitive scan returning the last (newest, arrival-ordered) match.
+  private static Signal newestInList(List<Signal> signals, String signalName) {
+    Signal latest = null;
+    for (Signal s : signals) {
+      if (s.name != null && s.name.equalsIgnoreCase(signalName)) {
+        latest = s;
       }
-      // Compare on the full (CreatedDate, Id) order the source uses for "latest"
-      // (ORDER BY CreatedDate DESC, Id DESC) via Signal.compareTo, not the
-      // timestamp alone: bulk inserts routinely share a CreatedDate, and a
-      // timestamp-only test would wrongly favor the cached row and return an
-      // older payload than sourceLatest.
-      Boolean cachedNewer = cachedLatest.compareTo(sourceLatest) > 0;
-      return cachedNewer ? cachedLatest : sourceLatest;
     }
-    return sourceLatest;
+    return latest;
+  }
+
+  // We only reach here when a read was capped (the full set is partial, or this
+  // name's page was truncated). In a parallel branch a capped read has already
+  // CLAIMED its rows (Received -> Processing), so the source's getLatestSignal --
+  // which sees only still-Received rows -- can miss them and report a false
+  // absence, stranding a suspend-on-absent branch whose signal is sitting in its
+  // own claimed page. Recover this branch's newest matching cached row and
+  // return the later-arriving of it and the source result.
+  private Signal reconcileLatest(
+    Signal sourceLatest,
+    String key,
+    String signalName
+  ) {
+    Signal cachedLatest = newestCachedMatch(key, signalName);
+    if (cachedLatest == null) {
+      return sourceLatest;
+    }
+    if (sourceLatest == null || !sourceLatest.isPresent()) {
+      return cachedLatest;
+    }
+    // Compare on the full (CreatedDate, Id) order the source uses for "latest"
+    // (ORDER BY CreatedDate DESC, Id DESC) via Signal.compareTo, not the
+    // timestamp alone: bulk inserts routinely share a CreatedDate, and a
+    // timestamp-only test would wrongly favor the cached row and return an
+    // older payload than sourceLatest.
+    return cachedLatest.compareTo(sourceLatest) > 0
+      ? cachedLatest
+      : sourceLatest;
   }
 
   // Newest matching signal already in this execution's in-memory caches: the
@@ -956,14 +1026,16 @@ public inherited sharing class StepContext {
   // signal is additionally tracked so rollback/consume can target only rows this
   // branch exclusively owns.
   private void markMatched(Signal s) {
-    if (s != null && s.name != null) {
-      matchedNames.add(s.name);
-      if (s.signalId != null) {
-        matchedSignalIds.add(s.signalId);
-        if (s.isClaimed()) {
-          claimedSignalIds.add(s.signalId);
-        }
-      }
+    if (s == null || s.name == null) {
+      return;
+    }
+    matchedNames.add(s.name);
+    if (s.signalId == null) {
+      return;
+    }
+    matchedSignalIds.add(s.signalId);
+    if (s.isClaimed()) {
+      claimedSignalIds.add(s.signalId);
     }
   }
 
@@ -972,81 +1044,69 @@ public inherited sharing class StepContext {
    * Returns true if any monitored limit (CPU, SOQL, DML statements, DML rows, or Heap size) is > 80% consumed.
    */
   public Boolean shouldYield() {
-    // CPU Time
-    if (
-      Limits.getLimitCpuTime() > 0 &&
-      ((Double) Limits.getCpuTime() / Limits.getLimitCpuTime()) > 0.80
-    ) {
+    if (exceedsThreshold(Limits.getCpuTime(), Limits.getLimitCpuTime())) {
       return true;
     }
-    // SOQL Queries
-    if (
-      Limits.getLimitQueries() > 0 &&
-      ((Double) Limits.getQueries() / Limits.getLimitQueries()) > 0.80
-    ) {
+    if (exceedsThreshold(Limits.getQueries(), Limits.getLimitQueries())) {
       return true;
     }
-    // SOQL Query Rows
     Double queryRowsFraction = mockQueryRowsFraction != null
       ? mockQueryRowsFraction
-      : (Limits.getLimitQueryRows() > 0
-          ? ((Double) Limits.getQueryRows() / Limits.getLimitQueryRows())
-          : 0.0);
+      : fractionOf(Limits.getQueryRows(), Limits.getLimitQueryRows());
     if (queryRowsFraction > 0.80) {
       return true;
     }
-    // DML Statements
     if (
-      Limits.getLimitDmlStatements() > 0 &&
-      ((Double) Limits.getDmlStatements() / Limits.getLimitDmlStatements()) >
-      0.80
+      exceedsThreshold(
+        Limits.getDmlStatements(),
+        Limits.getLimitDmlStatements()
+      )
     ) {
       return true;
     }
-    // DML Rows
-    if (
-      Limits.getLimitDmlRows() > 0 &&
-      ((Double) Limits.getDmlRows() / Limits.getLimitDmlRows()) > 0.80
-    ) {
+    if (exceedsThreshold(Limits.getDmlRows(), Limits.getLimitDmlRows())) {
       return true;
     }
-    // Heap Size
-    if (
-      Limits.getLimitHeapSize() > 0 &&
-      ((Double) Limits.getHeapSize() / Limits.getLimitHeapSize()) > 0.80
-    ) {
+    if (exceedsThreshold(Limits.getHeapSize(), Limits.getLimitHeapSize())) {
       return true;
     }
-    // Daily Async Apex Executions Limit (accounts for Beta Elastic Limits if enabled)
-    Double asyncFraction = mockAsyncExecutionsFraction != null
-      ? mockAsyncExecutionsFraction
-      : cachedAsyncFraction;
-    if (asyncFraction == null) {
-      Map<String, System.OrgLimit> limitsMap = System.OrgLimits.getMap();
-      if (limitsMap.containsKey('DailyAsyncApexExecutions')) {
-        System.OrgLimit dailyLimitObj = limitsMap.get(
-          'DailyAsyncApexExecutions'
-        );
-        Integer limitValue = dailyLimitObj.getValue();
-        Integer maxLimit = dailyLimitObj.getLimit();
+    Double asyncFraction = asyncExecutionsFraction();
+    return asyncFraction != null && asyncFraction > 0.80;
+  }
 
-        if (limitsMap.containsKey('DailyAsyncApexElasticExecutions')) {
-          System.OrgLimit elasticLimitObj = limitsMap.get(
-            'DailyAsyncApexElasticExecutions'
-          );
-          maxLimit = elasticLimitObj.getLimit();
-        }
+  // 0.0 when the limit is non-positive, else current/limit as a fraction.
+  private static Double fractionOf(Integer current, Integer max) {
+    return max > 0 ? ((Double) current / max) : 0.0;
+  }
 
-        if (maxLimit > 0) {
-          asyncFraction = (Double) limitValue / maxLimit;
-          cachedAsyncFraction = asyncFraction;
-        }
-      }
+  // True when current consumes more than 80% of a positive limit.
+  private static Boolean exceedsThreshold(Integer current, Integer max) {
+    return max > 0 && ((Double) current / max) > 0.80;
+  }
+
+  // Daily Async Apex Executions fraction (accounts for Beta Elastic Limits if
+  // enabled). Uses the test mock when set, else the cached org-limit reading.
+  private static Double asyncExecutionsFraction() {
+    if (mockAsyncExecutionsFraction != null) {
+      return mockAsyncExecutionsFraction;
     }
-    if (asyncFraction != null && asyncFraction > 0.80) {
-      return true;
+    if (cachedAsyncFraction != null) {
+      return cachedAsyncFraction;
     }
-    return false;
+    Map<String, System.OrgLimit> limitsMap = System.OrgLimits.getMap();
+    if (!limitsMap.containsKey('DailyAsyncApexExecutions')) {
+      return null;
+    }
+    System.OrgLimit dailyLimitObj = limitsMap.get('DailyAsyncApexExecutions');
+    Integer limitValue = dailyLimitObj.getValue();
+    Integer maxLimit = dailyLimitObj.getLimit();
+    if (limitsMap.containsKey('DailyAsyncApexElasticExecutions')) {
+      maxLimit = limitsMap.get('DailyAsyncApexElasticExecutions').getLimit();
+    }
+    if (maxLimit > 0) {
+      cachedAsyncFraction = (Double) limitValue / maxLimit;
+    }
+    return cachedAsyncFraction;
   }
 
   // ---------------------------------------------------------------------------
@@ -1146,45 +1206,41 @@ public inherited sharing class StepContext {
 
     // Check if any other step in this instance has already recorded a decision for this changeId.
     loadExecutions(getCallingClassName());
-    if (patchDecisionsCache.containsKey(changeId)) {
-      Boolean decision = patchDecisionsCache.get(changeId);
-      capturedValues.put(key, decision);
-      newCaptureKeys.add(key);
-      return decision;
-    }
-
-    // No decision has been recorded yet. This is the first time the decision is reached in this instance!
-    Boolean decision;
-    if (completedStepsCache.contains(this.stepName + ':' + this.stepVisit)) {
-      // The current step visit has already completed in the past, meaning this is a retry/re-execution of a completed step.
-      decision = false;
-    } else {
-      DateTime comparisonDate = introducedAt != null
-        ? introducedAt
-        : classLastModified;
-      if (
-        instanceCreatedDate != null &&
-        comparisonDate != null &&
-        instanceCreatedDate < comparisonDate
-      ) {
-        // The instance was created BEFORE the patch was introduced (or before the latest class deployment).
-        decision = false;
-      } else if (
-        !completedStepsCache.isEmpty() &&
-        (instanceCreatedDate == null ||
-        comparisonDate == null)
-      ) {
-        // Fallback: if we couldn't resolve dates but there are completed steps in the past, default to false.
-        decision = false;
-      } else {
-        // Default to true for brand-new instances.
-        decision = true;
-      }
-    }
-
+    Boolean decision = patchDecisionsCache.containsKey(changeId)
+      ? patchDecisionsCache.get(changeId)
+      : firstPatchDecision(introducedAt);
     capturedValues.put(key, decision);
     newCaptureKeys.add(key);
     return decision;
+  }
+
+  // Computes the patch decision the first time it is reached in this instance
+  // (no prior recorded decision). An already-completed visit is a re-execution
+  // (false); otherwise a brand-new instance defaults to true unless it predates
+  // the patch introduction / class deployment, or dates were unresolvable while
+  // earlier steps already completed.
+  private Boolean firstPatchDecision(DateTime introducedAt) {
+    if (completedStepsCache.contains(this.stepName + ':' + this.stepVisit)) {
+      return false;
+    }
+    DateTime comparisonDate = introducedAt != null
+      ? introducedAt
+      : classLastModified;
+    if (
+      instanceCreatedDate != null &&
+      comparisonDate != null &&
+      instanceCreatedDate < comparisonDate
+    ) {
+      return false;
+    }
+    if (
+      !completedStepsCache.isEmpty() &&
+      (instanceCreatedDate == null ||
+      comparisonDate == null)
+    ) {
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -1219,21 +1275,27 @@ public inherited sharing class StepContext {
     if (hasLoadedExecutions || this.workflowInstanceId == null) {
       return;
     }
-    // 1. Get the first and last execution ID for every step name in the workflow
-    List<AggregateResult> aggregates = [
+    Set<Id> targetIds = collectTargetExecutionIds();
+    List<Workflow_Step_Execution__c> executions = queryExecutions(targetIds);
+    resolveInstanceCreatedDate(executions);
+    resolveClassLastModified(targetClassName);
+    indexExecutions(executions, resolveCapturePayloads(executions));
+    hasLoadedExecutions = true;
+  }
+
+  // Steps 1 & 2: the first+last execution id per other step name, plus the
+  // current step name's executions bounded by stepVisit + 2 (queried separately
+  // to ensure correct visit counts).
+  private Set<Id> collectTargetExecutionIds() {
+    Set<Id> targetIds = new Set<Id>();
+    for (AggregateResult ar : [
       SELECT Step_Name__c, MIN(Id) minId, MAX(Id) maxId
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c = :this.workflowInstanceId
       WITH SYSTEM_MODE
       GROUP BY Step_Name__c
-    ];
-
-    Set<Id> targetIds = new Set<Id>();
-
-    for (AggregateResult ar : aggregates) {
-      String stepName = (String) ar.get('Step_Name__c');
-      if (stepName == this.stepName) {
-        // Current step name is queried separately below to ensure correct visit counts
+    ]) {
+      if ((String) ar.get('Step_Name__c') == this.stepName) {
         continue;
       }
       Id minId = (Id) ar.get('minId');
@@ -1245,10 +1307,8 @@ public inherited sharing class StepContext {
         targetIds.add(maxId);
       }
     }
-
-    // 2. Query executions of the current step name, bounded by stepVisit + 2
     Integer currentStepLimit = this.stepVisit + 2;
-    List<Workflow_Step_Execution__c> currentExecs = [
+    for (Workflow_Step_Execution__c e : [
       SELECT Id
       FROM Workflow_Step_Execution__c
       WHERE
@@ -1257,65 +1317,79 @@ public inherited sharing class StepContext {
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
       LIMIT :currentStepLimit
-    ];
-    for (Workflow_Step_Execution__c e : currentExecs) {
+    ]) {
       targetIds.add(e.Id);
     }
+    return targetIds;
+  }
 
-    // 3. Query the final sorted list of step executions by ID
-    List<Workflow_Step_Execution__c> executions = new List<Workflow_Step_Execution__c>();
-    if (!targetIds.isEmpty()) {
-      executions = [
-        SELECT
-          Step_Name__c,
-          Status__c,
-          Captured_Values__c,
-          Workflow_Instance__r.CreatedDate
-        FROM Workflow_Step_Execution__c
-        WHERE Id IN :targetIds
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate ASC, Id ASC
-      ];
+  // Step 3: the final sorted list of step executions by id.
+  private List<Workflow_Step_Execution__c> queryExecutions(Set<Id> targetIds) {
+    if (targetIds.isEmpty()) {
+      return new List<Workflow_Step_Execution__c>();
     }
+    return [
+      SELECT
+        Step_Name__c,
+        Status__c,
+        Captured_Values__c,
+        Workflow_Instance__r.CreatedDate
+      FROM Workflow_Step_Execution__c
+      WHERE Id IN :targetIds
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate ASC, Id ASC
+    ];
+  }
 
+  private void resolveInstanceCreatedDate(
+    List<Workflow_Step_Execution__c> executions
+  ) {
     if (Test.isRunningTest() && mockInstanceCreatedDate != null) {
       this.instanceCreatedDate = mockInstanceCreatedDate;
-    } else if (!executions.isEmpty()) {
-      this.instanceCreatedDate = executions[0].Workflow_Instance__r.CreatedDate;
-    } else {
-      List<Workflow_Instance__c> instances = [
-        SELECT CreatedDate
-        FROM Workflow_Instance__c
-        WHERE Id = :this.workflowInstanceId
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (!instances.isEmpty()) {
-        this.instanceCreatedDate = instances[0].CreatedDate;
-      }
+      return;
     }
+    if (!executions.isEmpty()) {
+      this.instanceCreatedDate = executions[0].Workflow_Instance__r.CreatedDate;
+      return;
+    }
+    List<Workflow_Instance__c> instances = [
+      SELECT CreatedDate
+      FROM Workflow_Instance__c
+      WHERE Id = :this.workflowInstanceId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    if (!instances.isEmpty()) {
+      this.instanceCreatedDate = instances[0].CreatedDate;
+    }
+  }
 
+  private void resolveClassLastModified(String targetClassName) {
     if (Test.isRunningTest() && mockClassLastModified != null) {
       this.classLastModified = mockClassLastModified;
-    } else {
-      List<ApexClass> classes = [
-        SELECT LastModifiedDate
-        FROM ApexClass
-        WHERE Name = :targetClassName
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (!classes.isEmpty()) {
-        this.classLastModified = classes[0].LastModifiedDate;
-      }
+      return;
     }
+    List<ApexClass> classes = [
+      SELECT LastModifiedDate
+      FROM ApexClass
+      WHERE Name = :targetClassName
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    if (!classes.isEmpty()) {
+      this.classLastModified = classes[0].LastModifiedDate;
+    }
+  }
 
+  // Resolve offloaded payloads in small batches to stay under Apex Heap Limits
+  // (synchronous cap is 6 MB).
+  private List<String> resolveCapturePayloads(
+    List<Workflow_Step_Execution__c> executions
+  ) {
     List<String> rawCaptures = new List<String>();
     for (Workflow_Step_Execution__c exec : executions) {
       rawCaptures.add(exec.Captured_Values__c);
     }
-
-    // Resolve offloaded payloads in small batches to stay under Apex Heap Limits (synchronous cap is 6 MB)
     Integer batchSize = 40;
     List<String> resolvedCaptures = new List<String>();
     for (Integer i = 0; i < rawCaptures.size(); i += batchSize) {
@@ -1325,44 +1399,53 @@ public inherited sharing class StepContext {
       }
       resolvedCaptures.addAll(WorkflowEngine.resolvePayloads(batchRaw));
     }
+    return resolvedCaptures;
+  }
 
+  // Populates completedStepsCache (per-visit completion markers) and
+  // patchDecisionsCache (prior __patch: decisions) from the resolved captures.
+  private void indexExecutions(
+    List<Workflow_Step_Execution__c> executions,
+    List<String> resolvedCaptures
+  ) {
     Map<String, Integer> completedCounts = new Map<String, Integer>();
     for (Integer i = 0; i < executions.size(); i++) {
       Workflow_Step_Execution__c exec = executions[i];
-      if (
-        exec.Status__c == 'Completed' ||
-        exec.Status__c == 'OperatorSkipped'
-      ) {
-        Integer visit = completedCounts.containsKey(exec.Step_Name__c)
-          ? completedCounts.get(exec.Step_Name__c)
-          : 0;
-        completedStepsCache.add(exec.Step_Name__c + ':' + visit);
-        completedCounts.put(exec.Step_Name__c, visit + 1);
-      }
-
-      String capturesJson = resolvedCaptures[i];
-      if (String.isBlank(capturesJson)) {
-        continue;
-      }
-      if (!capturesJson.contains('__patch:')) {
-        continue;
-      }
-
-      try {
-        Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
-          capturesJson
-        );
-        for (String k : captures.keySet()) {
-          if (k.startsWith('__patch:')) {
-            String changeId = k.substring(8);
-            patchDecisionsCache.put(changeId, (Boolean) captures.get(k));
-          }
-        }
-      } catch (Exception ignored) {
-        // Ignore malformed JSON
-      }
+      recordCompletedVisit(exec, completedCounts);
+      mergePatchDecisions(resolvedCaptures[i]);
     }
-    hasLoadedExecutions = true;
+  }
+
+  private void recordCompletedVisit(
+    Workflow_Step_Execution__c exec,
+    Map<String, Integer> completedCounts
+  ) {
+    if (exec.Status__c != 'Completed' && exec.Status__c != 'OperatorSkipped') {
+      return;
+    }
+    Integer visit = completedCounts.containsKey(exec.Step_Name__c)
+      ? completedCounts.get(exec.Step_Name__c)
+      : 0;
+    completedStepsCache.add(exec.Step_Name__c + ':' + visit);
+    completedCounts.put(exec.Step_Name__c, visit + 1);
+  }
+
+  private void mergePatchDecisions(String capturesJson) {
+    if (String.isBlank(capturesJson) || !capturesJson.contains('__patch:')) {
+      return;
+    }
+    try {
+      Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
+        capturesJson
+      );
+      for (String k : captures.keySet()) {
+        if (k.startsWith('__patch:')) {
+          patchDecisionsCache.put(k.substring(8), (Boolean) captures.get(k));
+        }
+      }
+    } catch (Exception ignored) {
+      // Ignore malformed JSON
+    }
   }
 
   private String getCallingClassName() {
@@ -1402,14 +1485,7 @@ public inherited sharing class StepContext {
    * captures to Workflow_Step_Execution__c.Captured_Values__c.
    */
   public String getCapturedValuesJson() {
-    if (
-      capturedValues.isEmpty() &&
-      (this.maxAttempts == null ||
-      this.maxAttempts <= 1) &&
-      String.isBlank(this.failedStepName) &&
-      String.isBlank(this.errorMessage) &&
-      this.attemptCount == null
-    ) {
+    if (hasNothingToSerialize()) {
       return null;
     }
     Map<String, Object> toSerialize = new Map<String, Object>(capturedValues);
@@ -1426,6 +1502,17 @@ public inherited sharing class StepContext {
       toSerialize.put('__attemptCount', this.attemptCount);
     }
     return JSON.serialize(toSerialize);
+  }
+
+  // True when there are no captures and no reserved metadata (retry/error
+  // bookkeeping) to persist, so getCapturedValuesJson() returns null.
+  private Boolean hasNothingToSerialize() {
+    return capturedValues.isEmpty() &&
+      (this.maxAttempts == null ||
+      this.maxAttempts <= 1) &&
+      String.isBlank(this.failedStepName) &&
+      String.isBlank(this.errorMessage) &&
+      this.attemptCount == null;
   }
 
   /**
@@ -1494,268 +1581,6 @@ public inherited sharing class StepContext {
     return new Map<String, Object>();
   }
 
-  @TestVisible
-  public static StepContext withCapturedValues(
-    Id workflowInstanceId,
-    String workflowName,
-    String stepName,
-    String inputJson,
-    String previousStepOutput,
-    String stepStateJson,
-    String workflowInputJson,
-    Integer workflowVersion,
-    Integer stepVisit,
-    SignalSource signalSource,
-    Datetime previousRunAt,
-    String capturedValuesJson
-  ) {
-    Map<String, Object> capturedValuesMap = parseCaptures(capturedValuesJson);
-    return withCapturedValuesMap(
-      workflowInstanceId,
-      workflowName,
-      stepName,
-      inputJson,
-      previousStepOutput,
-      stepStateJson,
-      workflowInputJson,
-      workflowVersion,
-      stepVisit,
-      signalSource,
-      previousRunAt,
-      capturedValuesMap,
-      false,
-      1,
-      1
-    );
-  }
-
-  @TestVisible
-  public static StepContext withCapturedValues(
-    Id workflowInstanceId,
-    String workflowName,
-    String stepName,
-    String inputJson,
-    String previousStepOutput,
-    String stepStateJson,
-    String workflowInputJson,
-    Integer workflowVersion,
-    Integer stepVisit,
-    SignalSource signalSource,
-    Datetime previousRunAt,
-    String capturedValuesJson,
-    Integer attempt,
-    Integer maxAttempts
-  ) {
-    Map<String, Object> capturedValuesMap = parseCaptures(capturedValuesJson);
-    return withCapturedValuesMap(
-      workflowInstanceId,
-      workflowName,
-      stepName,
-      inputJson,
-      previousStepOutput,
-      stepStateJson,
-      workflowInputJson,
-      workflowVersion,
-      stepVisit,
-      signalSource,
-      previousRunAt,
-      capturedValuesMap,
-      false,
-      attempt,
-      maxAttempts
-    );
-  }
-
-  @TestVisible
-  public static StepContext withCapturedValues(
-    Id workflowInstanceId,
-    String workflowName,
-    String stepName,
-    String inputJson,
-    String previousStepOutput,
-    String stepStateJson,
-    String workflowInputJson,
-    Integer workflowVersion,
-    Integer stepVisit,
-    SignalSource signalSource,
-    Datetime previousRunAt,
-    String capturedValuesJson,
-    Boolean timeoutResume
-  ) {
-    Map<String, Object> capturedValuesMap = parseCaptures(capturedValuesJson);
-    return withCapturedValuesMap(
-      workflowInstanceId,
-      workflowName,
-      stepName,
-      inputJson,
-      previousStepOutput,
-      stepStateJson,
-      workflowInputJson,
-      workflowVersion,
-      stepVisit,
-      signalSource,
-      previousRunAt,
-      capturedValuesMap,
-      timeoutResume,
-      1,
-      1
-    );
-  }
-
-  @TestVisible
-  public static StepContext withCapturedValues(
-    Id workflowInstanceId,
-    String workflowName,
-    String stepName,
-    String inputJson,
-    String previousStepOutput,
-    String stepStateJson,
-    String workflowInputJson,
-    Integer workflowVersion,
-    Integer stepVisit,
-    SignalSource signalSource,
-    Datetime previousRunAt,
-    String capturedValuesJson,
-    Boolean timeoutResume,
-    Integer attempt,
-    Integer maxAttempts
-  ) {
-    Map<String, Object> capturedValuesMap = parseCaptures(capturedValuesJson);
-    return withCapturedValuesMap(
-      workflowInstanceId,
-      workflowName,
-      stepName,
-      inputJson,
-      previousStepOutput,
-      stepStateJson,
-      workflowInputJson,
-      workflowVersion,
-      stepVisit,
-      signalSource,
-      previousRunAt,
-      capturedValuesMap,
-      timeoutResume,
-      attempt,
-      maxAttempts
-    );
-  }
-
-  /**
-   * Optimized factory that accepts a pre-parsed map of captured values to avoid double deserialization.
-   */
-  @TestVisible
-  public static StepContext withCapturedValuesMap(
-    Id workflowInstanceId,
-    String workflowName,
-    String stepName,
-    String inputJson,
-    String previousStepOutput,
-    String stepStateJson,
-    String workflowInputJson,
-    Integer workflowVersion,
-    Integer stepVisit,
-    SignalSource signalSource,
-    Datetime previousRunAt,
-    Map<String, Object> capturedValuesMap,
-    Boolean timeoutResume,
-    Integer attempt,
-    Integer maxAttempts
-  ) {
-    StepContext ctx = new StepContext(
-      workflowInstanceId,
-      workflowName,
-      stepName,
-      inputJson,
-      previousStepOutput,
-      stepStateJson,
-      workflowInputJson,
-      workflowVersion,
-      stepVisit,
-      signalSource,
-      previousRunAt
-    );
-    ctx.timeoutResume = (timeoutResume == true);
-    if (attempt != null && attempt > 0) {
-      ctx.attempt = attempt;
-    }
-    if (maxAttempts != null && maxAttempts > 0) {
-      ctx.maxAttempts = maxAttempts;
-    }
-    if (capturedValuesMap != null) {
-      ctx.capturedValues = capturedValuesMap;
-      if (ctx.capturedValues.containsKey('__maxAttempts')) {
-        try {
-          ctx.maxAttempts = Integer.valueOf(
-            ctx.capturedValues.get('__maxAttempts')
-          );
-        } catch (Exception ignored) {
-        }
-        ctx.capturedValues.remove('__maxAttempts');
-      }
-      if (ctx.capturedValues.containsKey('__failedStepName')) {
-        ctx.failedStepName = String.valueOf(
-          ctx.capturedValues.get('__failedStepName')
-        );
-        ctx.capturedValues.remove('__failedStepName');
-      }
-      if (ctx.capturedValues.containsKey('__errorMessage')) {
-        ctx.errorMessage = String.valueOf(
-          ctx.capturedValues.get('__errorMessage')
-        );
-        ctx.capturedValues.remove('__errorMessage');
-      }
-      if (ctx.capturedValues.containsKey('__attemptCount')) {
-        try {
-          ctx.attemptCount = Integer.valueOf(
-            ctx.capturedValues.get('__attemptCount')
-          );
-        } catch (Exception ignored) {
-        }
-        ctx.capturedValues.remove('__attemptCount');
-      }
-    }
-    return ctx;
-  }
-
-  /**
-   * Optimized factory overload for the compensation path that accepts a pre-parsed map.
-   */
-  @TestVisible
-  public static StepContext withCapturedValuesMap(
-    Id workflowInstanceId,
-    String workflowName,
-    String stepName,
-    String inputJson,
-    String previousStepOutput,
-    String stepStateJson,
-    String workflowInputJson,
-    Integer workflowVersion,
-    Integer stepVisit,
-    SignalSource signalSource,
-    Datetime previousRunAt,
-    Map<String, Object> capturedValuesMap,
-    Integer attempt,
-    Integer maxAttempts
-  ) {
-    return withCapturedValuesMap(
-      workflowInstanceId,
-      workflowName,
-      stepName,
-      inputJson,
-      previousStepOutput,
-      stepStateJson,
-      workflowInputJson,
-      workflowVersion,
-      stepVisit,
-      signalSource,
-      previousRunAt,
-      capturedValuesMap,
-      false,
-      attempt,
-      maxAttempts
-    );
-  }
-
   /**
    * Derives the idempotency key from logical (instance, step, visit) identity
    * only. SHA-256 keeps it opaque, uniform-length, and safe to forward verbatim
@@ -1818,130 +1643,148 @@ public inherited sharing class StepContext {
     if (childKeys == null || childKeys.isEmpty()) {
       return outcomes;
     }
+    ChildResolution res = new ChildResolution();
+    // Step 1: probe each key's signals and collect raw payloads to resolve.
+    for (Integer i = 0; i < childKeys.size(); i++) {
+      collectChildPayloads(i, childKeys[i], res);
+    }
+    // Step 2: bulk-resolve the collected payloads and index them by key.
+    resolveChildPayloads(res);
+    // Step 3: construct the ChildOutcome list.
+    for (Integer i = 0; i < childKeys.size(); i++) {
+      outcomes.add(buildChildOutcome(i, childKeys[i], res));
+    }
+    return outcomes;
+  }
 
-    // Step 1: Pre-process each key to check signals and collect raw payloads to resolve.
-    // We will associate each raw payload index with its target.
+  // Mutable accumulator for the three phases of getChildOutcomes so no phase
+  // helper needs a long parameter list.
+  private class ChildResolution {
     List<String> rawPayloads = new List<String>();
     List<Integer> targetKeyIndex = new List<Integer>();
     List<String> targetType = new List<String>(); // 'completed' or 'failedOutput'
-
-    // We'll also store pre-deserialized maps for failed signals so we don't deserialize twice
+    // Pre-deserialized maps for failed signals so we don't deserialize twice.
     Map<Integer, Map<String, Object>> failedDataMap = new Map<Integer, Map<String, Object>>();
+    Map<Integer, String> resolvedCompleted = new Map<Integer, String>();
+    Map<Integer, String> resolvedFailedOutput = new Map<Integer, String>();
 
-    for (Integer i = 0; i < childKeys.size(); i++) {
-      String childKey = childKeys[i];
-      if (String.isBlank(childKey)) {
-        continue;
-      }
-      String completedName = 'ChildCompleted:' + childKey;
-      String failedName = 'ChildFailed:' + childKey;
+    void addRawPayload(String payload, Integer keyIndex, String type) {
+      this.rawPayloads.add(payload);
+      this.targetKeyIndex.add(keyIndex);
+      this.targetType.add(type);
+    }
+  }
 
-      Signal completedSig = this.getSignal(completedName);
-      Signal failedSig = this.getSignal(failedName);
+  private void collectChildPayloads(
+    Integer i,
+    String childKey,
+    ChildResolution res
+  ) {
+    if (String.isBlank(childKey)) {
+      return;
+    }
+    String completedName = 'ChildCompleted:' + childKey;
+    String failedName = 'ChildFailed:' + childKey;
+    Signal completedSig = this.getSignal(completedName);
+    Signal failedSig = this.getSignal(failedName);
 
-      if (completedSig.isPresent() || failedSig.isPresent()) {
-        this.markMatched(new Signal(null, completedName, null));
-        this.markMatched(new Signal(null, failedName, null));
-      }
-
-      if (completedSig.isPresent()) {
-        if (String.isNotBlank(completedSig.payload)) {
-          rawPayloads.add(completedSig.payload);
-          targetKeyIndex.add(i);
-          targetType.add('completed');
-        }
-      } else if (failedSig.isPresent()) {
-        if (String.isNotBlank(failedSig.payload)) {
-          try {
-            Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
-              failedSig.payload
-            );
-            failedDataMap.put(i, data);
-            Object outputObj = data.get('output');
-            if (outputObj instanceof String) {
-              rawPayloads.add((String) outputObj);
-              targetKeyIndex.add(i);
-              targetType.add('failedOutput');
-            }
-          } catch (Exception ignored) {
-            // Deserialization failure will be handled during outcome construction
-          }
-        }
-      }
+    if (completedSig.isPresent() || failedSig.isPresent()) {
+      this.markMatched(new Signal(null, completedName, null));
+      this.markMatched(new Signal(null, failedName, null));
     }
 
-    // Step 2: Bulk resolve the payloads
-    List<String> resolvedPayloads = new List<String>();
-    if (!rawPayloads.isEmpty()) {
-      resolvedPayloads = WorkflowEngine.resolvePayloads(rawPayloads);
+    if (completedSig.isPresent()) {
+      if (String.isNotBlank(completedSig.payload)) {
+        res.addRawPayload(completedSig.payload, i, 'completed');
+      }
+    } else if (failedSig.isPresent() && String.isNotBlank(failedSig.payload)) {
+      collectFailedPayload(i, failedSig, res);
     }
+  }
 
-    // Map the resolved payloads back
-    Map<Integer, String> resolvedCompletedByKeyIndex = new Map<Integer, String>();
-    Map<Integer, String> resolvedFailedOutputByKeyIndex = new Map<Integer, String>();
+  private void collectFailedPayload(
+    Integer i,
+    Signal failedSig,
+    ChildResolution res
+  ) {
+    try {
+      Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
+        failedSig.payload
+      );
+      res.failedDataMap.put(i, data);
+      Object outputObj = data.get('output');
+      if (outputObj instanceof String) {
+        res.addRawPayload((String) outputObj, i, 'failedOutput');
+      }
+    } catch (Exception ignored) {
+      // Deserialization failure will be handled during outcome construction
+    }
+  }
 
+  private void resolveChildPayloads(ChildResolution res) {
+    if (res.rawPayloads.isEmpty()) {
+      return;
+    }
+    List<String> resolvedPayloads = WorkflowEngine.resolvePayloads(
+      res.rawPayloads
+    );
     for (Integer j = 0; j < resolvedPayloads.size(); j++) {
-      Integer keyIdx = targetKeyIndex[j];
-      String type = targetType[j];
-      String val = resolvedPayloads[j];
+      Integer keyIdx = res.targetKeyIndex[j];
+      String type = res.targetType[j];
       if (type == 'completed') {
-        resolvedCompletedByKeyIndex.put(keyIdx, val);
+        res.resolvedCompleted.put(keyIdx, resolvedPayloads[j]);
       } else if (type == 'failedOutput') {
-        resolvedFailedOutputByKeyIndex.put(keyIdx, val);
+        res.resolvedFailedOutput.put(keyIdx, resolvedPayloads[j]);
       }
     }
+  }
 
-    // Step 3: Construct the ChildOutcome list
-    for (Integer i = 0; i < childKeys.size(); i++) {
-      String childKey = childKeys[i];
-      if (String.isBlank(childKey)) {
-        outcomes.add(new ChildOutcome());
-        continue;
-      }
-      String completedName = 'ChildCompleted:' + childKey;
-      String failedName = 'ChildFailed:' + childKey;
-
-      Signal completedSig = this.getSignal(completedName);
-      Signal failedSig = this.getSignal(failedName);
-
-      if (completedSig.isPresent()) {
-        String resolvedVal = resolvedCompletedByKeyIndex.containsKey(i)
-          ? resolvedCompletedByKeyIndex.get(i)
-          : completedSig.payload;
-        outcomes.add(new ChildOutcome('Completed', null, resolvedVal));
-      } else if (failedSig.isPresent()) {
-        if (String.isNotBlank(failedSig.payload)) {
-          if (failedDataMap.containsKey(i)) {
-            Map<String, Object> data = failedDataMap.get(i);
-            String status = data.get('status') != null
-              ? String.valueOf(data.get('status'))
-              : null;
-            String errorMessage = data.get('errorMessage') != null
-              ? String.valueOf(data.get('errorMessage'))
-              : null;
-            Object outputObj = data.get('output');
-            String outputVal = null;
-            if (outputObj != null) {
-              if (outputObj instanceof String) {
-                outputVal = resolvedFailedOutputByKeyIndex.containsKey(i)
-                  ? resolvedFailedOutputByKeyIndex.get(i)
-                  : (String) outputObj;
-              } else {
-                outputVal = JSON.serialize(outputObj);
-              }
-            }
-            outcomes.add(new ChildOutcome(status, errorMessage, outputVal));
-          } else {
-            outcomes.add(new ChildOutcome('Failed', failedSig.payload, null));
-          }
-        } else {
-          outcomes.add(new ChildOutcome('Failed', null, null));
-        }
-      } else {
-        outcomes.add(new ChildOutcome());
-      }
+  private ChildOutcome buildChildOutcome(
+    Integer i,
+    String childKey,
+    ChildResolution res
+  ) {
+    if (String.isBlank(childKey)) {
+      return new ChildOutcome();
     }
+    Signal completedSig = this.getSignal('ChildCompleted:' + childKey);
+    Signal failedSig = this.getSignal('ChildFailed:' + childKey);
 
-    return outcomes;
+    if (completedSig.isPresent()) {
+      String resolvedVal = res.resolvedCompleted.containsKey(i)
+        ? res.resolvedCompleted.get(i)
+        : completedSig.payload;
+      return new ChildOutcome('Completed', null, resolvedVal);
+    }
+    if (!failedSig.isPresent()) {
+      return new ChildOutcome();
+    }
+    if (String.isBlank(failedSig.payload)) {
+      return new ChildOutcome('Failed', null, null);
+    }
+    if (!res.failedDataMap.containsKey(i)) {
+      return new ChildOutcome('Failed', failedSig.payload, null);
+    }
+    return buildFailedOutcome(i, res);
+  }
+
+  private ChildOutcome buildFailedOutcome(Integer i, ChildResolution res) {
+    Map<String, Object> data = res.failedDataMap.get(i);
+    String status = data.get('status') != null
+      ? String.valueOf(data.get('status'))
+      : null;
+    String errorMessage = data.get('errorMessage') != null
+      ? String.valueOf(data.get('errorMessage'))
+      : null;
+    Object outputObj = data.get('output');
+    String outputVal = null;
+    if (outputObj instanceof String) {
+      outputVal = res.resolvedFailedOutput.containsKey(i)
+        ? res.resolvedFailedOutput.get(i)
+        : (String) outputObj;
+    } else if (outputObj != null) {
+      outputVal = JSON.serialize(outputObj);
+    }
+    return new ChildOutcome(status, errorMessage, outputVal);
   }
 }

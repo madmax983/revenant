@@ -210,17 +210,17 @@ public class StepResultFanOutTest {
         )
       };
 
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        '{}',
-        '{}',
-        '{}',
-        '{}',
-        1,
-        signals
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson('{}')
+        .previousStepOutput('{}')
+        .stepStateJson('{}')
+        .workflowInputJson('{}')
+        .workflowVersion(1)
+        .pendingSignals(signals)
+        .build();
 
       List<StepContext.ChildOutcome> outcomes = ctx.getChildOutcomes(
         new List<String>{ 'KeyA', 'KeyB', 'KeyC' }

@@ -2039,15 +2039,15 @@ public class WorkflowEngineTest {
   @IsTest
   static void testStepContextShouldYield() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      StepContext ctx = new StepContext(
-        null,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(null)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson(null)
+        .build();
       // Under normal test conditions, limit usage is low, so shouldYield should return false
       System.assertEquals(false, ctx.shouldYield());
     }
@@ -2202,16 +2202,16 @@ public class WorkflowEngineTest {
       // Run Cleanup/Purge step on this instance
       CleanupWorkflow.PurgeOldInstancesStep purgeStep = new CleanupWorkflow.PurgeOldInstancesStep();
 
-      StepContext purgeCtx = new StepContext(
-        null,
-        'CleanupWorkflow',
-        'CleanupWorkflow.PurgeOldInstancesStep',
-        null,
-        null,
-        null,
-        '{"retentionDays":0,"batchSize":100}',
-        1
-      );
+      StepContext purgeCtx = new StepContext.Builder()
+        .instanceId(null)
+        .workflowName('CleanupWorkflow')
+        .stepName('CleanupWorkflow.PurgeOldInstancesStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson('{"retentionDays":0,"batchSize":100}')
+        .workflowVersion(1)
+        .build();
 
       // Execute purge
       StepResult purgeResult = purgeStep.execute(purgeCtx);

@@ -184,15 +184,16 @@ public inherited sharing class StepContextTestBuilder {
     for (StepContext.Signal sig : this.pendingSignals) {
       if (sig.signalId == null) {
         Id sigId = generateFakeId(Workflow_Signal__c.SObjectType);
-        finalSignals.add(
-          new StepContext.Signal(
+        StepContext.Signal rebuilt = new StepContext.Signal(
             sigId,
             sig.name,
-            sig.payload,
-            sig.createdDate,
-            sig.isClaimed()
+            sig.payload
           )
-        );
+          .withCreatedDate(sig.createdDate);
+        if (sig.isClaimed()) {
+          rebuilt.asClaimed();
+        }
+        finalSignals.add(rebuilt);
       } else {
         finalSignals.add(sig);
       }
@@ -200,22 +201,31 @@ public inherited sharing class StepContextTestBuilder {
 
     StaticSignalSource source = new StaticSignalSource(finalSignals);
 
-    return StepContext.withCapturedValuesMap(
-      instanceId,
-      this.workflowNameVal != null ? this.workflowNameVal : 'TestWorkflow',
-      this.stepNameVal != null ? this.stepNameVal : 'TestStep',
-      this.inputJsonVal,
-      this.previousStepOutputVal,
-      this.stepStateJsonVal,
-      this.workflowInputJsonVal,
-      this.workflowVersionVal != null ? this.workflowVersionVal : 1,
-      this.stepVisitVal != null ? this.stepVisitVal : 0,
-      source,
-      this.previousRunAtVal,
-      new Map<String, Object>(this.capturedValues),
-      this.timeoutResumeVal != null ? this.timeoutResumeVal : false,
-      this.attemptVal != null ? this.attemptVal : 1,
-      this.maxAttemptsVal != null ? this.maxAttemptsVal : 1
-    );
+    Boolean timeoutResumeArg = this.timeoutResumeVal != null
+      ? this.timeoutResumeVal
+      : false;
+    StepContext.Builder ctxBuilder = new StepContext.Builder()
+      .instanceId(instanceId)
+      .workflowName(
+        this.workflowNameVal != null ? this.workflowNameVal : 'TestWorkflow'
+      )
+      .stepName(this.stepNameVal != null ? this.stepNameVal : 'TestStep')
+      .inputJson(this.inputJsonVal)
+      .previousStepOutput(this.previousStepOutputVal)
+      .stepStateJson(this.stepStateJsonVal)
+      .workflowInputJson(this.workflowInputJsonVal)
+      .workflowVersion(
+        this.workflowVersionVal != null ? this.workflowVersionVal : 1
+      )
+      .stepVisit(this.stepVisitVal != null ? this.stepVisitVal : 0)
+      .signalSource(source)
+      .previousRunAt(this.previousRunAtVal)
+      .capturedValuesMap(new Map<String, Object>(this.capturedValues))
+      .attempt(this.attemptVal != null ? this.attemptVal : 1)
+      .maxAttempts(this.maxAttemptsVal != null ? this.maxAttemptsVal : 1);
+    if (timeoutResumeArg) {
+      ctxBuilder.markTimeoutResume();
+    }
+    return ctxBuilder.build();
   }
 }
