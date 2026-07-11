@@ -1,3 +1,9 @@
+/**
+ * @description Resolves workflow-related Apex class names to concrete Types across
+ * subscriber and package namespaces, applying an ordered chain of fallback
+ * strategies and caching results so managed-package and sandbox contexts behave
+ * consistently.
+ */
 public inherited sharing class WorkflowTypeResolver {
   @TestVisible
   private static String mockPackageNamespace = null;
@@ -7,10 +13,25 @@ public inherited sharing class WorkflowTypeResolver {
   @TestVisible
   private static Map<String, Type> typeCache = new Map<String, Type>();
 
+  /**
+   * @description Resolves a class name to its Type with no explicit context
+   * namespace, applying the default fallback chain.
+   * @param name The class name to resolve.
+   * @return The resolved Type, or null if the name is blank or cannot be resolved.
+   */
   public static Type resolve(String name) {
     return resolve(name, null);
   }
 
+  /**
+   * @description Resolves a class name to its Type, consulting the cache first and
+   * otherwise running the ordered fallback strategies. Blank names resolve to null,
+   * and both hits and misses are cached under a key that includes the context
+   * namespace.
+   * @param name The class name to resolve.
+   * @param contextNamespace An optional namespace to disambiguate the name, or null.
+   * @return The resolved Type, or null if the name cannot be resolved.
+   */
   public static Type resolve(String name, String contextNamespace) {
     if (String.isBlank(name)) {
       return null;
@@ -60,9 +81,11 @@ public inherited sharing class WorkflowTypeResolver {
   }
 
   /**
-   * Strategy 1: namespace-qualified resolution when the name contains a dot.
-   * Under simulation, a name prefixed with the simulated package namespace maps
-   * to the local (empty) namespace.
+   * @description Strategy 1: namespace-qualified resolution when the name contains
+   * a dot. Under simulation, a name prefixed with the simulated package namespace
+   * maps to the local (empty) namespace.
+   * @param name The dot-qualified class name to resolve.
+   * @return The resolved Type, or null if the name has no dot.
    */
   private static Type resolveDotQualified(String name) {
     if (!name.contains('.')) {
@@ -77,8 +100,11 @@ public inherited sharing class WorkflowTypeResolver {
   }
 
   /**
-   * Strategy 2: context namespace, when provided (resolves a collision in the
-   * subscriber namespace).
+   * @description Strategy 2: context namespace, when provided (resolves a collision
+   * in the subscriber namespace).
+   * @param name The class name to resolve.
+   * @param contextNamespace The namespace to resolve against, or null to skip.
+   * @return The resolved Type, or null if no context namespace was supplied.
    */
   private static Type resolveByContextNamespace(
     String name,
@@ -91,9 +117,11 @@ public inherited sharing class WorkflowTypeResolver {
   }
 
   /**
-   * Strategy 3: standard/caller resolution. Outside simulation this is the
-   * single-arg Type.forName (package or caller namespace); under simulation only
+   * @description Strategy 3: standard/caller resolution. Outside simulation this is
+   * the single-arg Type.forName (package or caller namespace); under simulation only
    * names explicitly prefixed with the simulated package namespace resolve.
+   * @param name The class name to resolve.
+   * @return The resolved Type, or null when simulating and the name is unprefixed.
    */
   private static Type resolveByCallerOrSimulatedPackage(String name) {
     if (!simulateNamespacedContext) {
@@ -106,7 +134,12 @@ public inherited sharing class WorkflowTypeResolver {
     return null;
   }
 
-  /** Strategy 5: package namespace fallback. */
+  /**
+   * @description Strategy 5: package namespace fallback, resolving the name against
+   * the managed-package namespace when one is present.
+   * @param name The class name to resolve.
+   * @return The resolved Type, or null when there is no package namespace.
+   */
   private static Type resolveByPackageNamespace(String name) {
     String packageNamespace = getPackageNamespace();
     if (String.isNotBlank(packageNamespace)) {
@@ -116,9 +149,11 @@ public inherited sharing class WorkflowTypeResolver {
   }
 
   /**
-   * Strategy 6: sandbox portability fallback. When a namespaced name failed to
-   * resolve, retry with the namespace stripped against the local and package
-   * namespaces.
+   * @description Strategy 6: sandbox portability fallback. When a namespaced name
+   * failed to resolve, retry with the namespace stripped against the local and
+   * package namespaces.
+   * @param name The dot-qualified class name to resolve.
+   * @return The resolved Type, or null if the name has no dot or cannot resolve.
    */
   private static Type resolveSandboxPortability(String name) {
     if (!name.contains('.')) {
@@ -136,6 +171,11 @@ public inherited sharing class WorkflowTypeResolver {
     return null;
   }
 
+  /**
+   * @description Returns the namespace this engine is deployed under, honoring the
+   * test mock override and otherwise deriving it from the WorkflowEngine class name.
+   * @return The package namespace, or an empty string when running unmanaged.
+   */
   public static String getPackageNamespace() {
     if (mockPackageNamespace != null) {
       return mockPackageNamespace;
@@ -147,6 +187,11 @@ public inherited sharing class WorkflowTypeResolver {
     return '';
   }
 
+  /**
+   * @description Extracts the namespace prefix from a dot-qualified workflow name.
+   * @param workflowName The workflow name, optionally namespace-qualified.
+   * @return The namespace portion, or an empty string when the name is unqualified.
+   */
   public static String extractNamespace(String workflowName) {
     if (String.isNotBlank(workflowName) && workflowName.contains('.')) {
       return workflowName.substringBefore('.');

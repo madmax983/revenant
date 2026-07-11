@@ -1,3 +1,9 @@
+/**
+ * @description Apex controller backing the Revenant workflow dashboard LWCs. Exposes
+ * authorized read APIs (instance lists, stats, trends, payload resolution, stalled /
+ * unrouted-signal views, version drain) and operator actions (retry, cancel, resume,
+ * pause/resume definitions, signal redelivery) over the engine's records.
+ */
 public inherited sharing class WorkflowDashboardController {
   // Class-level static binding variable for dynamic SOQL wildcard queries.
   // This is required because dynamic SOQL string bindings (:variable) must be in scope
@@ -105,9 +111,10 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * True when the running user has "Modify All Data", granted via EITHER their profile or
-   * an assigned permission set. Rename-proof and covers permission-set-granted admins,
-   * unlike matching a mutable profile name.
+   * @description True when the running user has "Modify All Data", granted via EITHER
+   * their profile or an assigned permission set. Rename-proof and covers
+   * permission-set-granted admins, unlike matching a mutable profile name.
+   * @return True if the running user holds Modify All Data; false otherwise.
    */
   private static Boolean currentUserHasModifyAllData() {
     return ![
@@ -160,9 +167,14 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * Resolves a payload field for display: returns the (possibly truncated) text and, when
-   * the value is attachment-backed and was truncated, records a download descriptor for
-   * the full ContentDocument under fieldKey in res.payloadFiles so the UI can offer the file.
+   * @description Resolves a payload field for display: returns the (possibly
+   * truncated) text and, when the value is attachment-backed and was truncated,
+   * records a download descriptor for the full ContentDocument under fieldKey in
+   * res.payloadFiles so the UI can offer the file.
+   * @param textValue The raw stored field value (possibly an attachment marker).
+   * @param fieldKey The logical field name used as the download descriptor key.
+   * @param res The accumulator carrying resolved bodies and download descriptors.
+   * @return The display text, truncated when it exceeds the display limit.
    */
   private static String resolveAndRecordPayload(
     String textValue,
@@ -457,6 +469,11 @@ public inherited sharing class WorkflowDashboardController {
   // (@AuraEnabled properties) so the LWC and tests populate it by assignment; a wide
   // constructor would re-introduce the long parameter list this wrapper removes. Unset
   // fields default to null, reproducing the previous shorter overloads.
+  /**
+   * @description Field-based query criteria for the filtered-instance list and the
+   * workflow-stat rollup, populated by the LWC and tests via assignment; unset
+   * fields default to null.
+   */
   public class InstanceQuery {
     @AuraEnabled
     public String workflowName;
@@ -504,6 +521,12 @@ public inherited sharing class WorkflowDashboardController {
     return Database.query(query, AccessLevel.SYSTEM_MODE);
   }
 
+  /**
+   * @description Returns a paginated, filtered page of workflow instances with
+   * per-row display fields including a computed waiting-on hint and a stalled flag.
+   * @param criteria The filter, attribute, and pagination criteria.
+   * @return One display-field map per matching instance, newest first.
+   */
   @AuraEnabled(cacheable=true)
   public static List<Map<String, Object>> getFilteredInstances(
     InstanceQuery criteria
@@ -558,6 +581,11 @@ public inherited sharing class WorkflowDashboardController {
   // (@AuraEnabled properties) so the LWC and tests populate it by assignment. getStalledCount
   // ignores the pagination fields (limitSize/offsetSize/cacheBuster); getStalledInstances uses
   // them. Unset fields default to null, reproducing the previous shorter overloads.
+  /**
+   * @description Field-based query criteria shared by the stalled-instance list and
+   * the stalled count; the count ignores the pagination fields. Unset fields default
+   * to null.
+   */
   public class StalledQuery {
     @AuraEnabled
     public String workflowName;
@@ -575,6 +603,13 @@ public inherited sharing class WorkflowDashboardController {
     public String attributesFilterJson;
   }
 
+  /**
+   * @description Returns a page of genuinely stalled instances — candidates past the
+   * idle threshold with no live job — filtered before pagination so the client never
+   * stops paging early on a short in-memory-filtered page.
+   * @param criteria The stalled-query filter, threshold, and pagination criteria.
+   * @return One display-field map per stalled instance on the requested page.
+   */
   @AuraEnabled(cacheable=true)
   public static List<Map<String, Object>> getStalledInstances(
     StalledQuery criteria
@@ -638,6 +673,12 @@ public inherited sharing class WorkflowDashboardController {
     return results;
   }
 
+  /**
+   * @description Counts genuinely stalled instances for the given criteria, reporting
+   * a capped flag when the candidate scan hit its governor-safety bound.
+   * @param criteria The stalled-query filter and threshold (pagination ignored).
+   * @return A map with the stalled count and a capped flag.
+   */
   @AuraEnabled
   public static Map<String, Object> getStalledCount(StalledQuery criteria) {
     checkAuthorization();
@@ -965,6 +1006,12 @@ public inherited sharing class WorkflowDashboardController {
   // Reuses InstanceQuery (the getFilteredInstances criteria); this rollup reads only
   // workflowName/status/searchTerm/attributesFilterJson and ignores the pagination and
   // failureCategory fields.
+  /**
+   * @description Rolls instances up into total / active / completed / failed counts
+   * for the summary tiles; reuses InstanceQuery but reads only the filter fields.
+   * @param criteria The filter criteria (pagination and failureCategory ignored).
+   * @return A map of the total, active, completed, and failed counts.
+   */
   @AuraEnabled
   public static Map<String, Integer> getWorkflowStats(InstanceQuery criteria) {
     checkAuthorization();
@@ -1148,6 +1195,12 @@ public inherited sharing class WorkflowDashboardController {
       };
     }
 
+    /**
+     * @description Orders aggregates worst-first: higher failure count first, ties
+     * broken by workflow name.
+     * @param other The other WorkflowTrendAggregate to compare against.
+     * @return A negative, zero, or positive value per the Comparable contract.
+     */
     public Integer compareTo(Object other) {
       WorkflowTrendAggregate that = (WorkflowTrendAggregate) other;
       if (this.failureCount != that.failureCount) {
@@ -1157,6 +1210,13 @@ public inherited sharing class WorkflowDashboardController {
     }
   }
 
+  /**
+   * @description Loads the full detail view for one instance: the record, its steps,
+   * children, successor, search attributes, breadcrumb log, pending compensations,
+   * and resolved payload download descriptors.
+   * @param instanceId The workflow instance to load details for.
+   * @return A map of the instance detail sections consumed by the detail LWC.
+   */
   @AuraEnabled
   public static Map<String, Object> getInstanceDetails(Id instanceId) {
     checkAuthorization();
@@ -1399,6 +1459,11 @@ public inherited sharing class WorkflowDashboardController {
   private class DefinitionScanLimitException extends Exception {
   }
 
+  /**
+   * @description Returns the discoverable WorkflowDefinition class names for the
+   * dashboard, after enforcing the Workflow_Admin authorization gate.
+   * @return The sorted list of concrete WorkflowDefinition class names.
+   */
   @AuraEnabled(cacheable=true)
   public static List<String> getDefinitions() {
     checkAuthorization();
@@ -1406,10 +1471,11 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * WorkflowDefinition discovery WITHOUT an authorization check. Callers MUST
-   * perform their own authorization first. Exists so sibling controllers (e.g.
-   * WorkflowScheduleController, gated on a different permission) can reuse the
-   * exact discovery logic without tripping this controller's Workflow_Admin gate.
+   * @description WorkflowDefinition discovery WITHOUT an authorization check. Callers
+   * MUST perform their own authorization first. Exists so sibling controllers (e.g.
+   * WorkflowScheduleController, gated on a different permission) can reuse the exact
+   * discovery logic without tripping this controller's Workflow_Admin gate.
+   * @return The sorted list of concrete WorkflowDefinition class names.
    */
   public static List<String> getDefinitionsUnchecked() {
     return getDefinitionsFromTypeIndex();
@@ -1423,9 +1489,12 @@ public inherited sharing class WorkflowDashboardController {
   // getDefinitionsFromSource and guardsTripped removed to optimize performance and safety.
 
   /**
-   * Degraded-mode discovery via the platform's compiled-type index. Heap/CPU cheap.
-   * Includes inner classes (qualified "Outer.Inner") and transitive interface
-   * inheritance, but lists only concrete (IsConcrete = true) implementing classes.
+   * @description Degraded-mode discovery via the platform's compiled-type index.
+   * Heap/CPU cheap. Includes inner classes (qualified "Outer.Inner") and transitive
+   * interface inheritance, but lists only concrete (IsConcrete = true) implementing
+   * classes.
+   * @return The sorted list of concrete WorkflowDefinition class names, test classes
+   * and system-only workflows excluded.
    */
   private static List<String> getDefinitionsFromTypeIndex() {
     Set<String> definitions = new Set<String>();
@@ -1462,6 +1531,14 @@ public inherited sharing class WorkflowDashboardController {
     return sorted;
   }
 
+  /**
+   * @description Starts a workflow from the dashboard, parsing the optional input
+   * JSON and surfacing a friendly error if it is malformed.
+   * @param workflowName The WorkflowDefinition class name to start.
+   * @param correlationKey The correlation key for the new instance.
+   * @param inputJson The optional input payload as JSON, or blank.
+   * @return The Id of the started workflow instance.
+   */
   @AuraEnabled
   public static Id startWorkflow(
     String workflowName,
@@ -1492,6 +1569,11 @@ public inherited sharing class WorkflowDashboardController {
     }
   }
 
+  /**
+   * @description Retries a single failed workflow instance, replaying it on its
+   * original definition version.
+   * @param instanceId The failed instance to retry.
+   */
   @AuraEnabled
   public static void retryWorkflowInstance(Id instanceId) {
     checkAuthorization();
@@ -1503,11 +1585,15 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * Exact count of failed instances that a "Re-drive matching" action would
-   * re-enqueue for the operator's CURRENT filter. Shown in the confirmation
-   * prompt before anything is enqueued. Uses the same selection surface
-   * (workflowName / status / searchTerm) as getFilteredInstances, restricted to
-   * the operator-recoverable terminal set and excluding the re-driver itself.
+   * @description Exact count of failed instances that a "Re-drive matching" action
+   * would re-enqueue for the operator's CURRENT filter. Shown in the confirmation
+   * prompt before anything is enqueued. Uses the same selection surface (workflowName
+   * / status / searchTerm) as getFilteredInstances, restricted to the
+   * operator-recoverable terminal set and excluding the re-driver itself.
+   * @param workflowName The workflow name filter, or null for all.
+   * @param status The status filter, or null for all.
+   * @param searchTerm The free-text search term, or null for none.
+   * @return The number of re-drive-eligible instances matching the filter.
    */
   @AuraEnabled
   public static Integer getRedriveEligibleCount(
@@ -1528,14 +1614,16 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * Re-drives every failed instance matching the operator's current filter in a
-   * single bounded action. The actual re-drive runs asynchronously as a
-   * BulkRedriveWorkflow instance, which pages over the selection in safe-sized
-   * chunks (so the platform async-enqueue budget is never exceeded) and recovers
-   * each instance through the existing WorkflowEngine.retryWorkflow primitive.
-   *
-   * Returns { started, eligibleCount, redriveInstanceId } so the dashboard can
-   * confirm the launch and link the operator to the re-driver for live progress.
+   * @description Re-drives every failed instance matching the operator's current
+   * filter in a single bounded action. The actual re-drive runs asynchronously as a
+   * BulkRedriveWorkflow instance, which pages over the selection in safe-sized chunks
+   * (so the platform async-enqueue budget is never exceeded) and recovers each
+   * instance through the existing WorkflowEngine.retryWorkflow primitive.
+   * @param workflowName The workflow name filter, or null for all.
+   * @param status The status filter, or null for all.
+   * @param searchTerm The free-text search term, or null for none.
+   * @return A map of { started, eligibleCount, redriveInstanceId } describing the
+   * launched re-driver.
    */
   @AuraEnabled
   public static Map<String, Object> redriveMatchingInstances(
@@ -1585,8 +1673,12 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * Exact count of active/stalled instances that a "Cancel matching" action would
-   * cancel/rollback for the operator's CURRENT filter.
+   * @description Exact count of active/stalled instances that a "Cancel matching"
+   * action would cancel/rollback for the operator's CURRENT filter.
+   * @param workflowName The workflow name filter, or null for all.
+   * @param status The status filter, or null for all.
+   * @param searchTerm The free-text search term, or null for none.
+   * @return The number of cancel-eligible instances matching the filter.
    */
   @AuraEnabled
   public static Integer getCancelEligibleCount(
@@ -1603,9 +1695,13 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * Cancels every active or stalled instance matching the operator's current filter
-   * in a single bounded action. The actual cancellation runs asynchronously as a
-   * BulkCancelWorkflow instance.
+   * @description Cancels every active or stalled instance matching the operator's
+   * current filter in a single bounded action, WITHOUT running compensations. The
+   * actual cancellation runs asynchronously as a BulkCancelWorkflow instance.
+   * @param workflowName The workflow name filter, or null for all.
+   * @param status The status filter, or null for all.
+   * @param searchTerm The free-text search term, or null for none.
+   * @return A map describing the launched bulk-cancel job.
    */
   @AuraEnabled
   public static Map<String, Object> cancelMatchingInstances(
@@ -1623,6 +1719,15 @@ public inherited sharing class WorkflowDashboardController {
     );
   }
 
+  /**
+   * @description Cancels every active or stalled instance matching the operator's
+   * current filter in a single bounded action, running each instance's compensations
+   * as part of the rollback. Runs asynchronously as a BulkCancelWorkflow instance.
+   * @param workflowName The workflow name filter, or null for all.
+   * @param status The status filter, or null for all.
+   * @param searchTerm The free-text search term, or null for none.
+   * @return A map describing the launched bulk-cancel job.
+   */
   @AuraEnabled
   public static Map<String, Object> cancelMatchingInstancesWithCompensations(
     String workflowName,
@@ -1684,6 +1789,11 @@ public inherited sharing class WorkflowDashboardController {
     }
   }
 
+  /**
+   * @description Manually resumes a Suspended instance, flipping it back to Running,
+   * clearing its sleep/async markers, and re-enqueuing its orchestrator.
+   * @param instanceId The suspended instance to resume.
+   */
   @AuraEnabled
   public static void resumeWorkflowInstance(Id instanceId) {
     checkAuthorization();
@@ -1710,9 +1820,10 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * Operator action to resume a stalled saga rollback (status CompensationFailed)
-   * from exactly the failed compensation point. Idempotent: a repeated/overlapping
-   * call after the rollback has already resumed is a safe no-op in the engine.
+   * @description Operator action to resume a stalled saga rollback (status
+   * CompensationFailed) from exactly the failed compensation point. Idempotent: a
+   * repeated/overlapping call after the rollback has already resumed is a safe no-op.
+   * @param instanceId The CompensationFailed instance whose rollback to resume.
    */
   @AuraEnabled
   public static void resumeCompensationInstance(Id instanceId) {
@@ -1725,8 +1836,12 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * Operator action to resume a failed instance past a failed step by supplying
-   * that step's resolved output and resuming forward execution.
+   * @description Operator action to resume a failed instance past a failed step by
+   * supplying that step's resolved output and resuming forward execution. Gated on
+   * the Workflow_Step_Skip permission (or Modify All Data).
+   * @param instanceId The failed instance to resume.
+   * @param stepName The failed step to skip past.
+   * @param suppliedOutputJson The operator-supplied output for the skipped step, JSON.
    */
   @AuraEnabled
   public static void resumePastStepInstance(
@@ -1756,6 +1871,12 @@ public inherited sharing class WorkflowDashboardController {
     }
   }
 
+  /**
+   * @description Operator action to trigger saga compensation (rollback) of an
+   * instance from the dashboard.
+   * @param instanceId The instance to compensate.
+   * @return The Id of the instance whose compensation was initiated.
+   */
   @AuraEnabled
   public static Id compensateWorkflow(Id instanceId) {
     checkAuthorization();
@@ -1769,6 +1890,10 @@ public inherited sharing class WorkflowDashboardController {
   // Request wrapper for cancelWorkflow so the runCompensations flag is an @AuraEnabled
   // property rather than a Boolean method parameter (the LWC populates it from the
   // cancel modal's dataset).
+  /**
+   * @description Request wrapper for cancelWorkflow that carries the target instance
+   * and the runCompensations flag as @AuraEnabled properties.
+   */
   public class CancelRequest {
     @AuraEnabled
     public Id instanceId;
@@ -1776,6 +1901,10 @@ public inherited sharing class WorkflowDashboardController {
     public Boolean runCompensations;
   }
 
+  /**
+   * @description Cancels a single instance, optionally running its compensations.
+   * @param req The cancel request naming the instance and compensation choice.
+   */
   @AuraEnabled
   public static void cancelWorkflow(CancelRequest req) {
     checkAuthorization();
@@ -1788,6 +1917,10 @@ public inherited sharing class WorkflowDashboardController {
 
   // Request wrapper for submitApproval: keeps the single @AuraEnabled endpoint (the LWC
   // wraps its existing fields) while moving the approved flag off the parameter list.
+  /**
+   * @description Request wrapper for submitApproval carrying the instance, approval
+   * key, decision, and comments as @AuraEnabled properties.
+   */
   public class ApprovalRequest {
     @AuraEnabled
     public Id instanceId;
@@ -1799,6 +1932,11 @@ public inherited sharing class WorkflowDashboardController {
     public String comments;
   }
 
+  /**
+   * @description Records an approval decision by delivering an Approve signal, after
+   * enforcing the gate's designated approval role and stamping the approver identity.
+   * @param req The approval request naming the instance, gate key, and decision.
+   */
   @AuraEnabled
   public static void submitApproval(ApprovalRequest req) {
     checkAuthorization();
@@ -1830,10 +1968,12 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * If the instance has a pending approval gate for the given key that designates an
-   * approvalRole, require the running user to hold a custom permission of that API name
-   * (or "Modify All Data" as a break-glass override). Gates with no role, or no matching
-   * pending gate, impose no additional restriction beyond checkAuthorization().
+   * @description If the instance has a pending approval gate for the given key that
+   * designates an approvalRole, require the running user to hold a custom permission
+   * of that API name (or "Modify All Data" as a break-glass override). Gates with no
+   * role, or no matching pending gate, impose no additional restriction.
+   * @param instanceId The instance whose pending approval gate is checked.
+   * @param approvalKey The approval gate key to match.
    */
   private static void enforceApprovalRole(Id instanceId, String approvalKey) {
     if (instanceId == null) {
@@ -1901,6 +2041,12 @@ public inherited sharing class WorkflowDashboardController {
     return null;
   }
 
+  /**
+   * @description Returns the watchdog/scheduler health snapshot for the dashboard:
+   * recent watchdog jobs, scheduled-job and sleeping-instance counts, pending
+   * timeouts, engine config, paused definitions, and async-apex limit usage.
+   * @return A map of the watchdog status fields consumed by the status panel.
+   */
   @AuraEnabled
   public static Map<String, Object> getWatchdogStatus() {
     checkAuthorization();
@@ -2015,6 +2161,10 @@ public inherited sharing class WorkflowDashboardController {
     return result;
   }
 
+  /**
+   * @description Manually bootstraps the watchdog from the dashboard, kicking off a
+   * fresh sweep/heartbeat cycle.
+   */
   @AuraEnabled
   public static void enqueueWatchdog() {
     checkAuthorization();
@@ -2026,17 +2176,18 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * Returns a per-Definition_Version__c drain view for the given workflow name.
-   * Each row carries three buckets — non-terminal (still executing), failed
-   * (terminal but re-drivable on this version), and clean terminal — plus a
-   * safeToRetire flag that is true only when BOTH the non-terminal and failed
-   * counts are 0. Failed runs are surfaced separately rather than folded into
-   * either bucket: a transient failure may recover on re-drive (so the version's
-   * code is still needed), while a failure caused by the very bug a new version
-   * fixes will never recover — the engine cannot tell which, so it reports the
-   * count and leaves the retire/re-drive judgement to the operator.
-   * Only versions actually observed in Workflow_Instance__c are returned;
-   * absence from results is NOT reported as "safe".
+   * @description Returns a per-Definition_Version__c drain view for the given
+   * workflow name. Each row carries three buckets — non-terminal (still executing),
+   * failed (terminal but re-drivable on this version), and clean terminal — plus a
+   * safeToRetire flag that is true only when BOTH the non-terminal and failed counts
+   * are 0. Failed runs are surfaced separately rather than folded into either bucket:
+   * a transient failure may recover on re-drive (so the version's code is still
+   * needed), while a failure caused by the very bug a new version fixes will never
+   * recover — the engine cannot tell which, so it reports the count and leaves the
+   * retire/re-drive judgement to the operator. Only versions actually observed in
+   * Workflow_Instance__c are returned; absence from results is NOT reported as "safe".
+   * @param workflowName The workflow definition name to build the drain view for.
+   * @return One drain-bucket map per observed definition version, or an empty list.
    */
   @AuraEnabled
   public static List<Map<String, Object>> getVersionDrain(String workflowName) {
@@ -2245,6 +2396,10 @@ public inherited sharing class WorkflowDashboardController {
   // Query criteria for the unrouted-signal list. Field-based (@AuraEnabled properties) so the
   // LWC and tests populate it by assignment. cacheBuster only varies the client-side cache key
   // and is unused in Apex.
+  /**
+   * @description Field-based query criteria for the unrouted-signal list, populated
+   * by the LWC and tests via assignment; unset fields default to null.
+   */
   public class UnroutedQuery {
     @AuraEnabled
     public String searchTerm;
@@ -2256,6 +2411,12 @@ public inherited sharing class WorkflowDashboardController {
     public String cacheBuster;
   }
 
+  /**
+   * @description Returns a page of unrouted (unmatched) signals with a computed age,
+   * so operators can inspect and redeliver signals that found no target instance.
+   * @param criteria The search and pagination criteria.
+   * @return One display map per unrouted signal on the requested page, oldest first.
+   */
   @AuraEnabled(cacheable=true)
   public static List<Map<String, Object>> getUnroutedSignals(
     UnroutedQuery criteria
@@ -2312,6 +2473,12 @@ public inherited sharing class WorkflowDashboardController {
     return results;
   }
 
+  /**
+   * @description Counts unrouted signals matching the search term, reporting a capped
+   * flag when the candidate scan hit its governor-safety bound.
+   * @param searchTerm The free-text search term over key/name, or blank for all.
+   * @return A map with the unrouted-signal count and a capped flag.
+   */
   @AuraEnabled
   public static Map<String, Object> getUnroutedSignalCount(String searchTerm) {
     checkAuthorization();
@@ -2337,6 +2504,12 @@ public inherited sharing class WorkflowDashboardController {
     };
   }
 
+  /**
+   * @description Re-attempts routing of a captured unrouted signal to a matching
+   * instance (held as Received for a paused target, without waking it).
+   * @param signalId The captured Workflow_Signal__c to redeliver.
+   * @return A map with a matched flag indicating whether an instance was found.
+   */
   @AuraEnabled
   public static Map<String, Object> redeliverSignal(Id signalId) {
     checkAuthorization();
@@ -2345,10 +2518,11 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * Pause a workflow definition (or * for org-wide maintenance mode).
-   * After calling this, new starts for the definition are parked (Paused) and
-   * the chain handoff gate parks in-flight instances instead of executing the
-   * next step.
+   * @description Pause a workflow definition (or * for org-wide maintenance mode).
+   * After calling this, new starts for the definition are parked (Paused) and the
+   * chain handoff gate parks in-flight instances instead of executing the next step.
+   * @param workflowName The definition name to pause, or * for org-wide.
+   * @param reason The operator-supplied reason recorded on the pause record.
    */
   @AuraEnabled
   public static void pauseDefinition(String workflowName, String reason) {
@@ -2361,8 +2535,9 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * Resume a paused workflow definition (or * for all). All instances currently
-   * in Paused status are transitioned back to Running and re-enqueued.
+   * @description Resume a paused workflow definition (or * for all). All instances
+   * currently in Paused status are transitioned back to Running and re-enqueued.
+   * @param workflowName The definition name to resume, or * for all.
    */
   @AuraEnabled
   public static void resumeDefinition(String workflowName) {
@@ -2375,8 +2550,9 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * Returns a list of currently paused definitions with parked-instance counts.
-   * Each entry: { workflowName, reason, pausedAt (CreatedDate), parkedCount }.
+   * @description Returns a list of currently paused definitions with parked-instance
+   * counts. Each entry: { workflowName, reason, pausedAt (CreatedDate), parkedCount }.
+   * @return One map per paused definition, or an empty list when none are paused.
    */
   @AuraEnabled
   public static List<Map<String, Object>> getPausedDefinitions() {
@@ -2488,11 +2664,12 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * Returns the concurrency-limit picture for each governed workflow (issue #28):
+   * @description Returns the concurrency-limit picture for each governed workflow:
    * current in-flight count vs. its configured ceiling, and the number of
    * parked/throttled instances awaiting admission. One row per durable counter
    * (Concurrency_State__c) — i.e. every workflow that is, or has been, governed.
    * Each entry: { workflowName, ceiling, inFlight, parked }.
+   * @return One concurrency-status map per governed workflow, or an empty list.
    */
   @AuraEnabled
   public static List<Map<String, Object>> getConcurrencyStatus() {
@@ -2553,6 +2730,14 @@ public inherited sharing class WorkflowDashboardController {
     }
   }
 
+  /**
+   * @description Returns a per-step failure breakdown for a workflow over the given
+   * time window: failure counts grouped by step, capped at a governor-safe scan
+   * bound with an isCapped flag when the cap is reached.
+   * @param workflowName The workflow definition name to analyze.
+   * @param timeWindow The window key selecting how far back to scan.
+   * @return A map with the window, cap metadata, total failures, and per-step groups.
+   */
   @AuraEnabled
   public static Map<String, Object> getWorkflowFailureBreakdown(
     String workflowName,
@@ -2740,6 +2925,12 @@ public inherited sharing class WorkflowDashboardController {
       };
     }
 
+    /**
+     * @description Orders step groups worst-first: higher failure count first, ties
+     * broken by step name.
+     * @param other The other StepFailureGroup to compare against.
+     * @return A negative, zero, or positive value per the Comparable contract.
+     */
     public Integer compareTo(Object other) {
       StepFailureGroup that = (StepFailureGroup) other;
       if (this.failureCount != that.failureCount) {
@@ -2784,6 +2975,12 @@ public inherited sharing class WorkflowDashboardController {
       };
     }
 
+    /**
+     * @description Orders error-signature groups worst-first: higher occurrence count
+     * first, ties broken by the signature text.
+     * @param other The other SignatureGroup to compare against.
+     * @return A negative, zero, or positive value per the Comparable contract.
+     */
     public Integer compareTo(Object other) {
       SignatureGroup that = (SignatureGroup) other;
       if (this.count != that.count) {
@@ -2793,6 +2990,13 @@ public inherited sharing class WorkflowDashboardController {
     }
   }
 
+  /**
+   * @description Operator action to manually inject a signal into an instance from
+   * the dashboard, gated on the signal-injection permission.
+   * @param instanceId The target workflow instance.
+   * @param signalName The name of the signal to deliver.
+   * @param payloadJson The signal payload as JSON, or blank.
+   */
   @AuraEnabled
   public static void injectSignal(
     Id instanceId,

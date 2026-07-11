@@ -29,16 +29,34 @@ public class WorkflowPauseTest {
   // MOCK WORKFLOWS
   // ============================================================
 
+  /**
+   * @description Mock two-step (StepA -> StepB) linear workflow used to exercise the
+   * pause gate at a normal step handoff.
+   */
   public class TwoStepWorkflow implements WorkflowDefinition {
+    /**
+     * @description Lists the ordered step names in this workflow.
+     * @return The step names in execution order.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'WorkflowPauseTest.StepA',
         'WorkflowPauseTest.StepB'
       };
     }
+    /**
+     * @description Names the first step to run when an instance starts.
+     * @return The initial step name.
+     */
     public String getInitialStep() {
       return 'WorkflowPauseTest.StepA';
     }
+    /**
+     * @description Routes StepA to StepB and ends after StepB.
+     * @param current The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return StepB after StepA, or null when complete.
+     */
     public String getNextStep(String current, StepResult result) {
       if (current == 'WorkflowPauseTest.StepA') {
         return 'WorkflowPauseTest.StepB';
@@ -47,28 +65,62 @@ public class WorkflowPauseTest {
     }
   }
 
+  /**
+   * @description Mock first step that completes and hands off to StepB.
+   */
   public class StepA implements WorkflowStep {
+    /**
+     * @description Completes with OutputA and routes to StepB.
+     * @param ctx The durable step context for this execution.
+     * @return A completion result routing to StepB.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete('WorkflowPauseTest.StepB', 'OutputA');
     }
   }
 
+  /**
+   * @description Mock terminal step that completes the workflow.
+   */
   public class StepB implements WorkflowStep {
+    /**
+     * @description Completes the workflow with OutputB.
+     * @param ctx The durable step context for this execution.
+     * @return A terminal completion result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'OutputB');
     }
   }
 
+  /**
+   * @description Mock workflow whose first step suspends waiting for a signal, used
+   * to test signal-hold behavior while paused.
+   */
   public class SuspendingWorkflow implements WorkflowDefinition {
+    /**
+     * @description Lists the ordered step names in this workflow.
+     * @return The step names in execution order.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'WorkflowPauseTest.SuspendStep',
         'WorkflowPauseTest.StepB'
       };
     }
+    /**
+     * @description Names the first step to run when an instance starts.
+     * @return The initial step name.
+     */
     public String getInitialStep() {
       return 'WorkflowPauseTest.SuspendStep';
     }
+    /**
+     * @description Routes SuspendStep to StepB and ends after StepB.
+     * @param current The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return StepB after SuspendStep, or null when complete.
+     */
     public String getNextStep(String current, StepResult result) {
       if (current == 'WorkflowPauseTest.SuspendStep') {
         return 'WorkflowPauseTest.StepB';
@@ -80,13 +132,29 @@ public class WorkflowPauseTest {
   // Step that suspends waiting for a signal. The signal name is not a suspend
   // argument — a resumed step matches signals via ctx.getPendingSignals(name);
   // suspend() just yields the SUSPEND action.
+  /**
+   * @description Mock step that suspends, modeling a step parked waiting on a signal.
+   */
   public class SuspendStep implements WorkflowStep {
+    /**
+     * @description Yields a SUSPEND action so the instance parks.
+     * @param ctx The durable step context for this execution.
+     * @return A suspend result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.suspend();
     }
   }
 
+  /**
+   * @description Mock scatter-gather workflow (split into BranchA/BranchB, join)
+   * used to test pause/resume across parallel branches.
+   */
   public class ParallelWorkflow implements WorkflowDefinition {
+    /**
+     * @description Lists the ordered step names in this workflow.
+     * @return The step names in execution order.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'WorkflowPauseTest.SplitStep',
@@ -95,9 +163,19 @@ public class WorkflowPauseTest {
         'WorkflowPauseTest.JoinStep'
       };
     }
+    /**
+     * @description Names the first step to run when an instance starts.
+     * @return The initial step name.
+     */
     public String getInitialStep() {
       return 'WorkflowPauseTest.SplitStep';
     }
+    /**
+     * @description Routes the split step to the join step; branches end their path.
+     * @param current The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return The join step after the split, or null otherwise.
+     */
     public String getNextStep(String current, StepResult result) {
       if (current == 'WorkflowPauseTest.SplitStep') {
         return 'WorkflowPauseTest.JoinStep';
@@ -106,7 +184,15 @@ public class WorkflowPauseTest {
     }
   }
 
+  /**
+   * @description Mock step that fans out into BranchA and BranchB.
+   */
   public class SplitStep implements WorkflowStep {
+    /**
+     * @description Splits execution into the two mock branches.
+     * @param ctx The durable step context for this execution.
+     * @return A split result into BranchA and BranchB.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.split(
         new List<String>{
@@ -118,19 +204,43 @@ public class WorkflowPauseTest {
     }
   }
 
+  /**
+   * @description Mock parallel branch A that completes immediately.
+   */
   public class BranchA implements WorkflowStep {
+    /**
+     * @description Completes branch A.
+     * @param ctx The durable step context for this execution.
+     * @return A completion result for branch A.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'BranchAOut');
     }
   }
 
+  /**
+   * @description Mock parallel branch B that completes immediately.
+   */
   public class BranchB implements WorkflowStep {
+    /**
+     * @description Completes branch B.
+     * @param ctx The durable step context for this execution.
+     * @return A completion result for branch B.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'BranchBOut');
     }
   }
 
+  /**
+   * @description Mock join step that completes after the branches merge.
+   */
   public class JoinStep implements WorkflowStep {
+    /**
+     * @description Completes the joined workflow.
+     * @param ctx The durable step context for this execution.
+     * @return A terminal completion result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'Joined');
     }
@@ -139,37 +249,89 @@ public class WorkflowPauseTest {
   // Timeout-configured parallel branches used to assert that the resume re-arm
   // path schedules a dynamic timeout job only for branches with an active step
   // row — never for a Completed branch still lingering in Current_Step__c.
+  /**
+   * @description Mock timeout-configured parallel branch A, used to assert the
+   * resume re-arm path only schedules a timeout for a branch with an active step.
+   */
   public class TimeoutBranchA implements WorkflowStep, TimeoutConfigurable {
+    /**
+     * @description Reports this branch's per-step timeout.
+     * @return The timeout in seconds.
+     */
     public Integer getTimeoutSeconds() {
       return 120;
     }
+    /**
+     * @description Completes branch A.
+     * @param ctx The durable step context for this execution.
+     * @return A completion result for branch A.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'BranchAOut');
     }
   }
 
+  /**
+   * @description Mock timeout-configured parallel branch B, counterpart to
+   * TimeoutBranchA in the resume re-arm assertions.
+   */
   public class TimeoutBranchB implements WorkflowStep, TimeoutConfigurable {
+    /**
+     * @description Reports this branch's per-step timeout.
+     * @return The timeout in seconds.
+     */
     public Integer getTimeoutSeconds() {
       return 120;
     }
+    /**
+     * @description Completes branch B.
+     * @param ctx The durable step context for this execution.
+     * @return A completion result for branch B.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'BranchBOut');
     }
   }
 
+  /**
+   * @description Mock parent workflow whose single step spawns a child, used to
+   * exercise the pause gate on the START_CHILD path.
+   */
   public class ChildSpawningWorkflow implements WorkflowDefinition {
+    /**
+     * @description Lists the ordered step names in this workflow.
+     * @return The single-element list of step names.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowPauseTest.SpawnChildStep' };
     }
+    /**
+     * @description Names the first step to run when an instance starts.
+     * @return The initial step name.
+     */
     public String getInitialStep() {
       return 'WorkflowPauseTest.SpawnChildStep';
     }
+    /**
+     * @description Ends after the single spawn step.
+     * @param current The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, since this workflow has one step.
+     */
     public String getNextStep(String current, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Mock step that starts a child TwoStepWorkflow via START_CHILD.
+   */
   public class SpawnChildStep implements WorkflowStep {
+    /**
+     * @description Spawns the child workflow keyed by the shared spawnChildKey.
+     * @param ctx The durable step context for this execution.
+     * @return A start-child result for the child workflow.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.startChild(
         'WorkflowPauseTest.TwoStepWorkflow',

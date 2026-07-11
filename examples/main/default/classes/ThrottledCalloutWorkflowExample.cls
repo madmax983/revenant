@@ -29,6 +29,11 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
   public static Integer successfulCallouts = 0;
   private static Set<String> processedKeys = new Set<String>();
 
+  /**
+   * @description Simulates the throttled outbound callout, counting every attempt
+   * and recording a successful call only once per idempotency key.
+   * @param idempotencyKey The key that makes the callout effectively-once.
+   */
   public static void performCallout(String idempotencyKey) {
     calloutAttempts++;
     if (processedKeys.contains(idempotencyKey)) {
@@ -38,22 +43,44 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
     successfulCallouts++;
   }
 
+  /**
+   * @description Resets the callout counters and processed-key set so tests start
+   * from a clean state.
+   */
   public static void reset() {
     calloutAttempts = 0;
     successfulCallouts = 0;
     processedKeys.clear();
   }
 
+  /**
+   * @description Two-step workflow DAG: acquire a rate-limiter token, then perform
+   * the callout in a separate transaction.
+   */
   public class ThrottledCalloutWorkflow implements WorkflowDefinition {
+    /**
+     * @description Lists the ordered step names in this workflow.
+     * @return The step names in execution order.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'ThrottledCalloutWorkflowExample.AcquireTokenStep',
         'ThrottledCalloutWorkflowExample.ThrottledCalloutStep'
       };
     }
+    /**
+     * @description Names the first step to run when an instance starts.
+     * @return The initial step name.
+     */
     public String getInitialStep() {
       return 'ThrottledCalloutWorkflowExample.AcquireTokenStep';
     }
+    /**
+     * @description Determines the step to run after the current one completes.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return The callout step after acquiring a token, or null when complete.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       if (
         currentStepName == 'ThrottledCalloutWorkflowExample.AcquireTokenStep'
@@ -64,7 +91,17 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
     }
   }
 
+  /**
+   * @description Acquires a rate-limiter token; on success advances to the callout
+   * step, otherwise yields a durable sleep so the DML commits in its own transaction.
+   */
   public class AcquireTokenStep implements WorkflowStep {
+    /**
+     * @description Calls the rate limiter and either sleeps until a token frees up or
+     * transitions to the throttled callout step.
+     * @param ctx The durable step context for this execution.
+     * @return A sleep result when throttled, or completion routing to the callout.
+     */
     public StepResult execute(StepContext ctx) {
       RateLimiter.AcquireResult result = RateLimiter.acquire(
         'ThrottledService'
@@ -79,7 +116,16 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
     }
   }
 
+  /**
+   * @description Performs the outbound callout in a fresh transaction, keyed by the
+   * step's idempotency key so retries and re-drives stay effectively-once.
+   */
   public class ThrottledCalloutStep implements WorkflowStep, CalloutStep {
+    /**
+     * @description Executes the idempotent callout and completes the workflow.
+     * @param ctx The durable step context for this execution.
+     * @return A completion result reporting success.
+     */
     public StepResult execute(StepContext ctx) {
       ThrottledCalloutWorkflowExample.performCallout(ctx.idempotencyKey);
       return StepResult.complete(

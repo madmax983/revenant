@@ -14,6 +14,11 @@ public inherited sharing class WorkflowHarnessCore {
     'ContinuedAsNew'
   };
 
+  /**
+   * @description Flushes any queued Workflow_Event__e platform events through the
+   * event trigger so signals and child completions are delivered; safe to call even
+   * when nothing is queued.
+   */
   public static void deliverEvents() {
     // Safe to call even with nothing queued; flushes published Workflow_Event__e
     // records through WorkflowEventTrigger (signals, child completions).
@@ -21,12 +26,15 @@ public inherited sharing class WorkflowHarnessCore {
   }
 
   /**
-   * Invokes the engine the way WorkflowOrchestrator does, and rescues a thrown
-   * step exactly as WorkflowFinalizer / SagaWorkflowExampleTest do — a synchronous
-   * catch that hands off to WorkflowEngine.handleCrash. (An earlier version wrapped
-   * each hop in a Database savepoint for production-faithful rollback, but that
-   * leaks one unreleased savepoint per successful hop; this matches the engine's
-   * own proven crash-driving pattern instead.)
+   * @description Invokes the engine the way WorkflowOrchestrator does, and rescues a
+   * thrown step exactly as WorkflowFinalizer / SagaWorkflowExampleTest do — a
+   * synchronous catch that hands off to WorkflowEngine.handleCrash. (An earlier
+   * version wrapped each hop in a Database savepoint for production-faithful
+   * rollback, but that leaks one unreleased savepoint per successful hop; this
+   * matches the engine's own proven crash-driving pattern instead.)
+   * @param ctx The harness context tracking known instances and hop counts.
+   * @param instanceId The workflow instance to advance.
+   * @param stepName The step to run on that instance.
    */
   public static void runStepSafely(
     WorkflowHarnessContext ctx,
@@ -42,6 +50,12 @@ public inherited sharing class WorkflowHarnessCore {
     }
   }
 
+  /**
+   * @description Resolves a step name to its Type and reports whether that step is a
+   * CalloutStep; returns false for blank names or any resolution/instantiation error.
+   * @param stepName The step name to inspect.
+   * @return True if the step implements CalloutStep; false otherwise.
+   */
   public static Boolean isCalloutStep(String stepName) {
     if (String.isBlank(stepName)) {
       return false;
@@ -58,13 +72,14 @@ public inherited sharing class WorkflowHarnessCore {
   }
 
   /**
-   * Root instance plus all live descendants (children spawned via START_CHILD).
-   *
-   * Stays frugal with SOQL — the whole drive runs inside the caller's one
-   * governor-limit budget. The known-instance set is cached across hops, so the
-   * common case costs a single status query per hop. The descendant scan only runs
-   * when some instance is parked in a non-sleep suspend (the state a START_CHILD
-   * leaves its parent in), which is the only way a new child can have appeared.
+   * @description Returns the root instance plus all live descendants (children
+   * spawned via START_CHILD). Stays frugal with SOQL — the whole drive runs inside
+   * the caller's one governor-limit budget. The known-instance set is cached across
+   * hops, so the common case costs a single status query per hop. The descendant
+   * scan only runs when some instance is parked in a non-sleep suspend (the state a
+   * START_CHILD leaves its parent in), which is the only way a new child can appear.
+   * @param ctx The harness context holding the known and scanned instance ids.
+   * @return The root instance and any newly discovered child instances.
    */
   public static List<Workflow_Instance__c> collectTree(
     WorkflowHarnessContext ctx
@@ -124,6 +139,12 @@ public inherited sharing class WorkflowHarnessCore {
     ctx.scannedInstanceIds.addAll(unscannedIds);
   }
 
+  /**
+   * @description Loads a single workflow instance by id in system mode, throwing a
+   * HarnessException when no such instance exists.
+   * @param instanceId The workflow instance to load.
+   * @return The matching Workflow_Instance__c record.
+   */
   public static Workflow_Instance__c queryInstance(Id instanceId) {
     List<Workflow_Instance__c> results = [
       SELECT Id, Status__c, Current_Step__c, Sleep_Until__c, Output__c
@@ -140,6 +161,13 @@ public inherited sharing class WorkflowHarnessCore {
     return results[0];
   }
 
+  /**
+   * @description Assembles the inspectable Result snapshot for the root instance:
+   * status, resolved output, hop count, terminal/suspended flags, and the executed /
+   * completed / compensated step lists plus sleep/retry flags.
+   * @param ctx The harness context identifying the root instance and hop count.
+   * @return The populated Result snapshot for assertions.
+   */
   public static WorkflowTestHarness.Result buildResult(
     WorkflowHarnessContext ctx
   ) {

@@ -1,4 +1,13 @@
+/**
+ * @description Flow/Process Builder entry point that idempotently starts a workflow
+ * and delivers a signal to it in a single transaction, adapting Invocable request
+ * and result wrappers to the underlying WorkflowEngine signal-or-start API.
+ */
 public inherited sharing class WorkflowSignalOrStartInvocableAction {
+  /**
+   * @description Invocable input describing the workflow to signal-or-start, its
+   * correlation key, optional input/attribute payloads, and the signal to deliver.
+   */
   public class SignalOrStartRequest {
     @InvocableVariable(label='Workflow Name' required=true)
     public String workflowName;
@@ -28,6 +37,10 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
     public String causationId;
   }
 
+  /**
+   * @description Invocable output carrying the resolved workflow instance id and a
+   * flag indicating whether a new instance was started or an existing one reused.
+   */
   public class SignalOrStartResult {
     @InvocableVariable(label='Workflow Instance ID')
     public Id workflowInstanceId;
@@ -44,6 +57,13 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
     category='Revenant Workflows'
     description='Idempotently starts a workflow and/or signals it in one transaction'
   )
+  /**
+   * @description Idempotently starts and signals workflows for each request in one
+   * transaction, delegating to WorkflowEngine.signalOrStart and mapping the engine
+   * results back to Invocable outputs.
+   * @param requests The signal-or-start requests to process.
+   * @return One result per request, or an empty list when requests is null/empty.
+   */
   public static List<SignalOrStartResult> signalOrStartWorkflow(
     List<SignalOrStartRequest> requests
   ) {
