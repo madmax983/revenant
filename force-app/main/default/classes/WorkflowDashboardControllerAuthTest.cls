@@ -13,6 +13,59 @@ public class WorkflowDashboardControllerAuthTest {
     );
   }
 
+  // Assembles the getFilteredInstances request wrapper by field assignment: a 1:1
+  // repackaging of the former positional arguments (identical values, just wrapped).
+  private static WorkflowDashboardController.InstanceQuery iqOf(
+    String workflowName,
+    String status,
+    String searchTerm,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster
+  ) {
+    WorkflowDashboardController.InstanceQuery q = new WorkflowDashboardController.InstanceQuery();
+    q.workflowName = workflowName;
+    q.status = status;
+    q.searchTerm = searchTerm;
+    q.limitSize = limitSize;
+    q.offsetSize = offsetSize;
+    q.cacheBuster = cacheBuster;
+    return q;
+  }
+
+  // Assembles the getWorkflowStats request wrapper (reuses InstanceQuery); the rollup
+  // reads only workflowName/status/searchTerm.
+  private static WorkflowDashboardController.InstanceQuery sqOf(
+    String workflowName,
+    String status,
+    String searchTerm
+  ) {
+    WorkflowDashboardController.InstanceQuery q = new WorkflowDashboardController.InstanceQuery();
+    q.workflowName = workflowName;
+    q.status = status;
+    q.searchTerm = searchTerm;
+    return q;
+  }
+
+  // Placeholder cancelWorkflow request for the authorization check (the values are
+  // irrelevant because the call is rejected before they are read).
+  private static WorkflowDashboardController.CancelRequest unauthCancelReq() {
+    WorkflowDashboardController.CancelRequest r = new WorkflowDashboardController.CancelRequest();
+    r.instanceId = null;
+    r.runCompensations = false;
+    return r;
+  }
+
+  // Placeholder submitApproval request for the authorization check.
+  private static WorkflowDashboardController.ApprovalRequest unauthApprovalReq() {
+    WorkflowDashboardController.ApprovalRequest r = new WorkflowDashboardController.ApprovalRequest();
+    r.instanceId = null;
+    r.approvalKey = '';
+    r.approved = false;
+    r.comments = '';
+    return r;
+  }
+
   @IsTest
   static void testAuthorizationFailures() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
@@ -42,12 +95,7 @@ public class WorkflowDashboardControllerAuthTest {
         // 1. getFilteredInstances
         try {
           WorkflowDashboardController.getFilteredInstances(
-            '',
-            '',
-            '',
-            10,
-            0,
-            ''
+            iqOf('', '', '', 10, 0, '')
           );
           System.assert(
             false,
@@ -59,7 +107,7 @@ public class WorkflowDashboardControllerAuthTest {
 
         // 2. getWorkflowStats
         try {
-          WorkflowDashboardController.getWorkflowStats('', '', '');
+          WorkflowDashboardController.getWorkflowStats(sqOf('', '', ''));
           System.assert(
             false,
             'Expected AuraHandledException for getWorkflowStats'
@@ -114,7 +162,7 @@ public class WorkflowDashboardControllerAuthTest {
 
         // 7. cancelWorkflow
         try {
-          WorkflowDashboardController.cancelWorkflow(null, false);
+          WorkflowDashboardController.cancelWorkflow(unauthCancelReq());
           System.assert(
             false,
             'Expected AuraHandledException for cancelWorkflow'
@@ -125,7 +173,7 @@ public class WorkflowDashboardControllerAuthTest {
 
         // 8. submitApproval
         try {
-          WorkflowDashboardController.submitApproval(null, '', false, '');
+          WorkflowDashboardController.submitApproval(unauthApprovalReq());
           System.assert(
             false,
             'Expected AuraHandledException for submitApproval'
@@ -212,12 +260,7 @@ public class WorkflowDashboardControllerAuthTest {
 
       Test.startTest();
       List<Map<String, Object>> res = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        'xyz',
-        10,
-        0,
-        'cbError'
+        iqOf('', '', 'xyz', 10, 0, 'cbError')
       );
       Test.stopTest();
 
@@ -596,12 +639,7 @@ public class WorkflowDashboardControllerAuthTest {
       // Test getFilteredInstances returns the computed waitingOn
       Test.startTest();
       List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
-        '',
-        'Suspended',
-        '',
-        10,
-        0,
-        ''
+        iqOf('', 'Suspended', '', 10, 0, '')
       );
       System.assertEquals(1, instances.size());
       // Since it's a fake ID and not active, it should fall back to 'Watchdog'
@@ -640,20 +678,10 @@ public class WorkflowDashboardControllerAuthTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       List<Map<String, Object>> res1 = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        '',
-        -10,
-        -5,
-        ''
+        iqOf('', '', '', -10, -5, '')
       );
       List<Map<String, Object>> res2 = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        '',
-        500,
-        5000,
-        ''
+        iqOf('', '', '', 500, 5000, '')
       );
       Test.stopTest();
       System.assertNotEquals(null, res1);
@@ -776,12 +804,12 @@ public class WorkflowDashboardControllerAuthTest {
       System.runAs(stdUser) {
         Boolean threw = false;
         try {
-          WorkflowDashboardController.submitApproval(
-            inst.Id,
-            'ExpenseApproval',
-            true,
-            'Approving without the role'
-          );
+          WorkflowDashboardController.ApprovalRequest approvalReq = new WorkflowDashboardController.ApprovalRequest();
+          approvalReq.instanceId = inst.Id;
+          approvalReq.approvalKey = 'ExpenseApproval';
+          approvalReq.approved = true;
+          approvalReq.comments = 'Approving without the role';
+          WorkflowDashboardController.submitApproval(approvalReq);
         } catch (AuraHandledException e) {
           threw = true;
           System.assert(

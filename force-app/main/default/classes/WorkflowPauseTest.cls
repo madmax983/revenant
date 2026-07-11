@@ -1564,10 +1564,10 @@ public class WorkflowPauseTest {
       insert inst;
 
       Test.startTest();
+      WorkflowDashboardController.InstanceQuery statsQuery = new WorkflowDashboardController.InstanceQuery();
+      statsQuery.workflowName = 'WorkflowPauseTest.TwoStepWorkflow';
       Map<String, Integer> stats = WorkflowDashboardController.getWorkflowStats(
-        'WorkflowPauseTest.TwoStepWorkflow',
-        null,
-        null
+        statsQuery
       );
       Test.stopTest();
 

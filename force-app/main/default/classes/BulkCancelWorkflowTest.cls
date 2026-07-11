@@ -45,15 +45,12 @@ public class BulkCancelWorkflowTest {
   }
 
   private static StepContext ctxFor(String inputJson, String stateJson) {
-    return new StepContext(
-      null,
-      'BulkCancelWorkflow',
-      'BulkCancelWorkflow.BulkCancelStep',
-      null,
-      null,
-      stateJson,
-      inputJson
-    );
+    return new StepContext.Builder()
+      .workflowName('BulkCancelWorkflow')
+      .stepName('BulkCancelWorkflow.BulkCancelStep')
+      .stepStateJson(stateJson)
+      .workflowInputJson(inputJson)
+      .build();
   }
 
   // Threads the operator filter into the chunk driver so each yielded

@@ -1,5 +1,39 @@
 @IsTest
 public class WorkflowDashboardControllerTest {
+  // Assembles the getFilteredInstances request wrapper by field assignment: a 1:1
+  // repackaging of the former positional arguments (identical values, just wrapped).
+  private static WorkflowDashboardController.InstanceQuery iqOf(
+    String workflowName,
+    String status,
+    String searchTerm,
+    Integer limitSize,
+    Integer offsetSize,
+    String cacheBuster
+  ) {
+    WorkflowDashboardController.InstanceQuery q = new WorkflowDashboardController.InstanceQuery();
+    q.workflowName = workflowName;
+    q.status = status;
+    q.searchTerm = searchTerm;
+    q.limitSize = limitSize;
+    q.offsetSize = offsetSize;
+    q.cacheBuster = cacheBuster;
+    return q;
+  }
+
+  // Assembles the getWorkflowStats request wrapper (reuses InstanceQuery); the rollup
+  // reads only workflowName/status/searchTerm.
+  private static WorkflowDashboardController.InstanceQuery sqOf(
+    String workflowName,
+    String status,
+    String searchTerm
+  ) {
+    WorkflowDashboardController.InstanceQuery q = new WorkflowDashboardController.InstanceQuery();
+    q.workflowName = workflowName;
+    q.status = status;
+    q.searchTerm = searchTerm;
+    return q;
+  }
+
   @IsTest
   static void testGetInstancesAndDetails() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
@@ -38,12 +72,7 @@ public class WorkflowDashboardControllerTest {
 
       Test.startTest();
       List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        '',
-        10,
-        0,
-        ''
+        iqOf('', '', '', 10, 0, '')
       );
       Map<String, Object> details = WorkflowDashboardController.getInstanceDetails(
         inst.Id
@@ -242,12 +271,12 @@ public class WorkflowDashboardControllerTest {
       insert inst;
 
       Test.startTest();
-      WorkflowDashboardController.submitApproval(
-        inst.Id,
-        'ExpenseApproval',
-        true,
-        'Looks good'
-      );
+      WorkflowDashboardController.ApprovalRequest approvalReq = new WorkflowDashboardController.ApprovalRequest();
+      approvalReq.instanceId = inst.Id;
+      approvalReq.approvalKey = 'ExpenseApproval';
+      approvalReq.approved = true;
+      approvalReq.comments = 'Looks good';
+      WorkflowDashboardController.submitApproval(approvalReq);
       Test.stopTest();
 
       // Deliver Platform Event
@@ -279,7 +308,10 @@ public class WorkflowDashboardControllerTest {
       insert inst;
 
       Test.startTest();
-      WorkflowDashboardController.cancelWorkflow(inst.Id, false);
+      WorkflowDashboardController.CancelRequest cancelReq = new WorkflowDashboardController.CancelRequest();
+      cancelReq.instanceId = inst.Id;
+      cancelReq.runCompensations = false;
+      WorkflowDashboardController.cancelWorkflow(cancelReq);
       Test.stopTest();
 
       Workflow_Instance__c updatedInst = [
@@ -331,12 +363,7 @@ public class WorkflowDashboardControllerTest {
       Test.startTest();
       // 1. Test filtering by Workflow Name
       List<Map<String, Object>> resWorkflow = WorkflowDashboardController.getFilteredInstances(
-        'TestDefA',
-        '',
-        '',
-        10,
-        0,
-        'cb1'
+        iqOf('TestDefA', '', '', 10, 0, 'cb1')
       );
       System.assertEquals(
         2,
@@ -346,12 +373,7 @@ public class WorkflowDashboardControllerTest {
 
       // 2. Test filtering by Status
       List<Map<String, Object>> resStatus = WorkflowDashboardController.getFilteredInstances(
-        '',
-        'Running',
-        '',
-        10,
-        0,
-        'cb2'
+        iqOf('', 'Running', '', 10, 0, 'cb2')
       );
       System.assertEquals(
         1,
@@ -365,12 +387,7 @@ public class WorkflowDashboardControllerTest {
 
       // 3. Test filtering by Search Term on Correlation Key
       List<Map<String, Object>> resSearchKey = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        'Banana',
-        10,
-        0,
-        'cb3'
+        iqOf('', '', 'Banana', 10, 0, 'cb3')
       );
       System.assertEquals(
         1,
@@ -384,12 +401,7 @@ public class WorkflowDashboardControllerTest {
 
       // 4. Test filtering by Search Term case-insensitivity on Correlation Key
       List<Map<String, Object>> resSearchError = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        'banana',
-        10,
-        0,
-        'cb4'
+        iqOf('', '', 'banana', 10, 0, 'cb4')
       );
       System.assertEquals(
         1,
@@ -399,12 +411,7 @@ public class WorkflowDashboardControllerTest {
 
       // 5. Test pagination: limit and offset
       List<Map<String, Object>> page1 = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        '',
-        2,
-        0,
-        'cb5'
+        iqOf('', '', '', 2, 0, 'cb5')
       );
       System.assertEquals(
         2,
@@ -413,12 +420,7 @@ public class WorkflowDashboardControllerTest {
       );
 
       List<Map<String, Object>> page2 = WorkflowDashboardController.getFilteredInstances(
-        '',
-        '',
-        '',
-        2,
-        2,
-        'cb6'
+        iqOf('', '', '', 2, 2, 'cb6')
       );
       System.assertEquals(
         1,
@@ -439,9 +441,7 @@ public class WorkflowDashboardControllerTest {
       Test.startTest();
       // 1. Get stats overall (no filters)
       Map<String, Integer> statsAll = WorkflowDashboardController.getWorkflowStats(
-        '',
-        '',
-        ''
+        sqOf('', '', '')
       );
       System.assertEquals(
         3,
@@ -466,9 +466,7 @@ public class WorkflowDashboardControllerTest {
 
       // 2. Get stats filtered by definition A
       Map<String, Integer> statsDefA = WorkflowDashboardController.getWorkflowStats(
-        'TestDefA',
-        '',
-        ''
+        sqOf('TestDefA', '', '')
       );
       System.assertEquals(2, statsDefA.get('total'));
       System.assertEquals(0, statsDefA.get('active'));
@@ -477,9 +475,7 @@ public class WorkflowDashboardControllerTest {
 
       // 3. Get stats filtered by search term
       Map<String, Integer> statsSearch = WorkflowDashboardController.getWorkflowStats(
-        '',
-        '',
-        'Banana'
+        sqOf('', '', 'Banana')
       );
       System.assertEquals(1, statsSearch.get('total'));
       System.assertEquals(1, statsSearch.get('failed'));
