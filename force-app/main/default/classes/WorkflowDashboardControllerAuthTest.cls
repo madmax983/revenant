@@ -13,40 +13,6 @@ public class WorkflowDashboardControllerAuthTest {
     );
   }
 
-  // Assembles the getFilteredInstances request wrapper by field assignment: a 1:1
-  // repackaging of the former positional arguments (identical values, just wrapped).
-  private static WorkflowDashboardController.InstanceQuery iqOf(
-    String workflowName,
-    String status,
-    String searchTerm,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
-  ) {
-    WorkflowDashboardController.InstanceQuery q = new WorkflowDashboardController.InstanceQuery();
-    q.workflowName = workflowName;
-    q.status = status;
-    q.searchTerm = searchTerm;
-    q.limitSize = limitSize;
-    q.offsetSize = offsetSize;
-    q.cacheBuster = cacheBuster;
-    return q;
-  }
-
-  // Assembles the getWorkflowStats request wrapper (reuses InstanceQuery); the rollup
-  // reads only workflowName/status/searchTerm.
-  private static WorkflowDashboardController.InstanceQuery sqOf(
-    String workflowName,
-    String status,
-    String searchTerm
-  ) {
-    WorkflowDashboardController.InstanceQuery q = new WorkflowDashboardController.InstanceQuery();
-    q.workflowName = workflowName;
-    q.status = status;
-    q.searchTerm = searchTerm;
-    return q;
-  }
-
   // Placeholder cancelWorkflow request for the authorization check (the values are
   // irrelevant because the call is rejected before they are read).
   private static WorkflowDashboardController.CancelRequest unauthCancelReq() {
@@ -95,7 +61,10 @@ public class WorkflowDashboardControllerAuthTest {
         // 1. getFilteredInstances
         try {
           WorkflowDashboardController.getFilteredInstances(
-            iqOf('', '', '', 10, 0, '')
+            WorkflowDashboardQueryBuilders.instanceQuery()
+              .filter('', '', '')
+              .page(10, 0, '')
+              .build()
           );
           System.assert(
             false,
@@ -107,7 +76,11 @@ public class WorkflowDashboardControllerAuthTest {
 
         // 2. getWorkflowStats
         try {
-          WorkflowDashboardController.getWorkflowStats(sqOf('', '', ''));
+          WorkflowDashboardController.getWorkflowStats(
+            WorkflowDashboardQueryBuilders.instanceQuery()
+              .filter('', '', '')
+              .build()
+          );
           System.assert(
             false,
             'Expected AuraHandledException for getWorkflowStats'
@@ -260,7 +233,10 @@ public class WorkflowDashboardControllerAuthTest {
 
       Test.startTest();
       List<Map<String, Object>> res = WorkflowDashboardController.getFilteredInstances(
-        iqOf('', '', 'xyz', 10, 0, 'cbError')
+        WorkflowDashboardQueryBuilders.instanceQuery()
+          .filter('', '', 'xyz')
+          .page(10, 0, 'cbError')
+          .build()
       );
       Test.stopTest();
 
@@ -639,7 +615,10 @@ public class WorkflowDashboardControllerAuthTest {
       // Test getFilteredInstances returns the computed waitingOn
       Test.startTest();
       List<Map<String, Object>> instances = WorkflowDashboardController.getFilteredInstances(
-        iqOf('', 'Suspended', '', 10, 0, '')
+        WorkflowDashboardQueryBuilders.instanceQuery()
+          .filter('', 'Suspended', '')
+          .page(10, 0, '')
+          .build()
       );
       System.assertEquals(1, instances.size());
       // Since it's a fake ID and not active, it should fall back to 'Watchdog'
@@ -678,10 +657,16 @@ public class WorkflowDashboardControllerAuthTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       List<Map<String, Object>> res1 = WorkflowDashboardController.getFilteredInstances(
-        iqOf('', '', '', -10, -5, '')
+        WorkflowDashboardQueryBuilders.instanceQuery()
+          .filter('', '', '')
+          .page(-10, -5, '')
+          .build()
       );
       List<Map<String, Object>> res2 = WorkflowDashboardController.getFilteredInstances(
-        iqOf('', '', '', 500, 5000, '')
+        WorkflowDashboardQueryBuilders.instanceQuery()
+          .filter('', '', '')
+          .page(500, 5000, '')
+          .build()
       );
       Test.stopTest();
       System.assertNotEquals(null, res1);

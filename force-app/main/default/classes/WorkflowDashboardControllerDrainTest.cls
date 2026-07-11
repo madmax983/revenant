@@ -1,21 +1,5 @@
 @IsTest
 public class WorkflowDashboardControllerDrainTest {
-  // Assembles the getUnroutedSignals request wrapper by field assignment: a 1:1
-  // repackaging of the former positional arguments (identical values, just wrapped).
-  private static WorkflowDashboardController.UnroutedQuery unroutedOf(
-    String searchTerm,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
-  ) {
-    WorkflowDashboardController.UnroutedQuery q = new WorkflowDashboardController.UnroutedQuery();
-    q.searchTerm = searchTerm;
-    q.limitSize = limitSize;
-    q.offsetSize = offsetSize;
-    q.cacheBuster = cacheBuster;
-    return q;
-  }
-
   // ── Version Drain Tests ────────────────────────────────────────────────────
 
   @IsTest
@@ -394,7 +378,10 @@ public class WorkflowDashboardControllerDrainTest {
 
       Test.startTest();
       List<Map<String, Object>> results = WorkflowDashboardController.getUnroutedSignals(
-        unroutedOf(null, 10, 0, '')
+        WorkflowDashboardQueryBuilders.unroutedQuery()
+          .searchTerm(null)
+          .page(10, 0, '')
+          .build()
       );
       Test.stopTest();
 
@@ -533,7 +520,10 @@ public class WorkflowDashboardControllerDrainTest {
       System.runAs(stdUser) {
         try {
           WorkflowDashboardController.getUnroutedSignals(
-            unroutedOf(null, 10, 0, '')
+            WorkflowDashboardQueryBuilders.unroutedQuery()
+              .searchTerm(null)
+              .page(10, 0, '')
+              .build()
           );
           System.assert(false, 'Expected AuraHandledException');
         } catch (AuraHandledException e) {

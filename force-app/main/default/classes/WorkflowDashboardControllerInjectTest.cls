@@ -1,93 +1,5 @@
 @IsTest
 public class WorkflowDashboardControllerInjectTest {
-  // Assembles the getFilteredInstances request wrapper by field assignment: a 1:1
-  // repackaging of the former positional arguments (identical values, just wrapped).
-  private static WorkflowDashboardController.InstanceQuery iqOf(
-    String workflowName,
-    String status,
-    String searchTerm,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
-  ) {
-    return iqOf(
-      workflowName,
-      status,
-      searchTerm,
-      null,
-      limitSize,
-      offsetSize,
-      cacheBuster
-    );
-  }
-
-  private static WorkflowDashboardController.InstanceQuery iqOf(
-    String workflowName,
-    String status,
-    String searchTerm,
-    String failureCategory,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
-  ) {
-    WorkflowDashboardController.InstanceQuery q = new WorkflowDashboardController.InstanceQuery();
-    q.workflowName = workflowName;
-    q.status = status;
-    q.searchTerm = searchTerm;
-    q.failureCategory = failureCategory;
-    q.limitSize = limitSize;
-    q.offsetSize = offsetSize;
-    q.cacheBuster = cacheBuster;
-    return q;
-  }
-
-  // Assembles the getStalledInstances request wrapper.
-  private static WorkflowDashboardController.StalledQuery stalledOf(
-    String workflowName,
-    String searchTerm,
-    Integer thresholdMinutes,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
-  ) {
-    WorkflowDashboardController.StalledQuery q = new WorkflowDashboardController.StalledQuery();
-    q.workflowName = workflowName;
-    q.searchTerm = searchTerm;
-    q.thresholdMinutes = thresholdMinutes;
-    q.limitSize = limitSize;
-    q.offsetSize = offsetSize;
-    q.cacheBuster = cacheBuster;
-    return q;
-  }
-
-  // Assembles the getStalledCount request wrapper (reuses StalledQuery).
-  private static WorkflowDashboardController.StalledQuery countOf(
-    String workflowName,
-    String searchTerm,
-    Integer thresholdMinutes
-  ) {
-    WorkflowDashboardController.StalledQuery q = new WorkflowDashboardController.StalledQuery();
-    q.workflowName = workflowName;
-    q.searchTerm = searchTerm;
-    q.thresholdMinutes = thresholdMinutes;
-    return q;
-  }
-
-  // Assembles the getUnroutedSignals request wrapper.
-  private static WorkflowDashboardController.UnroutedQuery unroutedOf(
-    String searchTerm,
-    Integer limitSize,
-    Integer offsetSize,
-    String cacheBuster
-  ) {
-    WorkflowDashboardController.UnroutedQuery q = new WorkflowDashboardController.UnroutedQuery();
-    q.searchTerm = searchTerm;
-    q.limitSize = limitSize;
-    q.offsetSize = offsetSize;
-    q.cacheBuster = cacheBuster;
-    return q;
-  }
-
   @IsTest
   static void testSearchWithSingleQuote() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
@@ -108,19 +20,30 @@ public class WorkflowDashboardControllerInjectTest {
 
       Test.startTest();
       List<Map<String, Object>> filteredInsts = WorkflowDashboardController.getFilteredInstances(
-        iqOf('', '', 'O\'Connor', 10, 0, '')
+        WorkflowDashboardQueryBuilders.instanceQuery()
+          .filter('', '', 'O\'Connor')
+          .page(10, 0, '')
+          .build()
       );
 
       List<Map<String, Object>> stalledInsts = WorkflowDashboardController.getStalledInstances(
-        stalledOf('', 'O\'Connor', -1, 10, 0, '')
+        WorkflowDashboardQueryBuilders.stalledQuery()
+          .criteria('', 'O\'Connor', -1)
+          .page(10, 0, '')
+          .build()
       );
 
       Map<String, Object> stalledCountResult = WorkflowDashboardController.getStalledCount(
-        countOf('', 'O\'Connor', -1)
+        WorkflowDashboardQueryBuilders.stalledQuery()
+          .criteria('', 'O\'Connor', -1)
+          .build()
       );
 
       List<Map<String, Object>> unroutedSigs = WorkflowDashboardController.getUnroutedSignals(
-        unroutedOf('O\'Connor', 10, 0, '')
+        WorkflowDashboardQueryBuilders.unroutedQuery()
+          .searchTerm('O\'Connor')
+          .page(10, 0, '')
+          .build()
       );
 
       Map<String, Object> unroutedCountResult = WorkflowDashboardController.getUnroutedSignalCount(
@@ -182,9 +105,13 @@ public class WorkflowDashboardControllerInjectTest {
       insert testInstances;
 
       Test.startTest();
-      // Calls the 7-parameter WorkflowDashboardController.getFilteredInstances with failureCategory = 'TIMEOUT'
+      // Calls WorkflowDashboardController.getFilteredInstances with failureCategory = 'TIMEOUT'
       List<Map<String, Object>> resCategory = WorkflowDashboardController.getFilteredInstances(
-        iqOf('', 'Failed', '', 'TIMEOUT', 10, 0, 'cb')
+        WorkflowDashboardQueryBuilders.instanceQuery()
+          .filter('', 'Failed', '')
+          .failureCategory('TIMEOUT')
+          .page(10, 0, 'cb')
+          .build()
       );
 
       // Calls WorkflowDashboardController.getInstanceDetails for the first instance
@@ -192,9 +119,12 @@ public class WorkflowDashboardControllerInjectTest {
         testInstances[0].Id
       );
 
-      // Calls the 6-parameter WorkflowDashboardController.getFilteredInstances with searchTerm = 'StepExceptionKey'
+      // Calls WorkflowDashboardController.getFilteredInstances with searchTerm = 'StepExceptionKey'
       List<Map<String, Object>> resSearch = WorkflowDashboardController.getFilteredInstances(
-        iqOf('', '', 'StepExceptionKey', 10, 0, 'cb')
+        WorkflowDashboardQueryBuilders.instanceQuery()
+          .filter('', '', 'StepExceptionKey')
+          .page(10, 0, 'cb')
+          .build()
       );
       Test.stopTest();
 
