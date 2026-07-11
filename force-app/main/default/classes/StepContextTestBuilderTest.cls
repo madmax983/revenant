@@ -291,17 +291,17 @@ public class StepContextTestBuilderTest {
       Datetime now = Datetime.now();
       // Seed signals out of chronological order (newer signal added first, older signal added second)
       StepContext.Signal newerSig = new StepContext.Signal(
-        null,
-        'MySignal',
-        '{"status":"newer"}',
-        now.addMinutes(10)
-      );
+          null,
+          'MySignal',
+          '{"status":"newer"}'
+        )
+        .withCreatedDate(now.addMinutes(10));
       StepContext.Signal olderSig = new StepContext.Signal(
-        null,
-        'MySignal',
-        '{"status":"older"}',
-        now
-      );
+          null,
+          'MySignal',
+          '{"status":"older"}'
+        )
+        .withCreatedDate(now);
 
       StepContext ctx = new StepContextTestBuilder()
         .addSignal(newerSig)
@@ -323,17 +323,17 @@ public class StepContextTestBuilderTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Datetime now = Datetime.now();
       StepContext.Signal newerSig = new StepContext.Signal(
-        null,
-        'MySignal',
-        '{"status":"newer"}',
-        now.addMinutes(10)
-      );
+          null,
+          'MySignal',
+          '{"status":"newer"}'
+        )
+        .withCreatedDate(now.addMinutes(10));
       StepContext.Signal olderSig = new StepContext.Signal(
-        null,
-        'MySignal',
-        '{"status":"older"}',
-        now
-      );
+          null,
+          'MySignal',
+          '{"status":"older"}'
+        )
+        .withCreatedDate(now);
 
       StepContext ctx = new StepContextTestBuilder()
         .addSignal(newerSig)

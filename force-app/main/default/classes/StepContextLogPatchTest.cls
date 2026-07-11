@@ -8,15 +8,11 @@ public class StepContextLogPatchTest {
   static void testLogApiBuffering() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
 
       ctx.log(StepContext.Level.INFO, 'Info message');
       Map<String, Object> context = new Map<String, Object>{
@@ -63,15 +59,11 @@ public class StepContextLogPatchTest {
   static void testLogCharacterTruncation() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
 
       String message4000 = 'a'.repeat(4000);
       ctx.log(StepContext.Level.INFO, message4000);
@@ -84,7 +76,11 @@ public class StepContextLogPatchTest {
       );
       System.assertEquals(message4000, crumbs[0].message);
 
-      ctx = new StepContext(dummyInstanceId, 'W', 'S', null, null, null, null);
+      ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .build();
       String message4001 = 'b'.repeat(4001);
       ctx.log(StepContext.Level.INFO, message4001);
       crumbs = ctx.getBreadcrumbs();
@@ -100,7 +96,11 @@ public class StepContextLogPatchTest {
       );
 
       // Test with context
-      ctx = new StepContext(dummyInstanceId, 'W', 'S', null, null, null, null);
+      ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .build();
       Map<String, Object> context = new Map<String, Object>{ 'k' => 'v' };
       // base message + ' | Context: {"k":"v"}' has length: 3980 + 21 = 4001
       String msg3980 = 'c'.repeat(3980);
@@ -119,15 +119,11 @@ public class StepContextLogPatchTest {
   static void testLogEntriesTruncation() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
 
       for (Integer i = 0; i < 100; i++) {
         ctx.log(StepContext.Level.INFO, 'Entry ' + i);
@@ -168,15 +164,11 @@ public class StepContextLogPatchTest {
   static void testLogNullOrEmptyMessage() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
 
       ctx.log(StepContext.Level.INFO, null);
       ctx.log(StepContext.Level.WARN, '');
@@ -199,15 +191,11 @@ public class StepContextLogPatchTest {
   static void testLogContextSerializationSafety() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .build();
 
       // Test circular reference catch
       Map<String, Object> circularMap = new Map<String, Object>();
@@ -222,7 +210,11 @@ public class StepContextLogPatchTest {
       );
 
       // Test oversized value pre-check
-      ctx = new StepContext(dummyInstanceId, 'W', 'S', null, null, null, null);
+      ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .build();
       Map<String, Object> oversizedMap = new Map<String, Object>{
         'payload' => 'x'.repeat(4001)
       };
@@ -243,15 +235,11 @@ public class StepContextLogPatchTest {
   static void testNullLogLevelDefaulting() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .build();
       ctx.log(null, 'null level message');
       List<StepContext.Breadcrumb> crumbs = ctx.getBreadcrumbs();
       System.assertEquals(1, crumbs.size());
@@ -267,15 +255,11 @@ public class StepContextLogPatchTest {
   static void testPatchedBrandNewInstance() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
 
       // First time decision is reached in a brand new instance
       Boolean isPatched = ctx.patched('change-1');
@@ -303,20 +287,13 @@ public class StepContextLogPatchTest {
   static void testPatchedReplay() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = StepContext.withCapturedValues(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        1,
-        null,
-        null,
-        '{"__patch:change-1":true}'
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .stepVisit(1)
+        .capturedValuesJson('{"__patch:change-1":true}')
+        .build();
 
       // Decision is replayed
       Boolean isPatched = ctx.patched('change-1');
@@ -360,15 +337,11 @@ public class StepContextLogPatchTest {
         Captured_Values__c = marker
       );
 
-      StepContext ctx = new StepContext(
-        inst.Id,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
 
       // The offloaded patch decision should be resolved and read successfully as true
       Boolean isPatched = ctx.patched('change-offloaded');
@@ -399,15 +372,11 @@ public class StepContextLogPatchTest {
         Status__c = 'Completed'
       );
 
-      StepContext ctx = new StepContext(
-        inst.Id,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
 
       // The step has already completed in the past, so the patch decision should be false (not flipped retroactively)
       Boolean isPatched = ctx.patched('change-1');
@@ -453,15 +422,11 @@ public class StepContextLogPatchTest {
           Captured_Values__c = '{"someValue":true}'
         );
 
-        StepContext ctx = new StepContext(
-          inst.Id,
-          'TestWorkflow',
-          'DownstreamStep',
-          null,
-          null,
-          null,
-          null
-        );
+        StepContext ctx = new StepContext.Builder()
+          .instanceId(inst.Id)
+          .workflowName('TestWorkflow')
+          .stepName('DownstreamStep')
+          .build();
 
         // DownstreamStep is running for the first time. Since instanceCreatedDate < classLastModified,
         // it must default to false (legacy).
@@ -499,15 +464,11 @@ public class StepContextLogPatchTest {
           Captured_Values__c = '{"someValue":true}'
         );
 
-        StepContext ctx = new StepContext(
-          inst.Id,
-          'TestWorkflow',
-          'DownstreamStep',
-          null,
-          null,
-          null,
-          null
-        );
+        StepContext ctx = new StepContext.Builder()
+          .instanceId(inst.Id)
+          .workflowName('TestWorkflow')
+          .stepName('DownstreamStep')
+          .build();
 
         // Since instanceCreatedDate >= classLastModified, it is a brand-new instance, so it must default to true!
         Boolean isPatched = ctx.patched('change-1');
@@ -542,15 +503,11 @@ public class StepContextLogPatchTest {
         );
         insert instA;
 
-        StepContext ctxA = new StepContext(
-          instA.Id,
-          'TestWorkflow',
-          'StepA',
-          null,
-          null,
-          null,
-          null
-        );
+        StepContext ctxA = new StepContext.Builder()
+          .instanceId(instA.Id)
+          .workflowName('TestWorkflow')
+          .stepName('StepA')
+          .build();
 
         // Since instanceCreatedDate < introducedAt, it must default to false (legacy)!
         System.assertEquals(false, ctxA.patched('change-date', introducedAt));
@@ -571,15 +528,11 @@ public class StepContextLogPatchTest {
         );
         insert instB;
 
-        StepContext ctxB = new StepContext(
-          instB.Id,
-          'TestWorkflow',
-          'StepA',
-          null,
-          null,
-          null,
-          null
-        );
+        StepContext ctxB = new StepContext.Builder()
+          .instanceId(instB.Id)
+          .workflowName('TestWorkflow')
+          .stepName('StepA')
+          .build();
 
         // Since instanceCreatedDate >= introducedAt, it must default to true, even though instanceCreatedDate < classLastModified!
         System.assertEquals(true, ctxB.patched('change-date', introducedAt));
@@ -596,20 +549,13 @@ public class StepContextLogPatchTest {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
 
       // Case 1: Patched is true, deprecated should pass silently
-      StepContext ctxTrue = StepContext.withCapturedValues(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        1,
-        null,
-        null,
-        '{"__patch:change-1":true}'
-      );
+      StepContext ctxTrue = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .stepVisit(1)
+        .capturedValuesJson('{"__patch:change-1":true}')
+        .build();
       try {
         ctxTrue.deprecated('change-1');
         // Pass
@@ -618,20 +564,13 @@ public class StepContextLogPatchTest {
       }
 
       // Case 2: Patched is false, deprecated should throw WorkflowException
-      StepContext ctxFalse = StepContext.withCapturedValues(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        1,
-        null,
-        null,
-        '{"__patch:change-1":false}'
-      );
+      StepContext ctxFalse = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .stepVisit(1)
+        .capturedValuesJson('{"__patch:change-1":false}')
+        .build();
       try {
         ctxFalse.deprecated('change-1');
         System.assert(
@@ -661,15 +600,11 @@ public class StepContextLogPatchTest {
       );
       insert inst;
 
-      StepContext ctx = new StepContext(
-        inst.Id,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
 
       // Call patched. It will call loadExecutions(getCallingClassName())
       // which resolves the calling class to 'StepContextTest'.

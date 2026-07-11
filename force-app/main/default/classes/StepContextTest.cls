@@ -69,15 +69,15 @@ public class StepContextTest {
   static void testConstructorAndProperties() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        '{"input": 1}',
-        '{"prev": 2}',
-        '{"state": 3}',
-        '{"wfInput": 4}'
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson('{"input": 1}')
+        .previousStepOutput('{"prev": 2}')
+        .stepStateJson('{"state": 3}')
+        .workflowInputJson('{"wfInput": 4}')
+        .build();
 
       System.assertEquals(dummyInstanceId, ctx.workflowInstanceId);
       System.assertEquals('TestWorkflow', ctx.workflowName);
@@ -94,16 +94,16 @@ public class StepContextTest {
   static void testConstructorWithVersion() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        '{"input": 1}',
-        '{"prev": 2}',
-        '{"state": 3}',
-        '{"wfInput": 4}',
-        3
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .inputJson('{"input": 1}')
+        .previousStepOutput('{"prev": 2}')
+        .stepStateJson('{"state": 3}')
+        .workflowInputJson('{"wfInput": 4}')
+        .workflowVersion(3)
+        .build();
 
       System.assertEquals(dummyInstanceId, ctx.workflowInstanceId);
       System.assertEquals('TestWorkflow', ctx.workflowName);
@@ -120,15 +120,11 @@ public class StepContextTest {
   static void testShouldYieldNormalConditions() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
 
       // Under normal test execution conditions, limits should not be exceeded
       System.assertEquals(
@@ -143,15 +139,11 @@ public class StepContextTest {
   static void testShouldYieldQueryRowsThresholdExceeded() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
 
       // Set mock to trigger SOQL query row limits checking logic
       StepContext.mockQueryRowsFraction = 0.81;
@@ -181,15 +173,11 @@ public class StepContextTest {
   static void testShouldYieldAsyncApexExecutionsLimit() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
 
       // Set mock fraction above 80%
       StepContext.mockAsyncExecutionsFraction = 0.81;
@@ -226,17 +214,12 @@ public class StepContextTest {
   static void testNoPendingSignalsReturnsCleanEmptyResult() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      // Construct via the existing 8-arg constructor (no signals supplied).
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1
-      );
+      // Construct via the Builder (no signals supplied).
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
 
       System.assertEquals(
         0,
@@ -282,17 +265,12 @@ public class StepContextTest {
         new StepContext.Signal(null, 'Second', '{"n":2}'),
         new StepContext.Signal(null, 'First', '{"n":3}')
       };
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        pending
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .pendingSignals(pending)
+        .build();
 
       List<StepContext.Signal> all = ctx.getSignals();
       System.assertEquals(3, all.size(), 'All pending signals must be exposed');
@@ -312,17 +290,12 @@ public class StepContextTest {
         new StepContext.Signal(null, 'Other', '{"x":1}'),
         new StepContext.Signal(null, 'Approval', '{"approved":false}')
       };
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        pending
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .pendingSignals(pending)
+        .build();
 
       StepContext.Signal latest = ctx.getSignal('Approval');
       System.assertEquals(true, latest.isPresent());
@@ -366,17 +339,12 @@ public class StepContextTest {
         new StepContext.Signal(sA.Id, 'Approval', sA.Payload__c),
         new StepContext.Signal(sB.Id, 'Other', sB.Payload__c)
       };
-      StepContext ctx = new StepContext(
-        inst.Id,
-        'X',
-        'Step',
-        null,
-        null,
-        null,
-        null,
-        1,
-        pending
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('X')
+        .stepName('Step')
+        .pendingSignals(pending)
+        .build();
 
       // Before observing anything, nothing is consumable.
       System.assertEquals(
@@ -431,17 +399,12 @@ public class StepContextTest {
         new StepContext.Signal(sA.Id, 'A', 'a'),
         new StepContext.Signal(sB.Id, 'B', 'b')
       };
-      StepContext ctx = new StepContext(
-        inst.Id,
-        'X',
-        'Step',
-        null,
-        null,
-        null,
-        null,
-        1,
-        pending
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('X')
+        .stepName('Step')
+        .pendingSignals(pending)
+        .build();
 
       // Reading the full list observes every pending signal.
       ctx.getSignals();
@@ -460,17 +423,12 @@ public class StepContextTest {
       List<StepContext.Signal> pending = new List<StepContext.Signal>{
         new StepContext.Signal(null, 'Real', '{"v":1}')
       };
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        pending
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .pendingSignals(pending)
+        .build();
 
       // A blank/null name must never fall through to the unscoped (all) query and
       // must not mark unrelated signals observed/consumable.
@@ -496,40 +454,29 @@ public class StepContextTest {
       // Oldest partial page for 'Evt' (budget-truncated); the true most-recent
       // 'Evt' row is NOT in this page.
       List<StepContext.Signal> oldestPage = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          null,
-          'Evt',
-          '{"seq":1}',
-          DateTime.now().addMinutes(-5)
-        ),
-        new StepContext.Signal(
-          null,
-          'Evt',
-          '{"seq":2}',
-          DateTime.now().addMinutes(-4)
-        )
+        new StepContext.Signal(null, 'Evt', '{"seq":1}')
+          .withCreatedDate(DateTime.now().addMinutes(-5)),
+        new StepContext.Signal(null, 'Evt', '{"seq":2}')
+          .withCreatedDate(DateTime.now().addMinutes(-4))
       };
       StepContext.Signal trueLatest = new StepContext.Signal(
-        null,
-        'Evt',
-        '{"seq":99}',
-        DateTime.now()
-      );
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        (StepContext.SignalSource) new FakeNameSource(
-          oldestPage,
-          trueLatest,
-          true
+          null,
+          'Evt',
+          '{"seq":99}'
         )
-      );
+        .withCreatedDate(DateTime.now());
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .signalSource(
+          (StepContext.SignalSource) new FakeNameSource(
+            oldestPage,
+            trueLatest,
+            true
+          )
+        )
+        .build();
 
       // Read the (capped) list first; this populates the partial per-name cache.
       System.assertEquals(2, ctx.getSignals('Evt').size());
@@ -555,32 +502,21 @@ public class StepContextTest {
       // returns null. The branch still owns the rows, so getSignal must not report
       // a false absence (which would strand a suspend-on-absent branch).
       List<StepContext.Signal> claimedPage = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          null,
-          'Foo',
-          '{"seq":1}',
-          DateTime.now().addMinutes(-2),
-          true
-        ),
-        new StepContext.Signal(
-          null,
-          'Foo',
-          '{"seq":2}',
-          DateTime.now().addMinutes(-1),
-          true
-        )
+        new StepContext.Signal(null, 'Foo', '{"seq":1}')
+          .withCreatedDate(DateTime.now().addMinutes(-2))
+          .asClaimed(),
+        new StepContext.Signal(null, 'Foo', '{"seq":2}')
+          .withCreatedDate(DateTime.now().addMinutes(-1))
+          .asClaimed()
       };
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        (StepContext.SignalSource) new FakeNameSource(claimedPage, null, true)
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .signalSource(
+          (StepContext.SignalSource) new FakeNameSource(claimedPage, null, true)
+        )
+        .build();
 
       System.assertEquals(2, ctx.getSignals('Foo').size());
 
@@ -605,37 +541,30 @@ public class StepContextTest {
       // A complete (uncapped) list: its last element IS the true latest, so the
       // cached list is trusted and getLatestSignal must NOT override it.
       List<StepContext.Signal> fullList = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          null,
-          'Evt',
-          '{"seq":1}',
-          DateTime.now().addMinutes(-2)
-        ),
-        new StepContext.Signal(
-          null,
-          'Evt',
-          '{"seq":2}',
-          DateTime.now().addMinutes(-1)
-        )
+        new StepContext.Signal(null, 'Evt', '{"seq":1}')
+          .withCreatedDate(DateTime.now().addMinutes(-2)),
+        new StepContext.Signal(null, 'Evt', '{"seq":2}')
+          .withCreatedDate(DateTime.now().addMinutes(-1))
       };
       // trueLatest differs so a regression that always consults the source fails.
       StepContext.Signal sentinel = new StepContext.Signal(
-        null,
-        'Evt',
-        '{"seq":99}',
-        DateTime.now()
-      );
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        (StepContext.SignalSource) new FakeNameSource(fullList, sentinel, false)
-      );
+          null,
+          'Evt',
+          '{"seq":99}'
+        )
+        .withCreatedDate(DateTime.now());
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .signalSource(
+          (StepContext.SignalSource) new FakeNameSource(
+            fullList,
+            sentinel,
+            false
+          )
+        )
+        .build();
 
       System.assertEquals(2, ctx.getSignals('Evt').size());
       StepContext.Signal latest = ctx.getSignal('Evt');
@@ -655,40 +584,29 @@ public class StepContextTest {
       // that does NOT contain 'Important', while the source can still resolve the
       // true latest 'Important' row.
       List<StepContext.Signal> partialAll = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          null,
-          'Noise',
-          '{"n":1}',
-          DateTime.now().addMinutes(-3)
-        ),
-        new StepContext.Signal(
-          null,
-          'Noise',
-          '{"n":2}',
-          DateTime.now().addMinutes(-2)
-        )
+        new StepContext.Signal(null, 'Noise', '{"n":1}')
+          .withCreatedDate(DateTime.now().addMinutes(-3)),
+        new StepContext.Signal(null, 'Noise', '{"n":2}')
+          .withCreatedDate(DateTime.now().addMinutes(-2))
       };
       StepContext.Signal important = new StepContext.Signal(
-        null,
-        'Important',
-        '{"go":true}',
-        DateTime.now()
-      );
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        (StepContext.SignalSource) new FakeNameSource(
-          partialAll,
-          important,
-          true
+          null,
+          'Important',
+          '{"go":true}'
         )
-      );
+        .withCreatedDate(DateTime.now());
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .signalSource(
+          (StepContext.SignalSource) new FakeNameSource(
+            partialAll,
+            important,
+            true
+          )
+        )
+        .build();
 
       // Unscoped read caps and only sees the Noise page.
       System.assertEquals(2, ctx.getSignals().size());
@@ -710,24 +628,15 @@ public class StepContextTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
       List<StepContext.Signal> pending = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          null,
-          'Approve:Order',
-          '{"ok":true}',
-          DateTime.now()
-        )
+        new StepContext.Signal(null, 'Approve:Order', '{"ok":true}')
+          .withCreatedDate(DateTime.now())
       };
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        pending
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .pendingSignals(pending)
+        .build();
 
       // Load the full list first (in-memory allLoaded path), then probe the name
       // with different casing. The source SOQL and lower-cased caches match names
@@ -759,30 +668,19 @@ public class StepContextTest {
         )
         .getKeyPrefix();
       List<StepContext.Signal> allRows = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          prefix + '000000000001',
-          'Foo',
-          '{"f":1}',
-          DateTime.now().addMinutes(-2)
-        ),
-        new StepContext.Signal(
-          prefix + '000000000002',
-          'Bar',
-          '{"b":1}',
-          DateTime.now().addMinutes(-1)
-        )
+        new StepContext.Signal(prefix + '000000000001', 'Foo', '{"f":1}')
+          .withCreatedDate(DateTime.now().addMinutes(-2)),
+        new StepContext.Signal(prefix + '000000000002', 'Bar', '{"b":1}')
+          .withCreatedDate(DateTime.now().addMinutes(-1))
       };
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        (StepContext.SignalSource) new ClaimingFakeSource(allRows)
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .signalSource(
+          (StepContext.SignalSource) new ClaimingFakeSource(allRows)
+        )
+        .build();
 
       // Capped full read claims both rows and marks them for consumption.
       System.assertEquals(2, ctx.getSignals().size());
@@ -812,32 +710,28 @@ public class StepContextTest {
       // Capped page row (claimed) shares the timestamp with the source's latest
       // but has a LOWER id, so the source row is the true latest (Id DESC).
       List<StepContext.Signal> page = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          prefix + '000000000002',
-          'Foo',
-          '{"seq":2}',
-          ts,
-          true
-        )
+        new StepContext.Signal(prefix + '000000000002', 'Foo', '{"seq":2}')
+          .withCreatedDate(ts)
+          .asClaimed()
       };
       StepContext.Signal sourceLatest = new StepContext.Signal(
-        prefix + '000000000003',
-        'Foo',
-        '{"seq":3}',
-        ts,
-        false
-      );
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'W',
-        'S',
-        null,
-        null,
-        null,
-        null,
-        1,
-        (StepContext.SignalSource) new FakeNameSource(page, sourceLatest, true)
-      );
+          prefix + '000000000003',
+          'Foo',
+          '{"seq":3}'
+        )
+        .withCreatedDate(ts);
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('W')
+        .stepName('S')
+        .signalSource(
+          (StepContext.SignalSource) new FakeNameSource(
+            page,
+            sourceLatest,
+            true
+          )
+        )
+        .build();
 
       ctx.getSignals('Foo');
       StepContext.Signal latest = ctx.getSignal('Foo');
@@ -862,25 +756,23 @@ public class StepContextTest {
       // operator re-drive (#1), and an at-least-once Workflow_Event__e resume all
       // re-build a context like this -> the key must be identical every time.
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext attemptA = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        '{"input":1}',
-        null,
-        null,
-        '{"wf":1}'
-      );
-      StepContext attemptB = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        '{"input":1}',
-        '{"prev":"changed"}',
-        '{"state":"changed"}',
-        '{"wf":1}',
-        9
-      );
+      StepContext attemptA = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson('{"input":1}')
+        .workflowInputJson('{"wf":1}')
+        .build();
+      StepContext attemptB = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .inputJson('{"input":1}')
+        .previousStepOutput('{"prev":"changed"}')
+        .stepStateJson('{"state":"changed"}')
+        .workflowInputJson('{"wf":1}')
+        .workflowVersion(9)
+        .build();
 
       System.assert(
         String.isNotBlank(attemptA.idempotencyKey),
@@ -898,24 +790,16 @@ public class StepContextTest {
   static void testIdempotencyKeyDistinctPerStep() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext stepA = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
-      StepContext stepB = new StepContext(
-        instanceId,
-        'WF',
-        'StepB',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext stepA = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .build();
+      StepContext stepB = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepB')
+        .build();
       System.assertNotEquals(
         stepA.idempotencyKey,
         stepB.idempotencyKey,
@@ -930,24 +814,16 @@ public class StepContextTest {
       // The same step name across two different instances (e.g. two parallel
       // fan-out branch instances with different Parent_Instance__c, or the same
       // step in two separate runs) must observe different keys.
-      StepContext branchOne = new StepContext(
-        TestIdFactory.generate(Organization.SObjectType),
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
-      StepContext branchTwo = new StepContext(
-        TestIdFactory.generate(Organization.SObjectType),
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext branchOne = new StepContext.Builder()
+        .instanceId(TestIdFactory.generate(Organization.SObjectType))
+        .workflowName('WF')
+        .stepName('StepA')
+        .build();
+      StepContext branchTwo = new StepContext.Builder()
+        .instanceId(TestIdFactory.generate(Organization.SObjectType))
+        .workflowName('WF')
+        .stepName('StepA')
+        .build();
       System.assertNotEquals(
         branchOne.idempotencyKey,
         branchTwo.idempotencyKey,
@@ -964,33 +840,22 @@ public class StepContextTest {
       // distinct from the forward execution key yet stable across compensation
       // retries.
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext forward = new StepContext(
-        instanceId,
-        'WF',
-        'ChargeStep',
-        null,
-        null,
-        null,
-        null
-      );
-      StepContext compensate = new StepContext(
-        instanceId,
-        'WF',
-        'ChargeStep_Compensate',
-        null,
-        null,
-        null,
-        null
-      );
-      StepContext compensateRetry = new StepContext(
-        instanceId,
-        'WF',
-        'ChargeStep_Compensate',
-        '{"different":"state"}',
-        null,
-        null,
-        null
-      );
+      StepContext forward = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('ChargeStep')
+        .build();
+      StepContext compensate = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('ChargeStep_Compensate')
+        .build();
+      StepContext compensateRetry = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('ChargeStep_Compensate')
+        .inputJson('{"different":"state"}')
+        .build();
 
       System.assertNotEquals(
         forward.idempotencyKey,
@@ -1012,41 +877,26 @@ public class StepContextTest {
       // completed visit must observe a different key so distinct side effects are
       // not wrongly deduped; the engine supplies an incrementing visit sequence.
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext visitZero = new StepContext(
-        instanceId,
-        'WF',
-        'PollStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0
-      );
-      StepContext visitOne = new StepContext(
-        instanceId,
-        'WF',
-        'PollStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        1
-      );
+      StepContext visitZero = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('PollStep')
+        .build();
+      StepContext visitOne = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('PollStep')
+        .stepVisit(1)
+        .build();
       // A retry/re-drive/resume of the SAME visit rebuilds the context with the
       // same visit sequence even though other state differs.
-      StepContext visitOneRetry = new StepContext(
-        instanceId,
-        'WF',
-        'PollStep',
-        '{"changed":true}',
-        null,
-        null,
-        null,
-        1,
-        1
-      );
+      StepContext visitOneRetry = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('PollStep')
+        .inputJson('{"changed":true}')
+        .stepVisit(1)
+        .build();
 
       System.assertNotEquals(
         visitZero.idempotencyKey,
@@ -1067,27 +917,17 @@ public class StepContextTest {
       // The additive visit param defaults to 0, so the 8-arg constructor and the
       // 9-arg constructor with stepVisit=0 must yield the identical key.
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext defaulted = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1
-      );
-      StepContext explicitZero = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0
-      );
+      StepContext defaulted = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .build();
+      StepContext explicitZero = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .stepVisit(0)
+        .build();
       System.assertEquals(
         defaulted.idempotencyKey,
         explicitZero.idempotencyKey,
@@ -1099,16 +939,11 @@ public class StepContextTest {
   @IsTest
   static void testPreviousRunAtNullByDefault() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      StepContext ctx = new StepContext(
-        TestIdFactory.generate(Organization.SObjectType),
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(TestIdFactory.generate(Organization.SObjectType))
+        .workflowName('WF')
+        .stepName('StepA')
+        .build();
       System.assertNotEquals(null, ctx, 'Context should be constructed');
       System.assertEquals(
         null,
@@ -1122,19 +957,12 @@ public class StepContextTest {
   static void testPreviousRunAtSetViaFullConstructor() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Datetime ts = Datetime.now().addMinutes(-5);
-      StepContext ctx = new StepContext(
-        TestIdFactory.generate(Organization.SObjectType),
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        ts
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(TestIdFactory.generate(Organization.SObjectType))
+        .workflowName('WF')
+        .stepName('StepA')
+        .previousRunAt(ts)
+        .build();
       System.assertEquals(
         ts,
         ctx.previousRunAt,

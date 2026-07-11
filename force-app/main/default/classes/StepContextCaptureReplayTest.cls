@@ -12,17 +12,12 @@ public class StepContextCaptureReplayTest {
   private static StepContext childOutcomeContext(
     Map<String, StepContext.Signal> sigs
   ) {
-    return new StepContext(
-      TestIdFactory.generate(Organization.SObjectType),
-      'W',
-      'S',
-      null,
-      null,
-      null,
-      null,
-      1,
-      new StepContextTestData.MapSignalSource(sigs)
-    );
+    return new StepContext.Builder()
+      .instanceId(TestIdFactory.generate(Organization.SObjectType))
+      .workflowName('W')
+      .stepName('S')
+      .signalSource(new StepContextTestData.MapSignalSource(sigs))
+      .build();
   }
 
   private static StepContext childOutcomeContext(
@@ -48,15 +43,11 @@ public class StepContextCaptureReplayTest {
   static void testOnceFirstCallInvokesProducerAndReturnsValue() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .build();
       StepContextTestData.StringProducer p = new StepContextTestData.StringProducer(
         'hello'
       );
@@ -78,15 +69,11 @@ public class StepContextCaptureReplayTest {
   static void testOnceSecondCallReturnsSameValueWithoutCallingProducer() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .build();
       StepContextTestData.StringProducer p = new StepContextTestData.StringProducer(
         'stable'
       );
@@ -109,15 +96,11 @@ public class StepContextCaptureReplayTest {
   static void testOnceDistinctKeysAreIndependent() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .build();
       StepContextTestData.StringProducer pA = new StepContextTestData.StringProducer(
         'alpha'
       );
@@ -141,20 +124,12 @@ public class StepContextCaptureReplayTest {
       String priorJson = JSON.serialize(
         new Map<String, Object>{ 'refNumber' => 'REF-001' }
       );
-      StepContext ctx = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        priorJson
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .capturedValuesJson(priorJson)
+        .build();
       StepContextTestData.StringProducer p = new StepContextTestData.StringProducer(
         'SHOULD-NOT-BE-CALLED'
       );
@@ -176,15 +151,11 @@ public class StepContextCaptureReplayTest {
   static void testGetCapturedValuesJsonRoundTrips() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .build();
       ctx.once('k1', new StepContextTestData.StringProducer('v1'));
       ctx.once('k2', new StepContextTestData.StringProducer('v2'));
       String capturedJson = ctx.getCapturedValuesJson();
@@ -200,15 +171,11 @@ public class StepContextCaptureReplayTest {
   static void testGetCapturedValuesJsonNullWhenNoCaptures() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .build();
       System.assertEquals(
         null,
         ctx.getCapturedValuesJson(),
@@ -223,32 +190,20 @@ public class StepContextCaptureReplayTest {
       // Numbers and booleans JSON-round-trip to a consistent type so values are
       // byte-identical regardless of whether they come from in-memory or rehydrated.
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .build();
       ctx.once('num', new StepContextTestData.StringProducer('42'));
       String captured = ctx.getCapturedValuesJson();
       // Rehydrate into a new context
-      StepContext ctx2 = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        captured
-      );
+      StepContext ctx2 = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .capturedValuesJson(captured)
+        .build();
       StepContextTestData.StringProducer p2 = new StepContextTestData.StringProducer(
         'different'
       );
@@ -270,15 +225,11 @@ public class StepContextCaptureReplayTest {
   static void testExposedRetryPropertiesAndDefaults() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .build();
       System.assertEquals(1, ctx.attempt, 'Default attempt should be 1');
       System.assertEquals(
         1,
@@ -296,22 +247,13 @@ public class StepContextCaptureReplayTest {
   static void testExposedRetryPropertiesOverloads() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        null,
-        2,
-        5
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .attempt(2)
+        .maxAttempts(5)
+        .build();
       System.assertEquals(2, ctx.attempt);
       System.assertEquals(5, ctx.maxAttempts);
       System.assert(!ctx.isFinalAttempt());
@@ -328,20 +270,12 @@ public class StepContextCaptureReplayTest {
           '__maxAttempts' => 3
         }
       );
-      StepContext ctx = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        priorJson
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .capturedValuesJson(priorJson)
+        .build();
       System.assertEquals(1, ctx.attempt);
       System.assertEquals(3, ctx.maxAttempts);
       System.assert(!ctx.isFinalAttempt());
@@ -367,22 +301,13 @@ public class StepContextCaptureReplayTest {
         }
       );
       // Hydrate
-      StepContext ctx = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        priorJson,
-        1, // attempt
-        3 // maxAttempts
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .capturedValuesJson(priorJson)
+        .maxAttempts(3) // attempt defaults to 1
+        .build();
       System.assertEquals(3, ctx.maxAttempts);
 
       // Simulate step execution yielding and capturing a new value
@@ -413,20 +338,12 @@ public class StepContextCaptureReplayTest {
 
       // 1. Double/Decimal value parsed from JSON
       String decimalJson = '{"__maxAttempts":3.0}';
-      StepContext ctx = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        decimalJson
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .capturedValuesJson(decimalJson)
+        .build();
       System.assertEquals(
         3,
         ctx.maxAttempts,
@@ -434,20 +351,12 @@ public class StepContextCaptureReplayTest {
       );
 
       // 2. Malformed JSON should not crash
-      StepContext ctx2 = StepContext.withCapturedValues(
-        instanceId,
-        'WF',
-        'StepA',
-        null,
-        null,
-        null,
-        null,
-        1,
-        0,
-        null,
-        null,
-        '{"__maxAttempts":'
-      );
+      StepContext ctx2 = new StepContext.Builder()
+        .instanceId(instanceId)
+        .workflowName('WF')
+        .stepName('StepA')
+        .capturedValuesJson('{"__maxAttempts":')
+        .build();
       System.assertEquals(
         1,
         ctx2.maxAttempts,
@@ -460,15 +369,11 @@ public class StepContextCaptureReplayTest {
   static void testReportProgress() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
-      StepContext ctx = new StepContext(
-        dummyInstanceId,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(dummyInstanceId)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .build();
 
       System.assertEquals(false, ctx.isProgressReported());
       System.assertEquals(null, ctx.getProgressJson());
@@ -517,17 +422,12 @@ public class StepContextCaptureReplayTest {
       );
       insert sig;
 
-      StepContext ctx = new StepContext(
-        inst.Id,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        new WorkflowEngine.PendingSignalSource(inst.Id)
-      );
+      StepContext ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .signalSource(new WorkflowEngine.PendingSignalSource(inst.Id))
+        .build();
 
       // Call getSignal first to populate cache with empty result (no signals present yet in the context cache)
       System.assertEquals(false, ctx.getSignal('Go').isPresent());
@@ -539,17 +439,12 @@ public class StepContextCaptureReplayTest {
       );
 
       // Create a new context since the old one cached the empty signal list
-      ctx = new StepContext(
-        inst.Id,
-        'TestWorkflow',
-        'TestStep',
-        null,
-        null,
-        null,
-        null,
-        1,
-        new WorkflowEngine.PendingSignalSource(inst.Id)
-      );
+      ctx = new StepContext.Builder()
+        .instanceId(inst.Id)
+        .workflowName('TestWorkflow')
+        .stepName('TestStep')
+        .signalSource(new WorkflowEngine.PendingSignalSource(inst.Id))
+        .build();
       Test.stopTest();
 
       Workflow_Signal__c reloadedSig = [
