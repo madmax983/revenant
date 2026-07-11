@@ -4961,12 +4961,11 @@ public class WorkflowEngineTest {
         update signals[0];
         return StepResult.complete(null, 'approved');
       }
-      return StepResult.waitForApproval(
-        'TimedApproval',
-        'Manager',
-        60,
-        'WorkflowEngineTest.ApprovalTimeoutFallbackStep'
-      );
+      return StepResult.waitForApproval('TimedApproval', 'Manager')
+        .withApprovalTimeout(
+          60,
+          'WorkflowEngineTest.ApprovalTimeoutFallbackStep'
+        );
     }
   }
 

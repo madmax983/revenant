@@ -148,24 +148,57 @@ public with sharing class WorkflowValidator {
     Set<String> declaredSet = new Set<String>(declaredSteps);
 
     if (!initialStepThrew) {
-      if (String.isBlank(initialStep)) {
-        result.add(
-          INITIAL_STEP_BLANK,
-          workflowName,
-          'Workflow "' +
-            workflowName +
-            '" getInitialStep() is blank; the DAG has no entry point.'
-        );
-      } else if (!declaredSet.contains(initialStep)) {
-        result.add(
-          INITIAL_STEP_NOT_DECLARED,
-          initialStep,
-          'Initial step "' + initialStep + '" is not contained in getSteps().'
-        );
-      }
+      validateInitialStepDeclared(initialStep, declaredSet, result);
     }
 
     // (d) Duplicate declarations.
+    flagDuplicateSteps(declaredSteps, result);
+
+    // (c) Every declared step must resolve to an instantiable WorkflowStep.
+    for (String stepName : declaredSet) {
+      validateStepClass(stepName, result);
+    }
+
+    // Best-effort transition probe for dangling successors.
+    probeTransitions(def, new ProbeContext(declaredSteps, declaredSet, result));
+
+    return result;
+  }
+
+  /**
+   * Records INITIAL_STEP_BLANK when the (successfully read) initial step is
+   * blank, or INITIAL_STEP_NOT_DECLARED when it is not present in getSteps().
+   */
+  private static void validateInitialStepDeclared(
+    String initialStep,
+    Set<String> declaredSet,
+    ValidationResult result
+  ) {
+    if (String.isBlank(initialStep)) {
+      result.add(
+        INITIAL_STEP_BLANK,
+        result.workflowName,
+        'Workflow "' +
+          result.workflowName +
+          '" getInitialStep() is blank; the DAG has no entry point.'
+      );
+    } else if (!declaredSet.contains(initialStep)) {
+      result.add(
+        INITIAL_STEP_NOT_DECLARED,
+        initialStep,
+        'Initial step "' + initialStep + '" is not contained in getSteps().'
+      );
+    }
+  }
+
+  /**
+   * Records a single DUPLICATE_STEP defect for each step name declared more than
+   * once in getSteps().
+   */
+  private static void flagDuplicateSteps(
+    List<String> declaredSteps,
+    ValidationResult result
+  ) {
     Set<String> seen = new Set<String>();
     Set<String> alreadyFlaggedDup = new Set<String>();
     for (String stepName : declaredSteps) {
@@ -179,16 +212,6 @@ public with sharing class WorkflowValidator {
       }
       seen.add(stepName);
     }
-
-    // (c) Every declared step must resolve to an instantiable WorkflowStep.
-    for (String stepName : declaredSet) {
-      validateStepClass(stepName, result);
-    }
-
-    // Best-effort transition probe for dangling successors.
-    probeTransitions(def, declaredSteps, declaredSet, result);
-
-    return result;
   }
 
   /**
@@ -339,20 +362,24 @@ public with sharing class WorkflowValidator {
    */
   private static void probeTransitions(
     WorkflowDefinition def,
-    List<String> declaredSteps,
-    Set<String> declaredSet,
-    ValidationResult result
+    ProbeContext ctx
   ) {
-    List<StepResult> probes = new List<StepResult>{
-      StepResult.complete(null, null),
-      StepResult.complete(null, new Map<String, Object>())
-    };
-
-    Set<String> flagged = new Set<String>();
-
     // Two-argument (default) routing for every declared step.
-    for (String stepName : declaredSteps) {
-      for (StepResult probe : probes) {
+    probeDefaultRouting(def, ctx);
+
+    // Version-aware routing for VersionedWorkflow definitions.
+    if (def instanceof VersionedWorkflow) {
+      probeVersionedRouting((VersionedWorkflow) def, ctx);
+    }
+  }
+
+  /** Drives the two-argument getNextStep for every declared step and probe. */
+  private static void probeDefaultRouting(
+    WorkflowDefinition def,
+    ProbeContext ctx
+  ) {
+    for (String stepName : ctx.declaredSteps) {
+      for (StepResult probe : ctx.probes) {
         String successor;
         try {
           successor = def.getNextStep(stepName, probe);
@@ -360,45 +387,50 @@ public with sharing class WorkflowValidator {
           // Data-dependent author logic; ignore for a best-effort probe.
           continue;
         }
-        flagIfDangling(stepName, successor, declaredSet, flagged, result);
+        flagIfDangling(stepName, successor, ctx);
       }
     }
+  }
 
-    // Version-aware routing for VersionedWorkflow definitions.
-    if (def instanceof VersionedWorkflow) {
-      VersionedWorkflow vdef = (VersionedWorkflow) def;
-      Integer latest;
-      try {
-        latest = vdef.getLatestVersion();
-      } catch (Exception e) {
-        // The engine calls getLatestVersion() before starting an instance, so a
-        // throw here means the workflow cannot start — report it rather than
-        // silently skipping the versioned probe.
-        latest = null;
-        result.add(
-          CONTRACT_METHOD_THREW,
-          result.workflowName,
-          'Workflow "' +
-            result.workflowName +
-            '" getLatestVersion() threw ' +
-            e.getTypeName() +
-            ': ' +
-            e.getMessage()
-        );
-      }
-      if (latest != null && latest >= 1) {
-        for (Integer version = 1; version <= latest; version++) {
-          for (String stepName : declaredSteps) {
-            for (StepResult probe : probes) {
-              String successor;
-              try {
-                successor = vdef.getNextStep(stepName, probe, version);
-              } catch (Exception e) {
-                continue;
-              }
-              flagIfDangling(stepName, successor, declaredSet, flagged, result);
-            }
+  /**
+   * Drives the three-argument getNextStep(current, result, version) for every
+   * version in 1..getLatestVersion(). A throw from getLatestVersion() means the
+   * workflow cannot start, so it is reported (the engine calls it before starting
+   * an instance) rather than silently skipping the versioned probe.
+   */
+  private static void probeVersionedRouting(
+    VersionedWorkflow vdef,
+    ProbeContext ctx
+  ) {
+    Integer latest;
+    try {
+      latest = vdef.getLatestVersion();
+    } catch (Exception e) {
+      ctx.result.add(
+        CONTRACT_METHOD_THREW,
+        ctx.result.workflowName,
+        'Workflow "' +
+          ctx.result.workflowName +
+          '" getLatestVersion() threw ' +
+          e.getTypeName() +
+          ': ' +
+          e.getMessage()
+      );
+      return;
+    }
+    if (latest == null || latest < 1) {
+      return;
+    }
+    for (Integer version = 1; version <= latest; version++) {
+      for (String stepName : ctx.declaredSteps) {
+        for (StepResult probe : ctx.probes) {
+          String successor;
+          try {
+            successor = vdef.getNextStep(stepName, probe, version);
+          } catch (Exception e) {
+            continue;
           }
+          flagIfDangling(stepName, successor, ctx);
         }
       }
     }
@@ -411,15 +443,15 @@ public with sharing class WorkflowValidator {
   private static void flagIfDangling(
     String stepName,
     String successor,
-    Set<String> declaredSet,
-    Set<String> flagged,
-    ValidationResult result
+    ProbeContext ctx
   ) {
     if (String.isBlank(successor)) {
       return;
     }
-    if (!declaredSet.contains(successor) && !flagged.contains(successor)) {
-      result.add(
+    if (
+      !ctx.declaredSet.contains(successor) && !ctx.flagged.contains(successor)
+    ) {
+      ctx.result.add(
         DANGLING_SUCCESSOR,
         successor,
         'Step "' +
@@ -428,7 +460,34 @@ public with sharing class WorkflowValidator {
           successor +
           '", which is not contained in getSteps() (best-effort probe).'
       );
-      flagged.add(successor);
+      ctx.flagged.add(successor);
+    }
+  }
+
+  /**
+   * Bundles the mutable and read-only state threaded through the transition
+   * probe: the declared step list/set, the running set of already-flagged
+   * dangling successors, the result to append defects to, and the fixed set of
+   * COMPLETE-action probe StepResults driven into getNextStep.
+   */
+  private class ProbeContext {
+    final List<String> declaredSteps;
+    final Set<String> declaredSet;
+    final Set<String> flagged = new Set<String>();
+    final ValidationResult result;
+    final List<StepResult> probes = new List<StepResult>{
+      StepResult.complete(null, null),
+      StepResult.complete(null, new Map<String, Object>())
+    };
+
+    ProbeContext(
+      List<String> declaredSteps,
+      Set<String> declaredSet,
+      ValidationResult result
+    ) {
+      this.declaredSteps = declaredSteps;
+      this.declaredSet = declaredSet;
+      this.result = result;
     }
   }
 }
