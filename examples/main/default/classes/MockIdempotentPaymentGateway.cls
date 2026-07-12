@@ -15,17 +15,36 @@ public inherited sharing class MockIdempotentPaymentGateway {
   private static Map<String, String> chargeIdByKey = new Map<String, String>();
   private static Integer sequence = 0;
 
+  /**
+   * @description Outcome of a charge attempt: the charge id and whether it was deduplicated
+   * from a prior call with the same idempotency key.
+   */
   public class ChargeResult {
     public String chargeId;
     public Boolean deduplicated;
 
+    /**
+     * @description Constructs a charge result.
+     * @param chargeId The id of the charge, new or previously recorded.
+     * @param deduplicated True if this result reused a prior charge for the same key.
+     */
     public ChargeResult(String chargeId, Boolean deduplicated) {
       this.chargeId = chargeId;
       this.deduplicated = deduplicated;
     }
   }
 
-  public static ChargeResult charge(String idempotencyKey, Integer amountCents) {
+  /**
+   * @description Records exactly one effective charge per distinct idempotency key,
+   * returning the prior charge without charging again when the key has been seen before.
+   * @param idempotencyKey The caller-supplied key that dedups repeat calls.
+   * @param amountCents The charge amount in cents.
+   * @return A ChargeResult with the charge id and whether it was deduplicated.
+   */
+  public static ChargeResult charge(
+    String idempotencyKey,
+    Integer amountCents
+  ) {
     if (
       String.isNotBlank(idempotencyKey) &&
       chargeIdByKey.containsKey(idempotencyKey)

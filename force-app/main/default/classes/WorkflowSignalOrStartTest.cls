@@ -1,20 +1,48 @@
 @IsTest
 public class WorkflowSignalOrStartTest {
+  /**
+   * @description Single-step test workflow used to exercise signalOrStart behaviors such
+   * as new-instance start, wake, idempotency, and child-wake gating.
+   */
   public class TestAggregationWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the ordered step names comprising this test workflow.
+     * @return A single-element list naming the aggregation step.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'WorkflowSignalOrStartTest.TestAggregationStep'
       };
     }
+    /**
+     * @description Returns the name of the first step to execute.
+     * @return The name of the aggregation step.
+     */
     public String getInitialStep() {
       return 'WorkflowSignalOrStartTest.TestAggregationStep';
     }
+    /**
+     * @description Computes the next step after the given step completes.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return Always null, since this is a single-step workflow.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
   }
 
+  /**
+   * @description Test step that completes when its approval signal is present, otherwise
+   * suspends waiting for approval.
+   */
   public class TestAggregationStep implements WorkflowStep {
+    /**
+     * @description Completes with the received payload when the approval signal is
+     * present, otherwise returns a wait-for-approval result.
+     * @param ctx The durable step context exposing signals.
+     * @return A complete result if approved, otherwise a wait-for-approval result.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal sig = ctx.getSignal('Approve:MySignal');
       if (sig.isPresent()) {

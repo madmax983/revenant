@@ -5,8 +5,11 @@ public class BulkRedriveWorkflowTest {
   // ==========================================
 
   /**
-   * Creates a re-drivable Failed instance of WorkflowEngineTest.HappyWorkflow,
-   * complete with a Failed step execution that retryWorkflow() can reset.
+   * @description Creates a re-drivable Failed instance of
+   * WorkflowEngineTest.HappyWorkflow, complete with a Failed step execution that
+   * retryWorkflow() can reset.
+   * @param key The correlation key for the seeded instance.
+   * @return The inserted Failed workflow instance.
    */
   private static Workflow_Instance__c makeFailedInstance(String key) {
     return makeFailedInstance(key, 'WorkflowEngineTest.HappyWorkflow');
@@ -36,8 +39,10 @@ public class BulkRedriveWorkflowTest {
   }
 
   /**
-   * Builds a StepContext that drives BulkRedriveStep directly. `stateJson` is the
-   * persisted yield state (null on first run); `inputJson` is the operator filter.
+   * @description Builds a StepContext that drives BulkRedriveStep directly.
+   * @param inputJson The operator filter JSON supplied as the workflow input.
+   * @param stateJson The persisted yield state, or null on the first run.
+   * @return A StepContext wired for the BulkRedriveStep under test.
    */
   private static StepContext ctxFor(String inputJson, String stateJson) {
     return new StepContext.Builder()
@@ -57,6 +62,12 @@ public class BulkRedriveWorkflowTest {
       this.filter = filter;
     }
 
+    /**
+     * @description Rebuilds the step's StepContext from persisted yield state,
+     * threading the operator filter through each resumed chunk transaction.
+     * @param stepStateJson The persisted yield state for the chunk being resumed.
+     * @return A StepContext carrying the filter and the supplied yield state.
+     */
     public StepContext build(String stepStateJson) {
       return ctxFor(filter, stepStateJson);
     }

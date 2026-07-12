@@ -22,6 +22,10 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
    */
   public static final String DECISION_SIGNAL = 'Approve:' + APPROVAL_KEY;
 
+  /**
+   * @description Declares the ordered step names comprising the approval saga.
+   * @return The list of ReserveBudget, RequestApproval, PlaceOrder, and Reject step names.
+   */
   public List<String> getSteps() {
     return new List<String>{
       'ApprovalWorkflowExample.ReserveBudgetStep',
@@ -31,14 +35,21 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
     };
   }
 
+  /**
+   * @description Names the step the engine runs first for a new instance.
+   * @return The ReserveBudgetStep step name.
+   */
   public String getInitialStep() {
     return 'ApprovalWorkflowExample.ReserveBudgetStep';
   }
 
   /**
-   * Routes steps. The approve/reject branch is expressed here in the DAG, not inside
+   * @description Routes steps. The approve/reject branch is expressed here in the DAG, not inside
    * the approval step itself, to keep the step's responsibility narrow (read signal,
    * surface payload) and make the routing logic visible and testable at the definition level.
+   * @param currentStepName The name of the step that just completed.
+   * @param result The result of the completed step, whose output carries the approval decision.
+   * @return The next step name (PlaceOrder on approve, Reject on rejection), or null when complete.
    */
   public String getNextStep(String currentStepName, StepResult result) {
     if (currentStepName == 'ApprovalWorkflowExample.ReserveBudgetStep') {
@@ -68,6 +79,12 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
    * rejected, compensate() releases the reservation automatically via LIFO rollback.
    */
   public class ReserveBudgetStep implements CompensatableStep {
+    /**
+     * @description Reserves budget for the purchase, deriving a reservation ID from
+     * the workflow input's purchaseAmount and surfacing it for later compensation.
+     * @param ctx The durable step context exposing the workflow input JSON.
+     * @return A completed StepResult carrying the reservationId and amount.
+     */
     public StepResult execute(StepContext ctx) {
       Decimal amount = 0;
       if (String.isNotBlank(ctx.workflowInputJson)) {
@@ -96,8 +113,10 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
     }
 
     /**
-     * Releases the reserved budget. The original step output is available via
+     * @description Releases the reserved budget. The original step output is available via
      * ctx.stepStateJson so the exact reservation ID can be retrieved without SOQL.
+     * @param ctx The durable step context exposing the original step state JSON.
+     * @return A completed StepResult recording the released reservationId.
      */
     public StepResult compensate(StepContext ctx) {
       String reservationId = 'res_unknown';
@@ -139,6 +158,12 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
    * at-least-once redelivered duplicate cannot advance the workflow twice.
    */
   public class RequestApprovalStep implements WorkflowStep {
+    /**
+     * @description On first run, suspends via waitForApproval awaiting the decision
+     * signal; on resume, surfaces the signal payload as output for routing.
+     * @param ctx The durable step context used to read the approval decision signal.
+     * @return A waitForApproval StepResult when undecided, else a completed result with the decision payload.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal decision = ctx.getSignal(DECISION_SIGNAL);
 
@@ -160,6 +185,11 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
 
   /** Terminal step on the approved path. */
   public class PlaceOrderStep implements WorkflowStep {
+    /**
+     * @description Places the order on the approved path and completes the workflow.
+     * @param ctx The durable step context supplying the workflow instance id for the order id.
+     * @return A completed StepResult carrying the approved result and generated orderId.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -179,6 +209,12 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
    * This is the saga-on-reject behaviour that native Approval Processes cannot express.
    */
   public class RejectStep implements WorkflowStep {
+    /**
+     * @description Fails the instance on the rejected path by throwing a
+     * WorkflowException, which triggers LIFO compensation of prior steps.
+     * @param ctx The durable step context exposing the rejection input JSON for the audit note.
+     * @return Never returns normally; always throws WorkflowException to fail the instance.
+     */
     public StepResult execute(StepContext ctx) {
       String reason = 'rejected';
       if (String.isNotBlank(ctx.inputJson)) {

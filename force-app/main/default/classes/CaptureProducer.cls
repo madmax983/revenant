@@ -8,5 +8,11 @@
  * re-execution it returns the durably recorded result without calling produce().
  */
 public interface CaptureProducer {
+  /**
+   * @description Produces the non-deterministic value to capture durably. The
+   * engine invokes this at most once per (instance, step, key); thereafter the
+   * recorded result is replayed without calling this method again.
+   * @return The value to record and replay for this capture key.
+   */
   Object produce();
 }

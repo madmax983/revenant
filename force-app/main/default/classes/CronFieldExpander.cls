@@ -8,8 +8,12 @@
  */
 public inherited sharing class CronFieldExpander {
   /**
-   * Expands one comma-separated token into its value set within [minVal, maxVal].
-   * Returns null on any error (unparseable token or out-of-range value).
+   * @description Expands one cron field token into its value set within
+   * [minVal, maxVal], handling wildcard, literal, range, and step forms.
+   * @param token The single cron field token to expand (e.g. `*`, `a`, `a-b`, `a/n`).
+   * @param minVal The inclusive lower bound legal for this field.
+   * @param maxVal The inclusive upper bound legal for this field.
+   * @return The set of matched values, or null if the token is unparseable or out of range.
    */
   public static Set<Integer> expand(
     String token,

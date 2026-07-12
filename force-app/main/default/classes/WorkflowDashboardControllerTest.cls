@@ -480,7 +480,12 @@ public class WorkflowDashboardControllerTest {
   // getDefinitionTrends — per-definition success-rate & throughput (Issue #33)
   // ──────────────────────────────────────────────────────────────────────────
 
-  /** Returns the row Map for the given workflow name from a getDefinitionTrends result. */
+  /**
+   * @description Returns the row Map for the given workflow name from a getDefinitionTrends result.
+   * @param trends The getDefinitionTrends result whose 'rows' list is scanned.
+   * @param workflowName The workflow name to match.
+   * @return The matching row Map, or null if no row matches the name.
+   */
   private static Map<String, Object> findTrendRow(
     Map<String, Object> trends,
     String workflowName

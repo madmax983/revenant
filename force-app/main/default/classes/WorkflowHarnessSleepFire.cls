@@ -6,6 +6,14 @@
  */
 @IsTest
 public inherited sharing class WorkflowHarnessSleepFire {
+  /**
+   * @description Deterministically wakes an instance parked in a sleep wait at
+   * the given step, resumes it through the engine, and drives to the next stable state.
+   * @param ctx The harness context identifying the workflow instance under test.
+   * @param stepName The name of the step currently sleeping.
+   * @param maxHops The maximum number of step transitions to drive after waking.
+   * @return The harness result after resuming and driving the instance.
+   */
   public static WorkflowTestHarness.Result fireSleep(
     WorkflowHarnessContext ctx,
     String stepName,
@@ -26,6 +34,14 @@ public inherited sharing class WorkflowHarnessSleepFire {
     return WorkflowHarnessDriver.drive(ctx, maxHops);
   }
 
+  /**
+   * @description Deterministically wakes an instance awaiting a retry backoff at
+   * the given step, resumes it through the engine, and drives to the next stable state.
+   * @param ctx The harness context identifying the workflow instance under test.
+   * @param stepName The name of the step currently awaiting retry.
+   * @param maxHops The maximum number of step transitions to drive after waking.
+   * @return The harness result after resuming and driving the instance.
+   */
   public static WorkflowTestHarness.Result fireRetry(
     WorkflowHarnessContext ctx,
     String stepName,

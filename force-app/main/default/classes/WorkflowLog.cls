@@ -1,15 +1,39 @@
+/**
+ * @description Best-effort logger that persists engine errors to Workflow_Log__c records,
+ * swallowing insert failures so diagnostics logging can never break workflow execution.
+ */
 public with sharing class WorkflowLog {
   private static final String LEVEL_ERROR = 'Error';
   private static final Integer MAX_MESSAGE_LENGTH = 131000;
 
+  /**
+   * @description Records an error log entry with no instance or workflow context.
+   * @param logType A short category label classifying the source of the error.
+   * @param message The error detail to persist; truncated if it exceeds the field limit.
+   */
   public static void error(String logType, String message) {
     error(logType, message, null, null, null);
   }
 
+  /**
+   * @description Records an error log entry associated with a specific workflow instance.
+   * @param logType A short category label classifying the source of the error.
+   * @param message The error detail to persist; truncated if it exceeds the field limit.
+   * @param instanceId The Id of the workflow instance the error relates to.
+   */
   public static void error(String logType, String message, Id instanceId) {
     error(logType, message, instanceId, null, null);
   }
 
+  /**
+   * @description Persists a fully-contextualized error log entry, truncating oversized
+   * messages and silently ignoring any insert failure.
+   * @param logType A short category label classifying the source of the error.
+   * @param message The error detail to persist; truncated if it exceeds the field limit.
+   * @param instanceId The Id of the workflow instance the error relates to.
+   * @param correlationKey The correlation key tying the error to a business transaction.
+   * @param workflowName The developer name of the workflow that produced the error.
+   */
   public static void error(
     String logType,
     String message,

@@ -1,3 +1,10 @@
+/**
+ * @description Durable per-step execution context handed to every workflow step.
+ * Carries the step's identity, inputs, prior outputs and retry/attempt metadata,
+ * and exposes the effectively-once primitives step authors rely on: breadcrumb
+ * logging, capture-once values, named change markers (patches), inbound signal
+ * reads, outbound event emission, progress reporting and governor-limit yielding.
+ */
 public inherited sharing class StepContext {
   public static final Integer MAX_LOG_ENTRIES = 100;
   public static final Integer MAX_MESSAGE_LENGTH = 4000;
@@ -104,6 +111,12 @@ public inherited sharing class StepContext {
     /** The formatted log message (with serialized context, if any, and truncation applied). */
     public String message { get; private set; }
 
+    /**
+     * @description Constructs a breadcrumb, stamping the current time and
+     * defaulting a null level to INFO.
+     * @param level The severity level; INFO is used when null.
+     * @param message The formatted log message.
+     */
     public Breadcrumb(Level level, String message) {
       this.timestamp = Datetime.now();
       this.level = (level != null) ? level : StepContext.Level.INFO;
@@ -225,20 +238,38 @@ public inherited sharing class StepContext {
     return this.breadcrumbs;
   }
 
+  /** The Id of the Workflow_Instance__c this step is executing for. */
   public Id workflowInstanceId { get; private set; }
+  /** The developer name of the workflow definition being executed. */
   public String workflowName { get; private set; }
+  /** The name of the step currently executing. */
   public String stepName { get; private set; }
+  /** JSON input passed to this step by the transition that scheduled it. */
   public String inputJson { get; private set; }
+  /** JSON output produced by the immediately preceding step, if any. */
   public String previousStepOutput { get; private set; }
+  /** JSON durable state persisted for this step across re-executions. */
   public String stepStateJson { get; private set; }
+  /** JSON input the workflow instance was originally started with. */
   public String workflowInputJson { get; private set; }
+  /** The version of the workflow definition this instance is pinned to. */
   public Integer workflowVersion { get; private set; }
+  /** The 1-based attempt number of the current step execution. */
   public Integer attempt { get; private set; }
+  /** The maximum number of attempts permitted for this step. */
   public Integer maxAttempts { get; private set; }
+  /** In a compensation/error context, the name of the step that failed. */
   public String failedStepName { get; private set; }
+  /** In a compensation/error context, the failure's error message. */
   public String errorMessage { get; private set; }
+  /** The cumulative count of attempts carried across re-executions. */
   public Integer attemptCount { get; private set; }
 
+  /**
+   * @description True when the current attempt is the last one permitted, so a
+   * step can branch to a terminal fallback instead of requesting another retry.
+   * @return True if this attempt has reached maxAttempts.
+   */
   public Boolean isFinalAttempt() {
     return this.attempt >= this.maxAttempts;
   }
@@ -308,10 +339,21 @@ public inherited sharing class StepContext {
     }
   }
 
+  /**
+   * @description True when this execution is the engine-routed timeout fallback
+   * rather than a normal run, so a step can take its timeout-handling branch.
+   * @return True if the context was built as a timeout resume.
+   */
   public Boolean isTimeoutResume() {
     return timeoutResume == true;
   }
 
+  /**
+   * @description Reports a progress snapshot as a percent-complete and message,
+   * buffered for the engine to persist at the next transition checkpoint.
+   * @param percentComplete The completion percentage to record.
+   * @param message A human-readable progress description.
+   */
   public void reportProgress(Decimal percentComplete, String message) {
     Map<String, Object> progressMap = new Map<String, Object>{
       'percentComplete' => percentComplete,
@@ -320,6 +362,12 @@ public inherited sharing class StepContext {
     reportProgress(progressMap);
   }
 
+  /**
+   * @description Reports an arbitrary progress payload, serialized to JSON and
+   * buffered for the engine to persist at the next transition checkpoint. A null
+   * payload clears the buffered progress.
+   * @param progressData The progress object to serialize, or null to clear.
+   */
   public void reportProgress(Object progressData) {
     if (progressData == null) {
       this.progressJson = null;
@@ -329,10 +377,20 @@ public inherited sharing class StepContext {
     this.progressReported = true;
   }
 
+  /**
+   * @description The buffered progress snapshot as JSON, read by the engine at
+   * the transition checkpoint. Null when no progress was reported.
+   * @return The serialized progress JSON, or null.
+   */
   public String getProgressJson() {
     return this.progressJson;
   }
 
+  /**
+   * @description True when the step called reportProgress() during this
+   * execution, so the engine knows there is a snapshot to persist.
+   * @return True if progress was reported.
+   */
   public Boolean isProgressReported() {
     return this.progressReported;
   }
@@ -343,13 +401,17 @@ public inherited sharing class StepContext {
    * id is exposed so the engine can tie consumption to the step's transition.
    */
   public class Signal implements Comparable {
+    /** The Id of the underlying Workflow_Signal__c record. */
     public Id signalId { get; private set; }
+    /** The author-interpreted signal name this row was delivered under. */
     public String name { get; private set; }
+    /** The signal's payload string, or null for the empty sentinel. */
     public String payload { get; private set; }
     // Arrival timestamp (Workflow_Signal__c.CreatedDate). Used to keep merged
     // signal lists in deterministic arrival order even when a row was already
     // claimed out of a later re-query. Null for the empty sentinel and for
     // signals built from an explicit in-memory list (tests).
+    /** Arrival timestamp used to keep merged signal lists in arrival order. */
     public Datetime createdDate { get; private set; }
     // True when the source atomically CLAIMED this row (flipped it to an
     // exclusive Processing state for this branch), as opposed to merely reading
@@ -358,6 +420,13 @@ public inherited sharing class StepContext {
     private Boolean claimed;
     private Boolean present;
 
+    /**
+     * @description Constructs a present signal from its record id, name and
+     * payload; createdDate is left null and claimed defaults to false.
+     * @param signalId The Workflow_Signal__c record id.
+     * @param name The signal name.
+     * @param payload The signal payload string.
+     */
     public Signal(Id signalId, String name, String payload) {
       this.signalId = signalId;
       this.name = name;
@@ -373,8 +442,11 @@ public inherited sharing class StepContext {
     }
 
     /**
-     * Sets the arrival timestamp and returns this signal, so a caller can build
-     * a signal fluently without a long constructor parameter list.
+     * @description Sets the arrival timestamp and returns this signal, so a
+     * caller can build a signal fluently without a long constructor parameter
+     * list.
+     * @param createdDate The arrival timestamp to record.
+     * @return This signal, for chaining.
      */
     public Signal withCreatedDate(Datetime createdDate) {
       this.createdDate = createdDate;
@@ -382,27 +454,42 @@ public inherited sharing class StepContext {
     }
 
     /**
-     * Marks this signal as CLAIMED (exclusive Processing hold for this branch)
-     * and returns it. Intent-named alternative to a boolean constructor flag.
+     * @description Marks this signal as CLAIMED (exclusive Processing hold for
+     * this branch) and returns it. Intent-named alternative to a boolean
+     * constructor flag.
+     * @return This signal, for chaining.
      */
     public Signal asClaimed() {
       this.claimed = true;
       return this;
     }
 
-    /** True when this represents a real pending signal (not the empty result). */
+    /**
+     * @description True when this represents a real pending signal (not the
+     * empty result sentinel).
+     * @return True if a matching signal is present.
+     */
     public Boolean isPresent() {
       return present;
     }
 
-    /** True when the engine holds an exclusive claim on this row for this branch. */
+    /**
+     * @description True when the engine holds an exclusive claim on this row for
+     * this branch.
+     * @return True if this row is claimed by this branch.
+     */
     public Boolean isClaimed() {
       return claimed;
     }
 
-    // Orders by arrival (CreatedDate, then Id) so a merged list preserves the
-    // engine's deterministic signal ordering. Nulls (in-memory signals) sort
-    // first, then by id, which is a stable fallback when no timestamp is known.
+    /**
+     * @description Orders by arrival (CreatedDate, then Id) so a merged list
+     * preserves the engine's deterministic signal ordering. Nulls (in-memory
+     * signals) sort first, then by id as a stable fallback when no timestamp is
+     * known.
+     * @param other The other Signal to compare against.
+     * @return A negative, zero, or positive Integer per the Comparable contract.
+     */
     public Integer compareTo(Object other) {
       Signal o = (Signal) other;
       if (this.createdDate != o.createdDate) {
@@ -432,8 +519,25 @@ public inherited sharing class StepContext {
    * engine; resolved lazily on first signal access.
    */
   public interface SignalSource {
+    /**
+     * @description Returns pending signals for the given name, or every pending
+     * signal when the name is blank/null.
+     * @param signalName The name to filter by, or blank for all.
+     * @return The matching pending signals.
+     */
     List<Signal> getPendingSignals(String signalName);
+    /**
+     * @description Returns only the single most-recent pending signal matching
+     * the name, avoiding loading every duplicate payload.
+     * @param signalName The name to match.
+     * @return The latest matching signal, or null if none.
+     */
     Signal getLatestSignal(String signalName);
+    /**
+     * @description True when the last read was truncated by a governor-safety
+     * row cap, so callers must not treat the returned page as exhaustive.
+     * @return True if the most recent read was capped.
+     */
     Boolean readWasCapped();
   }
 
@@ -554,95 +658,191 @@ public inherited sharing class StepContext {
     private Integer attemptVal = 1;
     private Integer maxAttemptsVal = 1;
 
+    /**
+     * @description Sets the workflow instance id for the context.
+     * @param val The Workflow_Instance__c id.
+     * @return This builder, for chaining.
+     */
     public Builder instanceId(Id val) {
       ctx.workflowInstanceId = val;
       return this;
     }
 
+    /**
+     * @description Sets the workflow definition name for the context.
+     * @param val The workflow developer name.
+     * @return This builder, for chaining.
+     */
     public Builder workflowName(String val) {
       ctx.workflowName = val;
       return this;
     }
 
+    /**
+     * @description Sets the name of the step this context represents.
+     * @param val The step name.
+     * @return This builder, for chaining.
+     */
     public Builder stepName(String val) {
       ctx.stepName = val;
       return this;
     }
 
+    /**
+     * @description Sets the JSON input passed to this step.
+     * @param val The step input JSON.
+     * @return This builder, for chaining.
+     */
     public Builder inputJson(String val) {
       ctx.inputJson = val;
       return this;
     }
 
+    /**
+     * @description Sets the JSON output produced by the preceding step.
+     * @param val The previous step's output JSON.
+     * @return This builder, for chaining.
+     */
     public Builder previousStepOutput(String val) {
       ctx.previousStepOutput = val;
       return this;
     }
 
+    /**
+     * @description Sets the durable per-step state JSON for this step.
+     * @param val The step state JSON.
+     * @return This builder, for chaining.
+     */
     public Builder stepStateJson(String val) {
       ctx.stepStateJson = val;
       return this;
     }
 
+    /**
+     * @description Sets the JSON input the workflow instance was started with.
+     * @param val The workflow input JSON.
+     * @return This builder, for chaining.
+     */
     public Builder workflowInputJson(String val) {
       ctx.workflowInputJson = val;
       return this;
     }
 
+    /**
+     * @description Sets the workflow definition version this instance is pinned
+     * to.
+     * @param val The workflow version.
+     * @return This builder, for chaining.
+     */
     public Builder workflowVersion(Integer val) {
       ctx.workflowVersion = val;
       return this;
     }
 
+    /**
+     * @description Sets the 0-based visit sequence of this step within the
+     * instance, used to scope the idempotency key and capture-once state.
+     * @param val The step visit sequence.
+     * @return This builder, for chaining.
+     */
     public Builder stepVisit(Integer val) {
       this.stepVisitVal = val;
       return this;
     }
 
+    /**
+     * @description Sets the lazy signal source; signals are not loaded until an
+     * accessor is actually called.
+     * @param val The SignalSource implementation.
+     * @return This builder, for chaining.
+     */
     public Builder signalSource(SignalSource val) {
       // Defer loading until a signal accessor is actually called.
       ctx.signalSource = val;
       return this;
     }
 
+    /**
+     * @description Supplies an explicit, already-resolved pending-signal list
+     * (used by tests) instead of a lazy source.
+     * @param val The pending signals to expose.
+     * @return This builder, for chaining.
+     */
     public Builder pendingSignals(List<Signal> val) {
       this.pendingSignalsVal = val;
       this.pendingSignalsProvided = true;
       return this;
     }
 
+    /**
+     * @description Sets the predecessor instance start time used as an
+     * incremental-query polling cursor.
+     * @param val The previous run's start timestamp.
+     * @return This builder, for chaining.
+     */
     public Builder previousRunAt(Datetime val) {
       ctx.previousRunAt = val;
       return this;
     }
 
+    /**
+     * @description Seeds the capture-once values from an already-parsed map so
+     * once() replays prior values without invoking producers.
+     * @param val The captured values map.
+     * @return This builder, for chaining.
+     */
     public Builder capturedValuesMap(Map<String, Object> val) {
       this.capturedValuesMapVal = val;
       return this;
     }
 
+    /**
+     * @description Seeds the capture-once values from a stored JSON payload,
+     * parsed during build.
+     * @param val The captured values JSON.
+     * @return This builder, for chaining.
+     */
     public Builder capturedValuesJson(String val) {
       this.capturedValuesJsonVal = val;
       this.capturesJsonProvided = true;
       return this;
     }
 
+    /**
+     * @description Sets the 1-based attempt number for this step execution.
+     * @param val The attempt number.
+     * @return This builder, for chaining.
+     */
     public Builder attempt(Integer val) {
       this.attemptVal = val;
       return this;
     }
 
+    /**
+     * @description Sets the maximum number of attempts permitted for this step.
+     * @param val The maximum attempts.
+     * @return This builder, for chaining.
+     */
     public Builder maxAttempts(Integer val) {
       this.maxAttemptsVal = val;
       return this;
     }
 
-    /** Marks this context as the engine-routed timeout fallback (issue #35). */
+    /**
+     * @description Marks this context as the engine-routed timeout fallback
+     * (issue #35).
+     * @return This builder, for chaining.
+     */
     public Builder markTimeoutResume() {
       this.timeoutResumeVal = true;
       return this;
     }
 
+    /**
+     * @description Finalizes construction, applying the derived and hydration
+     * state, and returns the built StepContext.
+     * @return The fully constructed StepContext.
+     */
     public StepContext build() {
       return ctx.finishBuild(this);
     }
@@ -921,6 +1121,8 @@ public inherited sharing class StepContext {
    * claim statement (and a FOR UPDATE lock query) apiece and, past the engine's
    * internal per-branch claim budget, degrades to at-least-once. See issue #38
    * and ParallelSignalFanInWorkflowExample.
+   *
+   * @return A cloned list of the pending signals, in arrival order; never null.
    */
   public List<Signal> getSignals() {
     List<Signal> all = loadAll();
@@ -933,6 +1135,9 @@ public inherited sharing class StepContext {
   /**
    * Returns the pending signals matching the given name, in arrival order.
    * Never null. Marks the name observed.
+   *
+   * @param signalName The signal name to match.
+   * @return A cloned list of matching pending signals, in arrival order.
    */
   public List<Signal> getSignals(String signalName) {
     List<Signal> matches = matchesFor(signalName);
@@ -953,6 +1158,10 @@ public inherited sharing class StepContext {
    * filter in memory rather than a getSignal() per name (see issue #38): beyond
    * the engine's per-branch claim budget, overflow per-name reads degrade to
    * at-least-once.
+   *
+   * @param signalName The signal name to match.
+   * @return The most-recent matching signal, or an empty (not-present) Signal
+   * when none is pending; never null.
    */
   public Signal getSignal(String signalName) {
     Signal latest = latestFor(signalName);
@@ -968,6 +1177,9 @@ public inherited sharing class StepContext {
    * Inside a parallel branch this claims the matching signal (one claim DML
    * statement); to probe MANY distinct names prefer a single getSignals() and
    * filter in memory rather than a hasSignal() per name (see issue #38).
+   *
+   * @param signalName The signal name to probe.
+   * @return True if at least one pending signal matches the name.
    */
   public Boolean hasSignal(String signalName) {
     Signal latest = latestFor(signalName);
@@ -984,7 +1196,11 @@ public inherited sharing class StepContext {
    * name is observed, every pending signal of that name is included so that
    * at-least-once redelivered duplicates do not reappear to a later step.
    */
-  /** Ids of the snapshot signals the step actually matched (saw a payload for). */
+  /**
+   * @description Ids of the snapshot signals the step actually matched (saw a
+   * payload for), which the engine marks consumed at the COMPLETE transition.
+   * @return A cloned set of the matched signal ids.
+   */
   public Set<Id> getConsumedSignalIds() {
     return matchedSignalIds.clone();
   }
@@ -995,6 +1211,8 @@ public inherited sharing class StepContext {
    * transition, so a same-name at-least-once duplicate delivered while the step
    * was executing is consumed too -- while a name that was only probed absent
    * never consumes a signal that arrives afterwards.
+   *
+   * @return A cloned set of the matched signal names.
    */
   public Set<String> getConsumedSignalNames() {
     return matchedNames.clone();
@@ -1006,6 +1224,8 @@ public inherited sharing class StepContext {
    * consume these while Processing -- merely-observed rows (not in this set) are
    * only consumed while still Received, so a branch never disturbs a sibling's
    * claim on a row it only read.
+   *
+   * @return A cloned set of the claimed signal ids.
    */
   public Set<Id> getClaimedSignalIds() {
     return claimedSignalIds.clone();
@@ -1016,6 +1236,8 @@ public inherited sharing class StepContext {
    * step may not have seen every pending row of a name. The engine then skips
    * same-name duplicate cleanup, which could otherwise consume backlog rows the
    * step never observed.
+   *
+   * @return True if any signal read was truncated by a governor-safety cap.
    */
   public Boolean signalReadWasCapped() {
     return signalSource != null && signalSource.readWasCapped();
@@ -1042,6 +1264,9 @@ public inherited sharing class StepContext {
   /**
    * Checks if the current transaction is approaching governor limits.
    * Returns true if any monitored limit (CPU, SOQL, DML statements, DML rows, or Heap size) is > 80% consumed.
+   *
+   * @return True if the transaction is nearing a governor limit and the step
+   * should yield.
    */
   public Boolean shouldYield() {
     if (exceedsThreshold(Limits.getCpuTime(), Limits.getLimitCpuTime())) {
@@ -1471,6 +1696,9 @@ public inherited sharing class StepContext {
    * returned Map/List cannot reach the canonical instance held in
    * capturedValues (which getCapturedValuesJson() serializes). Primitives are
    * immutable, so they are returned as-is to avoid needless allocation.
+   *
+   * @param value The captured value to defensively copy.
+   * @return A deep copy for Map/List values, or the value itself for primitives.
    */
   private Object defensiveCopy(Object value) {
     if (value instanceof Map<String, Object> || value instanceof List<Object>) {
@@ -1483,6 +1711,9 @@ public inherited sharing class StepContext {
    * Returns a JSON serialization of all captured values accumulated during this
    * execution, or null if nothing was captured. Used by the engine to persist
    * captures to Workflow_Step_Execution__c.Captured_Values__c.
+   *
+   * @return The serialized captured values (including reserved metadata), or
+   * null when there is nothing to persist.
    */
   public String getCapturedValuesJson() {
     if (hasNothingToSerialize()) {
@@ -1519,6 +1750,8 @@ public inherited sharing class StepContext {
    * True when at least one new capture was added during this execution (i.e.
    * the engine needs to persist Captured_Values__c). False when the step only
    * read back prior captures without adding any new ones.
+   *
+   * @return True if at least one new capture was added this execution.
    */
   public Boolean hasNewCaptures() {
     return !newCaptureKeys.isEmpty();
@@ -1537,6 +1770,8 @@ public inherited sharing class StepContext {
    * rolled-back transition fires nothing. Delivery to subscribers stays
    * at-least-once — the guarantee is effectively-once publication at the
    * producer, so subscribers must remain idempotent. A null event is ignored.
+   *
+   * @param event The platform event (__e) SObject to buffer for publication.
    */
   public void emit(SObject event) {
     if (event != null) {
@@ -1549,6 +1784,8 @@ public inherited sharing class StepContext {
    * order. Never null. The engine reads this at the step's COMPLETE/SPLIT
    * transition and publishes the union of these and any events passed to
    * StepResult.complete(next, output, events).
+   *
+   * @return A cloned list of the buffered outbound events, in arrival order.
    */
   public List<SObject> getPendingEmits() {
     return this.pendingEmits.clone();
@@ -1564,8 +1801,11 @@ public inherited sharing class StepContext {
    * re-execution context with prior captures in place.
    */
   /**
-   * Helper to parse captured values JSON string safely into a Map.
-   * Catches parsing exceptions and handles malformed payloads defensively.
+   * @description Helper to parse a captured-values JSON string safely into a
+   * Map, catching parsing exceptions and handling malformed payloads
+   * defensively.
+   * @param jsonStr The captured values JSON to parse.
+   * @return The parsed map, or an empty map when blank or malformed.
    */
   private static Map<String, Object> parseCaptures(String jsonStr) {
     if (String.isBlank(jsonStr)) {
@@ -1585,6 +1825,11 @@ public inherited sharing class StepContext {
    * Derives the idempotency key from logical (instance, step, visit) identity
    * only. SHA-256 keeps it opaque, uniform-length, and safe to forward verbatim
    * as an external idempotency token.
+   *
+   * @param instanceId The workflow instance id.
+   * @param stepName The step name.
+   * @param stepVisit The step's visit sequence within the instance.
+   * @return The hex-encoded SHA-256 idempotency key.
    */
   private static String deriveIdempotencyKey(
     Id instanceId,
@@ -1601,16 +1846,33 @@ public inherited sharing class StepContext {
     return EncodingUtil.convertToHex(digest);
   }
 
+  /**
+   * @description Read-only result of a child (sub-workflow) execution, resolved
+   * from the ChildCompleted/ChildFailed signals a parent step observes.
+   */
   public class ChildOutcome {
+    /** The child's terminal status, e.g. 'Completed' or 'Failed'. */
     public String status { get; private set; }
+    /** The child's error message when it failed, else null. */
     public String errorMessage { get; private set; }
+    /** The child's output payload, resolved from its completion signal. */
     public String output { get; private set; }
     private Boolean present = false;
 
+    /**
+     * @description Constructs an empty (not-present) outcome, used when no child
+     * result signal is pending for the key.
+     */
     public ChildOutcome() {
       this.present = false;
     }
 
+    /**
+     * @description Constructs a present outcome from a resolved child result.
+     * @param status The child's terminal status.
+     * @param errorMessage The child's error message, or null.
+     * @param output The child's output payload, or null.
+     */
     public ChildOutcome(String status, String errorMessage, String output) {
       this.status = status;
       this.errorMessage = errorMessage;
@@ -1618,15 +1880,31 @@ public inherited sharing class StepContext {
       this.present = true;
     }
 
+    /**
+     * @description True when a child result was found for this key (not the
+     * empty sentinel).
+     * @return True if this outcome represents a real child result.
+     */
     public Boolean isPresent() {
       return this.present;
     }
 
+    /**
+     * @description True when the child completed successfully.
+     * @return True if the child's status is 'Completed'.
+     */
     public Boolean isSuccess() {
       return this.status == 'Completed';
     }
   }
 
+  /**
+   * @description Resolves the outcome of a single child (sub-workflow) by its
+   * key from the pending ChildCompleted/ChildFailed signals.
+   * @param childKey The child key to look up.
+   * @return The child's outcome, or an empty (not-present) outcome when none is
+   * pending.
+   */
   public ChildOutcome getChildOutcome(String childKey) {
     List<ChildOutcome> outcomes = this.getChildOutcomes(
       new List<String>{ childKey }
@@ -1637,6 +1915,13 @@ public inherited sharing class StepContext {
     return outcomes[0];
   }
 
+  /**
+   * @description Resolves the outcomes of several children in one pass, bulk-
+   * resolving their payloads to avoid N+1 signal queries.
+   * @param childKeys The child keys to resolve, in order.
+   * @return A list of outcomes aligned to childKeys; blank/unknown keys yield an
+   * empty (not-present) outcome.
+   */
   public List<ChildOutcome> getChildOutcomes(List<String> childKeys) {
     this.loadAll(); // Pre-load all pending signals to bulkify and avoid N+1 queries
     List<ChildOutcome> outcomes = new List<ChildOutcome>();

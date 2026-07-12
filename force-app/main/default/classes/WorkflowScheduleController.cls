@@ -43,8 +43,11 @@ public with sharing class WorkflowScheduleController {
   // ── Reads ─────────────────────────────────────────────────────────────────
 
   /**
-   * Returns all schedules with their fields plus a computed dedicatedJobArmed flag.
-   * cacheBuster lets the client bypass the Lightning cache on manual refresh.
+   * @description Returns all schedules with their fields plus a computed
+   * dedicatedJobArmed flag. cacheBuster lets the client bypass the Lightning cache
+   * on manual refresh.
+   * @param cacheBuster An arbitrary value the client varies to bypass the LDS cache.
+   * @return One map of display fields per schedule, ordered by name.
    */
   @AuraEnabled(cacheable=true)
   public static List<Map<String, Object>> getSchedules(String cacheBuster) {
@@ -115,7 +118,10 @@ public with sharing class WorkflowScheduleController {
   }
 
   /**
-   * Returns one schedule plus its recent fire logs and next/last fire preview.
+   * @description Returns one schedule plus its recent fire logs and next/last fire
+   * preview.
+   * @param scheduleId The schedule to load.
+   * @return A map with the schedule, its recent logs, and next/last fire times.
    */
   @AuraEnabled
   public static Map<String, Object> getScheduleDetail(Id scheduleId) {
@@ -184,8 +190,9 @@ public with sharing class WorkflowScheduleController {
   }
 
   /**
-   * WorkflowDefinition class names for the editor combobox. Reuses the dashboard's
-   * discovery logic.
+   * @description WorkflowDefinition class names for the editor combobox. Reuses the
+   * dashboard's discovery logic.
+   * @return The discoverable WorkflowDefinition class names.
    */
   @AuraEnabled(cacheable=true)
   public static List<String> getWorkflowDefinitions() {
@@ -194,7 +201,10 @@ public with sharing class WorkflowScheduleController {
   }
 
   /**
-   * Live cron preview for the editor: validity plus last/next fire instants.
+   * @description Live cron preview for the editor: validity plus last/next fire
+   * instants.
+   * @param cron The cron expression to preview.
+   * @return A map with the valid flag and, when valid, last/next fire times.
    */
   @AuraEnabled
   public static Map<String, Object> previewCron(String cron) {
@@ -214,8 +224,11 @@ public with sharing class WorkflowScheduleController {
   // ── Writes ──────────────────────────────────────────────────────────────────
 
   /**
-   * Creates (no Id) or updates (Id present) a schedule. Validates cron and the
-   * optional input JSON before committing.
+   * @description Creates (no Id) or updates (Id present) a schedule. Validates cron
+   * and the optional input JSON before committing, reseeds the fire cursor when the
+   * cron changes, and keeps any armed dedicated job in sync.
+   * @param fields The schedule field values from the editor.
+   * @return The Id of the created or updated schedule.
    */
   @AuraEnabled
   public static Id saveSchedule(Map<String, Object> fields) {
@@ -258,7 +271,13 @@ public with sharing class WorkflowScheduleController {
     return sched.Id;
   }
 
-  /** Validates the cron, optional input JSON, and correlation-key prefix. Throws. */
+  /**
+   * @description Validates the cron, optional input JSON, and correlation-key prefix;
+   * throws an AuraHandledException on any invalid value.
+   * @param cron The cron expression to validate.
+   * @param inputJson The optional input JSON to validate, or blank.
+   * @param prefix The correlation-key prefix to validate.
+   */
   private static void validateScheduleInput(
     String cron,
     String inputJson,
@@ -284,7 +303,11 @@ public with sharing class WorkflowScheduleController {
     }
   }
 
-  /** Extracts the update-target Id from the incoming field map, or null on create. */
+  /**
+   * @description Extracts the update-target Id from the incoming field map.
+   * @param fields The incoming schedule field map.
+   * @return The existing schedule Id, or null on create.
+   */
   private static Id resolveExistingId(Map<String, Object> fields) {
     if (
       fields.get('Id') != null && String.isNotBlank((String) fields.get('Id'))
@@ -294,7 +317,11 @@ public with sharing class WorkflowScheduleController {
     return null;
   }
 
-  /** Reads the currently-persisted cron for an edit, or null on create/missing row. */
+  /**
+   * @description Reads the currently-persisted cron for an edit.
+   * @param existingId The schedule being edited, or null on create.
+   * @return The stored cron expression, or null on create or a missing row.
+   */
   private static String loadOldCron(Id existingId) {
     if (existingId == null) {
       return null;
@@ -310,8 +337,11 @@ public with sharing class WorkflowScheduleController {
   }
 
   /**
-   * Enforces correlation-key-prefix uniqueness with a friendly message (the field is
-   * also unique at the database level as a backstop). Throws on a collision.
+   * @description Enforces correlation-key-prefix uniqueness with a friendly message
+   * (the field is also unique at the database level as a backstop); throws on a
+   * collision.
+   * @param prefix The correlation-key prefix to check.
+   * @param existingId The schedule being edited (excluded from the check), or null.
    */
   private static void assertUniquePrefix(String prefix, Id existingId) {
     List<Workflow_Schedule__c> dupes;
@@ -341,7 +371,12 @@ public with sharing class WorkflowScheduleController {
     }
   }
 
-  /** Maps the incoming field map onto a Workflow_Schedule__c for upsert. */
+  /**
+   * @description Maps the incoming field map onto a Workflow_Schedule__c for upsert.
+   * @param fields The incoming schedule field map.
+   * @param existingId The Id to set for an update, or null for an insert.
+   * @return The populated schedule record ready to upsert.
+   */
   private static Workflow_Schedule__c buildScheduleRecord(
     Map<String, Object> fields,
     Id existingId
@@ -364,9 +399,12 @@ public with sharing class WorkflowScheduleController {
   }
 
   /**
-   * Keeps an armed dedicated CronTrigger consistent with the just-saved record: tears
-   * it down if the edit turned off Enabled or Dedicated mode, or re-arms it (abort +
-   * register) if still dedicated/enabled but the cadence changed.
+   * @description Keeps an armed dedicated CronTrigger consistent with the just-saved
+   * record: tears it down if the edit turned off Enabled or Dedicated mode, or
+   * re-arms it (abort + register) if still dedicated/enabled but the cadence changed.
+   * @param sched The just-saved schedule record.
+   * @param oldCron The cron before the save.
+   * @param cron The cron after the save.
    */
   private static void syncDedicatedJob(
     Workflow_Schedule__c sched,
@@ -403,6 +441,11 @@ public with sharing class WorkflowScheduleController {
     }
   }
 
+  /**
+   * @description Deletes a schedule, first tearing down any armed dedicated job so
+   * nothing is left orphaned.
+   * @param scheduleId The schedule to delete.
+   */
   @AuraEnabled
   public static void deleteSchedule(Id scheduleId) {
     checkAuthorization();
@@ -425,6 +468,11 @@ public with sharing class WorkflowScheduleController {
     delete as user sched;
   }
 
+  /**
+   * @description Enables a schedule and, when re-enabling a previously disabled one,
+   * reseeds the fire cursor so the next sweep waits for the next future window.
+   * @param scheduleId The schedule to enable.
+   */
   @AuraEnabled
   public static void enableSchedule(Id scheduleId) {
     checkAuthorization();
@@ -443,6 +491,11 @@ public with sharing class WorkflowScheduleController {
     }
   }
 
+  /**
+   * @description Disables a schedule and, if it was dedicated, also tears down its
+   * CronTrigger so it stops firing immediately.
+   * @param scheduleId The schedule to disable.
+   */
   @AuraEnabled
   public static void disableSchedule(Id scheduleId) {
     checkAuthorization();
@@ -476,10 +529,12 @@ public with sharing class WorkflowScheduleController {
   }
 
   /**
-   * (Re)computes the engine-managed Next_Fire_Window__c cursor for a schedule from
-   * its cron. Written in SYSTEM mode since the cursor field is read-only to admins.
-   * logSource distinguishes the caller (schedule save vs enable/disable toggle) in
-   * any error log.
+   * @description (Re)computes the engine-managed Next_Fire_Window__c cursor for a
+   * schedule from its cron. Written in SYSTEM mode since the cursor field is
+   * read-only to admins.
+   * @param scheduleId The schedule whose cursor is reseeded.
+   * @param cron The cron expression used to compute the next window.
+   * @param logSource The caller label recorded in any error log.
    */
   private static void reseedCursor(
     Id scheduleId,
@@ -502,6 +557,11 @@ public with sharing class WorkflowScheduleController {
     }
   }
 
+  /**
+   * @description Fires a schedule immediately, out of band from its cron cadence.
+   * @param scheduleId The schedule to run now.
+   * @return The Id of the started workflow instance, or null on failure.
+   */
   @AuraEnabled
   public static Id runNow(Id scheduleId) {
     checkAuthorization();
@@ -513,6 +573,11 @@ public with sharing class WorkflowScheduleController {
     }
   }
 
+  /**
+   * @description Arms a dedicated CronTrigger job for a schedule (its own scheduled
+   * slot rather than the shared sweeper).
+   * @param scheduleId The schedule to arm a dedicated job for.
+   */
   @AuraEnabled
   public static void registerDedicatedJob(Id scheduleId) {
     checkAuthorization();
@@ -523,6 +588,10 @@ public with sharing class WorkflowScheduleController {
     }
   }
 
+  /**
+   * @description Aborts and removes a schedule's dedicated CronTrigger job.
+   * @param scheduleId The schedule whose dedicated job is removed.
+   */
   @AuraEnabled
   public static void unregisterDedicatedJob(Id scheduleId) {
     checkAuthorization();

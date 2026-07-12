@@ -9,6 +9,10 @@
 public inherited sharing class WorkflowHarnessStepRunner {
   private final WorkflowHarnessContext ctx;
 
+  /**
+   * @description Binds the single-hop runner to a harness run context.
+   * @param ctx The per-run harness context this runner advances.
+   */
   public WorkflowHarnessStepRunner(WorkflowHarnessContext ctx) {
     this.ctx = ctx;
   }
@@ -19,6 +23,10 @@ public inherited sharing class WorkflowHarnessStepRunner {
    * not-yet-complete branch (the engine no-ops already-completed branches and
    * auto-inserts the rejoin once the last branch finishes), but never more branches
    * than the remaining budget allows — any leftover branches resume on the next hop.
+   *
+   * @param inst The workflow instance to advance by one logical step.
+   * @param remaining The remaining hop budget for this drive.
+   * @return The number of hops actually consumed.
    */
   public Integer advanceOneStep(Workflow_Instance__c inst, Integer remaining) {
     String currentStep = inst.Current_Step__c;

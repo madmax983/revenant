@@ -54,12 +54,18 @@ public inherited sharing class ConcurrencyGate {
   // the specific config and silently falling back to Default/unbounded.
   private static Map<String, Concurrency_Config__mdt> normalizedConfigsByName;
 
+  /**
+   * @description Outcome of an admission attempt: whether the instance may proceed and
+   * whether doing so consumed a real concurrency slot.
+   */
   public class AdmissionResult {
     // True if the instance may proceed to execute (either it took a slot, or the
     // workflow is unbounded).
+    /** @description True if the instance may proceed to execute. */
     public Boolean admitted { get; private set; }
     // True only when a real slot was consumed (a ceiling is configured). When false
     // and admitted is true, the workflow is unbounded and no counter was touched.
+    /** @description True only when a real bounded slot was consumed. */
     public Boolean slotConsumed { get; private set; }
 
     // Constructed only through the intent-named factories on the enclosing class so
@@ -100,8 +106,10 @@ public inherited sharing class ConcurrencyGate {
   }
 
   /**
-   * Resolves the configured ceiling for a workflow definition, or null when the
-   * workflow is unbounded (no specific record and no Default). Cached per transaction.
+   * @description Resolves the configured ceiling for a workflow definition, or null when
+   * the workflow is unbounded (no specific record and no Default). Cached per transaction.
+   * @param workflowName The workflow definition name to resolve a ceiling for.
+   * @return The configured positive ceiling, or null when the workflow is unbounded.
    */
   public static Integer getCeiling(String workflowName) {
     if (
@@ -181,16 +189,23 @@ public inherited sharing class ConcurrencyGate {
     return normalizedConfigsByName;
   }
 
-  /** True when the workflow has a concurrency ceiling configured. */
+  /**
+   * @description True when the workflow has a concurrency ceiling configured.
+   * @param workflowName The workflow definition name to check.
+   * @return True if a ceiling is configured, otherwise false.
+   */
   public static Boolean isConfigured(String workflowName) {
     return getCeiling(workflowName) != null;
   }
 
   /**
-   * Attempts to acquire a slot for the workflow. For an unbounded workflow this is
-   * a no-op that admits without touching any counter. For a bounded workflow it
-   * locks the durable counter row and admits (incrementing) only while the live
-   * count is below the ceiling.
+   * @description Attempts to acquire a slot for the workflow. For an unbounded workflow
+   * this is a no-op that admits without touching any counter. For a bounded workflow it
+   * locks the durable counter row and admits (incrementing) only while the live count is
+   * below the ceiling.
+   * @param workflowName The workflow definition name to admit an instance of.
+   * @return An AdmissionResult indicating whether the instance was admitted and whether a
+   * slot was consumed.
    */
   public static AdmissionResult tryAcquire(String workflowName) {
     Integer ceiling = getCeiling(workflowName);
@@ -212,8 +227,10 @@ public inherited sharing class ConcurrencyGate {
   }
 
   /**
-   * Releases `count` slots for the workflow (floored at zero). No-op when no counter
-   * row exists. Used by the terminal-transition release path.
+   * @description Releases `count` slots for the workflow (floored at zero). No-op when no
+   * counter row exists. Used by the terminal-transition release path.
+   * @param workflowName The workflow definition name whose slots to release.
+   * @param count The number of slots to free.
    */
   public static void release(String workflowName, Integer count) {
     if (String.isBlank(workflowName) || count == null || count <= 0) {
@@ -223,9 +240,10 @@ public inherited sharing class ConcurrencyGate {
   }
 
   /**
-   * Bulk release keyed by workflow definition -> number of slots to free. Locks each
-   * existing counter row once and decrements (floored at zero). Called from the
+   * @description Bulk release keyed by workflow definition to number of slots to free.
+   * Locks each existing counter row once and decrements (floored at zero). Called from the
    * instance trigger so many concurrent terminal transitions decrement correctly.
+   * @param countsByWorkflow Map of workflow definition name to the number of slots to free.
    */
   public static void releaseBulk(Map<String, Integer> countsByWorkflow) {
     if (countsByWorkflow == null || countsByWorkflow.isEmpty()) {
@@ -296,10 +314,11 @@ public inherited sharing class ConcurrencyGate {
   }
 
   /**
-   * Reconciles the counter for a single workflow to the true number of non-terminal
-   * slot-holding instances. Reclaims slots leaked by instances that died without
-   * releasing (crash / killed transaction). Heavy enough to live on the watchdog
+   * @description Reconciles the counter for a single workflow to the true number of
+   * non-terminal slot-holding instances, reclaiming slots leaked by instances that died
+   * without releasing (crash / killed transaction). Heavy enough to live on the watchdog
    * sweep, never on the admission hot path.
+   * @param workflowName The workflow definition name whose counter to reconcile.
    */
   public static void reconcile(String workflowName) {
     reconcileAll(new Set<String>{ workflowName });
@@ -410,9 +429,11 @@ public inherited sharing class ConcurrencyGate {
   }
 
   /**
-   * Locks the workflow's counter row, lazily provisioning it on first use. Mirrors
-   * RateLimiter's duplicate-insert race recovery: a concurrent first-use insert that
-   * loses the unique-key race is caught and the winner's row is re-locked.
+   * @description Locks the workflow's counter row, lazily provisioning it on first use.
+   * Mirrors RateLimiter's duplicate-insert race recovery: a concurrent first-use insert
+   * that loses the unique-key race is caught and the winner's row is re-locked.
+   * @param workflowName The workflow definition name whose counter row to lock or provision.
+   * @return The locked counter row for the workflow.
    */
   private static Concurrency_State__c lockOrProvision(String workflowName) {
     List<Concurrency_State__c> states = lockExistingState(workflowName);

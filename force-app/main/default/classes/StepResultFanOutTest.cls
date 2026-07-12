@@ -4,19 +4,44 @@ public class StepResultFanOutTest {
   // MOCK WORKFLOWS & STEPS
   // ==========================================
 
+  /**
+   * @description Mock single-step child workflow used to verify fan-out and join behavior.
+   */
   public class SimpleChildWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the ordered step names of this mock child workflow.
+     * @return A single-element list naming the child step.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'StepResultFanOutTest.ChildStep' };
     }
+    /**
+     * @description Returns the name of the first step to execute.
+     * @return The name of the child step.
+     */
     public String getInitialStep() {
       return 'StepResultFanOutTest.ChildStep';
     }
+    /**
+     * @description Computes the next step after the given step completes.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, since this is a single-step workflow.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Mock child step that multiplies its input value by ten and completes.
+   */
   public class ChildStep implements WorkflowStep {
+    /**
+     * @description Reads the input 'val', multiplies it by ten, and completes with the result.
+     * @param ctx The durable step context supplying the workflow input.
+     * @return A complete result carrying the computed result.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.workflowInputJson
@@ -29,19 +54,47 @@ public class StepResultFanOutTest {
     }
   }
 
+  /**
+   * @description Mock parent workflow whose single step fans out to two children and joins
+   * their results.
+   */
   public class ParentWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the ordered step names of this mock parent workflow.
+     * @return A single-element list naming the parent step.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'StepResultFanOutTest.ParentStep' };
     }
+    /**
+     * @description Returns the name of the first step to execute.
+     * @return The name of the parent step.
+     */
     public String getInitialStep() {
       return 'StepResultFanOutTest.ParentStep';
     }
+    /**
+     * @description Computes the next step after the given step completes.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, since this is a single-step workflow.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Mock parent step that starts two children on first run and, once both
+   * child outcomes are present, completes with the sum of their results.
+   */
   public class ParentStep implements WorkflowStep {
+    /**
+     * @description Joins the two child outcomes into a summed result, or starts the two
+     * children when their outcomes are not yet present.
+     * @param ctx The durable step context exposing child outcomes and instance id.
+     * @return A complete result with the summed output, or a start-children result.
+     */
     public StepResult execute(StepContext ctx) {
       String key1 = 'Child1_' + ctx.workflowInstanceId;
       String key2 = 'Child2_' + ctx.workflowInstanceId;
@@ -80,25 +133,59 @@ public class StepResultFanOutTest {
     }
   }
 
+  /**
+   * @description Mock child workflow whose single step suspends, used to keep a child in a
+   * non-terminal state during fan-out tests.
+   */
   public class SuspendingChildWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the ordered step names of this mock child workflow.
+     * @return A single-element list naming the suspending child step.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'StepResultFanOutTest.SuspendingChildStep' };
     }
+    /**
+     * @description Returns the name of the first step to execute.
+     * @return The name of the suspending child step.
+     */
     public String getInitialStep() {
       return 'StepResultFanOutTest.SuspendingChildStep';
     }
+    /**
+     * @description Computes the next step after the given step completes.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, since this is a single-step workflow.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Mock step that immediately suspends, holding its instance non-terminal.
+   */
   public class SuspendingChildStep implements WorkflowStep {
+    /**
+     * @description Suspends the step immediately.
+     * @param ctx The durable step context.
+     * @return A suspend result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.suspend();
     }
   }
 
+  /**
+   * @description Mock workflow that splits into a child-fan-out branch and a signal branch
+   * to verify a sibling signal is not gated by the child-readiness barrier.
+   */
   public class ParallelGatingWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the ordered step names of this mock gating workflow.
+     * @return The list of split, fan-out, signal, and join step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepResultFanOutTest.ParallelSplitStep',
@@ -107,9 +194,19 @@ public class StepResultFanOutTest {
         'StepResultFanOutTest.ParallelJoinStep'
       };
     }
+    /**
+     * @description Returns the name of the first step to execute.
+     * @return The name of the parallel split step.
+     */
     public String getInitialStep() {
       return 'StepResultFanOutTest.ParallelSplitStep';
     }
+    /**
+     * @description Routes the split step to the join step; other steps end the workflow.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return The join step name after the split, otherwise null.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       if (currentStepName == 'StepResultFanOutTest.ParallelSplitStep') {
         return 'StepResultFanOutTest.ParallelJoinStep';
@@ -118,7 +215,15 @@ public class StepResultFanOutTest {
     }
   }
 
+  /**
+   * @description Mock step that splits execution into the fan-out and signal branches.
+   */
   public class ParallelSplitStep implements WorkflowStep {
+    /**
+     * @description Splits into the fan-out and signal branches to run in parallel.
+     * @param ctx The durable step context.
+     * @return A split result naming the two parallel branches.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.split(
         new List<String>{
@@ -129,7 +234,17 @@ public class StepResultFanOutTest {
     }
   }
 
+  /**
+   * @description Mock branch step that starts a suspending child on first run and completes
+   * once that child's outcome is present.
+   */
   public class FanOutStep implements WorkflowStep {
+    /**
+     * @description Completes when the child outcome is present, otherwise starts the
+     * suspending child.
+     * @param ctx The durable step context exposing child outcomes and instance id.
+     * @return A complete result if the child outcome is present, otherwise a start-children result.
+     */
     public StepResult execute(StepContext ctx) {
       String key1 = 'ChildKey1_' + ctx.workflowInstanceId;
       StepContext.ChildOutcome outcome1 = ctx.getChildOutcome(key1);
@@ -147,7 +262,16 @@ public class StepResultFanOutTest {
     }
   }
 
+  /**
+   * @description Mock branch step that completes when its external signal is present,
+   * otherwise suspends.
+   */
   public class SignalStep implements WorkflowStep {
+    /**
+     * @description Completes when 'MyExternalSignal' is present, otherwise suspends.
+     * @param ctx The durable step context exposing signals.
+     * @return A complete result if the signal is present, otherwise a suspend result.
+     */
     public StepResult execute(StepContext ctx) {
       if (ctx.getSignal('MyExternalSignal').isPresent()) {
         return StepResult.complete(null, 'SignalReceived');
@@ -156,7 +280,16 @@ public class StepResultFanOutTest {
     }
   }
 
+  /**
+   * @description Mock join step that completes the parallel workflow once its branches have
+   * finished.
+   */
   public class ParallelJoinStep implements WorkflowStep {
+    /**
+     * @description Completes the workflow at the join point.
+     * @param ctx The durable step context.
+     * @return A complete result with no output.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, null);
     }

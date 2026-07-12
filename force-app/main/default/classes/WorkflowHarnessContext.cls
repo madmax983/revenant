@@ -14,12 +14,20 @@ public inherited sharing class WorkflowHarnessContext {
   public final Set<Id> scannedInstanceIds = new Set<Id>();
   public Boolean disableAutoTimeSkip = false;
 
+  /**
+   * @description Seeds the per-run state with the root workflow instance being driven.
+   * @param instanceId The Id of the root workflow instance.
+   */
   public WorkflowHarnessContext(Id instanceId) {
     this.rootInstanceId = instanceId;
     this.knownInstanceIds = new Set<Id>{ instanceId };
   }
 
-  /** Validates test context + a non-null instance Id, then builds the context. */
+  /**
+   * @description Validates test context and a non-null instance Id, then builds the context.
+   * @param instanceId The Id of the root workflow instance to drive.
+   * @return A context seeded with the given instance.
+   */
   public static WorkflowHarnessContext forInstance(Id instanceId) {
     if (!Test.isRunningTest()) {
       throw new WorkflowTestHarness.HarnessException(
@@ -34,12 +42,20 @@ public inherited sharing class WorkflowHarnessContext {
     return new WorkflowHarnessContext(instanceId);
   }
 
+  /**
+   * @description Guards that a step name was supplied, throwing a HarnessException when blank.
+   * @param stepName The step name that must be non-blank.
+   */
   public static void requireStep(String stepName) {
     if (String.isBlank(stepName)) {
       throw new WorkflowTestHarness.HarnessException('stepName is required.');
     }
   }
 
+  /**
+   * @description Guards that the hop budget is a positive number, throwing a HarnessException otherwise.
+   * @param maxHops The maximum hop count that must be greater than zero.
+   */
   public static void requirePositiveHops(Integer maxHops) {
     if (maxHops == null || maxHops <= 0) {
       throw new WorkflowTestHarness.HarnessException(

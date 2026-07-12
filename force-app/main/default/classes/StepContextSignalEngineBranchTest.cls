@@ -11,7 +11,14 @@
 public class StepContextSignalEngineBranchTest {
   // --- A parallel branch suspended on a signal is woken by name (D) ---------
 
+  /**
+   * @description Mock workflow proving a parallel branch suspended on a signal is woken by name.
+   */
   public class WakeWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the fully-qualified step names that make up this workflow.
+     * @return The list of fully-qualified step names in this definition.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepContextSignalEngineBranchTest.WakeSpawnStep',
@@ -20,9 +27,19 @@ public class StepContextSignalEngineBranchTest {
         'StepContextSignalEngineBranchTest.WakeOtherBranch'
       };
     }
+    /**
+     * @description Names the entry-point step the engine runs first.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineBranchTest.WakeSpawnStep';
     }
+    /**
+     * @description Routes to the successor step after the current step completes.
+     * @param currentStepName The step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The next step name, or null when the branch is terminal.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       if (
         currentStepName == 'StepContextSignalEngineBranchTest.WakeSpawnStep'
@@ -33,7 +50,15 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Spawn step that suspends until 'Go' arrives, then splits into the wait and other branches.
+   */
   public class WakeSpawnStep implements WorkflowStep {
+    /**
+     * @description Suspends until 'Go' is present, then splits into the wait and other branches carrying its payload.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Go');
       if (!s.isPresent()) {
@@ -49,7 +74,15 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Parallel branch that suspends until the 'Resume' signal wakes it.
+   */
   public class WakeWaitBranch implements WorkflowStep {
+    /**
+     * @description Suspends until the 'Resume' signal is present, then completes.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       if (!ctx.getSignal('Resume').isPresent()) {
         return StepResult.suspend();
@@ -58,13 +91,29 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Sibling branch that completes immediately so only the waiting branch stays suspended.
+   */
   public class WakeOtherBranch implements WorkflowStep {
+    /**
+     * @description Completes immediately with a marker result.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'other');
     }
   }
 
+  /**
+   * @description Join step that completes once both parallel branches have finished.
+   */
   public class WakeJoinStep implements WorkflowStep {
+    /**
+     * @description Completes the join by echoing the merged branch input.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, ctx.inputJson);
     }
@@ -108,7 +157,14 @@ public class StepContextSignalEngineBranchTest {
 
   // --- CalloutStep branches read without claiming (C) -----------------------
 
+  /**
+   * @description Mock workflow proving a CalloutStep branch reads a signal without claiming it.
+   */
   public class ProbeWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the fully-qualified step names that make up this workflow.
+     * @return The list of fully-qualified step names in this definition.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepContextSignalEngineBranchTest.ProbeSpawnStep',
@@ -117,9 +173,19 @@ public class StepContextSignalEngineBranchTest {
         'StepContextSignalEngineBranchTest.ProbeCalloutBranch'
       };
     }
+    /**
+     * @description Names the entry-point step the engine runs first.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineBranchTest.ProbeSpawnStep';
     }
+    /**
+     * @description Routes to the successor step after the current step completes.
+     * @param currentStepName The step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The next step name, or null when the branch is terminal.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       if (
         currentStepName == 'StepContextSignalEngineBranchTest.ProbeSpawnStep'
@@ -130,7 +196,15 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Spawn step that suspends until 'Kick', then splits into the claiming and callout branches.
+   */
   public class ProbeSpawnStep implements WorkflowStep {
+    /**
+     * @description Suspends until 'Kick', then splits into the claiming and callout branches.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Kick');
       if (!s.isPresent()) {
@@ -147,7 +221,15 @@ public class StepContextSignalEngineBranchTest {
   }
 
   // Default branch: claims, so its signal flips to Processing mid-execution.
+  /**
+   * @description Default branch that claims its signal, flipping the row to Processing mid-execution.
+   */
   public class ProbeClaimBranch implements WorkflowStep {
+    /**
+     * @description Reads and claims 'ProbeA', then records the resulting signal row status.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('ProbeA');
       String status = '';
@@ -165,7 +247,15 @@ public class StepContextSignalEngineBranchTest {
 
   // CalloutStep branch: must NOT claim, so its signal stays Received mid-step
   // and a subsequent payload-driven callout would be legal.
+  /**
+   * @description CalloutStep branch that reads its signal without claiming, leaving the row Received.
+   */
   public class ProbeCalloutBranch implements WorkflowStep, CalloutStep {
+    /**
+     * @description Reads 'ProbeB' without claiming, then records the signal row status (still Received).
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('ProbeB');
       String status = '';
@@ -181,7 +271,15 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Join step returning the instance input once both probe branches complete.
+   */
   public class ProbeJoinStep implements WorkflowStep {
+    /**
+     * @description Completes the join by echoing the merged branch input.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, ctx.inputJson);
     }
@@ -249,22 +347,47 @@ public class StepContextSignalEngineBranchTest {
   // callout without the engine's pre-execute timeout DML triggering an
   // uncommitted-work exception. ----------------------------------------------
 
+  /**
+   * @description Mock workflow proving a CalloutStep+TimeoutConfigurable branch runs its synchronous callout without an uncommitted-work exception.
+   */
   public class CalloutTimeoutWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the fully-qualified step names that make up this workflow.
+     * @return The list of fully-qualified step names in this definition.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepContextSignalEngineBranchTest.CTSpawnStep',
         'StepContextSignalEngineBranchTest.CTCalloutTimeoutBranch'
       };
     }
+    /**
+     * @description Names the entry-point step the engine runs first.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineBranchTest.CTSpawnStep';
     }
+    /**
+     * @description Routes to the successor step after the current step completes.
+     * @param currentStepName The step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The next step name, or null when the branch is terminal.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null; // branch is terminal
     }
   }
 
+  /**
+   * @description Spawn step that suspends until 'Kick', then splits into the callout+timeout branch.
+   */
   public class CTSpawnStep implements WorkflowStep {
+    /**
+     * @description Suspends until 'Kick', then splits into the callout+timeout branch.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Kick');
       if (!s.isPresent()) {
@@ -282,10 +405,22 @@ public class StepContextSignalEngineBranchTest {
   // Reads a signal (the reason CalloutStep exists) then makes a synchronous,
   // payload-driven callout. Also TimeoutConfigurable: the engine must defer its
   // timeout DML past execute() so this callout stays legal.
+  /**
+   * @description CalloutStep branch that is also TimeoutConfigurable; reads a signal then makes a synchronous callout.
+   */
   public class CTCalloutTimeoutBranch implements WorkflowStep, CalloutStep, TimeoutConfigurable {
+    /**
+     * @description The per-step timeout the engine enforces for this branch.
+     * @return The timeout in seconds.
+     */
     public Integer getTimeoutSeconds() {
       return 60;
     }
+    /**
+     * @description Reads a signal then makes a synchronous HTTP callout, completing with its status code.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       ctx.getSignal('CTSig');
       HttpRequest req = new HttpRequest();
@@ -299,7 +434,15 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description HttpCalloutMock returning a 200 OK for the branch's synchronous callout.
+   */
   public class CTOkMock implements HttpCalloutMock {
+    /**
+     * @description Responds to the mocked HTTP request with a 200 OK body.
+     * @param req The outbound HTTP request.
+     * @return The stubbed 200 response.
+     */
     public HttpResponse respond(HttpRequest req) {
       HttpResponse res = new HttpResponse();
       res.setStatusCode(200);
@@ -368,7 +511,14 @@ public class StepContextSignalEngineBranchTest {
 
   // --- Unscoped getSignals() preserves arrival order after a claim (B) ------
 
+  /**
+   * @description Mock workflow proving unscoped getSignals() preserves arrival order after a claim.
+   */
   public class OrderWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the fully-qualified step names that make up this workflow.
+     * @return The list of fully-qualified step names in this definition.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepContextSignalEngineBranchTest.OrderSpawnStep',
@@ -377,9 +527,19 @@ public class StepContextSignalEngineBranchTest {
         'StepContextSignalEngineBranchTest.OrderOtherBranch'
       };
     }
+    /**
+     * @description Names the entry-point step the engine runs first.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineBranchTest.OrderSpawnStep';
     }
+    /**
+     * @description Routes to the successor step after the current step completes.
+     * @param currentStepName The step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The next step name, or null when the branch is terminal.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       if (
         currentStepName == 'StepContextSignalEngineBranchTest.OrderSpawnStep'
@@ -390,7 +550,15 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Spawn step that suspends until 'Kick', then splits into the ordering branches.
+   */
   public class OrderSpawnStep implements WorkflowStep {
+    /**
+     * @description Suspends until 'Kick', then splits into the ordering branches.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Kick');
       if (!s.isPresent()) {
@@ -406,7 +574,15 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Branch that claims the older signal then reads the full list to assert arrival ordering.
+   */
   public class OrderBranch implements WorkflowStep {
+    /**
+     * @description Claims the older 'Foo', then reads the full signal list to expose arrival ordering.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       // Claim the older 'Foo' first, then read the full list. The merged-in
       // claimed Foo must sort before the newer still-Received Bar.
@@ -419,13 +595,29 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Sibling branch that completes immediately.
+   */
   public class OrderOtherBranch implements WorkflowStep {
+    /**
+     * @description Completes immediately with a marker result.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'other');
     }
   }
 
+  /**
+   * @description Join step returning the instance input once both branches complete.
+   */
   public class OrderJoinStep implements WorkflowStep {
+    /**
+     * @description Completes the join by echoing the merged branch input.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, ctx.inputJson);
     }
@@ -480,7 +672,14 @@ public class StepContextSignalEngineBranchTest {
 
   // --- getSignal falls back to an older signal when the newest is taken (E) -
 
+  /**
+   * @description Mock workflow proving getSignal falls back to an older signal when the newest is unavailable.
+   */
   public class FallbackWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the fully-qualified step names that make up this workflow.
+     * @return The list of fully-qualified step names in this definition.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepContextSignalEngineBranchTest.FallbackSpawnStep',
@@ -489,9 +688,19 @@ public class StepContextSignalEngineBranchTest {
         'StepContextSignalEngineBranchTest.FallbackOtherBranch'
       };
     }
+    /**
+     * @description Names the entry-point step the engine runs first.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineBranchTest.FallbackSpawnStep';
     }
+    /**
+     * @description Routes to the successor step after the current step completes.
+     * @param currentStepName The step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The next step name, or null when the branch is terminal.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       if (
         currentStepName == 'StepContextSignalEngineBranchTest.FallbackSpawnStep'
@@ -502,7 +711,15 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Spawn step that suspends until 'Kick', then splits into the fallback branches.
+   */
   public class FallbackSpawnStep implements WorkflowStep {
+    /**
+     * @description Suspends until 'Kick', then splits into the fallback branches.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Kick');
       if (!s.isPresent()) {
@@ -518,20 +735,44 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Branch that reads 'Foo', expected to fall back to the older still-Received row.
+   */
   public class FallbackBranch implements WorkflowStep {
+    /**
+     * @description Reads 'Foo', completing with its payload or 'absent' when none is available.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Foo');
       return StepResult.complete(null, s.isPresent() ? s.payload : 'absent');
     }
   }
 
+  /**
+   * @description Sibling branch that completes immediately.
+   */
   public class FallbackOtherBranch implements WorkflowStep {
+    /**
+     * @description Completes immediately with a marker result.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'other');
     }
   }
 
+  /**
+   * @description Join step returning the instance input once both branches complete.
+   */
   public class FallbackJoinStep implements WorkflowStep {
+    /**
+     * @description Completes the join by echoing the merged branch input.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, ctx.inputJson);
     }
@@ -596,7 +837,14 @@ public class StepContextSignalEngineBranchTest {
 
   // --- A CalloutStep branch must not consume a sibling's later claim (find 3) -
 
+  /**
+   * @description Mock workflow proving a CalloutStep branch does not consume a sibling's later claim.
+   */
   public class CalloutSiblingWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the fully-qualified step names that make up this workflow.
+     * @return The list of fully-qualified step names in this definition.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepContextSignalEngineBranchTest.CalloutSiblingSpawnStep',
@@ -605,9 +853,19 @@ public class StepContextSignalEngineBranchTest {
         'StepContextSignalEngineBranchTest.CalloutSiblingOtherBranch'
       };
     }
+    /**
+     * @description Names the entry-point step the engine runs first.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineBranchTest.CalloutSiblingSpawnStep';
     }
+    /**
+     * @description Routes to the successor step after the current step completes.
+     * @param currentStepName The step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The next step name, or null when the branch is terminal.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       if (
         currentStepName ==
@@ -619,7 +877,15 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Spawn step that suspends until 'Kick', then splits into the sibling branches.
+   */
   public class CalloutSiblingSpawnStep implements WorkflowStep {
+    /**
+     * @description Suspends until 'Kick', then splits into the sibling branches.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Kick');
       if (!s.isPresent()) {
@@ -638,7 +904,15 @@ public class StepContextSignalEngineBranchTest {
   // CalloutStep branch reads 'Shared' without claiming, then a sibling claims
   // the same row (Processing) before this branch completes. At COMPLETE this
   // branch must NOT consume the now-Processing row.
+  /**
+   * @description CalloutStep branch that observes 'Shared' without claiming, then simulates a sibling claiming the same row.
+   */
   public class CalloutSiblingBranch implements WorkflowStep, CalloutStep {
+    /**
+     * @description Observes 'Shared' without claiming, then simulates a sibling claiming the same row before completing.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Shared');
       if (s.isPresent()) {
@@ -652,13 +926,29 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Sibling branch that completes immediately.
+   */
   public class CalloutSiblingOtherBranch implements WorkflowStep {
+    /**
+     * @description Completes immediately with a marker result.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'other');
     }
   }
 
+  /**
+   * @description Join step returning the instance input once both branches complete.
+   */
   public class CalloutSiblingJoinStep implements WorkflowStep {
+    /**
+     * @description Completes the join by echoing the merged branch input.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, ctx.inputJson);
     }
@@ -762,7 +1052,14 @@ public class StepContextSignalEngineBranchTest {
 
   // --- Rollback must not release a sibling's claim on an observed row (find 1) -
 
+  /**
+   * @description Mock workflow proving a yielding branch's rollback does not release a sibling's claim on an observed row.
+   */
   public class CalloutRollbackWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the fully-qualified step names that make up this workflow.
+     * @return The list of fully-qualified step names in this definition.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepContextSignalEngineBranchTest.CalloutRollbackSpawnStep',
@@ -771,9 +1068,19 @@ public class StepContextSignalEngineBranchTest {
         'StepContextSignalEngineBranchTest.CalloutRollbackOtherBranch'
       };
     }
+    /**
+     * @description Names the entry-point step the engine runs first.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineBranchTest.CalloutRollbackSpawnStep';
     }
+    /**
+     * @description Routes to the successor step after the current step completes.
+     * @param currentStepName The step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The next step name, or null when the branch is terminal.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       if (
         currentStepName ==
@@ -785,7 +1092,15 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Spawn step that suspends until 'Kick', then splits into the rollback branches.
+   */
   public class CalloutRollbackSpawnStep implements WorkflowStep {
+    /**
+     * @description Suspends until 'Kick', then splits into the rollback branches.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Kick');
       if (!s.isPresent()) {
@@ -804,7 +1119,15 @@ public class StepContextSignalEngineBranchTest {
   // CalloutStep branch observes 'Shared' without claiming, a sibling then claims
   // it (Processing), and this branch YIELDs. Rollback must leave the sibling's
   // claim intact because this branch never claimed the row.
+  /**
+   * @description CalloutStep branch that observes 'Shared', lets a sibling claim it, then yields so its rollback runs.
+   */
   public class CalloutRollbackBranch implements WorkflowStep, CalloutStep {
+    /**
+     * @description Observes 'Shared', lets a sibling claim it, then yields so rollback runs without touching the claim.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Shared');
       if (s.isPresent() && String.isBlank(ctx.stepStateJson)) {
@@ -820,13 +1143,29 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Sibling branch that completes immediately.
+   */
   public class CalloutRollbackOtherBranch implements WorkflowStep {
+    /**
+     * @description Completes immediately with a marker result.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'other');
     }
   }
 
+  /**
+   * @description Join step returning the instance input once both branches complete.
+   */
   public class CalloutRollbackJoinStep implements WorkflowStep {
+    /**
+     * @description Completes the join by echoing the merged branch input.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, ctx.inputJson);
     }
@@ -869,21 +1208,46 @@ public class StepContextSignalEngineBranchTest {
   // --- A named lookup must not falsely report absence after the row budget is
   // spent (a step that suspends as if absent would strand). ------------------
 
+  /**
+   * @description Mock workflow proving a named signal lookup is not falsely reported absent after the row budget is exhausted.
+   */
   public class BudgetWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the fully-qualified step names that make up this workflow.
+     * @return The list of fully-qualified step names in this definition.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepContextSignalEngineBranchTest.BudgetReadStep'
       };
     }
+    /**
+     * @description Names the entry-point step the engine runs first.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineBranchTest.BudgetReadStep';
     }
+    /**
+     * @description Routes to the successor step after the current step completes.
+     * @param currentStepName The step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The next step name, or null when the branch is terminal.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null; // terminal
     }
   }
 
+  /**
+   * @description Step that spends the signal row budget on a noisy name, then probes a different name to prove no false absence.
+   */
   public class BudgetReadStep implements WorkflowStep {
+    /**
+     * @description Spends the row budget on 'Noise', then probes 'Important' via both accessors to prove no false absence.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       // Spend the row budget on a noisy name, then probe a different name via
       // both the latest lookup and the list accessor: neither may report a
@@ -969,21 +1333,46 @@ public class StepContextSignalEngineBranchTest {
 
   // --- Offloaded signal payloads resolve (in bulk) for list accessors --------
 
+  /**
+   * @description Mock workflow proving offloaded signal payloads resolve in bulk for list accessors.
+   */
   public class OffloadWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the fully-qualified step names that make up this workflow.
+     * @return The list of fully-qualified step names in this definition.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepContextSignalEngineBranchTest.OffloadReadStep'
       };
     }
+    /**
+     * @description Names the entry-point step the engine runs first.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineBranchTest.OffloadReadStep';
     }
+    /**
+     * @description Routes to the successor step after the current step completes.
+     * @param currentStepName The step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The next step name, or null when the branch is terminal.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
   }
 
+  /**
+   * @description Step that reads a list of 'Big' signals and records each resolved payload length.
+   */
   public class OffloadReadStep implements WorkflowStep {
+    /**
+     * @description Reads all 'Big' signals and records each resolved payload length.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       List<StepContext.Signal> sigs = ctx.getSignals('Big');
       List<Integer> lens = new List<Integer>();
@@ -1061,7 +1450,15 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Step that suspends until 'E2EGo' arrives, then completes; drives the end-to-end auto-replay test.
+   */
   public class E2EYieldWaitStep implements WorkflowStep {
+    /**
+     * @description Yields when the context requests it, otherwise suspends until 'E2EGo' is present then completes.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       if (ctx.shouldYield()) {
         return StepResult.suspend();
@@ -1073,15 +1470,32 @@ public class StepContextSignalEngineBranchTest {
     }
   }
 
+  /**
+   * @description Single-step mock workflow for the end-to-end pre-arrived-signal replay test.
+   */
   public class E2EYieldWaitWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the fully-qualified step names that make up this workflow.
+     * @return The list of fully-qualified step names in this definition.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepContextSignalEngineBranchTest.E2EYieldWaitStep'
       };
     }
+    /**
+     * @description Names the entry-point step the engine runs first.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineBranchTest.E2EYieldWaitStep';
     }
+    /**
+     * @description Routes to the successor step after the current step completes.
+     * @param currentStepName The step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The next step name, or null when the branch is terminal.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }

@@ -25,7 +25,15 @@ public with sharing class AiSupportTriageWorkflowExample {
 
   // ── Workflow definition ────────────────────────────────────────────────────
 
+  /**
+   * @description The triage workflow definition: an LLM classification step routes
+   * the inquiry to billing auto-resolution, case creation, or human escalation.
+   */
   public class TriageWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the classify, auto-resolve, create-case, and escalate steps.
+     * @return The list of step names in the triage workflow.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'AiSupportTriageWorkflowExample.AiClassifyStep',
@@ -35,10 +43,21 @@ public with sharing class AiSupportTriageWorkflowExample {
       };
     }
 
+    /**
+     * @description Returns the first step, the LLM classification.
+     * @return The name of the initial step.
+     */
     public String getInitialStep() {
       return 'AiSupportTriageWorkflowExample.AiClassifyStep';
     }
 
+    /**
+     * @description Routes on the classifier's output: billing to auto-resolve,
+     * technical to case creation (then escalation), anything else to escalation.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step, whose output drives routing.
+     * @return The next step name, or null for the terminal branches.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       if (currentStep == 'AiSupportTriageWorkflowExample.AiClassifyStep') {
         Map<String, Object> out = (Map<String, Object>) JSON.deserializeUntyped(
@@ -74,6 +93,12 @@ public with sharing class AiSupportTriageWorkflowExample {
    * dashboard once the AI service recovers — all without extra error-handling code.
    */
   public class AiClassifyStep implements WorkflowStep {
+    /**
+     * @description Classifies the inquiry text via the LLM; any LLM exception
+     * propagates so the engine retries the step under its RetryPolicy.
+     * @param ctx The durable step context exposing the inquiry input JSON.
+     * @return A complete result carrying the classification and inquiry text.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = parseJson(ctx.inputJson);
       String inquiryText = (String) input.get('inquiryText');
@@ -97,6 +122,11 @@ public with sharing class AiSupportTriageWorkflowExample {
    * Step 2a: Billing issue — automatically issue a refund and close.
    */
   public class AutoResolveBillingStep implements WorkflowStep {
+    /**
+     * @description Auto-resolves a billing inquiry by simulating a refund and closing out.
+     * @param ctx The durable step context exposing the classification output as input.
+     * @return A complete result describing the auto-resolution.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> classify = parseJson(ctx.inputJson);
       return StepResult.complete(
@@ -116,6 +146,12 @@ public with sharing class AiSupportTriageWorkflowExample {
    * human escalation gate (EscalateStep) for confirmation.
    */
   public class CreateCaseStep implements WorkflowStep {
+    /**
+     * @description Creates a support Case for a technical inquiry before handing off
+     * to the human escalation gate.
+     * @param ctx The durable step context exposing the classification output as input.
+     * @return A complete result carrying the created Case Id.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> classify = parseJson(ctx.inputJson);
 
@@ -148,6 +184,12 @@ public with sharing class AiSupportTriageWorkflowExample {
    * completes with the reviewer's decision.
    */
   public class EscalateStep implements WorkflowStep {
+    /**
+     * @description Suspends for human review on first entry, then consumes the
+     * reviewer's approve/reject signal and completes with their decision on resume.
+     * @param ctx The durable step context exposing the workflow instance Id.
+     * @return A wait-for-approval result, or a complete result once reviewed.
+     */
     public StepResult execute(StepContext ctx) {
       List<Workflow_Signal__c> signals = [
         SELECT Id, Payload__c

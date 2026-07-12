@@ -55,9 +55,10 @@ public inherited sharing class WorkflowLifecyclePublisher {
   private static Boolean forceDmlBudgetExhausted = false;
 
   /**
-   * Publishes a lifecycle event for a single instance, if it is in an emitting
-   * terminal state. Safe to call after any instance write; non-terminal and
+   * @description Publishes a lifecycle event for a single instance, if it is in an
+   * emitting terminal state. Safe to call after any instance write; non-terminal and
    * ContinuedAsNew statuses are silently ignored.
+   * @param instance The workflow instance whose terminal transition may emit an event.
    */
   public static void publish(Workflow_Instance__c instance) {
     if (instance == null) {
@@ -75,6 +76,8 @@ public inherited sharing class WorkflowLifecyclePublisher {
    * under-queried SObject would otherwise throw an SObjectException that rolls
    * back the terminal-state write. Fire-and-forget must never disrupt the
    * workflow transaction, so any failure here is logged and swallowed.
+   *
+   * @param instances The workflow instances whose terminal transitions may emit events.
    */
   public static void publish(List<Workflow_Instance__c> instances) {
     if (!WorkflowEngine.publishLifecycleEvents) {
@@ -106,6 +109,8 @@ public inherited sharing class WorkflowLifecyclePublisher {
    * that would roll back the terminal-state write — defeating the fire-and-forget
    * contract precisely for high-limit workflows — so the best-effort events are
    * dropped instead.
+   * @param eventCount The number of events about to be published.
+   * @return True when publishing would exhaust the transaction's DML budget.
    */
   private static Boolean wouldExceedDmlBudget(Integer eventCount) {
     return forceDmlBudgetExhausted ||
@@ -114,8 +119,9 @@ public inherited sharing class WorkflowLifecyclePublisher {
   }
 
   /**
-   * Publishes the events to the event bus, capturing them for test assertions in
-   * test context and honoring the injected failure hook.
+   * @description Publishes the events to the event bus, capturing them for test
+   * assertions in test context and honoring the injected failure hook.
+   * @param events The lifecycle events to publish.
    */
   private static void dispatch(List<Workflow_Lifecycle__e> events) {
     if (Test.isRunningTest() && throwTestException) {
@@ -144,9 +150,11 @@ public inherited sharing class WorkflowLifecyclePublisher {
   }
 
   /**
-   * Builds the lifecycle event for a single instance, or returns null when the
-   * instance is not in an emitting terminal state or its transition was already
-   * published in this transaction.
+   * @description Builds the lifecycle event for a single instance, or returns null
+   * when the instance is not in an emitting terminal state or its transition was
+   * already published in this transaction.
+   * @param instance The workflow instance to build an event for.
+   * @return The lifecycle event, or null when no event should be emitted.
    */
   private static Workflow_Lifecycle__e buildEvent(
     Workflow_Instance__c instance

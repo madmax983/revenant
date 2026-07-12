@@ -9,6 +9,10 @@
 public inherited sharing class EventAggregationWorkflowExample implements WorkflowDefinition {
   public static final String EVENT_SIGNAL = 'Approve:Event';
 
+  /**
+   * @description Returns the ordered step names composing this aggregation workflow.
+   * @return The accumulate and process-batch step names.
+   */
   public List<String> getSteps() {
     return new List<String>{
       'EventAggregationWorkflowExample.AccumulateStep',
@@ -16,10 +20,21 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
     };
   }
 
+  /**
+   * @description Returns the step the workflow begins with.
+   * @return The accumulate step name.
+   */
   public String getInitialStep() {
     return 'EventAggregationWorkflowExample.AccumulateStep';
   }
 
+  /**
+   * @description Advances from accumulation to batch processing once the threshold
+   * of events has been reached.
+   * @param currentStepName The name of the step that just completed.
+   * @param stepResult The result of the completed step.
+   * @return The process-batch step after accumulation, or null to end the workflow.
+   */
   public String getNextStep(String currentStepName, StepResult stepResult) {
     if (currentStepName == 'EventAggregationWorkflowExample.AccumulateStep') {
       return 'EventAggregationWorkflowExample.ProcessBatchStep';
@@ -29,7 +44,17 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
 
   // --- STEP DEFINITIONS ---
 
+  /**
+   * @description Accumulates inbound event payloads in the durable step state,
+   * suspending until at least three distinct events for the correlation key arrive.
+   */
   public class AccumulateStep implements WorkflowStep {
+    /**
+     * @description Merges the pending event signals into the accumulated state,
+     * completing once three are collected or otherwise suspending for more.
+     * @param ctx The durable step context exposing the accumulated state and pending signals.
+     * @return COMPLETE with the collected payloads at the threshold, or SUSPEND to await more.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, String> accumulatedMap = new Map<String, String>();
       if (String.isNotBlank(ctx.stepStateJson)) {
@@ -51,10 +76,17 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
             parsedPayload.length() >= 2
           ) {
             try {
-              parsedPayload = (String) JSON.deserialize(sig.payload, String.class);
+              parsedPayload = (String) JSON.deserialize(
+                sig.payload,
+                String.class
+              );
             } catch (Exception ex) {
               // Use raw payload if it fails to deserialize
-              System.debug(LoggingLevel.FINE, 'Failed to deserialize signal payload, using raw payload: ' + ex.getMessage());
+              System.debug(
+                LoggingLevel.FINE,
+                'Failed to deserialize signal payload, using raw payload: ' +
+                ex.getMessage()
+              );
             }
           }
           accumulatedMap.put(String.valueOf(sig.signalId), parsedPayload);
@@ -72,7 +104,17 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
     }
   }
 
+  /**
+   * @description Terminal step that processes the accumulated batch of events once
+   * the aggregation threshold has been met.
+   */
   public class ProcessBatchStep implements WorkflowStep {
+    /**
+     * @description Reads the accumulated payloads from the previous step, sorts them,
+     * and completes with a processing summary.
+     * @param ctx The durable step context supplying the previous step's accumulated output.
+     * @return A COMPLETE result summarizing the processed events.
+     */
     public StepResult execute(StepContext ctx) {
       List<String> processed = new List<String>();
       if (String.isNotBlank(ctx.previousStepOutput)) {
@@ -83,7 +125,10 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
           );
         } catch (Exception ex) {
           // Handle/ignore malformed input
-          System.debug(LoggingLevel.WARN, 'Failed to deserialize previous step output: ' + ex.getMessage());
+          System.debug(
+            LoggingLevel.WARN,
+            'Failed to deserialize previous step output: ' + ex.getMessage()
+          );
         }
       }
       if (processed == null) {
@@ -91,7 +136,13 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
       }
       processed.sort();
       // Simulate batch processing
-      return StepResult.complete(null, 'Processed ' + processed.size() + ' events: ' + String.join(processed, ', '));
+      return StepResult.complete(
+        null,
+        'Processed ' +
+          processed.size() +
+          ' events: ' +
+          String.join(processed, ', ')
+      );
     }
   }
 }

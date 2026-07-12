@@ -37,6 +37,7 @@ public inherited sharing class WorkflowPauseGate {
   @TestVisible
   private static Integer resumeChunkSize = 200;
 
+  /** @description Thrown when a pause/resume operation is invalid, e.g. a blank or reserved workflow name. */
   public class PauseException extends Exception {
   }
 
@@ -44,6 +45,11 @@ public inherited sharing class WorkflowPauseGate {
   // FAST-PATH: any pause record exists at all?
   // Called on every runStep invocation; a false result short-circuits everything.
   // ──────────────────────────────────────────────────────────────────────────
+  /**
+   * @description Fast-path check for whether any pause record exists at all,
+   * transaction-cached so runStep pays at most one SOQL per call stack.
+   * @return True if at least one definition (or the wildcard) is paused.
+   */
   public static Boolean anyPaused() {
     if (cachedAnyPaused == null) {
       loadCache();
@@ -55,6 +61,13 @@ public inherited sharing class WorkflowPauseGate {
   // Is a specific definition paused (by name or by wildcard *)?
   // Reserved names always return false regardless of pause records.
   // ──────────────────────────────────────────────────────────────────────────
+  /**
+   * @description True when the named definition is paused, either by an explicit
+   * pause record or by the org-wide wildcard. Reserved engine workflows are
+   * never reported as paused.
+   * @param workflowName The workflow definition name to check.
+   * @return True if the definition is currently paused.
+   */
   public static Boolean isDefinitionPaused(String workflowName) {
     if (isReserved(workflowName)) {
       return false;
@@ -71,6 +84,11 @@ public inherited sharing class WorkflowPauseGate {
 
   // True when an org-wide '*' pause is in effect (every non-reserved definition
   // is paused). Callers that batch-select instances use this to short-circuit.
+  /**
+   * @description True when an org-wide wildcard pause is in effect, so every
+   * non-reserved definition is paused.
+   * @return True if the '*' wildcard pause is active.
+   */
   public static Boolean wildcardPaused() {
     if (cachedPausedNames == null) {
       loadCache();
@@ -81,6 +99,12 @@ public inherited sharing class WorkflowPauseGate {
   // The set of explicitly paused definition names (excludes the '*' sentinel).
   // Used to exclude paused definitions from batch queries (e.g. the watchdog
   // resume batch) so they cannot starve resumable rows under a LIMIT.
+  /**
+   * @description The set of explicitly paused definition names, excluding the
+   * wildcard sentinel, so callers can filter paused definitions out of batch
+   * queries.
+   * @return The explicitly paused definition names (normalized, without '*').
+   */
   public static Set<String> pausedNames() {
     if (cachedPausedNames == null) {
       loadCache();
@@ -94,6 +118,12 @@ public inherited sharing class WorkflowPauseGate {
   // Pause a definition (or * for org-wide). Idempotent (upsert).
   // Throws PauseException for blank or reserved names.
   // ──────────────────────────────────────────────────────────────────────────
+  /**
+   * @description Pauses a definition (or all definitions via '*') by upserting a
+   * durable pause record. Idempotent, and rejects blank or reserved names.
+   * @param workflowName The definition name to pause, or '*' for org-wide.
+   * @param reason An operator-supplied reason recorded on the pause record.
+   */
   public static void pauseDefinition(String workflowName, String reason) {
     if (String.isBlank(workflowName)) {
       throw new PauseException('workflowName must not be blank when pausing.');
@@ -118,6 +148,12 @@ public inherited sharing class WorkflowPauseGate {
   // re-queues every instance that was parked (Status__c = 'Paused').
   // Also kicks WorkflowWatchdog.bootstrap() so held sleeps/timeouts resume.
   // ──────────────────────────────────────────────────────────────────────────
+  /**
+   * @description Resumes a definition (or all via '*') by deleting its pause
+   * record(s) and re-queueing every parked instance in bounded chunks, then
+   * bootstrapping the watchdog so held sleeps/timeouts resume.
+   * @param workflowName The definition name to resume, or '*' for org-wide.
+   */
   public static void resumeDefinition(String workflowName) {
     if (String.isBlank(workflowName)) {
       throw new PauseException('workflowName must not be blank when resuming.');
@@ -285,11 +321,24 @@ public inherited sharing class WorkflowPauseGate {
   // Drains the remaining parked-instance backlog for a resumed scope in chunks,
   // re-chaining until none remain. Kept off the synchronous resume path so a
   // large backlog cannot exceed governor limits in a single transaction.
+  /**
+   * @description Queueable that drains the remaining parked-instance backlog for
+   * a resumed scope in governor-safe chunks, re-chaining until none remain.
+   */
   public class ResumeChunkQueueable implements Queueable {
     private final String workflowName;
+    /**
+     * @description Constructs the drain job for a resumed scope.
+     * @param workflowName The definition scope to drain, or '*' for org-wide.
+     */
     public ResumeChunkQueueable(String workflowName) {
       this.workflowName = workflowName;
     }
+    /**
+     * @description Drains one chunk of parked instances, attaching a finalizer
+     * to surface any mid-drain failure; the chunk chains its own continuation.
+     * @param ctx The Queueable execution context.
+     */
     public void execute(QueueableContext ctx) {
       // Attach a finalizer so an unhandled failure mid-drain is surfaced to the log
       // sink rather than vanishing. The finalizer runs even if execute() throws.
@@ -305,11 +354,25 @@ public inherited sharing class WorkflowPauseGate {
   // ResumeChunkQueueable the drain chain would otherwise stop silently, stranding the
   // remaining Paused backlog; this records the failure so operators can see it. The
   // success path is untouched (it only acts on UNHANDLED_EXCEPTION).
+  /**
+   * @description Best-effort failure sink for the parked-instance drain; on an
+   * unhandled exception it logs the failure so a stalled drain chain is visible
+   * to operators rather than stranding the Paused backlog silently.
+   */
   public class ResumeChunkFinalizer implements Finalizer {
     private final String workflowName;
+    /**
+     * @description Constructs the finalizer for a resumed scope.
+     * @param workflowName The definition scope being drained, or '*'.
+     */
     public ResumeChunkFinalizer(String workflowName) {
       this.workflowName = workflowName;
     }
+    /**
+     * @description Logs the drain failure when the job ended in an unhandled
+     * exception; otherwise does nothing.
+     * @param ctx The finalizer context carrying the parent job result.
+     */
     public void execute(FinalizerContext ctx) {
       if (
         ctx == null ||

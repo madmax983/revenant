@@ -7,19 +7,47 @@
 public class StepContextSignalEngineTest {
   // --- Re-observation safety (AC4a) ---------------------------------------
 
+  /**
+   * @description Single-step fixture workflow used to prove an observed signal
+   * survives a yield and is only consumed once the observing step completes.
+   */
   public class ReObserveWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the workflow's single step.
+     * @return The single-element list containing ReObserveStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'StepContextSignalEngineTest.ReObserveStep' };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The ReObserveStep step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.ReObserveStep';
     }
+    /**
+     * @description Terminates after the single step.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return Null, ending the workflow.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
   }
 
+  /**
+   * @description Fixture step that suspends until 'Tick' arrives, then yields once
+   * before completing, so the observed signal must persist across the yield.
+   */
   public class ReObserveStep implements WorkflowStep {
+    /**
+     * @description Observes the 'Tick' signal, yields on first observation, and
+     * completes on the next run so consumption is tied to completion.
+     * @param ctx The durable step context exposing the pending signal and step state.
+     * @return A suspend, yield, or complete StepResult depending on signal and state.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Tick');
       if (!s.isPresent()) {
@@ -84,19 +112,47 @@ public class StepContextSignalEngineTest {
 
   // --- Cancel control signals are never surfaced (AC5) --------------------
 
+  /**
+   * @description Single-step fixture workflow used to prove Cancel control signals
+   * are never surfaced to a step as readable payloads.
+   */
   public class PlainWaitWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the workflow's single step.
+     * @return The single-element list containing PlainWaitStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'StepContextSignalEngineTest.PlainWaitStep' };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The PlainWaitStep step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.PlainWaitStep';
     }
+    /**
+     * @description Terminates after the single step.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return Null, ending the workflow.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
   }
 
+  /**
+   * @description Fixture step that asserts no 'Cancel' signal is readable and waits
+   * for a 'Go' signal to complete.
+   */
   public class PlainWaitStep implements WorkflowStep {
+    /**
+     * @description Asserts the Cancel control signal is invisible, then completes on
+     * 'Go' or suspends awaiting it.
+     * @param ctx The durable step context exposing the pending signals.
+     * @return A completed StepResult on 'Go', else a suspend StepResult.
+     */
     public StepResult execute(StepContext ctx) {
       // Asserts the control signal is never visible as a readable payload.
       System.assertEquals(
@@ -152,19 +208,47 @@ public class StepContextSignalEngineTest {
 
   // --- In-flight duplicate consumed by observed-name re-query (AC4b) -------
 
+  /**
+   * @description Single-step fixture workflow used to prove an at-least-once
+   * duplicate arriving mid-execution is still consumed by name at completion.
+   */
   public class InFlightDupWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the workflow's single step.
+     * @return The single-element list containing InFlightDupStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'StepContextSignalEngineTest.InFlightDupStep' };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The InFlightDupStep step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.InFlightDupStep';
     }
+    /**
+     * @description Terminates after the single step.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return Null, ending the workflow.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
   }
 
+  /**
+   * @description Fixture step that observes 'Dup', simulates a duplicate arriving
+   * mid-execution, then completes so both copies are consumed by name.
+   */
   public class InFlightDupStep implements WorkflowStep {
+    /**
+     * @description Observes 'Dup', inserts a same-name duplicate to mimic in-flight
+     * redelivery, then completes.
+     * @param ctx The durable step context exposing the pending signal and instance id.
+     * @return A suspend StepResult when unsignalled, else a completed StepResult.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Dup');
       if (!s.isPresent()) {
@@ -220,7 +304,15 @@ public class StepContextSignalEngineTest {
 
   // --- SPLIT consumes the spawning step's observed signals (AC4) ----------
 
+  /**
+   * @description Fixture workflow whose signal-observing step fans out into two
+   * parallel branches, proving the SPLIT consumes the spawning step's signals.
+   */
   public class SplitSignalWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the spawning, join, and two branch steps.
+     * @return The list of the split, join, and branch step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepContextSignalEngineTest.SignalThenSplitStep',
@@ -229,9 +321,19 @@ public class StepContextSignalEngineTest {
         'StepContextSignalEngineTest.BranchBStep'
       };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The SignalThenSplitStep step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.SignalThenSplitStep';
     }
+    /**
+     * @description Routes the spawning step to the join step; branches are driven by the split.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The join step name after the split, or null otherwise.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       if (
         currentStepName == 'StepContextSignalEngineTest.SignalThenSplitStep'
@@ -242,7 +344,16 @@ public class StepContextSignalEngineTest {
     }
   }
 
+  /**
+   * @description Fixture step that waits for 'Fan' then splits into two parallel
+   * branches, passing the signal payload as branch input.
+   */
   public class SignalThenSplitStep implements WorkflowStep {
+    /**
+     * @description Suspends until 'Fan' arrives, then fans out BranchA and BranchB.
+     * @param ctx The durable step context exposing the pending 'Fan' signal.
+     * @return A suspend StepResult when unsignalled, else a split StepResult.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Fan');
       if (!s.isPresent()) {
@@ -258,7 +369,16 @@ public class StepContextSignalEngineTest {
     }
   }
 
+  /**
+   * @description Parallel branch A, asserting the spawning step's signal does not
+   * leak into the branch.
+   */
   public class BranchAStep implements WorkflowStep {
+    /**
+     * @description Asserts 'Fan' is not visible in the branch and completes.
+     * @param ctx The durable step context for the branch.
+     * @return A completed StepResult marking branch A done.
+     */
     public StepResult execute(StepContext ctx) {
       System.assertEquals(
         false,
@@ -269,7 +389,16 @@ public class StepContextSignalEngineTest {
     }
   }
 
+  /**
+   * @description Parallel branch B, asserting the spawning step's signal does not
+   * leak into the branch.
+   */
   public class BranchBStep implements WorkflowStep {
+    /**
+     * @description Asserts 'Fan' is not visible in the branch and completes.
+     * @param ctx The durable step context for the branch.
+     * @return A completed StepResult marking branch B done.
+     */
     public StepResult execute(StepContext ctx) {
       System.assertEquals(
         false,
@@ -280,7 +409,15 @@ public class StepContextSignalEngineTest {
     }
   }
 
+  /**
+   * @description Join step that completes once both parallel branches finish.
+   */
   public class SplitJoinStep implements WorkflowStep {
+    /**
+     * @description Completes the join after the branches converge.
+     * @param ctx The durable step context for the join.
+     * @return A completed StepResult marking the join done.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'joined');
     }
@@ -328,19 +465,47 @@ public class StepContextSignalEngineTest {
 
   // --- A name probed absent must not consume a later arrival (AC4b nuance) -
 
+  /**
+   * @description Single-step fixture workflow used to prove a name probed absent
+   * does not consume a later same-name arrival.
+   */
   public class ProbeAbsentWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the workflow's single step.
+     * @return The single-element list containing ProbeAbsentStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'StepContextSignalEngineTest.ProbeAbsentStep' };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The ProbeAbsentStep step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.ProbeAbsentStep';
     }
+    /**
+     * @description Terminates after the single step.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return Null, ending the workflow.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
   }
 
+  /**
+   * @description Fixture step that probes an absent signal name, then inserts a
+   * signal of that name mid-execution to prove it is not wrongly consumed.
+   */
   public class ProbeAbsentStep implements WorkflowStep {
+    /**
+     * @description Waits for 'Trigger', probes 'LateGhost' absent, injects it
+     * mid-execution, then completes without consuming the un-matched signal.
+     * @param ctx The durable step context exposing the pending signals and instance id.
+     * @return A suspend StepResult when unsignalled, else a completed StepResult.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal triggerSig = ctx.getSignal('Trigger');
       if (!triggerSig.isPresent()) {
@@ -407,7 +572,15 @@ public class StepContextSignalEngineTest {
 
   // --- Atomic claim-at-read for parallel branches (AC6) --------------------
 
+  /**
+   * @description Fixture workflow that fans out two branches racing to claim the
+   * same 'Shared' signal, exercising atomic claim-at-read.
+   */
   public class ClaimRaceWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the spawning, join, and two racing branch steps.
+     * @return The list of the spawn, join, and branch step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepContextSignalEngineTest.ClaimRaceSpawnStep',
@@ -416,9 +589,19 @@ public class StepContextSignalEngineTest {
         'StepContextSignalEngineTest.ClaimBranchBeta'
       };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The ClaimRaceSpawnStep step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.ClaimRaceSpawnStep';
     }
+    /**
+     * @description Routes the spawning step to the join step; branches are driven by the split.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The join step name after the spawn, or null otherwise.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       if (currentStepName == 'StepContextSignalEngineTest.ClaimRaceSpawnStep') {
         return 'StepContextSignalEngineTest.ClaimRaceJoinStep';
@@ -428,7 +611,16 @@ public class StepContextSignalEngineTest {
   }
 
   // Spawning step: wait for a signal, then fan out two branches.
+  /**
+   * @description Spawning step that waits for 'Fan' then fans out the two racing
+   * claim branches.
+   */
   public class ClaimRaceSpawnStep implements WorkflowStep {
+    /**
+     * @description Suspends until 'Fan' arrives, then splits into Alpha and Beta.
+     * @param ctx The durable step context exposing the pending 'Fan' signal.
+     * @return A suspend StepResult when unsignalled, else a split StepResult.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Fan');
       if (!s.isPresent()) {
@@ -445,7 +637,16 @@ public class StepContextSignalEngineTest {
   }
 
   // Branch Alpha: claims a shared "Shared" signal if present; stores result in output.
+  /**
+   * @description Racing branch Alpha that claims the 'Shared' signal if present and
+   * records whether it saw it.
+   */
   public class ClaimBranchAlpha implements WorkflowStep {
+    /**
+     * @description Reads 'Shared' and completes with claimed/absent for assertion.
+     * @param ctx The durable step context exposing the 'Shared' signal.
+     * @return A completed StepResult carrying 'claimed' or 'absent'.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Shared');
       return StepResult.complete(null, s.isPresent() ? 'claimed' : 'absent');
@@ -453,14 +654,30 @@ public class StepContextSignalEngineTest {
   }
 
   // Branch Beta: also tries to claim the same "Shared" signal.
+  /**
+   * @description Racing branch Beta that also attempts to claim the 'Shared' signal.
+   */
   public class ClaimBranchBeta implements WorkflowStep {
+    /**
+     * @description Reads 'Shared' and completes with claimed/absent for assertion.
+     * @param ctx The durable step context exposing the 'Shared' signal.
+     * @return A completed StepResult carrying 'claimed' or 'absent'.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Shared');
       return StepResult.complete(null, s.isPresent() ? 'claimed' : 'absent');
     }
   }
 
+  /**
+   * @description Join step that echoes its joined input once both claim branches finish.
+   */
   public class ClaimRaceJoinStep implements WorkflowStep {
+    /**
+     * @description Completes the join, echoing the joined branch input.
+     * @param ctx The durable step context supplying the joined input JSON.
+     * @return A completed StepResult carrying the joined input.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, ctx.inputJson);
     }
@@ -629,7 +846,15 @@ public class StepContextSignalEngineTest {
 
   // --- Guard-then-read returns the claimed payload (StepContext cache merge) --
 
+  /**
+   * @description Fixture workflow that fans out a guard-then-read branch to prove a
+   * signal claimed by hasSignal is still returned by a subsequent getSignals.
+   */
   public class GuardReadWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the spawning, join, and two branch steps.
+     * @return The list of the spawn, join, and branch step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepContextSignalEngineTest.GuardReadSpawnStep',
@@ -638,9 +863,19 @@ public class StepContextSignalEngineTest {
         'StepContextSignalEngineTest.GuardReadOtherBranch'
       };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The GuardReadSpawnStep step name.
+     */
     public String getInitialStep() {
       return 'StepContextSignalEngineTest.GuardReadSpawnStep';
     }
+    /**
+     * @description Routes the spawning step to the join step; branches are driven by the split.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The join step name after the spawn, or null otherwise.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       if (currentStepName == 'StepContextSignalEngineTest.GuardReadSpawnStep') {
         return 'StepContextSignalEngineTest.GuardReadJoinStep';
@@ -649,7 +884,16 @@ public class StepContextSignalEngineTest {
     }
   }
 
+  /**
+   * @description Spawning step that waits for 'Fan' then fans out the guard-read and
+   * other branches.
+   */
   public class GuardReadSpawnStep implements WorkflowStep {
+    /**
+     * @description Suspends until 'Fan' arrives, then splits into the guard-read and other branches.
+     * @param ctx The durable step context exposing the pending 'Fan' signal.
+     * @return A suspend StepResult when unsignalled, else a split StepResult.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal s = ctx.getSignal('Fan');
       if (!s.isPresent()) {
@@ -668,7 +912,17 @@ public class StepContextSignalEngineTest {
   // Guard-then-read: hasSignal('Shared') (claims the latest row out of the
   // source's Received view), then getSignals('Shared') -- which must still
   // return that already-claimed payload, not an empty list.
+  /**
+   * @description Branch that guards on hasSignal('Shared') then reads it back via
+   * getSignals, proving the claimed payload survives the guard.
+   */
   public class GuardReadBranch implements WorkflowStep {
+    /**
+     * @description Guards then reads 'Shared', recording the guard result, count, and
+     * payload in the output for assertion.
+     * @param ctx The durable step context exposing the 'Shared' signal.
+     * @return A completed StepResult carrying the guard/count/payload marker.
+     */
     public StepResult execute(StepContext ctx) {
       Boolean guard = ctx.hasSignal('Shared');
       List<StepContext.Signal> all = ctx.getSignals('Shared');
@@ -683,13 +937,30 @@ public class StepContextSignalEngineTest {
     }
   }
 
+  /**
+   * @description The sibling branch that simply completes, providing the second arm
+   * of the parallel split.
+   */
   public class GuardReadOtherBranch implements WorkflowStep {
+    /**
+     * @description Completes the sibling branch.
+     * @param ctx The durable step context for the branch.
+     * @return A completed StepResult marking the other branch done.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'other');
     }
   }
 
+  /**
+   * @description Join step that echoes its joined input once both branches finish.
+   */
   public class GuardReadJoinStep implements WorkflowStep {
+    /**
+     * @description Completes the join, echoing the joined branch input.
+     * @param ctx The durable step context supplying the joined input JSON.
+     * @return A completed StepResult carrying the joined input.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, ctx.inputJson);
     }

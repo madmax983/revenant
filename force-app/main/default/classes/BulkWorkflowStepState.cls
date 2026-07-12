@@ -13,6 +13,10 @@ public inherited sharing class BulkWorkflowStepState {
    * running tallies forward. filterKeys lets each job seed its own filter shape
    * (BulkCancel additionally carries 'runCompensations') without duplicating the
    * surrounding hydration plumbing.
+   *
+   * @param ctx The step context carrying the persisted state and workflow input.
+   * @param filterKeys The filter keys to seed from the input on the first run.
+   * @return The hydrated step state map.
    */
   public static Map<String, Object> hydrate(
     StepContext ctx,
@@ -34,14 +38,23 @@ public inherited sharing class BulkWorkflowStepState {
     return state;
   }
 
-  /** Reads the resumable paging cursor (lastId) from hydrated state, or null. */
+  /**
+   * @description Reads the resumable paging cursor (lastId) from hydrated state.
+   * @param state The hydrated step state map.
+   * @return The cursor Id, or null when no cursor has been recorded yet.
+   */
   public static Id cursorFrom(Map<String, Object> state) {
     return state.get('lastId') != null
       ? (Id) (String) state.get('lastId')
       : null;
   }
 
-  /** Null-safe Integer coercion for tally values pulled from untyped state. */
+  /**
+   * @description Null-safe Integer coercion for tally values pulled from untyped
+   * state.
+   * @param o The untyped value to coerce.
+   * @return The Integer value, or 0 when the value is null.
+   */
   public static Integer intOf(Object o) {
     return o == null ? 0 : Integer.valueOf(String.valueOf(o));
   }

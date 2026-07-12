@@ -25,18 +25,40 @@ public inherited sharing class CaptureOnceWorkflowExample {
    */
   public static Integer refNumberCalls = 0;
   public static Integer startedAtCalls = 0;
+  /**
+   * @description Resets the producer invocation counters so a test starts from a
+   * clean slate before driving the workflow.
+   */
   public static void resetProducerCounters() {
     refNumberCalls = 0;
     startedAtCalls = 0;
   }
 
+  /**
+   * @description Single-step workflow definition demonstrating capture-once
+   * stability across a yield/resume and a retry.
+   */
   public class CaptureOnceWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the single step in this definition.
+     * @return The fully-qualified step names.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'CaptureOnceWorkflowExample.CaptureOnceStep' };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'CaptureOnceWorkflowExample.CaptureOnceStep';
     }
+    /**
+     * @description Terminal after the single step, so routing always ends.
+     * @param currentStep The name of the step that just completed.
+     * @param result The completed step's result.
+     * @return Always null, marking the workflow complete.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       return null;
     }
@@ -68,6 +90,13 @@ public inherited sharing class CaptureOnceWorkflowExample {
    * retry waits, driving the step through all three re-executions in one call.
    */
   public class CaptureOnceStep implements WorkflowStep {
+    /**
+     * @description Captures a reference number and timestamp via once(), then
+     * drives itself through yield, retry, and complete phases to prove the
+     * captured values stay stable across every re-execution.
+     * @param ctx The durable step context providing once() and step state.
+     * @return A yield, retry, or completed StepResult depending on the phase.
+     */
     public StepResult execute(StepContext ctx) {
       // Capture a generated reference number — stable across all re-executions.
       String refNumber = (String) ctx.once(
@@ -128,6 +157,11 @@ public inherited sharing class CaptureOnceWorkflowExample {
   }
 
   private class RefNumberProducer implements CaptureProducer {
+    /**
+     * @description Generates a random reference number, counting each invocation
+     * so the test can prove once() runs it exactly once.
+     * @return A newly generated 'REF-' reference string.
+     */
     public Object produce() {
       CaptureOnceWorkflowExample.refNumberCalls++;
       Blob randomBytes = Crypto.generateAesKey(128);
@@ -139,6 +173,11 @@ public inherited sharing class CaptureOnceWorkflowExample {
   }
 
   private class StartedAtProducer implements CaptureProducer {
+    /**
+     * @description Produces the current epoch-millis timestamp, counting each
+     * invocation so the test can prove once() runs it exactly once.
+     * @return The current time as an epoch-millis String.
+     */
     public Object produce() {
       CaptureOnceWorkflowExample.startedAtCalls++;
       return String.valueOf(Datetime.now().getTime());

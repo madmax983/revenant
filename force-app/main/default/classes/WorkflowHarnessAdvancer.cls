@@ -14,6 +14,14 @@ public inherited sharing class WorkflowHarnessAdvancer {
     'Cancelling'
   };
 
+  /**
+   * @description Decides whether the harness can drive the given instance forward by
+   * re-invoking runStep, considering active statuses, unrun sibling branches, and
+   * deterministic sleep/retry waits eligible for auto time-skip.
+   * @param ctx The harness context supplying auto-time-skip configuration.
+   * @param inst The workflow instance to evaluate.
+   * @return True if the instance can be advanced, otherwise false.
+   */
   public static Boolean isAdvanceable(
     WorkflowHarnessContext ctx,
     Workflow_Instance__c inst
@@ -61,6 +69,12 @@ public inherited sharing class WorkflowHarnessAdvancer {
     return false;
   }
 
+  /**
+   * @description Splits a comma-separated parallel Current_Step__c value into trimmed
+   * individual branch step names.
+   * @param currentStep The comma-separated current step string to split.
+   * @return The list of trimmed branch step names.
+   */
   public static List<String> splitBranches(String currentStep) {
     List<String> branches = new List<String>();
     for (String branch : currentStep.split(',')) {
@@ -69,6 +83,13 @@ public inherited sharing class WorkflowHarnessAdvancer {
     return branches;
   }
 
+  /**
+   * @description Loads the most recent step execution for each named branch of an
+   * instance, keyed by step name, using CreatedDate/Id descending to pick the latest.
+   * @param instanceId The Id of the workflow instance whose executions to query.
+   * @param branches The branch step names to look up.
+   * @return A map from step name to its latest step execution record.
+   */
   public static Map<String, Workflow_Step_Execution__c> latestExecByStep(
     Id instanceId,
     List<String> branches

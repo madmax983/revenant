@@ -6,6 +6,12 @@ public class BulkWorkflowTestHelpers {
    * class so the shared drive loop below stays workflow-agnostic.
    */
   public interface ChunkContextFactory {
+    /**
+     * @description Rebuilds the driving StepContext for a chunk transaction from
+     * the prior transaction's yielded step state.
+     * @param stepStateJson The step state yielded by the previous chunk, or null on the first run.
+     * @return The StepContext for the next chunk transaction.
+     */
     StepContext build(String stepStateJson);
   }
 
@@ -17,6 +23,10 @@ public class BulkWorkflowTestHelpers {
    *
    * Extracted from the identical drive-and-assert loops in
    * BulkCancelWorkflowTest and BulkRedriveWorkflowTest.
+   *
+   * @param step The bulk workflow step under test.
+   * @param contexts Factory that rebuilds the driving StepContext for each chunk.
+   * @return The terminal StepResult from the completing chunk.
    */
   public static StepResult driveTwoYieldsThenComplete(
     WorkflowStep step,

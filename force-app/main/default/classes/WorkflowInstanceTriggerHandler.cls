@@ -40,6 +40,13 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
   // decrements are grouped by workflow definition and applied once below.
   private final Map<String, Integer> slotsToRelease = new Map<String, Integer>();
 
+  /**
+   * @description Constructs the handler with the trigger's new records, old-map,
+   * and operation type, deriving the insert/update flags used by the save logic.
+   * @param newInstances Trigger.new list of Workflow_Instance__c records.
+   * @param oldMap Trigger.oldMap of prior record states (null on insert).
+   * @param operationType The trigger operation being handled.
+   */
   public WorkflowInstanceTriggerHandler(
     List<Workflow_Instance__c> newInstances,
     Map<Id, Workflow_Instance__c> oldMap,
@@ -51,6 +58,11 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
     this.isUpdate = operationType == System.TriggerOperation.BEFORE_UPDATE;
   }
 
+  /**
+   * @description Applies all before-insert/before-update logic for each record —
+   * correlation-key defaulting and reservation, terminal-timestamp stamping,
+   * failure-category clearing — then releases any accumulated concurrency slots.
+   */
   public void handleBeforeSave() {
     for (Workflow_Instance__c instance : newInstances) {
       applyRootCorrelationKeyDefault(instance);
@@ -89,6 +101,10 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
    * Stamps or clears Terminal_At__c for the terminal-state transition and returns
    * whether the record was ALREADY terminal before this save (used downstream to gate
    * the slot release to the FIRST terminal transition only).
+   *
+   * @param instance The record being saved.
+   * @param isTerminal Whether the record's new status is a terminal status.
+   * @return True if the record was already terminal before this save.
    */
   private Boolean applyTerminalTimestamp(
     Workflow_Instance__c instance,

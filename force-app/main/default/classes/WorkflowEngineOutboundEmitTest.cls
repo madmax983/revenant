@@ -22,13 +22,31 @@
 public class WorkflowEngineOutboundEmitTest {
   // ----- Workflow A: a single step that emits then yields -> retries -> completes.
 
+  /**
+   * @description Fixture workflow with a single emit step that yields, retries, then
+   * completes, exercising effectively-once publish across re-executions.
+   */
   public class EmitWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the single EmitOnceStep.
+     * @return The one-element list naming EmitOnceStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowEngineOutboundEmitTest.EmitOnceStep' };
     }
+    /**
+     * @description Returns EmitOnceStep as the entry point.
+     * @return The name of the initial step.
+     */
     public String getInitialStep() {
       return 'WorkflowEngineOutboundEmitTest.EmitOnceStep';
     }
+    /**
+     * @description Terminates after the single step.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, marking the workflow complete.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       return null;
     }
@@ -41,6 +59,12 @@ public class WorkflowEngineOutboundEmitTest {
    * would publish three times; effectively-once publishes exactly one.
    */
   public class EmitOnceStep implements WorkflowStep {
+    /**
+     * @description Emits on every execution but yields, then retries, then completes,
+     * so effectively-once publishing can be asserted across three re-executions.
+     * @param ctx The durable step context used to emit and inspect retry state.
+     * @return A yield, then a retry, then a complete result across successive runs.
+     */
     public StepResult execute(StepContext ctx) {
       // Buffered on every execution; published only when COMPLETE commits.
       ctx.emit(
@@ -82,21 +106,48 @@ public class WorkflowEngineOutboundEmitTest {
 
   // ----- Workflow using the StepResult.complete(next, output, events) overload.
 
+  /**
+   * @description Fixture workflow whose single step emits via the
+   * StepResult.complete(next, output, events) overload rather than ctx.emit.
+   */
   public class ResultEmitWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the single ResultEmitStep.
+     * @return The one-element list naming ResultEmitStep.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'WorkflowEngineOutboundEmitTest.ResultEmitStep'
       };
     }
+    /**
+     * @description Returns ResultEmitStep as the entry point.
+     * @return The name of the initial step.
+     */
     public String getInitialStep() {
       return 'WorkflowEngineOutboundEmitTest.ResultEmitStep';
     }
+    /**
+     * @description Terminates after the single step.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, marking the workflow complete.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Fixture step that attaches its outbound event to the complete result
+   * via the events overload.
+   */
   public class ResultEmitStep implements WorkflowStep {
+    /**
+     * @description Completes carrying a single lifecycle event on the result.
+     * @param ctx The durable step context exposing the workflow instance Id.
+     * @return A complete result carrying one outbound event.
+     */
     public StepResult execute(StepContext ctx) {
       List<SObject> events = new List<SObject>{
         new Workflow_Lifecycle__e(
@@ -110,7 +161,15 @@ public class WorkflowEngineOutboundEmitTest {
 
   // ----- Workflow B: a split step that emits, fanning out to two branches.
 
+  /**
+   * @description Fixture workflow whose initial step emits then splits into two
+   * branches that rejoin, verifying emit publishes exactly once on the SPLIT commit.
+   */
   public class SplitEmitWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the split, two branch, and join steps.
+     * @return The list of step names in the split-emit workflow.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'WorkflowEngineOutboundEmitTest.SplitEmitStep',
@@ -119,9 +178,19 @@ public class WorkflowEngineOutboundEmitTest {
         'WorkflowEngineOutboundEmitTest.JoinStep'
       };
     }
+    /**
+     * @description Returns the split step as the entry point.
+     * @return The name of the initial step.
+     */
     public String getInitialStep() {
       return 'WorkflowEngineOutboundEmitTest.SplitEmitStep';
     }
+    /**
+     * @description Routes the split step to the join once both branches finish.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return The join step after the split, or null otherwise.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       if (currentStep == 'WorkflowEngineOutboundEmitTest.SplitEmitStep') {
         return 'WorkflowEngineOutboundEmitTest.JoinStep';
@@ -130,7 +199,16 @@ public class WorkflowEngineOutboundEmitTest {
     }
   }
 
+  /**
+   * @description Fixture step that emits an event and then fans out into the two
+   * parallel branches.
+   */
   public class SplitEmitStep implements WorkflowStep {
+    /**
+     * @description Emits a lifecycle event, then splits into the A and B branches.
+     * @param ctx The durable step context used to emit the event.
+     * @return A split result naming the two branch steps.
+     */
     public StepResult execute(StepContext ctx) {
       ctx.emit(
         new Workflow_Lifecycle__e(
@@ -147,19 +225,43 @@ public class WorkflowEngineOutboundEmitTest {
     }
   }
 
+  /**
+   * @description Fixture branch step A that completes immediately.
+   */
   public class BranchAStep implements WorkflowStep {
+    /**
+     * @description Completes the A branch.
+     * @param ctx The durable step context.
+     * @return A complete result with output 'A'.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'A');
     }
   }
 
+  /**
+   * @description Fixture branch step B that completes immediately.
+   */
   public class BranchBStep implements WorkflowStep {
+    /**
+     * @description Completes the B branch.
+     * @param ctx The durable step context.
+     * @return A complete result with output 'B'.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'B');
     }
   }
 
+  /**
+   * @description Fixture join step that completes once both branches finish.
+   */
   public class JoinStep implements WorkflowStep {
+    /**
+     * @description Completes the join after the branches converge.
+     * @param ctx The durable step context.
+     * @return A complete result with output 'joined'.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'joined');
     }
@@ -167,19 +269,46 @@ public class WorkflowEngineOutboundEmitTest {
 
   // ----- Workflow whose result events list contains a null entry.
 
+  /**
+   * @description Fixture workflow whose step returns an events list containing a null,
+   * verifying the engine filters nulls before publishing.
+   */
   public class NullEventWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the single NullEventStep.
+     * @return The one-element list naming NullEventStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowEngineOutboundEmitTest.NullEventStep' };
     }
+    /**
+     * @description Returns NullEventStep as the entry point.
+     * @return The name of the initial step.
+     */
     public String getInitialStep() {
       return 'WorkflowEngineOutboundEmitTest.NullEventStep';
     }
+    /**
+     * @description Terminates after the single step.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, marking the workflow complete.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Fixture step whose result events list contains a valid event plus a
+   * null, exercising the engine's null-filtering before EventBus.publish.
+   */
   public class NullEventStep implements WorkflowStep {
+    /**
+     * @description Completes carrying an events list with one valid event and a null.
+     * @param ctx The durable step context exposing the workflow instance Id.
+     * @return A complete result carrying the mixed events list.
+     */
     public StepResult execute(StepContext ctx) {
       // A conditionally-built list that ends up with a null alongside a valid
       // event. The engine must filter the null, not forward it to
@@ -197,16 +326,34 @@ public class WorkflowEngineOutboundEmitTest {
 
   // ----- Saga whose compensation step emits on rollback.
 
+  /**
+   * @description Fixture saga whose second step fails, forcing a rollback so the first
+   * step's compensation emits an event coupled to the Compensated commit.
+   */
   public class CompensationEmitWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the refundable charge step and the failing step.
+     * @return The list of step names in the compensation-emit saga.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'WorkflowEngineOutboundEmitTest.RefundableChargeStep',
         'WorkflowEngineOutboundEmitTest.FailingStep'
       };
     }
+    /**
+     * @description Returns the refundable charge step as the entry point.
+     * @return The name of the initial step.
+     */
     public String getInitialStep() {
       return 'WorkflowEngineOutboundEmitTest.RefundableChargeStep';
     }
+    /**
+     * @description Routes the charge step to the failing step to trigger rollback.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return The failing step after the charge, or null otherwise.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       if (
         currentStep == 'WorkflowEngineOutboundEmitTest.RefundableChargeStep'
@@ -217,7 +364,16 @@ public class WorkflowEngineOutboundEmitTest {
     }
   }
 
+  /**
+   * @description Fixture compensatable step that charges on the forward path and emits
+   * a Compensated event when its compensation runs on rollback.
+   */
   public class RefundableChargeStep implements CompensatableStep {
+    /**
+     * @description Records a simulated charge on the forward path.
+     * @param ctx The durable step context.
+     * @return A complete result carrying the charge Id.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -225,6 +381,11 @@ public class WorkflowEngineOutboundEmitTest {
       );
     }
 
+    /**
+     * @description Emits a Compensated lifecycle event and records the refund during rollback.
+     * @param ctx The durable step context used to emit the event.
+     * @return A complete result carrying the refund outcome.
+     */
     public StepResult compensate(StepContext ctx) {
       // Emit on rollback — must publish, coupled to the Compensated commit.
       ctx.emit(
@@ -240,7 +401,16 @@ public class WorkflowEngineOutboundEmitTest {
     }
   }
 
+  /**
+   * @description Fixture step that always throws, forcing the saga to roll back into
+   * the prior step's compensation.
+   */
   public class FailingStep implements WorkflowStep {
+    /**
+     * @description Throws unconditionally to trigger compensation.
+     * @param ctx The durable step context.
+     * @return Never returns; always throws to force rollback.
+     */
     public StepResult execute(StepContext ctx) {
       // Force a failure so the saga rolls back into RefundableChargeStep.compensate().
       throw new WorkflowEngine.WorkflowException(
