@@ -47,11 +47,26 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
         return StepResult.retry(new RetryPolicy(2, (Double) 2.0, 3));
       }
 
-      // Launch the callout asynchronously to bypass DML callout restrictions
-      System.enqueueJob(new AsyncCalloutJob(ctx.workflowInstanceId, endpoint));
+      // Only kick off a NEW async callout on the first (non-resumed) entry: a
+      // blank step state means the queueable has not run yet. If step state is
+      // already present we are mid-resume inside the async context, so we must
+      // NOT enqueue again -- chaining another AsyncCalloutJob here would recurse
+      // until Apex hits "Maximum stack depth has been reached".
+      if (String.isBlank(ctx.stepStateJson)) {
+        // Launch the callout asynchronously to bypass DML callout restrictions.
+        System.enqueueJob(
+          new AsyncCalloutJob(ctx.workflowInstanceId, endpoint)
+        );
+        // Suspend the execution state; it resumes once the queueable finishes.
+        return StepResult.suspend();
+      }
 
-      // Suspend the execution state. It will resume once the queueable finishes.
-      return StepResult.suspend();
+      // Resumed with a payload tryResumeFromState did not recognize as a clean
+      // response. Complete the handshake synchronously via the retry policy
+      // instead of re-enqueuing inside the already-running async context.
+      return StepResult.retry(
+        new RetryPolicy(resolveRetryDelay(ctx), (Double) 1.0, 3)
+      );
     }
 
     // Inspects the durable step state for a completed callout response. Returns a
