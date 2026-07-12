@@ -182,11 +182,21 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
     private final Id instanceId;
     private final String endpoint;
 
+    /**
+     * @description Captures the suspended instance and endpoint for the async callout.
+     * @param instanceId The suspended workflow instance to resume with the result.
+     * @param endpoint The HTTP endpoint to call.
+     */
     public AsyncCalloutJob(Id instanceId, String endpoint) {
       this.instanceId = instanceId;
       this.endpoint = endpoint;
     }
 
+    /**
+     * @description Attaches the resume finalizer, then performs the callout and
+     * resumes the suspended instance off the original transaction.
+     * @param context The Queueable context supplied by the platform.
+     */
     public void execute(QueueableContext context) {
       // Attach a Finalizer so a catastrophic failure of this job (an uncaught
       // exception whose rollback would discard the resume written below) still
@@ -205,10 +215,19 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
   public class ResumeFinalizer implements Finalizer {
     private final Id instanceId;
 
+    /**
+     * @description Captures the suspended instance to recover if the job fails.
+     * @param instanceId The suspended workflow instance to resume on failure.
+     */
     public ResumeFinalizer(Id instanceId) {
       this.instanceId = instanceId;
     }
 
+    /**
+     * @description On an unhandled job exception, resumes the suspended instance
+     * with an error payload so the workflow can apply its retry policy.
+     * @param context The finalizer context exposing the parent job result and exception.
+     */
     public void execute(FinalizerContext context) {
       if (context.getResult() != ParentJobResult.UNHANDLED_EXCEPTION) {
         // The job's own resume already ran; nothing to recover.

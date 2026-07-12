@@ -93,10 +93,13 @@ public inherited sharing class IdempotentChargeWorkflowExample {
     }
 
     /**
-     * Coerces a JSON-deserialized numeric value to an Integer. JSON.deserializeUntyped
-     * boxes numbers as Integer/Long/Decimal/Double depending on the value, so a direct
-     * (Integer) cast can throw; each numeric type is handled so the requested amount is
-     * preserved. Returns defaultAmount when the value is not a recognized numeric type.
+     * @description Coerces a JSON-deserialized numeric value to an Integer.
+     * JSON.deserializeUntyped boxes numbers as Integer/Long/Decimal/Double depending on the
+     * value, so a direct (Integer) cast can throw; each numeric type is handled so the
+     * requested amount is preserved.
+     * @param amountObj The boxed numeric value from JSON deserialization.
+     * @param defaultAmount The fallback returned when amountObj is not a recognized numeric type.
+     * @return The coerced Integer amount, or defaultAmount when the value is not numeric.
      */
     private Integer toIntAmount(Object amountObj, Integer defaultAmount) {
       if (amountObj instanceof Integer) {

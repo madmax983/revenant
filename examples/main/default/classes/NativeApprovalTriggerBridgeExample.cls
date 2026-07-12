@@ -117,8 +117,11 @@ public inherited sharing class NativeApprovalTriggerBridgeExample {
   }
 
   /**
-   * Returns the Ids of Cases whose Approval_Status__c changed to a decided (non-Pending)
-   * value in this update, i.e. the Cases an approver has just approved or rejected.
+   * @description Returns the Ids of Cases whose Approval_Status__c changed to a decided
+   * (non-Pending) value in this update, i.e. the Cases an approver has just approved or rejected.
+   * @param newCases The updated Case records from the trigger.
+   * @param oldCasesMap The prior state of the Cases keyed by Id.
+   * @return The Ids of Cases whose approval status just became decided.
    */
   private static Set<Id> collectDecidedCaseIds(
     List<Case> newCases,
@@ -138,7 +141,10 @@ public inherited sharing class NativeApprovalTriggerBridgeExample {
   }
 
   /**
-   * Maps each decided Case Id to its most recent ProcessInstance Id (approval history header).
+   * @description Maps each decided Case Id to its most recent ProcessInstance Id
+   * (approval history header).
+   * @param decidedCaseIds The Ids of Cases that have just been decided.
+   * @return A map from Case Id to its latest ProcessInstance Id.
    */
   private static Map<Id, Id> queryLatestProcessInstanceIdByCaseId(
     Set<Id> decidedCaseIds
@@ -159,7 +165,10 @@ public inherited sharing class NativeApprovalTriggerBridgeExample {
   }
 
   /**
-   * Maps each ProcessInstance Id to the approver's comment on its latest Approved/Rejected step.
+   * @description Maps each ProcessInstance Id to the approver's comment on its latest
+   * Approved/Rejected step.
+   * @param processInstanceIds The ProcessInstance Ids to read approval comments for.
+   * @return A map from ProcessInstance Id to the approver's latest decision comment.
    */
   private static Map<Id, String> queryLatestCommentByProcessInstanceId(
     List<Id> processInstanceIds
@@ -187,9 +196,13 @@ public inherited sharing class NativeApprovalTriggerBridgeExample {
   }
 
   /**
-   * Flattens the two-hop lookup (Case -> ProcessInstance -> approval comment) into a
-   * single Case Id -> comment map, preserving the exact "latest" semantics of the two
+   * @description Flattens the two-hop lookup (Case -> ProcessInstance -> approval comment)
+   * into a single Case Id -> comment map, preserving the exact "latest" semantics of the two
    * source maps so buildSignalRequests can stay a simple one-argument-per-Case builder.
+   * @param decidedCaseIds The Ids of Cases that have just been decided.
+   * @param processInstanceIdByCaseId Map from Case Id to its latest ProcessInstance Id.
+   * @param commentByProcessInstanceId Map from ProcessInstance Id to its latest decision comment.
+   * @return A map from Case Id to the approver's latest comment (null when none is found).
    */
   private static Map<Id, String> resolveCommentByCaseId(
     Set<Id> decidedCaseIds,
@@ -210,8 +223,12 @@ public inherited sharing class NativeApprovalTriggerBridgeExample {
   }
 
   /**
-   * Builds one idempotent decision SignalRequest per decided Case, carrying the approved
-   * flag, the approver's comment (when available), and the approver's name.
+   * @description Builds one idempotent decision SignalRequest per decided Case, carrying the
+   * approved flag, the approver's comment (when available), and the approver's name.
+   * @param newCases The updated Case records from the trigger.
+   * @param decidedCaseIds The Ids of Cases that have just been decided.
+   * @param commentByCaseId Map from Case Id to the approver's latest decision comment.
+   * @return One decision SignalRequest per decided Case.
    */
   private static List<WorkflowEngine.SignalRequest> buildSignalRequests(
     List<Case> newCases,

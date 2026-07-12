@@ -86,9 +86,11 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
     }
 
     /**
-     * Unwraps a JSON-encoded string payload (e.g. `"Item-A"`) to its raw value,
-     * falling back to the original payload when it is not a quoted JSON string or
+     * @description Unwraps a JSON-encoded string payload (e.g. `"Item-A"`) to its raw
+     * value, falling back to the original payload when it is not a quoted JSON string or
      * cannot be deserialized.
+     * @param sig The pending signal whose payload should be normalized.
+     * @return The unwrapped payload string, or the raw payload when it is not quoted JSON.
      */
     private String normalizePayload(StepContext.Signal sig) {
       String parsedPayload = sig.payload;

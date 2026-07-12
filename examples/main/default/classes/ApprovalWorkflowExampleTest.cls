@@ -3,8 +3,9 @@ private class ApprovalWorkflowExampleTest {
   static final String KEY_PREFIX = 'ApprovalWorkflow_Test_';
 
   /**
-   * Asserts the append-only audit trail recorded exactly one compensation whose logged
-   * output confirms the reserved budget was released.
+   * @description Asserts the append-only audit trail recorded exactly one compensation
+   * whose logged output confirms the reserved budget was released.
+   * @param instanceId The workflow instance whose compensation log is inspected.
    */
   private static void assertReservationReleased(Id instanceId) {
     List<Workflow_Step_Execution__c> compLogs = [

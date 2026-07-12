@@ -72,9 +72,11 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
   }
 
   /**
-   * Safely deserializes a JSON object string into a Map, returning an empty Map when
-   * the input is blank or malformed. Centralising the guard keeps each step body focused
-   * on reading the keys it cares about rather than repeating null and parse handling.
+   * @description Safely deserializes a JSON object string into a Map, returning an empty
+   * Map when the input is blank or malformed. Centralising the guard keeps each step body
+   * focused on reading the keys it cares about rather than repeating null and parse handling.
+   * @param jsonText The JSON object string to deserialize.
+   * @return The deserialized Map, or an empty Map when the input is blank or malformed.
    */
   private static Map<String, Object> parseJsonMap(String jsonText) {
     if (String.isBlank(jsonText)) {

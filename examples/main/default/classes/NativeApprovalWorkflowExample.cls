@@ -92,9 +92,11 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
   }
 
   /**
-   * Reads a JSON object string into a Map, yielding an empty Map when the input is blank
-   * or cannot be parsed. Folding the guard into one place lets each step read the decision
-   * keys it needs without repeating null checks or inline parse-failure handling.
+   * @description Reads a JSON object string into a Map, yielding an empty Map when the input
+   * is blank or cannot be parsed. Folding the guard into one place lets each step read the
+   * decision keys it needs without repeating null checks or inline parse-failure handling.
+   * @param jsonText The JSON object string to deserialize.
+   * @return The deserialized Map, or an empty Map when the input is blank or malformed.
    */
   private static Map<String, Object> deserializeJson(String jsonText) {
     if (String.isBlank(jsonText)) {

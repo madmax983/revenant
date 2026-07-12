@@ -70,8 +70,9 @@ public class SagaStalledRollbackExampleTest {
   }
 
   /**
-   * Asserts the saga is poised on the failing forward step with all four
+   * @description Asserts the saga is poised on the failing forward step with all four
    * compensatable steps recorded on the stack, just before rollback begins.
+   * @param instanceId The workflow instance under test.
    */
   private static void assertPoisedOnFailingForwardStep(Id instanceId) {
     Workflow_Instance__c inst = [
@@ -92,7 +93,8 @@ public class SagaStalledRollbackExampleTest {
   }
 
   /**
-   * Asserts the forward-step failure kicked the saga into the Compensating state.
+   * @description Asserts the forward-step failure kicked the saga into the Compensating state.
+   * @param instanceId The workflow instance under test.
    */
   private static void assertRollbackStarted(Id instanceId) {
     Workflow_Instance__c inst = [
@@ -108,9 +110,10 @@ public class SagaStalledRollbackExampleTest {
   }
 
   /**
-   * Asserts the stalled-rollback condition: the distinguishable
+   * @description Asserts the stalled-rollback condition: the distinguishable
    * CompensationFailed state, the intact remaining LIFO stack, and the
    * operator-visible pending-compensation depth from the dashboard controller.
+   * @param instanceId The workflow instance under test.
    */
   private static void assertRollbackStalled(Id instanceId) {
     Workflow_Instance__c inst = [
@@ -155,8 +158,9 @@ public class SagaStalledRollbackExampleTest {
   }
 
   /**
-   * Asserts the resumed rollback reached the fully-compensated terminal state
+   * @description Asserts the resumed rollback reached the fully-compensated terminal state
    * with a fully-drained compensation stack.
+   * @param instanceId The workflow instance under test.
    */
   private static void assertFullyCompensated(Id instanceId) {
     Workflow_Instance__c inst = [
@@ -178,9 +182,10 @@ public class SagaStalledRollbackExampleTest {
   }
 
   /**
-   * Asserts the append-only compensation audit trail: every forward step
+   * @description Asserts the append-only compensation audit trail: every forward step
    * compensated exactly once, with the transient ShipOrderStep failure preserved
    * alongside its successful retry.
+   * @param instanceId The workflow instance under test.
    */
   private static void assertCompensationAuditTrail(Id instanceId) {
     // AC: every compensation outcome is an append-only Workflow_Step_Execution__c

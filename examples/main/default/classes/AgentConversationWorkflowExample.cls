@@ -267,10 +267,8 @@ public with sharing class AgentConversationWorkflowExample {
    * Invokes an Agentforce agent via the platform's generateAiAgentResponse
    * invocable action. No HTTP callout or Named Credential needed.
    *
-   * @param agentDeveloperName  API name of the Agentforce agent (e.g. Support_Agent)
-   * @param userMessage         Message to send this turn
-   * @param sessionId           Existing session to continue, or null for a new session
-   * @param mockResponseIndex   Which entry in mockAgentResponses to use in tests
+   * @param request Bundled agent-turn parameters (agent developer name, user
+   * message, optional session id, and mock response index for tests).
    * @return The agent's response wrapper (mocked in tests), including its sessionId.
    */
   private static AgentResponse invokeAgent(AgentInvocationRequest request) {
