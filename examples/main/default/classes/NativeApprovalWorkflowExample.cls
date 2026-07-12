@@ -84,12 +84,12 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
    * or cannot be parsed. Folding the guard into one place lets each step read the decision
    * keys it needs without repeating null checks or inline parse-failure handling.
    */
-  private static Map<String, Object> deserializeJson(String json) {
-    if (String.isBlank(json)) {
+  private static Map<String, Object> deserializeJson(String jsonText) {
+    if (String.isBlank(jsonText)) {
       return new Map<String, Object>();
     }
     try {
-      return (Map<String, Object>) JSON.deserializeUntyped(json);
+      return (Map<String, Object>) JSON.deserializeUntyped(jsonText);
     } catch (Exception ignored) {
       return new Map<String, Object>();
     }

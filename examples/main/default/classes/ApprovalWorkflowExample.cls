@@ -65,12 +65,12 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
    * the input is blank or malformed. Centralising the guard keeps each step body focused
    * on reading the keys it cares about rather than repeating null and parse handling.
    */
-  private static Map<String, Object> parseJsonMap(String json) {
-    if (String.isBlank(json)) {
+  private static Map<String, Object> parseJsonMap(String jsonText) {
+    if (String.isBlank(jsonText)) {
       return new Map<String, Object>();
     }
     try {
-      return (Map<String, Object>) JSON.deserializeUntyped(json);
+      return (Map<String, Object>) JSON.deserializeUntyped(jsonText);
     } catch (Exception ignored) {
       return new Map<String, Object>();
     }
