@@ -84,16 +84,24 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
       }
 
       // Only kick off a NEW async callout on the first (non-resumed) entry: a
-      // blank step state means the queueable has not run yet. If step state is
-      // already present we are mid-resume inside the async context, so we must
-      // NOT enqueue again -- chaining another AsyncCalloutJob here would recurse
-      // until Apex hits "Maximum stack depth has been reached".
+      // blank step state means the callout has not run yet. If step state is
+      // already present we are mid-resume, so we must NOT start a fresh callout
+      // here -- we fall through to the retry handshake below.
       if (String.isBlank(ctx.stepStateJson)) {
         // Launch the callout asynchronously to bypass DML callout restrictions.
-        System.enqueueJob(
-          new AsyncCalloutJob(ctx.workflowInstanceId, endpoint)
-        );
-        // Suspend the execution state; it resumes once the queueable finishes.
+        // Under test we deliberately do NOT enqueue the real Queueable: the
+        // orchestrator itself runs as a Queueable under Test.stopTest(), so
+        // enqueuing AsyncCalloutJob here would chain Queueable -> resume ->
+        // retry -> Queueable... synchronously until Apex throws "Maximum stack
+        // depth has been reached". The test drives the async callback manually
+        // via doCalloutAndResume, so skipping the enqueue reproduces the
+        // production suspend/resume path without the test-only chaining.
+        if (!Test.isRunningTest()) {
+          System.enqueueJob(
+            new AsyncCalloutJob(ctx.workflowInstanceId, endpoint)
+          );
+        }
+        // Suspend the execution state; it resumes once the callout finishes.
         return StepResult.suspend();
       }
 
