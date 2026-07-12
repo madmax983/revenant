@@ -25,6 +25,10 @@ public inherited sharing class OrderChoreographyWorkflowExample {
    */
   public static Integer refundStartCount = 0;
 
+  /**
+   * @description Resets the refund-start counter so a test can assert the effectively-once
+   * emission from a known baseline.
+   */
   public static void resetCounters() {
     refundStartCount = 0;
   }
@@ -34,6 +38,8 @@ public inherited sharing class OrderChoreographyWorkflowExample {
    * Order_Shipped__e. Get-or-start keeps it idempotent on the consumer side too,
    * but the producer-side effectively-once publish is what keeps it from being
    * asked to start B more than once per shipment.
+   *
+   * @param events The delivered Order_Shipped__e events driving get-or-start of the refund workflow.
    */
   public static void onOrderShipped(List<Order_Shipped__e> events) {
     // Bulk-safe: a platform-event trigger can deliver many events in one
@@ -60,15 +66,33 @@ public inherited sharing class OrderChoreographyWorkflowExample {
 
   // ----- Workflow A: ship the order, emit Order_Shipped__e on COMPLETE. -------
 
+  /**
+   * @description Workflow A: a single-step definition that ships the order and emits
+   * Order_Shipped__e when its ShipOrderStep completes.
+   */
   public class ShipmentWorkflow implements WorkflowDefinition {
+    /**
+     * @description Lists the steps that make up this workflow.
+     * @return The ordered list of fully-qualified step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'OrderChoreographyWorkflowExample.ShipOrderStep'
       };
     }
+    /**
+     * @description Names the first step executed when an instance starts.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'OrderChoreographyWorkflowExample.ShipOrderStep';
     }
+    /**
+     * @description Routes to the next step; this workflow completes after its only step.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, signalling the workflow is complete.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       return null;
     }
@@ -85,6 +109,13 @@ public inherited sharing class OrderChoreographyWorkflowExample {
    * exists only to force re-execution for the test.)
    */
   public inherited sharing class ShipOrderStep implements WorkflowStep {
+    /**
+     * @description Buffers an Order_Shipped__e via ctx.emit on every execution but only
+     * reaches COMPLETE on the third run (after a yield and a retry), demonstrating that the
+     * event publishes exactly once on the final commit.
+     * @param ctx The durable step context carrying workflow input and step state.
+     * @return A yield, retry, or complete StepResult depending on the execution phase.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.workflowInputJson
@@ -139,21 +170,47 @@ public inherited sharing class OrderChoreographyWorkflowExample {
 
   // ----- Workflow B: started by the Order_Shipped__e subscriber. --------------
 
+  /**
+   * @description Workflow B: a single-step refund definition started by the Order_Shipped__e
+   * subscriber once shipment completes.
+   */
   public class RefundWorkflow implements WorkflowDefinition {
+    /**
+     * @description Lists the steps that make up this workflow.
+     * @return The ordered list of fully-qualified step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'OrderChoreographyWorkflowExample.IssueRefundStep'
       };
     }
+    /**
+     * @description Names the first step executed when an instance starts.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'OrderChoreographyWorkflowExample.IssueRefundStep';
     }
+    /**
+     * @description Routes to the next step; this workflow completes after its only step.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, signalling the workflow is complete.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description The single refund step of Workflow B, which completes immediately.
+   */
   public class IssueRefundStep implements WorkflowStep {
+    /**
+     * @description Issues the refund and completes the workflow.
+     * @param ctx The durable step context for this execution.
+     * @return A completed StepResult carrying the refund outcome.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'refund-issued');
     }

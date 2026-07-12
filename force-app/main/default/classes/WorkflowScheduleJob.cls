@@ -13,10 +13,24 @@
 public inherited sharing class WorkflowScheduleJob implements Schedulable {
   private Id scheduleId;
 
+  /**
+   * @description Constructs the job with the Id of the Workflow_Schedule__c row
+   * it re-reads at fire time; only the Id is stored so the latest schedule state
+   * (Enabled__c, dedication) is honoured when the CronTrigger fires.
+   * @param scheduleId The Id of the Workflow_Schedule__c this job fires for.
+   */
   public WorkflowScheduleJob(Id scheduleId) {
     this.scheduleId = scheduleId;
   }
 
+  /**
+   * @description Fires the dedicated-slot schedule: re-reads the schedule row,
+   * self-aborts the CronTrigger if the row is gone or the schedule is disabled or
+   * no longer dedicated, otherwise computes the cron fire window and routes
+   * through WorkflowScheduleSweeper.fireScheduled honouring the overlap policy.
+   * @param ctx The schedulable context exposing this CronTrigger's Id for
+   * self-abort.
+   */
   public void execute(SchedulableContext ctx) {
     List<Workflow_Schedule__c> rows = [
       SELECT

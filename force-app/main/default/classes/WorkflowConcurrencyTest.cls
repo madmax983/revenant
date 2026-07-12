@@ -19,19 +19,45 @@ public class WorkflowConcurrencyTest {
 
   // A workflow whose single step suspends (waits for a signal), so an admitted
   // instance stays in-flight holding its slot until it is driven terminal.
+  /**
+   * @description Fixture workflow whose single step suspends, so an admitted instance
+   * stays in-flight holding its concurrency slot until driven terminal.
+   */
   public class WaitWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the single WaitStep.
+     * @return The one-element list naming WaitStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowConcurrencyTest.WaitStep' };
     }
+    /**
+     * @description Returns WaitStep as the entry point.
+     * @return The name of the initial step.
+     */
     public String getInitialStep() {
       return 'WorkflowConcurrencyTest.WaitStep';
     }
+    /**
+     * @description Terminates after the single step.
+     * @param current The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, marking the workflow complete.
+     */
     public String getNextStep(String current, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Fixture step that immediately suspends to keep its instance in-flight.
+   */
   public class WaitStep implements WorkflowStep {
+    /**
+     * @description Suspends the instance so it holds its concurrency slot.
+     * @param ctx The durable step context.
+     * @return A suspend result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.suspend();
     }
@@ -39,22 +65,53 @@ public class WorkflowConcurrencyTest {
 
   // A bounded workflow whose initial step declares a timeout — used to prove the
   // initial step's deadline is deferred until admission for configured workflows.
+  /**
+   * @description Fixture bounded workflow whose initial step declares a timeout, used to
+   * prove the initial step's deadline is deferred until admission.
+   */
   public class TimeoutWaitWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the single TimeoutWaitStep.
+     * @return The one-element list naming TimeoutWaitStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowConcurrencyTest.TimeoutWaitStep' };
     }
+    /**
+     * @description Returns TimeoutWaitStep as the entry point.
+     * @return The name of the initial step.
+     */
     public String getInitialStep() {
       return 'WorkflowConcurrencyTest.TimeoutWaitStep';
     }
+    /**
+     * @description Terminates after the single step.
+     * @param current The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, marking the workflow complete.
+     */
     public String getNextStep(String current, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Fixture step that suspends and declares an execution timeout, exercising
+   * deferral of the deadline until the instance is admitted through the concurrency gate.
+   */
   public class TimeoutWaitStep implements WorkflowStep, TimeoutConfigurable {
+    /**
+     * @description Declares this step's execution timeout.
+     * @return The timeout in seconds.
+     */
     public Integer getTimeoutSeconds() {
       return 300;
     }
+    /**
+     * @description Suspends the instance so it holds its slot while timed.
+     * @param ctx The durable step context.
+     * @return A suspend result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.suspend();
     }
@@ -1348,16 +1405,34 @@ public class WorkflowConcurrencyTest {
     }
   }
 
+  /**
+   * @description Fixture two-step workflow (WaitStep then TimeoutWaitStep) used to prove
+   * a step's timeout is deferred until the instance is admitted for a bounded workflow.
+   */
   public class MultiStepConcurrencyWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the wait step followed by the timeout wait step.
+     * @return The list of step names in the multi-step workflow.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'WorkflowConcurrencyTest.WaitStep',
         'WorkflowConcurrencyTest.TimeoutWaitStep'
       };
     }
+    /**
+     * @description Returns WaitStep as the entry point.
+     * @return The name of the initial step.
+     */
     public String getInitialStep() {
       return 'WorkflowConcurrencyTest.WaitStep';
     }
+    /**
+     * @description Routes WaitStep to TimeoutWaitStep, then terminates.
+     * @param current The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return The timeout wait step after the wait step, or null otherwise.
+     */
     public String getNextStep(String current, StepResult result) {
       if (current == 'WorkflowConcurrencyTest.WaitStep') {
         return 'WorkflowConcurrencyTest.TimeoutWaitStep';

@@ -35,6 +35,11 @@ public inherited sharing class WorkflowScheduleSweeper {
   private static final String LOG_TYPE = 'ScheduleFire';
   private static final String LEVEL_INFO = 'Info';
 
+  /**
+   * @description Thrown for schedule-management errors, such as a cron that
+   * cannot be expressed in Salesforce's dedicated-slot format or a fire targeting
+   * an unknown workflow definition.
+   */
   public class WorkflowScheduleException extends Exception {
   }
 
@@ -143,10 +148,12 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * Loads the due (or never-fired) 0-slot schedules for this sweep, ordered
+   * @description Loads the due (or never-fired) 0-slot schedules for this sweep, ordered
    * least-recently-due first. Next_Fire_Window__c is a server-side cursor: a handled
    * low-cadence schedule's next window is in the future, so it filters out and cannot
    * pin the batch and starve higher-cadence schedules.
+   * @param now The evaluation instant used as the due cutoff.
+   * @return The batch of enabled, non-dedicated schedules that may be due.
    */
   private static List<Workflow_Schedule__c> loadDueSchedules(DateTime now) {
     return [
@@ -174,10 +181,12 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * Classifies one schedule for the sweep: either queues a cursor-only update (park
-   * an impossible cron, backfill a handled window, or seed a never-fired pre-creation
+   * @description Classifies one schedule for the sweep: either queues a cursor-only update
+   * (park an impossible cron, backfill a handled window, or seed a never-fired pre-creation
    * window) or appends a DueItem to fire. Per-item exceptions are swallowed so one bad
    * schedule cannot abort the whole heartbeat batch.
+   * @param sched The schedule row being classified.
+   * @param state The mutable sweep working set accumulating updates and due items.
    */
   private static void classifyForSweep(
     Workflow_Schedule__c sched,
@@ -247,7 +256,12 @@ public inherited sharing class WorkflowScheduleSweeper {
     }
   }
 
-  /** Builds the DueItem (prefix + correlation key + overlap policy) for a fire. */
+  /**
+   * @description Builds the DueItem (prefix + correlation key + overlap policy) for a fire.
+   * @param sched The schedule being fired.
+   * @param fireTime The cron window instant this fire corresponds to.
+   * @return The assembled DueItem describing the pending fire.
+   */
   private static DueItem buildDueItem(
     Workflow_Schedule__c sched,
     DateTime fireTime
@@ -264,10 +278,12 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * Plans a single due item: records a Skipped log (overlap-blocked) or an Error log
-   * (unknown workflow / bad input JSON) and advances the cursor, or otherwise queues a
-   * bulk StartRequest. resolveInput is isolated per item so one malformed schedule
-   * cannot abort the batch.
+   * @description Plans a single due item: records a Skipped log (overlap-blocked) or an
+   * Error log (unknown workflow / bad input JSON) and advances the cursor, or otherwise
+   * queues a bulk StartRequest. resolveInput is isolated per item so one malformed
+   * schedule cannot abort the batch.
+   * @param item The due item to plan.
+   * @param state The mutable sweep working set collecting logs, updates, and requests.
    */
   private static void planDueItem(DueItem item, SweepState state) {
     if (
@@ -315,7 +331,10 @@ public inherited sharing class WorkflowScheduleSweeper {
     state.starting.add(item);
   }
 
-  /** Runs the bulk start and records Started/Deduped logs + cursor advances. */
+  /**
+   * @description Runs the bulk start and records Started/Deduped logs + cursor advances.
+   * @param state The sweep working set holding the built requests and starting items.
+   */
   private static void startAndRecord(SweepState state) {
     List<WorkflowEngine.StartResult> results = WorkflowEngine.startOrGet(
       state.requests
@@ -334,7 +353,12 @@ public inherited sharing class WorkflowScheduleSweeper {
     }
   }
 
-  /** Builds the cursor-advancing update row (last/next window + outcome) for a fire. */
+  /**
+   * @description Builds the cursor-advancing update row (last/next window + outcome) for a fire.
+   * @param item The due item whose schedule cursor is being advanced.
+   * @param outcome The outcome label recorded on the schedule (Started, Skipped, etc.).
+   * @return An in-memory Workflow_Schedule__c carrying the advanced cursor fields.
+   */
   private static Workflow_Schedule__c advanceRow(DueItem item, String outcome) {
     return new Workflow_Schedule__c(
       Id = item.sched.Id,
@@ -347,7 +371,10 @@ public inherited sharing class WorkflowScheduleSweeper {
     );
   }
 
-  /** Single-guarded bulk update for the sweep's queued cursor/state changes. */
+  /**
+   * @description Single-guarded bulk update for the sweep's queued cursor/state changes.
+   * @param toUpdate The schedule rows to persist; a no-op when empty.
+   */
   private static void flushUpdates(List<Workflow_Schedule__c> toUpdate) {
     if (!toUpdate.isEmpty()) {
       update as system toUpdate;
@@ -355,12 +382,13 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * Arms a dedicated CronTrigger (1 scheduled-job slot) for a Dedicated_Slot__c
+   * @description Arms a dedicated CronTrigger (1 scheduled-job slot) for a Dedicated_Slot__c
    * schedule via the schedule-aware WorkflowScheduleJob, which re-reads the record
    * at fire time (so disabling the schedule stops it) and resolves input tokens.
    *
    * NOTE: System.schedule interprets the cron in the ARMING USER'S time zone, unlike
    * the UTC 0-slot path — see docs/recurring-schedules.md.
+   * @param scheduleId The Id of the schedule to arm a dedicated CronTrigger for.
    */
   public static void registerDedicatedJob(Id scheduleId) {
     Workflow_Schedule__c sched = [
@@ -381,15 +409,21 @@ public inherited sharing class WorkflowScheduleSweeper {
     );
   }
 
-  /** Stable CronTrigger/job name for a dedicated schedule, derived from its Id. */
+  /**
+   * @description Stable CronTrigger/job name for a dedicated schedule, derived from its Id.
+   * @param scheduleId The Id of the schedule.
+   * @return The deterministic job name used to arm, find, and abort its CronTrigger.
+   */
   public static String dedicatedJobName(Id scheduleId) {
     return 'RevenantSched_' + scheduleId;
   }
 
   /**
-   * Fires a schedule immediately, on demand, independent of its cron cadence.
+   * @description Fires a schedule immediately, on demand, independent of its cron cadence.
    * Uses a distinct manual correlation key so it never collides with a cron
    * window. Records a Started log and returns the started instance Id.
+   * @param scheduleId The Id of the schedule to run now.
+   * @return The Id of the started workflow instance.
    */
   public static Id runNow(Id scheduleId) {
     Workflow_Schedule__c sched = [
@@ -445,7 +479,8 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * Aborts the dedicated CronTrigger registered for this schedule.
+   * @description Aborts the dedicated CronTrigger registered for this schedule.
+   * @param scheduleId The Id of the schedule whose CronTrigger should be aborted.
    */
   public static void unregisterDedicatedJob(Id scheduleId) {
     String jobName = dedicatedJobName(scheduleId);
@@ -460,7 +495,11 @@ public inherited sharing class WorkflowScheduleSweeper {
     }
   }
 
-  /** Whether a dedicated CronTrigger is currently armed for this schedule. */
+  /**
+   * @description Whether a dedicated CronTrigger is currently armed for this schedule.
+   * @param scheduleId The Id of the schedule to check.
+   * @return True if a CronTrigger for this schedule exists, false otherwise.
+   */
   public static Boolean isDedicatedJobArmed(Id scheduleId) {
     String jobName = dedicatedJobName(scheduleId);
     return ![
@@ -475,6 +514,12 @@ public inherited sharing class WorkflowScheduleSweeper {
 
   // ── Shared helpers (also used by WorkflowScheduleJob) ───────────────────────
 
+  /**
+   * @description Returns the correlation-key prefix for a schedule, falling back to
+   * the schedule Name when no explicit Correlation_Key_Prefix__c is configured.
+   * @param sched The schedule whose effective prefix is needed.
+   * @return The configured prefix, or the schedule Name when none is set.
+   */
   public static String effectivePrefix(Workflow_Schedule__c sched) {
     return String.isNotBlank(sched.Correlation_Key_Prefix__c)
       ? sched.Correlation_Key_Prefix__c
@@ -482,10 +527,13 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * Resolves a schedule's Input_Json__c into a workflow input, substituting the
+   * @description Resolves a schedule's Input_Json__c into a workflow input, substituting the
    * {{fireTime}} and {{scheduleName}} tokens. Returns null when no input is set.
    * Shared by the 0-slot sweep, run-now, and the dedicated WorkflowScheduleJob so
    * the three paths cannot drift.
+   * @param sched The schedule supplying the input template.
+   * @param fireTime The window instant substituted for the {{fireTime}} token.
+   * @return The deserialized workflow input, or null when no input is configured.
    */
   public static Object resolveInput(
     Workflow_Schedule__c sched,
@@ -506,8 +554,10 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * Returns the JSON-escaped body of a string WITHOUT the surrounding quotes, so
+   * @description Returns the JSON-escaped body of a string WITHOUT the surrounding quotes, so
    * it can be substituted into a quoted token position ("{{scheduleName}}").
+   * @param raw The raw string to escape.
+   * @return The escaped body without surrounding quotes, or empty string when null.
    */
   private static String jsonEscape(String raw) {
     if (raw == null) {
@@ -518,10 +568,11 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * Fires a single schedule applying its overlap policy, recording the outcome in
+   * @description Fires a single schedule applying its overlap policy, recording the outcome in
    * Last_Fired_Window__c / Last_Outcome__c and a Workflow_Log__c row. Shared by the
    * dedicated-slot WorkflowScheduleJob so dedicated fires honour Skip and keep the
    * same state/audit trail as the 0-slot sweep.
+   * @param ctx The fire context identifying the schedule, window, and correlation key.
    */
   public static void fireScheduled(FireContext ctx) {
     Workflow_Schedule__c sched = ctx.sched;
@@ -572,9 +623,11 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * True when workflowName resolves to a class that implements WorkflowDefinition.
+   * @description True when workflowName resolves to a class that implements WorkflowDefinition.
    * Used to reject schedules pointing at a missing/typo'd definition before they
    * reach startOrGet (which would otherwise create a phantom Pending instance).
+   * @param workflowName The workflow definition name to validate.
+   * @return True if the name resolves to a WorkflowDefinition, false otherwise.
    */
   public static Boolean isValidWorkflowName(String workflowName) {
     if (String.isBlank(workflowName)) {
@@ -593,7 +646,11 @@ public inherited sharing class WorkflowScheduleSweeper {
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
-  /** Records an Error outcome (single log + state advance) for a failed fire. */
+  /**
+   * @description Records an Error outcome (single log + state advance) for a failed fire.
+   * @param ctx The fire context identifying the schedule and window.
+   * @param message The error detail recorded on the log row.
+   */
   private static void recordError(FireContext ctx, String message) {
     LogSpec spec = new LogSpec(ctx, 'Error');
     spec.message = message;
@@ -602,13 +659,15 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * For all Skip-policy due items, returns the set of prefixes that currently have
+   * @description For all Skip-policy due items, returns the set of prefixes that currently have
    * an ACTIVE instance from a DIFFERENT window (i.e. a prior run still in flight).
    *
    * Uses a single dynamic query (coarse LIKE per prefix) and then an EXACT
    * `startsWith(prefix + '_')` filter in Apex, so an unrelated key such as
    * "JobManual_..." can never falsely block the "Job" schedule, and admin-entered
    * `%`/`_` wildcards in a prefix cannot widen the match.
+   * @param dueItems The due items being planned this sweep.
+   * @return The set of Skip-policy prefixes blocked by an active prior run.
    */
   private static Set<String> computeBlockedPrefixes(List<DueItem> dueItems) {
     Map<String, DueItem> skipByPrefix = new Map<String, DueItem>();
@@ -634,9 +693,12 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * Builds the coarse LIKE-per-prefix query for in-flight instances, populating the
+   * @description Builds the coarse LIKE-per-prefix query for in-flight instances, populating the
    * bind map. The exact startsWith filter in collectBlockedPrefixes guarantees
    * correctness, so this pre-filter can be broad.
+   * @param prefixes The Skip-policy prefixes to match against active instances.
+   * @param binds The bind map populated with one LIKE pattern per prefix.
+   * @return The dynamic SOQL string querying active instances by prefix.
    */
   private static String buildActivePriorRunQuery(
     Set<String> prefixes,
@@ -657,10 +719,13 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * From the coarse query result, returns the set of Skip prefixes that have an
+   * @description From the coarse query result, returns the set of Skip prefixes that have an
    * ACTIVE instance from a DIFFERENT window (a prior run still in flight). Prefixes/
    * keys are compared case-insensitively (the prefix field is caseSensitive=false and
    * SOQL LIKE ignores case) so an admin re-casing a prefix still recognises a prior run.
+   * @param active The active instances returned by the coarse prefix query.
+   * @param skipItems The Skip-policy due items to test for a blocking prior run.
+   * @return The set of prefixes with an active prior run from a different window.
    */
   private static Set<String> collectBlockedPrefixes(
     List<Workflow_Instance__c> active,
@@ -685,8 +750,11 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * Single-schedule overlap check (case-insensitive): is there an ACTIVE instance
+   * @description Single-schedule overlap check (case-insensitive): is there an ACTIVE instance
    * whose correlation key shares this prefix but is from a different window?
+   * @param prefix The correlation-key prefix identifying the schedule.
+   * @param currentCorrKey The current window's correlation key, excluded from the match.
+   * @return True when an active instance from a different window shares the prefix.
    */
   private static Boolean hasActivePriorRun(
     String prefix,
@@ -716,7 +784,11 @@ public inherited sharing class WorkflowScheduleSweeper {
     return false;
   }
 
-  /** Truncates a DateTime to the start of its minute in UTC (seconds = 0). */
+  /**
+   * @description Truncates a DateTime to the start of its minute in UTC (seconds = 0).
+   * @param dt The DateTime to truncate.
+   * @return The same instant with seconds zeroed, in UTC.
+   */
   private static DateTime truncateToMinute(DateTime dt) {
     return DateTime.newInstanceGmt(
       dt.yearGmt(),
@@ -728,7 +800,11 @@ public inherited sharing class WorkflowScheduleSweeper {
     );
   }
 
-  /** Advances a schedule's last/next window state after a fire. Single-row DML. */
+  /**
+   * @description Advances a schedule's last/next window state after a fire. Single-row DML.
+   * @param ctx The fire context identifying the schedule and window.
+   * @param outcome The outcome label recorded on the schedule.
+   */
   private static void updateState(FireContext ctx, String outcome) {
     update as system new Workflow_Schedule__c(
       Id = ctx.sched.Id,
@@ -742,11 +818,14 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * Next fire instant STRICTLY after the handled window, or null if unknown.
+   * @description Next fire instant STRICTLY after the handled window, or null if unknown.
    * WorkflowCronEvaluator.nextFireTime is inclusive (returns the window itself if
    * it matches), so we evaluate from one minute past the handled window — cron
    * windows are minute-granular — to guarantee the cursor advances and the row
    * rotates out of future batches.
+   * @param cron The schedule's cron expression.
+   * @param firedWindow The window instant just handled.
+   * @return The next window strictly after firedWindow, or null when unknown.
    */
   private static DateTime nextWindow(String cron, DateTime firedWindow) {
     if (String.isBlank(cron) || firedWindow == null) {
@@ -779,7 +858,7 @@ public inherited sharing class WorkflowScheduleSweeper {
   }
 
   /**
-   * Converts a 5-field cron (min hour dom month dow) to the 7-field Salesforce
+   * @description Converts a 5-field cron (min hour dom month dow) to the 7-field Salesforce
    * format required by System.schedule: seconds minutes hours dom month dow year.
    *
    * Two Salesforce-specific translations are applied:
@@ -788,6 +867,8 @@ public inherited sharing class WorkflowScheduleSweeper {
    *   - Salesforce requires exactly one of dom/dow to be '?'. Because Salesforce
    *     cron has no DOM-OR-DOW semantics, a cron that restricts BOTH is rejected
    *     for dedicated mode (the 0-slot evaluator still supports it).
+   * @param fiveFieldCron The 5-field cron expression to convert.
+   * @return The equivalent 7-field Salesforce cron string.
    */
   @TestVisible
   static String toSalesforceCron(String fiveFieldCron) {

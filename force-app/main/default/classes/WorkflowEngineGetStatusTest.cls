@@ -1076,6 +1076,10 @@ private class WorkflowEngineGetStatusTest {
 
   // ─── Stub workflow inner class (required by InstanceBuilder Workflow_Name__c) ─
   // Not actually executed; here so the class name resolves in this test context.
+  /**
+   * @description Placeholder workflow class that is never executed; it only needs to
+   * exist so the Workflow_Name__c used by InstanceBuilder resolves in this test.
+   */
   public class StubWorkflow {
   }
 }

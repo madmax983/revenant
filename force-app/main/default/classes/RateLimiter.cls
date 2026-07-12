@@ -1,3 +1,8 @@
+/**
+ * @description Token-bucket rate limiter that cooperatively throttles outbound
+ * integration calls, persisting per-key bucket state durably so limits hold across
+ * transactions and asynchronous workflow retries.
+ */
 public inherited sharing class RateLimiter {
   // Allows unit tests to inject custom configs without database DML dependencies
   @TestVisible
@@ -6,8 +11,18 @@ public inherited sharing class RateLimiter {
   @TestVisible
   private static Boolean simulateDuplicateOnInsert = false;
 
+  /**
+   * @description Outcome of an acquire attempt: whether a token was granted and, if
+   * throttled, how long the caller should back off before retrying.
+   */
   public class AcquireResult {
+    /**
+     * @description True when a token was consumed and the caller may proceed immediately.
+     */
     public Boolean isAllowed { get; private set; }
+    /**
+     * @description Seconds the caller should sleep before retrying when throttled; zero when allowed.
+     */
     public Integer sleepDurationSeconds { get; private set; }
 
     // Constructed only through the intent-named factories on the enclosing class.
@@ -39,8 +54,11 @@ public inherited sharing class RateLimiter {
   }
 
   /**
-   * Cooperatively checks and consumes a token for the specified integration key.
-   * Locks the state record using SELECT ... FOR UPDATE to avoid concurrency issues.
+   * @description Cooperatively checks and consumes a token for the specified integration
+   * key, locking the state record with SELECT ... FOR UPDATE to remain safe under
+   * concurrency and lazily provisioning the bucket on first use.
+   * @param integrationKey The developer name identifying the rate-limit bucket to draw from.
+   * @return An AcquireResult indicating whether a token was granted, or the back-off delay when throttled.
    */
   public static AcquireResult acquire(String integrationKey) {
     // 1. Resolve + validate config

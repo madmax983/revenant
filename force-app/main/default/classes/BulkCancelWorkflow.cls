@@ -1,7 +1,7 @@
 /**
- * BulkCancelWorkflow
- *
- * Operator-initiated bulk cancel of workflow instances.
+ * @description Operator-initiated, resumable bulk cancel of workflow instances:
+ * a single-step workflow that selects eligible instances in chunks and cancels
+ * each in its own savepoint, tallying cancelled/skipped/errored outcomes.
  */
 public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition {
   public static final String CANCELER_WORKFLOW_NAME = 'BulkCancelWorkflow';
@@ -26,14 +26,29 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
 
   // ---- WorkflowDefinition ----
 
+  /**
+   * @description Declares the single step class that performs the bulk cancel.
+   * @return The one-element list naming the BulkCancelStep step.
+   */
   public List<String> getSteps() {
     return new List<String>{ 'BulkCancelWorkflow.BulkCancelStep' };
   }
 
+  /**
+   * @description Returns the entry step, which is the sole bulk-cancel step.
+   * @return The name of the initial step.
+   */
   public String getInitialStep() {
     return 'BulkCancelWorkflow.BulkCancelStep';
   }
 
+  /**
+   * @description Terminates the workflow after its single step, since there is
+   * no successor to route to.
+   * @param currentStepName The name of the step that just completed.
+   * @param result The result of the completed step.
+   * @return Always null, marking the single-step workflow complete.
+   */
   public String getNextStep(String currentStepName, StepResult result) {
     return null; // single-step workflow
   }
@@ -41,14 +56,23 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
   // ---- Eligible-selection helpers ----
 
   /**
-   * Shared selection surface. The eligible-status set and the self-exclusion
-   * name are this job's only variance from BulkRedriveWorkflow, so both are
-   * injected into the one shared selector implementation.
+   * @description Builds the shared selection surface. The eligible-status set and
+   * the self-exclusion name are this job's only variance from BulkRedriveWorkflow,
+   * so both are injected into the one shared selector implementation.
+   * @return A selector scoped to this job's eligible statuses and self-exclusion.
    */
   private static BulkWorkflowSelector selector() {
     return new BulkWorkflowSelector(ELIGIBLE_STATUSES, CANCELER_WORKFLOW_NAME);
   }
 
+  /**
+   * @description Counts how many instances match the given filters and are
+   * eligible for cancellation, used to preview the scope of a bulk cancel.
+   * @param workflowName The workflow name to filter by, or null for all.
+   * @param status The instance status to filter by, or null for all eligible.
+   * @param searchTerm A free-text term matched against instance search fields.
+   * @return The number of eligible matching instances.
+   */
   public static Integer countEligible(
     String workflowName,
     String status,
@@ -74,7 +98,19 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
     Integer processed = 0;
   }
 
+  /**
+   * @description The resumable step that cancels one chunk of eligible instances
+   * per execution, persisting its cursor and tallies to durable state and
+   * yielding until every matching instance has been processed.
+   */
   public inherited sharing class BulkCancelStep implements WorkflowStep {
+    /**
+     * @description Fetches and processes the next chunk of eligible instances,
+     * writing the advanced cursor and running tallies back to durable state and
+     * yielding while more rows remain, otherwise completing with a summary.
+     * @param ctx The durable step context carrying state and governor budget.
+     * @return A yield result while work remains, or a complete result with the summary.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> state = BulkWorkflowStepState.hydrate(
         ctx,
@@ -120,10 +156,14 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
     }
 
     /**
-     * Processes one chunk: locks the whole (<= chunkSize) chunk once up front
-     * (one FOR UPDATE instead of one query per instance), then cancels each
+     * @description Processes one chunk: locks the whole (&lt;= chunkSize) chunk once
+     * up front (one FOR UPDATE instead of one query per instance), then cancels each
      * still-eligible instance in its own savepoint, advancing the cursor and
      * tallies. Yields early (breaks) when the governor budget runs low.
+     * @param ctx The durable step context used to check the yield budget.
+     * @param chunk The instance Ids selected for this pass.
+     * @param state The hydrated durable state carrying prior cursor and tallies.
+     * @return The updated progress with advanced cursor and running tallies.
      */
     private Progress processChunk(
       StepContext ctx,
@@ -167,9 +207,11 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
     }
 
     /**
-     * One bulk FOR UPDATE read of the chunk, returning each instance's current
-     * status keyed by Id. Locking the tiny chunk in a single query preserves the
-     * pre-cancel status recheck while keeping SOQL out of the per-instance loop.
+     * @description One bulk FOR UPDATE read of the chunk, returning each instance's
+     * current status keyed by Id. Locking the tiny chunk in a single query preserves
+     * the pre-cancel status recheck while keeping SOQL out of the per-instance loop.
+     * @param ids The instance Ids in the chunk to lock and read.
+     * @return A map of instance Id to its current status.
      */
     private Map<Id, String> lockStatuses(List<Id> ids) {
       Map<Id, String> statusById = new Map<Id, String>();
@@ -189,10 +231,14 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
     }
 
     /**
-     * Cancels a single instance inside its own savepoint. A still-eligible
+     * @description Cancels a single instance inside its own savepoint. A still-eligible
      * instance is cancelled; anything no longer eligible (or missing) is skipped;
      * any failure rolls back that instance's partial writes and is counted as an
      * error, leaving peers untouched.
+     * @param instId The Id of the instance to cancel.
+     * @param currentStatus The instance's status read under lock, for the eligibility recheck.
+     * @param runCompensations Whether to run saga compensations as part of the cancel.
+     * @return The outcome: CANCELLED, SKIPPED, or ERRORED.
      */
     private CancelOutcome cancelOne(
       Id instId,

@@ -1,4 +1,15 @@
+/**
+ * @description Coalesces rapid repeated start requests for the same workflow and
+ * correlation key into a single deferred start: it maintains durable
+ * Debounce_State__c rows with a rolling fire time (bounded by an optional max
+ * wait) and a sweeper that fires the due states once, with per-state retry.
+ */
 public inherited sharing class WorkflowDebouncer {
+  /**
+   * @description A single debounce start request: the target workflow and
+   * correlation key, its input/attributes payloads, and the debounce and
+   * max-wait windows that govern when the coalesced start fires.
+   */
   public class DebounceRequest {
     public String workflowName;
     public String correlationKey;
@@ -18,7 +29,9 @@ public inherited sharing class WorkflowDebouncer {
   }
 
   /**
-   * Bulk start debounced requests.
+   * @description Bulk-registers debounced start requests, upserting a durable
+   * debounce state per key and advancing its rolling fire time (capped by max wait).
+   * @param requests The debounce requests to register; null and invalid entries are skipped.
    */
   public static void startDebounced(List<DebounceRequest> requests) {
     if (requests == null || requests.isEmpty()) {
@@ -343,6 +356,14 @@ public inherited sharing class WorkflowDebouncer {
       : Datetime.now();
   }
 
+  /**
+   * @description Derives the stable debounce key for a workflow/correlation pair
+   * by hashing the lowercased "name:key" string, so repeated triggers collapse
+   * onto the same durable debounce state.
+   * @param workflowName The target workflow name.
+   * @param correlationKey The correlation key identifying the logical subject.
+   * @return The hex-encoded MD5 digest used as the debounce key.
+   */
   public static String generateDebounceKey(
     String workflowName,
     String correlationKey
@@ -354,9 +375,10 @@ public inherited sharing class WorkflowDebouncer {
   }
 
   /**
-   * Validates an attributes JSON payload against the engine's structural and
-   * size limits. Delegates to the shared parser; retained as a public entry
+   * @description Validates an attributes JSON payload against the engine's structural
+   * and size limits. Delegates to the shared parser; retained as a public entry
    * point for existing callers.
+   * @param attributesJson The attributes JSON string to validate.
    */
   public static void validateAttributesJson(String attributesJson) {
     WorkflowInvocableInputParser.validateAttributesJson(attributesJson);

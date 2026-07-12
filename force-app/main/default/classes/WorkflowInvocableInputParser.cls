@@ -1,8 +1,15 @@
+/**
+ * Parses and validates the untyped input and attributes JSON payloads accepted by
+ * the engine's invocable entry points, centralizing the deserialization and size
+ * limits so callers get consistent WorkflowException messaging.
+ */
 public inherited sharing class WorkflowInvocableInputParser {
   /**
-   * Deserializes an untyped JSON input payload. Returns null when the payload
-   * is blank; throws a WorkflowException with an 'Invalid Input JSON' message
+   * @description Deserializes an untyped JSON input payload. Returns null when the
+   * payload is blank; throws a WorkflowException with an 'Invalid Input JSON' message
    * when the payload is not valid JSON.
+   * @param inputJson The raw input JSON to deserialize.
+   * @return The deserialized object graph, or null when the payload is blank.
    */
   public static Object parseInputJson(String inputJson) {
     if (String.isBlank(inputJson)) {
@@ -18,9 +25,11 @@ public inherited sharing class WorkflowInvocableInputParser {
   }
 
   /**
-   * Strictly parses an attributes JSON object into a String-to-String map.
+   * @description Strictly parses an attributes JSON object into a String-to-String map.
    * Blank input yields null. Non-object JSON or a parse failure throws a
    * WorkflowException with an 'Invalid Attributes JSON' message.
+   * @param attributesJson The raw attributes JSON to parse.
+   * @return The parsed attribute map, or null when the input is blank.
    */
   public static Map<String, String> parseAttributesJson(String attributesJson) {
     if (String.isBlank(attributesJson)) {
@@ -45,8 +54,10 @@ public inherited sharing class WorkflowInvocableInputParser {
   }
 
   /**
-   * Leniently parses an attributes JSON object into a String-to-String map.
+   * @description Leniently parses an attributes JSON object into a String-to-String map.
    * Blank input yields null; malformed or non-object JSON yields an empty map.
+   * @param attributesJson The raw attributes JSON to parse.
+   * @return The parsed attribute map, an empty map on malformed input, or null when blank.
    */
   public static Map<String, String> parseAttributesJsonLenient(
     String attributesJson
@@ -67,10 +78,11 @@ public inherited sharing class WorkflowInvocableInputParser {
   }
 
   /**
-   * Validates an attributes JSON payload against the engine's structural and
+   * @description Validates an attributes JSON payload against the engine's structural and
    * size limits. Blank input is a no-op. Note: unlike parseAttributesJson, a
    * non-object payload throws an unwrapped 'must represent a key-value object'
    * message, matching the engine's stricter debounce validation contract.
+   * @param attributesJson The raw attributes JSON to validate.
    */
   public static void validateAttributesJson(String attributesJson) {
     if (String.isBlank(attributesJson)) {

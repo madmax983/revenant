@@ -20,11 +20,21 @@ public class CalloutTimeoutWorkflowExampleTest {
     private Integer code;
     private String body;
 
+    /**
+     * @description Builds a mock that always replies with the given status and body.
+     * @param code The HTTP status code to return.
+     * @param body The response body to return.
+     */
     public SingleRequestMock(Integer code, String body) {
       this.code = code;
       this.body = body;
     }
 
+    /**
+     * @description Returns the pre-configured status code and body for any request.
+     * @param req The outbound HTTP request being mocked.
+     * @return The stubbed HTTP response.
+     */
     public HttpResponse respond(HttpRequest req) {
       HttpResponse res = new HttpResponse();
       res.setStatusCode(this.code);

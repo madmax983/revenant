@@ -13,17 +13,35 @@
  * effective charge is ever made.
  */
 public inherited sharing class IdempotentChargeWorkflowExample {
+  /**
+   * @description Single-step workflow definition whose only step charges the card
+   * using the engine's stable idempotency key.
+   */
   public class ChargeWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the sole step composing this workflow.
+     * @return A one-element list naming the charge-payment step.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'IdempotentChargeWorkflowExample.ChargePaymentStep'
       };
     }
 
+    /**
+     * @description Returns the step the workflow begins with.
+     * @return The charge-payment step name.
+     */
     public String getInitialStep() {
       return 'IdempotentChargeWorkflowExample.ChargePaymentStep';
     }
 
+    /**
+     * @description Terminal single-step workflow: there is no successor step.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, ending the workflow after the charge step.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       return null; // Terminal single-step workflow
     }
@@ -34,6 +52,13 @@ public inherited sharing class IdempotentChargeWorkflowExample {
    * so that re-execution of this same logical step never double-charges.
    */
   public class ChargePaymentStep implements WorkflowStep {
+    /**
+     * @description Charges the card via the mock gateway, forwarding
+     * ctx.idempotencyKey so retries, re-drives, and at-least-once resumes of this
+     * same logical step never double-charge.
+     * @param ctx The durable step context supplying the stable idempotency key and input.
+     * @return A COMPLETE result carrying the charge id, amount, and deduplication flag.
+     */
     public StepResult execute(StepContext ctx) {
       Integer amountCents = 1500;
       if (String.isNotBlank(ctx.workflowInputJson)) {

@@ -2,6 +2,11 @@
 public class StepContextTestBuilderTest {
   // A mock producer that throws an exception if called, defined at the outer class level
   private class ThrowingProducer implements CaptureProducer {
+    /**
+     * @description Throws if invoked, so a test can assert once() replays a prior
+     * capture without ever calling the producer.
+     * @return Never returns; always throws.
+     */
     public Object produce() {
       throw new IllegalArgumentException('Should not be called');
     }
@@ -9,9 +14,17 @@ public class StepContextTestBuilderTest {
 
   private class StringProducer implements CaptureProducer {
     private String val;
+    /**
+     * @description Constructs the producer with the value to return.
+     * @param val The String to produce.
+     */
     public StringProducer(String val) {
       this.val = val;
     }
+    /**
+     * @description Returns the configured value.
+     * @return The configured String value.
+     */
     public Object produce() {
       return this.val;
     }

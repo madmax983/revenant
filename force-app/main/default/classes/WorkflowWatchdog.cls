@@ -1,3 +1,9 @@
+/**
+ * @description Schedulable entry point that keeps the engine's self-chaining
+ * watchdog alive. On execution it bootstraps the singleton WatchdogWorkflow that
+ * polls for due sleeps, timeouts, and stalled instances, resuming it if it is
+ * suspended past its wake time.
+ */
 public inherited sharing class WorkflowWatchdog implements Schedulable {
   @TestVisible
   private static Boolean bootstrapped = false;
@@ -8,10 +14,19 @@ public inherited sharing class WorkflowWatchdog implements Schedulable {
   @TestVisible
   private Integer delayMinutes;
 
+  /**
+   * @description Constructs a watchdog using the engine's configured default
+   * self-reschedule delay (WorkflowEngine.watchdogDelayMinutes).
+   */
   public WorkflowWatchdog() {
     this(WorkflowEngine.watchdogDelayMinutes);
   }
 
+  /**
+   * @description Constructs a watchdog with an explicit self-reschedule delay,
+   * clamped to the 1-10 minute range (defaulting to 10 when null or out of range).
+   * @param delayMinutes The desired minutes between watchdog re-runs.
+   */
   public WorkflowWatchdog(Integer delayMinutes) {
     this.delayMinutes = (delayMinutes == null ||
       delayMinutes < 1 ||
@@ -21,7 +36,9 @@ public inherited sharing class WorkflowWatchdog implements Schedulable {
   }
 
   /**
-   * Schedulable interface.
+   * @description Schedulable entry point invoked by the platform scheduler; delegates
+   * to bootstrap() to (re)start or resume the singleton watchdog workflow.
+   * @param ctx The Schedulable context supplied by the platform scheduler.
    */
   public void execute(SchedulableContext ctx) {
     bootstrap();

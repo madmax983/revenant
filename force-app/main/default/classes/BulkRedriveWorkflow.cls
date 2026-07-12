@@ -72,14 +72,28 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
 
   // ---- WorkflowDefinition ----
 
+  /**
+   * @description Lists the ordered step names in this single-step re-drive workflow.
+   * @return The single-element list of step names.
+   */
   public List<String> getSteps() {
     return new List<String>{ 'BulkRedriveWorkflow.BulkRedriveStep' };
   }
 
+  /**
+   * @description Names the first step to run when an instance starts.
+   * @return The initial step name.
+   */
   public String getInitialStep() {
     return 'BulkRedriveWorkflow.BulkRedriveStep';
   }
 
+  /**
+   * @description Determines the step to run after the current one completes.
+   * @param currentStepName The name of the step that just completed.
+   * @param result The result of the completed step.
+   * @return Always null, since this is a single-step workflow.
+   */
   public String getNextStep(String currentStepName, StepResult result) {
     return null; // single-step workflow
   }
@@ -87,8 +101,9 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
   // ---- Eligible-selection helpers (single source of truth) ----
 
   /**
-   * Shared selection surface. Injects this job's recoverable-status set and its
-   * self-exclusion name into the one shared selector implementation.
+   * @description Shared selection surface. Injects this job's recoverable-status set
+   * and its self-exclusion name into the one shared selector implementation.
+   * @return A selector scoped to the recoverable statuses and the ouroboros guard.
    */
   private static BulkWorkflowSelector selector() {
     return new BulkWorkflowSelector(
@@ -98,10 +113,14 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
   }
 
   /**
-   * Exact count of instances that WILL be re-driven for the given filter — the
-   * number shown to the operator for confirmation. Uses the same selection
-   * surface (workflowName / status / searchTerm) as getFilteredInstances and
-   * excludes the re-driver itself.
+   * @description Exact count of instances that WILL be re-driven for the given
+   * filter — the number shown to the operator for confirmation. Uses the same
+   * selection surface (workflowName / status / searchTerm) as getFilteredInstances
+   * and excludes the re-driver itself.
+   * @param workflowName The workflow name filter, or null for all.
+   * @param status The status filter, or null for all.
+   * @param searchTerm The free-text search term, or null for none.
+   * @return The number of eligible (Failed) instances matching the filter.
    */
   public static Integer countEligible(
     String workflowName,
@@ -116,7 +135,19 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
 
   // ---- The re-drive step ----
 
+  /**
+   * @description The single re-drive step. Pages over the eligible selection in
+   * bounded chunks, retrying each instance and yielding to a fresh transaction
+   * whenever it nears a governor limit, checkpointing progress in the step state.
+   */
   public inherited sharing class BulkRedriveStep implements WorkflowStep {
+    /**
+     * @description Processes one chunk of eligible instances — retrying, skipping, or
+     * counting errors per instance — then yields if more work remains or completes
+     * with a summary once the selection is exhausted.
+     * @param ctx The durable step context for this execution.
+     * @return A yield result carrying checkpoint state, or completion with a summary.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> state = BulkWorkflowStepState.hydrate(
         ctx,
@@ -192,10 +223,12 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
     }
 
     /**
-     * Re-drives a single instance inside its own savepoint. A retryWorkflow
-     * failure rolls back that instance's partial writes; a "Failed status" guard
-     * rejection is a benign skip, anything else is counted as an error — leaving
-     * the peers already re-driven in this chunk untouched.
+     * @description Re-drives a single instance inside its own savepoint. A
+     * retryWorkflow failure rolls back that instance's partial writes; a "Failed
+     * status" guard rejection is a benign skip, anything else is counted as an
+     * error — leaving the peers already re-driven in this chunk untouched.
+     * @param instId The workflow instance to re-drive.
+     * @return REDRIVEN on success, SKIPPED if no longer Failed, else ERRORED.
      */
     private RedriveOutcome redriveOne(Id instId) {
       Savepoint sp = Database.setSavepoint();

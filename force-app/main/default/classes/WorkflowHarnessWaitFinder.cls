@@ -6,7 +6,12 @@
  */
 @IsTest
 public inherited sharing class WorkflowHarnessWaitFinder {
-  /** Locates the instance currently parked on a sleep wait for the given step. */
+  /**
+   * @description Locates the instance in the tree currently parked on a sleep wait for the given step.
+   * @param ctx The harness run context holding the instance tree.
+   * @param stepName The step whose sleeping instance to find.
+   * @return The matching suspended instance, or null when none is parked on a sleep wait.
+   */
   public static Workflow_Instance__c findSleeping(
     WorkflowHarnessContext ctx,
     String stepName
@@ -14,7 +19,12 @@ public inherited sharing class WorkflowHarnessWaitFinder {
     return find(ctx, stepName, true);
   }
 
-  /** Locates the instance currently parked on a retry wait for the given step. */
+  /**
+   * @description Locates the instance in the tree currently parked on a retry wait for the given step.
+   * @param ctx The harness run context holding the instance tree.
+   * @param stepName The step whose retrying instance to find.
+   * @return The matching suspended instance, or null when none is parked on a retry wait.
+   */
   public static Workflow_Instance__c findRetrying(
     WorkflowHarnessContext ctx,
     String stepName

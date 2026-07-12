@@ -246,7 +246,15 @@ public class WorkflowTestHarnessTest {
 
   // --- Test-Only Steps and Workflows for Fault Injection ------------------
 
+  /**
+   * @description Trivial step fixture that completes immediately.
+   */
   public class SimpleStep implements WorkflowStep {
+    /**
+     * @description Completes with a fixed done marker.
+     * @param ctx The durable step context for this execution.
+     * @return A COMPLETE result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -255,13 +263,25 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  /**
+   * @description Retry-configurable step fixture used to exercise the retry policy path.
+   */
   public class RetryStep implements WorkflowStep, RetryConfigurable {
+    /**
+     * @description Completes with a fixed done marker.
+     * @param ctx The durable step context for this execution.
+     * @return A COMPLETE result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
         new Map<String, Object>{ 'done' => true }
       );
     }
+    /**
+     * @description Supplies the fixture's retry policy (up to 3 attempts, 1s interval).
+     * @return The retry policy the engine applies to this step.
+     */
     public RetryPolicy getRetryPolicy() {
       RetryPolicy policy = new RetryPolicy();
       policy.maximumAttempts = 3;
@@ -271,13 +291,26 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  /**
+   * @description Compensatable step fixture whose execute and compensate both succeed.
+   */
   public class MyCompensatableStep implements CompensatableStep {
+    /**
+     * @description Completes the forward action with a done marker.
+     * @param ctx The durable step context for this execution.
+     * @return A COMPLETE result marking the forward action.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
         new Map<String, Object>{ 'done' => true }
       );
     }
+    /**
+     * @description Completes the compensating action with an undone marker.
+     * @param ctx The durable step context for this execution.
+     * @return A COMPLETE result marking compensation.
+     */
     public StepResult compensate(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -286,40 +319,92 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  /**
+   * @description Single-step workflow fixture over SimpleStep for fault-injection tests.
+   */
   public class TestFaultWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the sole fixture step name.
+     * @return A one-element list naming SimpleStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowTestHarnessTest.SimpleStep' };
     }
+    /**
+     * @description Returns the step the fixture begins with.
+     * @return The SimpleStep name.
+     */
     public String getInitialStep() {
       return 'WorkflowTestHarnessTest.SimpleStep';
     }
+    /**
+     * @description Terminal single-step fixture: there is no successor step.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, ending the workflow.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Single-step workflow fixture over RetryStep for retry-path tests.
+   */
   public class TestRetryWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the sole fixture step name.
+     * @return A one-element list naming RetryStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowTestHarnessTest.RetryStep' };
     }
+    /**
+     * @description Returns the step the fixture begins with.
+     * @return The RetryStep name.
+     */
     public String getInitialStep() {
       return 'WorkflowTestHarnessTest.RetryStep';
     }
+    /**
+     * @description Terminal single-step fixture: there is no successor step.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, ending the workflow.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Two-step workflow fixture (compensatable then simple) for
+   * compensation-path tests.
+   */
   public class TestCompensateWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the ordered fixture step names.
+     * @return The compensatable and simple step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'WorkflowTestHarnessTest.MyCompensatableStep',
         'WorkflowTestHarnessTest.SimpleStep'
       };
     }
+    /**
+     * @description Returns the step the fixture begins with.
+     * @return The compensatable step name.
+     */
     public String getInitialStep() {
       return 'WorkflowTestHarnessTest.MyCompensatableStep';
     }
+    /**
+     * @description Advances from the compensatable step to the simple step, then ends.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return The next step name, or null once the simple step completes.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       if (currentStep == 'WorkflowTestHarnessTest.MyCompensatableStep') {
         return 'WorkflowTestHarnessTest.SimpleStep';
@@ -328,7 +413,17 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  /**
+   * @description Parent step fixture that starts a child workflow and resumes on its
+   * outcome, exercising parent/child composition in the harness.
+   */
   public class StartChildStep implements WorkflowStep {
+    /**
+     * @description Starts the child on first run and suspends; on the child's outcome
+     * completes on success or fails on child failure.
+     * @param ctx The durable step context exposing the child outcome.
+     * @return startChild while awaiting the child, or COMPLETE/FAIL on its outcome.
+     */
     public StepResult execute(StepContext ctx) {
       String childKey = 'ChildKey';
       StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
@@ -347,28 +442,63 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  /**
+   * @description Single-step parent workflow fixture over StartChildStep.
+   */
   public class TestParentWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the sole fixture step name.
+     * @return A one-element list naming StartChildStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowTestHarnessTest.StartChildStep' };
     }
+    /**
+     * @description Returns the step the fixture begins with.
+     * @return The StartChildStep name.
+     */
     public String getInitialStep() {
       return 'WorkflowTestHarnessTest.StartChildStep';
     }
+    /**
+     * @description Terminal single-step fixture: there is no successor step.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, ending the workflow.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Two-step child workflow fixture (compensatable then simple) used as
+   * the child in compensating parent/child tests.
+   */
   public class TestCompensatableChildWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the ordered fixture step names.
+     * @return The compensatable and simple step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'WorkflowTestHarnessTest.MyCompensatableStep',
         'WorkflowTestHarnessTest.SimpleStep'
       };
     }
+    /**
+     * @description Returns the step the fixture begins with.
+     * @return The compensatable step name.
+     */
     public String getInitialStep() {
       return 'WorkflowTestHarnessTest.MyCompensatableStep';
     }
+    /**
+     * @description Advances from the compensatable step to the simple step, then ends.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return The next step name, or null once the simple step completes.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       if (currentStep == 'WorkflowTestHarnessTest.MyCompensatableStep') {
         return 'WorkflowTestHarnessTest.SimpleStep';
@@ -377,7 +507,17 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  /**
+   * @description Parent step fixture that starts a compensatable child workflow and
+   * resumes on its outcome.
+   */
   public class StartCompensatableChildStep implements WorkflowStep {
+    /**
+     * @description Starts the compensatable child on first run and suspends; on its
+     * outcome completes on success or fails on child failure.
+     * @param ctx The durable step context exposing the child outcome.
+     * @return startChild while awaiting the child, or COMPLETE/FAIL on its outcome.
+     */
     public StepResult execute(StepContext ctx) {
       String childKey = 'ChildKey';
       StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
@@ -396,15 +536,32 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  /**
+   * @description Single-step parent workflow fixture over StartCompensatableChildStep.
+   */
   public class TestCompensatableParentWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the sole fixture step name.
+     * @return A one-element list naming StartCompensatableChildStep.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'WorkflowTestHarnessTest.StartCompensatableChildStep'
       };
     }
+    /**
+     * @description Returns the step the fixture begins with.
+     * @return The StartCompensatableChildStep name.
+     */
     public String getInitialStep() {
       return 'WorkflowTestHarnessTest.StartCompensatableChildStep';
     }
+    /**
+     * @description Terminal single-step fixture: there is no successor step.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, ending the workflow.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       return null;
     }
@@ -626,19 +783,46 @@ public class WorkflowTestHarnessTest {
   // ISSUE 110: DETERMINISTIC SLEEP & RETRY TIME-SKIP TEST ARTIFACTS
   // ==========================================================================
 
+  /**
+   * @description Single-step workflow fixture that sleeps, used to verify the
+   * harness's deterministic sleep time-skip.
+   */
   public class TimeSkipSleepWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the sole fixture step name.
+     * @return A one-element list naming the time-skip sleep step.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowTestHarnessTest.TimeSkipSleepStep' };
     }
+    /**
+     * @description Returns the step the fixture begins with.
+     * @return The time-skip sleep step name.
+     */
     public String getInitialStep() {
       return 'WorkflowTestHarnessTest.TimeSkipSleepStep';
     }
+    /**
+     * @description Terminal single-step fixture: there is no successor step.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return Always null, ending the workflow.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
   }
 
+  /**
+   * @description Step fixture that sleeps for 60s on first run and completes when the
+   * harness skips time and resumes it.
+   */
   public class TimeSkipSleepStep implements WorkflowStep {
+    /**
+     * @description Sleeps on first run; completes once resumed with sleep state.
+     * @param ctx The durable step context; a non-null step state marks the post-sleep resume.
+     * @return A SLEEP result on first run, or COMPLETE once resumed.
+     */
     public StepResult execute(StepContext ctx) {
       if (ctx.stepStateJson != null) {
         return StepResult.complete(null, 'ResumedSuccessfully');
@@ -647,19 +831,45 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  /**
+   * @description Single-step workflow fixture that retries, used to verify the
+   * harness's deterministic retry time-skip.
+   */
   public class TimeSkipRetryWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the sole fixture step name.
+     * @return A one-element list naming the time-skip retry step.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowTestHarnessTest.TimeSkipRetryStep' };
     }
+    /**
+     * @description Returns the step the fixture begins with.
+     * @return The time-skip retry step name.
+     */
     public String getInitialStep() {
       return 'WorkflowTestHarnessTest.TimeSkipRetryStep';
     }
+    /**
+     * @description Terminal single-step fixture: there is no successor step.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return Always null, ending the workflow.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
   }
 
+  /**
+   * @description Step fixture that retries until its third attempt, then completes.
+   */
   public class TimeSkipRetryStep implements WorkflowStep {
+    /**
+     * @description Retries while the attempt count is below three, then completes.
+     * @param ctx The durable step context exposing the current attempt number.
+     * @return A RETRY result before the third attempt, or COMPLETE on it.
+     */
     public StepResult execute(StepContext ctx) {
       if (ctx.attempt < 3) {
         return StepResult.retry(5);
@@ -668,22 +878,48 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  /**
+   * @description Workflow fixture that splits into two parallel sleeping branches,
+   * used to verify time-skip across concurrent branches.
+   */
   public class ParallelSleepWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the fixture step names, including the parallel branch pair.
+     * @return The split step followed by the comma-joined parallel branch names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'WorkflowTestHarnessTest.ParallelSleepSplitStep',
         'WorkflowTestHarnessTest.ParallelSleepA,WorkflowTestHarnessTest.ParallelSleepB'
       };
     }
+    /**
+     * @description Returns the step the fixture begins with.
+     * @return The split step name.
+     */
     public String getInitialStep() {
       return 'WorkflowTestHarnessTest.ParallelSleepSplitStep';
     }
+    /**
+     * @description Routing is driven by the split result, so no static successor is given.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return Always null; the parallel branches are launched by the split.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
   }
 
+  /**
+   * @description Step fixture that splits execution into the two parallel sleep branches.
+   */
   public class ParallelSleepSplitStep implements WorkflowStep {
+    /**
+     * @description Splits into the ParallelSleepA and ParallelSleepB branches.
+     * @param ctx The durable step context for this execution.
+     * @return A SPLIT result fanning out to the two parallel branches.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.split(
         new List<String>{
@@ -694,7 +930,15 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  /**
+   * @description Parallel branch fixture that sleeps then completes.
+   */
   public class ParallelSleepA implements WorkflowStep {
+    /**
+     * @description Sleeps for 10s on first run; completes once resumed with sleep state.
+     * @param ctx The durable step context; a non-null step state marks the post-sleep resume.
+     * @return A SLEEP result on first run, or COMPLETE once resumed.
+     */
     public StepResult execute(StepContext ctx) {
       if (ctx.stepStateJson != null) {
         return StepResult.complete(null, 'ResumedA');
@@ -703,7 +947,15 @@ public class WorkflowTestHarnessTest {
     }
   }
 
+  /**
+   * @description Parallel branch fixture that suspends until its signal arrives.
+   */
   public class ParallelSleepB implements WorkflowStep {
+    /**
+     * @description Completes once its branch signal is present, otherwise suspends.
+     * @param ctx The durable step context exposing the branch signal.
+     * @return COMPLETE when signaled, or SUSPEND while awaiting the signal.
+     */
     public StepResult execute(StepContext ctx) {
       if (ctx.getSignal('WorkflowTestHarnessTest.ParallelSleepB').isPresent()) {
         return StepResult.complete(null, 'done_b');

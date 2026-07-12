@@ -1,8 +1,22 @@
+/**
+ * @description Reference example that fans a large SOQL result set out across
+ * parallel child workflows using a serialized Database.Cursor: a parent workflow
+ * opens the cursor, spawns one child per offset chunk, suspends until they finish,
+ * then aggregates and verifies the merged results.
+ */
 public inherited sharing class CursorFanoutWorkflowExample {
   // ==========================================
   // Parent Workflow Definition
   // ==========================================
+  /**
+   * @description Parent workflow DAG: open the cursor, fan out chunk children, then
+   * verify the aggregated output.
+   */
   public class CursorFanoutWorkflow implements WorkflowDefinition {
+    /**
+     * @description Lists the ordered step names in this workflow.
+     * @return The step names in execution order.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'CursorFanoutWorkflowExample.CursorQueryStep',
@@ -11,10 +25,20 @@ public inherited sharing class CursorFanoutWorkflowExample {
       };
     }
 
+    /**
+     * @description Names the first step to run when an instance starts.
+     * @return The initial step name.
+     */
     public String getInitialStep() {
       return 'CursorFanoutWorkflowExample.CursorQueryStep';
     }
 
+    /**
+     * @description Determines the step to run after the current one completes.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return The next step name, or null when the workflow is complete.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       if (currentStepName == 'CursorFanoutWorkflowExample.CursorQueryStep') {
         return 'CursorFanoutWorkflowExample.CursorFanoutStep';
@@ -29,17 +53,35 @@ public inherited sharing class CursorFanoutWorkflowExample {
   // ==========================================
   // Child Workflow Definition
   // ==========================================
+  /**
+   * @description Child workflow DAG that processes a single cursor chunk; a single
+   * step, so it completes after its one step.
+   */
   public class ProcessCursorChunkWorkflow implements WorkflowDefinition {
+    /**
+     * @description Lists the ordered step names in this workflow.
+     * @return The single-element list of step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'CursorFanoutWorkflowExample.ProcessCursorChunkStep'
       };
     }
 
+    /**
+     * @description Names the first step to run when an instance starts.
+     * @return The initial step name.
+     */
     public String getInitialStep() {
       return 'CursorFanoutWorkflowExample.ProcessCursorChunkStep';
     }
 
+    /**
+     * @description Determines the step to run after the current one completes.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, since the child has only one step.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       return null; // Complete
     }
@@ -55,6 +97,12 @@ public inherited sharing class CursorFanoutWorkflowExample {
    * and serializes the cursor pointer so it can be distributed.
    */
   public inherited sharing class CursorQueryStep implements WorkflowStep {
+    /**
+     * @description Opens a Database.Cursor over the source query, records the total
+     * row count, and serializes the cursor pointer plus chunk size for fan-out.
+     * @param ctx The durable step context for this execution.
+     * @return A completion result carrying totalRecords, serializedCursor, chunkSize.
+     */
     public StepResult execute(StepContext ctx) {
       ctx.reportProgress(10.0, 'Cursor opened; calculating partitions');
       // Construct query (using Accounts for demonstration)
@@ -100,6 +148,12 @@ public inherited sharing class CursorFanoutWorkflowExample {
    * suspends parent execution, and joins results upon wake-up.
    */
   public inherited sharing class CursorFanoutStep implements WorkflowStep {
+    /**
+     * @description On first run spawns one child workflow per offset chunk and
+     * suspends; on re-entry waits for all children then aggregates their outputs.
+     * @param ctx The durable step context for this execution.
+     * @return A suspend result while children run, or completion with the aggregate.
+     */
     public StepResult execute(StepContext ctx) {
       // Query child instances associated with this parent
       List<Workflow_Instance__c> childInstances = [
@@ -217,6 +271,12 @@ public inherited sharing class CursorFanoutWorkflowExample {
    * Deserializes the Database.Cursor and fetches records for the allocated chunk.
    */
   public class ProcessCursorChunkStep implements WorkflowStep {
+    /**
+     * @description Deserializes the cursor from its chunk input and fetches the
+     * records for the assigned offset partition, returning their count and names.
+     * @param ctx The durable step context for this execution.
+     * @return A completion result with the chunk offset, processed count, and names.
+     */
     public StepResult execute(StepContext ctx) {
       if (String.isBlank(ctx.workflowInputJson)) {
         return StepResult.complete(
@@ -272,6 +332,12 @@ public inherited sharing class CursorFanoutWorkflowExample {
    * Receives and summarizes the aggregated results.
    */
   public class CursorVerifyStep implements WorkflowStep {
+    /**
+     * @description Summarizes the aggregated fan-out output into a final verification
+     * status carrying the total processed count.
+     * @param ctx The durable step context for this execution.
+     * @return A completion result with the verification summary.
+     */
     public StepResult execute(StepContext ctx) {
       ctx.reportProgress(
         100.0,

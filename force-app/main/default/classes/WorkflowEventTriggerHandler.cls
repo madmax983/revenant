@@ -21,10 +21,19 @@ public inherited sharing class WorkflowEventTriggerHandler {
   private final List<Workflow_Event__e> throttledEvents = new List<Workflow_Event__e>();
   private Integer processedResumeSignals = 0;
 
+  /**
+   * @description Constructs a handler over one after-insert batch of workflow events.
+   * @param events The Workflow_Event__e records delivered in this trigger invocation.
+   */
   public WorkflowEventTriggerHandler(List<Workflow_Event__e> events) {
     this.events = events;
   }
 
+  /**
+   * @description Processes the event batch: classifies each event in order,
+   * executes the accumulated resume and signal requests in bulk, and republishes
+   * any throttled overflow in a single EventBus publish.
+   */
   public void handleAfterInsert() {
     // 1. Process events in the batch
     for (Workflow_Event__e event : events) {

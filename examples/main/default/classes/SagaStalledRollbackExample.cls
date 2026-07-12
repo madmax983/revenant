@@ -20,7 +20,14 @@ public inherited sharing class SagaStalledRollbackExample {
    */
   public static Boolean failShipmentCompensation = false;
 
+  /**
+   * @description Saga definition: four compensatable steps followed by a terminal step that fails, triggering a LIFO rollback.
+   */
   public class StalledSagaWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the fully-qualified step names that make up this saga.
+     * @return The list of fully-qualified step names in this definition.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'SagaStalledRollbackExample.ChargeCardStep',
@@ -31,10 +38,20 @@ public inherited sharing class SagaStalledRollbackExample {
       };
     }
 
+    /**
+     * @description Names the entry-point step the engine runs first.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'SagaStalledRollbackExample.ChargeCardStep';
     }
 
+    /**
+     * @description Routes to the successor step after the current step completes.
+     * @param currentStepName The step that just completed.
+     * @param result The result of the completed step.
+     * @return The next step name, or null when the saga has no further forward step.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       if (currentStepName == 'SagaStalledRollbackExample.ChargeCardStep') {
         return 'SagaStalledRollbackExample.ReserveInventoryStep';
@@ -54,7 +71,15 @@ public inherited sharing class SagaStalledRollbackExample {
     }
   }
 
+  /**
+   * @description Compensatable step that charges the card; its compensation issues a refund.
+   */
   public class ChargeCardStep implements CompensatableStep {
+    /**
+     * @description Charges the card and records the resulting charge id.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -62,6 +87,11 @@ public inherited sharing class SagaStalledRollbackExample {
       );
     }
 
+    /**
+     * @description Refunds the charge during rollback.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult compensate(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -70,7 +100,15 @@ public inherited sharing class SagaStalledRollbackExample {
     }
   }
 
+  /**
+   * @description Compensatable step that reserves inventory; its compensation releases the reservation.
+   */
   public class ReserveInventoryStep implements CompensatableStep {
+    /**
+     * @description Reserves inventory and records the reservation id.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -78,6 +116,11 @@ public inherited sharing class SagaStalledRollbackExample {
       );
     }
 
+    /**
+     * @description Releases the inventory reservation during rollback.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult compensate(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -86,7 +129,15 @@ public inherited sharing class SagaStalledRollbackExample {
     }
   }
 
+  /**
+   * @description Compensatable step that ships the order; its compensation recalls the shipment and fails transiently while failShipmentCompensation is set.
+   */
   public class ShipOrderStep implements CompensatableStep {
+    /**
+     * @description Ships the order and records the shipment id.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -94,6 +145,11 @@ public inherited sharing class SagaStalledRollbackExample {
       );
     }
 
+    /**
+     * @description Recalls the shipment during rollback, throwing a transient failure while failShipmentCompensation is set.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult compensate(StepContext ctx) {
       // Transient failure: the recall request to the carrier is temporarily
       // unavailable. The engine must NOT abandon the deeper stack entries.
@@ -109,7 +165,15 @@ public inherited sharing class SagaStalledRollbackExample {
     }
   }
 
+  /**
+   * @description Compensatable step that books a courier; its compensation cancels the booking.
+   */
   public class BookCourierStep implements CompensatableStep {
+    /**
+     * @description Books a courier and records the courier id.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -117,6 +181,11 @@ public inherited sharing class SagaStalledRollbackExample {
       );
     }
 
+    /**
+     * @description Cancels the courier booking during rollback.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult compensate(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -125,7 +194,15 @@ public inherited sharing class SagaStalledRollbackExample {
     }
   }
 
+  /**
+   * @description Non-compensatable terminal step that always fails, triggering the saga rollback.
+   */
   public class ConfirmDeliveryStep implements WorkflowStep {
+    /**
+     * @description Throws to fail the forward flow and start the LIFO rollback.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       // Forward failure that triggers the saga rollback.
       throw new WorkflowEngine.WorkflowException(

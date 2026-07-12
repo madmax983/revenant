@@ -1,12 +1,27 @@
+/**
+ * @description Scheduled watchdog that enforces a step's timeout deadline, failing the
+ * step and its workflow instance if it is still Running or Pending when the deadline
+ * elapses, while honoring pause/resume holds, concurrency parking, and re-armed deadlines.
+ */
 public inherited sharing class WorkflowTimeoutJob implements Schedulable {
   private Id instanceId;
   private String stepName;
 
+  /**
+   * @description Arms a timeout watchdog for a specific step of a workflow instance.
+   * @param instanceId The Id of the workflow instance whose step is being watched.
+   * @param stepName The name of the step whose deadline this job enforces.
+   */
   public WorkflowTimeoutJob(Id instanceId, String stepName) {
     this.instanceId = instanceId;
     this.stepName = stepName;
   }
 
+  /**
+   * @description Schedulable entry point that enforces the timeout and then aborts its own
+   * one-shot scheduled job so it does not linger.
+   * @param ctx The schedulable context supplying the trigger Id to abort.
+   */
   public void execute(SchedulableContext ctx) {
     try {
       executeInternal();
@@ -18,6 +33,11 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
     }
   }
 
+  /**
+   * @description Core enforcement logic: locks the instance parent-first, applies the
+   * pause and concurrency-park holds, enforces the timeout against the active step
+   * execution, and otherwise fails the instance if it is still waiting on this step to start.
+   */
   public void executeInternal() {
     // Parent-first locking: query and lock the parent instance first
     Workflow_Instance__c instance = lockInstance();
@@ -84,6 +104,9 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
    * in-progress rollback.
    *
    * Returns true when the timeout must be held (caller returns without enforcing).
+   *
+   * @param instance The locked workflow instance being evaluated.
+   * @return True when the timeout must be held and enforcement skipped, otherwise false.
    */
   private Boolean shouldHoldForPause(Workflow_Instance__c instance) {
     Boolean pauseCandidate = (instance.Status__c == 'Pending' ||
@@ -134,6 +157,9 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
    * Returns true when such a record exists (handled — including intentional skips),
    * so the caller does not fall through to the pre-start check. Returns false only when
    * no Running/Pending step execution exists.
+   *
+   * @param instance The locked workflow instance whose active step is being enforced.
+   * @return True when a Running/Pending step execution was handled, false when none exists.
    */
   private Boolean enforceActiveStep(Workflow_Instance__c instance) {
     List<Workflow_Step_Execution__c> stepExecs = [
@@ -201,6 +227,10 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
    * stamped at scheduling time and cleared only on admission, the null-deadline jobs
    * reaching here split cleanly: parked rows (parked=true, skip) vs. genuine pre-start
    * watchdogs (parked=false, fail "before starting").
+   *
+   * @param stepExec The locked step execution whose deadline is being checked.
+   * @param instance The locked workflow instance supplying the concurrency-park marker.
+   * @return True when this job should skip enforcement because a fresh deadline or admission deferral applies.
    */
   private Boolean shouldSkipForFreshDeadline(
     Workflow_Step_Execution__c stepExec,
@@ -252,15 +282,29 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
     return false;
   }
 
+  /**
+   * @description Queueable variant of the timeout watchdog, used when a step's deadline is
+   * enforced asynchronously on the queueable job path rather than the scheduler.
+   */
   public class QueueableTimeoutJob implements Queueable {
     private Id instanceId;
     private String stepName;
 
+    /**
+     * @description Arms an asynchronous timeout watchdog for a specific step.
+     * @param instanceId The Id of the workflow instance whose step is being watched.
+     * @param stepName The name of the step whose deadline this job enforces.
+     */
     public QueueableTimeoutJob(Id instanceId, String stepName) {
       this.instanceId = instanceId;
       this.stepName = stepName;
     }
 
+    /**
+     * @description Queueable entry point that attaches a failure-logging finalizer and runs
+     * the timeout enforcement.
+     * @param ctx The queueable context for this execution.
+     */
     public void execute(QueueableContext ctx) {
       // Surface an unhandled failure of the timeout enforcement to the log sink rather
       // than letting it vanish. The finalizer runs even if execute() throws.
@@ -271,18 +315,30 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
     }
   }
 
-  // Best-effort failure sink for the timeout queueable. On an unhandled exception the
-  // step deadline would otherwise go unenforced and the failure unrecorded; this logs it.
-  // The success path is untouched (it only acts on UNHANDLED_EXCEPTION).
+  /**
+   * @description Best-effort failure sink for the timeout queueable. On an unhandled
+   * exception the step deadline would otherwise go unenforced and the failure unrecorded;
+   * this logs it. The success path is untouched (it only acts on UNHANDLED_EXCEPTION).
+   */
   public class TimeoutJobFinalizer implements Finalizer {
     private final Id instanceId;
     private final String stepName;
 
+    /**
+     * @description Captures the instance and step context to include in any failure log.
+     * @param instanceId The Id of the workflow instance whose timeout job may have failed.
+     * @param stepName The name of the step whose timeout enforcement may have failed.
+     */
     public TimeoutJobFinalizer(Id instanceId, String stepName) {
       this.instanceId = instanceId;
       this.stepName = stepName;
     }
 
+    /**
+     * @description Finalizer entry point that logs an error only when the queueable ended
+     * in an unhandled exception, leaving the success path untouched.
+     * @param ctx The finalizer context reporting the parent job's result and exception.
+     */
     public void execute(FinalizerContext ctx) {
       if (
         ctx == null ||

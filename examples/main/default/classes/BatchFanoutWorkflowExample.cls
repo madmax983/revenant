@@ -1,8 +1,21 @@
+/**
+ * @description Example that fans a batch of records out to one child workflow per record
+ * and joins their results, demonstrating parent/child orchestration with yield-based
+ * chunked spawning and completion aggregation.
+ */
 public inherited sharing class BatchFanoutWorkflowExample {
   // ==========================================
   // Parent Workflow Definition
   // ==========================================
+  /**
+   * @description Parent workflow that fetches records, fans them out to children, and
+   * verifies the aggregated batch result.
+   */
   public class BatchFanoutWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the ordered step names of the parent workflow.
+     * @return The list of fetch, fanout, and verify step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'BatchFanoutWorkflowExample.FetchRecordsStep',
@@ -11,10 +24,20 @@ public inherited sharing class BatchFanoutWorkflowExample {
       };
     }
 
+    /**
+     * @description Returns the name of the first step to execute.
+     * @return The name of the fetch records step.
+     */
     public String getInitialStep() {
       return 'BatchFanoutWorkflowExample.FetchRecordsStep';
     }
 
+    /**
+     * @description Advances fetch to fanout, and fanout to verify; verify ends the workflow.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return The next step name, or null when the workflow is complete.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       if (currentStepName == 'BatchFanoutWorkflowExample.FetchRecordsStep') {
         return 'BatchFanoutWorkflowExample.FanoutStep';
@@ -29,17 +52,34 @@ public inherited sharing class BatchFanoutWorkflowExample {
   // ==========================================
   // Child Workflow Definition
   // ==========================================
+  /**
+   * @description Child workflow that processes a single record fanned out by the parent.
+   */
   public class ProcessRecordWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the ordered step names of the child workflow.
+     * @return A single-element list naming the process-account step.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'BatchFanoutWorkflowExample.ProcessAccountStep'
       };
     }
 
+    /**
+     * @description Returns the name of the first step to execute.
+     * @return The name of the process-account step.
+     */
     public String getInitialStep() {
       return 'BatchFanoutWorkflowExample.ProcessAccountStep';
     }
 
+    /**
+     * @description Computes the next step after the given step completes.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Always null, since this is a single-step workflow.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       return null; // Complete
     }
@@ -55,6 +95,12 @@ public inherited sharing class BatchFanoutWorkflowExample {
    * to simulate querying records from the database.
    */
   public inherited sharing class FetchRecordsStep implements WorkflowStep {
+    /**
+     * @description Queries up to 100 Accounts (falling back to mock data when none exist)
+     * and completes with the record list for the fanout step to process.
+     * @param ctx The durable step context.
+     * @return A complete result carrying the list of records.
+     */
     public StepResult execute(StepContext ctx) {
       List<Account> accounts = [
         SELECT Id, Name
@@ -98,6 +144,13 @@ public inherited sharing class BatchFanoutWorkflowExample {
    * 3. Aggregates results once all child completed signals are received.
    */
   public inherited sharing class FanoutStep implements WorkflowStep {
+    /**
+     * @description Spawns one child workflow per record in yield-bounded chunks, suspends
+     * until all children reach a terminal state, then aggregates their outputs.
+     * @param ctx The durable step context supplying previous output, step state, and instance id.
+     * @return A yield result while spawning, a suspend result while awaiting children, or a
+     * complete result carrying the aggregated child outputs.
+     */
     public StepResult execute(StepContext ctx) {
       // 1. Parse accounts from previous step output
       if (String.isBlank(ctx.previousStepOutput)) {
@@ -266,6 +319,12 @@ public inherited sharing class BatchFanoutWorkflowExample {
    * Simulates performing audit logic on the account and returning results.
    */
   public inherited sharing class ProcessAccountStep implements WorkflowStep {
+    /**
+     * @description Audits the input account, updating a real Account record when the id is a
+     * genuine 15/18-char Id, and completes with the audit result.
+     * @param ctx The durable step context supplying the child workflow input.
+     * @return A complete result carrying the audit outcome.
+     */
     public StepResult execute(StepContext ctx) {
       if (String.isBlank(ctx.workflowInputJson)) {
         return StepResult.complete(
@@ -308,6 +367,12 @@ public inherited sharing class BatchFanoutWorkflowExample {
    * Receives the aggregated output map and prints out the final status.
    */
   public class VerifyBatchStep implements WorkflowStep {
+    /**
+     * @description Reads the aggregated child outputs and completes with a final batch
+     * summary of totals and details.
+     * @param ctx The durable step context supplying the aggregated previous output.
+     * @return A complete result carrying the final batch summary.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> aggregated = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.previousStepOutput

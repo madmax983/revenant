@@ -684,16 +684,34 @@ public class ChildWorkflowCompositionExampleTest {
   }
 
   // Helper Workflows for compensation stack drain test
+  /**
+   * @description Fixture parent workflow that launches a child which compensates and
+   * fails, verifying the parent observes the compensated child outcome.
+   */
   public class CompensatingParentWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the launch and outcome-handling steps.
+     * @return The list of the launch-child and handle-outcome step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'ChildWorkflowCompositionExampleTest.LaunchCompensatingChildStep',
         'ChildWorkflowCompositionExampleTest.HandleCompensatedOutcomeStep'
       };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The LaunchCompensatingChildStep step name.
+     */
     public String getInitialStep() {
       return 'ChildWorkflowCompositionExampleTest.LaunchCompensatingChildStep';
     }
+    /**
+     * @description Routes from the launch step to the step named in its result, then terminates.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step, carrying the next step name.
+     * @return The next step name after the launch step, or null once complete.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       if (
         currentStepName ==
@@ -705,7 +723,17 @@ public class ChildWorkflowCompositionExampleTest {
     }
   }
 
+  /**
+   * @description Step that starts the compensating child once, suspends while it
+   * runs, and surfaces the child outcome when it resolves.
+   */
   public class LaunchCompensatingChildStep implements WorkflowStep {
+    /**
+     * @description Starts the child on first run, suspends while it is in flight, and
+     * completes with the child's outcome once present.
+     * @param ctx The durable step context exposing the child outcome and instance id.
+     * @return A startChild, suspend, or complete StepResult depending on child state.
+     */
     public StepResult execute(StepContext ctx) {
       String childKey = 'CompensateCheck_' + ctx.workflowInstanceId;
       StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
@@ -741,7 +769,16 @@ public class ChildWorkflowCompositionExampleTest {
     }
   }
 
+  /**
+   * @description Step that records the compensated child's status and error message
+   * as the parent's decision.
+   */
   public class HandleCompensatedOutcomeStep implements WorkflowStep {
+    /**
+     * @description Reads the child status and error from input and completes the parent.
+     * @param ctx The durable step context supplying the child-outcome input JSON.
+     * @return A completed StepResult carrying the parent decision and child status.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.inputJson
@@ -757,16 +794,34 @@ public class ChildWorkflowCompositionExampleTest {
     }
   }
 
+  /**
+   * @description Fixture child workflow whose compensatable first step is followed
+   * by a failing step, forcing LIFO compensation before the child terminates.
+   */
   public class CompensatingChildWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the compensatable step followed by the failing step.
+     * @return The list of the compensating and failing step names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'ChildWorkflowCompositionExampleTest.CompensatingStep',
         'ChildWorkflowCompositionExampleTest.FailingStep'
       };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The CompensatingStep step name.
+     */
     public String getInitialStep() {
       return 'ChildWorkflowCompositionExampleTest.CompensatingStep';
     }
+    /**
+     * @description Routes from the compensatable step to the failing step, then terminates.
+     * @param currentStepName The name of the step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The failing step name after the compensatable step, or null once complete.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       if (
         currentStepName ==
@@ -778,13 +833,27 @@ public class ChildWorkflowCompositionExampleTest {
     }
   }
 
+  /**
+   * @description Compensatable fixture step that completes on the forward path and
+   * records its compensation when the child unwinds.
+   */
   public class CompensatingStep implements CompensatableStep {
+    /**
+     * @description Completes with a value on the forward path.
+     * @param ctx The durable step context.
+     * @return A completed StepResult carrying the value.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
         new Map<String, Object>{ 'value' => 42 }
       );
     }
+    /**
+     * @description Records the compensation during LIFO rollback.
+     * @param ctx The durable step context for compensation.
+     * @return A completed StepResult marking the step compensated.
+     */
     public StepResult compensate(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -793,7 +862,16 @@ public class ChildWorkflowCompositionExampleTest {
     }
   }
 
+  /**
+   * @description Fixture step that always fails, triggering compensation of the
+   * preceding compensatable step.
+   */
   public class FailingStep implements WorkflowStep {
+    /**
+     * @description Returns a terminal fail() to trigger the child's compensation.
+     * @param ctx The durable step context.
+     * @return A fail StepResult with the simulated failure reason.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.fail('Simulated failure after compensatable work');
     }

@@ -63,12 +63,15 @@ public inherited sharing class WorkflowTestHarness {
    * Returns the shared context after forwarding the caller-settable
    * disableAutoTimeSkip flag into it, so the collaborators that read the context
    * see the author's latest choice at drive time. Used by every advancing call.
+   *
+   * @return The shared harness context with the current flags applied.
    */
   private WorkflowHarnessContext ctxSynced() {
     ctx.disableAutoTimeSkip = disableAutoTimeSkip;
     return ctx;
   }
 
+  /** @description Signals a harness failure, e.g. a workflow that never stabilized within the hop budget. */
   public class HarnessException extends Exception {
   }
 
@@ -92,12 +95,22 @@ public inherited sharing class WorkflowTestHarness {
     public Boolean isSleeping;
     public Boolean isAwaitingRetry;
 
-    /** True if the named step appears anywhere in the audit trail. */
+    /**
+     * @description True if the named step appears anywhere in the audit trail.
+     * @param stepName The step name to look for.
+     * @return True if the step was executed on this instance.
+     */
     public Boolean reachedStep(String stepName) {
       return executedSteps != null && executedSteps.contains(stepName);
     }
   }
 
+  /**
+   * @description Creates a harness bound to a started workflow instance and
+   * suppresses the engine's in-test Queueable hand-offs so the harness can drive
+   * synchronously.
+   * @param instanceId The Workflow_Instance__c id to drive.
+   */
   public WorkflowTestHarness(Id instanceId) {
     this.ctx = WorkflowHarnessContext.forInstance(instanceId);
     // Keep the async chain quiet: drive synchronously and suppress the engine's
@@ -111,6 +124,8 @@ public inherited sharing class WorkflowTestHarness {
    * result. Unlike drive(), this never throws when work remains — it lets the
    * caller decide whether to keep going (via another step() or drive()). If
    * nothing is advanceable, it returns the current result unchanged.
+   *
+   * @return The current inspectable result after at most one hop.
    */
   public Result step() {
     return WorkflowHarnessDriver.stepOnce(ctxSynced());
@@ -123,6 +138,9 @@ public inherited sharing class WorkflowTestHarness {
    * (whether Completed or still Running/Retrying), or when the instance
    * stabilizes naturally (terminal or signal-suspend), whichever comes first.
    * Throws HarnessException if the step is never reached within maxHops.
+   *
+   * @param stepName The step name to drive toward.
+   * @return The result once the step is reached or the instance stabilizes.
    */
   public Result driveUntilStep(String stepName) {
     return WorkflowHarnessDriver.driveUntilStep(
@@ -132,11 +150,21 @@ public inherited sharing class WorkflowTestHarness {
     );
   }
 
+  /**
+   * @description Drives until the named step appears in the audit trail, bounded
+   * by an explicit hop budget.
+   * @param stepName The step name to drive toward.
+   * @param maxHops The maximum number of hops to consume.
+   * @return The result once the step is reached or the instance stabilizes.
+   */
   public Result driveUntilStep(String stepName, Integer maxHops) {
     return WorkflowHarnessDriver.driveUntilStep(ctxSynced(), stepName, maxHops);
   }
 
-  /** Drives to the next stable state using the default hop budget. */
+  /**
+   * @description Drives to the next stable state using the default hop budget.
+   * @return The result at the next terminal or signal-suspend state.
+   */
   public Result drive() {
     return WorkflowHarnessDriver.drive(ctxSynced(), DEFAULT_MAX_HOPS);
   }
@@ -145,6 +173,9 @@ public inherited sharing class WorkflowTestHarness {
    * Drives the instance (and any child workflows it spawns) until nothing can
    * advance — i.e. it reaches a terminal state or a genuine wait-for-signal
    * suspend. Throws HarnessException if it cannot stabilize within maxHops.
+   *
+   * @param maxHops The maximum number of hops to consume.
+   * @return The result at the next terminal or signal-suspend state.
    */
   public Result drive(Integer maxHops) {
     return WorkflowHarnessDriver.drive(ctxSynced(), maxHops);
@@ -154,6 +185,11 @@ public inherited sharing class WorkflowTestHarness {
    * Delivers an external signal to a workflow (by correlation key or instance Id)
    * and resumes driving — the human-in-the-loop / external-signal affordance. Uses
    * the shipped WorkflowEngine.signal path; no manual event-bus plumbing.
+   *
+   * @param correlationKey The correlation key or instance Id to target.
+   * @param signalName The signal name to deliver.
+   * @param payload The signal payload.
+   * @return The result after delivering the signal and resuming driving.
    */
   public Result injectSignal(
     String correlationKey,
@@ -170,31 +206,67 @@ public inherited sharing class WorkflowTestHarness {
    * reproducing a watchdog timeout, then resumes driving (so a timeout that
    * triggers compensation is pumped to its terminal state). The author never
    * hand-mutates Status__c / Current_Step__c to simulate the timeout.
+   *
+   * @param stepName The step whose watchdog timeout to fire.
+   * @return The result after firing the timeout and resuming driving.
    */
   public Result fireTimeout(String stepName) {
     return fireTimeout(stepName, DEFAULT_MAX_HOPS);
   }
 
+  /**
+   * @description Fires the shipped WorkflowTimeoutJob against a step, bounded by
+   * an explicit hop budget, then resumes driving.
+   * @param stepName The step whose watchdog timeout to fire.
+   * @param maxHops The maximum number of hops to consume while resuming.
+   * @return The result after firing the timeout and resuming driving.
+   */
   public Result fireTimeout(String stepName, Integer maxHops) {
     new WorkflowTimeoutJob(ctx.rootInstanceId, stepName).executeInternal();
     return WorkflowHarnessDriver.drive(ctxSynced(), maxHops);
   }
 
-  /** Returns the current inspectable result without advancing the workflow. */
+  /**
+   * @description Returns the current inspectable result without advancing the
+   * workflow.
+   * @return The current inspectable result.
+   */
   public Result inspect() {
     return WorkflowHarnessCore.buildResult(ctx);
   }
 
+  /**
+   * @description Registers a persistent fault so the named step always throws
+   * the given message when executed, until faults are cleared.
+   * @param stepName The step to fault.
+   * @param message The exception message to throw.
+   * @return This harness, for chaining.
+   */
   public WorkflowTestHarness failStep(String stepName, String message) {
     new WorkflowHarnessFaults(ctx).registerFault(stepName, message);
     return this;
   }
 
+  /**
+   * @description Registers a one-shot fault so the named step throws once and
+   * then succeeds on the subsequent retry.
+   * @param stepName The step to fault once.
+   * @param message The exception message to throw.
+   * @return This harness, for chaining.
+   */
   public WorkflowTestHarness failStepOnce(String stepName, String message) {
     new WorkflowHarnessFaults(ctx).registerFaultOnce(stepName, message);
     return this;
   }
 
+  /**
+   * @description Registers a fault so the named step throws for a fixed number
+   * of executions before succeeding, to exercise retry policies.
+   * @param stepName The step to fault.
+   * @param message The exception message to throw.
+   * @param failCount The number of executions to fail before succeeding.
+   * @return This harness, for chaining.
+   */
   public WorkflowTestHarness failStep(
     String stepName,
     String message,
@@ -204,11 +276,21 @@ public inherited sharing class WorkflowTestHarness {
     return this;
   }
 
+  /**
+   * @description Clears all registered faults so steps execute normally again.
+   * @return This harness, for chaining.
+   */
   public WorkflowTestHarness clearFaults() {
     new WorkflowHarnessFaults(ctx).removeFaults();
     return this;
   }
 
+  /**
+   * @description Fires a parked sleep wait on the named step through the
+   * engine's resume path, then resumes driving.
+   * @param stepName The sleeping step to wake.
+   * @return The result after waking the sleep and resuming driving.
+   */
   public Result fireSleep(String stepName) {
     return WorkflowHarnessSleepFire.fireSleep(
       ctxSynced(),
@@ -217,10 +299,23 @@ public inherited sharing class WorkflowTestHarness {
     );
   }
 
+  /**
+   * @description Fires a parked sleep wait on the named step, bounded by an
+   * explicit hop budget, then resumes driving.
+   * @param stepName The sleeping step to wake.
+   * @param maxHops The maximum number of hops to consume while resuming.
+   * @return The result after waking the sleep and resuming driving.
+   */
   public Result fireSleep(String stepName, Integer maxHops) {
     return WorkflowHarnessSleepFire.fireSleep(ctxSynced(), stepName, maxHops);
   }
 
+  /**
+   * @description Fires a parked retry wait on the named step through the
+   * engine's resume path, then resumes driving.
+   * @param stepName The retrying step to wake.
+   * @return The result after firing the retry and resuming driving.
+   */
   public Result fireRetry(String stepName) {
     return WorkflowHarnessSleepFire.fireRetry(
       ctxSynced(),
@@ -229,6 +324,13 @@ public inherited sharing class WorkflowTestHarness {
     );
   }
 
+  /**
+   * @description Fires a parked retry wait on the named step, bounded by an
+   * explicit hop budget, then resumes driving.
+   * @param stepName The retrying step to wake.
+   * @param maxHops The maximum number of hops to consume while resuming.
+   * @return The result after firing the retry and resuming driving.
+   */
   public Result fireRetry(String stepName, Integer maxHops) {
     return WorkflowHarnessSleepFire.fireRetry(ctxSynced(), stepName, maxHops);
   }

@@ -15,35 +15,80 @@ public class StepResultFailTest {
   // ==========================================
 
   // --- fail() with no compensatable steps -> terminal Failed ---------------
+  /**
+   * @description Single-step fixture workflow whose only step calls fail() with no
+   * compensatable predecessors, exercising the terminal-Failed path.
+   */
   public class FailNoCompWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the workflow's single step.
+     * @return The single-element list containing FailNoCompStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'StepResultFailTest.FailNoCompStep' };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The FailNoCompStep step name.
+     */
     public String getInitialStep() {
       return 'StepResultFailTest.FailNoCompStep';
     }
+    /**
+     * @description Terminates after the single step.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Null, ending the workflow.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Fixture step that deliberately fails with a business reason and no
+   * compensation stack.
+   */
   public class FailNoCompStep implements WorkflowStep {
+    /**
+     * @description Returns an explicit fail() to drive the terminal-Failed path.
+     * @param ctx The durable step context.
+     * @return A fail StepResult carrying the business reason.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.fail('Order already refunded');
     }
   }
 
   // --- fail() with a compensatable predecessor -> Compensating/Compensated --
+  /**
+   * @description Fixture workflow with a compensatable charge step followed by a
+   * failing step, exercising LIFO rollback to Compensated.
+   */
   public class FailWithCompWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the charge step followed by the failing step.
+     * @return The list of CompChargeStep and FailForwardStep names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepResultFailTest.CompChargeStep',
         'StepResultFailTest.FailForwardStep'
       };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The CompChargeStep step name.
+     */
     public String getInitialStep() {
       return 'StepResultFailTest.CompChargeStep';
     }
+    /**
+     * @description Routes from the charge step to the failing step, then terminates.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return The next step name, or null once complete.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       if (currentStepName == 'StepResultFailTest.CompChargeStep') {
         return 'StepResultFailTest.FailForwardStep';
@@ -52,13 +97,27 @@ public class StepResultFailTest {
     }
   }
 
+  /**
+   * @description Compensatable fixture step that charges on the forward path and
+   * refunds on compensation.
+   */
   public class CompChargeStep implements CompensatableStep {
+    /**
+     * @description Records a charge and completes.
+     * @param ctx The durable step context.
+     * @return A completed StepResult carrying the charge id.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
         new Map<String, Object>{ 'chargeId' => 'ch_77777' }
       );
     }
+    /**
+     * @description Refunds the charge during LIFO rollback.
+     * @param ctx The durable step context for compensation.
+     * @return A completed StepResult carrying the refund id.
+     */
     public StepResult compensate(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -67,7 +126,16 @@ public class StepResultFailTest {
     }
   }
 
+  /**
+   * @description Fixture step that deliberately fails after a compensatable
+   * predecessor, triggering rollback.
+   */
   public class FailForwardStep implements WorkflowStep {
+    /**
+     * @description Returns a terminal fail() to trigger compensation of the charge.
+     * @param ctx The durable step context.
+     * @return A fail StepResult carrying the business reason.
+     */
     public StepResult execute(StepContext ctx) {
       // A deliberate, terminal business failure — not a crash, not a retry.
       return StepResult.fail('Account closed');
@@ -75,19 +143,46 @@ public class StepResultFailTest {
   }
 
   // --- fail() carrying structured failureData ------------------------------
+  /**
+   * @description Single-step fixture workflow whose step fails with structured
+   * failureData, verifying it persists on the step record.
+   */
   public class FailWithDataWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the workflow's single step.
+     * @return The single-element list containing FailWithDataStep.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'StepResultFailTest.FailWithDataStep' };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The FailWithDataStep step name.
+     */
     public String getInitialStep() {
       return 'StepResultFailTest.FailWithDataStep';
     }
+    /**
+     * @description Terminates after the single step.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return Null, ending the workflow.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       return null;
     }
   }
 
+  /**
+   * @description Fixture step that fails with a reason and structured failureData
+   * payload.
+   */
   public class FailWithDataStep implements WorkflowStep {
+    /**
+     * @description Returns a fail() carrying structured failureData for persistence.
+     * @param ctx The durable step context.
+     * @return A fail StepResult carrying the reason and failureData map.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.fail(
         'KYC rejected',
@@ -295,16 +390,34 @@ public class StepResultFailTest {
   }
 
   // --- fail() returned from a compensation step ----------------------------
+  /**
+   * @description Fixture workflow whose forward failure triggers a compensation
+   * step that itself fails, exercising the CompensationFailed terminal state.
+   */
   public class FailCompWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the compensatable charge step followed by the failing step.
+     * @return The list of CompensatableChargeStep and AlwaysFailStep names.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'StepResultFailTest.CompensatableChargeStep',
         'StepResultFailTest.AlwaysFailStep'
       };
     }
+    /**
+     * @description Names the first step to run.
+     * @return The CompensatableChargeStep step name.
+     */
     public String getInitialStep() {
       return 'StepResultFailTest.CompensatableChargeStep';
     }
+    /**
+     * @description Routes from the charge step to the failing step, then terminates.
+     * @param currentStepName The name of the step that just completed.
+     * @param result The result of the completed step.
+     * @return The next step name, or null once complete.
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       if (currentStepName == 'StepResultFailTest.CompensatableChargeStep') {
         return 'StepResultFailTest.AlwaysFailStep';
@@ -313,17 +426,40 @@ public class StepResultFailTest {
     }
   }
 
+  /**
+   * @description Compensatable fixture step whose compensation deliberately fails,
+   * to drive the CompensationFailed path.
+   */
   public class CompensatableChargeStep implements CompensatableStep {
+    /**
+     * @description Records a charge and completes.
+     * @param ctx The durable step context.
+     * @return A completed StepResult carrying the charge marker.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'charged');
     }
+    /**
+     * @description Deliberately fails compensation to exercise CompensationFailed.
+     * @param ctx The durable step context for compensation.
+     * @return A fail StepResult carrying the compensation failure reason.
+     */
     public StepResult compensate(StepContext ctx) {
       // Compensation step deliberately fails (e.g. reversal account locked).
       return StepResult.fail('Reversal account locked');
     }
   }
 
+  /**
+   * @description Fixture step that always fails, triggering rollback of the
+   * compensatable predecessor.
+   */
   public class AlwaysFailStep implements WorkflowStep {
+    /**
+     * @description Returns a terminal fail() to trigger compensation.
+     * @param ctx The durable step context.
+     * @return A fail StepResult carrying the trigger reason.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.fail('Trigger compensation');
     }

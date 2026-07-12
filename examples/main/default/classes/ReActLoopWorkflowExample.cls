@@ -61,7 +61,15 @@ public with sharing class ReActLoopWorkflowExample {
 
   // ── Workflow definition ────────────────────────────────────────────────────
 
+  /**
+   * @description The ReAct loop workflow definition: a cyclic DAG that alternates
+   * ReasonStep and ActStep until the model decides to finish, then routes to FinishStep.
+   */
   public class ReActLoopWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the reason, act, and finish steps of the ReAct loop.
+     * @return The list of step names in the ReAct workflow.
+     */
     public List<String> getSteps() {
       return new List<String>{
         'ReActLoopWorkflowExample.ReasonStep',
@@ -70,10 +78,21 @@ public with sharing class ReActLoopWorkflowExample {
       };
     }
 
+    /**
+     * @description Returns the first step, the reasoning step.
+     * @return The name of the initial step.
+     */
     public String getInitialStep() {
       return 'ReActLoopWorkflowExample.ReasonStep';
     }
 
+    /**
+     * @description Drives the loop: ReasonStep routes to ActStep or FinishStep based
+     * on whether the model is done, and ActStep always cycles back to ReasonStep.
+     * @param currentStep The name of the step that just completed.
+     * @param result The result of the completed step, whose output drives routing.
+     * @return The next step name, or null after the terminal FinishStep.
+     */
     public String getNextStep(String currentStep, StepResult result) {
       if (currentStep == 'ReActLoopWorkflowExample.ReasonStep') {
         Map<String, Object> out = (Map<String, Object>) JSON.deserializeUntyped(
@@ -101,6 +120,13 @@ public with sharing class ReActLoopWorkflowExample {
    * to ActStep) or stop (routes to FinishStep).
    */
   public class ReasonStep implements WorkflowStep {
+    /**
+     * @description Asks the model for the next Thought/Action given the question and
+     * scratchpad, appends the thought, and either finishes (with the answer or on
+     * hitting the iteration guard) or emits the chosen tool call for ActStep.
+     * @param ctx The durable step context exposing the question and accumulated scratchpad.
+     * @return A complete result flagged done to finish, or carrying the next tool call.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = parseJson(ctx.inputJson);
       String question = (String) input.get('question');
@@ -181,6 +207,12 @@ public with sharing class ReActLoopWorkflowExample {
    * model can react to what it just observed.
    */
   public class ActStep implements WorkflowStep {
+    /**
+     * @description Runs the tool ReasonStep selected, appends the Action/Observation
+     * to the scratchpad, increments the iteration, and loops back to ReasonStep.
+     * @param ctx The durable step context exposing the chosen tool name and input.
+     * @return A complete result carrying the updated scratchpad and iteration count.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = parseJson(ctx.inputJson);
       String question = (String) input.get('question');
@@ -218,6 +250,12 @@ public with sharing class ReActLoopWorkflowExample {
    * Thought/Action/Observation transcript that led to it.
    */
   public class FinishStep implements WorkflowStep {
+    /**
+     * @description Terminal step that surfaces the model's final answer and the full
+     * Thought/Action/Observation transcript.
+     * @param ctx The durable step context exposing the final answer and scratchpad.
+     * @return A complete result carrying the final answer and transcript.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = parseJson(ctx.inputJson);
       return StepResult.complete(

@@ -37,6 +37,10 @@ public inherited sharing class WorkflowStatusInvocableAction {
 
   private static final String OFFLOAD_MARKER_PREFIX = '{"$attachmentId":';
 
+  /**
+   * @description Invocable request identifying the workflow instance to read, by either its
+   * record Id or its correlation key.
+   */
   public class StatusRequest {
     @InvocableVariable(
       label='Correlation Key or Workflow Instance ID'
@@ -46,6 +50,10 @@ public inherited sharing class WorkflowStatusInvocableAction {
     public String workflowKeyOrId;
   }
 
+  /**
+   * @description Invocable response reporting a workflow instance's resolved status, output,
+   * progress, and failure detail, with payloads rehydrated from offloaded storage.
+   */
   public class StatusResult {
     @InvocableVariable(
       label='Found'
@@ -101,6 +109,9 @@ public inherited sharing class WorkflowStatusInvocableAction {
     )
     public String causationId;
 
+    /**
+     * @description Initializes the result to a not-found, non-terminal, non-success state.
+     */
     public StatusResult() {
       this.found = false;
       this.isTerminal = false;
@@ -128,6 +139,13 @@ public inherited sharing class WorkflowStatusInvocableAction {
     category='Revenant Workflows'
     description='Reads a Revenant durable workflow instance current status, output, and failure detail (read-only).'
   )
+  /**
+   * @description Bulk, read-only lookup that resolves each request to its current workflow
+   * instance (following ContinuedAsNew chains), rehydrates offloaded payloads, and returns
+   * one correspondingly-ordered status result per request.
+   * @param requests The status requests to resolve; null or empty yields an empty list.
+   * @return A StatusResult per input request, in the same order.
+   */
   public static List<StatusResult> getStatus(List<StatusRequest> requests) {
     if (requests == null || requests.isEmpty()) {
       return new List<StatusResult>();
@@ -157,6 +175,9 @@ public inherited sharing class WorkflowStatusInvocableAction {
    * Buckets each raw input into an Id lookup and/or a Correlation Key lookup, kept in
    * request order. An id-shaped value is also retained as a key fallback in case a
    * caller used a correlation key that happens to look like an Id.
+   *
+   * @param requests The raw status requests to bucket, kept in order.
+   * @return The populated lookup buckets holding per-request and de-duplicated Ids and keys.
    */
   private static LookupBuckets bucketRequests(List<StatusRequest> requests) {
     String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
@@ -183,7 +204,13 @@ public inherited sharing class WorkflowStatusInvocableAction {
     return buckets;
   }
 
-  /** Parses an id-shaped, correctly-prefixed raw value into an Id, or null. */
+  /**
+   * @description Parses an id-shaped, correctly-prefixed raw value into an Id.
+   * @param raw The raw request value to interpret.
+   * @param wflowPrefix The 3-character key prefix for Workflow_Instance__c.
+   * @param idPattern The compiled pattern matching 15- or 18-character Salesforce Ids.
+   * @return The parsed instance Id, or null when the value is not a valid instance Id.
+   */
   private static Id parseInstanceId(
     String raw,
     String wflowPrefix,
@@ -204,7 +231,12 @@ public inherited sharing class WorkflowStatusInvocableAction {
     return null;
   }
 
-  /** Single bulk query for all direct matches, in any status (terminal included). */
+  /**
+   * @description Runs a single bulk query for all direct matches, in any status (terminal
+   * included), and indexes them by Id and by preferred correlation key.
+   * @param buckets The lookup buckets supplying the de-duplicated Id and key sets to query.
+   * @return A match index of instances keyed by Id and by correlation key.
+   */
   private static MatchIndex loadDirectMatches(LookupBuckets buckets) {
     MatchIndex index = new MatchIndex();
     if (buckets.lookupIds.isEmpty() && buckets.lookupKeys.isEmpty()) {
@@ -238,6 +270,9 @@ public inherited sharing class WorkflowStatusInvocableAction {
    * is not unique: a key can be reused after a run goes terminal, and a ContinuedAsNew
    * hand-off can reuse a custom key. When a key maps to several rows, prefer the live
    * run (active status), then the most recent, so we report the current run.
+   *
+   * @param inst The instance to consider adding to the by-key index.
+   * @param byKey The correlation-key index to update in place.
    */
   private static void mergeByKey(
     Workflow_Instance__c inst,
@@ -256,6 +291,11 @@ public inherited sharing class WorkflowStatusInvocableAction {
    * Resolves a starting instance per request (Id matches are precise handles; key
    * matches are walked forward through ContinuedAsNew) and returns the per-request
    * list after the chain walk, correspondingly ordered.
+   *
+   * @param requests The status requests, used only for their count and order.
+   * @param buckets The lookup buckets holding the per-request parsed Ids and keys.
+   * @param index The direct-match index to resolve each request against.
+   * @return The per-request resolved instances (null where unmatched), after the chain walk.
    */
   private static List<Workflow_Instance__c> resolveStartingInstances(
     List<StatusRequest> requests,
@@ -291,6 +331,9 @@ public inherited sharing class WorkflowStatusInvocableAction {
    * chain exceeds the bound we stop on the furthest generation reached, which is still
    * a ContinuedAsNew row and is therefore reported as non-terminal / non-success --
    * never as a false completed outcome.
+   *
+   * @param resolved The per-request resolved instances, advanced in place to successors.
+   * @param walkChain Per-request flags marking which requests should be forward-walked.
    */
   private static void walkContinuedAsNewChains(
     List<Workflow_Instance__c> resolved,
@@ -307,6 +350,10 @@ public inherited sharing class WorkflowStatusInvocableAction {
    * Advances every still-predecessor request by one ContinuedAsNew generation using a
    * single query. Returns false when there is nothing left to advance (no predecessors
    * remain, or no successor was found), signalling the walk to stop.
+   *
+   * @param resolved The per-request resolved instances, advanced in place to successors.
+   * @param walkChain Per-request flags marking which requests should be forward-walked.
+   * @return True if any request advanced a generation, false when nothing remains to advance.
    */
   private static Boolean advanceChainGeneration(
     List<Workflow_Instance__c> resolved,
@@ -322,7 +369,12 @@ public inherited sharing class WorkflowStatusInvocableAction {
     return applySuccessors(resolved, walkChain, successorByPrev);
   }
 
-  /** Collects the Ids of requests still sitting on a ContinuedAsNew predecessor. */
+  /**
+   * @description Collects the Ids of requests still sitting on a ContinuedAsNew predecessor.
+   * @param resolved The per-request resolved instances to inspect.
+   * @param walkChain Per-request flags marking which requests should be forward-walked.
+   * @return The set of predecessor instance Ids to advance in the next generation.
+   */
   private static Set<Id> collectPredecessors(
     List<Workflow_Instance__c> resolved,
     List<Boolean> walkChain
@@ -337,7 +389,11 @@ public inherited sharing class WorkflowStatusInvocableAction {
     return predecessorIds;
   }
 
-  /** One bulk query mapping each predecessor Id to its ContinuedAsNew successor. */
+  /**
+   * @description Runs one bulk query mapping each predecessor Id to its ContinuedAsNew successor.
+   * @param predecessorIds The predecessor instance Ids whose successors are being sought.
+   * @return A map from each predecessor Id to its successor instance.
+   */
   private static Map<Id, Workflow_Instance__c> querySuccessors(
     Set<Id> predecessorIds
   ) {
@@ -364,6 +420,11 @@ public inherited sharing class WorkflowStatusInvocableAction {
   /**
    * Replaces each still-predecessor request with its successor where one exists.
    * Returns true if any request advanced.
+   *
+   * @param resolved The per-request resolved instances, updated in place to successors.
+   * @param walkChain Per-request flags marking which requests should be forward-walked.
+   * @param successorByPrev The predecessor-to-successor map from the current generation query.
+   * @return True if any request was advanced to a successor, otherwise false.
    */
   private static Boolean applySuccessors(
     List<Workflow_Instance__c> resolved,
@@ -392,6 +453,9 @@ public inherited sharing class WorkflowStatusInvocableAction {
    * the Apex heap limit. We do not truncate (that would break the identical-to-Apex-
    * caller guarantee); callers polling many very large outputs at once should use
    * smaller Flow batch sizes.
+   *
+   * @param resolved The resolved instances whose offloaded output/progress payloads to load.
+   * @return A map from each offload attachment (ContentDocument) Id to its payload text.
    */
   private static Map<Id, String> loadOffloadedPayloads(
     List<Workflow_Instance__c> resolved
@@ -414,7 +478,12 @@ public inherited sharing class WorkflowStatusInvocableAction {
     return dataByAttachment;
   }
 
-  /** Gathers the offload attachment Ids referenced by any resolved instance. */
+  /**
+   * @description Gathers the offload attachment Ids referenced by any resolved instance's
+   * output or progress fields.
+   * @param resolved The resolved instances to scan for offload markers.
+   * @return The set of referenced offload attachment (ContentDocument) Ids.
+   */
   private static Set<Id> collectAttachmentIds(
     List<Workflow_Instance__c> resolved
   ) {
@@ -434,7 +503,13 @@ public inherited sharing class WorkflowStatusInvocableAction {
     return attachmentIds;
   }
 
-  /** Builds the correspondingly-ordered StatusResult list from resolved instances. */
+  /**
+   * @description Builds the correspondingly-ordered StatusResult list from resolved
+   * instances, rehydrating offloaded output and progress payloads.
+   * @param resolved The resolved instances, one per request in order (null where unmatched).
+   * @param dataByAttachment The map of offload attachment Ids to rehydrated payload text.
+   * @return One StatusResult per resolved instance, in the same order.
+   */
   private static List<StatusResult> assembleResults(
     List<Workflow_Instance__c> resolved,
     Map<Id, String> dataByAttachment
@@ -463,6 +538,10 @@ public inherited sharing class WorkflowStatusInvocableAction {
    * run wins over a finished/handed-off one; among equals, the most recently
    * created wins. This keeps getStatus reporting the current run when a key has
    * been reused across terminal runs or ContinuedAsNew generations.
+   *
+   * @param candidate The newly-seen instance sharing the correlation key.
+   * @param existing The instance already indexed for that correlation key.
+   * @return True when the candidate should replace the existing entry.
    */
   private static Boolean isPreferredCandidate(
     Workflow_Instance__c candidate,

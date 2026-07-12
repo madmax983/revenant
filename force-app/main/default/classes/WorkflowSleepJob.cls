@@ -1,11 +1,25 @@
+/**
+ * @description Schedulable that resumes a sleeping (Suspended) workflow instance once its
+ * sleep timer elapses, clearing the sleep markers, enqueuing the next step, and no-opping
+ * if the sleep was already resumed by another path.
+ */
 public inherited sharing class WorkflowSleepJob implements Schedulable {
   private Id instanceId;
   private String stepName;
 
+  /**
+   * @description Constructs a sleep job that resumes the instance's current step.
+   * @param instanceId The Id of the suspended workflow instance to resume; required.
+   */
   public WorkflowSleepJob(Id instanceId) {
     this(instanceId, null);
   }
 
+  /**
+   * @description Constructs a sleep job that resumes a specific named step.
+   * @param instanceId The Id of the suspended workflow instance to resume; required.
+   * @param stepName The name of the step to resume.
+   */
   public WorkflowSleepJob(Id instanceId, String stepName) {
     if (instanceId == null) {
       throw new WorkflowEngine.WorkflowException('instanceId is required.');
@@ -14,6 +28,11 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     this.stepName = stepName;
   }
 
+  /**
+   * @description Clears the sleep markers and, if the sleep is still pending, enqueues the
+   * orchestrator and schedules its timeout watchdog; aborts this stale scheduled job.
+   * @param ctx The schedulable execution context.
+   */
   public void execute(SchedulableContext ctx) {
     // If the sleep has already been resumed by fireSleep or the watchdog, this scheduled job is stale and must no-op.
     if (!checkAndClearSleepMarkers(this.instanceId, this.stepName)) {
@@ -89,19 +108,37 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     return true;
   }
 
+  /**
+   * @description Queueable variant of the sleep job used when a sleep resume must be
+   * chained through the async queue rather than the scheduler.
+   */
   public inherited sharing class QueueableSleepJob implements Queueable {
     private Id instanceId;
     private String stepName;
 
+    /**
+     * @description Constructs a queueable sleep job that resumes the instance's current step.
+     * @param instanceId The Id of the suspended workflow instance to resume.
+     */
     public QueueableSleepJob(Id instanceId) {
       this(instanceId, null);
     }
 
+    /**
+     * @description Constructs a queueable sleep job that resumes a specific named step.
+     * @param instanceId The Id of the suspended workflow instance to resume.
+     * @param stepName The name of the step to resume.
+     */
     public QueueableSleepJob(Id instanceId, String stepName) {
       this.instanceId = instanceId;
       this.stepName = stepName;
     }
 
+    /**
+     * @description Attaches a failure-sink finalizer, clears the sleep markers, and if the
+     * sleep is still pending enqueues the orchestrator and schedules its timeout watchdog.
+     * @param ctx The queueable execution context.
+     */
     public void execute(QueueableContext ctx) {
       // Surface an unhandled failure of the sleep resume to the log sink rather than
       // letting it vanish. The finalizer runs even if execute() throws.
@@ -132,15 +169,29 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
   // Best-effort failure sink for the sleep queueable. On an unhandled exception the sleep
   // resume would otherwise fail silently and strand the suspended instance; this logs it.
   // The success path is untouched (it only acts on UNHANDLED_EXCEPTION).
+  /**
+   * @description Best-effort finalizer that logs an error when the sleep queueable ends in
+   * an unhandled exception, so a failed resume does not silently strand the suspended instance.
+   */
   public inherited sharing class SleepJobFinalizer implements Finalizer {
     private final Id instanceId;
     private final String stepName;
 
+    /**
+     * @description Constructs the finalizer capturing the instance and step being resumed.
+     * @param instanceId The Id of the workflow instance the resume targeted.
+     * @param stepName The name of the step the resume targeted.
+     */
     public SleepJobFinalizer(Id instanceId, String stepName) {
       this.instanceId = instanceId;
       this.stepName = stepName;
     }
 
+    /**
+     * @description Logs the sleep resume failure when the parent job ended in an unhandled
+     * exception; otherwise does nothing.
+     * @param ctx The finalizer context carrying the parent job result and exception.
+     */
     public void execute(FinalizerContext ctx) {
       if (
         ctx == null ||

@@ -21,8 +21,11 @@ public inherited sharing class CronFieldParser {
   }
 
   /**
-   * Parses a whole 5-field cron expression. Returns null when the expression is
-   * blank, does not have exactly 5 fields, or any field is invalid.
+   * @description Parses a whole 5-field cron expression into an expanded, validated
+   * Fields view. Returns null when the expression is blank, does not have exactly 5
+   * fields, or any field is invalid.
+   * @param cronExpr The 5-field cron expression to parse.
+   * @return The expanded Fields, or null if the expression is blank or invalid.
    */
   public static Fields parse(String cronExpr) {
     if (String.isBlank(cronExpr)) {
@@ -56,8 +59,12 @@ public inherited sharing class CronFieldParser {
   }
 
   /**
-   * Parses a single cron field into an expanded Set<Integer>.
+   * @description Parses a single cron field into an expanded Set<Integer>.
    * Returns null if the field is invalid or any value is out of [minVal, maxVal].
+   * @param field The single cron field token to expand.
+   * @param minVal The minimum legal value for this field.
+   * @param maxVal The maximum legal value for this field.
+   * @return The expanded set of values, or null if the field is invalid or empty.
    */
   @TestVisible
   static Set<Integer> parseField(String field, Integer minVal, Integer maxVal) {

@@ -47,6 +47,12 @@ public with sharing class WorkflowValidator {
     public String stepName;
     public String message;
 
+    /**
+     * @description Builds a structural defect naming its code, offending step, and message.
+     * @param code The stable defect code.
+     * @param stepName The offending step name (or workflow name for definition-level defects).
+     * @param message The human-readable description of the defect.
+     */
     public Defect(String code, String stepName, String message) {
       this.code = code;
       this.stepName = stepName;
@@ -63,14 +69,27 @@ public with sharing class WorkflowValidator {
     public String workflowName;
     public List<Defect> defects = new List<Defect>();
 
+    /**
+     * @description Creates an empty result bound to the workflow being validated.
+     * @param workflowName The name of the workflow under validation.
+     */
     public ValidationResult(String workflowName) {
       this.workflowName = workflowName;
     }
 
+    /**
+     * @description Reports whether the validation run found no defects.
+     * @return True when no defects were recorded.
+     */
     public Boolean isValid() {
       return defects.isEmpty();
     }
 
+    /**
+     * @description Reports whether a defect with the given code was recorded.
+     * @param code The defect code to look for.
+     * @return True when at least one defect with that code exists.
+     */
     public Boolean hasDefect(String code) {
       for (Defect d : defects) {
         if (d.code == code) {
@@ -80,6 +99,10 @@ public with sharing class WorkflowValidator {
       return false;
     }
 
+    /**
+     * @description Flattens the recorded defects to their human-readable messages.
+     * @return The list of defect messages, empty when the DAG is valid.
+     */
     public List<String> getMessages() {
       List<String> messages = new List<String>();
       for (Defect d : defects) {
@@ -94,9 +117,11 @@ public with sharing class WorkflowValidator {
   }
 
   /**
-   * Statically validates the WorkflowDefinition named by workflowName and
+   * @description Statically validates the WorkflowDefinition named by workflowName and
    * returns all structural defects found. Never throws for author-side
    * problems — every defect is surfaced through the returned result.
+   * @param workflowName The name of the workflow definition to validate.
+   * @return The validation result listing every structural defect found.
    */
   public static ValidationResult validate(String workflowName) {
     ValidationResult result = new ValidationResult(workflowName);
@@ -166,8 +191,11 @@ public with sharing class WorkflowValidator {
   }
 
   /**
-   * Records INITIAL_STEP_BLANK when the (successfully read) initial step is
+   * @description Records INITIAL_STEP_BLANK when the (successfully read) initial step is
    * blank, or INITIAL_STEP_NOT_DECLARED when it is not present in getSteps().
+   * @param initialStep The declared entry-point step name.
+   * @param declaredSet The set of step names declared in getSteps().
+   * @param result The validation result to record any defect on.
    */
   private static void validateInitialStepDeclared(
     String initialStep,
@@ -192,8 +220,10 @@ public with sharing class WorkflowValidator {
   }
 
   /**
-   * Records a single DUPLICATE_STEP defect for each step name declared more than
-   * once in getSteps().
+   * @description Records a single DUPLICATE_STEP defect for each step name declared
+   * more than once in getSteps().
+   * @param declaredSteps The declared step names, in declaration order.
+   * @param result The validation result to record any duplicate defects on.
    */
   private static void flagDuplicateSteps(
     List<String> declaredSteps,
@@ -215,9 +245,12 @@ public with sharing class WorkflowValidator {
   }
 
   /**
-   * Resolves workflowName to a WorkflowDefinition instance, recording a
+   * @description Resolves workflowName to a WorkflowDefinition instance, recording a
    * DEFINITION_UNRESOLVABLE defect and returning null when it cannot resolve
    * or does not implement the contract.
+   * @param workflowName The workflow name to resolve to a definition class.
+   * @param result The validation result to record any resolution defect on.
+   * @return The resolved WorkflowDefinition, or null when it cannot be resolved.
    */
   private static WorkflowDefinition resolveDefinition(
     String workflowName,
@@ -272,9 +305,11 @@ public with sharing class WorkflowValidator {
   }
 
   /**
-   * Reads getSteps() defensively. A null return is normalized to an empty
+   * @description Reads getSteps() defensively. A null return is normalized to an empty
    * list so downstream checks (initial-step containment, duplicates) behave
    * predictably rather than NPE-ing.
+   * @param def The workflow definition to read steps from.
+   * @return The declared steps, or an empty list when getSteps() returned null.
    */
   private static List<String> safeGetSteps(WorkflowDefinition def) {
     List<String> steps = def.getSteps();
@@ -282,9 +317,11 @@ public with sharing class WorkflowValidator {
   }
 
   /**
-   * Flags a declared step name that does not resolve via Type.forName, or
+   * @description Flags a declared step name that does not resolve via Type.forName, or
    * resolves to a class that does not implement WorkflowStep. CompensatableStep
    * extends WorkflowStep, so the instanceof check covers both.
+   * @param stepName The declared step name to resolve and type-check.
+   * @param result The validation result to record any step defect on.
    */
   private static void validateStepClass(
     String stepName,

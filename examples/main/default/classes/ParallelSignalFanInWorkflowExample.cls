@@ -32,6 +32,10 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
     'ack:apac'
   };
 
+  /**
+   * @description Lists the ordered step names in this workflow.
+   * @return The step names in execution order.
+   */
   public List<String> getSteps() {
     return new List<String>{
       'ParallelSignalFanInWorkflowExample.GatherSpawnStep',
@@ -41,10 +45,21 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
     };
   }
 
+  /**
+   * @description Names the first step to run when an instance starts.
+   * @return The initial step name.
+   */
   public String getInitialStep() {
     return 'ParallelSignalFanInWorkflowExample.GatherSpawnStep';
   }
 
+  /**
+   * @description Determines the step to run after the current one completes; the
+   * gather step routes to the join step and branches otherwise end their path.
+   * @param currentStepName The name of the step that just completed.
+   * @param stepResult The result of the completed step.
+   * @return The join step after the gather step, or null otherwise.
+   */
   public String getNextStep(String currentStepName, StepResult stepResult) {
     // Branches join back at the gather step's successor; the join step ends it.
     if (
@@ -62,6 +77,12 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
    * gathers the distinct named acks) and a trivial sibling branch.
    */
   public class GatherSpawnStep implements WorkflowStep {
+    /**
+     * @description Waits for the Kick signal, then splits into the collector and
+     * sibling branches, forwarding the kick payload.
+     * @param ctx The durable step context for this execution.
+     * @return A suspend result until kicked, or a split into the two branches.
+     */
     public StepResult execute(StepContext ctx) {
       StepContext.Signal kick = ctx.getSignal('Kick');
       if (!kick.isPresent()) {
@@ -95,6 +116,13 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
    * branch cannot livelock re-reading the same capped page.
    */
   public class CollectorBranch implements WorkflowStep {
+    /**
+     * @description Claims the whole pending signal page with a single getSignals()
+     * call, filters to the expected acks, and completes only once every expected ack
+     * is present; suspends (with a capped-page name-scoped fallback) otherwise.
+     * @param ctx The durable step context for this execution.
+     * @return A suspend result until all acks arrive, or completion with the acks.
+     */
     public StepResult execute(StepContext ctx) {
       // RECOMMENDED PRIMITIVE: one getSignals() call claims the whole pending
       // page in a single statement and stays exactly-once (see collectExpectedAcks).
@@ -194,6 +222,12 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
 
   /** Trivial sibling so the SPLIT fans out into more than one branch. */
   public class SiblingBranch implements WorkflowStep {
+    /**
+     * @description Trivial branch that completes immediately so the SPLIT fans out
+     * into more than one branch.
+     * @param ctx The durable step context for this execution.
+     * @return A completion result carrying a placeholder ack.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'ack');
     }
@@ -201,6 +235,11 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
 
   /** Join step: surfaces the merged branch input as its output. */
   public class JoinStep implements WorkflowStep {
+    /**
+     * @description Join step that surfaces the merged branch input as its output.
+     * @param ctx The durable step context for this execution.
+     * @return A completion result echoing the merged branch input JSON.
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, ctx.inputJson);
     }

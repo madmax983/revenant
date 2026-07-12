@@ -9,10 +9,11 @@
 @IsTest
 public inherited sharing class WorkflowHarnessSleep {
   /**
-   * Clears the sleep/retry wake markers on an instance (never Status__c or
-   * Current_Step__c unless the instance is still Suspended). This is the same field
+   * @description Clears the sleep/retry wake markers on an instance (never Status__c
+   * or Current_Step__c unless the instance is still Suspended). This is the same field
    * reset the engine performs when its watchdog or WorkflowSleepJob wakes a sleeping
    * instance.
+   * @param instanceId The workflow instance whose wake markers should be cleared.
    */
   public static void clearSleepMarkers(Id instanceId) {
     List<Workflow_Instance__c> insts = [
@@ -36,6 +37,12 @@ public inherited sharing class WorkflowHarnessSleep {
     update as system toUpdate;
   }
 
+  /**
+   * @description Clears wake markers only when a Suspended instance is genuinely no
+   * longer waiting, inspecting its active step executions (and any dynamic sleep jobs)
+   * to distinguish a still-sleeping/retrying step from a normally pending one.
+   * @param instanceId The workflow instance to inspect and conditionally clear.
+   */
   public static void clearStaleSleepMarkers(Id instanceId) {
     List<Workflow_Instance__c> insts = [
       SELECT Status__c, Current_Step__c
@@ -117,6 +124,13 @@ public inherited sharing class WorkflowHarnessSleep {
     return WorkflowHarnessCron.namesLike('WorkflowSleep_' + instanceId + '%');
   }
 
+  /**
+   * @description Detects whether a step output represents an engine-managed wait
+   * state (timeout, child workflow, or approval) rather than a genuine sleep, by
+   * probing the serialized output for the framework's reserved marker keys.
+   * @param output The serialized step output JSON to inspect.
+   * @return True if the output encodes a framework wait state; false otherwise.
+   */
   public static Boolean isFrameworkWaitState(String output) {
     if (String.isBlank(output) || !output.trim().startsWith('{')) {
       return false;

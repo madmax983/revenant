@@ -1,7 +1,13 @@
+/**
+ * @description Example after-update Case trigger handler that debounces rapid
+ * Subject/Description edits into a single coalesced workflow start via
+ * WorkflowDebouncer, so a burst of updates launches one instance per Case.
+ */
 public inherited sharing class CaseDebounceTriggerHandler {
   /**
-   * Trigger entry point. Inspects the current Trigger context and dispatches to the
-   * matching handler method, keeping the CaseDebounceTrigger body a single delegation call.
+   * @description Trigger entry point. Inspects the current Trigger context and
+   * dispatches to the matching handler method, keeping the CaseDebounceTrigger
+   * body a single delegation call.
    */
   public static void run() {
     if (Trigger.isAfter && Trigger.isUpdate) {
@@ -12,6 +18,13 @@ public inherited sharing class CaseDebounceTriggerHandler {
     }
   }
 
+  /**
+   * @description Collects a debounced workflow-start request for every Case
+   * whose Subject or Description changed, then submits them in bulk with a
+   * short debounce window.
+   * @param newCases Trigger.new list of updated Case records.
+   * @param oldCasesMap Trigger.oldMap of prior Case states.
+   */
   public static void handleAfterUpdate(
     List<Case> newCases,
     Map<Id, Case> oldCasesMap

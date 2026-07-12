@@ -5,14 +5,28 @@
  * waits for all of them to complete, and aggregates their results.
  */
 public inherited sharing class ChildWorkflowFanOutExample implements WorkflowDefinition {
+  /**
+   * @description Declares the fully-qualified step names that make up the parent workflow.
+   * @return The list of fully-qualified step names in this definition.
+   */
   public List<String> getSteps() {
     return new List<String>{ 'ChildWorkflowFanOutExample.FanOutStep' };
   }
 
+  /**
+   * @description Names the entry-point step the engine runs first.
+   * @return The fully-qualified initial step name.
+   */
   public String getInitialStep() {
     return 'ChildWorkflowFanOutExample.FanOutStep';
   }
 
+  /**
+   * @description Routes to the successor step after the current step completes.
+   * @param currentStepName The step that just completed.
+   * @param stepResult The result of the completed step.
+   * @return The next step name, or null since the fan-out step is terminal.
+   */
   public String getNextStep(String currentStepName, StepResult stepResult) {
     return null;
   }
@@ -29,6 +43,11 @@ public inherited sharing class ChildWorkflowFanOutExample implements WorkflowDef
    * their results, and completes the workflow.
    */
   public class FanOutStep implements WorkflowStep {
+    /**
+     * @description Reads the input items and spawns a child workflow per item; on resume, aggregates the child scores and completes.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       List<Object> items = parseItems(ctx);
       List<String> childKeys = buildChildKeys(items, ctx);
@@ -150,15 +169,32 @@ public inherited sharing class ChildWorkflowFanOutExample implements WorkflowDef
   // CHILD WORKFLOW DEFINITION
   // ---------------------------------------------------------------------------
 
+  /**
+   * @description Child workflow definition that scores a single item via one step.
+   */
   public class ScoreItemWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the fully-qualified step names that make up the child workflow.
+     * @return The list of fully-qualified step names in this definition.
+     */
     public List<String> getSteps() {
       return new List<String>{ 'ChildWorkflowFanOutExample.ComputeScoreStep' };
     }
 
+    /**
+     * @description Names the entry-point step the child workflow runs first.
+     * @return The fully-qualified initial step name.
+     */
     public String getInitialStep() {
       return 'ChildWorkflowFanOutExample.ComputeScoreStep';
     }
 
+    /**
+     * @description Routes to the successor step after the current child step completes.
+     * @param currentStepName The step that just completed.
+     * @param stepResult The result of the completed step.
+     * @return The next step name, or null since the child workflow has a single terminal step.
+     */
     public String getNextStep(String currentStepName, StepResult stepResult) {
       return null;
     }
@@ -168,7 +204,15 @@ public inherited sharing class ChildWorkflowFanOutExample implements WorkflowDef
   // CHILD STEP
   // ---------------------------------------------------------------------------
 
+  /**
+   * @description Child step that computes a score from the item's value.
+   */
   public class ComputeScoreStep implements WorkflowStep {
+    /**
+     * @description Computes a score by doubling the item value and completes with the result.
+     * @param ctx The durable per-step execution context.
+     * @return The step's outcome result.
+     */
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.workflowInputJson
