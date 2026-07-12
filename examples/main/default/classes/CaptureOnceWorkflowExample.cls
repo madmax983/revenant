@@ -67,7 +67,7 @@ public inherited sharing class CaptureOnceWorkflowExample {
    * The test uses WorkflowTestHarness.drive() which auto-resumes yield and
    * retry waits, driving the step through all three re-executions in one call.
    */
-  public class CaptureOnceStep implements WorkflowStep {
+  public inherited sharing class CaptureOnceStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       // Capture a generated reference number — stable across all re-executions.
       String refNumber = (String) ctx.once(

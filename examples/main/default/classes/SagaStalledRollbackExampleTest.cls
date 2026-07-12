@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public class SagaStalledRollbackExampleTest {
   /**
    * End-to-end demonstration of the recoverable "rollback incomplete" condition:
@@ -13,25 +13,67 @@ public class SagaStalledRollbackExampleTest {
    *   4. Every forward step is compensated exactly once; no compensation that
    *      already succeeded is re-run, and no forward step is re-executed.
    */
-  @isTest
+  @IsTest
   static void testStalledRollbackResumesToFullyCompensated() {
-    WorkflowEngine.disableQueueableInTest = true;
-    SagaStalledRollbackExample.failShipmentCompensation = true;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      SagaStalledRollbackExample.failShipmentCompensation = true;
 
-    Test.startTest();
+      Test.startTest();
 
-    Id instanceId = WorkflowEngine.start(
-      'SagaStalledRollbackExample.StalledSagaWorkflow',
-      'StalledSagaKey_1',
-      '{"orderId":"ord_777"}'
-    );
+      Id instanceId = WorkflowEngine.start(
+        'SagaStalledRollbackExample.StalledSagaWorkflow',
+        'StalledSagaKey_1',
+        '{"orderId":"ord_777"}'
+      );
 
-    // Drive the four compensatable forward steps to completion.
-    WorkflowEngine.runStep(instanceId, null); // ChargeCardStep
-    WorkflowEngine.runStep(instanceId, null); // ReserveInventoryStep
-    WorkflowEngine.runStep(instanceId, null); // ShipOrderStep
-    WorkflowEngine.runStep(instanceId, null); // BookCourierStep
+      // Drive the four compensatable forward steps to completion.
+      WorkflowEngine.runStep(instanceId, null); // ChargeCardStep
+      WorkflowEngine.runStep(instanceId, null); // ReserveInventoryStep
+      WorkflowEngine.runStep(instanceId, null); // ShipOrderStep
+      WorkflowEngine.runStep(instanceId, null); // BookCourierStep
 
+      assertPoisedOnFailingForwardStep(instanceId);
+
+      // Run the failing forward step -> triggers Saga compensation.
+      try {
+        WorkflowEngine.runStep(instanceId, null);
+        System.assert(false, 'ConfirmDeliveryStep should have thrown');
+      } catch (Exception ex) {
+        WorkflowEngine.handleCrash(instanceId, ex);
+      }
+
+      assertRollbackStarted(instanceId);
+
+      // Compensate BookCourierStep (top of stack) -> succeeds, pops to depth 3.
+      WorkflowEngine.runStep(instanceId, null);
+      // Compensate ShipOrderStep (second-from-top) -> throws transiently -> stalls.
+      WorkflowEngine.runStep(instanceId, null);
+
+      assertRollbackStalled(instanceId);
+
+      // The transient outage clears, then the operator resumes the rollback.
+      SagaStalledRollbackExample.failShipmentCompensation = false;
+      WorkflowEngine.resumeCompensation(instanceId);
+
+      // Drive the resumed rollback to completion: Ship -> Reserve -> Charge -> done.
+      WorkflowEngine.runStep(instanceId, null); // ShipOrderStep compensate (now succeeds)
+      WorkflowEngine.runStep(instanceId, null); // ReserveInventoryStep compensate
+      WorkflowEngine.runStep(instanceId, null); // ChargeCardStep compensate
+      WorkflowEngine.runStep(instanceId, null); // stack empty -> Compensated
+
+      Test.stopTest();
+
+      assertFullyCompensated(instanceId);
+      assertCompensationAuditTrail(instanceId);
+    }
+  }
+
+  /**
+   * Asserts the saga is poised on the failing forward step with all four
+   * compensatable steps recorded on the stack, just before rollback begins.
+   */
+  private static void assertPoisedOnFailingForwardStep(Id instanceId) {
     Workflow_Instance__c inst = [
       SELECT Status__c, Current_Step__c, Compensation_Stack__c
       FROM Workflow_Instance__c
@@ -47,16 +89,13 @@ public class SagaStalledRollbackExampleTest {
       List<String>.class
     );
     System.assertEquals(4, stack.size(), 'All four forward steps recorded');
+  }
 
-    // Run the failing forward step -> triggers Saga compensation.
-    try {
-      WorkflowEngine.runStep(instanceId, null);
-      System.assert(false, 'ConfirmDeliveryStep should have thrown');
-    } catch (Exception ex) {
-      WorkflowEngine.handleCrash(instanceId, ex);
-    }
-
-    inst = [
+  /**
+   * Asserts the forward-step failure kicked the saga into the Compensating state.
+   */
+  private static void assertRollbackStarted(Id instanceId) {
+    Workflow_Instance__c inst = [
       SELECT Status__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
@@ -66,13 +105,15 @@ public class SagaStalledRollbackExampleTest {
       inst.Status__c,
       'Forward failure should kick off rollback'
     );
+  }
 
-    // Compensate BookCourierStep (top of stack) -> succeeds, pops to depth 3.
-    WorkflowEngine.runStep(instanceId, null);
-    // Compensate ShipOrderStep (second-from-top) -> throws transiently -> stalls.
-    WorkflowEngine.runStep(instanceId, null);
-
-    inst = [
+  /**
+   * Asserts the stalled-rollback condition: the distinguishable
+   * CompensationFailed state, the intact remaining LIFO stack, and the
+   * operator-visible pending-compensation depth from the dashboard controller.
+   */
+  private static void assertRollbackStalled(Id instanceId) {
+    Workflow_Instance__c inst = [
       SELECT Status__c, Compensation_Stack__c, Error_Message__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
@@ -87,7 +128,7 @@ public class SagaStalledRollbackExampleTest {
 
     // AC: the remaining LIFO stack is preserved intact (never truncated/popped past
     // the failed step). BookCourierStep was compensated; Ship/Reserve/Charge remain.
-    stack = (List<String>) JSON.deserialize(
+    List<String> stack = (List<String>) JSON.deserialize(
       inst.Compensation_Stack__c,
       List<String>.class
     );
@@ -111,20 +152,14 @@ public class SagaStalledRollbackExampleTest {
       (Integer) details.get('pendingCompensationCount'),
       'Dashboard should report the exact count of un-reversed steps'
     );
+  }
 
-    // The transient outage clears, then the operator resumes the rollback.
-    SagaStalledRollbackExample.failShipmentCompensation = false;
-    WorkflowEngine.resumeCompensation(instanceId);
-
-    // Drive the resumed rollback to completion: Ship -> Reserve -> Charge -> done.
-    WorkflowEngine.runStep(instanceId, null); // ShipOrderStep compensate (now succeeds)
-    WorkflowEngine.runStep(instanceId, null); // ReserveInventoryStep compensate
-    WorkflowEngine.runStep(instanceId, null); // ChargeCardStep compensate
-    WorkflowEngine.runStep(instanceId, null); // stack empty -> Compensated
-
-    Test.stopTest();
-
-    inst = [
+  /**
+   * Asserts the resumed rollback reached the fully-compensated terminal state
+   * with a fully-drained compensation stack.
+   */
+  private static void assertFullyCompensated(Id instanceId) {
+    Workflow_Instance__c inst = [
       SELECT Status__c, Compensation_Stack__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
@@ -140,7 +175,14 @@ public class SagaStalledRollbackExampleTest {
       List<String>.class
     );
     System.assertEquals(0, finalStack.size(), 'Stack fully drained');
+  }
 
+  /**
+   * Asserts the append-only compensation audit trail: every forward step
+   * compensated exactly once, with the transient ShipOrderStep failure preserved
+   * alongside its successful retry.
+   */
+  private static void assertCompensationAuditTrail(Id instanceId) {
     // AC: every compensation outcome is an append-only Workflow_Step_Execution__c
     // record; the failed attempt is preserved alongside the successful retry.
     List<Workflow_Step_Execution__c> compLogs = [
@@ -207,53 +249,55 @@ public class SagaStalledRollbackExampleTest {
    * the first (the instance is no longer in CompensationFailed) is a safe no-op and
    * never double-runs a compensation or spawns a second rollback chain.
    */
-  @isTest
+  @IsTest
   static void testResumeCompensationIsIdempotent() {
-    WorkflowEngine.disableQueueableInTest = true;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
 
-    Workflow_Instance__c inst = new Workflow_Instance__c(
-      Workflow_Name__c = 'SagaStalledRollbackExample.StalledSagaWorkflow',
-      Status__c = 'CompensationFailed',
-      Compensation_Stack__c = JSON.serialize(
-        new List<String>{ 'SagaStalledRollbackExample.ChargeCardStep' }
-      ),
-      Error_Message__c = 'Failed at step ...ShipOrderStep_Compensate: boom'
-    );
-    insert inst;
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'SagaStalledRollbackExample.StalledSagaWorkflow',
+        Status__c = 'CompensationFailed',
+        Compensation_Stack__c = JSON.serialize(
+          new List<String>{ 'SagaStalledRollbackExample.ChargeCardStep' }
+        ),
+        Error_Message__c = 'Failed at step ...ShipOrderStep_Compensate: boom'
+      );
+      insert inst;
 
-    Test.startTest();
-    // First resume transitions out of the stalled state.
-    WorkflowEngine.resumeCompensation(inst.Id);
-    // Second (double-click) resume must be a no-op: status is no longer
-    // CompensationFailed, so nothing is re-enqueued or mutated.
-    WorkflowEngine.resumeCompensation(inst.Id);
-    Test.stopTest();
+      Test.startTest();
+      // First resume transitions out of the stalled state.
+      WorkflowEngine.resumeCompensation(inst.Id);
+      // Second (double-click) resume must be a no-op: status is no longer
+      // CompensationFailed, so nothing is re-enqueued or mutated.
+      WorkflowEngine.resumeCompensation(inst.Id);
+      Test.stopTest();
 
-    Workflow_Instance__c afterResume = [
-      SELECT Status__c
-      FROM Workflow_Instance__c
-      WHERE Id = :inst.Id
-    ];
-    System.assertEquals(
-      'Compensating',
-      afterResume.Status__c,
-      'Resume should transition the stalled rollback back into Compensating'
-    );
+      Workflow_Instance__c afterResume = [
+        SELECT Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :inst.Id
+      ];
+      System.assertEquals(
+        'Compensating',
+        afterResume.Status__c,
+        'Resume should transition the stalled rollback back into Compensating'
+      );
 
-    // Exactly one fresh (non-terminal) compensation attempt was created for the
-    // stalled top-of-stack step, never two.
-    Integer activeAttempts = [
-      SELECT COUNT()
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :inst.Id
-        AND Step_Name__c = 'SagaStalledRollbackExample.ChargeCardStep_Compensate'
-        AND Status__c IN ('Pending', 'Running', 'Retrying')
-    ];
-    System.assertEquals(
-      1,
-      activeAttempts,
-      'A double resume must not create two concurrent compensation attempts'
-    );
+      // Exactly one fresh (non-terminal) compensation attempt was created for the
+      // stalled top-of-stack step, never two.
+      Integer activeAttempts = [
+        SELECT COUNT()
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :inst.Id
+          AND Step_Name__c = 'SagaStalledRollbackExample.ChargeCardStep_Compensate'
+          AND Status__c IN ('Pending', 'Running', 'Retrying')
+      ];
+      System.assertEquals(
+        1,
+        activeAttempts,
+        'A double resume must not create two concurrent compensation attempts'
+      );
+    }
   }
 }

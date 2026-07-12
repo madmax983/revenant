@@ -15,7 +15,7 @@
  *
  *   1. A Case is created. An after-insert trigger (CaseApprovalBridgeTrigger) starts the
  *      workflow, correlating on the Case ID.
- *   2. The workflow executes. When it reaches RequestApprovalStep, it automatically queries the 
+ *   2. The workflow executes. When it reaches RequestApprovalStep, it automatically queries the
  *      correlation key (the Case ID) and submits it to the native Salesforce Approval Process
  *      (Case.Revenant_Trigger_Approval_Example.approvalProcess-meta.xml).
  *   3. The request lands in the standard Salesforce Approval Requests tab/inbox.
@@ -24,7 +24,7 @@
  *   5. The Case trigger (CaseApprovalBridgeTrigger) detects this update, queries the approval comments
  *      from ProcessInstanceStep, and signals the workflow to resume.
  *
- * Revenant supplies the orchestration primitives (waitForApproval + signal-driven resume); 
+ * Revenant supplies the orchestration primitives (waitForApproval + signal-driven resume);
  * the native Salesforce Approval Process handles the human-facing workflow (routing, delegation,
  * and the standard global Approvals inbox).
  */
@@ -79,6 +79,22 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
     return null;
   }
 
+  /**
+   * Reads a JSON object string into a Map, yielding an empty Map when the input is blank
+   * or cannot be parsed. Folding the guard into one place lets each step read the decision
+   * keys it needs without repeating null checks or inline parse-failure handling.
+   */
+  private static Map<String, Object> deserializeJson(String json) {
+    if (String.isBlank(json)) {
+      return new Map<String, Object>();
+    }
+    try {
+      return (Map<String, Object>) JSON.deserializeUntyped(json);
+    } catch (Exception ignored) {
+      return new Map<String, Object>();
+    }
+  }
+
   // --- STEP DEFINITIONS ---
 
   /**
@@ -91,20 +107,9 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
   public class ReserveBudgetStep implements CompensatableStep {
     public StepResult execute(StepContext ctx) {
       Decimal amount = 0;
-      if (String.isNotBlank(ctx.workflowInputJson)) {
-        try {
-          Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
-            ctx.workflowInputJson
-          );
-          if (input.containsKey('amount')) {
-            amount = (Decimal) input.get('amount');
-          }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize input JSON: ' + e.getMessage()
-          );
-        }
+      Map<String, Object> input = deserializeJson(ctx.workflowInputJson);
+      if (input.containsKey('amount')) {
+        amount = (Decimal) input.get('amount');
       }
       String reservationId = 'res_' + String.valueOf(amount).replace('.', '_');
       return StepResult.complete(
@@ -122,20 +127,9 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
      */
     public StepResult compensate(StepContext ctx) {
       String reservationId = 'res_unknown';
-      if (String.isNotBlank(ctx.stepStateJson)) {
-        try {
-          Map<String, Object> orig = (Map<String, Object>) JSON.deserializeUntyped(
-            ctx.stepStateJson
-          );
-          if (orig.containsKey('reservationId')) {
-            reservationId = (String) orig.get('reservationId');
-          }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize step state JSON: ' + e.getMessage()
-          );
-        }
+      Map<String, Object> orig = deserializeJson(ctx.stepStateJson);
+      if (orig.containsKey('reservationId')) {
+        reservationId = (String) orig.get('reservationId');
       }
       return StepResult.complete(
         null,
@@ -160,7 +154,7 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
    * transition, so an at-least-once redelivered duplicate (e.g. the bridge Flow re-firing)
    * cannot advance the workflow twice.
    */
-  public class RequestApprovalStep implements WorkflowStep {
+  public inherited sharing class RequestApprovalStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       StepContext.Signal decision = ctx.getSignal(DECISION_SIGNAL);
 
@@ -170,7 +164,7 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
         // This ensures the approval request shows up in the standard Salesforce Approval Requests tab/inbox.
         String correlationKey = getCorrelationKey(ctx.workflowInstanceId);
         submitRecordIfValid(correlationKey);
-        
+
         // The second argument is an optional Custom Permission API name that
         // WorkflowDashboardController.enforceApprovalRole would require an approver to
         // hold if this workflow were also decided from the dashboard. Left null here:
@@ -213,11 +207,7 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
         submitReq.setObjectId(recordId);
         // Let Salesforce pick the active process whose entry criteria matches
         Approval.process(submitReq, false);
-      } catch (Exception e) {
-        System.debug(
-          LoggingLevel.WARN,
-          'Native approval auto-submission skipped/failed for key ' + correlationKey + ': ' + e.getMessage()
-        );
+      } catch (Exception ignored) {
       }
     }
   }
@@ -245,26 +235,15 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
   public class RejectStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       String reason = 'rejected';
-      if (String.isNotBlank(ctx.inputJson)) {
-        try {
-          Map<String, Object> decision = (Map<String, Object>) JSON.deserializeUntyped(
-            ctx.inputJson
-          );
-          // The outbound bridge Flow's payload carries the approver's note under
-          // 'comments'; accept 'reason' too so a direct Apex/Flow signal using either
-          // key still survives into the failure message.
-          Object note = decision.containsKey('reason')
-            ? decision.get('reason')
-            : decision.get('comments');
-          if (note != null) {
-            reason = String.valueOf(note);
-          }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize rejection input JSON: ' + e.getMessage()
-          );
-        }
+      Map<String, Object> decision = deserializeJson(ctx.inputJson);
+      // The outbound bridge Flow's payload carries the approver's note under
+      // 'comments'; accept 'reason' too so a direct Apex/Flow signal using either
+      // key still survives into the failure message.
+      Object note = decision.containsKey('reason')
+        ? decision.get('reason')
+        : decision.get('comments');
+      if (note != null) {
+        reason = String.valueOf(note);
       }
       throw new WorkflowEngine.WorkflowException(
         'Approval rejected: ' + reason

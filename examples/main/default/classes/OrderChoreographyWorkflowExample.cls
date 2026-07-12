@@ -84,7 +84,7 @@ public inherited sharing class OrderChoreographyWorkflowExample {
    * StepResult.complete(null, output) after ctx.emit(...) — the yield/retry here
    * exists only to force re-execution for the test.)
    */
-  public class ShipOrderStep implements WorkflowStep {
+  public inherited sharing class ShipOrderStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.workflowInputJson

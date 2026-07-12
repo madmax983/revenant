@@ -43,21 +43,10 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
       List<StepContext.Signal> signals = ctx.getSignals(EVENT_SIGNAL);
       for (StepContext.Signal sig : signals) {
         if (sig.isPresent()) {
-          String parsedPayload = sig.payload;
-          if (
-            String.isNotBlank(parsedPayload) &&
-            parsedPayload.startsWith('"') &&
-            parsedPayload.endsWith('"') &&
-            parsedPayload.length() >= 2
-          ) {
-            try {
-              parsedPayload = (String) JSON.deserialize(sig.payload, String.class);
-            } catch (Exception ex) {
-              // Use raw payload if it fails to deserialize
-              System.debug(LoggingLevel.FINE, 'Failed to deserialize signal payload, using raw payload: ' + ex.getMessage());
-            }
-          }
-          accumulatedMap.put(String.valueOf(sig.signalId), parsedPayload);
+          accumulatedMap.put(
+            String.valueOf(sig.signalId),
+            normalizePayload(sig)
+          );
         }
       }
 
@@ -70,6 +59,28 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
       // Otherwise, save state and suspend waiting for more events
       return StepResult.suspend(JSON.serialize(accumulatedMap));
     }
+
+    /**
+     * Unwraps a JSON-encoded string payload (e.g. `"Item-A"`) to its raw value,
+     * falling back to the original payload when it is not a quoted JSON string or
+     * cannot be deserialized.
+     */
+    private String normalizePayload(StepContext.Signal sig) {
+      String parsedPayload = sig.payload;
+      Boolean looksJsonQuoted =
+        String.isNotBlank(parsedPayload) &&
+        parsedPayload.startsWith('"') &&
+        parsedPayload.endsWith('"') &&
+        parsedPayload.length() >= 2;
+      if (looksJsonQuoted) {
+        try {
+          return (String) JSON.deserialize(sig.payload, String.class);
+        } catch (Exception ignored) {
+          // Use raw payload if it fails to deserialize
+        }
+      }
+      return parsedPayload;
+    }
   }
 
   public class ProcessBatchStep implements WorkflowStep {
@@ -81,9 +92,8 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
             ctx.previousStepOutput,
             List<String>.class
           );
-        } catch (Exception ex) {
+        } catch (Exception ignored) {
           // Handle/ignore malformed input
-          System.debug(LoggingLevel.WARN, 'Failed to deserialize previous step output: ' + ex.getMessage());
         }
       }
       if (processed == null) {
@@ -91,7 +101,13 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
       }
       processed.sort();
       // Simulate batch processing
-      return StepResult.complete(null, 'Processed ' + processed.size() + ' events: ' + String.join(processed, ', '));
+      return StepResult.complete(
+        null,
+        'Processed ' +
+          processed.size() +
+          ' events: ' +
+          String.join(processed, ', ')
+      );
     }
   }
 }

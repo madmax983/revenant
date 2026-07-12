@@ -15,23 +15,38 @@ public inherited sharing class MockIdempotentPaymentGateway {
   private static Map<String, String> chargeIdByKey = new Map<String, String>();
   private static Integer sequence = 0;
 
+  /**
+   * Outcome of a charge attempt: a first-seen key results in a real CHARGED
+   * side effect, while a repeat key is served from cache as DEDUPLICATED.
+   */
+  public enum ChargeOutcome {
+    CHARGED,
+    DEDUPLICATED
+  }
+
   public class ChargeResult {
     public String chargeId;
     public Boolean deduplicated;
 
-    public ChargeResult(String chargeId, Boolean deduplicated) {
+    public ChargeResult(String chargeId, ChargeOutcome outcome) {
       this.chargeId = chargeId;
-      this.deduplicated = deduplicated;
+      this.deduplicated = (outcome == ChargeOutcome.DEDUPLICATED);
     }
   }
 
-  public static ChargeResult charge(String idempotencyKey, Integer amountCents) {
+  public static ChargeResult charge(
+    String idempotencyKey,
+    Integer amountCents
+  ) {
     if (
       String.isNotBlank(idempotencyKey) &&
       chargeIdByKey.containsKey(idempotencyKey)
     ) {
       // Server-side dedup on the caller-supplied key: no new side effect.
-      return new ChargeResult(chargeIdByKey.get(idempotencyKey), true);
+      return new ChargeResult(
+        chargeIdByKey.get(idempotencyKey),
+        ChargeOutcome.DEDUPLICATED
+      );
     }
     // First time we have seen this key: the one real, effective charge.
     effectiveSideEffectCount++;
@@ -40,7 +55,7 @@ public inherited sharing class MockIdempotentPaymentGateway {
     if (String.isNotBlank(idempotencyKey)) {
       chargeIdByKey.put(idempotencyKey, chargeId);
     }
-    return new ChargeResult(chargeId, false);
+    return new ChargeResult(chargeId, ChargeOutcome.CHARGED);
   }
 
   @TestVisible

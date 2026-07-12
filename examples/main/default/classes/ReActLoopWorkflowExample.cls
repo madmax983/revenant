@@ -44,12 +44,12 @@ public with sharing class ReActLoopWorkflowExample {
   private static List<String> mockLlmResponses;
 
   @TestVisible
-  private static String AI_MODEL = 'sfdc_ai__DefaultGPT35Turbo';
+  private static String aiModel = 'sfdc_ai__DefaultGPT35Turbo';
 
   // Loop guard: forces FinishStep instead of looping forever if the model
   // never emits Finish[...]. Each iteration is one ReasonStep + ActStep hop.
   @TestVisible
-  private static Integer MAX_ITERATIONS = 5;
+  private static Integer maxIterations = 5;
 
   // Toy knowledge base for the Search[query] tool — a stand-in for a real
   // lookup (SOQL, Knowledge article search, or an external API callout).
@@ -107,24 +107,11 @@ public with sharing class ReActLoopWorkflowExample {
       if (String.isBlank(question)) {
         throw new WorkflowEngine.WorkflowException('question is required');
       }
-      String scratchpad = input.containsKey('scratchpad')
-        ? (String) input.get('scratchpad')
-        : '';
-      Integer iteration = input.containsKey('iteration')
-        ? Integer.valueOf(String.valueOf(input.get('iteration')))
-        : 0;
+      String scratchpad = readScratchpad(input);
+      Integer iteration = readIteration(input);
 
-      if (iteration >= MAX_ITERATIONS) {
-        return StepResult.complete(
-          null,
-          new Map<String, Object>{
-            'done' => true,
-            'finalAnswer' => 'Could not reach a final answer within ' +
-            MAX_ITERATIONS +
-            ' reasoning steps.',
-            'scratchpad' => scratchpad
-          }
-        );
+      if (iteration >= maxIterations) {
+        return StepResult.complete(null, maxIterationsResult(scratchpad));
       }
 
       String completion = reason(question, scratchpad, iteration);
@@ -134,14 +121,7 @@ public with sharing class ReActLoopWorkflowExample {
       if (parsed.isFinish) {
         return StepResult.complete(
           null,
-          new Map<String, Object>{
-            'done' => true,
-            'finalAnswer' => parsed.actionInput,
-            'scratchpad' => updatedScratchpad +
-            '\nFinish[' +
-            parsed.actionInput +
-            ']'
-          }
+          finishResult(parsed, updatedScratchpad)
         );
       }
 
@@ -156,6 +136,42 @@ public with sharing class ReActLoopWorkflowExample {
           'toolInput' => parsed.actionInput
         }
       );
+    }
+
+    private String readScratchpad(Map<String, Object> input) {
+      return input.containsKey('scratchpad')
+        ? (String) input.get('scratchpad')
+        : '';
+    }
+
+    private Integer readIteration(Map<String, Object> input) {
+      return input.containsKey('iteration')
+        ? Integer.valueOf(String.valueOf(input.get('iteration')))
+        : 0;
+    }
+
+    private Map<String, Object> maxIterationsResult(String scratchpad) {
+      return new Map<String, Object>{
+        'done' => true,
+        'finalAnswer' => 'Could not reach a final answer within ' +
+        maxIterations +
+        ' reasoning steps.',
+        'scratchpad' => scratchpad
+      };
+    }
+
+    private Map<String, Object> finishResult(
+      ParsedStep parsed,
+      String updatedScratchpad
+    ) {
+      return new Map<String, Object>{
+        'done' => true,
+        'finalAnswer' => parsed.actionInput,
+        'scratchpad' => updatedScratchpad +
+        '\nFinish[' +
+        parsed.actionInput +
+        ']'
+      };
     }
   }
 
@@ -245,7 +261,7 @@ public with sharing class ReActLoopWorkflowExample {
   @TestVisible
   private static String evaluateArithmetic(String expression) {
     try {
-      ArithmeticParser parser = new ArithmeticParser(expression);
+      ReActArithmeticParser parser = new ReActArithmeticParser(expression);
       Decimal value = parser.parseExpression();
       parser.expectEnd();
       return String.valueOf(value);
@@ -255,96 +271,6 @@ public with sharing class ReActLoopWorkflowExample {
         '" (' +
         e.getMessage() +
         ')';
-    }
-  }
-
-  /**
-   * Minimal recursive-descent parser for +, -, *, /, and parentheses — just
-   * enough to back the Calculator[expr] tool without an external dependency.
-   */
-  private class ArithmeticParser {
-    private final String src;
-    private Integer pos = 0;
-
-    ArithmeticParser(String expression) {
-      this.src = (expression == null) ? '' : expression.replaceAll('\\s+', '');
-    }
-
-    Decimal parseExpression() {
-      Decimal value = parseTerm();
-      while (pos < src.length() && (peek() == '+' || peek() == '-')) {
-        String op = peek();
-        pos++;
-        Decimal rhs = parseTerm();
-        value = (op == '+') ? value + rhs : value - rhs;
-      }
-      return value;
-    }
-
-    Decimal parseTerm() {
-      Decimal value = parseFactor();
-      while (pos < src.length() && (peek() == '*' || peek() == '/')) {
-        String op = peek();
-        pos++;
-        Decimal rhs = parseFactor();
-        if (op == '*') {
-          value = value * rhs;
-        } else {
-          if (rhs == 0) {
-            throw new IllegalArgumentException('division by zero');
-          }
-          value = value / rhs;
-        }
-      }
-      return value;
-    }
-
-    Decimal parseFactor() {
-      if (pos < src.length() && peek() == '-') {
-        pos++;
-        return -parseFactor();
-      }
-      if (pos < src.length() && peek() == '(') {
-        pos++;
-        Decimal value = parseExpression();
-        expect(')');
-        return value;
-      }
-      return parseNumber();
-    }
-
-    Decimal parseNumber() {
-      Integer start = pos;
-      while (pos < src.length() && (peek().isNumeric() || peek() == '.')) {
-        pos++;
-      }
-      if (start == pos) {
-        throw new IllegalArgumentException(
-          'expected a number at position ' + pos
-        );
-      }
-      return Decimal.valueOf(src.substring(start, pos));
-    }
-
-    private String peek() {
-      return src.substring(pos, pos + 1);
-    }
-
-    private void expect(String ch) {
-      if (pos >= src.length() || peek() != ch) {
-        throw new IllegalArgumentException(
-          'expected "' + ch + '" at position ' + pos
-        );
-      }
-      pos++;
-    }
-
-    void expectEnd() {
-      if (pos != src.length()) {
-        throw new IllegalArgumentException(
-          'unexpected trailing characters at position ' + pos
-        );
-      }
     }
   }
 
@@ -368,7 +294,7 @@ public with sharing class ReActLoopWorkflowExample {
     }
 
     aiplatform.ModelsAPI.createGenerations_Request request = new aiplatform.ModelsAPI.createGenerations_Request();
-    request.modelName = AI_MODEL;
+    request.modelName = aiModel;
 
     aiplatform.ModelsAPI_GenerationRequest body = new aiplatform.ModelsAPI_GenerationRequest();
     body.prompt = buildPrompt(question, scratchpad);

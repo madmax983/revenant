@@ -42,26 +42,10 @@ public inherited sharing class IdempotentChargeWorkflowExample {
             ctx.workflowInputJson
           );
           if (input.get('amountCents') != null) {
-            // JSON.deserializeUntyped boxes numbers as Integer/Long/Decimal/Double
-            // depending on the value, so a direct (Integer) cast can throw. Handle
-            // each numeric type so the requested amount is preserved.
-            Object amountObj = input.get('amountCents');
-            if (amountObj instanceof Integer) {
-              amountCents = (Integer) amountObj;
-            } else if (amountObj instanceof Long) {
-              amountCents = ((Long) amountObj).intValue();
-            } else if (amountObj instanceof Decimal) {
-              amountCents = ((Decimal) amountObj).intValue();
-            } else if (amountObj instanceof Double) {
-              amountCents = ((Double) amountObj).intValue();
-            }
+            amountCents = toIntAmount(input.get('amountCents'), amountCents);
           }
-        } catch (Exception ex) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize amountCents from workflowInputJson: ' +
-            ex.getMessage()
-          );
+        } catch (Exception ignored) {
+          // Malformed workflowInputJson: keep the default charge amount.
         }
       }
 
@@ -81,6 +65,28 @@ public inherited sharing class IdempotentChargeWorkflowExample {
           'deduplicated' => res.deduplicated
         }
       );
+    }
+
+    /**
+     * Coerces a JSON-deserialized numeric value to an Integer. JSON.deserializeUntyped
+     * boxes numbers as Integer/Long/Decimal/Double depending on the value, so a direct
+     * (Integer) cast can throw; each numeric type is handled so the requested amount is
+     * preserved. Returns defaultAmount when the value is not a recognized numeric type.
+     */
+    private Integer toIntAmount(Object amountObj, Integer defaultAmount) {
+      if (amountObj instanceof Integer) {
+        return (Integer) amountObj;
+      }
+      if (amountObj instanceof Long) {
+        return ((Long) amountObj).intValue();
+      }
+      if (amountObj instanceof Decimal) {
+        return ((Decimal) amountObj).intValue();
+      }
+      if (amountObj instanceof Double) {
+        return ((Double) amountObj).intValue();
+      }
+      return defaultAmount;
     }
   }
 }

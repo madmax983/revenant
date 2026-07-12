@@ -2,7 +2,6 @@
  * @description Example class demonstrating a cursor fan-out execution workflow
  * utilizing ChunkedCursorIterator for processing and parallelizing records.
  */
-@SuppressWarnings('PMD.AvoidDebugStatements, PMD.OperationWithLimitsInLoop')
 public inherited sharing class RevenantCursorFanoutExample {
   // ==========================================
   // Parent Workflow Definition
@@ -118,12 +117,8 @@ public inherited sharing class RevenantCursorFanoutExample {
           if (cs != null) {
             chunkSize = Integer.valueOf(String.valueOf(cs));
           }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize chunkSize from workflowInputJson: ' +
-            e.getMessage()
-          );
+        } catch (Exception ignored) {
+          // Malformed chunkSize input falls back to the default chunk size.
         }
       }
       if (chunkSize < 1) {
@@ -321,23 +316,15 @@ public inherited sharing class RevenantCursorFanoutExample {
      * @return The step execution result.
      */
     public StepResult execute(StepContext ctx) {
-      if (String.isBlank(ctx.workflowInputJson)) {
+      ChunkedCursorIterator partition = deserializePartition(
+        ctx.workflowInputJson
+      );
+      if (partition == null) {
         return StepResult.complete(
           null,
           new Map<String, Object>{ 'count' => 0, 'names' => new List<String>() }
         );
       }
-
-      Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
-        ctx.workflowInputJson
-      );
-      String serializedCursor = (String) input.get('serializedCursor');
-
-      // Deserialize the partition ChunkedCursorIterator
-      ChunkedCursorIterator partition = (ChunkedCursorIterator) JSON.deserialize(
-        serializedCursor,
-        ChunkedCursorIterator.class
-      );
 
       Integer offset = partition.position;
 
@@ -363,6 +350,28 @@ public inherited sharing class RevenantCursorFanoutExample {
         'names' => accountNames
       };
       return StepResult.complete(null, result);
+    }
+
+    /**
+     * @description Rebuilds the ChunkedCursorIterator partition from the child
+     * workflow input, or returns null when no input was supplied.
+     * @param workflowInputJson The child workflow input JSON.
+     * @return The deserialized partition, or null when input is blank.
+     */
+    private ChunkedCursorIterator deserializePartition(
+      String workflowInputJson
+    ) {
+      if (String.isBlank(workflowInputJson)) {
+        return null;
+      }
+      Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
+        workflowInputJson
+      );
+      String serializedCursor = (String) input.get('serializedCursor');
+      return (ChunkedCursorIterator) JSON.deserialize(
+        serializedCursor,
+        ChunkedCursorIterator.class
+      );
     }
   }
 

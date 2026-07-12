@@ -30,6 +30,23 @@ public inherited sharing class ChildWorkflowFanOutExample implements WorkflowDef
    */
   public class FanOutStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
+      List<Object> items = parseItems(ctx);
+      List<String> childKeys = buildChildKeys(items, ctx);
+
+      // Check if outcomes are already present (resume path)
+      List<StepContext.ChildOutcome> outcomes = ctx.getChildOutcomes(childKeys);
+      if (allOutcomesPresent(outcomes)) {
+        return aggregateOutcomes(outcomes);
+      }
+
+      // First run path: spawn child workflows
+      return spawnChildren(items, ctx);
+    }
+
+    // Deserializes the workflow input into the list of items, accepting either a
+    // bare list or an object with an "items" list. Throws if the input is
+    // missing or not one of those shapes.
+    private List<Object> parseItems(StepContext ctx) {
       if (String.isBlank(ctx.workflowInputJson)) {
         throw new WorkflowEngine.WorkflowException(
           'Workflow input is required.'
@@ -49,7 +66,12 @@ public inherited sharing class ChildWorkflowFanOutExample implements WorkflowDef
           'Workflow input must be a list of items or an object containing an "items" list.'
         );
       }
+      return items;
+    }
 
+    // Derives the deterministic child correlation key for each item so the same
+    // children can be looked up on resume. Throws if any item is missing its id.
+    private List<String> buildChildKeys(List<Object> items, StepContext ctx) {
       List<String> childKeys = new List<String>();
       for (Object obj : items) {
         Map<String, Object> item = (Map<String, Object>) obj;
@@ -61,42 +83,49 @@ public inherited sharing class ChildWorkflowFanOutExample implements WorkflowDef
         }
         childKeys.add('Score_' + ctx.workflowInstanceId + '_' + itemId);
       }
+      return childKeys;
+    }
 
-      // Check if outcomes are already present (resume path)
-      List<StepContext.ChildOutcome> outcomes = ctx.getChildOutcomes(childKeys);
-      Boolean allPresent = true;
+    // True only once every spawned child has reported an outcome.
+    private Boolean allOutcomesPresent(
+      List<StepContext.ChildOutcome> outcomes
+    ) {
       for (StepContext.ChildOutcome outcome : outcomes) {
         if (!outcome.isPresent()) {
-          allPresent = false;
-          break;
+          return false;
         }
       }
+      return true;
+    }
 
-      if (allPresent) {
-        // All child outcomes are present! We aggregate their scores here.
-        Integer totalScore = 0;
-        for (Integer i = 0; i < outcomes.size(); i++) {
-          StepContext.ChildOutcome outcome = outcomes[i];
-          if (outcome.isSuccess()) {
-            String childOutput = outcome.output;
-            Map<String, Object> result = (Map<String, Object>) JSON.deserializeUntyped(
-              childOutput
-            );
-            totalScore += ((Decimal) result.get('score')).intValue();
-          } else {
-            return StepResult.fail(
-              'Child workflow failed: ' + outcome.errorMessage
-            );
-          }
+    // All child outcomes are present: aggregate their scores, failing the step
+    // if any child failed.
+    private StepResult aggregateOutcomes(
+      List<StepContext.ChildOutcome> outcomes
+    ) {
+      Integer totalScore = 0;
+      for (Integer i = 0; i < outcomes.size(); i++) {
+        StepContext.ChildOutcome outcome = outcomes[i];
+        if (!outcome.isSuccess()) {
+          return StepResult.fail(
+            'Child workflow failed: ' + outcome.errorMessage
+          );
         }
-
-        return StepResult.complete(
-          null,
-          new Map<String, Object>{ 'totalScore' => totalScore }
+        String childOutput = outcome.output;
+        Map<String, Object> result = (Map<String, Object>) JSON.deserializeUntyped(
+          childOutput
         );
+        totalScore += ((Decimal) result.get('score')).intValue();
       }
 
-      // First run path: spawn child workflows
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{ 'totalScore' => totalScore }
+      );
+    }
+
+    // First run path: build one child request per item and spawn them all.
+    private StepResult spawnChildren(List<Object> items, StepContext ctx) {
       List<StepResult.ChildRequest> reqs = new List<StepResult.ChildRequest>();
       for (Integer i = 0; i < items.size(); i++) {
         Map<String, Object> item = (Map<String, Object>) items[i];

@@ -25,7 +25,11 @@ public inherited sharing class SagaWorkflowExample {
 
   public class ChargeCreditCardStep implements CompensatableStep {
     public StepResult execute(StepContext ctx) {
-      ctx.log(StepContext.Level.INFO, 'Charging credit card', new Map<String, Object>{'amount' => 150});
+      ctx.log(
+        StepContext.Level.INFO,
+        'Charging credit card',
+        new Map<String, Object>{ 'amount' => 150 }
+      );
       return StepResult.complete(
         null,
         new Map<String, Object>{ 'chargeId' => 'ch_12345', 'amount' => 150 }
@@ -43,15 +47,15 @@ public inherited sharing class SagaWorkflowExample {
           if (origOutput != null && origOutput.containsKey('chargeId')) {
             chargeId = (String) origOutput.get('chargeId');
           }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize stepStateJson: ' + e.getMessage()
-          );
+        } catch (Exception ignored) {
         }
       }
 
-      ctx.log(StepContext.Level.WARN, 'Refunding credit card charge', new Map<String, Object>{'chargeId' => chargeId});
+      ctx.log(
+        StepContext.Level.WARN,
+        'Refunding credit card charge',
+        new Map<String, Object>{ 'chargeId' => chargeId }
+      );
       // Mock refund logic
       return StepResult.complete(
         null,

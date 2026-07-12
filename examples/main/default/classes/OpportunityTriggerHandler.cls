@@ -1,4 +1,17 @@
 public inherited sharing class OpportunityTriggerHandler {
+  /**
+   * Trigger entry point. Inspects the current Trigger context and dispatches to the
+   * matching handler method, keeping the OpportunityTrigger body a single delegation call.
+   */
+  public static void run() {
+    if (Trigger.isAfter && Trigger.isUpdate) {
+      handleAfterUpdate(
+        (List<Opportunity>) Trigger.new,
+        (Map<Id, Opportunity>) Trigger.oldMap
+      );
+    }
+  }
+
   public static void handleAfterUpdate(
     List<Opportunity> newOpps,
     Map<Id, Opportunity> oldOppsMap

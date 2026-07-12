@@ -73,9 +73,6 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
   public class ProvisionSandboxStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       ctx.reportProgress(30.0, 'Creating client sandbox');
-      Map<String, Object> order = (Map<String, Object>) JSON.deserializeUntyped(
-        ctx.inputJson
-      );
 
       String sandboxOrgId =
         '00D' + String.valueOf(Math.abs(Crypto.getRandomInteger())).left(15);
@@ -90,9 +87,6 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
   public class CreateBillingAccountStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       ctx.reportProgress(50.0, 'Configuring billing accounts');
-      Map<String, Object> order = (Map<String, Object>) JSON.deserializeUntyped(
-        ctx.inputJson
-      );
 
       String billingAccountId =
         'cust_billing_' +
@@ -114,7 +108,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
     }
   }
 
-  public class VIPApprovalStep implements WorkflowStep {
+  public inherited sharing class VIPApprovalStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       ctx.reportProgress(70.0, 'Verifying manager approvals');
       Map<String, Object> instanceInput = (Map<String, Object>) JSON.deserializeUntyped(
@@ -166,7 +160,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
     }
   }
 
-  public class WelcomeWorkflowLauncherStep implements WorkflowStep {
+  public inherited sharing class WelcomeWorkflowLauncherStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       Map<String, Object> instanceInput = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.workflowInputJson
@@ -243,7 +237,6 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
   public class SendEmailStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
       String email = (String) JSON.deserialize(ctx.inputJson, String.class);
-      System.debug('Welcome email sent to: ' + email);
       return StepResult.complete(null, 'Sent welcome email to ' + email);
     }
   }

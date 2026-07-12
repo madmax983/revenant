@@ -1,4 +1,17 @@
 public inherited sharing class CaseDebounceTriggerHandler {
+  /**
+   * Trigger entry point. Inspects the current Trigger context and dispatches to the
+   * matching handler method, keeping the CaseDebounceTrigger body a single delegation call.
+   */
+  public static void run() {
+    if (Trigger.isAfter && Trigger.isUpdate) {
+      handleAfterUpdate(
+        (List<Case>) Trigger.new,
+        (Map<Id, Case>) Trigger.oldMap
+      );
+    }
+  }
+
   public static void handleAfterUpdate(
     List<Case> newCases,
     Map<Id, Case> oldCasesMap
