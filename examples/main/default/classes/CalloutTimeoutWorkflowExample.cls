@@ -237,14 +237,30 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
      * @param context The finalizer context exposing the parent job result and exception.
      */
     public void execute(FinalizerContext context) {
-      if (context.getResult() != ParentJobResult.UNHANDLED_EXCEPTION) {
+      // Delegate the decision/recovery logic so it can be unit tested directly:
+      // System.FinalizerContext cannot be instantiated in a test.
+      handleResult(context.getResult(), context.getException());
+    }
+
+    /**
+     * @description Resumes the suspended instance with an error payload when the
+     * async job ended in an unhandled exception; otherwise does nothing.
+     * @param result The parent job result reported by the finalizer callback.
+     * @param jobException The exception the failed job threw, dereferenced only on
+     * the unhandled-exception branch.
+     */
+    @TestVisible
+    private void handleResult(
+      System.ParentJobResult result,
+      System.Exception jobException
+    ) {
+      if (result != ParentJobResult.UNHANDLED_EXCEPTION) {
         // The job's own resume already ran; nothing to recover.
         return;
       }
       Map<String, Object> state = new Map<String, Object>{
         'status' => 500,
-        'body' => 'Async callout job failed: ' +
-        context.getException().getMessage()
+        'body' => 'Async callout job failed: ' + jobException.getMessage()
       };
       try {
         WorkflowEngine.resumeInstance(instanceId, JSON.serialize(state));

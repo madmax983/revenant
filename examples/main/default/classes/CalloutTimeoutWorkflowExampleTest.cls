@@ -43,6 +43,170 @@ public class CalloutTimeoutWorkflowExampleTest {
     }
   }
 
+  private class FinalizerTestException extends Exception {
+  }
+
+  @IsTest
+  static void testAsyncCalloutJobAndFinalizerDirectly() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowAlertManager.mockConfigs.put(
+        'CalloutTimeoutWorkflowExample_CalloutWorkflow',
+        (Workflow_Alert_Config__mdt) JSON.deserialize(
+          '{"DeveloperName":"CalloutTimeoutWorkflowExample_CalloutWorkflow", "Email_Recipients__c":"test@example.com", "Enable_Alerts__c":true}',
+          Workflow_Alert_Config__mdt.class
+        )
+      );
+      WorkflowAlertManager.sentEmailsCount = 0;
+
+      // Drive the async suspend/resume path deterministically: forceAsyncInTest
+      // makes the step suspend, and disableQueueableInTest stops WorkflowEngine
+      // from auto-enqueuing the orchestrator so we can drive it by hand.
+      CalloutTimeoutWorkflowExample.forceAsyncInTest = true;
+      WorkflowEngine.disableQueueableInTest = true;
+      Test.setMock(
+        HttpCalloutMock.class,
+        new SingleRequestMock(200, '{"success": true}')
+      );
+
+      Test.startTest();
+      // Build an instance suspended at the MakeHttpCallout step so the async job
+      // has a valid instance to resume.
+      Id instanceId = WorkflowEngine.start(
+        'CalloutTimeoutWorkflowExample.CalloutWorkflow',
+        'DirectAsyncCalloutKey',
+        new Map<String, Object>{
+          'endpoint' => 'https://httpbin.org/status/200'
+        }
+      );
+      new WorkflowOrchestrator(instanceId).execute(null); // runs step -> suspend()
+
+      // AsyncCalloutJob.execute() calls System.attachFinalizer unconditionally,
+      // which is only legal inside a real Queueable transaction. Enqueue it so
+      // Test.stopTest() runs execute() (ctor + attachFinalizer + doCalloutAndResume)
+      // in a valid async context rather than throwing on a direct execute(null).
+      System.enqueueJob(
+        new CalloutTimeoutWorkflowExample.AsyncCalloutJob(
+          instanceId,
+          'https://httpbin.org/status/200'
+        )
+      );
+      Test.stopTest(); // executes AsyncCalloutJob and resumes the instance
+
+      // The job's callout + resume moved the instance to Running with the mocked
+      // 200 payload cached on the step execution.
+      Workflow_Instance__c inst = [
+        SELECT Status__c, Current_Step__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instanceId
+      ];
+      System.assertEquals(
+        'Running',
+        inst.Status__c,
+        'AsyncCalloutJob should resume the suspended instance to Running'
+      );
+      System.assertEquals(
+        'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep',
+        inst.Current_Step__c
+      );
+
+      List<Workflow_Step_Execution__c> asyncExecs = [
+        SELECT Output__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = 'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep'
+        ORDER BY CreatedDate DESC, Id DESC
+      ];
+      System.assert(!asyncExecs.isEmpty());
+      System.assert(
+        String.isNotBlank(asyncExecs[0].Output__c),
+        'Resume payload should be cached on the step execution'
+      );
+      System.assert(asyncExecs[0].Output__c.contains('status'));
+      System.assert(
+        asyncExecs[0].Output__c.contains('200'),
+        'Cached payload should carry the mocked 200 status'
+      );
+
+      // ResumeFinalizer coverage. System.FinalizerContext cannot be instantiated
+      // in a test, so exercise its extracted decision logic directly on a fresh
+      // suspended fixture instance.
+      Id finalizerInstanceId = WorkflowEngine.start(
+        'CalloutTimeoutWorkflowExample.CalloutWorkflow',
+        'FinalizerRecoveryKey',
+        new Map<String, Object>{
+          'endpoint' => 'https://httpbin.org/status/500'
+        }
+      );
+      new WorkflowOrchestrator(finalizerInstanceId).execute(null); // suspend
+      Workflow_Instance__c suspended = [
+        SELECT Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :finalizerInstanceId
+      ];
+      System.assertEquals(
+        'Suspended',
+        suspended.Status__c,
+        'Fixture instance should be suspended before the finalizer runs'
+      );
+
+      CalloutTimeoutWorkflowExample.ResumeFinalizer finalizer = new CalloutTimeoutWorkflowExample.ResumeFinalizer(
+        finalizerInstanceId
+      );
+
+      // Happy path: the job's own resume already ran, so the finalizer no-ops.
+      finalizer.handleResult(System.ParentJobResult.SUCCESS, null);
+      Workflow_Instance__c afterSuccess = [
+        SELECT Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :finalizerInstanceId
+      ];
+      System.assertEquals(
+        'Suspended',
+        afterSuccess.Status__c,
+        'A SUCCESS result must not resume the instance'
+      );
+
+      // Failure path: the job died, so the finalizer resumes with an error payload.
+      finalizer.handleResult(
+        System.ParentJobResult.UNHANDLED_EXCEPTION,
+        new FinalizerTestException('async job died')
+      );
+      Workflow_Instance__c afterFailure = [
+        SELECT Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :finalizerInstanceId
+      ];
+      System.assertEquals(
+        'Running',
+        afterFailure.Status__c,
+        'An UNHANDLED_EXCEPTION result should resume the instance for recovery'
+      );
+
+      List<Workflow_Step_Execution__c> finalizerExecs = [
+        SELECT Output__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :finalizerInstanceId
+          AND Step_Name__c = 'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep'
+        ORDER BY CreatedDate DESC, Id DESC
+      ];
+      System.assert(!finalizerExecs.isEmpty());
+      System.assert(
+        String.isNotBlank(finalizerExecs[0].Output__c),
+        'Finalizer recovery should cache an error payload'
+      );
+      System.assert(
+        finalizerExecs[0].Output__c.contains('Async callout job failed'),
+        'Recovery payload should describe the job failure'
+      );
+      System.assert(
+        finalizerExecs[0].Output__c.contains('async job died'),
+        'Recovery payload should carry the job exception message'
+      );
+    }
+  }
+
   @IsTest
   static void testCalloutSuccess() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
