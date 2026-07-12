@@ -125,28 +125,8 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
      */
     public StepResult execute(StepContext ctx) {
       // RECOMMENDED PRIMITIVE: one getSignals() call claims the whole pending
-      // page in a single statement and stays exactly-once.
-      //
-      // CAVEAT: an unscoped getSignals() marks EVERY pending signal observed, so
-      // the COMPLETE transition consumes all of them -- including any not in
-      // EXPECTED_ACK_NAMES. Use this full-list-and-filter pattern only when this
-      // branch owns the instance's signal namespace (here the sibling branch
-      // consumes no signals); otherwise a row meant for a sibling would be
-      // consumed here and never delivered. When branches share a namespace,
-      // scope the read per name instead.
-      Map<String, String> received = new Map<String, String>();
-      for (StepContext.Signal s : ctx.getSignals()) {
-        String name = (s.name == null) ? null : s.name.toLowerCase();
-        if (EXPECTED_ACK_NAMES.contains(name)) {
-          // Key by the CANONICAL (lower-cased) name -- the same form used for the
-          // membership test -- so a case-variant redelivery ('Ack:US' then
-          // 'ack:us') collapses to one entry instead of two. Keying by the raw
-          // s.name would let those count as two distinct acks and push
-          // received.size() to the gate while a real expected name is still
-          // missing. The original-case name is kept as the value for display.
-          received.put(name, s.name);
-        }
-      }
+      // page in a single statement and stays exactly-once (see collectExpectedAcks).
+      Map<String, String> received = collectExpectedAcks(ctx);
 
       // FAN-IN GATING: only COMPLETE once every expected ack is present. If just
       // a subset has arrived (the branch was re-driven before the rest were
@@ -156,34 +136,18 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
       // partial acks are neither consumed nor lost; when a later ack re-drives
       // this branch, getSignals() re-reads the full set and consumes it exactly
       // once at COMPLETE.
+      //
+      // CAPPED-PAGE FALLBACK: when the set is still short only because the
+      // unscoped getSignals() page was truncated by the governor-safety cap,
+      // fill the still-missing names with name-scoped reads before deciding to
+      // suspend (see fillMissingAcksViaScopedReads).
+      if (
+        received.size() < EXPECTED_ACK_NAMES.size() && ctx.signalReadWasCapped()
+      ) {
+        fillMissingAcksViaScopedReads(ctx, received);
+      }
       if (received.size() < EXPECTED_ACK_NAMES.size()) {
-        // CAPPED-PAGE FALLBACK: the unscoped getSignals() page is bounded by the
-        // engine's governor-safety cap (PARALLEL_CLAIM_ROW_CAP). At pathological
-        // scale -- thousands of unconsumed same-name rows (e.g. redelivered
-        // 'Ack:US') older than the still-missing names -- those rows fill the
-        // whole oldest-first page, so an unscoped read never reaches 'Ack:EU' /
-        // 'Ack:APAC'. Plain suspend would roll the claims back and re-read the
-        // SAME oldest page on every re-drive, stranding the branch forever.
-        // ctx.signalReadWasCapped() detects exactly this truncation. When it
-        // fires, fall back to a NAME-SCOPED read per missing name: a per-name
-        // query filters on Signal_Name__c, so it is not starved by a different
-        // name's backlog and reaches the buried acks directly. This stays
-        // exactly-once while the per-branch claim budget lasts and degrades to
-        // the engine's documented at-least-once once it is spent.
-        if (ctx.signalReadWasCapped()) {
-          for (String expected : EXPECTED_ACK_NAMES) {
-            if (received.containsKey(expected)) {
-              continue;
-            }
-            StepContext.Signal scoped = ctx.getSignal(expected);
-            if (scoped.isPresent()) {
-              received.put(expected, scoped.name);
-            }
-          }
-        }
-        if (received.size() < EXPECTED_ACK_NAMES.size()) {
-          return StepResult.suspend();
-        }
+        return StepResult.suspend();
       }
 
       List<String> presentNames = new List<String>(received.values());
@@ -197,6 +161,62 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
           'count' => presentNames.size()
         }
       );
+    }
+
+    // Claims the whole pending page in one exactly-once getSignals() statement
+    // and filters it to the expected acks, keyed by canonical (lower-cased) name.
+    //
+    // CAVEAT: an unscoped getSignals() marks EVERY pending signal observed, so
+    // the COMPLETE transition consumes all of them -- including any not in
+    // EXPECTED_ACK_NAMES. Use this full-list-and-filter pattern only when this
+    // branch owns the instance's signal namespace (here the sibling branch
+    // consumes no signals); otherwise a row meant for a sibling would be
+    // consumed here and never delivered. When branches share a namespace,
+    // scope the read per name instead.
+    private Map<String, String> collectExpectedAcks(StepContext ctx) {
+      Map<String, String> received = new Map<String, String>();
+      for (StepContext.Signal s : ctx.getSignals()) {
+        String name = (s.name == null) ? null : s.name.toLowerCase();
+        if (!EXPECTED_ACK_NAMES.contains(name)) {
+          continue;
+        }
+        // Key by the CANONICAL (lower-cased) name -- the same form used for the
+        // membership test -- so a case-variant redelivery ('Ack:US' then
+        // 'ack:us') collapses to one entry instead of two. Keying by the raw
+        // s.name would let those count as two distinct acks and push
+        // received.size() to the gate while a real expected name is still
+        // missing. The original-case name is kept as the value for display.
+        received.put(name, s.name);
+      }
+      return received;
+    }
+
+    // CAPPED-PAGE FALLBACK: the unscoped getSignals() page is bounded by the
+    // engine's governor-safety cap (PARALLEL_CLAIM_ROW_CAP). At pathological
+    // scale -- thousands of unconsumed same-name rows (e.g. redelivered
+    // 'Ack:US') older than the still-missing names -- those rows fill the
+    // whole oldest-first page, so an unscoped read never reaches 'Ack:EU' /
+    // 'Ack:APAC'. Plain suspend would roll the claims back and re-read the
+    // SAME oldest page on every re-drive, stranding the branch forever.
+    // ctx.signalReadWasCapped() detects exactly this truncation. When it
+    // fires, fall back to a NAME-SCOPED read per missing name: a per-name
+    // query filters on Signal_Name__c, so it is not starved by a different
+    // name's backlog and reaches the buried acks directly. This stays
+    // exactly-once while the per-branch claim budget lasts and degrades to
+    // the engine's documented at-least-once once it is spent.
+    private void fillMissingAcksViaScopedReads(
+      StepContext ctx,
+      Map<String, String> received
+    ) {
+      for (String expected : EXPECTED_ACK_NAMES) {
+        if (received.containsKey(expected)) {
+          continue;
+        }
+        StepContext.Signal scoped = ctx.getSignal(expected);
+        if (scoped.isPresent()) {
+          received.put(expected, scoped.name);
+        }
+      }
     }
   }
 

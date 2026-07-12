@@ -108,7 +108,7 @@ public inherited sharing class OrderChoreographyWorkflowExample {
    * StepResult.complete(null, output) after ctx.emit(...) — the yield/retry here
    * exists only to force re-execution for the test.)
    */
-  public class ShipOrderStep implements WorkflowStep {
+  public inherited sharing class ShipOrderStep implements WorkflowStep {
     /**
      * @description Buffers an Order_Shipped__e via ctx.emit on every execution but only
      * reaches COMPLETE on the third run (after a yield and a retry), demonstrating that the

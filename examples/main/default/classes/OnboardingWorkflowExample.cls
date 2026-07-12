@@ -122,9 +122,6 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
      */
     public StepResult execute(StepContext ctx) {
       ctx.reportProgress(30.0, 'Creating client sandbox');
-      Map<String, Object> order = (Map<String, Object>) JSON.deserializeUntyped(
-        ctx.inputJson
-      );
 
       String sandboxOrgId =
         '00D' + String.valueOf(Math.abs(Crypto.getRandomInteger())).left(15);
@@ -147,9 +144,6 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
      */
     public StepResult execute(StepContext ctx) {
       ctx.reportProgress(50.0, 'Configuring billing accounts');
-      Map<String, Object> order = (Map<String, Object>) JSON.deserializeUntyped(
-        ctx.inputJson
-      );
 
       String billingAccountId =
         'cust_billing_' +
@@ -184,7 +178,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
    * @description For high-value orders, pauses for an executive approval signal and
    * consumes the decision, failing the step on rejection.
    */
-  public class VIPApprovalStep implements WorkflowStep {
+  public inherited sharing class VIPApprovalStep implements WorkflowStep {
     /**
      * @description Waits for the VIP approval signal when the order amount is large,
      * consuming the decision on resume and throwing if it was rejected; small orders
@@ -247,7 +241,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
    * @description Launches the welcome-email child workflow and resumes when the child
    * signals completion, demonstrating parent/child orchestration.
    */
-  public class WelcomeWorkflowLauncherStep implements WorkflowStep {
+  public inherited sharing class WelcomeWorkflowLauncherStep implements WorkflowStep {
     /**
      * @description Starts the welcome-email child workflow on first execution, then
      * completes once the child's ChildCompleted signal has been received and consumed.
@@ -374,7 +368,6 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
      */
     public StepResult execute(StepContext ctx) {
       String email = (String) JSON.deserialize(ctx.inputJson, String.class);
-      System.debug('Welcome email sent to: ' + email);
       return StepResult.complete(null, 'Sent welcome email to ' + email);
     }
   }

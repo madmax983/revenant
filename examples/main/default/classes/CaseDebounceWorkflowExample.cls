@@ -41,10 +41,6 @@ public class CaseDebounceWorkflowExample implements WorkflowDefinition {
      * @return A completed StepResult ending the workflow.
      */
     public StepResult execute(StepContext ctx) {
-      System.debug(
-        'CaseDebounceWorkflowExample processing case update input: ' +
-        ctx.inputJson
-      );
       return StepResult.complete(null, null);
     }
   }

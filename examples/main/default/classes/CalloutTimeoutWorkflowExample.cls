@@ -60,74 +60,17 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
      * @return SUSPEND while awaiting the callout, COMPLETE on success, or RETRY on failure.
      */
     public StepResult execute(StepContext ctx) {
-      // Check if we already have the callout response in our state (resuming after future method)
-      if (String.isNotBlank(ctx.stepStateJson)) {
-        try {
-          Map<String, Object> state = (Map<String, Object>) JSON.deserializeUntyped(
-            ctx.stepStateJson
-          );
-          if (state.containsKey('status')) {
-            Integer status = (Integer) state.get('status');
-            String body = (String) state.get('body');
-            if (status == 200) {
-              return StepResult.complete(
-                null,
-                new Map<String, Object>{ 'status' => status, 'body' => body }
-              );
-            } else {
-              // Read initial interval from input if available
-              Integer retryDelay = 2;
-              if (String.isNotBlank(ctx.workflowInputJson)) {
-                try {
-                  Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
-                    ctx.workflowInputJson
-                  );
-                  if (input.containsKey('retryDelay')) {
-                    retryDelay = (Integer) input.get('retryDelay');
-                  }
-                } catch (Exception ex) {
-                  System.debug(
-                    LoggingLevel.WARN,
-                    'Failed to deserialize retryDelay from workflowInputJson: ' +
-                    ex.getMessage()
-                  );
-                }
-              }
-              // If it failed, we retry using retry policy
-              return StepResult.retry(
-                new RetryPolicy(retryDelay, (Double) 1.0, 3)
-              );
-            }
-          }
-        } catch (Exception ex) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize stepStateJson: ' + ex.getMessage()
-          );
-        }
+      // If we are resuming after the async callout, our state holds the response.
+      StepResult resumeResult = tryResumeFromState(ctx);
+      if (resumeResult != null) {
+        return resumeResult;
       }
 
-      // Otherwise, get the endpoint
-      String endpoint = 'https://httpbin.org/status/500';
-      if (String.isNotBlank(ctx.workflowInputJson)) {
-        try {
-          Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
-            ctx.workflowInputJson
-          );
-          if (input.containsKey('endpoint')) {
-            endpoint = (String) input.get('endpoint');
-          }
-        } catch (Exception ex) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize endpoint from workflowInputJson: ' +
-            ex.getMessage()
-          );
-        }
-      }
+      // Otherwise, get the endpoint and kick off the callout.
+      String endpoint = resolveEndpoint(ctx);
 
       if (Test.isRunningTest() && !forceAsyncInTest) {
-        // In tests, avoid future delays by simulating success/failure directly
+        // In tests, avoid async delays by simulating success/failure directly
         if (endpoint.contains('status/200')) {
           return StepResult.complete(
             null,
@@ -136,28 +79,195 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
               'body' => '{"success": true}'
             }
           );
-        } else {
-          return StepResult.retry(new RetryPolicy(2, (Double) 2.0, 3));
         }
+        return StepResult.retry(new RetryPolicy(2, (Double) 2.0, 3));
       }
 
-      // Launch the callout asynchronously to bypass DML callout restrictions
-      executeAsyncCallout(ctx.workflowInstanceId, endpoint);
+      // Only kick off a NEW async callout on the first (non-resumed) entry: a
+      // blank step state means the callout has not run yet. If step state is
+      // already present we are mid-resume, so we must NOT start a fresh callout
+      // here -- we fall through to the retry handshake below.
+      if (String.isBlank(ctx.stepStateJson)) {
+        // Launch the callout asynchronously to bypass DML callout restrictions.
+        // Under test we deliberately do NOT enqueue the real Queueable: the
+        // orchestrator itself runs as a Queueable under Test.stopTest(), so
+        // enqueuing AsyncCalloutJob here would chain Queueable -> resume ->
+        // retry -> Queueable... synchronously until Apex throws "Maximum stack
+        // depth has been reached". The test drives the async callback manually
+        // via doCalloutAndResume, so skipping the enqueue reproduces the
+        // production suspend/resume path without the test-only chaining.
+        if (!Test.isRunningTest()) {
+          System.enqueueJob(
+            new AsyncCalloutJob(ctx.workflowInstanceId, endpoint)
+          );
+        }
+        // Suspend the execution state; it resumes once the callout finishes.
+        return StepResult.suspend();
+      }
 
-      // Suspend the execution state. It will resume once the future method finishes.
-      return StepResult.suspend();
+      // Resumed with a payload tryResumeFromState did not recognize as a clean
+      // response. Complete the handshake synchronously via the retry policy
+      // instead of re-enqueuing inside the already-running async context.
+      return StepResult.retry(
+        new RetryPolicy(resolveRetryDelay(ctx), (Double) 1.0, 3)
+      );
+    }
+
+    // Inspects the durable step state for a completed callout response. Returns a
+    // terminal StepResult when resuming, or null to fall through to a fresh callout.
+    private StepResult tryResumeFromState(StepContext ctx) {
+      if (String.isBlank(ctx.stepStateJson)) {
+        return null;
+      }
+      try {
+        Map<String, Object> state = (Map<String, Object>) JSON.deserializeUntyped(
+          ctx.stepStateJson
+        );
+        if (!state.containsKey('status')) {
+          return null;
+        }
+        Integer status = (Integer) state.get('status');
+        String body = (String) state.get('body');
+        if (status == 200) {
+          return StepResult.complete(
+            null,
+            new Map<String, Object>{ 'status' => status, 'body' => body }
+          );
+        }
+        // If it failed, we retry using retry policy
+        Integer retryDelay = resolveRetryDelay(ctx);
+        return StepResult.retry(new RetryPolicy(retryDelay, (Double) 1.0, 3));
+      } catch (Exception ignored) {
+        return null;
+      }
+    }
+
+    // Reads the initial retry interval from the workflow input, defaulting to 2.
+    private Integer resolveRetryDelay(StepContext ctx) {
+      Integer retryDelay = 2;
+      if (String.isBlank(ctx.workflowInputJson)) {
+        return retryDelay;
+      }
+      try {
+        Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
+          ctx.workflowInputJson
+        );
+        if (input.containsKey('retryDelay')) {
+          retryDelay = (Integer) input.get('retryDelay');
+        }
+      } catch (Exception ignored) {
+        // Leave the default retry delay in place on malformed input.
+      }
+      return retryDelay;
+    }
+
+    // Reads the callout endpoint from the workflow input, defaulting to a 500 stub.
+    private String resolveEndpoint(StepContext ctx) {
+      String endpoint = 'https://httpbin.org/status/500';
+      if (String.isBlank(ctx.workflowInputJson)) {
+        return endpoint;
+      }
+      try {
+        Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
+          ctx.workflowInputJson
+        );
+        if (input.containsKey('endpoint')) {
+          endpoint = (String) input.get('endpoint');
+        }
+      } catch (Exception ignored) {
+        // Leave the default endpoint in place on malformed input.
+      }
+      return endpoint;
     }
   }
 
   /**
-   * @description Future entry point that performs the callout off the transaction
-   * that suspended the step, bypassing the DML-before-callout restriction.
-   * @param instanceId The suspended workflow instance to resume with the result.
-   * @param endpoint The HTTP endpoint to call.
+   * Performs the HTTP callout off-transaction so the step can suspend and resume.
+   * Replaces a former `@future` method with a Queueable, which keeps the async
+   * teaching intent while allowing typed inputs and chaining.
    */
-  @future(callout=true)
-  public static void executeAsyncCallout(Id instanceId, String endpoint) {
-    doCalloutAndResume(instanceId, endpoint);
+  public class AsyncCalloutJob implements Queueable, Database.AllowsCallouts {
+    private final Id instanceId;
+    private final String endpoint;
+
+    /**
+     * @description Captures the suspended instance and endpoint for the async callout.
+     * @param instanceId The suspended workflow instance to resume with the result.
+     * @param endpoint The HTTP endpoint to call.
+     */
+    public AsyncCalloutJob(Id instanceId, String endpoint) {
+      this.instanceId = instanceId;
+      this.endpoint = endpoint;
+    }
+
+    /**
+     * @description Attaches the resume finalizer, then performs the callout and
+     * resumes the suspended instance off the original transaction.
+     * @param context The Queueable context supplied by the platform.
+     */
+    public void execute(QueueableContext context) {
+      // Attach a Finalizer so a catastrophic failure of this job (an uncaught
+      // exception whose rollback would discard the resume written below) still
+      // wakes the suspended instance instead of stranding it forever.
+      System.attachFinalizer(new ResumeFinalizer(instanceId));
+      doCalloutAndResume(instanceId, endpoint);
+    }
+  }
+
+  /**
+   * Safety net for AsyncCalloutJob: if the job dies with an unhandled exception,
+   * its transaction rolls back and the resume written inside doCalloutAndResume
+   * is lost. The Finalizer runs in a fresh transaction and resumes the instance
+   * with an error payload so the workflow can apply its retry policy.
+   */
+  public class ResumeFinalizer implements Finalizer {
+    private final Id instanceId;
+
+    /**
+     * @description Captures the suspended instance to recover if the job fails.
+     * @param instanceId The suspended workflow instance to resume on failure.
+     */
+    public ResumeFinalizer(Id instanceId) {
+      this.instanceId = instanceId;
+    }
+
+    /**
+     * @description On an unhandled job exception, resumes the suspended instance
+     * with an error payload so the workflow can apply its retry policy.
+     * @param context The finalizer context exposing the parent job result and exception.
+     */
+    public void execute(FinalizerContext context) {
+      // Delegate the decision/recovery logic so it can be unit tested directly:
+      // System.FinalizerContext cannot be instantiated in a test.
+      handleResult(context.getResult(), context.getException());
+    }
+
+    /**
+     * @description Resumes the suspended instance with an error payload when the
+     * async job ended in an unhandled exception; otherwise does nothing.
+     * @param result The parent job result reported by the finalizer callback.
+     * @param jobException The exception the failed job threw, dereferenced only on
+     * the unhandled-exception branch.
+     */
+    @TestVisible
+    private void handleResult(
+      System.ParentJobResult result,
+      System.Exception jobException
+    ) {
+      if (result != ParentJobResult.UNHANDLED_EXCEPTION) {
+        // The job's own resume already ran; nothing to recover.
+        return;
+      }
+      Map<String, Object> state = new Map<String, Object>{
+        'status' => 500,
+        'body' => 'Async callout job failed: ' + jobException.getMessage()
+      };
+      try {
+        WorkflowEngine.resumeInstance(instanceId, JSON.serialize(state));
+      } catch (Exception ignored) {
+        // Nothing more can be done from the Finalizer.
+      }
+    }
   }
 
   /**
@@ -196,13 +306,7 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
     // Resume the suspended instance with the callout result
     try {
       WorkflowEngine.resumeInstance(instanceId, JSON.serialize(state));
-    } catch (Exception ex) {
-      System.debug(
-        'Failed to resume workflow instance ' +
-          instanceId +
-          ': ' +
-          ex.getMessage()
-      );
+    } catch (Exception ignored) {
     }
   }
 }

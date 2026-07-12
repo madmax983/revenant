@@ -21,7 +21,7 @@ public with sharing class AiSupportTriageWorkflowExample {
   private static String mockAiClassification;
 
   @TestVisible
-  private static String AI_MODEL = 'sfdc_ai__DefaultGPT35Turbo';
+  private static String aiModel = 'sfdc_ai__DefaultGPT35Turbo';
 
   // ── Workflow definition ────────────────────────────────────────────────────
 
@@ -145,7 +145,7 @@ public with sharing class AiSupportTriageWorkflowExample {
    * Step 2b: Technical issue — create a support case, then hand off to the
    * human escalation gate (EscalateStep) for confirmation.
    */
-  public class CreateCaseStep implements WorkflowStep {
+  public inherited sharing class CreateCaseStep implements WorkflowStep {
     /**
      * @description Creates a support Case for a technical inquiry before handing off
      * to the human escalation gate.
@@ -183,7 +183,7 @@ public with sharing class AiSupportTriageWorkflowExample {
    * engine re-runs this step; on re-entry the signal is consumed and the step
    * completes with the reviewer's decision.
    */
-  public class EscalateStep implements WorkflowStep {
+  public inherited sharing class EscalateStep implements WorkflowStep {
     /**
      * @description Suspends for human review on first entry, then consumes the
      * reviewer's approve/reject signal and completes with their decision on resume.
@@ -240,7 +240,7 @@ public with sharing class AiSupportTriageWorkflowExample {
       inquiryText;
 
     aiplatform.ModelsAPI.createGenerations_Request request = new aiplatform.ModelsAPI.createGenerations_Request();
-    request.modelName = AI_MODEL;
+    request.modelName = aiModel;
 
     aiplatform.ModelsAPI_GenerationRequest body = new aiplatform.ModelsAPI_GenerationRequest();
     body.prompt = prompt;

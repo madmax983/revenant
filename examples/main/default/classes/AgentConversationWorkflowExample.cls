@@ -118,7 +118,12 @@ public with sharing class AgentConversationWorkflowExample {
         throw new WorkflowEngine.WorkflowException('userMessage is required');
       }
 
-      AgentResponse turn = invokeAgent(agentDevName, userMessage, null, 0);
+      AgentInvocationRequest request = new AgentInvocationRequest();
+      request.agentDeveloperName = agentDevName;
+      request.userMessage = userMessage;
+      request.sessionId = null;
+      request.mockResponseIndex = 0;
+      AgentResponse turn = invokeAgent(request);
 
       return StepResult.complete(
         null,
@@ -143,7 +148,7 @@ public with sharing class AgentConversationWorkflowExample {
    *
    * Or from any Apex that has the instance ID (trigger, flow action, etc.).
    */
-  public class AwaitFollowUpStep implements WorkflowStep {
+  public inherited sharing class AwaitFollowUpStep implements WorkflowStep {
     /**
      * @description Suspends until a 'FollowUp' signal arrives, then consumes it and
      * threads the follow-up message plus stored sessionId to the continuation turn.
@@ -205,12 +210,12 @@ public with sharing class AgentConversationWorkflowExample {
       String sessionId = (String) input.get('sessionId');
       String followUpMessage = (String) input.get('followUpMessage');
 
-      AgentResponse turn = invokeAgent(
-        agentDevName,
-        followUpMessage,
-        sessionId,
-        1
-      );
+      AgentInvocationRequest request = new AgentInvocationRequest();
+      request.agentDeveloperName = agentDevName;
+      request.userMessage = followUpMessage;
+      request.sessionId = sessionId;
+      request.mockResponseIndex = 1;
+      AgentResponse turn = invokeAgent(request);
 
       return StepResult.complete(
         null,
@@ -248,39 +253,43 @@ public with sharing class AgentConversationWorkflowExample {
   // ── Agent invocation helper ────────────────────────────────────────────────
 
   /**
+   * Bundles the parameters for a single agent turn so invokeAgent takes one
+   * request object instead of a long positional parameter list.
+   */
+  private class AgentInvocationRequest {
+    public String agentDeveloperName;
+    public String userMessage;
+    public String sessionId;
+    public Integer mockResponseIndex;
+  }
+
+  /**
    * Invokes an Agentforce agent via the platform's generateAiAgentResponse
    * invocable action. No HTTP callout or Named Credential needed.
    *
-   * @param agentDeveloperName  API name of the Agentforce agent (e.g. Support_Agent)
-   * @param userMessage         Message to send this turn
-   * @param sessionId           Existing session to continue, or null for a new session
-   * @param mockResponseIndex   Which entry in mockAgentResponses to use in tests
+   * @param request Bundled agent-turn parameters (agent developer name, user
+   * message, optional session id, and mock response index for tests).
    * @return The agent's response wrapper (mocked in tests), including its sessionId.
    */
-  private static AgentResponse invokeAgent(
-    String agentDeveloperName,
-    String userMessage,
-    String sessionId,
-    Integer mockResponseIndex
-  ) {
+  private static AgentResponse invokeAgent(AgentInvocationRequest request) {
     if (Test.isRunningTest()) {
       AgentResponse mock = new AgentResponse();
       mock.agentResponse = (mockAgentResponses != null &&
-        mockAgentResponses.size() > mockResponseIndex)
-        ? mockAgentResponses[mockResponseIndex]
+        mockAgentResponses.size() > request.mockResponseIndex)
+        ? mockAgentResponses[request.mockResponseIndex]
         : 'Mock agent response';
-      mock.sessionId = 'mock-session-' + mockResponseIndex;
+      mock.sessionId = 'mock-session-' + request.mockResponseIndex;
       mock.success = true;
       return mock;
     }
 
     Invocable.Action action = Invocable.Action.createCustomAction(
       'generateAiAgentResponse',
-      agentDeveloperName
+      request.agentDeveloperName
     );
-    action.setInvocationParameter('userMessage', userMessage);
-    if (String.isNotBlank(sessionId)) {
-      action.setInvocationParameter('sessionId', sessionId);
+    action.setInvocationParameter('userMessage', request.userMessage);
+    if (String.isNotBlank(request.sessionId)) {
+      action.setInvocationParameter('sessionId', request.sessionId);
     }
 
     List<Invocable.Action.Result> results = action.invoke();

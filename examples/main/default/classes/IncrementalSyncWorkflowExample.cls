@@ -17,11 +17,11 @@
 public inherited sharing class IncrementalSyncWorkflowExample {
   /** How far back the first-ever run looks when there is no prior run. */
   @TestVisible
-  private static Integer COLD_START_LOOKBACK_HOURS = 24;
+  private static Integer coldStartLookbackHours = 24;
 
   /** Seconds to sleep between polling runs. Ignored in test context. */
   @TestVisible
-  private static Integer SLEEP_INTERVAL_SECONDS = 300;
+  private static Integer sleepIntervalSeconds = 300;
 
   /**
    * @description The polling workflow definition: sync changed records, sleep, then
@@ -72,7 +72,7 @@ public inherited sharing class IncrementalSyncWorkflowExample {
    * @description Queries and processes Account records modified since the previous
    * run, using ctx.previousRunAt as the high-water mark (with a cold-start fallback).
    */
-  public class SyncChangedAccountsStep implements WorkflowStep {
+  public inherited sharing class SyncChangedAccountsStep implements WorkflowStep {
     /**
      * @description Drains the full window of Accounts changed since the last run and
      * returns the processed count and window start.
@@ -84,7 +84,7 @@ public inherited sharing class IncrementalSyncWorkflowExample {
       // lookback window on the very first run (previousRunAt is null).
       Datetime since = ctx.previousRunAt != null
         ? ctx.previousRunAt
-        : Datetime.now().addHours(-COLD_START_LOOKBACK_HOURS);
+        : Datetime.now().addHours(-coldStartLookbackHours);
 
       // Drain the ENTIRE window each run. With previousRunAt as the cursor,
       // run N queries >= start(N-1) and run N+1 queries >= start(N), so every
@@ -136,7 +136,7 @@ public inherited sharing class IncrementalSyncWorkflowExample {
       if (Test.isRunningTest() || ctx.stepStateJson != null) {
         return StepResult.complete(null, null);
       }
-      return StepResult.sleep(SLEEP_INTERVAL_SECONDS, 'sleeping');
+      return StepResult.sleep(sleepIntervalSeconds, 'sleeping');
     }
   }
 

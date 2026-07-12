@@ -94,7 +94,7 @@ public inherited sharing class BatchFanoutWorkflowExample {
    * Simply returns a mock list of record data (e.g. Account names/IDs)
    * to simulate querying records from the database.
    */
-  public class FetchRecordsStep implements WorkflowStep {
+  public inherited sharing class FetchRecordsStep implements WorkflowStep {
     /**
      * @description Queries up to 100 Accounts (falling back to mock data when none exist)
      * and completes with the record list for the fanout step to process.
@@ -143,7 +143,7 @@ public inherited sharing class BatchFanoutWorkflowExample {
    * 2. Yields/suspends waiting for completion signals.
    * 3. Aggregates results once all child completed signals are received.
    */
-  public class FanoutStep implements WorkflowStep {
+  public inherited sharing class FanoutStep implements WorkflowStep {
     /**
      * @description Spawns one child workflow per record in yield-bounded chunks, suspends
      * until all children reach a terminal state, then aggregates their outputs.
@@ -166,102 +166,143 @@ public inherited sharing class BatchFanoutWorkflowExample {
       );
 
       // 2. Resolve offset from stepStateJson
-      Integer offset = 0;
-      if (String.isNotBlank(ctx.stepStateJson)) {
-        try {
-          Map<String, Object> stateMap = (Map<String, Object>) JSON.deserializeUntyped(
-            ctx.stepStateJson
-          );
-          if (stateMap.containsKey('offset')) {
-            offset = ((Decimal) stateMap.get('offset')).intValue();
-          }
-        } catch (Exception ex) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize stepStateJson: ' + ex.getMessage()
-          );
-        }
-      }
+      Integer offset = resolveOffset(ctx);
 
       // 3. Spawn child workflows in chunks if they have not been spawned yet
-      List<Workflow_Instance__c> childInstances = [
+      List<Workflow_Instance__c> childInstances = queryChildInstances(
+        ctx.workflowInstanceId
+      );
+
+      Boolean needsSpawning =
+        (offset < accountsList.size()) &&
+        (offset > 0 || childInstances.isEmpty());
+      if (needsSpawning) {
+        StepResult spawnOutcome = spawnChildren(
+          ctx,
+          accountsList,
+          childInstances
+        );
+        if (spawnOutcome != null) {
+          // Yielded mid-spawn: resume spawning in the next transaction.
+          return spawnOutcome;
+        }
+        // Query child instances again after spawning to get the latest list for checking completion
+        childInstances = queryChildInstances(ctx.workflowInstanceId);
+      }
+
+      if (!allChildrenSettled(childInstances)) {
+        // Not all child workflows have completed yet, suspend parent
+        return StepResult.suspend();
+      }
+
+      // 4. Once all are completed, aggregate their outputs
+      return StepResult.complete(null, aggregateChildOutputs(childInstances));
+    }
+
+    // Reads the durable spawn offset from step state, defaulting to 0.
+    private Integer resolveOffset(StepContext ctx) {
+      Integer offset = 0;
+      if (String.isBlank(ctx.stepStateJson)) {
+        return offset;
+      }
+      try {
+        Map<String, Object> stateMap = (Map<String, Object>) JSON.deserializeUntyped(
+          ctx.stepStateJson
+        );
+        if (stateMap.containsKey('offset')) {
+          offset = ((Decimal) stateMap.get('offset')).intValue();
+        }
+      } catch (Exception ignored) {
+        // Leave offset at 0 on malformed state.
+      }
+      return offset;
+    }
+
+    // Loads the current child instances for this parent.
+    private List<Workflow_Instance__c> queryChildInstances(
+      Id parentInstanceId
+    ) {
+      return [
         SELECT Id, Status__c, Correlation_Key__c, Output__c
         FROM Workflow_Instance__c
-        WHERE Parent_Instance__c = :ctx.workflowInstanceId
+        WHERE Parent_Instance__c = :parentInstanceId
         WITH SYSTEM_MODE
       ];
+    }
+
+    // Spawns child workflows from the given offset. Returns a YIELD StepResult if
+    // the transaction ran low on resources mid-spawn, or null once spawning finishes.
+    private StepResult spawnChildren(
+      StepContext ctx,
+      List<Object> accountsList,
+      List<Workflow_Instance__c> childInstances
+    ) {
+      // Resume point within accountsList, read back from durable step state.
+      Integer offset = resolveOffset(ctx);
 
       // Build a set of already-spawned keys so the loop is idempotent on retry.
       // A yield-then-suspend sequence leaves a stale offset in stepExec.Output__c
       // that survives retryWorkflow, causing needsSpawning=true even when children
       // at those offsets already exist. Skipping existing keys prevents collisions.
+      Set<String> spawnedChildKeys = collectSpawnedKeys(childInstances);
+
+      for (Integer i = offset; i < accountsList.size(); i++) {
+        if (ctx.shouldYield()) {
+          // Return YIELD to resume spawning in the next transaction
+          Map<String, Object> nextState = new Map<String, Object>{
+            'offset' => i
+          };
+          return StepResult.yield(JSON.serialize(nextState));
+        }
+
+        Object accObj = accountsList[i];
+        Map<String, Object> acc = (Map<String, Object>) accObj;
+        String accId = (String) acc.get('id');
+
+        // Generate unique child correlation key
+        String childKey = 'Process_' + accId + '_' + ctx.workflowInstanceId;
+
+        if (!spawnedChildKeys.contains(childKey)) {
+          WorkflowEngine.start(
+            'BatchFanoutWorkflowExample.ProcessRecordWorkflow',
+            childKey,
+            acc,
+            ctx.workflowInstanceId
+          );
+        }
+      }
+      return null;
+    }
+
+    // Collects the correlation keys of children that already exist.
+    private Set<String> collectSpawnedKeys(
+      List<Workflow_Instance__c> childInstances
+    ) {
       Set<String> spawnedChildKeys = new Set<String>();
       for (Workflow_Instance__c child : childInstances) {
         if (String.isNotBlank(child.Correlation_Key__c)) {
           spawnedChildKeys.add(child.Correlation_Key__c);
         }
       }
+      return spawnedChildKeys;
+    }
 
-      Boolean needsSpawning =
-        (offset < accountsList.size()) &&
-        (offset > 0 || childInstances.isEmpty());
-      if (needsSpawning) {
-        Boolean yielded = false;
-        for (Integer i = offset; i < accountsList.size(); i++) {
-          if (ctx.shouldYield()) {
-            offset = i;
-            yielded = true;
-            break;
-          }
-
-          Object accObj = accountsList[i];
-          Map<String, Object> acc = (Map<String, Object>) accObj;
-          String accId = (String) acc.get('id');
-
-          // Generate unique child correlation key
-          String childKey = 'Process_' + accId + '_' + ctx.workflowInstanceId;
-
-          if (!spawnedChildKeys.contains(childKey)) {
-            WorkflowEngine.start(
-              'BatchFanoutWorkflowExample.ProcessRecordWorkflow',
-              childKey,
-              acc,
-              ctx.workflowInstanceId
-            );
-          }
-        }
-
-        if (yielded) {
-          // Return YIELD to resume spawning in the next transaction
-          Map<String, Object> nextState = new Map<String, Object>{
-            'offset' => offset
-          };
-          return StepResult.yield(JSON.serialize(nextState));
-        }
-
-        // Query child instances again after spawning to get the latest list for checking completion
-        childInstances = [
-          SELECT Id, Status__c, Correlation_Key__c, Output__c
-          FROM Workflow_Instance__c
-          WHERE Parent_Instance__c = :ctx.workflowInstanceId
-          WITH SYSTEM_MODE
-        ];
-      }
-
-      Boolean allCompleted = true;
+    // True when every child has reached a terminal (Completed/Failed) status.
+    private Boolean allChildrenSettled(
+      List<Workflow_Instance__c> childInstances
+    ) {
       for (Workflow_Instance__c child : childInstances) {
         if (child.Status__c != 'Completed' && child.Status__c != 'Failed') {
-          allCompleted = false;
-          break;
+          return false;
         }
       }
+      return true;
+    }
 
-      if (!allCompleted) {
-        // Not all child workflows have completed yet, suspend parent
-        return StepResult.suspend();
-      }
-
-      // 5. Once all are completed, aggregate their outputs
+    // Aggregates each child's deserialized output keyed by correlation key.
+    private Map<String, Object> aggregateChildOutputs(
+      List<Workflow_Instance__c> childInstances
+    ) {
       Map<String, Object> aggregatedResults = new Map<String, Object>();
       for (Workflow_Instance__c child : childInstances) {
         Object childOut = child.Output__c != null
@@ -269,8 +310,7 @@ public inherited sharing class BatchFanoutWorkflowExample {
           : null;
         aggregatedResults.put(child.Correlation_Key__c, childOut);
       }
-
-      return StepResult.complete(null, aggregatedResults);
+      return aggregatedResults;
     }
   }
 
@@ -278,7 +318,7 @@ public inherited sharing class BatchFanoutWorkflowExample {
    * ProcessAccountStep (Child Step):
    * Simulates performing audit logic on the account and returning results.
    */
-  public class ProcessAccountStep implements WorkflowStep {
+  public inherited sharing class ProcessAccountStep implements WorkflowStep {
     /**
      * @description Audits the input account, updating a real Account record when the id is a
      * genuine 15/18-char Id, and completes with the audit result.

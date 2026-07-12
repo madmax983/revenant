@@ -71,6 +71,24 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
     return null;
   }
 
+  /**
+   * @description Safely deserializes a JSON object string into a Map, returning an empty
+   * Map when the input is blank or malformed. Centralising the guard keeps each step body
+   * focused on reading the keys it cares about rather than repeating null and parse handling.
+   * @param jsonText The JSON object string to deserialize.
+   * @return The deserialized Map, or an empty Map when the input is blank or malformed.
+   */
+  private static Map<String, Object> parseJsonMap(String jsonText) {
+    if (String.isBlank(jsonText)) {
+      return new Map<String, Object>();
+    }
+    try {
+      return (Map<String, Object>) JSON.deserializeUntyped(jsonText);
+    } catch (Exception ignored) {
+      return new Map<String, Object>();
+    }
+  }
+
   // --- STEP DEFINITIONS ---
 
   /**
@@ -87,20 +105,9 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
      */
     public StepResult execute(StepContext ctx) {
       Decimal amount = 0;
-      if (String.isNotBlank(ctx.workflowInputJson)) {
-        try {
-          Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
-            ctx.workflowInputJson
-          );
-          if (input.containsKey('purchaseAmount')) {
-            amount = (Decimal) input.get('purchaseAmount');
-          }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize input JSON: ' + e.getMessage()
-          );
-        }
+      Map<String, Object> input = parseJsonMap(ctx.workflowInputJson);
+      if (input.containsKey('purchaseAmount')) {
+        amount = (Decimal) input.get('purchaseAmount');
       }
       String reservationId = 'res_' + String.valueOf(amount).replace('.', '_');
       return StepResult.complete(
@@ -120,20 +127,9 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
      */
     public StepResult compensate(StepContext ctx) {
       String reservationId = 'res_unknown';
-      if (String.isNotBlank(ctx.stepStateJson)) {
-        try {
-          Map<String, Object> orig = (Map<String, Object>) JSON.deserializeUntyped(
-            ctx.stepStateJson
-          );
-          if (orig.containsKey('reservationId')) {
-            reservationId = (String) orig.get('reservationId');
-          }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize step state JSON: ' + e.getMessage()
-          );
-        }
+      Map<String, Object> orig = parseJsonMap(ctx.stepStateJson);
+      if (orig.containsKey('reservationId')) {
+        reservationId = (String) orig.get('reservationId');
       }
       return StepResult.complete(
         null,
@@ -217,26 +213,15 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
      */
     public StepResult execute(StepContext ctx) {
       String reason = 'rejected';
-      if (String.isNotBlank(ctx.inputJson)) {
-        try {
-          Map<String, Object> decision = (Map<String, Object>) JSON.deserializeUntyped(
-            ctx.inputJson
-          );
-          // The built-in dashboard's submitApproval records the approver's note under
-          // 'comments'; a Flow or Apex signal might instead use 'reason'. Accept either
-          // so the approver's audit note survives into the failure message.
-          Object note = decision.containsKey('reason')
-            ? decision.get('reason')
-            : decision.get('comments');
-          if (note != null) {
-            reason = String.valueOf(note);
-          }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize rejection input JSON: ' + e.getMessage()
-          );
-        }
+      Map<String, Object> decision = parseJsonMap(ctx.inputJson);
+      // The built-in dashboard's submitApproval records the approver's note under
+      // 'comments'; a Flow or Apex signal might instead use 'reason'. Accept either
+      // so the approver's audit note survives into the failure message.
+      Object note = decision.containsKey('reason')
+        ? decision.get('reason')
+        : decision.get('comments');
+      if (note != null) {
+        reason = String.valueOf(note);
       }
       throw new WorkflowEngine.WorkflowException(
         'Approval rejected: ' + reason

@@ -5,6 +5,20 @@
  */
 public inherited sharing class OpportunityTriggerHandler {
   /**
+   * @description Trigger entry point. Inspects the current Trigger context and
+   * dispatches to the matching handler method, keeping the OpportunityTrigger
+   * body a single delegation call.
+   */
+  public static void run() {
+    if (Trigger.isAfter && Trigger.isUpdate) {
+      handleAfterUpdate(
+        (List<Opportunity>) Trigger.new,
+        (Map<Id, Opportunity>) Trigger.oldMap
+      );
+    }
+  }
+
+  /**
    * @description Starts an onboarding workflow in bulk for every Opportunity that just
    * transitioned to 'Closed Won'.
    * @param newOpps The updated Opportunity records from the trigger.

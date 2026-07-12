@@ -5,6 +5,20 @@
  */
 public inherited sharing class CaseDebounceTriggerHandler {
   /**
+   * @description Trigger entry point. Inspects the current Trigger context and
+   * dispatches to the matching handler method, keeping the CaseDebounceTrigger
+   * body a single delegation call.
+   */
+  public static void run() {
+    if (Trigger.isAfter && Trigger.isUpdate) {
+      handleAfterUpdate(
+        (List<Case>) Trigger.new,
+        (Map<Id, Case>) Trigger.oldMap
+      );
+    }
+  }
+
+  /**
    * @description Collects a debounced workflow-start request for every Case
    * whose Subject or Description changed, then submits them in bulk with a
    * short debounce window.

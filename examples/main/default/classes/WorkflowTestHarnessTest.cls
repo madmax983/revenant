@@ -5,82 +5,84 @@
  * with no manual WorkflowOrchestrator construction, no Test.getEventBus().deliver()
  * calls, and no direct instance-record mutation in the test body.
  */
-@isTest
+@IsTest
 public class WorkflowTestHarnessTest {
   /**
    * Happy path: one drive() call to the human-in-the-loop suspend, one injectSignal()
    * call to completion. Exercises split/join parallelism, a child workflow with a sleep,
    * and an approval signal — the full OnboardingWorkflowExample DAG.
    */
-  @isTest
+  @IsTest
   static void driveAndInjectSignalRunsOnboardingToCompletion() {
-    Map<String, Object> inputMap = new Map<String, Object>{
-      'amount' => 15000.0,
-      'customerName' => 'Acme Corp',
-      'email' => 'admin@acme.com'
-    };
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Map<String, Object> inputMap = new Map<String, Object>{
+        'amount' => 15000.0,
+        'customerName' => 'Acme Corp',
+        'email' => 'admin@acme.com'
+      };
 
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'OnboardingWorkflowExample',
-      'Harness_Onboarding_1',
-      inputMap
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'OnboardingWorkflowExample',
+        'Harness_Onboarding_1',
+        inputMap
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
 
-    // Drive #1: advance from start through the parallel fan-out/rejoin to the
-    // executive-approval suspend, all in a single call.
-    WorkflowTestHarness.Result suspended = harness.drive();
-    Test.stopTest();
+      // Drive #1: advance from start through the parallel fan-out/rejoin to the
+      // executive-approval suspend, all in a single call.
+      WorkflowTestHarness.Result suspended = harness.drive();
+      Test.stopTest();
 
-    System.assertEquals(
-      'Suspended',
-      suspended.status,
-      'Workflow should pause for VIP approval'
-    );
-    System.assert(
-      suspended.isSuspended,
-      'Result should report the suspended state'
-    );
-    System.assert(
-      suspended.reachedStep('OnboardingWorkflowExample.ProvisionSandboxStep'),
-      'Parallel branch ProvisionSandboxStep should have executed'
-    );
-    System.assert(
-      suspended.reachedStep(
-        'OnboardingWorkflowExample.CreateBillingAccountStep'
-      ),
-      'Parallel branch CreateBillingAccountStep should have executed'
-    );
-    System.assert(
-      suspended.reachedStep('OnboardingWorkflowExample.JoinOnboardingStep'),
-      'Rejoin step should have executed'
-    );
+      System.assertEquals(
+        'Suspended',
+        suspended.status,
+        'Workflow should pause for VIP approval'
+      );
+      System.assert(
+        suspended.isSuspended,
+        'Result should report the suspended state'
+      );
+      System.assert(
+        suspended.reachedStep('OnboardingWorkflowExample.ProvisionSandboxStep'),
+        'Parallel branch ProvisionSandboxStep should have executed'
+      );
+      System.assert(
+        suspended.reachedStep(
+          'OnboardingWorkflowExample.CreateBillingAccountStep'
+        ),
+        'Parallel branch CreateBillingAccountStep should have executed'
+      );
+      System.assert(
+        suspended.reachedStep('OnboardingWorkflowExample.JoinOnboardingStep'),
+        'Rejoin step should have executed'
+      );
 
-    // Drive #2: provide the approval signal and let the harness resume the child
-    // welcome workflow (including its sleep) and run to completion.
-    WorkflowTestHarness.Result completed = harness.injectSignal(
-      'Harness_Onboarding_1',
-      'Approve:VIPOrderApproval',
-      '{"approved":true,"comments":"Approved VIP Customer"}'
-    );
+      // Drive #2: provide the approval signal and let the harness resume the child
+      // welcome workflow (including its sleep) and run to completion.
+      WorkflowTestHarness.Result completed = harness.injectSignal(
+        'Harness_Onboarding_1',
+        'Approve:VIPOrderApproval',
+        '{"approved":true,"comments":"Approved VIP Customer"}'
+      );
 
-    System.assertEquals(
-      'Completed',
-      completed.status,
-      'Workflow should reach Completed after approval'
-    );
-    System.assert(completed.isTerminal, 'Completed is a terminal state');
-    System.assert(
-      completed.output.contains('"status":"Completed"'),
-      'Final output should carry the completed status payload'
-    );
-    System.assert(
-      completed.completedSteps.contains(
-        'OnboardingWorkflowExample.CompleteOnboardingStep'
-      ),
-      'Final step should be recorded as completed'
-    );
+      System.assertEquals(
+        'Completed',
+        completed.status,
+        'Workflow should reach Completed after approval'
+      );
+      System.assert(completed.isTerminal, 'Completed is a terminal state');
+      System.assert(
+        completed.output.contains('"status":"Completed"'),
+        'Final output should carry the completed status payload'
+      );
+      System.assert(
+        completed.completedSteps.contains(
+          'OnboardingWorkflowExample.CompleteOnboardingStep'
+        ),
+        'Final step should be recorded as completed'
+      );
+    }
   }
 
   /**
@@ -88,68 +90,72 @@ public class WorkflowTestHarnessTest {
    * whole rollback through the shipped handleCrash + compensation loop and exposes
    * the LIFO compensate() order from the append-only audit records.
    */
-  @isTest
+  @IsTest
   static void driveRunsSagaCompensationsInLifoOrder() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'SagaWorkflowExample.SagaWorkflow',
-      'Harness_Saga_1',
-      '{"email":"test@example.com"}'
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    harness.failStep(
-      'SagaWorkflowExample.SendWelcomeEmailStep',
-      'SMTP Server Down'
-    );
-    WorkflowTestHarness.Result result = harness.drive();
-    Test.stopTest();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'SagaWorkflowExample.SagaWorkflow',
+        'Harness_Saga_1',
+        '{"email":"test@example.com"}'
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      harness.failStep(
+        'SagaWorkflowExample.SendWelcomeEmailStep',
+        'SMTP Server Down'
+      );
+      WorkflowTestHarness.Result result = harness.drive();
+      Test.stopTest();
 
-    System.assertEquals(
-      'Compensated',
-      result.status,
-      'Saga should fully compensate after the SMTP failure'
-    );
-    System.assertEquals(
-      new List<String>{
-        'SagaWorkflowExample.ProvisionServiceStep_Compensate',
-        'SagaWorkflowExample.ChargeCreditCardStep_Compensate'
-      },
-      result.compensatedSteps,
-      'Compensations must run in reverse (LIFO) order'
-    );
+      System.assertEquals(
+        'Compensated',
+        result.status,
+        'Saga should fully compensate after the SMTP failure'
+      );
+      System.assertEquals(
+        new List<String>{
+          'SagaWorkflowExample.ProvisionServiceStep_Compensate',
+          'SagaWorkflowExample.ChargeCreditCardStep_Compensate'
+        },
+        result.compensatedSteps,
+        'Compensations must run in reverse (LIFO) order'
+      );
+    }
   }
 
   /**
    * Bounded: a budget too small to stabilize fails the test with a clear message
    * rather than hanging or silently passing.
    */
-  @isTest
+  @IsTest
   static void driveFailsWhenBudgetExhausted() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'OnboardingWorkflowExample',
-      'Harness_Budget_1',
-      new Map<String, Object>{
-        'amount' => 15000.0,
-        'customerName' => 'Acme Corp',
-        'email' => 'admin@acme.com'
-      }
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-
-    Boolean threw = false;
-    try {
-      harness.drive(1);
-    } catch (WorkflowTestHarness.HarnessException ex) {
-      threw = true;
-      System.assert(
-        ex.getMessage().contains('did not stabilize'),
-        'Message should explain the workflow did not stabilize: ' +
-        ex.getMessage()
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'OnboardingWorkflowExample',
+        'Harness_Budget_1',
+        new Map<String, Object>{
+          'amount' => 15000.0,
+          'customerName' => 'Acme Corp',
+          'email' => 'admin@acme.com'
+        }
       );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+
+      Boolean threw = false;
+      try {
+        harness.drive(1);
+      } catch (WorkflowTestHarness.HarnessException ex) {
+        threw = true;
+        System.assert(
+          ex.getMessage().contains('did not stabilize'),
+          'Message should explain the workflow did not stabilize: ' +
+          ex.getMessage()
+        );
+      }
+      Test.stopTest();
+      System.assert(threw, 'Exhausting the hop budget should throw');
     }
-    Test.stopTest();
-    System.assert(threw, 'Exhausting the hop budget should throw');
   }
 
   /**
@@ -157,81 +163,85 @@ public class WorkflowTestHarnessTest {
    * intermediate state, then resumes to the final Compensated terminal — proving
    * that a harness can be paused and resumed across multiple calls.
    */
-  @isTest
+  @IsTest
   static void driveUntilStepPausesAndResumes() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'SagaWorkflowExample.SagaWorkflow',
-      'Harness_UntilStep_1',
-      '{"email":"test@example.com"}'
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    harness.failStep(
-      'SagaWorkflowExample.SendWelcomeEmailStep',
-      'SMTP Server Down'
-    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'SagaWorkflowExample.SagaWorkflow',
+        'Harness_UntilStep_1',
+        '{"email":"test@example.com"}'
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      harness.failStep(
+        'SagaWorkflowExample.SendWelcomeEmailStep',
+        'SMTP Server Down'
+      );
 
-    // Pause after the first forward step completes.
-    WorkflowTestHarness.Result mid = harness.driveUntilStep(
-      'SagaWorkflowExample.ChargeCreditCardStep'
-    );
+      // Pause after the first forward step completes.
+      WorkflowTestHarness.Result mid = harness.driveUntilStep(
+        'SagaWorkflowExample.ChargeCreditCardStep'
+      );
 
-    System.assert(
-      mid.reachedStep('SagaWorkflowExample.ChargeCreditCardStep'),
-      'ChargeCreditCardStep should appear in the audit trail'
-    );
-    System.assert(
-      !mid.isTerminal,
-      'Workflow should still be running after the first step'
-    );
+      System.assert(
+        mid.reachedStep('SagaWorkflowExample.ChargeCreditCardStep'),
+        'ChargeCreditCardStep should appear in the audit trail'
+      );
+      System.assert(
+        !mid.isTerminal,
+        'Workflow should still be running after the first step'
+      );
 
-    // Resume from the paused point to the final terminal state.
-    WorkflowTestHarness.Result result = harness.drive();
-    Test.stopTest();
+      // Resume from the paused point to the final terminal state.
+      WorkflowTestHarness.Result result = harness.drive();
+      Test.stopTest();
 
-    System.assertEquals(
-      'Compensated',
-      result.status,
-      'Saga should compensate after the SMTP failure'
-    );
-    System.assertEquals(
-      new List<String>{
-        'SagaWorkflowExample.ProvisionServiceStep_Compensate',
-        'SagaWorkflowExample.ChargeCreditCardStep_Compensate'
-      },
-      result.compensatedSteps,
-      'Compensations must run in LIFO order'
-    );
+      System.assertEquals(
+        'Compensated',
+        result.status,
+        'Saga should compensate after the SMTP failure'
+      );
+      System.assertEquals(
+        new List<String>{
+          'SagaWorkflowExample.ProvisionServiceStep_Compensate',
+          'SagaWorkflowExample.ChargeCreditCardStep_Compensate'
+        },
+        result.compensatedSteps,
+        'Compensations must run in LIFO order'
+      );
+    }
   }
 
   /**
    * Watchdog timeout: the harness fires the shipped WorkflowTimeoutJob to fail a
    * pending step, without the author hand-mutating the instance record.
    */
-  @isTest
+  @IsTest
   static void fireTimeoutFailsThroughWorkflowTimeoutJob() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'OnboardingWorkflowExample',
-      'Harness_Timeout_1',
-      new Map<String, Object>{
-        'amount' => 100.0,
-        'customerName' => 'Acme Corp',
-        'email' => 'admin@acme.com'
-      }
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    // The initial step is still Pending right after start; fire its timeout.
-    WorkflowTestHarness.Result result = harness.fireTimeout(
-      'OnboardingWorkflowExample.VerifyOrderStep'
-    );
-    Test.stopTest();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'OnboardingWorkflowExample',
+        'Harness_Timeout_1',
+        new Map<String, Object>{
+          'amount' => 100.0,
+          'customerName' => 'Acme Corp',
+          'email' => 'admin@acme.com'
+        }
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      // The initial step is still Pending right after start; fire its timeout.
+      WorkflowTestHarness.Result result = harness.fireTimeout(
+        'OnboardingWorkflowExample.VerifyOrderStep'
+      );
+      Test.stopTest();
 
-    System.assertEquals(
-      'Failed',
-      result.status,
-      'Timing out the initial pending step should fail the workflow'
-    );
+      System.assertEquals(
+        'Failed',
+        result.status,
+        'Timing out the initial pending step should fail the workflow'
+      );
+    }
   }
 
   // --- Test-Only Steps and Workflows for Fault Injection ------------------
@@ -559,199 +569,212 @@ public class WorkflowTestHarnessTest {
 
   // --- Fault Injection Tests -----------------------------------------------
 
-  @isTest
+  @IsTest
   static void testFaultInjectionForwardPath() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowTestHarnessTest.TestFaultWorkflow',
-      'Fault_Forward_1',
-      new Map<String, Object>()
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    harness.failStep(
-      'WorkflowTestHarnessTest.SimpleStep',
-      'Injected forward failure'
-    );
-    WorkflowTestHarness.Result result = harness.drive();
-    Test.stopTest();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowTestHarnessTest.TestFaultWorkflow',
+        'Fault_Forward_1',
+        new Map<String, Object>()
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      harness.failStep(
+        'WorkflowTestHarnessTest.SimpleStep',
+        'Injected forward failure'
+      );
+      WorkflowTestHarness.Result result = harness.drive();
+      Test.stopTest();
 
-    System.assertEquals(
-      'Failed',
-      result.status,
-      'Workflow should fail due to injected fault'
-    );
-    System.assert(
-      result.output == null || !result.output.contains('"done":true'),
-      'Step should not have successfully completed'
-    );
-  }
-
-  @isTest
-  static void testFaultInjectionRetryOnce() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowTestHarnessTest.TestRetryWorkflow',
-      'Fault_Retry_1',
-      new Map<String, Object>()
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    harness.failStepOnce(
-      'WorkflowTestHarnessTest.RetryStep',
-      'Injected retry failure'
-    );
-    WorkflowTestHarness.Result result = harness.drive();
-    Test.stopTest();
-
-    System.assertEquals(
-      'Completed',
-      result.status,
-      'Workflow should succeed after retry'
-    );
-  }
-
-  @isTest
-  static void testFaultInjectionCompensate() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowTestHarnessTest.TestCompensateWorkflow',
-      'Fault_Comp_1',
-      new Map<String, Object>()
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    // Fail the second step forward to trigger compensation of the first
-    harness.failStep('WorkflowTestHarnessTest.SimpleStep', 'Trigger rollback');
-    // Fail the compensation step itself
-    harness.failStep(
-      'WorkflowTestHarnessTest.MyCompensatableStep_Compensate',
-      'Injected compensation failure'
-    );
-    WorkflowTestHarness.Result result = harness.drive();
-    Test.stopTest();
-
-    System.assertEquals(
-      'CompensationFailed',
-      result.status,
-      'Rollback should be incomplete'
-    );
-
-    // Check execution logs
-    List<Workflow_Step_Execution__c> logs = [
-      SELECT Step_Name__c, Status__c, Error_Details__c
-      FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId
-      ORDER BY CreatedDate ASC
-    ];
-
-    Boolean foundCompensateFailure = false;
-    for (Workflow_Step_Execution__c log : logs) {
-      if (
-        log.Step_Name__c ==
-        'WorkflowTestHarnessTest.MyCompensatableStep_Compensate'
-      ) {
-        System.assertEquals('Failed', log.Status__c);
-        System.assert(
-          log.Error_Details__c.contains('Injected compensation failure')
-        );
-        foundCompensateFailure = true;
-      }
+      System.assertEquals(
+        'Failed',
+        result.status,
+        'Workflow should fail due to injected fault'
+      );
+      System.assert(
+        result.output == null || !result.output.contains('"done":true'),
+        'Step should not have successfully completed'
+      );
     }
-    System.assert(
-      foundCompensateFailure,
-      'Should have executed and failed the compensation step'
-    );
   }
 
-  @isTest
+  @IsTest
+  static void testFaultInjectionRetryOnce() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowTestHarnessTest.TestRetryWorkflow',
+        'Fault_Retry_1',
+        new Map<String, Object>()
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      harness.failStepOnce(
+        'WorkflowTestHarnessTest.RetryStep',
+        'Injected retry failure'
+      );
+      WorkflowTestHarness.Result result = harness.drive();
+      Test.stopTest();
+
+      System.assertEquals(
+        'Completed',
+        result.status,
+        'Workflow should succeed after retry'
+      );
+    }
+  }
+
+  @IsTest
+  static void testFaultInjectionCompensate() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowTestHarnessTest.TestCompensateWorkflow',
+        'Fault_Comp_1',
+        new Map<String, Object>()
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      // Fail the second step forward to trigger compensation of the first
+      harness.failStep(
+        'WorkflowTestHarnessTest.SimpleStep',
+        'Trigger rollback'
+      );
+      // Fail the compensation step itself
+      harness.failStep(
+        'WorkflowTestHarnessTest.MyCompensatableStep_Compensate',
+        'Injected compensation failure'
+      );
+      WorkflowTestHarness.Result result = harness.drive();
+      Test.stopTest();
+
+      System.assertEquals(
+        'CompensationFailed',
+        result.status,
+        'Rollback should be incomplete'
+      );
+
+      // Check execution logs
+      List<Workflow_Step_Execution__c> logs = [
+        SELECT Step_Name__c, Status__c, Error_Details__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c = :instanceId
+        ORDER BY CreatedDate ASC
+      ];
+
+      Boolean foundCompensateFailure = false;
+      for (Workflow_Step_Execution__c log : logs) {
+        if (
+          log.Step_Name__c ==
+          'WorkflowTestHarnessTest.MyCompensatableStep_Compensate'
+        ) {
+          System.assertEquals('Failed', log.Status__c);
+          System.assert(
+            log.Error_Details__c.contains('Injected compensation failure')
+          );
+          foundCompensateFailure = true;
+        }
+      }
+      System.assert(
+        foundCompensateFailure,
+        'Should have executed and failed the compensation step'
+      );
+    }
+  }
+
+  @IsTest
   static void testFaultInjectionChildWorkflow() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowTestHarnessTest.TestParentWorkflow',
-      'Parent_1',
-      new Map<String, Object>()
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    // Register fault on the child workflow step, specifying the child step name
-    harness.failStep(
-      'WorkflowTestHarnessTest.SimpleStep',
-      'Injected child step failure'
-    );
-    WorkflowTestHarness.Result result = harness.drive();
-    Test.stopTest();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowTestHarnessTest.TestParentWorkflow',
+        'Parent_1',
+        new Map<String, Object>()
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      // Register fault on the child workflow step, specifying the child step name
+      harness.failStep(
+        'WorkflowTestHarnessTest.SimpleStep',
+        'Injected child step failure'
+      );
+      WorkflowTestHarness.Result result = harness.drive();
+      Test.stopTest();
 
-    // Verify parent has failed because the child failed
-    System.assertEquals(
-      'Failed',
-      result.status,
-      'Parent workflow should fail if child fails'
-    );
+      // Verify parent has failed because the child failed
+      System.assertEquals(
+        'Failed',
+        result.status,
+        'Parent workflow should fail if child fails'
+      );
+    }
   }
 
-  @isTest
+  @IsTest
   static void testFaultInjectionChildWorkflowCompensate() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowTestHarnessTest.TestCompensatableParentWorkflow',
-      'Parent_Comp_1',
-      new Map<String, Object>()
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    // Register fault to fail the second step of the child, causing it to roll back
-    harness.failStep(
-      'WorkflowTestHarnessTest.SimpleStep',
-      'Injected child step failure'
-    );
-    // Register fault to fail the compensation of the first step of the child
-    harness.failStep(
-      'WorkflowTestHarnessTest.MyCompensatableStep_Compensate',
-      'Injected child compensation failure'
-    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowTestHarnessTest.TestCompensatableParentWorkflow',
+        'Parent_Comp_1',
+        new Map<String, Object>()
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      // Register fault to fail the second step of the child, causing it to roll back
+      harness.failStep(
+        'WorkflowTestHarnessTest.SimpleStep',
+        'Injected child step failure'
+      );
+      // Register fault to fail the compensation of the first step of the child
+      harness.failStep(
+        'WorkflowTestHarnessTest.MyCompensatableStep_Compensate',
+        'Injected child compensation failure'
+      );
 
-    WorkflowTestHarness.Result result = harness.drive();
-    Test.stopTest();
+      WorkflowTestHarness.Result result = harness.drive();
+      Test.stopTest();
 
-    // Verify parent has failed because the child failed
-    System.assertEquals(
-      'Failed',
-      result.status,
-      'Parent workflow should fail if child fails'
-    );
+      // Verify parent has failed because the child failed
+      System.assertEquals(
+        'Failed',
+        result.status,
+        'Parent workflow should fail if child fails'
+      );
 
-    // Retrieve child workflow instances
-    List<Workflow_Instance__c> children = [
-      SELECT Id, Status__c, Error_Message__c
-      FROM Workflow_Instance__c
-      WHERE Parent_Instance__c = :instanceId
-    ];
-    System.assertEquals(
-      1,
-      children.size(),
-      'Should have started one child workflow'
-    );
-    Workflow_Instance__c child = children[0];
-    System.assertEquals(
-      'CompensationFailed',
-      child.Status__c,
-      'Child workflow should be in CompensationFailed state'
-    );
+      // Retrieve child workflow instances
+      List<Workflow_Instance__c> children = [
+        SELECT Id, Status__c, Error_Message__c
+        FROM Workflow_Instance__c
+        WHERE Parent_Instance__c = :instanceId
+      ];
+      System.assertEquals(
+        1,
+        children.size(),
+        'Should have started one child workflow'
+      );
+      Workflow_Instance__c child = children[0];
+      System.assertEquals(
+        'CompensationFailed',
+        child.Status__c,
+        'Child workflow should be in CompensationFailed state'
+      );
 
-    // Verify child step execution log for compensation step is Failed
-    List<Workflow_Step_Execution__c> logs = [
-      SELECT Step_Name__c, Status__c, Error_Details__c
-      FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :child.Id
-      ORDER BY CreatedDate ASC
-    ];
-    Boolean foundCompensateFailure = false;
-    for (Workflow_Step_Execution__c log : logs) {
-      if (
-        log.Step_Name__c ==
-        'WorkflowTestHarnessTest.MyCompensatableStep_Compensate'
-      ) {
-        System.assertEquals('Failed', log.Status__c);
-        System.assert(
-          log.Error_Details__c.contains('Injected child compensation failure')
-        );
-        foundCompensateFailure = true;
+      // Verify child step execution log for compensation step is Failed
+      List<Workflow_Step_Execution__c> logs = [
+        SELECT Step_Name__c, Status__c, Error_Details__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c = :child.Id
+        ORDER BY CreatedDate ASC
+      ];
+      Boolean foundCompensateFailure = false;
+      for (Workflow_Step_Execution__c log : logs) {
+        if (
+          log.Step_Name__c ==
+          'WorkflowTestHarnessTest.MyCompensatableStep_Compensate'
+        ) {
+          System.assertEquals('Failed', log.Status__c);
+          System.assert(
+            log.Error_Details__c.contains('Injected child compensation failure')
+          );
+          foundCompensateFailure = true;
+        }
       }
     }
   }
@@ -941,223 +964,235 @@ public class WorkflowTestHarnessTest {
     }
   }
 
-  @isTest
+  @IsTest
   static void testSleepWorkflowTimeSkip() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowTestHarnessTest.TimeSkipSleepWorkflow',
-      'SleepKey',
-      null
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    harness.disableAutoTimeSkip = true;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowTestHarnessTest.TimeSkipSleepWorkflow',
+        'SleepKey',
+        null
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      harness.disableAutoTimeSkip = true;
 
-    // Drive the initial step (TimeSkipSleepStep)
-    WorkflowTestHarness.Result result = harness.step();
+      // Drive the initial step (TimeSkipSleepStep)
+      WorkflowTestHarness.Result result = harness.step();
 
-    System.assertEquals('Suspended', result.status);
-    System.assertEquals(
-      true,
-      result.isSleeping,
-      'Should be marked as sleeping'
-    );
-    System.assertEquals(
-      false,
-      result.isAwaitingRetry,
-      'Should not be retrying'
-    );
+      System.assertEquals('Suspended', result.status);
+      System.assertEquals(
+        true,
+        result.isSleeping,
+        'Should be marked as sleeping'
+      );
+      System.assertEquals(
+        false,
+        result.isAwaitingRetry,
+        'Should not be retrying'
+      );
 
-    // Fire the sleep and drive to completion
-    WorkflowTestHarness.Result finalResult = harness.fireSleep(
-      'WorkflowTestHarnessTest.TimeSkipSleepStep'
-    );
-    Test.stopTest();
+      // Fire the sleep and drive to completion
+      WorkflowTestHarness.Result finalResult = harness.fireSleep(
+        'WorkflowTestHarnessTest.TimeSkipSleepStep'
+      );
+      Test.stopTest();
 
-    System.assertEquals('Completed', finalResult.status);
+      System.assertEquals('Completed', finalResult.status);
+    }
   }
 
-  @isTest
+  @IsTest
   static void testRetryWorkflowTimeSkip() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowTestHarnessTest.TimeSkipRetryWorkflow',
-      'RetryKey',
-      null
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    harness.disableAutoTimeSkip = true;
-
-    // Drive the initial step (TimeSkipRetryStep first attempt which retries)
-    WorkflowTestHarness.Result result = harness.step();
-
-    System.assertEquals('Suspended', result.status);
-    System.assertEquals(false, result.isSleeping, 'Should not be sleeping');
-    System.assertEquals(
-      true,
-      result.isAwaitingRetry,
-      'Should be marked as retrying'
-    );
-
-    // Fire the retry once (will run second attempt and retry again)
-    WorkflowTestHarness.Result secondResult = harness.fireRetry(
-      'WorkflowTestHarnessTest.TimeSkipRetryStep'
-    );
-    System.assertEquals('Suspended', secondResult.status);
-    System.assertEquals(true, secondResult.isAwaitingRetry);
-
-    // Fire the retry again (will run third attempt and complete)
-    WorkflowTestHarness.Result finalResult = harness.fireRetry(
-      'WorkflowTestHarnessTest.TimeSkipRetryStep'
-    );
-    Test.stopTest();
-
-    System.assertEquals('Completed', finalResult.status);
-  }
-
-  @isTest
-  static void testFireSleepOnNonSleepingStepThrows() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowTestHarnessTest.TimeSkipSleepWorkflow',
-      'SleepKey2',
-      null
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    harness.drive();
-    Test.stopTest();
-
-    try {
-      harness.fireSleep('WorkflowTestHarnessTest.TimeSkipSleepStep');
-      System.assert(false, 'Should have thrown HarnessException');
-    } catch (WorkflowTestHarness.HarnessException ex) {
-      System.assert(
-        ex.getMessage().contains('is not currently sleeping'),
-        'Actionable message expected: ' + ex.getMessage()
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowTestHarnessTest.TimeSkipRetryWorkflow',
+        'RetryKey',
+        null
       );
-    }
-  }
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      harness.disableAutoTimeSkip = true;
 
-  @isTest
-  static void testFireRetryOnNonRetryingStepThrows() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowTestHarnessTest.TimeSkipRetryWorkflow',
-      'RetryKey2',
-      null
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    harness.drive();
-    Test.stopTest();
+      // Drive the initial step (TimeSkipRetryStep first attempt which retries)
+      WorkflowTestHarness.Result result = harness.step();
 
-    try {
-      harness.fireRetry('WorkflowTestHarnessTest.TimeSkipRetryStep');
-      System.assert(false, 'Should have thrown HarnessException');
-    } catch (WorkflowTestHarness.HarnessException ex) {
-      System.assert(
-        ex.getMessage().contains('is not currently awaiting retry'),
-        'Actionable message expected: ' + ex.getMessage()
+      System.assertEquals('Suspended', result.status);
+      System.assertEquals(false, result.isSleeping, 'Should not be sleeping');
+      System.assertEquals(
+        true,
+        result.isAwaitingRetry,
+        'Should be marked as retrying'
       );
-    }
-  }
 
-  @isTest
-  static void testJobsGracefulNullContext() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowTestHarnessTest.TimeSkipSleepWorkflow',
-      'SleepKeyJobs',
-      null
-    );
-    Id retryInstanceId = WorkflowEngine.start(
-      'WorkflowTestHarnessTest.TimeSkipRetryWorkflow',
-      'RetryKeyJobs',
-      null
-    );
-    // Call Schedulable execute directly with null context.
-    // It should run without throwing since we guarded System.abortJob.
-    new WorkflowSleepJob(instanceId).execute(null);
-    new WorkflowRetryJob(
-        retryInstanceId,
+      // Fire the retry once (will run second attempt and retry again)
+      WorkflowTestHarness.Result secondResult = harness.fireRetry(
         'WorkflowTestHarnessTest.TimeSkipRetryStep'
-      )
-      .execute(null);
-
-    // Validate that constructors throw on null instance ID
-    try {
-      new WorkflowSleepJob(null);
-      System.assert(
-        false,
-        'Expected WorkflowSleepJob to throw WorkflowException'
       );
-    } catch (WorkflowEngine.WorkflowException ex) {
-      System.assertEquals('instanceId is required.', ex.getMessage());
-    }
+      System.assertEquals('Suspended', secondResult.status);
+      System.assertEquals(true, secondResult.isAwaitingRetry);
 
-    try {
-      new WorkflowRetryJob(null, 'WorkflowTestHarnessTest.TimeSkipRetryStep');
-      System.assert(
-        false,
-        'Expected WorkflowRetryJob to throw WorkflowException'
+      // Fire the retry again (will run third attempt and complete)
+      WorkflowTestHarness.Result finalResult = harness.fireRetry(
+        'WorkflowTestHarnessTest.TimeSkipRetryStep'
       );
-    } catch (WorkflowEngine.WorkflowException ex) {
-      System.assertEquals('instanceId is required.', ex.getMessage());
-    }
+      Test.stopTest();
 
-    Test.stopTest();
+      System.assertEquals('Completed', finalResult.status);
+    }
   }
 
-  @isTest
-  static void testParallelSleepBranchDifferentiated() {
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'WorkflowTestHarnessTest.ParallelSleepWorkflow',
-      'ParallelSleepKey',
-      null
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    harness.disableAutoTimeSkip = true;
-
-    // Run first step (ParallelSleepSplitStep) which splits the flow
-    WorkflowTestHarness.Result splitResult = harness.step();
-    System.assertEquals('Running', splitResult.status);
-
-    // Run the next step execution (runs ParallelSleepA which returns SLEEP and suspends)
-    WorkflowTestHarness.Result resultA = harness.step();
-    System.assertEquals('Suspended', resultA.status);
-    System.assertEquals(true, resultA.isSleeping);
-
-    // Run the next step execution (runs ParallelSleepB which returns SUSPEND and suspends)
-    WorkflowTestHarness.Result resultB = harness.step();
-    System.assertEquals('Suspended', resultB.status);
-
-    // Firing sleep on ParallelSleepB (which is plain suspended, not sleeping) must throw HarnessException
-    try {
-      harness.fireSleep('WorkflowTestHarnessTest.ParallelSleepB');
-      System.assert(
-        false,
-        'Expected fireSleep on ParallelSleepB to throw HarnessException'
+  @IsTest
+  static void testFireSleepOnNonSleepingStepThrows() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowTestHarnessTest.TimeSkipSleepWorkflow',
+        'SleepKey2',
+        null
       );
-    } catch (WorkflowTestHarness.HarnessException ex) {
-      System.assert(
-        ex.getMessage().contains('is not currently sleeping'),
-        'Actionable message expected: ' + ex.getMessage()
-      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      harness.drive();
+      Test.stopTest();
+
+      try {
+        harness.fireSleep('WorkflowTestHarnessTest.TimeSkipSleepStep');
+        System.assert(false, 'Should have thrown HarnessException');
+      } catch (WorkflowTestHarness.HarnessException ex) {
+        System.assert(
+          ex.getMessage().contains('is not currently sleeping'),
+          'Actionable message expected: ' + ex.getMessage()
+        );
+      }
     }
+  }
 
-    // Firing sleep on ParallelSleepA (which is actually sleeping) must succeed and wait on the remaining branch B
-    WorkflowTestHarness.Result awakeA = harness.fireSleep(
-      'WorkflowTestHarnessTest.ParallelSleepA'
-    );
-    System.assertEquals('Suspended', awakeA.status);
+  @IsTest
+  static void testFireRetryOnNonRetryingStepThrows() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowTestHarnessTest.TimeSkipRetryWorkflow',
+        'RetryKey2',
+        null
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      harness.drive();
+      Test.stopTest();
 
-    // Resuming B via signal must succeed and drive to completion
-    WorkflowTestHarness.Result finalResult = harness.injectSignal(
-      'ParallelSleepKey',
-      'WorkflowTestHarnessTest.ParallelSleepB',
-      null
-    );
-    Test.stopTest();
+      try {
+        harness.fireRetry('WorkflowTestHarnessTest.TimeSkipRetryStep');
+        System.assert(false, 'Should have thrown HarnessException');
+      } catch (WorkflowTestHarness.HarnessException ex) {
+        System.assert(
+          ex.getMessage().contains('is not currently awaiting retry'),
+          'Actionable message expected: ' + ex.getMessage()
+        );
+      }
+    }
+  }
 
-    System.assertEquals('Completed', finalResult.status);
+  @IsTest
+  static void testJobsGracefulNullContext() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowTestHarnessTest.TimeSkipSleepWorkflow',
+        'SleepKeyJobs',
+        null
+      );
+      Id retryInstanceId = WorkflowEngine.start(
+        'WorkflowTestHarnessTest.TimeSkipRetryWorkflow',
+        'RetryKeyJobs',
+        null
+      );
+      // Call Schedulable execute directly with null context.
+      // It should run without throwing since we guarded System.abortJob.
+      new WorkflowSleepJob(instanceId).execute(null);
+      new WorkflowRetryJob(
+          retryInstanceId,
+          'WorkflowTestHarnessTest.TimeSkipRetryStep'
+        )
+        .execute(null);
+
+      // Validate that constructors throw on null instance ID
+      try {
+        new WorkflowSleepJob(null);
+        System.assert(
+          false,
+          'Expected WorkflowSleepJob to throw WorkflowException'
+        );
+      } catch (WorkflowEngine.WorkflowException ex) {
+        System.assertEquals('instanceId is required.', ex.getMessage());
+      }
+
+      try {
+        new WorkflowRetryJob(null, 'WorkflowTestHarnessTest.TimeSkipRetryStep');
+        System.assert(
+          false,
+          'Expected WorkflowRetryJob to throw WorkflowException'
+        );
+      } catch (WorkflowEngine.WorkflowException ex) {
+        System.assertEquals('instanceId is required.', ex.getMessage());
+      }
+
+      Test.stopTest();
+    }
+  }
+
+  @IsTest
+  static void testParallelSleepBranchDifferentiated() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowTestHarnessTest.ParallelSleepWorkflow',
+        'ParallelSleepKey',
+        null
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      harness.disableAutoTimeSkip = true;
+
+      // Run first step (ParallelSleepSplitStep) which splits the flow
+      WorkflowTestHarness.Result splitResult = harness.step();
+      System.assertEquals('Running', splitResult.status);
+
+      // Run the next step execution (runs ParallelSleepA which returns SLEEP and suspends)
+      WorkflowTestHarness.Result resultA = harness.step();
+      System.assertEquals('Suspended', resultA.status);
+      System.assertEquals(true, resultA.isSleeping);
+
+      // Run the next step execution (runs ParallelSleepB which returns SUSPEND and suspends)
+      WorkflowTestHarness.Result resultB = harness.step();
+      System.assertEquals('Suspended', resultB.status);
+
+      // Firing sleep on ParallelSleepB (which is plain suspended, not sleeping) must throw HarnessException
+      try {
+        harness.fireSleep('WorkflowTestHarnessTest.ParallelSleepB');
+        System.assert(
+          false,
+          'Expected fireSleep on ParallelSleepB to throw HarnessException'
+        );
+      } catch (WorkflowTestHarness.HarnessException ex) {
+        System.assert(
+          ex.getMessage().contains('is not currently sleeping'),
+          'Actionable message expected: ' + ex.getMessage()
+        );
+      }
+
+      // Firing sleep on ParallelSleepA (which is actually sleeping) must succeed and wait on the remaining branch B
+      WorkflowTestHarness.Result awakeA = harness.fireSleep(
+        'WorkflowTestHarnessTest.ParallelSleepA'
+      );
+      System.assertEquals('Suspended', awakeA.status);
+
+      // Resuming B via signal must succeed and drive to completion
+      WorkflowTestHarness.Result finalResult = harness.injectSignal(
+        'ParallelSleepKey',
+        'WorkflowTestHarnessTest.ParallelSleepB',
+        null
+      );
+      Test.stopTest();
+
+      System.assertEquals('Completed', finalResult.status);
+    }
   }
 }

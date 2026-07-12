@@ -83,11 +83,7 @@ public inherited sharing class SagaWorkflowExample {
           if (origOutput != null && origOutput.containsKey('chargeId')) {
             chargeId = (String) origOutput.get('chargeId');
           }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize stepStateJson: ' + e.getMessage()
-          );
+        } catch (Exception ignored) {
         }
       }
 

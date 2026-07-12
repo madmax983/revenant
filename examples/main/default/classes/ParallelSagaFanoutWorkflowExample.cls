@@ -100,15 +100,6 @@ public inherited sharing class ParallelSagaFanoutWorkflowExample {
      * @return A complete result marking the branch compensated.
      */
     public StepResult compensate(StepContext ctx) {
-      if (String.isNotBlank(ctx.stepStateJson)) {
-        Map<String, Object> state = (Map<String, Object>) JSON.deserializeUntyped(
-          ctx.stepStateJson
-        );
-        System.debug(
-          LoggingLevel.INFO,
-          'Compensating branch 1 with state: ' + state
-        );
-      }
       compensationAudit.add('Branch1_Compensate');
       return StepResult.complete(
         null,
@@ -145,15 +136,6 @@ public inherited sharing class ParallelSagaFanoutWorkflowExample {
      * @return A complete result marking the branch compensated.
      */
     public StepResult compensate(StepContext ctx) {
-      if (String.isNotBlank(ctx.stepStateJson)) {
-        Map<String, Object> state = (Map<String, Object>) JSON.deserializeUntyped(
-          ctx.stepStateJson
-        );
-        System.debug(
-          LoggingLevel.INFO,
-          'Compensating branch 2 with state: ' + state
-        );
-      }
       compensationAudit.add('Branch2_Compensate');
       return StepResult.complete(
         null,
@@ -194,15 +176,6 @@ public inherited sharing class ParallelSagaFanoutWorkflowExample {
      * @return A complete result marking the branch compensated.
      */
     public StepResult compensate(StepContext ctx) {
-      if (String.isNotBlank(ctx.stepStateJson)) {
-        Map<String, Object> state = (Map<String, Object>) JSON.deserializeUntyped(
-          ctx.stepStateJson
-        );
-        System.debug(
-          LoggingLevel.INFO,
-          'Compensating branch 3 with state: ' + state
-        );
-      }
       compensationAudit.add('Branch3_Compensate');
       return StepResult.complete(
         null,
@@ -239,15 +212,6 @@ public inherited sharing class ParallelSagaFanoutWorkflowExample {
      * @return A complete result marking the branch compensated.
      */
     public StepResult compensate(StepContext ctx) {
-      if (String.isNotBlank(ctx.stepStateJson)) {
-        Map<String, Object> state = (Map<String, Object>) JSON.deserializeUntyped(
-          ctx.stepStateJson
-        );
-        System.debug(
-          LoggingLevel.INFO,
-          'Compensating branch 4 with state: ' + state
-        );
-      }
       compensationAudit.add('Branch4_Compensate');
       return StepResult.complete(
         null,

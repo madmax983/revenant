@@ -16,6 +16,15 @@ public inherited sharing class MockIdempotentPaymentGateway {
   private static Integer sequence = 0;
 
   /**
+   * @description Outcome of a charge attempt: a first-seen key results in a real
+   * CHARGED side effect, while a repeat key is served from cache as DEDUPLICATED.
+   */
+  public enum ChargeOutcome {
+    CHARGED,
+    DEDUPLICATED
+  }
+
+  /**
    * @description Outcome of a charge attempt: the charge id and whether it was deduplicated
    * from a prior call with the same idempotency key.
    */
@@ -26,11 +35,11 @@ public inherited sharing class MockIdempotentPaymentGateway {
     /**
      * @description Constructs a charge result.
      * @param chargeId The id of the charge, new or previously recorded.
-     * @param deduplicated True if this result reused a prior charge for the same key.
+     * @param outcome CHARGED for a first-seen key, or DEDUPLICATED when a prior charge was reused for the same key.
      */
-    public ChargeResult(String chargeId, Boolean deduplicated) {
+    public ChargeResult(String chargeId, ChargeOutcome outcome) {
       this.chargeId = chargeId;
-      this.deduplicated = deduplicated;
+      this.deduplicated = (outcome == ChargeOutcome.DEDUPLICATED);
     }
   }
 
@@ -50,7 +59,10 @@ public inherited sharing class MockIdempotentPaymentGateway {
       chargeIdByKey.containsKey(idempotencyKey)
     ) {
       // Server-side dedup on the caller-supplied key: no new side effect.
-      return new ChargeResult(chargeIdByKey.get(idempotencyKey), true);
+      return new ChargeResult(
+        chargeIdByKey.get(idempotencyKey),
+        ChargeOutcome.DEDUPLICATED
+      );
     }
     // First time we have seen this key: the one real, effective charge.
     effectiveSideEffectCount++;
@@ -59,7 +71,7 @@ public inherited sharing class MockIdempotentPaymentGateway {
     if (String.isNotBlank(idempotencyKey)) {
       chargeIdByKey.put(idempotencyKey, chargeId);
     }
-    return new ChargeResult(chargeId, false);
+    return new ChargeResult(chargeId, ChargeOutcome.CHARGED);
   }
 
   @TestVisible

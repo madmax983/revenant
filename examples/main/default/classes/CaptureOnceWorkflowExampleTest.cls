@@ -1,4 +1,4 @@
-@isTest
+@IsTest
 public class CaptureOnceWorkflowExampleTest {
   /**
    * Drives the capture-once example through ≥3 re-executions of the same step:
@@ -11,94 +11,98 @@ public class CaptureOnceWorkflowExampleTest {
    * byte-identical to what the step produced on the very first run — zero drift.
    * The producer call counter (static) proves the producer was invoked exactly once.
    */
-  @isTest
+  @IsTest
   static void capturedValuesAreStableAcrossYieldRetryAndComplete() {
-    CaptureOnceWorkflowExample.resetProducerCounters();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      CaptureOnceWorkflowExample.resetProducerCounters();
 
-    Test.startTest();
-    Id instanceId = WorkflowEngine.start(
-      'CaptureOnceWorkflowExample.CaptureOnceWorkflow',
-      'capture-once-test-1',
-      null
-    );
-    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
-    WorkflowTestHarness.Result result = harness.drive();
-    Test.stopTest();
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'CaptureOnceWorkflowExample.CaptureOnceWorkflow',
+        'capture-once-test-1',
+        null
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      WorkflowTestHarness.Result result = harness.drive();
+      Test.stopTest();
 
-    System.assertEquals('Completed', result.status, 'Workflow must complete');
-    System.assert(
-      result.reachedStep('CaptureOnceWorkflowExample.CaptureOnceStep'),
-      'CaptureOnceStep must have executed'
-    );
+      System.assertEquals('Completed', result.status, 'Workflow must complete');
+      System.assert(
+        result.reachedStep('CaptureOnceWorkflowExample.CaptureOnceStep'),
+        'CaptureOnceStep must have executed'
+      );
 
-    // The step's final output carries the two captured values.
-    System.assertNotEquals(null, result.output, 'Output must be non-null');
-    Map<String, Object> output = (Map<String, Object>) JSON.deserializeUntyped(
-      result.output
-    );
-    String refNumber = (String) output.get('refNumber');
-    String startedAt = (String) output.get('startedAt');
+      // The step's final output carries the two captured values.
+      System.assertNotEquals(null, result.output, 'Output must be non-null');
+      Map<String, Object> output = (Map<String, Object>) JSON.deserializeUntyped(
+        result.output
+      );
+      String refNumber = (String) output.get('refNumber');
+      String startedAt = (String) output.get('startedAt');
 
-    System.assert(
-      String.isNotBlank(refNumber),
-      'refNumber must be captured and echoed in output'
-    );
-    System.assert(
-      String.isNotBlank(startedAt),
-      'startedAt must be captured and echoed in output'
-    );
+      System.assert(
+        String.isNotBlank(refNumber),
+        'refNumber must be captured and echoed in output'
+      );
+      System.assert(
+        String.isNotBlank(startedAt),
+        'startedAt must be captured and echoed in output'
+      );
 
-    // Producer was invoked exactly once despite ≥3 executions of the step.
-    System.assertEquals(
-      1,
-      CaptureOnceWorkflowExample.refNumberCalls,
-      'refNumber producer must be called exactly once across all re-executions'
-    );
-    System.assertEquals(
-      1,
-      CaptureOnceWorkflowExample.startedAtCalls,
-      'startedAt producer must be called exactly once across all re-executions'
-    );
+      // Producer was invoked exactly once despite ≥3 executions of the step.
+      System.assertEquals(
+        1,
+        CaptureOnceWorkflowExample.refNumberCalls,
+        'refNumber producer must be called exactly once across all re-executions'
+      );
+      System.assertEquals(
+        1,
+        CaptureOnceWorkflowExample.startedAtCalls,
+        'startedAt producer must be called exactly once across all re-executions'
+      );
+    }
   }
 
   /**
    * Once() values must be scoped to a single step context: a fresh context (new
    * instance, same step name) produces its own value independently.
    */
-  @isTest
+  @IsTest
   static void distinctInstancesHaveIndependentCaptures() {
-    CaptureOnceWorkflowExample.resetProducerCounters();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      CaptureOnceWorkflowExample.resetProducerCounters();
 
-    Test.startTest();
-    Id id1 = WorkflowEngine.start(
-      'CaptureOnceWorkflowExample.CaptureOnceWorkflow',
-      'capture-scope-1',
-      null
-    );
-    Id id2 = WorkflowEngine.start(
-      'CaptureOnceWorkflowExample.CaptureOnceWorkflow',
-      'capture-scope-2',
-      null
-    );
-    WorkflowTestHarness.Result r1 = new WorkflowTestHarness(id1).drive();
-    WorkflowTestHarness.Result r2 = new WorkflowTestHarness(id2).drive();
-    Test.stopTest();
+      Test.startTest();
+      Id id1 = WorkflowEngine.start(
+        'CaptureOnceWorkflowExample.CaptureOnceWorkflow',
+        'capture-scope-1',
+        null
+      );
+      Id id2 = WorkflowEngine.start(
+        'CaptureOnceWorkflowExample.CaptureOnceWorkflow',
+        'capture-scope-2',
+        null
+      );
+      WorkflowTestHarness.Result r1 = new WorkflowTestHarness(id1).drive();
+      WorkflowTestHarness.Result r2 = new WorkflowTestHarness(id2).drive();
+      Test.stopTest();
 
-    System.assertEquals('Completed', r1.status);
-    System.assertEquals('Completed', r2.status);
+      System.assertEquals('Completed', r1.status);
+      System.assertEquals('Completed', r2.status);
 
-    Map<String, Object> out1 = (Map<String, Object>) JSON.deserializeUntyped(
-      r1.output
-    );
-    Map<String, Object> out2 = (Map<String, Object>) JSON.deserializeUntyped(
-      r2.output
-    );
+      Map<String, Object> out1 = (Map<String, Object>) JSON.deserializeUntyped(
+        r1.output
+      );
+      Map<String, Object> out2 = (Map<String, Object>) JSON.deserializeUntyped(
+        r2.output
+      );
 
-    // Each instance produces its own independent refNumber.
-    System.assertNotEquals(
-      out1.get('refNumber'),
-      out2.get('refNumber'),
-      'Two independent instances must produce independent captured values'
-    );
+      // Each instance produces its own independent refNumber.
+      System.assertNotEquals(
+        out1.get('refNumber'),
+        out2.get('refNumber'),
+        'Two independent instances must produce independent captured values'
+      );
+    }
   }
 }

@@ -96,7 +96,7 @@ public inherited sharing class CursorFanoutWorkflowExample {
    * Initializes a Database.Cursor, queries the total records,
    * and serializes the cursor pointer so it can be distributed.
    */
-  public class CursorQueryStep implements WorkflowStep {
+  public inherited sharing class CursorQueryStep implements WorkflowStep {
     /**
      * @description Opens a Database.Cursor over the source query, records the total
      * row count, and serializes the cursor pointer plus chunk size for fan-out.
@@ -108,44 +108,37 @@ public inherited sharing class CursorFanoutWorkflowExample {
       // Construct query (using Accounts for demonstration)
       String query = 'SELECT Id, Name FROM Account ORDER BY Name';
 
-      // Create native Apex Cursor
+      // Create native Apex Cursor. Serializing it (below) retains a reference to
+      // the SOQL result cache so child chunks can fetch their partition later.
       Database.Cursor cursor = Database.getCursor(query);
-      Integer totalRecords = cursor.getNumRecords();
-
-      // Serialize the cursor pointer (retains reference to SOQL cache)
-      String serializedCursor = JSON.serialize(cursor);
-
-      // Chunk size defaults to 2 for the demo/tests, but can be overridden via the
-      // workflow input (e.g. {"chunkSize": 50}) so a large dataset fans out into a
-      // manageable number of larger chunks instead of hundreds of tiny child workflows.
-      Integer chunkSize = 2;
-      if (String.isNotBlank(ctx.workflowInputJson)) {
-        try {
-          Map<String, Object> inp = (Map<String, Object>) JSON.deserializeUntyped(
-            ctx.workflowInputJson
-          );
-          Object cs = inp.get('chunkSize');
-          if (cs != null) {
-            chunkSize = Integer.valueOf(String.valueOf(cs));
-          }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to deserialize chunkSize from workflowInputJson: ' +
-            e.getMessage()
-          );
-        }
-      }
-      if (chunkSize < 1) {
-        chunkSize = 1;
-      }
 
       Map<String, Object> output = new Map<String, Object>{
-        'totalRecords' => totalRecords,
-        'serializedCursor' => serializedCursor,
-        'chunkSize' => chunkSize
+        'totalRecords' => cursor.getNumRecords(),
+        'serializedCursor' => JSON.serialize(cursor),
+        'chunkSize' => resolveChunkSize(ctx.workflowInputJson)
       };
       return StepResult.complete(null, output);
+    }
+
+    // Chunk size defaults to 2 for the demo/tests, but can be overridden via the
+    // workflow input (e.g. {"chunkSize": 50}) so a large dataset fans out into a
+    // manageable number of larger chunks instead of hundreds of tiny child workflows.
+    private Integer resolveChunkSize(String inputJson) {
+      if (String.isBlank(inputJson)) {
+        return 2;
+      }
+      Integer chunkSize = 2;
+      try {
+        Map<String, Object> parsed = (Map<String, Object>) JSON.deserializeUntyped(
+          inputJson
+        );
+        Object requested = parsed.get('chunkSize');
+        if (requested != null) {
+          chunkSize = Integer.valueOf(String.valueOf(requested));
+        }
+      } catch (Exception ignored) {
+      }
+      return Math.max(1, chunkSize);
     }
   }
 
@@ -154,7 +147,7 @@ public inherited sharing class CursorFanoutWorkflowExample {
    * Spawns a parallel child ProcessCursorChunkWorkflow for each offset chunk,
    * suspends parent execution, and joins results upon wake-up.
    */
-  public class CursorFanoutStep implements WorkflowStep {
+  public inherited sharing class CursorFanoutStep implements WorkflowStep {
     /**
      * @description On first run spawns one child workflow per offset chunk and
      * suspends; on re-entry waits for all children then aggregates their outputs.
@@ -170,99 +163,106 @@ public inherited sharing class CursorFanoutWorkflowExample {
         WITH USER_MODE
       ];
 
-      // First run: spawn chunks
+      // First activation spawns the chunks; later activations join them.
       if (childInstances.isEmpty()) {
-        ctx.reportProgress(40.0, 'Fanning out parallel child chunks');
-        if (String.isBlank(ctx.previousStepOutput)) {
-          return StepResult.complete(
-            null,
-            new Map<String, Object>{
-              'error' => 'No output received from CursorQueryStep'
-            }
-          );
-        }
-
-        Map<String, Object> queryData = (Map<String, Object>) JSON.deserializeUntyped(
-          ctx.previousStepOutput
-        );
-        Integer totalRecords = (Integer) queryData.get('totalRecords');
-        String serializedCursor = (String) queryData.get('serializedCursor');
-        Integer chunkSize = (Integer) queryData.get('chunkSize');
-
-        if (totalRecords == 0) {
-          return StepResult.complete(
-            null,
-            new Map<String, Object>{
-              'totalProcessed' => 0,
-              'results' => new List<Object>()
-            }
-          );
-        }
-
-        // Spawn child workflows in increments of chunkSize
-        for (Integer offset = 0; offset < totalRecords; offset += chunkSize) {
-          // Create child workflow input
-          Map<String, Object> childInput = new Map<String, Object>{
-            'serializedCursor' => serializedCursor,
-            'offset' => offset,
-            'limit' => chunkSize
-          };
-
-          // Generate unique correlation key for this chunk
-          String childKey =
-            'CursorChunk_' +
-            offset +
-            '_' +
-            ctx.workflowInstanceId;
-
-          // Start child workflow
-          WorkflowEngine.start(
-            'CursorFanoutWorkflowExample.ProcessCursorChunkWorkflow',
-            childKey,
-            childInput,
-            ctx.workflowInstanceId
-          );
-        }
-
+        return fanOutChunks(ctx);
+      }
+      if (!allChildrenSettled(childInstances)) {
         return StepResult.suspend();
       }
+      return collectChunkResults(ctx, childInstances);
+    }
 
-      // Check if all children have finished
-      Boolean allCompleted = true;
+    private StepResult fanOutChunks(StepContext ctx) {
+      ctx.reportProgress(40.0, 'Fanning out parallel child chunks');
+      if (String.isBlank(ctx.previousStepOutput)) {
+        return StepResult.complete(
+          null,
+          new Map<String, Object>{
+            'error' => 'No output received from CursorQueryStep'
+          }
+        );
+      }
+
+      Map<String, Object> plan = (Map<String, Object>) JSON.deserializeUntyped(
+        ctx.previousStepOutput
+      );
+      Integer totalRecords = (Integer) plan.get('totalRecords');
+      if (totalRecords == 0) {
+        return StepResult.complete(
+          null,
+          new Map<String, Object>{
+            'totalProcessed' => 0,
+            'results' => new List<Object>()
+          }
+        );
+      }
+      String serializedCursor = (String) plan.get('serializedCursor');
+      Integer chunkSize = (Integer) plan.get('chunkSize');
+
+      // Spawn one child workflow per offset window of chunkSize records.
+      for (Integer offset = 0; offset < totalRecords; offset += chunkSize) {
+        Map<String, Object> childInput = new Map<String, Object>{
+          'serializedCursor' => serializedCursor,
+          'offset' => offset,
+          'limit' => chunkSize
+        };
+        String childKey =
+          'CursorChunk_' +
+          offset +
+          '_' +
+          ctx.workflowInstanceId;
+        WorkflowEngine.start(
+          'CursorFanoutWorkflowExample.ProcessCursorChunkWorkflow',
+          childKey,
+          childInput,
+          ctx.workflowInstanceId
+        );
+      }
+
+      return StepResult.suspend();
+    }
+
+    private Boolean allChildrenSettled(
+      List<Workflow_Instance__c> childInstances
+    ) {
       for (Workflow_Instance__c child : childInstances) {
         if (child.Status__c != 'Completed' && child.Status__c != 'Failed') {
-          allCompleted = false;
-          break;
+          return false;
         }
       }
+      return true;
+    }
 
-      if (!allCompleted) {
-        return StepResult.suspend();
-      }
-
+    private StepResult collectChunkResults(
+      StepContext ctx,
+      List<Workflow_Instance__c> childInstances
+    ) {
       ctx.reportProgress(80.0, 'All chunks completed; aggregating outputs');
 
-      // Aggregate outputs
       List<Object> aggregatedOutputs = new List<Object>();
       Integer totalProcessed = 0;
       for (Workflow_Instance__c child : childInstances) {
-        if (child.Output__c != null) {
-          Map<String, Object> childOut = (Map<String, Object>) JSON.deserializeUntyped(
-            child.Output__c
-          );
-          aggregatedOutputs.add(childOut);
-          Integer processedCount = (Integer) childOut.get('count');
-          if (processedCount != null) {
-            totalProcessed += processedCount;
-          }
+        if (child.Output__c == null) {
+          continue;
+        }
+        Map<String, Object> chunkOutput = (Map<String, Object>) JSON.deserializeUntyped(
+          child.Output__c
+        );
+        aggregatedOutputs.add(chunkOutput);
+        Integer chunkCount = (Integer) chunkOutput.get('count');
+        if (chunkCount != null) {
+          totalProcessed += chunkCount;
         }
       }
 
-      Map<String, Object> resultPayload = new Map<String, Object>{
-        'totalProcessed' => totalProcessed,
-        'chunks' => aggregatedOutputs
-      };
-      return StepResult.complete(null, resultPayload);
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{
+          'totalProcessed' => totalProcessed,
+          'chunks' => aggregatedOutputs
+        }
+      );
     }
   }
 
@@ -308,10 +308,9 @@ public inherited sharing class CursorFanoutWorkflowExample {
       // Fetch records for our offset partition
       List<SObject> records = cursor.fetch(offset, fetchCount);
 
-      List<String> accountNames = new List<String>();
-      for (SObject sobj : records) {
-        Account acc = (Account) sobj;
-        accountNames.add(acc.Name);
+      List<String> names = new List<String>();
+      for (SObject record : records) {
+        names.add(((Account) record).Name);
       }
 
       ctx.reportProgress(
@@ -319,12 +318,12 @@ public inherited sharing class CursorFanoutWorkflowExample {
         'Chunk offset ' + offset + ' processed successfully'
       );
 
-      Map<String, Object> result = new Map<String, Object>{
+      Map<String, Object> chunkResult = new Map<String, Object>{
         'offset' => offset,
         'count' => records.size(),
-        'names' => accountNames
+        'names' => names
       };
-      return StepResult.complete(null, result);
+      return StepResult.complete(null, chunkResult);
     }
   }
 
@@ -344,17 +343,16 @@ public inherited sharing class CursorFanoutWorkflowExample {
         100.0,
         'Verification complete; fanned-out records validated'
       );
-      Map<String, Object> fanoutResult = (Map<String, Object>) JSON.deserializeUntyped(
+      Map<String, Object> fanout = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.previousStepOutput
       );
-      Integer totalProcessed = (Integer) fanoutResult.get('totalProcessed');
 
-      Map<String, Object> finalStatus = new Map<String, Object>{
+      Map<String, Object> summary = new Map<String, Object>{
         'status' => 'Cursor fan-out verification complete',
-        'totalProcessed' => totalProcessed,
-        'fanoutDetails' => fanoutResult
+        'totalProcessed' => (Integer) fanout.get('totalProcessed'),
+        'fanoutDetails' => fanout
       };
-      return StepResult.complete(null, finalStatus);
+      return StepResult.complete(null, summary);
     }
   }
 }
