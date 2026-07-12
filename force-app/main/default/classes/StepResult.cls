@@ -1,7 +1,5 @@
 /**
- * @description Immutable directive a WorkflowStep returns to tell the engine what to do
- * next — complete, yield, suspend, retry, sleep, split, start children, wait for approval,
- * continue-as-new, or fail — built through the static factory methods on this class.
+ * @description Immutable directive a WorkflowStep returns to tell the engine what to do next — complete, yield, suspend, retry, sleep, split, start children, wait for approval, continue-as-new, or fail — built through the static factory methods on this class.
  */
 public inherited sharing class StepResult {
   /**
@@ -106,8 +104,7 @@ public inherited sharing class StepResult {
   private static final Map<Id, Long> MS_PER_BUSINESS_DAY_BY_BH_ID = new Map<Id, Long>();
 
   /**
-   * @description Completes the step, optionally routing to a named next step and carrying
-   * a serialized output payload.
+   * @description Completes the step, optionally routing to a named next step and carrying a serialized output payload.
    * @param nextStepName The name of the next step to run, or null to let the definition decide.
    * @param output The step output to serialize, or null for no output.
    * @return A COMPLETE result carrying the next step and serialized output.
@@ -121,12 +118,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Completes the step and hands the engine one or more domain Platform
-   * Events to publish effectively-once when this COMPLETE transition commits (issue #64).
-   * Retries, yields, suspends, re-drives, and at-least-once resumes that re-run execute()
-   * before that commit publish nothing; a step already durably Completed never re-emits.
-   * Authors choose their own __e type; delivery to subscribers stays at-least-once, so
-   * subscribers must remain idempotent.
+   * @description Completes the step and hands the engine one or more domain Platform Events to publish effectively-once when this COMPLETE transition commits (issue #64). Retries, yields, suspends, re-drives, and at-least-once resumes that re-run execute() before that commit publish nothing; a step already durably Completed never re-emits. Authors choose their own __e type; delivery to subscribers stays at-least-once, so subscribers must remain idempotent.
    * @param nextStepName The name of the next step to run, or null.
    * @param output The step output to serialize, or null for no output.
    * @param events The outbound Platform Events to publish on commit.
@@ -143,8 +135,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Yields control back to the engine to re-drive the same step in a fresh
-   * transaction, persisting the given durable state so long-running work stays within limits.
+   * @description Yields control back to the engine to re-drive the same step in a fresh transaction, persisting the given durable state so long-running work stays within limits.
    * @param stepStateJson Opaque durable state carried into the next re-drive.
    * @return A YIELD result carrying the persisted step state.
    */
@@ -178,8 +169,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Suspends the step with a durable timeout, routing to timeoutStep if the
-   * deadline elapses before a signal or approval arrives.
+   * @description Suspends the step with a durable timeout, routing to timeoutStep if the deadline elapses before a signal or approval arrives.
    * @param timeoutSeconds Positive number of seconds before the wait times out.
    * @param timeoutStep The non-blank step to route to on timeout.
    * @return A SUSPEND result armed with the timeout and timeout step.
@@ -203,8 +193,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Requests a retry of the step governed by the given retry policy's backoff
-   * and attempt limits.
+   * @description Requests a retry of the step governed by the given retry policy's backoff and attempt limits.
    * @param policy The non-null retry policy controlling delay and max attempts.
    * @return A RETRY result carrying the retry policy.
    */
@@ -221,8 +210,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Requests a retry after a fixed delay, wrapping it in a backwards-compatible
-   * fixed-interval retry policy.
+   * @description Requests a retry after a fixed delay, wrapping it in a backwards-compatible fixed-interval retry policy.
    * @param retryAfterSeconds The fixed delay in seconds before the retry.
    * @return A RETRY result carrying a fixed-interval retry policy.
    */
@@ -235,8 +223,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Sleeps durably for the given number of seconds before the engine resumes
-   * the step.
+   * @description Sleeps durably for the given number of seconds before the engine resumes the step.
    * @param seconds The non-negative number of seconds to sleep.
    * @return A SLEEP result carrying the sleep duration.
    */
@@ -253,8 +240,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Sleeps durably for the given number of seconds while persisting durable
-   * step state across the wait.
+   * @description Sleeps durably for the given number of seconds while persisting durable step state across the wait.
    * @param seconds The non-negative number of seconds to sleep.
    * @param stepStateJson Opaque durable state to persist while sleeping.
    * @return A SLEEP result carrying the sleep duration and persisted state.
@@ -421,9 +407,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description The instant the calendar-day scan should begin: the given start when the
-   * calendar has no Id (mock) or start is already within business hours, otherwise the
-   * next business-hours start after it.
+   * @description The instant the calendar-day scan should begin: the given start when the calendar has no Id (mock) or start is already within business hours, otherwise the next business-hours start after it.
    * @param bh The BusinessHours calendar defining working windows.
    * @param start The candidate start instant for the scan.
    * @return The adjusted instant at which the calendar-day scan should begin.
@@ -585,8 +569,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Sleeps durably for a business-hours-aware duration, converting the given
-   * amount and unit against the named BusinessHours calendar to a wake time.
+   * @description Sleeps durably for a business-hours-aware duration, converting the given amount and unit against the named BusinessHours calendar to a wake time.
    * @param amount The non-negative quantity of the unit to sleep.
    * @param unit The unit of time (e.g. days, hours, minutes), optionally business-prefixed.
    * @param businessHoursName The name of the BusinessHours calendar to resolve against.
@@ -610,9 +593,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Attaches durable step state (opaque JSON, persisted across the wait) to
-   * this result, returning it for fluent chaining — e.g.
-   * StepResult.sleep(2, 'Hours', 'Default').withStepState(json).
+   * @description Attaches durable step state (opaque JSON, persisted across the wait) to this result, returning it for fluent chaining — e.g. StepResult.sleep(2, 'Hours', 'Default').withStepState(json).
    * @param stepStateJson The opaque durable state to persist across the wait.
    * @return This StepResult, for fluent chaining.
    */
@@ -644,9 +625,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Resolves the named BusinessHours calendar, converts amount/unit to a
-   * millisecond interval, and returns the clamped whole-second wait until the
-   * business-hours-adjusted wake time.
+   * @description Resolves the named BusinessHours calendar, converts amount/unit to a millisecond interval, and returns the clamped whole-second wait until the business-hours-adjusted wake time.
    * @param amount The quantity of the unit to sleep.
    * @param unit The unit of time to convert.
    * @param businessHoursName The name of the BusinessHours calendar to resolve.
@@ -683,8 +662,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Converts a non-day unit (hours/minutes/seconds and their variants) to
-   * milliseconds, throwing for an unsupported unit.
+   * @description Converts a non-day unit (hours/minutes/seconds and their variants) to milliseconds, throwing for an unsupported unit.
    * @param unitLower The lower-cased, trimmed unit spelling to convert.
    * @param amount The quantity of the unit.
    * @param unit The original unit spelling, used in the error message.
@@ -727,8 +705,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Starts a single child workflow as part of a saga, correlating it by key
-   * and passing the given input.
+   * @description Starts a single child workflow as part of a saga, correlating it by key and passing the given input.
    * @param childWorkflowName The non-blank name of the child workflow to start.
    * @param childCorrelationKey The correlation key identifying the child instance.
    * @param input The child input, serialized if needed.
@@ -753,8 +730,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description One child workflow to start when a step fans out to multiple children via
-   * startChildren.
+   * @description One child workflow to start when a step fans out to multiple children via startChildren.
    */
   public class ChildRequest {
     /** @description Name of the child workflow to start. */
@@ -765,8 +741,7 @@ public inherited sharing class StepResult {
     public String inputJson { get; set; }
 
     /**
-     * @description Constructs a child request, validating the workflow name and serializing
-     * the input as needed.
+     * @description Constructs a child request, validating the workflow name and serializing the input as needed.
      * @param workflowName The non-blank name of the child workflow to start.
      * @param correlationKey The correlation key identifying the child instance.
      * @param input The child input, serialized if needed.
@@ -788,8 +763,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Starts multiple child workflows together as a fan-out, validating that the
-   * list is non-empty and contains no null entries.
+   * @description Starts multiple child workflows together as a fan-out, validating that the list is non-empty and contains no null entries.
    * @param children The non-empty list of child requests to start.
    * @return A START_CHILDREN result carrying the child requests.
    */
@@ -813,8 +787,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Suspends the step to wait for a human approval signal matching the given
-   * key, optionally restricted to a role.
+   * @description Suspends the step to wait for a human approval signal matching the given key, optionally restricted to a role.
    * @param key The non-blank approval signal key to wait on.
    * @param role The role authorized to approve, or null for any.
    * @return A WAIT_FOR_APPROVAL result carrying the approval key and role.
@@ -833,10 +806,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Arms a durable timeout on this WAIT_FOR_APPROVAL result, returning it for
-   * fluent chaining — e.g.
-   * StepResult.waitForApproval(key, role).withApprovalTimeout(60, 'TimeoutStep'). If the
-   * deadline elapses before the approval, the engine routes to timeoutStep.
+   * @description Arms a durable timeout on this WAIT_FOR_APPROVAL result, returning it for fluent chaining — e.g. StepResult.waitForApproval(key, role).withApprovalTimeout(60, 'TimeoutStep'). If the deadline elapses before the approval, the engine routes to timeoutStep.
    * @param timeoutSeconds Positive number of seconds before the approval times out.
    * @param timeoutStep The non-blank step to route to on timeout.
    * @return This StepResult, for fluent chaining.
@@ -861,8 +831,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Splits execution into parallel branches, one per named step, all running
-   * concurrently before the workflow joins.
+   * @description Splits execution into parallel branches, one per named step, all running concurrently before the workflow joins.
    * @param stepNames The non-empty list of step names to run in parallel.
    * @return A SPLIT result carrying the parallel step names.
    */
@@ -886,8 +855,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Splits execution into parallel branches, one per named step, sharing the
-   * given serialized input across all branches.
+   * @description Splits execution into parallel branches, one per named step, sharing the given serialized input across all branches.
    * @param stepNames The non-empty list of step names to run in parallel.
    * @param input The shared branch input, serialized if needed.
    * @return A SPLIT result carrying the parallel step names and shared input.
@@ -913,8 +881,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Continues the workflow as a fresh instance seeded with the given input,
-   * carrying over the current correlation key, to bound history growth on long-running loops.
+   * @description Continues the workflow as a fresh instance seeded with the given input, carrying over the current correlation key, to bound history growth on long-running loops.
    * @param nextInput The input seeding the continued instance, serialized if needed.
    * @return A CONTINUE_AS_NEW result carrying the next input.
    */
@@ -927,8 +894,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Continues the workflow as a fresh instance seeded with the given input and
-   * a custom correlation key.
+   * @description Continues the workflow as a fresh instance seeded with the given input and a custom correlation key.
    * @param nextInput The input seeding the continued instance, serialized if needed.
    * @param customKey The correlation key to assign to the continued instance.
    * @return A CONTINUE_AS_NEW result carrying the next input and correlation key.
@@ -942,12 +908,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Deliberately, terminally fails the step (issue #37). Returning this —
-   * rather than throwing — records the author's operator-readable reason as the failure
-   * (not an Apex stack trace) and stops the workflow in ZERO retry hops: the engine routes
-   * straight through the failure/compensation path, compensating (LIFO) when the instance
-   * has a Compensation_Stack__c or failing outright when it does not. Use it for business-
-   * rule violations the author knows will never succeed (e.g. "order already refunded").
+   * @description Deliberately, terminally fails the step (issue #37). Returning this — rather than throwing — records the author's operator-readable reason as the failure (not an Apex stack trace) and stops the workflow in ZERO retry hops: the engine routes straight through the failure/compensation path, compensating (LIFO) when the instance has a Compensation_Stack__c or failing outright when it does not. Use it for business-rule violations the author knows will never succeed (e.g. "order already refunded").
    * @param reason The non-blank operator-readable failure reason.
    * @return A FAIL result carrying the failure reason.
    */
@@ -956,8 +917,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Same as fail(reason) but also carries structured failureData, persisted
-   * with the failing step for downstream inspection (compensation, alerting).
+   * @description Same as fail(reason) but also carries structured failureData, persisted with the failing step for downstream inspection (compensation, alerting).
    * @param reason The non-blank operator-readable failure reason.
    * @param failureData Structured failure data to serialize, or null.
    * @return A FAIL result carrying the reason and serialized failure data.
@@ -1006,8 +966,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description True when the trimmed value is wrapped in matching JSON object, array, or
-   * string delimiters.
+   * @description True when the trimmed value is wrapped in matching JSON object, array, or string delimiters.
    * @param trimmed The trimmed candidate string to inspect.
    * @return True if the value has matching JSON delimiters, otherwise false.
    */
