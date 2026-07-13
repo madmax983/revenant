@@ -1147,4 +1147,81 @@ public class WorkflowEngineTimedSignalTest {
       );
     }
   }
+
+  @IsTest
+  static void testScalarStartOrGetHonorsInputJsonWhenInputNull() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Regression: the scalar startOrGet(StartRequest) path must persist the
+      // pre-serialized req.inputJson onto the instance's Input__c when the
+      // structured req.input is null (mirroring the bulk start path). The scalar
+      // doStart previously ignored inputJson on this branch and stored null.
+      WorkflowEngine.disableQueueableInTest = true;
+
+      WorkflowEngine.StartRequest req = new WorkflowEngine.StartRequest(
+        'WorkflowEngineTest.HappyWorkflow',
+        'ScalarInputJsonKey',
+        null
+      );
+      req.inputJson = '{"fromInputJson":true}';
+
+      Test.startTest();
+      WorkflowEngine.StartResult res = WorkflowEngine.startOrGet(req);
+      Test.stopTest();
+
+      Workflow_Instance__c inst = [
+        SELECT Input__c
+        FROM Workflow_Instance__c
+        WHERE Id = :res.instanceId
+      ];
+      // Asserts the instance carries the inputJson payload, not null.
+      System.assertEquals(
+        '{"fromInputJson":true}',
+        inst.Input__c,
+        'Scalar startOrGet must persist req.inputJson onto Input__c when input is null'
+      );
+    }
+  }
+
+  @IsTest
+  static void testScalarUnroutedSignalIdempotentSameDedupKey() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Regression: the scalar signal(SignalRequest) unrouted-capture path must
+      // carry req.dedupKey through to the captured Workflow_Signal__c, exactly
+      // like the bulk path (see testUnroutedSignalIdempotentSameDedupKey). N
+      // deliveries with the same dedupKey to an unmatched key must produce
+      // exactly ONE Unrouted row. The scalar path previously dropped dedupKey,
+      // so each redelivery captured a duplicate row.
+      WorkflowEngine.disableQueueableInTest = true;
+
+      String dedupKey = 'scalar-idempotency-uuid-001';
+
+      Test.startTest();
+      WorkflowEngine.signal(
+        new WorkflowEngine.SignalRequest('ScalarIdempKey', 'Arrive', '{"n":1}')
+          .withDedupKey(dedupKey)
+      );
+      WorkflowEngine.signal(
+        new WorkflowEngine.SignalRequest('ScalarIdempKey', 'Arrive', '{"n":1}')
+          .withDedupKey(dedupKey)
+      );
+      WorkflowEngine.signal(
+        new WorkflowEngine.SignalRequest('ScalarIdempKey', 'Arrive', '{"n":1}')
+          .withDedupKey(dedupKey)
+      );
+      Test.stopTest();
+
+      List<Workflow_Signal__c> captured = [
+        SELECT Id, Signal_Key__c
+        FROM Workflow_Signal__c
+        WHERE Correlation_Key__c = 'ScalarIdempKey'
+      ];
+      // Asserts dedup was honored: exactly one row, keyed by the dedupKey.
+      System.assertEquals(
+        1,
+        captured.size(),
+        'N scalar deliveries with the same dedupKey must produce exactly one captured row'
+      );
+      System.assertEquals(dedupKey, captured[0].Signal_Key__c);
+    }
+  }
 }
