@@ -7845,85 +7845,83 @@ public inherited sharing class WorkflowEngine {
     public String inputJson;
   }
 
-  @TestVisible
-  private static void startChildWorkflow(ChildWorkflowStartRequest req) {
-    Id parentId = req.parentId;
-    String workflowName = req.workflowName;
-    String correlationKey = req.correlationKey;
-    String inputJson = req.inputJson;
-    validateCorrelationKey(correlationKey);
-    if (String.isNotBlank(correlationKey)) {
-      // 1. Check for active globally unique key
-      List<Workflow_Instance__c> existingActive = [
-        SELECT Id, Parent_Instance__c, Status__c
-        FROM Workflow_Instance__c
-        WHERE Active_Correlation_Key__c = :correlationKey
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (!existingActive.isEmpty()) {
-        if (existingActive[0].Parent_Instance__c == parentId) {
-          // Idempotent re-suspend
-          return;
-        }
-        throw new WorkflowException(
-          'An active workflow already exists with correlation key: ' +
-          correlationKey
-        );
+  /**
+   * Resolves the correlation-key preconditions for starting a child workflow.
+   * Returns true when an idempotent re-suspend applies (an active instance under
+   * the same parent, or a terminal sibling under the same parent already exists),
+   * and throws when the key collides with an active instance under a different
+   * parent.
+   * @param correlationKey the child's correlation key (assumed not blank)
+   * @param parentId the requesting parent instance id
+   * @return true when the start should resolve idempotently without creating one
+   */
+  private static Boolean isChildStartIdempotent(
+    String correlationKey,
+    Id parentId
+  ) {
+    // 1. Check for active globally unique key
+    List<Workflow_Instance__c> existingActive = [
+      SELECT Id, Parent_Instance__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Active_Correlation_Key__c = :correlationKey
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    if (!existingActive.isEmpty()) {
+      if (existingActive[0].Parent_Instance__c == parentId) {
+        return true; // Idempotent re-suspend
       }
-
-      // 2. Check for sibling terminal key under same parent
-      List<Workflow_Instance__c> existingSibling = [
-        SELECT Id, Parent_Instance__c, Status__c
-        FROM Workflow_Instance__c
-        WHERE
-          Correlation_Key__c = :correlationKey
-          AND Parent_Instance__c = :parentId
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (!existingSibling.isEmpty()) {
-        return; // Idempotent re-suspend
-      }
+      throw new WorkflowException(
+        'An active workflow already exists with correlation key: ' +
+        correlationKey
+      );
     }
 
-    if (String.isBlank(workflowName)) {
-      throw new WorkflowException('Workflow name is required.');
-    }
-    String parentNamespace = '';
-    if (parentId != null) {
-      List<Workflow_Instance__c> parentInsts = [
-        SELECT Workflow_Name__c
-        FROM Workflow_Instance__c
-        WHERE Id = :parentId
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (!parentInsts.isEmpty()) {
-        parentNamespace = WorkflowTypeResolver.extractNamespace(
-          parentInsts[0].Workflow_Name__c
-        );
-      }
-    }
+    // 2. Check for sibling terminal key under same parent
+    List<Workflow_Instance__c> existingSibling = [
+      SELECT Id, Parent_Instance__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE
+        Correlation_Key__c = :correlationKey
+        AND Parent_Instance__c = :parentId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    return !existingSibling.isEmpty(); // non-empty => idempotent re-suspend
+  }
+
+  /**
+   * Builds (in memory) the child Workflow_Instance__c from the start request and
+   * its resolved definition, populating status, correlation/parent linkage,
+   * definition version and initial step. Throws when the workflow name cannot be
+   * resolved or the class does not implement WorkflowDefinition.
+   * @param req the child start request
+   * @param parentNamespace the parent's namespace used to resolve the type
+   * @return the unsaved child instance
+   */
+  private static Workflow_Instance__c buildChildInstance(
+    ChildWorkflowStartRequest req,
+    String parentNamespace
+  ) {
     Type wflowType = WorkflowTypeResolver.resolve(
-      workflowName,
+      req.workflowName,
       parentNamespace
     );
     if (wflowType == null) {
       throw new WorkflowException(
-        'Workflow definition not found for name: ' + workflowName
+        'Workflow definition not found for name: ' + req.workflowName
       );
     }
     Workflow_Instance__c instance = new Workflow_Instance__c();
     instance.Workflow_Name__c = String.valueOf(wflowType);
     instance.Status__c = 'Pending';
-    instance.Correlation_Key__c = correlationKey;
-    instance.Parent_Instance__c = parentId;
-    instance.Causation_Id__c = parentId;
+    instance.Correlation_Key__c = req.correlationKey;
+    instance.Parent_Instance__c = req.parentId;
+    instance.Causation_Id__c = req.parentId;
     Object defObj = wflowType.newInstance();
     if (!(defObj instanceof WorkflowDefinition)) {
       throw new WorkflowException(
-        'Class ' + workflowName + ' must implement WorkflowDefinition'
+        'Class ' + req.workflowName + ' must implement WorkflowDefinition'
       );
     }
 
@@ -7934,7 +7932,20 @@ public inherited sharing class WorkflowEngine {
       instance.Definition_Version__c = 1;
     }
     instance.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
+    return instance;
+  }
 
+  /**
+   * Inserts the child instance, handling the DUPLICATE_VALUE concurrency
+   * backstop: when a sibling wins the insert race under the same parent the
+   * start resolves idempotently, otherwise a collision throws.
+   * @param instance the unsaved child instance
+   * @return true when a concurrent sibling won the race and the start should
+   * resolve idempotently without proceeding
+   */
+  private static Boolean insertChildInstance(Workflow_Instance__c instance) {
+    Id parentId = instance.Parent_Instance__c;
+    String correlationKey = instance.Correlation_Key__c;
     try {
       Database.insert(instance, true, AccessLevel.SYSTEM_MODE);
       if (Test.isRunningTest() && parentId != null) {
@@ -7951,7 +7962,7 @@ public inherited sharing class WorkflowEngine {
           LIMIT 1
         ];
         if (!sibling.isEmpty() && sibling[0].Parent_Instance__c == parentId) {
-          return; // Sibling won the insert race, and it belongs to this parent; resolve idempotently.
+          return true; // Sibling won the insert race, and it belongs to this parent; resolve idempotently.
         }
         throw new WorkflowException(
           'An active workflow already exists with correlation key: ' +
@@ -7960,14 +7971,15 @@ public inherited sharing class WorkflowEngine {
       }
       throw ex;
     }
+    return false;
+  }
 
-    instance.Input__c = savePayloadIfNeeded(
-      instance.Id,
-      inputJson,
-      'Input_Child_' + instance.Id
-    );
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
+  /**
+   * Inserts the child's initial Pending step execution, mirroring the instance's
+   * initial step and input.
+   * @param instance the persisted child instance
+   */
+  private static void insertInitialChildStep(Workflow_Instance__c instance) {
     if (String.isNotBlank(instance.Current_Step__c)) {
       Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
       stepExec.Workflow_Instance__c = instance.Id;
@@ -7977,7 +7989,50 @@ public inherited sharing class WorkflowEngine {
       stepExec.Retry_Count__c = 0;
       Database.insert(stepExec, true, AccessLevel.SYSTEM_MODE);
     }
+  }
 
+  @TestVisible
+  private static void startChildWorkflow(ChildWorkflowStartRequest req) {
+    Id parentId = req.parentId;
+    String correlationKey = req.correlationKey;
+    String inputJson = req.inputJson;
+    validateCorrelationKey(correlationKey);
+    if (
+      String.isNotBlank(correlationKey) &&
+      isChildStartIdempotent(correlationKey, parentId)
+    ) {
+      return;
+    }
+
+    if (String.isBlank(req.workflowName)) {
+      throw new WorkflowException('Workflow name is required.');
+    }
+    String parentNamespace = resolveParentNamespace(parentId);
+    Workflow_Instance__c instance = buildChildInstance(req, parentNamespace);
+
+    if (insertChildInstance(instance)) {
+      return;
+    }
+
+    instance.Input__c = savePayloadIfNeeded(
+      instance.Id,
+      inputJson,
+      'Input_Child_' + instance.Id
+    );
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+
+    insertInitialChildStep(instance);
+
+    finalizeChildStart(instance);
+  }
+
+  /**
+   * Finalizes a freshly-persisted child instance: applies the operator pause
+   * gate, schedules (or defers) the initial-step watchdog, and enqueues the
+   * orchestrator when not running under test.
+   * @param instance the persisted child instance to finalize
+   */
+  private static void finalizeChildStart(Workflow_Instance__c instance) {
     // Operator pause gate — park the child at start if its definition is paused, so a
     // running parent cannot bypass the pause by spawning children. The initial Pending
     // step (above) gives resume a concrete step to drive; skip timeout scheduling and
