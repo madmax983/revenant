@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Flow xmlns="http://soap.sforce.com/2006/04/metadata">
     <apiVersion>67.0</apiVersion>
+    <description>Test fixture autolaunched flow that echoes its input string to its output, used by Revenant integration tests to exercise flow invocation.</description>
     <assignments>
+        <description>Copies the inputVal request value into the outputVal result variable.</description>
         <name>Assign_Values</name>
         <label>Assign Values</label>
         <locationX>176</locationX>
@@ -19,6 +21,7 @@
     <label>Test Autolaunched Flow</label>
     <processType>AutoLaunchedFlow</processType>
     <variables>
+        <description>Input string supplied by the caller and echoed to outputVal.</description>
         <name>inputVal</name>
         <dataType>String</dataType>
         <isCollection>false</isCollection>
@@ -26,6 +29,7 @@
         <isOutput>false</isOutput>
     </variables>
     <variables>
+        <description>Output string returned to the caller, set from inputVal.</description>
         <name>outputVal</name>
         <dataType>String</dataType>
         <isCollection>false</isCollection>

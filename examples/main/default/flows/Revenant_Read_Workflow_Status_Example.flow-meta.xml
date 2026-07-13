@@ -3,6 +3,7 @@
     <apiVersion>67.0</apiVersion>
     <description>Reference recipe: read a Revenant durable workflow's outcome with the Get Workflow Status invocable action and branch on isSuccess, without referencing any internal field API names.</description>
     <actionCalls>
+        <description>Calls the Revenant Get Workflow Status invocable action for the supplied key or Id; routes any action fault to Log_Fault.</description>
         <name>Get_Workflow_Status</name>
         <label>Get Workflow Status</label>
         <locationX>176</locationX>
@@ -12,6 +13,9 @@
         <connector>
             <targetReference>Branch_On_Outcome</targetReference>
         </connector>
+        <faultConnector>
+            <targetReference>Log_Fault</targetReference>
+        </faultConnector>
         <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
             <name>workflowKeyOrId</name>
@@ -22,7 +26,54 @@
         <nameSegment>WorkflowStatusInvocableAction</nameSegment>
         <storeOutputAutomatically>true</storeOutputAutomatically>
     </actionCalls>
+    <recordCreates>
+        <description>Fault handler: persists the flow fault message to a Workflow_Log__c error record, mirroring the Apex WorkflowLog.error sink, so a failed status lookup surfaces in the durable log.</description>
+        <name>Log_Fault</name>
+        <label>Log Fault</label>
+        <locationX>836</locationX>
+        <locationY>134</locationY>
+        <connector>
+            <targetReference>Capture_Fault</targetReference>
+        </connector>
+        <faultConnector>
+            <targetReference>Capture_Fault</targetReference>
+        </faultConnector>
+        <inputAssignments>
+            <field>Level__c</field>
+            <value>
+                <stringValue>Error</stringValue>
+            </value>
+        </inputAssignments>
+        <inputAssignments>
+            <field>Log_Type__c</field>
+            <value>
+                <stringValue>FlowFault</stringValue>
+            </value>
+        </inputAssignments>
+        <inputAssignments>
+            <field>Message__c</field>
+            <value>
+                <elementReference>$Flow.FaultMessage</elementReference>
+            </value>
+        </inputAssignments>
+        <object>Workflow_Log__c</object>
+    </recordCreates>
     <assignments>
+        <description>Terminal fault handler: captures the fault message into faultMessage if the error log insert itself fails, so the flow ends cleanly (mirrors WorkflowLog.error swallowing its own insert failures).</description>
+        <name>Capture_Fault</name>
+        <label>Capture Fault</label>
+        <locationX>836</locationX>
+        <locationY>278</locationY>
+        <assignmentItems>
+            <assignToReference>faultMessage</assignToReference>
+            <operator>Assign</operator>
+            <value>
+                <elementReference>$Flow.FaultMessage</elementReference>
+            </value>
+        </assignmentItems>
+    </assignments>
+    <assignments>
+        <description>Sets branchResult to a not-found message when no workflow matches the supplied key or Id.</description>
         <name>Assign_Not_Found</name>
         <label>Assign Not Found</label>
         <locationX>440</locationX>
@@ -36,6 +87,7 @@
         </assignmentItems>
     </assignments>
     <assignments>
+        <description>Sets branchResult to a still-running message when the workflow has not reached a terminal state.</description>
         <name>Assign_Pending</name>
         <label>Assign Still Running</label>
         <locationX>308</locationX>
@@ -49,6 +101,7 @@
         </assignmentItems>
     </assignments>
     <assignments>
+        <description>Sets branchResult to a success message and copies the workflow output JSON into resolvedOutputJson.</description>
         <name>Assign_Succeeded</name>
         <label>Assign Succeeded</label>
         <locationX>176</locationX>
@@ -69,6 +122,7 @@
         </assignmentItems>
     </assignments>
     <assignments>
+        <description>Sets branchResult to the workflow's error message when the workflow status is Failed.</description>
         <name>Assign_Failed</name>
         <label>Assign Failed</label>
         <locationX>572</locationX>
@@ -82,6 +136,7 @@
         </assignmentItems>
     </assignments>
     <assignments>
+        <description>Sets branchResult to an ended-without-success message for terminal non-success outcomes such as Cancelled or Compensated.</description>
         <name>Assign_Ended_Other</name>
         <label>Assign Ended Without Success</label>
         <locationX>704</locationX>
@@ -95,6 +150,7 @@
         </assignmentItems>
     </assignments>
     <decisions>
+        <description>Routes to the appropriate result assignment based on the Get Workflow Status output: not found, succeeded, failed, still running, or ended without success.</description>
         <name>Branch_On_Outcome</name>
         <label>Branch On Outcome</label>
         <locationX>176</locationX>
@@ -177,6 +233,7 @@
     </start>
     <status>Active</status>
     <variables>
+        <description>Input correlation key or workflow instance Id to look up the status for.</description>
         <name>workflowKeyOrIdInput</name>
         <dataType>String</dataType>
         <isCollection>false</isCollection>
@@ -184,6 +241,7 @@
         <isOutput>false</isOutput>
     </variables>
     <variables>
+        <description>Human-readable outcome message returned to the caller.</description>
         <name>branchResult</name>
         <dataType>String</dataType>
         <isCollection>false</isCollection>
@@ -191,7 +249,16 @@
         <isOutput>true</isOutput>
     </variables>
     <variables>
+        <description>Workflow output JSON, populated only when the workflow completed successfully.</description>
         <name>resolvedOutputJson</name>
+        <dataType>String</dataType>
+        <isCollection>false</isCollection>
+        <isInput>false</isInput>
+        <isOutput>true</isOutput>
+    </variables>
+    <variables>
+        <description>Captured fault message when the status lookup or its error log insert fails.</description>
+        <name>faultMessage</name>
         <dataType>String</dataType>
         <isCollection>false</isCollection>
         <isInput>false</isInput>

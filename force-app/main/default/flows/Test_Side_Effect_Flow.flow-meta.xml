@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Flow xmlns="http://soap.sforce.com/2006/04/metadata">
     <apiVersion>67.0</apiVersion>
+    <description>Test fixture autolaunched flow that creates an Account from the supplied name, used by Revenant integration tests to exercise a flow side effect and its fault path.</description>
     <recordCreates>
+        <description>Creates an Account whose Name is the accountName input.</description>
         <name>Create_Account</name>
         <label>Create Account</label>
         <locationX>176</locationX>
@@ -19,6 +21,7 @@
     <label>Test Side Effect Flow</label>
     <processType>AutoLaunchedFlow</processType>
     <variables>
+        <description>Name used for the Account created by this flow.</description>
         <name>accountName</name>
         <dataType>String</dataType>
         <isCollection>false</isCollection>
