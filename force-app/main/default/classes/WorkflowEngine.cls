@@ -4641,7 +4641,12 @@ public inherited sharing class WorkflowEngine {
     }
 
     // 6. Handle Step Outcome
-    handleStepResult(instance, stepExec, result, context);
+    StepOutcomeContext outcome = new StepOutcomeContext();
+    outcome.instance = instance;
+    outcome.stepExec = stepExec;
+    outcome.result = result;
+    outcome.context = context;
+    handleStepResult(outcome);
   }
 
   /**
@@ -5441,13 +5446,26 @@ public inherited sharing class WorkflowEngine {
     WorkflowOutboundEventPublisher.publish(events);
   }
 
-  private static void handleStepResult(
-    Workflow_Instance__c instance,
-    Workflow_Step_Execution__c stepExec,
-    StepResult result,
-    StepContext context
-  ) {
-    persistStepBreadcrumbs(instance, stepExec, result, context);
+  /**
+   * @description Internal wrapper bundling the values threaded through the
+   * step-outcome handlers (handleStepResult, handleCompensationStepResult,
+   * persistStepBreadcrumbs) so each takes a single parameter instead of a long
+   * positional list. Populated field-by-field to avoid a wide constructor.
+   */
+  private class StepOutcomeContext {
+    private Workflow_Instance__c instance;
+    private Workflow_Step_Execution__c stepExec;
+    private StepResult result;
+    private List<String> stack;
+    private StepContext context;
+  }
+
+  private static void handleStepResult(StepOutcomeContext outcome) {
+    Workflow_Instance__c instance = outcome.instance;
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
+    StepResult result = outcome.result;
+    StepContext context = outcome.context;
+    persistStepBreadcrumbs(outcome);
     // Re-query to avoid overwriting a timeout or finalizer crash status and race conditions
     Workflow_Instance__c freshInstance = [
       SELECT
@@ -9741,7 +9759,11 @@ public inherited sharing class WorkflowEngine {
         result = compensatableStepInstance.compensate(context);
       }
     } catch (Exception ex) {
-      persistStepBreadcrumbs(instance, stepExec, null, context);
+      StepOutcomeContext crashOutcome = new StepOutcomeContext();
+      crashOutcome.instance = instance;
+      crashOutcome.stepExec = stepExec;
+      crashOutcome.context = context;
+      persistStepBreadcrumbs(crashOutcome);
       stepExec.Status__c = 'Failed';
       stepExec.Error_Details__c =
         ex.getMessage() +
@@ -9762,17 +9784,22 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    handleCompensationStepResult(instance, stepExec, result, stack, context);
+    StepOutcomeContext outcome = new StepOutcomeContext();
+    outcome.instance = instance;
+    outcome.stepExec = stepExec;
+    outcome.result = result;
+    outcome.stack = stack;
+    outcome.context = context;
+    handleCompensationStepResult(outcome);
   }
 
-  private static void handleCompensationStepResult(
-    Workflow_Instance__c instance,
-    Workflow_Step_Execution__c stepExec,
-    StepResult result,
-    List<String> stack,
-    StepContext context
-  ) {
-    persistStepBreadcrumbs(instance, stepExec, result, context);
+  private static void handleCompensationStepResult(StepOutcomeContext outcome) {
+    Workflow_Instance__c instance = outcome.instance;
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
+    StepResult result = outcome.result;
+    List<String> stack = outcome.stack;
+    StepContext context = outcome.context;
+    persistStepBreadcrumbs(outcome);
     Workflow_Instance__c freshInstance = [
       SELECT
         Id,
@@ -13178,12 +13205,11 @@ public inherited sharing class WorkflowEngine {
     return clean;
   }
 
-  private static void persistStepBreadcrumbs(
-    Workflow_Instance__c instance,
-    Workflow_Step_Execution__c stepExec,
-    StepResult result,
-    StepContext context
-  ) {
+  private static void persistStepBreadcrumbs(StepOutcomeContext outcome) {
+    Workflow_Instance__c instance = outcome.instance;
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
+    StepResult result = outcome.result;
+    StepContext context = outcome.context;
     if (context == null || stepExec == null || instance == null) {
       return;
     }
