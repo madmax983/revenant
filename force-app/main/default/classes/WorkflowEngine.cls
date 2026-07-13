@@ -7298,169 +7298,225 @@ public inherited sharing class WorkflowEngine {
    */
   private static void failResolvedInstance(FailInstanceRequest req) {
     Workflow_Instance__c instance = req.instance;
-    String stepName = req.stepName;
-    String errorMessage = req.errorMessage;
-    String failureCategory = req.failureCategory;
-    Integer attemptCount = req.attemptCount;
-    Boolean isCompFailure = (instance.Status__c == 'Compensating' ||
-    instance.Status__c == 'Cancelling' ||
-    (String.isNotBlank(stepName) && stepName.endsWith('_Compensate')));
+    Boolean isCompFailure = isCompensationContext(instance, req.stepName);
 
-    if (!isCompFailure) {
-      try {
-        Type wfType = WorkflowTypeResolver.resolve(
-          instance.Workflow_Name__c,
-          WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
-        );
-        if (wfType != null) {
-          WorkflowDefinition def = (WorkflowDefinition) wfType.newInstance();
-          if (def instanceof ErrorRoutingWorkflow) {
-            String truncatedError = errorMessage != null
-              ? errorMessage.left(20000)
-              : null;
-            StepError err = new StepError(
-              stepName,
-              truncatedError,
-              attemptCount
-            );
-            String errorStepName = ((ErrorRoutingWorkflow) def)
-              .getErrorStep(stepName, err);
-            if (String.isNotBlank(errorStepName)) {
-              if (
-                String.isNotBlank(instance.Current_Step__c) &&
-                instance.Current_Step__c.contains(',')
-              ) {
-                List<String> activeSteps = instance.Current_Step__c.split(',');
-                List<Workflow_Step_Execution__c> siblingExecs = [
-                  SELECT Id, Status__c
-                  FROM Workflow_Step_Execution__c
-                  WHERE
-                    Workflow_Instance__c = :instance.Id
-                    AND Step_Name__c IN :activeSteps
-                    AND Step_Name__c != :stepName
-                    AND Status__c IN ('Pending', 'Retrying')
-                  WITH SYSTEM_MODE
-                  FOR UPDATE
-                ];
-                for (Workflow_Step_Execution__c sibling : siblingExecs) {
-                  sibling.Status__c = 'Cancelled';
-                }
-                if (!siblingExecs.isEmpty()) {
-                  Database.update(siblingExecs, true, AccessLevel.SYSTEM_MODE);
-                }
-              }
-
-              abortScheduledJobs(instance.Id);
-
-              Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
-              nextStepExec.Workflow_Instance__c = instance.Id;
-              nextStepExec.Step_Name__c = errorStepName;
-              nextStepExec.Status__c = 'Pending';
-              nextStepExec.Retry_Count__c = 0;
-
-              Map<String, Object> errorCaptures = new Map<String, Object>{
-                '__failedStepName' => stepName,
-                '__errorMessage' => truncatedError,
-                '__attemptCount' => attemptCount
-              };
-              nextStepExec.Captured_Values__c = savePayloadIfNeeded(
-                instance.Id,
-                JSON.serialize(errorCaptures),
-                'Captures_' + errorStepName.replaceAll('[^a-zA-Z0-9]', '_')
-              );
-              Database.insert(nextStepExec, true, AccessLevel.SYSTEM_MODE);
-
-              instance.Current_Step__c = errorStepName;
-              instance.Status__c = 'Running';
-              instance.Sleep_Until__c = null;
-              instance.Async_Job_Id__c = null;
-              Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-              scheduleTimeoutJobForInstance(instance);
-              if (Test.isRunningTest()) {
-                if (!disableQueueableInTest) {
-                  System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-                }
-              } else {
-                enqueueOrchestrator(instance.Id, null);
-              }
-              return;
-            }
-          }
-        }
-      } catch (Exception ignored) {
-        // Error-routing is best-effort; a routing failure must not mask the original error.
-      }
+    if (tryErrorRouting(req, isCompFailure)) {
+      return;
     }
 
     // Check if there are compensations to run
-    Boolean hasCompensations = false;
-    if (String.isNotBlank(instance.Compensation_Stack__c)) {
-      List<String> stack = (List<String>) JSON.deserialize(
-        instance.Compensation_Stack__c,
-        List<String>.class
+    if (!hasPendingCompensations(instance)) {
+      failInstanceTerminally(req);
+      return;
+    }
+
+    if (isCompensationContext(instance, req.stepName)) {
+      failCompensationTerminally(req);
+      return;
+    }
+
+    beginCompensation(req);
+  }
+
+  private static Boolean isCompensationContext(
+    Workflow_Instance__c instance,
+    String stepName
+  ) {
+    return instance.Status__c == 'Compensating' ||
+      instance.Status__c == 'Cancelling' ||
+      (String.isNotBlank(stepName) && stepName.endsWith('_Compensate'));
+  }
+
+  private static Boolean hasPendingCompensations(
+    Workflow_Instance__c instance
+  ) {
+    if (String.isBlank(instance.Compensation_Stack__c)) {
+      return false;
+    }
+    List<String> stack = (List<String>) JSON.deserialize(
+      instance.Compensation_Stack__c,
+      List<String>.class
+    );
+    return !stack.isEmpty();
+  }
+
+  // Best-effort error routing: if the workflow defines an error step, cancel
+  // siblings, insert the error step, and re-run. Returns true when routing
+  // consumed the failure (caller returns), false to fall through to the
+  // compensation/terminal-fail path. Never lets a routing failure mask the
+  // original error.
+  private static Boolean tryErrorRouting(
+    FailInstanceRequest req,
+    Boolean isCompFailure
+  ) {
+    if (isCompFailure) {
+      return false;
+    }
+    Workflow_Instance__c instance = req.instance;
+    try {
+      Type wfType = WorkflowTypeResolver.resolve(
+        instance.Workflow_Name__c,
+        WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
       );
-      hasCompensations = !stack.isEmpty();
+      if (wfType == null) {
+        return false;
+      }
+      WorkflowDefinition def = (WorkflowDefinition) wfType.newInstance();
+      if (!(def instanceof ErrorRoutingWorkflow)) {
+        return false;
+      }
+      String truncatedError = req.errorMessage != null
+        ? req.errorMessage.left(20000)
+        : null;
+      StepError err = new StepError(
+        req.stepName,
+        truncatedError,
+        req.attemptCount
+      );
+      String errorStepName = ((ErrorRoutingWorkflow) def)
+        .getErrorStep(req.stepName, err);
+      if (String.isBlank(errorStepName)) {
+        return false;
+      }
+      routeToErrorStep(req, errorStepName, truncatedError);
+      return true;
+    } catch (Exception ignored) {
+      // Error-routing is best-effort; a routing failure must not mask the original error.
+      return false;
     }
+  }
 
-    if (!hasCompensations) {
-      instance.Status__c = 'Failed';
-      instance.Failure_Category__c = failureCategory;
-      instance.Error_Message__c = ('Failed at step ' +
-        stepName +
-        ': ' +
-        errorMessage)
-        .left(255);
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-      notifyParentCompletion(instance);
-      WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
-      WorkflowLifecyclePublisher.publish(instance);
+  private static void routeToErrorStep(
+    FailInstanceRequest req,
+    String errorStepName,
+    String truncatedError
+  ) {
+    Workflow_Instance__c instance = req.instance;
+    cancelSiblingStepsForErrorRouting(instance, req.stepName);
+
+    abortScheduledJobs(instance.Id);
+
+    Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
+    nextStepExec.Workflow_Instance__c = instance.Id;
+    nextStepExec.Step_Name__c = errorStepName;
+    nextStepExec.Status__c = 'Pending';
+    nextStepExec.Retry_Count__c = 0;
+
+    Map<String, Object> errorCaptures = new Map<String, Object>{
+      '__failedStepName' => req.stepName,
+      '__errorMessage' => truncatedError,
+      '__attemptCount' => req.attemptCount
+    };
+    nextStepExec.Captured_Values__c = savePayloadIfNeeded(
+      instance.Id,
+      JSON.serialize(errorCaptures),
+      'Captures_' + errorStepName.replaceAll('[^a-zA-Z0-9]', '_')
+    );
+    Database.insert(nextStepExec, true, AccessLevel.SYSTEM_MODE);
+
+    instance.Current_Step__c = errorStepName;
+    instance.Status__c = 'Running';
+    instance.Sleep_Until__c = null;
+    instance.Async_Job_Id__c = null;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+
+    scheduleTimeoutJobForInstance(instance);
+    enqueueOrchestratorForInstance(instance.Id);
+  }
+
+  private static void cancelSiblingStepsForErrorRouting(
+    Workflow_Instance__c instance,
+    String stepName
+  ) {
+    if (
+      String.isBlank(instance.Current_Step__c) ||
+      !instance.Current_Step__c.contains(',')
+    ) {
       return;
     }
-
-    Boolean isCompensationFailure = (instance.Status__c == 'Compensating' ||
-    instance.Status__c == 'Cancelling' ||
-    (String.isNotBlank(stepName) && stepName.endsWith('_Compensate')));
-
-    if (isCompensationFailure) {
-      Boolean wasCancelling =
-        instance.Status__c == 'Cancelling' ||
-        (instance.Error_Message__c != null &&
-        instance.Error_Message__c.contains('Cancelled by user'));
-      instance.Status__c = 'CompensationFailed';
-      instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
-      instance.Error_Message__c = buildRollbackIncompleteMessage(
-          wasCancelling,
-          'Rollback incomplete at compensation step ' +
-            stepName +
-            ': ' +
-            errorMessage
-        )
-        .left(255);
-      instance.Sleep_Until__c = null;
-      instance.Async_Job_Id__c = null;
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-      notifyParentCompletion(instance);
-      WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
-      WorkflowLifecyclePublisher.publish(instance);
-      return;
+    List<String> activeSteps = instance.Current_Step__c.split(',');
+    List<Workflow_Step_Execution__c> siblingExecs = [
+      SELECT Id, Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instance.Id
+        AND Step_Name__c IN :activeSteps
+        AND Step_Name__c != :stepName
+        AND Status__c IN ('Pending', 'Retrying')
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+    for (Workflow_Step_Execution__c sibling : siblingExecs) {
+      sibling.Status__c = 'Cancelled';
     }
+    if (!siblingExecs.isEmpty()) {
+      Database.update(siblingExecs, true, AccessLevel.SYSTEM_MODE);
+    }
+  }
 
+  private static void failInstanceTerminally(FailInstanceRequest req) {
+    Workflow_Instance__c instance = req.instance;
+    instance.Status__c = 'Failed';
+    instance.Failure_Category__c = req.failureCategory;
+    instance.Error_Message__c = ('Failed at step ' +
+      req.stepName +
+      ': ' +
+      req.errorMessage)
+      .left(255);
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+    notifyParentCompletion(instance);
+    WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
+    WorkflowLifecyclePublisher.publish(instance);
+  }
+
+  private static void failCompensationTerminally(FailInstanceRequest req) {
+    Workflow_Instance__c instance = req.instance;
+    Boolean wasCancelling =
+      instance.Status__c == 'Cancelling' ||
+      (instance.Error_Message__c != null &&
+      instance.Error_Message__c.contains('Cancelled by user'));
+    instance.Status__c = 'CompensationFailed';
+    instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
+    instance.Error_Message__c = buildRollbackIncompleteMessage(
+        wasCancelling,
+        'Rollback incomplete at compensation step ' +
+          req.stepName +
+          ': ' +
+          req.errorMessage
+      )
+      .left(255);
+    instance.Sleep_Until__c = null;
+    instance.Async_Job_Id__c = null;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+    notifyParentCompletion(instance);
+    WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
+    WorkflowLifecyclePublisher.publish(instance);
+  }
+
+  private static void beginCompensation(FailInstanceRequest req) {
+    Workflow_Instance__c instance = req.instance;
     instance.Status__c = 'Compensating';
     instance.Error_Message__c = ('Failed at step ' +
-      stepName +
+      req.stepName +
       ': ' +
-      errorMessage)
+      req.errorMessage)
       .left(255);
     preCreateFirstCompensationStep(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
+    enqueueOrchestratorForInstance(instance.Id);
+  }
+
+  // Shared enqueue path used by the fail/error-routing branches: in tests,
+  // enqueue only when queueables are enabled; otherwise delegate to the
+  // standard orchestrator enqueue.
+  private static void enqueueOrchestratorForInstance(Id instanceId) {
     if (Test.isRunningTest()) {
       if (!disableQueueableInTest) {
-        System.enqueueJob(new WorkflowOrchestrator(instance.Id));
+        System.enqueueJob(new WorkflowOrchestrator(instanceId));
       }
     } else {
-      enqueueOrchestrator(instance.Id, null);
+      enqueueOrchestrator(instanceId, null);
     }
   }
 
