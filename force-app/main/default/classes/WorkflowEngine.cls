@@ -4091,11 +4091,6 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Resumes a suspended workflow matching the correlation key.
-   * @param correlationKey correlation key of the suspended instance
-   * @param payload resume payload delivered to the waiting step
-   */
-  /**
    * Stores the resume payload on the instance's current active step (if any),
    * flipping it to Running and re-arming or clearing its watchdog deadline.
    * @param instance the resumed instance (Running)
@@ -4138,6 +4133,11 @@ public inherited sharing class WorkflowEngine {
     Database.update(stepExec, true, AccessLevel.SYSTEM_MODE);
   }
 
+  /**
+   * Resumes a suspended workflow matching the correlation key.
+   * @param correlationKey correlation key of the suspended instance
+   * @param payload resume payload delivered to the waiting step
+   */
   public static void resume(String correlationKey, String payload) {
     List<Workflow_Instance__c> instances = [
       SELECT Id, Workflow_Name__c, Current_Step__c
@@ -10122,20 +10122,20 @@ public inherited sharing class WorkflowEngine {
       Workflow_Step_Execution__c stepExec = latestStepByName.get(
         targetStepName
       );
-      if (
+      Boolean incomplete =
         stepExec == null ||
         (stepExec.Status__c != 'Completed' &&
-        stepExec.Status__c != 'OperatorSkipped')
-      ) {
-        if (Test.isRunningTest()) {
-          if (!disableQueueableInTest) {
-            System.enqueueJob(
-              new WorkflowOrchestrator(instanceId, targetStepName)
-            );
-          }
-        } else {
-          enqueueOrchestrator(instanceId, targetStepName);
-        }
+        stepExec.Status__c != 'OperatorSkipped');
+      if (!incomplete) {
+        continue;
+      }
+      if (!Test.isRunningTest()) {
+        enqueueOrchestrator(instanceId, targetStepName);
+        continue;
+      }
+      if (!disableQueueableInTest) {
+        // In-loop enqueue is intentional (OperationWithLimitsInLoop deferred to PR #3).
+        System.enqueueJob(new WorkflowOrchestrator(instanceId, targetStepName));
       }
     }
   }
