@@ -1710,6 +1710,15 @@ public inherited sharing class WorkflowEngine {
    * @param req the start request describing the workflow to instantiate
    * @return an unsaved Workflow_Instance__c populated from the request and definition
    */
+  // Candidate (localName, namespace) pairs used to authorize a workflow name
+  // against ApexTypeImplementor with and without its resolved namespace prefix.
+  private class WorkflowNameCandidates {
+    String localName1;
+    String ns1;
+    String localName2;
+    String ns2;
+  }
+
   private static Workflow_Instance__c buildInstance(StartRequest req) {
     Workflow_Instance__c instance = new Workflow_Instance__c();
     Type startWflowType = WorkflowTypeResolver.resolve(
@@ -1722,108 +1731,137 @@ public inherited sharing class WorkflowEngine {
     instance.Status__c = 'Pending';
     instance.Correlation_Key__c = req.correlationKey;
     instance.Parent_Instance__c = req.parentInstanceId;
-    String finalCausationId = null;
-    if (String.isNotBlank(req.causationId)) {
-      finalCausationId = req.causationId;
-      if (finalCausationId.startsWith('key:')) {
-        Map<String, Object> payload = new Map<String, Object>{
-          'k' => finalCausationId.substring(4),
-          't' => System.now().getTime() + 1000
-        };
-        finalCausationId = 'key:' + JSON.serialize(payload);
-      }
-    } else {
-      finalCausationId = req.parentInstanceId;
-    }
-    instance.Causation_Id__c = finalCausationId;
+    instance.Causation_Id__c = resolveCausationId(req);
 
-    if (String.isNotBlank(req.workflowName)) {
-      String wflowKey = req.workflowName.toLowerCase();
-      if (!validatedWorkflows.containsKey(wflowKey)) {
-        Type resolvedWflowType = WorkflowTypeResolver.resolve(
-          req.workflowName,
-          WorkflowTypeResolver.extractNamespace(req.workflowName)
-        );
-        String localName1 = req.workflowName;
-        String ns1 = '';
-        String localName2 = req.workflowName;
-        String ns2 = '';
-        if (resolvedWflowType != null) {
-          String fqName = String.valueOf(resolvedWflowType);
-          if (fqName.contains('.')) {
-            ns1 = fqName.substringBefore('.');
-            localName1 = fqName.substringAfter('.');
-            ns2 = '';
-            localName2 = fqName;
-          } else {
-            localName1 = fqName;
-            localName2 = fqName;
-          }
-        }
-        List<ApexTypeImplementor> queryResults = [
-          SELECT ClassName, ClassNamespacePrefix
-          FROM ApexTypeImplementor
-          WHERE
-            ClassName IN (:localName1, :localName2)
-            AND ClassNamespacePrefix IN (:ns1, :ns2)
-            AND InterfaceName IN (
-              'WorkflowDefinition',
-              'VersionedWorkflow',
-              'ErrorRoutingWorkflow'
-            )
-          WITH SYSTEM_MODE
-        ];
-        List<ApexTypeImplementor> impls = new List<ApexTypeImplementor>();
-        for (ApexTypeImplementor impl : queryResults) {
-          String implNs = String.isBlank(impl.ClassNamespacePrefix)
-            ? ''
-            : impl.ClassNamespacePrefix;
-          if (
-            (impl.ClassName.equalsIgnoreCase(localName1) &&
-            implNs.equalsIgnoreCase(ns1)) ||
-            (impl.ClassName.equalsIgnoreCase(localName2) &&
-            implNs.equalsIgnoreCase(ns2))
-          ) {
-            impls.add(impl);
-            break;
-          }
-        }
-        if (impls.isEmpty()) {
-          throw new WorkflowException(
-            'Unauthorized or invalid workflow definition: ' + req.workflowName
-          );
-        }
-        validatedWorkflows.put(wflowKey, true);
+    validateWorkflowAuthorization(req);
+    applyDefinitionMetadata(instance, req);
+    return instance;
+  }
+
+  private static String resolveCausationId(StartRequest req) {
+    if (String.isBlank(req.causationId)) {
+      return req.parentInstanceId;
+    }
+    String finalCausationId = req.causationId;
+    if (finalCausationId.startsWith('key:')) {
+      Map<String, Object> payload = new Map<String, Object>{
+        'k' => finalCausationId.substring(4),
+        't' => System.now().getTime() + 1000
+      };
+      finalCausationId = 'key:' + JSON.serialize(payload);
+    }
+    return finalCausationId;
+  }
+
+  // Authorize the workflow name against ApexTypeImplementor once per name
+  // (memoized in validatedWorkflows); throws when no authorized implementor
+  // matches either candidate (local or fully-qualified) form.
+  private static void validateWorkflowAuthorization(StartRequest req) {
+    if (String.isBlank(req.workflowName)) {
+      return;
+    }
+    String wflowKey = req.workflowName.toLowerCase();
+    if (validatedWorkflows.containsKey(wflowKey)) {
+      return;
+    }
+    WorkflowNameCandidates c = resolveNameCandidates(req.workflowName);
+    List<ApexTypeImplementor> queryResults = [
+      SELECT ClassName, ClassNamespacePrefix
+      FROM ApexTypeImplementor
+      WHERE
+        ClassName IN (:c.localName1, :c.localName2)
+        AND ClassNamespacePrefix IN (:c.ns1, :c.ns2)
+        AND InterfaceName IN (
+          'WorkflowDefinition',
+          'VersionedWorkflow',
+          'ErrorRoutingWorkflow'
+        )
+      WITH SYSTEM_MODE
+    ];
+    if (!matchesAuthorizedImpl(queryResults, c)) {
+      throw new WorkflowException(
+        'Unauthorized or invalid workflow definition: ' + req.workflowName
+      );
+    }
+    validatedWorkflows.put(wflowKey, true);
+  }
+
+  private static WorkflowNameCandidates resolveNameCandidates(
+    String workflowName
+  ) {
+    WorkflowNameCandidates c = new WorkflowNameCandidates();
+    c.localName1 = workflowName;
+    c.ns1 = '';
+    c.localName2 = workflowName;
+    c.ns2 = '';
+    Type resolvedWflowType = WorkflowTypeResolver.resolve(
+      workflowName,
+      WorkflowTypeResolver.extractNamespace(workflowName)
+    );
+    if (resolvedWflowType != null) {
+      String fqName = String.valueOf(resolvedWflowType);
+      if (fqName.contains('.')) {
+        c.ns1 = fqName.substringBefore('.');
+        c.localName1 = fqName.substringAfter('.');
+        c.ns2 = '';
+        c.localName2 = fqName;
+      } else {
+        c.localName1 = fqName;
+        c.localName2 = fqName;
       }
     }
+    return c;
+  }
 
+  private static Boolean matchesAuthorizedImpl(
+    List<ApexTypeImplementor> queryResults,
+    WorkflowNameCandidates c
+  ) {
+    for (ApexTypeImplementor impl : queryResults) {
+      String implNs = String.isBlank(impl.ClassNamespacePrefix)
+        ? ''
+        : impl.ClassNamespacePrefix;
+      if (
+        (impl.ClassName.equalsIgnoreCase(c.localName1) &&
+        implNs.equalsIgnoreCase(c.ns1)) ||
+        (impl.ClassName.equalsIgnoreCase(c.localName2) &&
+        implNs.equalsIgnoreCase(c.ns2))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static void applyDefinitionMetadata(
+    Workflow_Instance__c instance,
+    StartRequest req
+  ) {
     Type wflowType = WorkflowTypeResolver.resolve(
       req.workflowName,
       WorkflowTypeResolver.extractNamespace(req.workflowName)
     );
-    if (wflowType != null) {
-      Object defObj = wflowType.newInstance();
-      if (defObj instanceof VersionedWorkflow) {
-        instance.Definition_Version__c = ((VersionedWorkflow) defObj)
-          .getLatestVersion();
-      } else {
-        instance.Definition_Version__c = 1;
-      }
-      if (defObj instanceof WorkflowDefinition) {
-        instance.Current_Step__c = ((WorkflowDefinition) defObj)
-          .getInitialStep();
-      }
-      if (defObj instanceof ExecutionTimeoutConfigurable) {
-        Integer timeoutSecs = ((ExecutionTimeoutConfigurable) defObj)
-          .getExecutionTimeoutSeconds();
-        if (timeoutSecs != null) {
-          instance.Deadline_At__c = DateTime.now().addSeconds(timeoutSecs);
-        }
-      }
+    if (wflowType == null) {
+      instance.Definition_Version__c = 1;
+      return;
+    }
+    Object defObj = wflowType.newInstance();
+    if (defObj instanceof VersionedWorkflow) {
+      instance.Definition_Version__c = ((VersionedWorkflow) defObj)
+        .getLatestVersion();
     } else {
       instance.Definition_Version__c = 1;
     }
-    return instance;
+    if (defObj instanceof WorkflowDefinition) {
+      instance.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
+    }
+    if (defObj instanceof ExecutionTimeoutConfigurable) {
+      Integer timeoutSecs = ((ExecutionTimeoutConfigurable) defObj)
+        .getExecutionTimeoutSeconds();
+      if (timeoutSecs != null) {
+        instance.Deadline_At__c = DateTime.now().addSeconds(timeoutSecs);
+      }
+    }
   }
 
   /**
