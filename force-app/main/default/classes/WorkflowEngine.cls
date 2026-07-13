@@ -1896,7 +1896,9 @@ public inherited sharing class WorkflowEngine {
 
     instance.Input__c = savePayloadIfNeeded(
       instance.Id,
-      (input != null) ? JSON.serialize(input) : null,
+      (req.inputJson != null)
+        ? req.inputJson
+        : ((input != null) ? JSON.serialize(input) : null),
       'Input_' + instance.Id
     );
 
