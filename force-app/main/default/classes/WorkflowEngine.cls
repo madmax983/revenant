@@ -863,12 +863,16 @@ public inherited sharing class WorkflowEngine {
    * @param roots normalized chain-root correlation keys to resolve
    * @return map of each root key to its winning instance record
    */
-  private static Map<String, Workflow_Instance__c> resolveWinnersByRoot(
-    Set<String> roots
+  /**
+   * Phase 1: buckets the active run per chain (bounded to ~one per chain by the
+   * unique active-key index) into the winner map.
+   * @param roots the chain-root keys to resolve
+   * @param winnerByRoot the accumulating winner map
+   */
+  private static void addActiveWinners(
+    Set<String> roots,
+    Map<String, Workflow_Instance__c> winnerByRoot
   ) {
-    Map<String, Workflow_Instance__c> winnerByRoot = new Map<String, Workflow_Instance__c>();
-
-    // Active runs — bounded to ~one per chain by the unique active-key index.
     for (Workflow_Instance__c inst : [
       SELECT
         Id,
@@ -888,83 +892,112 @@ public inherited sharing class WorkflowEngine {
         inst
       );
     }
+  }
 
-    // Roots with no active run → most-recent non-hand-off terminal generation.
-    Set<String> remainingRoots = unresolved(roots, winnerByRoot);
-    if (!remainingRoots.isEmpty()) {
-      Map<String, Datetime> maxByRoot = new Map<String, Datetime>();
-      Set<Datetime> maxTimes = new Set<Datetime>();
-      for (AggregateResult ar : [
-        SELECT Root_Correlation_Key__c root, MAX(CreatedDate) mc
-        FROM Workflow_Instance__c
-        WHERE
-          Root_Correlation_Key__c IN :remainingRoots
-          AND Status__c IN :TERMINAL_GETSTATUS_STATUSES
-        WITH SYSTEM_MODE
-        GROUP BY Root_Correlation_Key__c
-      ]) {
-        Datetime mc = (Datetime) ar.get('mc');
-        if (mc == null) {
-          continue;
-        }
-        String nr = normalizeKey((String) ar.get('root'));
-        Datetime existing = maxByRoot.get(nr);
-        if (existing == null || mc > existing) {
-          maxByRoot.put(nr, mc);
-        }
-        maxTimes.add(mc);
+  /**
+   * Phase 2: for roots with no active run, buckets the most-recent non-hand-off
+   * terminal generation into the winner map.
+   * @param remainingRoots roots left unresolved after the active phase
+   * @param winnerByRoot the accumulating winner map
+   */
+  private static void addTerminalGenerationWinners(
+    Set<String> remainingRoots,
+    Map<String, Workflow_Instance__c> winnerByRoot
+  ) {
+    if (remainingRoots.isEmpty()) {
+      return;
+    }
+    Map<String, Datetime> maxByRoot = new Map<String, Datetime>();
+    Set<Datetime> maxTimes = new Set<Datetime>();
+    for (AggregateResult ar : [
+      SELECT Root_Correlation_Key__c root, MAX(CreatedDate) mc
+      FROM Workflow_Instance__c
+      WHERE
+        Root_Correlation_Key__c IN :remainingRoots
+        AND Status__c IN :TERMINAL_GETSTATUS_STATUSES
+      WITH SYSTEM_MODE
+      GROUP BY Root_Correlation_Key__c
+    ]) {
+      Datetime mc = (Datetime) ar.get('mc');
+      if (mc == null) {
+        continue;
       }
-      if (!maxTimes.isEmpty()) {
-        for (Workflow_Instance__c inst : [
-          SELECT
-            Id,
-            Status__c,
-            CreatedDate,
-            Active_Correlation_Key__c,
-            Correlation_Key__c,
-            Root_Correlation_Key__c
-          FROM Workflow_Instance__c
-          WHERE
-            Root_Correlation_Key__c IN :remainingRoots
-            AND Status__c IN :TERMINAL_GETSTATUS_STATUSES
-            AND CreatedDate IN :maxTimes
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate DESC
-          LIMIT :dedupLookupRowCap
-        ]) {
-          String r = normalizeKey(inst.Root_Correlation_Key__c);
-          if (inst.CreatedDate == maxByRoot.get(r)) {
-            putBestByRoot(winnerByRoot, r, inst);
-          }
-        }
+      String nr = normalizeKey((String) ar.get('root'));
+      Datetime existing = maxByRoot.get(nr);
+      if (existing == null || mc > existing) {
+        maxByRoot.put(nr, mc);
+      }
+      maxTimes.add(mc);
+    }
+    if (maxTimes.isEmpty()) {
+      return;
+    }
+    for (Workflow_Instance__c inst : [
+      SELECT
+        Id,
+        Status__c,
+        CreatedDate,
+        Active_Correlation_Key__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE
+        Root_Correlation_Key__c IN :remainingRoots
+        AND Status__c IN :TERMINAL_GETSTATUS_STATUSES
+        AND CreatedDate IN :maxTimes
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+      LIMIT :dedupLookupRowCap
+    ]) {
+      String r = normalizeKey(inst.Root_Correlation_Key__c);
+      if (inst.CreatedDate == maxByRoot.get(r)) {
+        putBestByRoot(winnerByRoot, r, inst);
       }
     }
+  }
 
-    // Fallback for an all-hand-off chain: keep the most-recent matched row so the
-    // caller still sees the latest generation rather than null.
-    Set<String> stuckRoots = unresolved(roots, winnerByRoot);
-    if (!stuckRoots.isEmpty()) {
-      for (Workflow_Instance__c inst : [
-        SELECT
-          Id,
-          Status__c,
-          CreatedDate,
-          Active_Correlation_Key__c,
-          Correlation_Key__c,
-          Root_Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE Root_Correlation_Key__c IN :stuckRoots
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC
-        LIMIT :dedupLookupRowCap
-      ]) {
-        putBestByRoot(
-          winnerByRoot,
-          normalizeKey(inst.Root_Correlation_Key__c),
-          inst
-        );
-      }
+  /**
+   * Phase 3: fallback for an all-hand-off chain — keeps the most-recent matched
+   * row so the caller still sees the latest generation rather than null.
+   * @param stuckRoots roots still unresolved after the terminal phase
+   * @param winnerByRoot the accumulating winner map
+   */
+  private static void addHandoffFallbackWinners(
+    Set<String> stuckRoots,
+    Map<String, Workflow_Instance__c> winnerByRoot
+  ) {
+    if (stuckRoots.isEmpty()) {
+      return;
     }
+    for (Workflow_Instance__c inst : [
+      SELECT
+        Id,
+        Status__c,
+        CreatedDate,
+        Active_Correlation_Key__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Root_Correlation_Key__c IN :stuckRoots
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+      LIMIT :dedupLookupRowCap
+    ]) {
+      putBestByRoot(
+        winnerByRoot,
+        normalizeKey(inst.Root_Correlation_Key__c),
+        inst
+      );
+    }
+  }
+
+  private static Map<String, Workflow_Instance__c> resolveWinnersByRoot(
+    Set<String> roots
+  ) {
+    Map<String, Workflow_Instance__c> winnerByRoot = new Map<String, Workflow_Instance__c>();
+    addActiveWinners(roots, winnerByRoot);
+    addTerminalGenerationWinners(unresolved(roots, winnerByRoot), winnerByRoot);
+    addHandoffFallbackWinners(unresolved(roots, winnerByRoot), winnerByRoot);
     return winnerByRoot;
   }
 
