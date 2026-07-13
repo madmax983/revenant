@@ -260,11 +260,11 @@ public inherited sharing class WorkflowDebouncer {
 
       // Pass null to input since we set inputJson directly, saving CPU deserialization cycles.
       WorkflowEngine.StartRequest req = new WorkflowEngine.StartRequest(
-        state.Workflow_Name__c,
-        state.Correlation_Key__c,
-        null,
-        attributes
-      );
+          state.Workflow_Name__c,
+          state.Correlation_Key__c,
+          null
+        )
+        .withAttributes(attributes);
       req.inputJson = state.Input_Json__c;
       req.causationId = state.Causation_Id__c;
       startRequests.add(req);

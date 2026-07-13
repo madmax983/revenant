@@ -1452,7 +1452,8 @@ public inherited sharing class WorkflowEngine {
     Map<String, String> attributes
   ) {
     return doStart(
-        new StartRequest(workflowName, correlationKey, input, attributes),
+        new StartRequest(workflowName, correlationKey, input)
+          .withAttributes(attributes),
         true
       )
       .instanceId;
@@ -1474,7 +1475,8 @@ public inherited sharing class WorkflowEngine {
     Id parentInstanceId
   ) {
     return doStart(
-        new StartRequest(workflowName, correlationKey, input, parentInstanceId),
+        new StartRequest(workflowName, correlationKey, input)
+          .withParent(parentInstanceId),
         true
       )
       .instanceId;
@@ -1498,13 +1500,9 @@ public inherited sharing class WorkflowEngine {
     Map<String, String> attributes
   ) {
     return doStart(
-        new StartRequest(
-          workflowName,
-          correlationKey,
-          input,
-          parentInstanceId,
-          attributes
-        ),
+        new StartRequest(workflowName, correlationKey, input)
+          .withParent(parentInstanceId)
+          .withAttributes(attributes),
         true
       )
       .instanceId;
@@ -1623,7 +1621,8 @@ public inherited sharing class WorkflowEngine {
     Map<String, String> attributes
   ) {
     return doStart(
-      new StartRequest(workflowName, correlationKey, input, attributes),
+      new StartRequest(workflowName, correlationKey, input)
+        .withAttributes(attributes),
       true
     );
   }
@@ -1643,7 +1642,8 @@ public inherited sharing class WorkflowEngine {
     Id parentInstanceId
   ) {
     return doStart(
-      new StartRequest(workflowName, correlationKey, input, parentInstanceId),
+      new StartRequest(workflowName, correlationKey, input)
+        .withParent(parentInstanceId),
       true
     );
   }
@@ -1665,13 +1665,9 @@ public inherited sharing class WorkflowEngine {
     Map<String, String> attributes
   ) {
     return doStart(
-      new StartRequest(
-        workflowName,
-        correlationKey,
-        input,
-        parentInstanceId,
-        attributes
-      ),
+      new StartRequest(workflowName, correlationKey, input)
+        .withParent(parentInstanceId)
+        .withAttributes(attributes),
       true
     );
   }
@@ -2603,64 +2599,23 @@ public inherited sharing class WorkflowEngine {
     }
 
     /**
-     * @description Builds a start request with searchable attributes.
-     * @param workflowName developer name of the workflow definition
-     * @param correlationKey dedup/correlation key
-     * @param input start input payload
-     * @param attributes searchable key/value attributes
+     * @description Fluent setter stamping searchable attributes on the request.
+     * @param attributesArg searchable key/value attributes
+     * @return this request, for call chaining
      */
-    public StartRequest(
-      String workflowName,
-      String correlationKey,
-      Object input,
-      Map<String, String> attributes
-    ) {
-      this.workflowName = workflowName;
-      this.correlationKey = correlationKey;
-      this.input = input;
-      this.attributes = attributes;
+    public StartRequest withAttributes(Map<String, String> attributesArg) {
+      this.attributes = attributesArg;
+      return this;
     }
 
     /**
-     * @description Builds a start request with a parent instance reference.
-     * @param workflowName developer name of the workflow definition
-     * @param correlationKey dedup/correlation key
-     * @param input start input payload
-     * @param parentInstanceId Id of the parent workflow instance
+     * @description Fluent setter linking the request to a parent instance.
+     * @param parentInstanceIdArg Id of the parent workflow instance
+     * @return this request, for call chaining
      */
-    public StartRequest(
-      String workflowName,
-      String correlationKey,
-      Object input,
-      Id parentInstanceId
-    ) {
-      this.workflowName = workflowName;
-      this.correlationKey = correlationKey;
-      this.input = input;
-      this.parentInstanceId = parentInstanceId;
-    }
-
-    /**
-     * @description Builds a start request with both a parent reference and
-     * searchable attributes.
-     * @param workflowName developer name of the workflow definition
-     * @param correlationKey dedup/correlation key
-     * @param input start input payload
-     * @param parentInstanceId Id of the parent workflow instance
-     * @param attributes searchable key/value attributes
-     */
-    public StartRequest(
-      String workflowName,
-      String correlationKey,
-      Object input,
-      Id parentInstanceId,
-      Map<String, String> attributes
-    ) {
-      this.workflowName = workflowName;
-      this.correlationKey = correlationKey;
-      this.input = input;
-      this.parentInstanceId = parentInstanceId;
-      this.attributes = attributes;
+    public StartRequest withParent(Id parentInstanceIdArg) {
+      this.parentInstanceId = parentInstanceIdArg;
+      return this;
     }
   }
 

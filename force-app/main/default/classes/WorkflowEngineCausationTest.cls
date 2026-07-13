@@ -240,11 +240,11 @@ public class WorkflowEngineCausationTest {
 
       // Start Child under Parent with blank causationId (so it has only Parent_Instance__c)
       WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
-        'WorkflowEngineMocksBTest.DaemonWorkflow',
-        'ChildDaemonKey',
-        0,
-        parentId
-      );
+          'WorkflowEngineMocksBTest.DaemonWorkflow',
+          'ChildDaemonKey',
+          0
+        )
+        .withParent(parentId);
       Id childId = WorkflowEngine.startOrGet(
           new List<WorkflowEngine.StartRequest>{ childReq }
         )[0]
