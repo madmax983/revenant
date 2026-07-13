@@ -18,7 +18,6 @@
         </faultConnector>
         <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
-            <description>Passes the caller-supplied correlation key or workflow instance Id into the invocable action.</description>
             <name>workflowKeyOrId</name>
             <value>
                 <elementReference>workflowKeyOrIdInput</elementReference>
