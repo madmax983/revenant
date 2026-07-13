@@ -695,64 +695,95 @@ public inherited sharing class WorkflowEngine {
       bucketByOwnKey(inst, keys, bestByKey);
     }
 
-    // 1b) Keys with no active run → most-recent row by correlation key (any status,
-    //     so a ContinuedAsNew hand-off is detected for the chain expansion below). An
-    //     aggregate yields one MAX(CreatedDate) per key (a hot key collapses to a
-    //     single group), then a bounded fetch resolves the Id(s) at those timestamps.
+    // 1b) Keys with no active run → most-recent row by correlation key.
+    resolveRemainingKeyWinners(keys, bestByKey);
+
+    // 2) For keys whose direct winner is a ContinuedAsNew hand-off, follow the
+    //    chain to its live/final successor via the shared root key.
+    expandContinuedAsNewWinners(bestByKey);
+
+    Map<String, Id> winnerByKey = new Map<String, Id>();
+    for (String reqKey : bestByKey.keySet()) {
+      winnerByKey.put(reqKey, bestByKey.get(reqKey).Id);
+    }
+    return winnerByKey;
+  }
+
+  /**
+   * Resolves winners for keys with no active run (phase 1b): the most-recent row
+   * by correlation key of any status (so a ContinuedAsNew hand-off is detected
+   * for the chain expansion). An aggregate yields one MAX(CreatedDate) per key
+   * (a hot key collapses to one group), then a bounded fetch resolves the Id(s)
+   * at those timestamps. Mutates bestByKey in place.
+   * @param keys the full requested key set (for own-key bucketing)
+   * @param bestByKey the accumulating best-instance-per-key map to extend
+   */
+  private static void resolveRemainingKeyWinners(
+    Set<String> keys,
+    Map<String, Workflow_Instance__c> bestByKey
+  ) {
     Set<String> remaining = unresolved(keys, bestByKey);
-    if (!remaining.isEmpty()) {
-      Map<String, Datetime> maxByKey = new Map<String, Datetime>();
-      Set<Datetime> maxTimes = new Set<Datetime>();
-      for (AggregateResult ar : [
-        SELECT Correlation_Key__c ck, MAX(CreatedDate) mc
-        FROM Workflow_Instance__c
-        WHERE Correlation_Key__c IN :remaining
-        WITH SYSTEM_MODE
-        GROUP BY Correlation_Key__c
-      ]) {
-        Datetime mc = (Datetime) ar.get('mc');
-        if (mc == null) {
-          continue;
-        }
-        // Guard the put: a case-insensitive GROUP BY can yield separate groups for
-        // case variants that normalize to the same key, so keep the latest.
-        String nk = normalizeKey((String) ar.get('ck'));
-        Datetime existing = maxByKey.get(nk);
-        if (existing == null || mc > existing) {
-          maxByKey.put(nk, mc);
-        }
-        maxTimes.add(mc);
+    if (remaining.isEmpty()) {
+      return;
+    }
+    Map<String, Datetime> maxByKey = new Map<String, Datetime>();
+    Set<Datetime> maxTimes = new Set<Datetime>();
+    for (AggregateResult ar : [
+      SELECT Correlation_Key__c ck, MAX(CreatedDate) mc
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c IN :remaining
+      WITH SYSTEM_MODE
+      GROUP BY Correlation_Key__c
+    ]) {
+      Datetime mc = (Datetime) ar.get('mc');
+      if (mc == null) {
+        continue;
       }
-      if (!maxTimes.isEmpty()) {
-        for (Workflow_Instance__c inst : [
-          SELECT
-            Id,
-            Status__c,
-            CreatedDate,
-            Active_Correlation_Key__c,
-            Correlation_Key__c,
-            Root_Correlation_Key__c
-          FROM Workflow_Instance__c
-          WHERE Correlation_Key__c IN :remaining AND CreatedDate IN :maxTimes
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate DESC
-          LIMIT :dedupLookupRowCap
-        ]) {
-          if (
-            inst.CreatedDate ==
-            maxByKey.get(normalizeKey(inst.Correlation_Key__c))
-          ) {
-            bucketByOwnKey(inst, keys, bestByKey);
-          }
-        }
+      // Guard the put: a case-insensitive GROUP BY can yield separate groups for
+      // case variants that normalize to the same key, so keep the latest.
+      String nk = normalizeKey((String) ar.get('ck'));
+      Datetime existing = maxByKey.get(nk);
+      if (existing == null || mc > existing) {
+        maxByKey.put(nk, mc);
+      }
+      maxTimes.add(mc);
+    }
+    if (maxTimes.isEmpty()) {
+      return;
+    }
+    for (Workflow_Instance__c inst : [
+      SELECT
+        Id,
+        Status__c,
+        CreatedDate,
+        Active_Correlation_Key__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c IN :remaining AND CreatedDate IN :maxTimes
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+      LIMIT :dedupLookupRowCap
+    ]) {
+      if (
+        inst.CreatedDate == maxByKey.get(normalizeKey(inst.Correlation_Key__c))
+      ) {
+        bucketByOwnKey(inst, keys, bestByKey);
       }
     }
+  }
 
-    // 2) For keys whose direct winner is a ContinuedAsNew hand-off, the chain has
-    //    moved on — follow it to the live/final successor via the shared root key.
-    //    (Phase 1 matched on the key itself, not on root, so the successors — which
-    //    carry a different correlation key — were not seen yet, even when the polled
-    //    key is the chain root.)
+  /**
+   * Follows ContinuedAsNew hand-offs to their live/final successor (phase 2).
+   * For each key whose direct winner is a ContinuedAsNew row, the chain root is
+   * resolved (falling back to the predecessor's own key when its root is blank)
+   * and, when a preferred successor is found, it replaces the winner. Mutates
+   * bestByKey in place.
+   * @param bestByKey the best-instance-per-key map to expand
+   */
+  private static void expandContinuedAsNewWinners(
+    Map<String, Workflow_Instance__c> bestByKey
+  ) {
     Map<String, String> rootByKey = new Map<String, String>();
     Set<String> expandRoots = new Set<String>();
     for (String reqKey : bestByKey.keySet()) {
@@ -769,25 +800,20 @@ public inherited sharing class WorkflowEngine {
         expandRoots.add(root);
       }
     }
-    if (!expandRoots.isEmpty()) {
-      Map<String, Workflow_Instance__c> winnerByRoot = resolveWinnersByRoot(
-        expandRoots
-      );
-      for (String reqKey : rootByKey.keySet()) {
-        Workflow_Instance__c cand = winnerByRoot.get(rootByKey.get(reqKey));
-        if (
-          cand != null && isPreferredForGetStatus(cand, bestByKey.get(reqKey))
-        ) {
-          bestByKey.put(reqKey, cand);
-        }
+    if (expandRoots.isEmpty()) {
+      return;
+    }
+    Map<String, Workflow_Instance__c> winnerByRoot = resolveWinnersByRoot(
+      expandRoots
+    );
+    for (String reqKey : rootByKey.keySet()) {
+      Workflow_Instance__c cand = winnerByRoot.get(rootByKey.get(reqKey));
+      if (
+        cand != null && isPreferredForGetStatus(cand, bestByKey.get(reqKey))
+      ) {
+        bestByKey.put(reqKey, cand);
       }
     }
-
-    Map<String, Id> winnerByKey = new Map<String, Id>();
-    for (String reqKey : bestByKey.keySet()) {
-      winnerByKey.put(reqKey, bestByKey.get(reqKey).Id);
-    }
-    return winnerByKey;
   }
 
   /**
