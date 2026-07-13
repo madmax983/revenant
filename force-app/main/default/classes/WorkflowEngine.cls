@@ -12750,6 +12750,11 @@ public inherited sharing class WorkflowEngine {
     return events;
   }
 
+  /**
+   * @description Enqueues orchestrator work for a batch of requests, dispatching
+   * directly under test and via RUN_STEP platform events otherwise.
+   * @param requests the orchestrator requests to enqueue
+   */
   public static void enqueueOrchestrators(List<OrchestratorRequest> requests) {
     WorkflowWatchdog.bootstrap();
     if (Test.isRunningTest()) {
