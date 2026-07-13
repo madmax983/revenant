@@ -370,10 +370,8 @@ public class WorkflowSignalIdempotencyTest {
 
       // First call: signal lands.
       WorkflowEngine.signal(
-        'idem-test-6',
-        'Approve',
-        '{"v":1}',
-        'apex-key-001'
+        new WorkflowEngine.SignalRequest('idem-test-6', 'Approve', '{"v":1}')
+          .withIdempotencyKey('apex-key-001')
       );
 
       System.assertEquals(
@@ -398,10 +396,8 @@ public class WorkflowSignalIdempotencyTest {
 
       // Second call with the same key: silent no-op.
       WorkflowEngine.signal(
-        'idem-test-6',
-        'Approve',
-        '{"v":2}',
-        'apex-key-001'
+        new WorkflowEngine.SignalRequest('idem-test-6', 'Approve', '{"v":2}')
+          .withIdempotencyKey('apex-key-001')
       );
 
       System.assertEquals(
@@ -523,10 +519,12 @@ public class WorkflowSignalIdempotencyTest {
 
       // First keyed cancel (no compensations) drives the instance terminal.
       WorkflowEngine.signal(
-        'idem-cancel-1',
-        'Cancel',
-        '{"runCompensations":false}',
-        'cancel-key-1'
+        new WorkflowEngine.SignalRequest(
+            'idem-cancel-1',
+            'Cancel',
+            '{"runCompensations":false}'
+          )
+          .withIdempotencyKey('cancel-key-1')
       );
 
       System.assertEquals(
@@ -549,10 +547,12 @@ public class WorkflowSignalIdempotencyTest {
       Boolean threw = false;
       try {
         WorkflowEngine.signal(
-          'idem-cancel-1',
-          'Cancel',
-          '{"runCompensations":false}',
-          'cancel-key-1'
+          new WorkflowEngine.SignalRequest(
+              'idem-cancel-1',
+              'Cancel',
+              '{"runCompensations":false}'
+            )
+            .withIdempotencyKey('cancel-key-1')
         );
       } catch (Exception ex) {
         threw = true;
@@ -823,7 +823,10 @@ public class WorkflowSignalIdempotencyTest {
       WorkflowEngine.redeliverCapturedSignal(captured.Id);
 
       // 4. A routed duplicate of the same idempotency key must be deduped.
-      WorkflowEngine.signal('boundary-1', 'Approve', '{"v":2}', 'boundary-key');
+      WorkflowEngine.signal(
+        new WorkflowEngine.SignalRequest('boundary-1', 'Approve', '{"v":2}')
+          .withIdempotencyKey('boundary-key')
+      );
 
       System.assertEquals(
         1,

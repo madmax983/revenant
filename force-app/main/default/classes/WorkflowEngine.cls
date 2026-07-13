@@ -7328,7 +7328,7 @@ public inherited sharing class WorkflowEngine {
    * @param payload signal payload
    */
   public static void signal(String keyOrId, String signalName, String payload) {
-    signal(keyOrId, signalName, payload, null);
+    signal(new SignalRequest(keyOrId, signalName, payload));
   }
 
   /**
@@ -7339,17 +7339,14 @@ public inherited sharing class WorkflowEngine {
    * is constraint-based (unique Signal_Key__c per instance hash) so it holds
    * across concurrent transactions without adding SOQL to the hot path.
    * Passing null preserves the existing at-least-once behavior.
-   * @param keyOrId correlation key or instance Id of the target
-   * @param signalName name of the signal to deliver
-   * @param payload signal payload
-   * @param idempotencyKey per-delivery idempotency key, or null for at-least-once
+   * @param req the signal request (keyOrId, signalName, payload and optional
+   * idempotencyKey); when idempotencyKey is null, at-least-once behavior applies
    */
-  public static void signal(
-    String keyOrId,
-    String signalName,
-    String payload,
-    String idempotencyKey
-  ) {
+  public static void signal(SignalRequest req) {
+    String keyOrId = req.keyOrId;
+    String signalName = req.signalName;
+    String payload = req.payload;
+    String idempotencyKey = req.idempotencyKey;
     String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
         SObjectDescribeOptions.DEFERRED
       )
