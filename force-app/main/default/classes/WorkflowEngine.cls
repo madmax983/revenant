@@ -9286,6 +9286,16 @@ public inherited sharing class WorkflowEngine {
     }
 
     // Serial resume.
+    enqueueSerialResume(instanceId);
+  }
+
+  /**
+   * Serial resume enqueue: dedups per instance, then enqueues the orchestrator
+   * directly under test, or via queueable (falling back to the platform-event
+   * path when the queueable budget is exhausted or the enqueue throws).
+   * @param instanceId the instance to resume
+   */
+  private static void enqueueSerialResume(Id instanceId) {
     if (enqueuedInstanceIds.contains(instanceId)) {
       return;
     }
@@ -9294,17 +9304,17 @@ public inherited sharing class WorkflowEngine {
       if (!disableQueueableInTest) {
         System.enqueueJob(new WorkflowOrchestrator(instanceId));
       }
-    } else {
-      try {
-        if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
-          System.enqueueJob(new WorkflowOrchestrator(instanceId));
-        } else {
-          enqueueOrchestrator(instanceId, null);
-        }
-      } catch (Exception ignored) {
-        // Queueable enqueue failed; fall back to the Platform Event path.
+      return;
+    }
+    try {
+      if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+        System.enqueueJob(new WorkflowOrchestrator(instanceId));
+      } else {
         enqueueOrchestrator(instanceId, null);
       }
+    } catch (Exception ignored) {
+      // Queueable enqueue failed; fall back to the Platform Event path.
+      enqueueOrchestrator(instanceId, null);
     }
   }
 
