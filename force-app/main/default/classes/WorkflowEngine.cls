@@ -3691,6 +3691,15 @@ public inherited sharing class WorkflowEngine {
     runStep(instanceId, null);
   }
 
+  private class RunStepContext {
+    Id instanceId;
+    String stepName;
+    Workflow_Instance__c instance;
+    Workflow_Step_Execution__c stepExec;
+    Integer stepVisit = 0;
+    String activeStepName;
+  }
+
   /**
    * @description Executes a single step of a workflow instance and durably
    * persists its outcome: hydrates the step's `StepContext`, runs the step (or a
@@ -3702,7 +3711,44 @@ public inherited sharing class WorkflowEngine {
    * current step
    */
   public static void runStep(Id instanceId, String stepName) {
-    // 1. Fetch instance state (NO FOR UPDATE lock to allow parallel execution and direct callouts)
+    RunStepContext ctx = new RunStepContext();
+    ctx.instanceId = instanceId;
+    ctx.stepName = stepName;
+    ctx.instance = loadInstanceForRun(instanceId);
+    if (isFinishedStatus(ctx.instance.Status__c)) {
+      return; // Already finished
+    }
+    if (routeIfCompensating(ctx.instance)) {
+      return;
+    }
+    if (parkIfPaused(ctx.instance)) {
+      return;
+    }
+    if (admitOrParkForConcurrency(ctx.instance)) {
+      return;
+    }
+    initializeStepInMemory(ctx.instance);
+    if (isStaleParallelOrchestratorRun(ctx.instance, stepName)) {
+      return;
+    }
+    ctx.activeStepName = String.isNotBlank(stepName)
+      ? stepName
+      : ctx.instance.Current_Step__c;
+    if (acquireStepExecutionLog(ctx)) {
+      return;
+    }
+    validateExplicitStepName(ctx.instance, stepName);
+    String prevOutput = resolvePreviousStepOutput(
+      ctx.instance,
+      ctx.activeStepName,
+      stepName
+    );
+    invokeStepAndHandleOutcome(ctx, prevOutput);
+  }
+
+  // §1. Fetch instance state (NO FOR UPDATE lock to allow parallel execution and
+  // direct callouts).
+  private static Workflow_Instance__c loadInstanceForRun(Id instanceId) {
     List<Workflow_Instance__c> instances = [
       SELECT
         Id,
@@ -3728,245 +3774,255 @@ public inherited sharing class WorkflowEngine {
       WITH SYSTEM_MODE
       LIMIT 1
     ];
-
     if (instances.isEmpty()) {
       throw new WorkflowException('Workflow instance not found: ' + instanceId);
     }
+    return instances[0];
+  }
 
-    Workflow_Instance__c instance = instances[0];
+  // A forward-terminal status: nothing left to drive.
+  private static Boolean isFinishedStatus(String status) {
+    return status == 'Completed' ||
+      status == 'Failed' ||
+      status == 'Compensated' ||
+      status == 'CompensationFailed' ||
+      status == 'Cancelled' ||
+      status == 'ContinuedAsNew';
+  }
+
+  // Detect a live compensation drive and route it to runCompensationStep.
+  // Returns true when the instance was routed (caller must stop).
+  private static Boolean routeIfCompensating(Workflow_Instance__c instance) {
+    if (!isLiveCompensation(instance)) {
+      return false;
+    }
+    String reassertedStatus = reassertCompensatingStatus(instance);
+    runCompensationStep(instance, reassertedStatus);
+    return true;
+  }
+
+  // A compensation step that SUSPENDed (e.g. waiting on a signal) leaves the
+  // instance Suspended; signal() then flips it to Running before re-enqueueing.
+  // In either state a latest step ending in '_Compensate' whose base name is on
+  // the compensation stack means the instance is still compensating and must
+  // route to runCompensationStep, not the forward path.
+  private static Boolean isLiveCompensation(Workflow_Instance__c instance) {
     if (
-      instance.Status__c == 'Completed' ||
-      instance.Status__c == 'Failed' ||
-      instance.Status__c == 'Compensated' ||
-      instance.Status__c == 'CompensationFailed' ||
-      instance.Status__c == 'Cancelled' ||
-      instance.Status__c == 'ContinuedAsNew'
+      instance.Status__c == 'Compensating' ||
+      instance.Status__c == 'Cancelling'
     ) {
-      return; // Already finished
+      return true;
     }
-
-    Boolean isCompensating = (instance.Status__c == 'Compensating' ||
-    instance.Status__c == 'Cancelling');
-    // A compensation step that SUSPENDed (e.g. waiting on a signal) leaves the
-    // instance Suspended; signal() then flips it to Running before re-enqueueing.
-    // In either state a latest step ending in '_Compensate' means the instance
-    // is still compensating and must route to runCompensationStep, not the
-    // forward path -- otherwise a signal-driven compensation is skipped and the
-    // instance stays stuck Running with the compensation step pending.
-    if (instance.Status__c == 'Suspended' || instance.Status__c == 'Running') {
-      // Only treat a trailing-'_Compensate' latest step as a live compensation
-      // when the instance's compensation stack actually holds the matching base
-      // step. A normal forward step that happens to be named '<x>_Compensate'
-      // and is resumed by signal() (Suspended/Running with no -- or unrelated --
-      // stack) must NOT be misrouted to runCompensationStep, which would see no
-      // matching stack entry and mark the instance Compensated instead of
-      // resuming it. The forward execution of compensatable steps grows the
-      // stack too, so a non-empty stack alone is not enough; require the base
-      // name to be on it.
-      List<String> compStack = String.isNotBlank(instance.Compensation_Stack__c)
-        ? (List<String>) JSON.deserialize(
-            instance.Compensation_Stack__c,
-            List<String>.class
-          )
-        : new List<String>();
-      if (!compStack.isEmpty()) {
-        List<Workflow_Step_Execution__c> latestSteps = [
-          SELECT Step_Name__c
-          FROM Workflow_Step_Execution__c
-          WHERE Workflow_Instance__c = :instance.Id
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate DESC, Id DESC
-          LIMIT 1
-        ];
-        if (
-          !latestSteps.isEmpty() &&
-          latestSteps[0].Step_Name__c != null &&
-          latestSteps[0].Step_Name__c.endsWith('_Compensate') &&
-          compStack.contains(
-            latestSteps[0].Step_Name__c.removeEnd('_Compensate')
-          )
-        ) {
-          isCompensating = true;
-        }
-      }
+    if (instance.Status__c != 'Suspended' && instance.Status__c != 'Running') {
+      return false;
     }
-
-    if (isCompensating) {
-      // Re-assert the compensating status before running the step: runCompensationStep
-      // early-exits unless the instance is Compensating/Cancelling, so a
-      // Suspended (initial detection) or Running (signal-resumed) instance must
-      // be restored to the right compensation status first.
-      String reassertedStatus = null;
-      if (
-        instance.Status__c == 'Suspended' ||
-        instance.Status__c == 'Running'
-      ) {
-        reassertedStatus = (instance.Error_Message__c != null &&
-          instance.Error_Message__c.contains('Cancelled by user'))
-          ? 'Cancelling'
-          : 'Compensating';
-        instance.Status__c = reassertedStatus;
-        instance.Async_Job_Id__c = null;
-        // Set the compensating status in memory but DEFER its DML to
-        // runCompensationStep. A compensation step resumed by a signal may be a
-        // CalloutStep that makes a payload-driven callout in compensate(), and
-        // Salesforce forbids a callout once the transaction holds uncommitted
-        // DML. Committing here (as this used to) made that callout illegal.
-        // runCompensationStep re-applies this phase after its own re-query and
-        // commits it before compensate() for an ordinary step / after it for a
-        // CalloutStep. A crash before that commit leaves the instance Suspended/
-        // Running with the '_Compensate' step on the stack, which this same
-        // detection re-routes on the next drive.
-      }
-      runCompensationStep(instance, reassertedStatus);
-      return;
+    // Only treat a trailing-'_Compensate' latest step as a live compensation
+    // when the instance's compensation stack actually holds the matching base
+    // step. A normal forward step that happens to be named '<x>_Compensate' and
+    // is resumed by signal() (with no -- or unrelated -- stack) must NOT be
+    // misrouted. The forward execution of compensatable steps grows the stack
+    // too, so a non-empty stack alone is not enough; require the base name on it.
+    List<String> compStack = String.isNotBlank(instance.Compensation_Stack__c)
+      ? (List<String>) JSON.deserialize(
+          instance.Compensation_Stack__c,
+          List<String>.class
+        )
+      : new List<String>();
+    if (compStack.isEmpty()) {
+      return false;
     }
+    return latestStepIsOnCompensationStack(instance.Id, compStack);
+  }
 
-    // 2a. Operator pause gate — park at the chain handoff instead of proceeding.
-    //     Compensating/Cancelling instances bypass this (already returned above) so
-    //     cancel + rollback always proceed on a paused definition.
+  // True when the instance's most recent step execution is a '_Compensate' step
+  // whose base name is on the compensation stack.
+  private static Boolean latestStepIsOnCompensationStack(
+    Id instanceId,
+    List<String> compStack
+  ) {
+    List<Workflow_Step_Execution__c> latestSteps = [
+      SELECT Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    return !latestSteps.isEmpty() &&
+      latestSteps[0].Step_Name__c != null &&
+      latestSteps[0].Step_Name__c.endsWith('_Compensate') &&
+      compStack.contains(latestSteps[0].Step_Name__c.removeEnd('_Compensate'));
+  }
+
+  // Re-assert the compensating status before running the step: runCompensationStep
+  // early-exits unless the instance is Compensating/Cancelling, so a Suspended
+  // (initial detection) or Running (signal-resumed) instance must be restored to
+  // the right compensation status first. The DML is DEFERRED to runCompensationStep
+  // so a signal-resumed CalloutStep compensate() is not blocked by uncommitted DML.
+  private static String reassertCompensatingStatus(
+    Workflow_Instance__c instance
+  ) {
+    if (instance.Status__c != 'Suspended' && instance.Status__c != 'Running') {
+      return null;
+    }
+    String reassertedStatus = (instance.Error_Message__c != null &&
+      instance.Error_Message__c.contains('Cancelled by user'))
+      ? 'Cancelling'
+      : 'Compensating';
+    instance.Status__c = reassertedStatus;
+    instance.Async_Job_Id__c = null;
+    return reassertedStatus;
+  }
+
+  // §2a. Operator pause gate — park at the chain handoff instead of proceeding.
+  // Returns true when the instance is parked/paused (caller must stop).
+  private static Boolean parkIfPaused(Workflow_Instance__c instance) {
     Boolean definitionPaused =
       WorkflowPauseGate.anyPaused() &&
       WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c);
-    // A still-Paused row must NOT execute even once its definition has been
-    // resumed: chunked resume deletes the pause record before every Paused row is
-    // flipped to Running, so a stale RUN_STEP delivered in that window would
-    // otherwise run the step before the drain re-arms its timeout / flips it. Let
-    // the resume drain own the Paused -> Running transition.
-    if (definitionPaused || instance.Status__c == 'Paused') {
-      // Park a not-yet-parked instance whose definition is paused; an
-      // already-Paused row is just a no-op until the drain flips it to Running.
-      if (definitionPaused && instance.Status__c != 'Paused') {
-        instance.Status__c = 'Paused';
-        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-      }
-      return;
+
+    if (!(definitionPaused || instance.Status__c == 'Paused')) {
+      return false;
+    }
+    // Park a not-yet-parked instance whose definition is paused; an
+    // already-Paused row is just a no-op until the drain flips it to Running.
+    if (definitionPaused && instance.Status__c != 'Paused') {
+      instance.Status__c = 'Paused';
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     }
 
-    // 2b. Concurrency admission gate. An instance that does not yet hold a slot must
-    //     acquire one before executing any step of a definition with a configured
-    //     ceiling. Acquisition commits the guarded counter increment in THIS
-    //     transaction and re-drives the step in a fresh transaction, so execute()
-    //     never runs while the counter DML is uncommitted (which would make a
-    //     CalloutStep — the primary use case for this feature — illegal). A held slot
-    //     is released only on a terminal transition (WorkflowInstanceTrigger).
-    //     Compensating/Cancelling instances already returned to runCompensationStep
-    //     above; they keep the slot acquired on the forward path and are never re-gated.
-    if (!instance.Concurrency_Slot_Held__c) {
-      // Only bounded workflows are gated; resolving the ceiling first (a
-      // governor-free CMDT read) keeps unbounded workflows on the exact path they
-      // take today, with no instance lock.
-      if (ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
-        // Serialize concurrent RUN_STEP deliveries for the SAME instance: both may
-        // have read Concurrency_Slot_Held__c = false from the unlocked instance
-        // query above. Re-read the authoritative flag under a row lock so the loser
-        // observes the winner's committed acquire and no-ops, instead of either
-        // double-consuming a slot (ceiling > 1) or parking over the just-admitted
-        // row (ceiling = 1).
-        Workflow_Instance__c locked = [
-          SELECT Concurrency_Slot_Held__c, Status__c
-          FROM Workflow_Instance__c
-          WHERE Id = :instance.Id
-          WITH SYSTEM_MODE
-          FOR UPDATE
-        ];
-        if (locked.Concurrency_Slot_Held__c) {
-          // A concurrent delivery already admitted this instance; its re-hop drives
-          // the step. This delivery is a safe no-op.
-          return;
-        }
-        // A concurrent cancel/terminal transition may have landed between the
-        // unlocked instance query above and this locked re-read. Acquiring a slot
-        // and writing Status__c = 'Running' off the stale forward state would
-        // resurrect a finished/cancelled instance, so bail unless it is still
-        // forward-runnable. (Compensating/Cancelling/Paused are driven by their own
-        // paths, never the admission gate.)
-        if (
-          locked.Status__c != 'Pending' &&
-          locked.Status__c != 'Running' &&
-          locked.Status__c != 'Suspended'
-        ) {
-          return;
-        }
+    return true;
+  }
 
-        // Resolve the initial step for a fresh start BEFORE consuming a slot, so an
-        // unresolvable workflow class fails cleanly here (the same WorkflowException
-        // the validation below would throw) instead of holding a slot that
-        // reconciliation would count forever. Throwing before tryAcquire takes no
-        // slot; throwing after would roll back the uncommitted increment anyway.
-        String resolvedStep = instance.Current_Step__c;
-        if (String.isBlank(resolvedStep)) {
-          Type wfType = WorkflowTypeResolver.resolve(
-            instance.Workflow_Name__c,
-            WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
-          );
-          if (wfType == null) {
-            throw new WorkflowException(
-              'Could not resolve workflow definition class: ' +
-              instance.Workflow_Name__c
-            );
-          }
-          resolvedStep = ((WorkflowDefinition) wfType.newInstance())
-            .getInitialStep();
-        }
+  // §2b. Concurrency admission gate. Returns true when the delivery was handled
+  // here (no-op, parked, or re-driven after acquiring a slot).
+  private static Boolean admitOrParkForConcurrency(
+    Workflow_Instance__c instance
+  ) {
+    if (instance.Concurrency_Slot_Held__c) {
+      return false;
+    }
+    if (ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
+      return admitConfiguredInstance(instance);
+    }
+    // Otherwise unbounded (no ceiling): fall through and run exactly as today. If
+    // this instance was parked under a ceiling that an admin has since removed or
+    // disabled, clear the stale admission-retry markers before running.
+    if (instance.Concurrency_Parked__c) {
+      instance.Concurrency_Parked__c = false;
+      instance.Sleep_Until__c = null;
+      instance.Async_Job_Id__c = null;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+      // Re-arm the pending step's watchdog deadline that parkForConcurrency cleared,
+      // mirroring the successful-admission path above. Without this a re-drive that
+      // is delayed or lost (and a CalloutStep, whose pre-exec bookkeeping relies on
+      // the watchdog already being armed) would run with no pre-start timeout net.
+      // reArmTimeoutsForResume re-arms here because the workflow is now unbounded
+      // (isConfigured is false), so it is not treated as a deferred admission.
+      reArmTimeoutsForResume(new List<Workflow_Instance__c>{ instance });
+      // Re-drive in a fresh transaction instead of executing the step now: the
+      // marker-clear DML above is uncommitted, and a CalloutStep cannot run while
+      // uncommitted DML is pending (Salesforce forbids it) — the same reason the
+      // admission-acquire path above re-hops. A fresh RUN_STEP re-reads this row
+      // (now unparked) and runs the step cleanly.
+      if (!(Test.isRunningTest() && disableQueueableInTest)) {
+        enqueueResume(instance.Id);
+      }
 
-        ConcurrencyGate.AdmissionResult admission = ConcurrencyGate.tryAcquire(
-          instance.Workflow_Name__c
-        );
-        if (admission.admitted) {
-          // Slot acquired: commit the acquire + flag, then re-drive in a fresh
-          // transaction. Clear the admission-retry sleep markers and restamp the
-          // step's watchdog deadline (cleared on park) durably via
-          // reArmTimeoutsForResume, so a re-admitted step keeps its timeout safety
-          // net even when dynamic scheduling is off or at the job limit.
-          instance.Concurrency_Slot_Held__c = true;
-          instance.Concurrency_Parked__c = false;
-          instance.Current_Step__c = resolvedStep;
-          instance.Status__c = 'Running';
-          instance.Sleep_Until__c = null;
-          instance.Async_Job_Id__c = null;
-          Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-          reArmTimeoutsForResume(new List<Workflow_Instance__c>{ instance });
-          if (!(Test.isRunningTest() && disableQueueableInTest)) {
-            enqueueResume(instance.Id);
-          }
-          return;
-        }
-        // Ceiling full: park and re-attempt admission automatically through the
-        // existing sleep/watchdog resume plumbing.
-        parkForConcurrency(instance, resolvedStep);
-        return;
-      }
-      // Otherwise unbounded (no ceiling): fall through and run exactly as today. If
-      // this instance was parked under a ceiling that an admin has since removed or
-      // disabled, clear the stale admission-retry markers before running. Leaving a
-      // due Sleep_Until__c in place would let the watchdog treat a later real SUSPEND
-      // as an overdue sleeper and re-run the step without its external signal.
-      if (instance.Concurrency_Parked__c) {
-        instance.Concurrency_Parked__c = false;
-        instance.Sleep_Until__c = null;
-        instance.Async_Job_Id__c = null;
-        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-        // Re-arm the pending step's watchdog deadline that parkForConcurrency cleared,
-        // mirroring the successful-admission path above. Without this a re-drive that
-        // is delayed or lost (and a CalloutStep, whose pre-exec bookkeeping relies on
-        // the watchdog already being armed) would run with no pre-start timeout net.
-        // reArmTimeoutsForResume re-arms here because the workflow is now unbounded
-        // (isConfigured is false), so it is not treated as a deferred admission.
-        reArmTimeoutsForResume(new List<Workflow_Instance__c>{ instance });
-        // Re-drive in a fresh transaction instead of executing the step now: the
-        // marker-clear DML above is uncommitted, and a CalloutStep cannot run while
-        // uncommitted DML is pending (Salesforce forbids it) — the same reason the
-        // admission-acquire path above re-hops. A fresh RUN_STEP re-reads this row
-        // (now unparked) and runs the step cleanly.
-        if (!(Test.isRunningTest() && disableQueueableInTest)) {
-          enqueueResume(instance.Id);
-        }
-        return;
-      }
+      return true;
+    }
+    return false;
+  }
+
+  // Configured (bounded) admission: re-read under a lock, then acquire a slot and
+  // re-drive, or park for a later re-attempt. Always handles the delivery.
+  private static Boolean admitConfiguredInstance(
+    Workflow_Instance__c instance
+  ) {
+    Workflow_Instance__c locked = [
+      SELECT Concurrency_Slot_Held__c, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instance.Id
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+    if (locked.Concurrency_Slot_Held__c) {
+      // A concurrent delivery already admitted this instance; its re-hop drives
+      // the step. This delivery is a safe no-op.
+      return true;
+    }
+    // A concurrent cancel/terminal transition may have landed between the
+    // unlocked instance query above and this locked re-read. Acquiring a slot
+    // and writing Status__c = 'Running' off the stale forward state would
+    // resurrect a finished/cancelled instance, so bail unless it is still
+    // forward-runnable. (Compensating/Cancelling/Paused are driven by their own
+    // paths, never the admission gate.)
+    if (
+      locked.Status__c != 'Pending' &&
+      locked.Status__c != 'Running' &&
+      locked.Status__c != 'Suspended'
+    ) {
+      return true;
     }
 
-    // 2. Initialize initial step in memory if this is the start (DML deferred to outcome handler)
+    String resolvedStep = resolveStepForAdmission(instance);
+
+    ConcurrencyGate.AdmissionResult admission = ConcurrencyGate.tryAcquire(
+      instance.Workflow_Name__c
+    );
+    if (admission.admitted) {
+      commitSlotAcquisitionAndRedrive(instance, resolvedStep);
+      return true;
+    }
+    // Ceiling full: park and re-attempt admission automatically through the
+    // existing sleep/watchdog resume plumbing.
+    parkForConcurrency(instance, resolvedStep);
+    return true;
+  }
+
+  // Resolve the initial step for a fresh start BEFORE consuming a slot, so an
+  // unresolvable workflow class fails cleanly here instead of holding a slot that
+  // reconciliation would count forever.
+  private static String resolveStepForAdmission(Workflow_Instance__c instance) {
+    String resolvedStep = instance.Current_Step__c;
+    if (String.isNotBlank(resolvedStep)) {
+      return resolvedStep;
+    }
+    Type wfType = WorkflowTypeResolver.resolve(
+      instance.Workflow_Name__c,
+      WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+    );
+    if (wfType == null) {
+      throw new WorkflowException(
+        'Could not resolve workflow definition class: ' +
+        instance.Workflow_Name__c
+      );
+    }
+    return ((WorkflowDefinition) wfType.newInstance()).getInitialStep();
+  }
+
+  // Slot acquired: commit the acquire + flag, clear admission-retry markers,
+  // re-arm the step's watchdog deadline, and re-drive in a fresh transaction.
+  private static void commitSlotAcquisitionAndRedrive(
+    Workflow_Instance__c instance,
+    String resolvedStep
+  ) {
+    instance.Concurrency_Slot_Held__c = true;
+    instance.Concurrency_Parked__c = false;
+    instance.Current_Step__c = resolvedStep;
+    instance.Status__c = 'Running';
+    instance.Sleep_Until__c = null;
+    instance.Async_Job_Id__c = null;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+    reArmTimeoutsForResume(new List<Workflow_Instance__c>{ instance });
+    if (!(Test.isRunningTest() && disableQueueableInTest)) {
+      enqueueResume(instance.Id);
+    }
+  }
+
+  // §2. Initialize the initial step in memory if this is the start (DML deferred
+  // to the outcome handler).
+  private static void initializeStepInMemory(Workflow_Instance__c instance) {
     if (String.isBlank(instance.Current_Step__c)) {
       Type wflowType = WorkflowTypeResolver.resolve(
         instance.Workflow_Name__c,
@@ -3988,29 +4044,25 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c = 'Running';
       instance.Async_Job_Id__c = null;
     }
+  }
 
-    // If stepName is blank but Current_Step__c is a parallel list, this is a stale/duplicate orchestrator run. Return early.
-    if (
-      String.isBlank(stepName) &&
+  // A blank-stepName delivery for a parallel (comma-list) current step is a
+  // stale/duplicate orchestrator run.
+  private static Boolean isStaleParallelOrchestratorRun(
+    Workflow_Instance__c instance,
+    String stepName
+  ) {
+    return String.isBlank(stepName) &&
       String.isNotBlank(instance.Current_Step__c) &&
-      instance.Current_Step__c.contains(',')
-    ) {
-      return;
-    }
+      instance.Current_Step__c.contains(',');
+  }
 
-    // Determine step name to execute
-    String activeStepName = String.isNotBlank(stepName)
-      ? stepName
-      : instance.Current_Step__c;
-
-    // 3. Retrieve or create Step Execution log with FOR UPDATE lock.
-    // Load all executions for this step so we can derive the visit count in
-    // Apex without an extra COUNT() SOQL query.
-    // Captured_Values__c is intentionally NOT selected here: this bulk read loads
-    // every prior execution of the step only to count completed visits and pick
-    // the latest row, so pulling each historical capture payload (up to ~100 KB
-    // inline) would waste heap on a looping step. It is selected on the single-row
-    // FOR UPDATE requery below, where only the latest row's captures are needed.
+  // §3. Retrieve or create the step execution log with a FOR UPDATE lock, and
+  // re-query the instance under the lock. Returns true on an early exit (already
+  // finished, or the step was completed/terminated by a concurrent thread).
+  private static Boolean acquireStepExecutionLog(RunStepContext ctx) {
+    Id instanceId = ctx.instanceId;
+    String activeStepName = ctx.activeStepName;
     List<Workflow_Step_Execution__c> stepExecs = [
       SELECT Id, Step_Name__c, Status__c, Input__c, Output__c, Retry_Count__c
       FROM Workflow_Step_Execution__c
@@ -4021,6 +4073,31 @@ public inherited sharing class WorkflowEngine {
       ORDER BY CreatedDate DESC, Id DESC
     ];
 
+    ctx.stepVisit = computeCompletedVisitCount(stepExecs);
+    stepExecs = lockLatestStepExecIfPresent(stepExecs);
+
+    // Re-query the instance after acquiring the lock on the step execution to get
+    // the most up-to-date committed state.
+    Workflow_Instance__c instance = reloadInstanceLocked(instanceId);
+    ctx.instance = instance;
+
+    // Check early exit conditions for instance status
+    if (isFinishedStatus(instance.Status__c)) {
+      return true; // Already finished
+    }
+
+    Workflow_Step_Execution__c stepExec = buildOrReuseStepExec(ctx, stepExecs);
+    if (stepExec == null) {
+      return true; // Already completed or terminated by concurrent thread
+    }
+    ctx.stepExec = stepExec;
+    return false;
+  }
+
+  // Count the already-completed (or operator-skipped) runs of this step.
+  private static Integer computeCompletedVisitCount(
+    List<Workflow_Step_Execution__c> stepExecs
+  ) {
     Integer stepVisit = 0;
     for (Workflow_Step_Execution__c exec : stepExecs) {
       if (
@@ -4030,27 +4107,37 @@ public inherited sharing class WorkflowEngine {
         stepVisit++;
       }
     }
+    return stepVisit;
+  }
 
-    if (!stepExecs.isEmpty()) {
-      stepExecs = [
-        SELECT
-          Id,
-          Step_Name__c,
-          Status__c,
-          Input__c,
-          Output__c,
-          Retry_Count__c,
-          Transient_Retry_Count__c,
-          Captured_Values__c
-        FROM Workflow_Step_Execution__c
-        WHERE Id = :stepExecs[0].Id
-        WITH SYSTEM_MODE
-        FOR UPDATE
-      ];
+  // Re-read the latest step execution FOR UPDATE (with the columns the drive
+  // needs) when one exists; otherwise return the empty list unchanged.
+  private static List<Workflow_Step_Execution__c> lockLatestStepExecIfPresent(
+    List<Workflow_Step_Execution__c> stepExecs
+  ) {
+    if (stepExecs.isEmpty()) {
+      return stepExecs;
     }
+    return [
+      SELECT
+        Id,
+        Step_Name__c,
+        Status__c,
+        Input__c,
+        Output__c,
+        Retry_Count__c,
+        Transient_Retry_Count__c,
+        Captured_Values__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :stepExecs[0].Id
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+  }
 
-    // Re-query the instance after acquiring the lock on the step execution to get the most up-to-date committed state
-    instances = [
+  // Re-query the instance under the step lock; throw if it vanished.
+  private static Workflow_Instance__c reloadInstanceLocked(Id instanceId) {
+    List<Workflow_Instance__c> instances = [
       SELECT
         Id,
         Name,
@@ -4077,25 +4164,19 @@ public inherited sharing class WorkflowEngine {
     if (instances.isEmpty()) {
       throw new WorkflowException('Workflow instance not found: ' + instanceId);
     }
-    instance = instances[0];
+    return instances[0];
+  }
 
-    // Check early exit conditions for instance status
-    if (
-      instance.Status__c == 'Completed' ||
-      instance.Status__c == 'Failed' ||
-      instance.Status__c == 'Compensated' ||
-      instance.Status__c == 'CompensationFailed' ||
-      instance.Status__c == 'Cancelled' ||
-      instance.Status__c == 'ContinuedAsNew'
-    ) {
-      return; // Already finished
-    }
-
-    Workflow_Step_Execution__c stepExec;
+  // Build a fresh step execution (seeded with the previous step's output) or
+  // reuse the locked one; returns null when the reused step is already terminal.
+  private static Workflow_Step_Execution__c buildOrReuseStepExec(
+    RunStepContext ctx,
+    List<Workflow_Step_Execution__c> stepExecs
+  ) {
     if (stepExecs.isEmpty()) {
-      stepExec = new Workflow_Step_Execution__c();
-      stepExec.Workflow_Instance__c = instanceId;
-      stepExec.Step_Name__c = activeStepName;
+      Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
+      stepExec.Workflow_Instance__c = ctx.instanceId;
+      stepExec.Step_Name__c = ctx.activeStepName;
       stepExec.Status__c = 'Running';
       stepExec.Retry_Count__c = 0;
       stepExec.Transient_Retry_Count__c = 0;
@@ -4105,7 +4186,7 @@ public inherited sharing class WorkflowEngine {
         SELECT Output__c
         FROM Workflow_Step_Execution__c
         WHERE
-          Workflow_Instance__c = :instanceId
+          Workflow_Instance__c = :ctx.instanceId
           AND Status__c IN ('Completed', 'OperatorSkipped')
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
@@ -4113,52 +4194,68 @@ public inherited sharing class WorkflowEngine {
       ];
       stepExec.Input__c = !completedSteps.isEmpty()
         ? completedSteps[0].Output__c
-        : instance.Input__c;
-    } else {
-      stepExec = stepExecs[0];
-      if (
-        stepExec.Status__c == 'Completed' ||
-        stepExec.Status__c == 'OperatorSkipped' ||
-        stepExec.Status__c == 'Failed' ||
-        stepExec.Status__c == 'Cancelled' ||
-        stepExec.Status__c == 'Compensated'
-      ) {
-        return; // Already completed or terminated by concurrent thread
-      }
-      stepExec.Status__c = 'Running';
+        : ctx.instance.Input__c;
+      return stepExec;
     }
 
-    // Validate explicit stepName only when Current_Step__c is a parallel list and the requested step is in that list
-    if (String.isNotBlank(stepName) && instance.Current_Step__c != stepName) {
-      if (
-        String.isBlank(instance.Current_Step__c) ||
-        !instance.Current_Step__c.contains(',')
-      ) {
-        throw new WorkflowException(
-          'Step ' +
-            stepName +
-            ' is not the active/expected step for this instance: ' +
-            instance.Current_Step__c
-        );
-      }
-      Boolean isValid = false;
-      for (String pStep : instance.Current_Step__c.split(',')) {
-        if (pStep.trim() == stepName) {
-          isValid = true;
-          break;
-        }
-      }
-      if (!isValid) {
-        throw new WorkflowException(
-          'Step ' +
-            stepName +
-            ' is not the active/expected step for this instance: ' +
-            instance.Current_Step__c
-        );
+    Workflow_Step_Execution__c stepExec = stepExecs[0];
+    if (isStepExecTerminal(stepExec.Status__c)) {
+      return null;
+    }
+    stepExec.Status__c = 'Running';
+    return stepExec;
+  }
+
+  // A step execution status that is already terminal for this drive.
+  private static Boolean isStepExecTerminal(String status) {
+    return status == 'Completed' ||
+      status == 'OperatorSkipped' ||
+      status == 'Failed' ||
+      status == 'Cancelled' ||
+      status == 'Compensated';
+  }
+
+  // Validate an explicit stepName against the active (possibly parallel) step.
+  private static void validateExplicitStepName(
+    Workflow_Instance__c instance,
+    String stepName
+  ) {
+    if (String.isBlank(stepName) || instance.Current_Step__c == stepName) {
+      return;
+    }
+    if (!isStepInParallelList(instance.Current_Step__c, stepName)) {
+      throw new WorkflowException(
+        'Step ' +
+          stepName +
+          ' is not the active/expected step for this instance: ' +
+          instance.Current_Step__c
+      );
+    }
+  }
+
+  // True when stepName is one of the comma-separated active parallel steps.
+  private static Boolean isStepInParallelList(
+    String currentStep,
+    String stepName
+  ) {
+    if (String.isBlank(currentStep) || !currentStep.contains(',')) {
+      return false;
+    }
+    for (String pStep : currentStep.split(',')) {
+      if (pStep.trim() == stepName) {
+        return true;
       }
     }
+    return false;
+  }
 
-    // 4. Resolve previous step output & step state (for yielded/resumed executions)
+  // §4. Resolve the previous step's output for a yielded/resumed execution.
+  private static String resolvePreviousStepOutput(
+    Workflow_Instance__c instance,
+    String activeStepName,
+    String stepName
+  ) {
+    Id instanceId = instance.Id;
     String prevOutput = null;
     List<Workflow_Step_Execution__c> lastCompleted;
     if (
@@ -4195,7 +4292,36 @@ public inherited sharing class WorkflowEngine {
       prevOutput = lastCompleted[0].Output__c;
     }
 
-    // 5. Invoke Step Execution
+    return prevOutput;
+  }
+
+  // §5/§6. Invoke the step (with fault injection and timeout bookkeeping) and
+  // route its outcome through handleStepResult.
+  private static void invokeStepAndHandleOutcome(
+    RunStepContext ctx,
+    String prevOutput
+  ) {
+    WorkflowStep stepInstance = resolveStepInstance(
+      ctx.instance,
+      ctx.activeStepName
+    );
+    StepContext context = buildStepContext(ctx, stepInstance, prevOutput);
+    StepResult result = executeStepWithTimeout(ctx, stepInstance, context);
+
+    // 6. Handle Step Outcome
+    StepOutcomeContext outcome = new StepOutcomeContext();
+    outcome.instance = ctx.instance;
+    outcome.stepExec = ctx.stepExec;
+    outcome.result = result;
+    outcome.context = context;
+    handleStepResult(outcome);
+  }
+
+  // Resolve and instantiate the WorkflowStep for the active step.
+  private static WorkflowStep resolveStepInstance(
+    Workflow_Instance__c instance,
+    String activeStepName
+  ) {
     Type stepType = WorkflowTypeResolver.resolve(
       activeStepName,
       WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
@@ -4205,28 +4331,46 @@ public inherited sharing class WorkflowEngine {
         'Could not resolve class for step: ' + activeStepName
       );
     }
-    WorkflowStep stepInstance = (WorkflowStep) stepType.newInstance();
+    return (WorkflowStep) stepType.newInstance();
+  }
 
+  // Choose the signal source: a parallel branch claims signals at read time
+  // (Received -> Processing) so siblings cannot double-process them. That claim is
+  // uncommitted DML, which would make a payload-driven callout illegal, so a
+  // CalloutStep opts out of claiming and reads at-least-once instead.
+  private static StepContext.SignalSource resolveSignalSource(
+    RunStepContext ctx,
+    WorkflowStep stepInstance
+  ) {
     Boolean isParallelBranchStep =
-      String.isNotBlank(stepName) &&
-      String.isNotBlank(instance.Current_Step__c) &&
-      instance.Current_Step__c.contains(',');
-    // A parallel branch claims signals at read time (Received -> Processing) so
-    // siblings cannot double-process them. That claim is uncommitted DML, which
-    // would make a payload-driven callout illegal, so a step that declares
-    // CalloutStep opts out of claiming and reads at-least-once instead.
+      String.isNotBlank(ctx.stepName) &&
+      String.isNotBlank(ctx.instance.Current_Step__c) &&
+      ctx.instance.Current_Step__c.contains(',');
     Boolean claimSignals =
       isParallelBranchStep && !(stepInstance instanceof CalloutStep);
-    StepContext.SignalSource signalSrc = claimSignals
-      ? (StepContext.SignalSource) new ParallelBranchSignalSource(instanceId)
-      : (StepContext.SignalSource) new PendingSignalSource(instanceId);
-    // stepVisit: number of already-completed runs of this step in this instance.
-    // Computed above from the stepExecs list (before FOR UPDATE re-assigns it)
-    // to avoid a separate COUNT() SOQL query.
+    return claimSignals
+      ? (StepContext.SignalSource) new ParallelBranchSignalSource(
+          ctx.instanceId
+        )
+      : (StepContext.SignalSource) new PendingSignalSource(ctx.instanceId);
+  }
+
+  // Hydrate the StepContext for this execution, stripping engine-internal markers
+  // and resolving captures/retry state.
+  private static StepContext buildStepContext(
+    RunStepContext ctx,
+    WorkflowStep stepInstance,
+    String prevOutput
+  ) {
+    Workflow_Instance__c instance = ctx.instance;
+    Workflow_Step_Execution__c stepExec = ctx.stepExec;
+
+    StepContext.SignalSource signalSrc = resolveSignalSource(ctx, stepInstance);
+
     // Detect and strip the $timeoutResume marker (issue #35): the watchdog sets it
-    // in Input__c of the fallback exec to durably signal the timeout-triggered path.
-    // Strip it before passing inputJson to the context so the author step never
-    // sees the engine-internal key.
+    // in Input__c of the fallback exec to durably signal the timeout-triggered
+    // path. Strip it before passing inputJson to the context so the author step
+    // never sees the engine-internal key.
     String resolvedInput = resolvePayload(stepExec.Input__c);
     Boolean isTimeoutResume =
       String.isNotBlank(resolvedInput) &&
@@ -4238,79 +4382,108 @@ public inherited sharing class WorkflowEngine {
       // does not linger in the durable audit row (saved with the exec below).
       stepExec.Input__c = resolvedInput;
     }
-    // Strip the engine-internal $timeoutStep marker from the state JSON a timed
-    // wait persisted in Output__c, so a signal-win resume that re-runs the wait
-    // step does not surface the reserved key to the author via stepStateJson.
+
+    Integer attempt = stepExec.Retry_Count__c != null
+      ? (Integer) stepExec.Retry_Count__c + 1
+      : 1;
+    CaptureContext cc = resolveCaptureContext(stepInstance, stepExec);
+
+    StepContext.Builder contextBuilder = new StepContext.Builder()
+      .instanceId(ctx.instanceId)
+      .workflowName(instance.Workflow_Name__c)
+      .stepName(ctx.activeStepName)
+      .inputJson(resolvedInput)
+      .previousStepOutput(resolvePayload(prevOutput))
+      .stepStateJson(resolveStepStateJson(stepExec))
+      .workflowInputJson(resolvePayload(instance.Input__c))
+      .workflowVersion(resolveWorkflowVersion(instance))
+      .stepVisit(ctx.stepVisit)
+      .signalSource(signalSrc)
+      .previousRunAt(instance.Previous_Run_At__c)
+      .capturedValuesMap(cc.capturesMap)
+      .attempt(attempt)
+      .maxAttempts(cc.maxAttempts);
+    if (isTimeoutResume) {
+      contextBuilder.markTimeoutResume();
+    }
+    return contextBuilder.build();
+  }
+
+  // Strip the engine-internal $timeoutStep marker from the state JSON a timed wait
+  // persisted in Output__c, so a signal-win resume that re-runs the wait step does
+  // not surface the reserved key to the author via stepStateJson.
+  private static String resolveStepStateJson(
+    Workflow_Step_Execution__c stepExec
+  ) {
     String resolvedState = resolvePayload(stepExec.Output__c);
     if (
       String.isNotBlank(resolvedState) && resolvedState.contains('$timeoutStep')
     ) {
       resolvedState = stripJsonMapKey(resolvedState, '$timeoutStep');
     }
+    return resolvedState;
+  }
 
-    Integer attempt = stepExec.Retry_Count__c != null
-      ? (Integer) stepExec.Retry_Count__c + 1
+  // The instance's definition version, defaulting to 1.
+  private static Integer resolveWorkflowVersion(Workflow_Instance__c instance) {
+    return instance.Definition_Version__c != null
+      ? (Integer) instance.Definition_Version__c
       : 1;
-    Integer maxAttempts = 1;
+  }
+
+  private class CaptureContext {
     Map<String, Object> capturesMap = new Map<String, Object>();
+    Integer maxAttempts = 1;
+  }
+
+  // Resolve the captured-values map and the effective max attempts (from a
+  // RetryConfigurable policy, or a persisted __maxAttempts, defaulting to 1).
+  private static CaptureContext resolveCaptureContext(
+    WorkflowStep stepInstance,
+    Workflow_Step_Execution__c stepExec
+  ) {
+    CaptureContext cc = new CaptureContext();
     if (stepInstance instanceof RetryConfigurable) {
       RetryPolicy policy = sanitizePolicy(
         ((RetryConfigurable) stepInstance).getRetryPolicy()
       );
-      maxAttempts = policy.maximumAttempts;
+      cc.maxAttempts = policy.maximumAttempts;
     }
     if (String.isNotBlank(stepExec.Captured_Values__c)) {
       String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
       if (String.isNotBlank(resolvedCaptures)) {
         try {
-          capturesMap = (Map<String, Object>) JSON.deserializeUntyped(
+          cc.capturesMap = (Map<String, Object>) JSON.deserializeUntyped(
             resolvedCaptures
           );
           if (
             !(stepInstance instanceof RetryConfigurable) &&
-            capturesMap.containsKey('__maxAttempts')
+            cc.capturesMap.containsKey('__maxAttempts')
           ) {
-            maxAttempts = Integer.valueOf(capturesMap.get('__maxAttempts'));
+            cc.maxAttempts = Integer.valueOf(
+              cc.capturesMap.get('__maxAttempts')
+            );
           }
         } catch (Exception ignored) {
           // Malformed captured values; retain the default maxAttempts.
         }
       }
     }
+    return cc;
+  }
 
-    StepContext.Builder contextBuilder = new StepContext.Builder()
-      .instanceId(instanceId)
-      .workflowName(instance.Workflow_Name__c)
-      .stepName(activeStepName)
-      .inputJson(resolvedInput)
-      .previousStepOutput(resolvePayload(prevOutput))
-      .stepStateJson(resolvedState)
-      .workflowInputJson(resolvePayload(instance.Input__c))
-      .workflowVersion(
-        instance.Definition_Version__c != null
-          ? (Integer) instance.Definition_Version__c
-          : 1
-      )
-      .stepVisit(stepVisit)
-      .signalSource(signalSrc)
-      .previousRunAt(instance.Previous_Run_At__c)
-      .capturedValuesMap(capturesMap)
-      .attempt(attempt)
-      .maxAttempts(maxAttempts);
-    if (isTimeoutResume) {
-      contextBuilder.markTimeoutResume();
-    }
-    StepContext context = contextBuilder.build();
-
-    // Save/Commit step execution status and set Timeout_At__c before executing the step so watchdog can detect timeouts.
+  // Set the pre-exec Running status and Timeout_At__c (deferring the DML write for
+  // a CalloutStep), returning the resolved timeout seconds for the finally block.
+  private static Integer applyPreExecTimeout(
+    Workflow_Step_Execution__c stepExec,
+    WorkflowStep stepInstance
+  ) {
     // A CalloutStep performs a synchronous, payload-driven HTTP callout inside
     // execute(), and Salesforce forbids a callout once the transaction holds
-    // pending DML. We already skip signal claiming for such a step (claimSignals
-    // above), but this timeout bookkeeping also writes DML, so defer that write
-    // past execute() for a CalloutStep. The step's Timeout_At__c and scheduled
-    // timeout job were already committed when it was queued, so the watchdog
-    // stays armed across the callout; the finally block reconciles the timeout
-    // once execute() returns.
+    // pending DML, so defer this timeout-bookkeeping write past execute() for one.
+    // The step's Timeout_At__c and scheduled timeout job were already committed
+    // when it was queued, so the watchdog stays armed across the callout; the
+    // finally block reconciles the timeout once execute() returns.
     Boolean deferPreExecDml = stepInstance instanceof CalloutStep;
     stepExec.Status__c = 'Running';
     Integer timeoutSeconds = null;
@@ -4328,6 +4501,18 @@ public inherited sharing class WorkflowEngine {
         saveStepExec(stepExec);
       }
     }
+    return timeoutSeconds;
+  }
+
+  // Execute the step (honoring test fault injection) and reconcile its timeout in
+  // a finally block.
+  private static StepResult executeStepWithTimeout(
+    RunStepContext ctx,
+    WorkflowStep stepInstance,
+    StepContext context
+  ) {
+    Workflow_Step_Execution__c stepExec = ctx.stepExec;
+    Integer timeoutSeconds = applyPreExecTimeout(stepExec, stepInstance);
 
     StepResult result;
     try {
@@ -4336,7 +4521,11 @@ public inherited sharing class WorkflowEngine {
         injectedFaults != null &&
         !injectedFaults.isEmpty()
       ) {
-        result = checkAndInjectFault(instanceId, activeStepName, stepInstance);
+        result = checkAndInjectFault(
+          ctx.instanceId,
+          ctx.activeStepName,
+          stepInstance
+        );
       }
       if (result == null) {
         result = stepInstance.execute(context);
@@ -4345,17 +4534,10 @@ public inherited sharing class WorkflowEngine {
       if (timeoutSeconds != null && timeoutSeconds > 0) {
         stepExec.Timeout_At__c = null;
         saveStepExec(stepExec);
-        cancelTimeoutJob(instanceId, activeStepName);
+        cancelTimeoutJob(ctx.instanceId, ctx.activeStepName);
       }
     }
-
-    // 6. Handle Step Outcome
-    StepOutcomeContext outcome = new StepOutcomeContext();
-    outcome.instance = instance;
-    outcome.stepExec = stepExec;
-    outcome.result = result;
-    outcome.context = context;
-    handleStepResult(outcome);
+    return result;
   }
 
   /**
@@ -5167,6 +5349,7 @@ public inherited sharing class WorkflowEngine {
     private StepResult result;
     private List<String> stack;
     private StepContext context;
+    private Boolean isParallel;
   }
 
   private static void handleStepResult(StepOutcomeContext outcome) {
