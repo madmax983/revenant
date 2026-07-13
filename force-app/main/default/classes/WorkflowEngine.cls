@@ -10792,12 +10792,37 @@ public inherited sharing class WorkflowEngine {
   }
 
   private static void handleCompensationStepResult(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-    List<String> stack = outcome.stack;
-    StepContext context = outcome.context;
     persistStepBreadcrumbs(outcome);
+    Workflow_Instance__c instance = loadFreshCompensationInstance(
+      outcome.instance
+    );
+    persistCompensationProgressAndCaptures(outcome, instance);
+
+    StepResult.ActionType action = outcome.result.action;
+    if (action == StepResult.ActionType.COMPLETE) {
+      handleCompensationComplete(outcome, instance);
+    } else if (action == StepResult.ActionType.YIELD) {
+      handleCompensationYield(outcome, instance);
+    } else if (action == StepResult.ActionType.SUSPEND) {
+      handleCompensationSuspend(outcome, instance);
+    } else if (action == StepResult.ActionType.SLEEP) {
+      handleCompensationSleep(outcome, instance);
+    } else if (action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
+      handleCompensationWaitForApproval(outcome, instance);
+    } else if (action == StepResult.ActionType.RETRY) {
+      handleCompensationRetry(outcome, instance);
+    } else if (action == StepResult.ActionType.FAIL) {
+      handleCompensationFail(outcome, instance);
+    } else {
+      handleCompensationUnsupported(outcome, instance);
+    }
+  }
+
+  // Re-load the instance under FOR UPDATE and reject if a concurrent path
+  // already terminated or cancelled it.
+  private static Workflow_Instance__c loadFreshCompensationInstance(
+    Workflow_Instance__c instance
+  ) {
     Workflow_Instance__c freshInstance = [
       SELECT
         Id,
@@ -10830,7 +10855,15 @@ public inherited sharing class WorkflowEngine {
         'Workflow execution was terminated or cancelled.'
       );
     }
-    instance = freshInstance;
+    return freshInstance;
+  }
+
+  private static void persistCompensationProgressAndCaptures(
+    StepOutcomeContext outcome,
+    Workflow_Instance__c instance
+  ) {
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
+    StepContext context = outcome.context;
     if (context != null && context.isProgressReported()) {
       String progJson = context.getProgressJson();
       instance.Progress__c = savePayloadIfNeeded(
@@ -10852,250 +10885,290 @@ public inherited sharing class WorkflowEngine {
         'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
       );
     }
+  }
 
-    if (result.action == StepResult.ActionType.COMPLETE) {
-      stepExec.Status__c = 'Compensated';
-      stepExec.Output__c = savePayloadIfNeeded(
-        instance.Id,
-        result.outputJson,
-        'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-      );
-      saveStepExec(stepExec);
+  // Shared recoverable rollback-failure transition used by the RETRY-exhausted,
+  // explicit-FAIL, and unsupported-action branches. Captures wasCancelling from
+  // the pre-mutation status, then parks the saga in CompensationFailed.
+  private static void failCompensationRecoverable(
+    Workflow_Instance__c instance,
+    String detail
+  ) {
+    Boolean wasCancelling = (instance.Status__c == 'Cancelling');
+    instance.Status__c = 'CompensationFailed';
+    instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
+    instance.Error_Message__c = buildRollbackIncompleteMessage(
+        wasCancelling,
+        detail
+      )
+      .left(255);
+    // Clear any stale sleep/retry deadline so a resumed gate is not immediately
+    // re-woken by the watchdog (Sleep_Until__c <= now).
+    instance.Sleep_Until__c = null;
+    instance.Async_Job_Id__c = null;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+    notifyParentCompletion(instance);
+    WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
+    WorkflowLifecyclePublisher.publish(instance);
+  }
 
-      // A compensating step that read signals durably completed; consume them on
-      // the same contract as a forward step so a later compensation attempt or
-      // step does not re-observe them. Compensation runs serially (LIFO) and
-      // does not claim, so it consumes still-Received rows plus same-name cleanup.
-      markSignalsConsumed(instance.Id, context, false);
+  private static void handleCompensationComplete(
+    StepOutcomeContext outcome,
+    Workflow_Instance__c instance
+  ) {
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
+    StepResult result = outcome.result;
+    List<String> stack = outcome.stack;
+    StepContext context = outcome.context;
+    stepExec.Status__c = 'Compensated';
+    stepExec.Output__c = savePayloadIfNeeded(
+      instance.Id,
+      result.outputJson,
+      'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+    );
+    saveStepExec(stepExec);
 
-      // Effectively-once outbound emit from compensation (issue #64): a
-      // CompensatableStep.compensate() that calls ctx.emit() or the
-      // complete(..., events) overload publishes here, coupled to the durable
-      // Compensated transition — the same commit-coupling as the forward path,
-      // so the public emit API does not silently drop events in rollback flows.
-      publishOutboundEvents(result, context);
+    // A compensating step that read signals durably completed; consume them on
+    // the same contract as a forward step so a later compensation attempt or
+    // step does not re-observe them. Compensation runs serially (LIFO) and
+    // does not claim, so it consumes still-Received rows plus same-name cleanup.
+    markSignalsConsumed(instance.Id, context, false);
 
-      stack.remove(stack.size() - 1);
-      instance.Compensation_Stack__c = JSON.serialize(stack);
+    // Effectively-once outbound emit from compensation (issue #64): a
+    // CompensatableStep.compensate() that calls ctx.emit() or the
+    // complete(..., events) overload publishes here, coupled to the durable
+    // Compensated transition — the same commit-coupling as the forward path,
+    // so the public emit API does not silently drop events in rollback flows.
+    publishOutboundEvents(result, context);
 
-      if (stack.isEmpty()) {
-        instance.Status__c = (instance.Status__c == 'Cancelling')
-          ? 'Cancelled'
-          : 'Compensated';
-        instance.Current_Step__c = null;
-      }
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+    stack.remove(stack.size() - 1);
+    instance.Compensation_Stack__c = JSON.serialize(stack);
 
-      if (stack.isEmpty()) {
-        notifyParentCompletion(instance);
-      } else {
-        scheduleTimeoutJobForInstance(instance.Id);
-      }
+    if (stack.isEmpty()) {
+      instance.Status__c = (instance.Status__c == 'Cancelling')
+        ? 'Cancelled'
+        : 'Compensated';
+      instance.Current_Step__c = null;
+    }
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
-      if (Test.isRunningTest()) {
-        if (!disableQueueableInTest) {
-          System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-        }
-      } else {
-        enqueueOrchestrator(instance.Id, null);
-      }
-
-      // Fire-and-forget outbound lifecycle event; only fires once the stack is
-      // drained and the instance has reached Compensated/Cancelled. Runs LAST so
-      // the load-bearing orchestrator enqueue above keeps first claim on DML budget.
-      WorkflowLifecyclePublisher.publish(instance);
-    } else if (result.action == StepResult.ActionType.YIELD) {
-      stepExec.Status__c = 'Running';
-      stepExec.Output__c = savePayloadIfNeeded(
-        instance.Id,
-        result.stepStateJson,
-        'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-      );
-      saveStepExec(stepExec);
-
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-      scheduleTimeoutJobForInstance(instance.Id);
-      enqueueOrchestrator(instance.Id, null);
-    } else if (result.action == StepResult.ActionType.SUSPEND) {
-      // Note: timed-wait timeout is not supported in compensation steps and is not armed here.
-      stepExec.Status__c = 'Pending';
-      stepExec.Output__c = String.isNotBlank(result.stepStateJson)
-        ? savePayloadIfNeeded(
-            instance.Id,
-            result.stepStateJson,
-            'State_Suspend_' +
-            stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-          )
-        : null;
-      saveStepExec(stepExec);
-      instance.Status__c = 'Suspended';
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    } else if (result.action == StepResult.ActionType.SLEEP) {
-      stepExec.Status__c = 'Pending';
-      stepExec.Output__c = savePayloadIfNeeded(
-        instance.Id,
-        result.stepStateJson,
-        'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-      );
-      saveStepExec(stepExec);
-      instance.Status__c = 'Suspended';
-      if (result.sleepDurationSeconds != null) {
-        instance.Sleep_Until__c = DateTime.now()
-          .addSeconds(result.sleepDurationSeconds);
-        instance.Async_Job_Id__c = scheduleSleepResume(
-          instance.Id,
-          stepExec.Step_Name__c,
-          result.sleepDurationSeconds
-        );
-      }
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    } else if (result.action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
-      // Note: timed-wait timeout is not supported in compensation steps and is not armed here.
-      stepExec.Status__c = 'Pending';
-      Map<String, Object> state = new Map<String, Object>{
-        'waitingForApproval' => true,
-        'approvalKey' => result.approvalKey,
-        'approvalRole' => result.approvalRole
-      };
-      stepExec.Output__c = savePayloadIfNeeded(
-        instance.Id,
-        JSON.serialize(state),
-        'State_Approval_' +
-        stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-      );
-      saveStepExec(stepExec);
-      instance.Status__c = 'Suspended';
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    } else if (result.action == StepResult.ActionType.RETRY) {
-      stepExec.Retry_Count__c += 1;
-      // Get and sanitize retry policy
-      RetryPolicy policy = sanitizePolicy(result.retryPolicy);
-
-      Map<String, Object> captures = new Map<String, Object>();
-      if (String.isNotBlank(stepExec.Captured_Values__c)) {
-        String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
-        if (String.isNotBlank(resolvedCaptures)) {
-          try {
-            captures = (Map<String, Object>) JSON.deserializeUntyped(
-              resolvedCaptures
-            );
-          } catch (Exception ignored) {
-            // Malformed captures; proceed with an empty captures map.
-          }
-        }
-      }
-      captures.put('__maxAttempts', policy.maximumAttempts);
-      stepExec.Captured_Values__c = savePayloadIfNeeded(
-        instance.Id,
-        JSON.serialize(captures),
-        'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-      );
-
-      if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
-        stepExec.Status__c = 'Failed';
-        stepExec.Error_Details__c =
-          'Compensation max retries (' +
-          policy.maximumAttempts +
-          ') exceeded.';
-        saveStepExec(stepExec);
-
-        // The author's RetryPolicy budget for the automatic phase is exhausted, but
-        // the remaining stack is intact. Surface a recoverable "rollback incomplete"
-        // state (resumable by an operator) instead of abandoning the deeper steps.
-        Boolean wasCancelling = (instance.Status__c == 'Cancelling');
-        instance.Status__c = 'CompensationFailed';
-        instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
-        instance.Error_Message__c = buildRollbackIncompleteMessage(
-            wasCancelling,
-            'Rollback incomplete: compensation step ' +
-              stepExec.Step_Name__c +
-              ' failed after max retries.'
-          )
-          .left(255);
-        // This branch was reached by the scheduled retry firing, so clear that elapsed
-        // sleep deadline; otherwise a later resumed SUSPEND/approval gate would be
-        // immediately re-woken by the watchdog (Sleep_Until__c <= now).
-        instance.Sleep_Until__c = null;
-        instance.Async_Job_Id__c = null;
-        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-        notifyParentCompletion(instance);
-        WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
-        WorkflowLifecyclePublisher.publish(instance);
-      } else {
-        stepExec.Status__c = 'Retrying';
-        stepExec.Output__c = null;
-        saveStepExec(stepExec);
-
-        Double backoff = Math.pow(
-          (Double) policy.backoffCoefficient,
-          (Double) (stepExec.Retry_Count__c - 1)
-        );
-        Integer delay = (Integer) (policy.initialIntervalSeconds * backoff);
-        delay = Math.min(delay, 86400);
-        instance.Status__c = 'Suspended';
-        instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
-        instance.Async_Job_Id__c = scheduleRetry(
-          instance.Id,
-          stepExec.Step_Name__c,
-          delay
-        );
-        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-      }
-    } else if (result.action == StepResult.ActionType.FAIL) {
-      // A compensation step returned an explicit fail() — treat it as a deliberate
-      // compensation crash: park the saga in the recoverable CompensationFailed state
-      // with the author's reason, preserving the remaining LIFO stack for operator
-      // resume. Same format as the RETRY-exhausted and thrown-exception paths.
-      stepExec.Status__c = 'Failed';
-      stepExec.Error_Details__c = (result.failureDataJson != null)
-        ? result.failureReason + '\nfailureData: ' + result.failureDataJson
-        : result.failureReason;
-      saveStepExec(stepExec);
-
-      Boolean wasCancellingFail = (instance.Status__c == 'Cancelling');
-      instance.Status__c = 'CompensationFailed';
-      instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
-      instance.Error_Message__c = buildRollbackIncompleteMessage(
-          wasCancellingFail,
-          'Rollback incomplete: compensation step ' +
-            stepExec.Step_Name__c +
-            ' failed: ' +
-            result.failureReason
-        )
-        .left(255);
-      instance.Sleep_Until__c = null;
-      instance.Async_Job_Id__c = null;
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+    if (stack.isEmpty()) {
       notifyParentCompletion(instance);
-      WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
-      WorkflowLifecyclePublisher.publish(instance);
     } else {
+      scheduleTimeoutJobForInstance(instance.Id);
+    }
+
+    enqueueOrchestratorForInstance(instance.Id);
+
+    // Fire-and-forget outbound lifecycle event; only fires once the stack is
+    // drained and the instance has reached Compensated/Cancelled. Runs LAST so
+    // the load-bearing orchestrator enqueue above keeps first claim on DML budget.
+    WorkflowLifecyclePublisher.publish(instance);
+  }
+
+  private static void handleCompensationYield(
+    StepOutcomeContext outcome,
+    Workflow_Instance__c instance
+  ) {
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
+    StepResult result = outcome.result;
+    stepExec.Status__c = 'Running';
+    stepExec.Output__c = savePayloadIfNeeded(
+      instance.Id,
+      result.stepStateJson,
+      'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+    );
+    saveStepExec(stepExec);
+
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+
+    scheduleTimeoutJobForInstance(instance.Id);
+    enqueueOrchestrator(instance.Id, null);
+  }
+
+  private static void handleCompensationSuspend(
+    StepOutcomeContext outcome,
+    Workflow_Instance__c instance
+  ) {
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
+    StepResult result = outcome.result;
+    // Note: timed-wait timeout is not supported in compensation steps and is not armed here.
+    stepExec.Status__c = 'Pending';
+    stepExec.Output__c = String.isNotBlank(result.stepStateJson)
+      ? savePayloadIfNeeded(
+          instance.Id,
+          result.stepStateJson,
+          'State_Suspend_' +
+          stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+        )
+      : null;
+    saveStepExec(stepExec);
+    instance.Status__c = 'Suspended';
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+  }
+
+  private static void handleCompensationSleep(
+    StepOutcomeContext outcome,
+    Workflow_Instance__c instance
+  ) {
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
+    StepResult result = outcome.result;
+    stepExec.Status__c = 'Pending';
+    stepExec.Output__c = savePayloadIfNeeded(
+      instance.Id,
+      result.stepStateJson,
+      'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+    );
+    saveStepExec(stepExec);
+    instance.Status__c = 'Suspended';
+    if (result.sleepDurationSeconds != null) {
+      instance.Sleep_Until__c = DateTime.now()
+        .addSeconds(result.sleepDurationSeconds);
+      instance.Async_Job_Id__c = scheduleSleepResume(
+        instance.Id,
+        stepExec.Step_Name__c,
+        result.sleepDurationSeconds
+      );
+    }
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+  }
+
+  private static void handleCompensationWaitForApproval(
+    StepOutcomeContext outcome,
+    Workflow_Instance__c instance
+  ) {
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
+    StepResult result = outcome.result;
+    // Note: timed-wait timeout is not supported in compensation steps and is not armed here.
+    stepExec.Status__c = 'Pending';
+    Map<String, Object> state = new Map<String, Object>{
+      'waitingForApproval' => true,
+      'approvalKey' => result.approvalKey,
+      'approvalRole' => result.approvalRole
+    };
+    stepExec.Output__c = savePayloadIfNeeded(
+      instance.Id,
+      JSON.serialize(state),
+      'State_Approval_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+    );
+    saveStepExec(stepExec);
+    instance.Status__c = 'Suspended';
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+  }
+
+  private static void handleCompensationRetry(
+    StepOutcomeContext outcome,
+    Workflow_Instance__c instance
+  ) {
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
+    StepResult result = outcome.result;
+    stepExec.Retry_Count__c += 1;
+    // Get and sanitize retry policy
+    RetryPolicy policy = sanitizePolicy(result.retryPolicy);
+
+    Map<String, Object> captures = new Map<String, Object>();
+    if (String.isNotBlank(stepExec.Captured_Values__c)) {
+      String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
+      if (String.isNotBlank(resolvedCaptures)) {
+        try {
+          captures = (Map<String, Object>) JSON.deserializeUntyped(
+            resolvedCaptures
+          );
+        } catch (Exception ignored) {
+          // Malformed captures; proceed with an empty captures map.
+        }
+      }
+    }
+    captures.put('__maxAttempts', policy.maximumAttempts);
+    stepExec.Captured_Values__c = savePayloadIfNeeded(
+      instance.Id,
+      JSON.serialize(captures),
+      'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+    );
+
+    if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
       stepExec.Status__c = 'Failed';
       stepExec.Error_Details__c =
-        'Unsupported compensation action: ' +
-        (result != null ? result.action : null);
+        'Compensation max retries (' +
+        policy.maximumAttempts +
+        ') exceeded.';
       saveStepExec(stepExec);
 
-      // Remaining stack is intact; leave the saga recoverable rather than abandoning it.
-      Boolean wasCancelling = (instance.Status__c == 'Cancelling');
-      instance.Status__c = 'CompensationFailed';
-      instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
-      instance.Error_Message__c = buildRollbackIncompleteMessage(
-          wasCancelling,
-          'Rollback incomplete: compensation step ' +
-            stepExec.Step_Name__c +
-            ' failed: Unsupported action.'
-        )
-        .left(255);
-      // Clear any stale sleep/retry deadline (see the max-retries branch above).
-      instance.Sleep_Until__c = null;
-      instance.Async_Job_Id__c = null;
+      // The author's RetryPolicy budget for the automatic phase is exhausted, but
+      // the remaining stack is intact. Surface a recoverable "rollback incomplete"
+      // state (resumable by an operator) instead of abandoning the deeper steps.
+      failCompensationRecoverable(
+        instance,
+        'Rollback incomplete: compensation step ' +
+          stepExec.Step_Name__c +
+          ' failed after max retries.'
+      );
+    } else {
+      stepExec.Status__c = 'Retrying';
+      stepExec.Output__c = null;
+      saveStepExec(stepExec);
+
+      Double backoff = Math.pow(
+        (Double) policy.backoffCoefficient,
+        (Double) (stepExec.Retry_Count__c - 1)
+      );
+      Integer delay = (Integer) (policy.initialIntervalSeconds * backoff);
+      delay = Math.min(delay, 86400);
+      instance.Status__c = 'Suspended';
+      instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
+      instance.Async_Job_Id__c = scheduleRetry(
+        instance.Id,
+        stepExec.Step_Name__c,
+        delay
+      );
       Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-      notifyParentCompletion(instance);
-      WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
-      WorkflowLifecyclePublisher.publish(instance);
     }
+  }
+
+  private static void handleCompensationFail(
+    StepOutcomeContext outcome,
+    Workflow_Instance__c instance
+  ) {
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
+    StepResult result = outcome.result;
+    // A compensation step returned an explicit fail() — treat it as a deliberate
+    // compensation crash: park the saga in the recoverable CompensationFailed state
+    // with the author's reason, preserving the remaining LIFO stack for operator
+    // resume. Same format as the RETRY-exhausted and thrown-exception paths.
+    stepExec.Status__c = 'Failed';
+    stepExec.Error_Details__c = (result.failureDataJson != null)
+      ? result.failureReason + '\nfailureData: ' + result.failureDataJson
+      : result.failureReason;
+    saveStepExec(stepExec);
+
+    failCompensationRecoverable(
+      instance,
+      'Rollback incomplete: compensation step ' +
+        stepExec.Step_Name__c +
+        ' failed: ' +
+        result.failureReason
+    );
+  }
+
+  private static void handleCompensationUnsupported(
+    StepOutcomeContext outcome,
+    Workflow_Instance__c instance
+  ) {
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
+    StepResult result = outcome.result;
+    stepExec.Status__c = 'Failed';
+    stepExec.Error_Details__c =
+      'Unsupported compensation action: ' +
+      (result != null ? result.action : null);
+    saveStepExec(stepExec);
+
+    // Remaining stack is intact; leave the saga recoverable rather than abandoning it.
+    failCompensationRecoverable(
+      instance,
+      'Rollback incomplete: compensation step ' +
+        stepExec.Step_Name__c +
+        ' failed: Unsupported action.'
+    );
   }
 
   private static void preCreateFirstCompensationStep(
