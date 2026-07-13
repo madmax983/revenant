@@ -1343,22 +1343,118 @@ public inherited sharing class WorkflowEngine {
     return getEarliestPredecessorCreatedDate(inst, 100);
   }
 
+  /**
+   * Mutable state for a predecessor-chain walk: the earliest CreatedDate seen so
+   * far, the next predecessor id to visit, the set of already-visited ids, the
+   * hop count and the hop ceiling.
+   */
+  private class PredecessorWalk {
+    DateTime earliest;
+    Id prevId;
+    Set<Id> visited;
+    Integer hopsCount;
+    Integer maxPredecessors;
+  }
+
+  /**
+   * Whether the walk may take another hop to a present predecessor node: the
+   * next id is set, unvisited, the node is present, and the hop ceiling is not
+   * yet reached.
+   * @param walk the walk state
+   * @param nodePresent whether the next predecessor node is populated
+   * @return true when the walk may advance to the node
+   */
+  private static Boolean canLookAhead(
+    PredecessorWalk walk,
+    Boolean nodePresent
+  ) {
+    return walk.prevId != null &&
+      !walk.visited.contains(walk.prevId) &&
+      nodePresent &&
+      walk.hopsCount < walk.maxPredecessors;
+  }
+
+  /**
+   * Walks up to four further predecessor levels in-memory from the queried row
+   * `p` (whose Previous_Instance__r chain was pre-fetched five deep), advancing
+   * the walk's earliest/prevId/hopsCount/visited state. Stops at the first level
+   * whose predecessor is absent, already visited, or beyond the hop ceiling.
+   * @param walk the walk state to advance
+   * @param p the queried row with its pre-fetched predecessor chain
+   */
+  private static void advanceInMemoryLookAhead(
+    PredecessorWalk walk,
+    Workflow_Instance__c p
+  ) {
+    if (!canLookAhead(walk, p.Previous_Instance__r != null)) {
+      return;
+    }
+    walk.visited.add(walk.prevId);
+    walk.earliest = p.Previous_Instance__r.CreatedDate;
+    walk.prevId = p.Previous_Instance__r.Previous_Instance__c;
+    walk.hopsCount++;
+
+    if (
+      !canLookAhead(walk, p.Previous_Instance__r.Previous_Instance__r != null)
+    ) {
+      return;
+    }
+    walk.visited.add(walk.prevId);
+    walk.earliest = p.Previous_Instance__r.Previous_Instance__r.CreatedDate;
+    walk.prevId = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c;
+    walk.hopsCount++;
+
+    if (
+      !canLookAhead(
+        walk,
+        p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c != null
+      )
+    ) {
+      return;
+    }
+    walk.visited.add(walk.prevId);
+    walk.earliest = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
+      .CreatedDate;
+    walk.prevId = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
+      .Previous_Instance__c;
+    walk.hopsCount++;
+
+    if (
+      !canLookAhead(
+        walk,
+        p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
+          .Previous_Instance__c != null
+      )
+    ) {
+      return;
+    }
+    walk.visited.add(walk.prevId);
+    walk.earliest = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
+      .Previous_Instance__r.CreatedDate;
+    walk.prevId = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
+      .Previous_Instance__r.Previous_Instance__c;
+    walk.hopsCount++;
+  }
+
   private static DateTime getEarliestPredecessorCreatedDate(
     Workflow_Instance__c inst,
     Integer maxPredecessors
   ) {
-    DateTime earliest = inst.CreatedDate;
-    Id prevId = inst.Previous_Instance__c;
-    Set<Id> visited = new Set<Id>{ inst.Id };
-    Integer hopsCount = 0;
+    PredecessorWalk walk = new PredecessorWalk();
+    walk.earliest = inst.CreatedDate;
+    walk.prevId = inst.Previous_Instance__c;
+    walk.visited = new Set<Id>{ inst.Id };
+    walk.hopsCount = 0;
+    walk.maxPredecessors = maxPredecessors;
     while (
-      prevId != null &&
-      !visited.contains(prevId) &&
-      hopsCount < maxPredecessors &&
+      walk.prevId != null &&
+      !walk.visited.contains(walk.prevId) &&
+      walk.hopsCount < maxPredecessors &&
       predecessorQueriesRemaining > 0
     ) {
-      visited.add(prevId);
+      walk.visited.add(walk.prevId);
       predecessorQueriesRemaining--;
+      Id prevId = walk.prevId;
       List<Workflow_Instance__c> prevs = [
         SELECT
           Id,
@@ -1382,66 +1478,14 @@ public inherited sharing class WorkflowEngine {
       }
 
       Workflow_Instance__c p = prevs[0];
-      earliest = p.CreatedDate;
-      prevId = p.Previous_Instance__c;
-      hopsCount++;
+      walk.earliest = p.CreatedDate;
+      walk.prevId = p.Previous_Instance__c;
+      walk.hopsCount++;
 
       // Look ahead up to 4 more levels from p in-memory
-      if (
-        prevId != null &&
-        !visited.contains(prevId) &&
-        p.Previous_Instance__r != null &&
-        hopsCount < maxPredecessors
-      ) {
-        visited.add(prevId);
-        earliest = p.Previous_Instance__r.CreatedDate;
-        prevId = p.Previous_Instance__r.Previous_Instance__c;
-        hopsCount++;
-
-        if (
-          prevId != null &&
-          !visited.contains(prevId) &&
-          p.Previous_Instance__r.Previous_Instance__r != null &&
-          hopsCount < maxPredecessors
-        ) {
-          visited.add(prevId);
-          earliest = p.Previous_Instance__r.Previous_Instance__r.CreatedDate;
-          prevId = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c;
-          hopsCount++;
-
-          if (
-            prevId != null &&
-            !visited.contains(prevId) &&
-            p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c !=
-            null &&
-            hopsCount < maxPredecessors
-          ) {
-            visited.add(prevId);
-            earliest = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
-              .CreatedDate;
-            prevId = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
-              .Previous_Instance__c;
-            hopsCount++;
-
-            if (
-              prevId != null &&
-              !visited.contains(prevId) &&
-              p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
-                .Previous_Instance__c != null &&
-              hopsCount < maxPredecessors
-            ) {
-              visited.add(prevId);
-              earliest = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
-                .Previous_Instance__r.CreatedDate;
-              prevId = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
-                .Previous_Instance__r.Previous_Instance__c;
-              hopsCount++;
-            }
-          }
-        }
-      }
+      advanceInMemoryLookAhead(walk, p);
     }
-    return earliest;
+    return walk.earliest;
   }
 
   /**
