@@ -277,11 +277,11 @@ public class WorkflowSignalOrStartTest {
       );
       requests.add(
         new WorkflowEngine.SignalOrStartRequest(
-          startNew,
-          'Approve:MySignal',
-          '"PayloadNew"',
-          'Idemp-Bulk-1'
-        )
+            startNew,
+            'Approve:MySignal',
+            '"PayloadNew"'
+          )
+          .withIdempotencyKey('Idemp-Bulk-1')
       );
 
       // Request 2: Existing active instance
@@ -292,21 +292,21 @@ public class WorkflowSignalOrStartTest {
       );
       requests.add(
         new WorkflowEngine.SignalOrStartRequest(
-          startActive,
-          'Approve:MySignal',
-          '"PayloadActive"',
-          'Idemp-Bulk-2'
-        )
+            startActive,
+            'Approve:MySignal',
+            '"PayloadActive"'
+          )
+          .withIdempotencyKey('Idemp-Bulk-2')
       );
 
       // Request 3: Duplicate of Request 1 in same batch (in-batch duplicate)
       requests.add(
         new WorkflowEngine.SignalOrStartRequest(
-          startNew,
-          'Approve:MySignal',
-          '"PayloadNew"',
-          'Idemp-Bulk-1'
-        )
+            startNew,
+            'Approve:MySignal',
+            '"PayloadNew"'
+          )
+          .withIdempotencyKey('Idemp-Bulk-1')
       );
 
       WorkflowEngine.disableQueueableInTest = false;

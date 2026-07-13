@@ -2606,22 +2606,13 @@ public inherited sharing class WorkflowEngine {
     }
 
     /**
-     * @description Builds a signal-or-start request with an idempotency key.
-     * @param start start request used to resolve or create the target instance
-     * @param signalName name of the signal to deliver
-     * @param payload signal payload
-     * @param idempotencyKey per-delivery idempotency key
+     * @description Fluent setter stamping a per-delivery idempotency key.
+     * @param idempotencyKeyArg per-delivery idempotency key
+     * @return this request, for call chaining
      */
-    public SignalOrStartRequest(
-      StartRequest start,
-      String signalName,
-      String payload,
-      String idempotencyKey
-    ) {
-      this.start = start;
-      this.signalName = signalName;
-      this.payload = payload;
-      this.idempotencyKey = idempotencyKey;
+    public SignalOrStartRequest withIdempotencyKey(String idempotencyKeyArg) {
+      this.idempotencyKey = idempotencyKeyArg;
+      return this;
     }
   }
 
@@ -3053,11 +3044,11 @@ public inherited sharing class WorkflowEngine {
     String idempotencyKey
   ) {
     SignalOrStartRequest req = new SignalOrStartRequest(
-      start,
-      signalName,
-      payloadJson,
-      idempotencyKey
-    );
+        start,
+        signalName,
+        payloadJson
+      )
+      .withIdempotencyKey(idempotencyKey);
     List<StartResult> results = signalOrStart(
       new List<SignalOrStartRequest>{ req }
     );
