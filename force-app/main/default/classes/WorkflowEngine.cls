@@ -12195,34 +12195,7 @@ public inherited sharing class WorkflowEngine {
     }
 
     // Determine the source of the forward executions (original completed run or this run)
-    Id forwardSourceInstanceId = instance.Id;
-    Id prevInstId = null;
-    try {
-      prevInstId = instance.Previous_Instance__c;
-    } catch (SObjectException ex) {
-      List<Workflow_Instance__c> temp = [
-        SELECT Previous_Instance__c
-        FROM Workflow_Instance__c
-        WHERE Id = :instance.Id
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (!temp.isEmpty()) {
-        prevInstId = temp[0].Previous_Instance__c;
-      }
-    }
-    if (prevInstId != null) {
-      List<Workflow_Instance__c> preds = [
-        SELECT Status__c
-        FROM Workflow_Instance__c
-        WHERE Id = :prevInstId
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (!preds.isEmpty() && preds[0].Status__c == 'Completed') {
-        forwardSourceInstanceId = prevInstId;
-      }
-    }
+    Id forwardSourceInstanceId = resolveForwardSourceInstanceId(instance);
 
     List<Workflow_Step_Execution__c> originalExecs = [
       SELECT Input__c, Output__c
