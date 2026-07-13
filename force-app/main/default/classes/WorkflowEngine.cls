@@ -12350,6 +12350,34 @@ public inherited sharing class WorkflowEngine {
       throw new WorkflowException('Instance ID cannot be null.');
     }
 
+    Workflow_Instance__c target = loadCompensationTarget(instanceId);
+
+    // Spawn successor compensating instance. Carry the root correlation key forward.
+    Workflow_Instance__c compensatingInstance = buildCompensatingInstance(
+      target
+    );
+    Database.insert(compensatingInstance, true, AccessLevel.SYSTEM_MODE);
+
+    // Link original instance to new compensating instance
+    target.Compensated_By__c = compensatingInstance.Id;
+    Database.update(target, true, AccessLevel.SYSTEM_MODE);
+
+    // Pre-create the first compensation step execution log
+    preCreateFirstCompensationStep(compensatingInstance);
+
+    // Schedule watchdog and enqueue orchestrator
+    enqueueCompensatingOrchestrator(compensatingInstance.Id);
+
+    return compensatingInstance.Id;
+  }
+
+  /**
+   * Loads and validates the target instance for compensation, locking it FOR
+   * UPDATE. Throws when it is missing, not Completed, or has no compensation stack.
+   * @param instanceId the instance to compensate
+   * @return the locked, validated target instance
+   */
+  private static Workflow_Instance__c loadCompensationTarget(Id instanceId) {
     List<Workflow_Instance__c> targetInstances = [
       SELECT
         Id,
@@ -12397,9 +12425,19 @@ public inherited sharing class WorkflowEngine {
         'Compensation stack is empty for instance: ' + instanceId
       );
     }
+    return target;
+  }
 
-    // Spawn successor compensating instance. Carry the root correlation key forward.
-    Workflow_Instance__c compensatingInstance = new Workflow_Instance__c(
+  /**
+   * Builds the successor compensating instance, carrying the root correlation key
+   * and causation lineage forward from the completed target.
+   * @param target the completed instance being compensated
+   * @return the unsaved compensating instance
+   */
+  private static Workflow_Instance__c buildCompensatingInstance(
+    Workflow_Instance__c target
+  ) {
+    return new Workflow_Instance__c(
       Workflow_Name__c = target.Workflow_Name__c,
       Correlation_Key__c = target.Correlation_Key__c,
       Root_Correlation_Key__c = String.isNotBlank(
@@ -12416,27 +12454,24 @@ public inherited sharing class WorkflowEngine {
         ? target.Causation_Id__c
         : target.Parent_Instance__c
     );
+  }
 
-    Database.insert(compensatingInstance, true, AccessLevel.SYSTEM_MODE);
-
-    // Link original instance to new compensating instance
-    target.Compensated_By__c = compensatingInstance.Id;
-    Database.update(target, true, AccessLevel.SYSTEM_MODE);
-
-    // Pre-create the first compensation step execution log
-    preCreateFirstCompensationStep(compensatingInstance);
-
-    // Schedule watchdog and enqueue orchestrator
-    scheduleTimeoutJobForInstance(compensatingInstance.Id);
-    if (Test.isRunningTest()) {
-      if (!disableQueueableInTest) {
-        System.enqueueJob(new WorkflowOrchestrator(compensatingInstance.Id));
-      }
-    } else {
-      enqueueOrchestrator(compensatingInstance.Id, null);
+  /**
+   * Schedules the watchdog and enqueues the orchestrator for a compensating
+   * instance, dispatching directly under test and via event otherwise.
+   * @param compensatingInstanceId the compensating instance to drive
+   */
+  private static void enqueueCompensatingOrchestrator(
+    Id compensatingInstanceId
+  ) {
+    scheduleTimeoutJobForInstance(compensatingInstanceId);
+    if (!Test.isRunningTest()) {
+      enqueueOrchestrator(compensatingInstanceId, null);
+      return;
     }
-
-    return compensatingInstance.Id;
+    if (!disableQueueableInTest) {
+      System.enqueueJob(new WorkflowOrchestrator(compensatingInstanceId));
+    }
   }
 
   /**
