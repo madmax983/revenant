@@ -8,10 +8,12 @@ private class WorkflowDebounceTest {
 
       Test.startTest();
       WorkflowEngine.startDebounced(
-        'WorkflowEngineTest.HappyWorkflow',
-        'deb_key_1',
-        '{"val":1}',
-        10
+        new WorkflowDebouncer.DebounceRequest(
+            'WorkflowEngineTest.HappyWorkflow',
+            'deb_key_1',
+            '{"val":1}'
+          )
+          .withDebounce(10)
       );
 
       // Verify no workflow instance is created yet, but Debounce_State__c exists
@@ -93,19 +95,23 @@ private class WorkflowDebounceTest {
       Test.startTest();
       // First trigger
       WorkflowEngine.startDebounced(
-        'WorkflowEngineTest.HappyWorkflow',
-        'deb_key_2',
-        '{"val":1}',
-        10
+        new WorkflowDebouncer.DebounceRequest(
+            'WorkflowEngineTest.HappyWorkflow',
+            'deb_key_2',
+            '{"val":1}'
+          )
+          .withDebounce(10)
       );
 
       // Advance 5 seconds and trigger again
       WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(5);
       WorkflowEngine.startDebounced(
-        'WorkflowEngineTest.HappyWorkflow',
-        'deb_key_2',
-        '{"val":2}',
-        10
+        new WorkflowDebouncer.DebounceRequest(
+            'WorkflowEngineTest.HappyWorkflow',
+            'deb_key_2',
+            '{"val":2}'
+          )
+          .withDebounce(10)
       );
 
       // Verify timer extended: new Fire_At__c = start + 5 + 10 = start + 15
@@ -172,21 +178,25 @@ private class WorkflowDebounceTest {
       Test.startTest();
       // First trigger: debounce = 10, maxWait = 15
       WorkflowEngine.startDebounced(
-        'WorkflowEngineTest.HappyWorkflow',
-        'deb_key_3',
-        '{"val":1}',
-        10,
-        15
+        new WorkflowDebouncer.DebounceRequest(
+            'WorkflowEngineTest.HappyWorkflow',
+            'deb_key_3',
+            '{"val":1}'
+          )
+          .withDebounce(10)
+          .withMaxWait(15)
       );
 
       // Trigger again at start + 8s: expected extended is start + 18s, but capped at start + 15s
       WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(8);
       WorkflowEngine.startDebounced(
-        'WorkflowEngineTest.HappyWorkflow',
-        'deb_key_3',
-        '{"val":2}',
-        10,
-        15
+        new WorkflowDebouncer.DebounceRequest(
+            'WorkflowEngineTest.HappyWorkflow',
+            'deb_key_3',
+            '{"val":2}'
+          )
+          .withDebounce(10)
+          .withMaxWait(15)
       );
 
       List<Debounce_State__c> states = [
@@ -248,11 +258,13 @@ private class WorkflowDebounceTest {
       for (Integer i = 0; i < 15; i++) {
         WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(1);
         WorkflowEngine.startDebounced(
-          'WorkflowEngineTest.HappyWorkflow',
-          'deb_key_burst',
-          '{"val":' + i + '}',
-          10,
-          30
+          new WorkflowDebouncer.DebounceRequest(
+              'WorkflowEngineTest.HappyWorkflow',
+              'deb_key_burst',
+              '{"val":' + i + '}'
+            )
+            .withDebounce(10)
+            .withMaxWait(30)
         );
       }
 
@@ -312,10 +324,12 @@ private class WorkflowDebounceTest {
 
       // Call startDebounced for the same key
       WorkflowEngine.startDebounced(
-        'WorkflowEngineTest.HappyWorkflow',
-        'deb_key_dedup',
-        '{"val":99}',
-        10
+        new WorkflowDebouncer.DebounceRequest(
+            'WorkflowEngineTest.HappyWorkflow',
+            'deb_key_dedup',
+            '{"val":99}'
+          )
+          .withDebounce(10)
       );
 
       // Advance time and sweep
@@ -360,10 +374,12 @@ private class WorkflowDebounceTest {
       String largeJson = 'x'.repeat(131073);
       try {
         WorkflowEngine.startDebounced(
-          'WorkflowEngineTest.HappyWorkflow',
-          'deb_key_large',
-          largeJson,
-          10
+          new WorkflowDebouncer.DebounceRequest(
+              'WorkflowEngineTest.HappyWorkflow',
+              'deb_key_large',
+              largeJson
+            )
+            .withDebounce(10)
         );
         System.assert(false, 'Should have failed due to payload size limit');
       } catch (WorkflowEngine.WorkflowException ex) {
@@ -384,13 +400,15 @@ private class WorkflowDebounceTest {
 
       Test.startTest();
       WorkflowEngine.startDebounced(
-        'WorkflowEngineTest.HappyWorkflow',
-        'deb_key_metadata',
-        '{"val":1}',
-        10,
-        15,
-        '{"attr1":"val1"}',
-        'causation123'
+        new WorkflowDebouncer.DebounceRequest(
+            'WorkflowEngineTest.HappyWorkflow',
+            'deb_key_metadata',
+            '{"val":1}'
+          )
+          .withDebounce(10)
+          .withMaxWait(15)
+          .withAttributesJson('{"attr1":"val1"}')
+          .withCausationId('causation123')
       );
 
       // Verify debounce state record contains attributes and causation
@@ -434,10 +452,12 @@ private class WorkflowDebounceTest {
       String longKey = 'k'.repeat(201);
       try {
         WorkflowEngine.startDebounced(
-          'WorkflowEngineTest.HappyWorkflow',
-          longKey,
-          '{}',
-          10
+          new WorkflowDebouncer.DebounceRequest(
+              'WorkflowEngineTest.HappyWorkflow',
+              longKey,
+              '{}'
+            )
+            .withDebounce(10)
         );
         System.assert(
           false,
@@ -462,10 +482,12 @@ private class WorkflowDebounceTest {
       Test.startTest();
       // Enqueue debounce state with a invalid/non-existent workflow name
       WorkflowEngine.startDebounced(
-        'NonExistentWorkflowClassDoesNotExist',
-        'deb_key_fail_retry',
-        '{}',
-        10
+        new WorkflowDebouncer.DebounceRequest(
+            'NonExistentWorkflowClassDoesNotExist',
+            'deb_key_fail_retry',
+            '{}'
+          )
+          .withDebounce(10)
       );
 
       // Verify debounce state created
@@ -579,10 +601,12 @@ private class WorkflowDebounceTest {
 
       Test.startTest();
       WorkflowEngine.startDebounced(
-        longWorkflowName,
-        longCorrelationKey,
-        '{}',
-        10
+        new WorkflowDebouncer.DebounceRequest(
+            longWorkflowName,
+            longCorrelationKey,
+            '{}'
+          )
+          .withDebounce(10)
       );
       Test.stopTest();
 
@@ -608,13 +632,15 @@ private class WorkflowDebounceTest {
       }
       try {
         WorkflowEngine.startDebounced(
-          'WorkflowEngineTest.HappyWorkflow',
-          'deb_key_limits_1',
-          '{}',
-          10,
-          15,
-          JSON.serialize(tooManyAttrs),
-          'causation1'
+          new WorkflowDebouncer.DebounceRequest(
+              'WorkflowEngineTest.HappyWorkflow',
+              'deb_key_limits_1',
+              '{}'
+            )
+            .withDebounce(10)
+            .withMaxWait(15)
+            .withAttributesJson(JSON.serialize(tooManyAttrs))
+            .withCausationId('causation1')
         );
         System.assert(false, 'Should have failed due to attribute count limit');
       } catch (WorkflowEngine.WorkflowException ex) {
@@ -631,13 +657,15 @@ private class WorkflowDebounceTest {
       };
       try {
         WorkflowEngine.startDebounced(
-          'WorkflowEngineTest.HappyWorkflow',
-          'deb_key_limits_2',
-          '{}',
-          10,
-          15,
-          JSON.serialize(longKeyAttrs),
-          'causation2'
+          new WorkflowDebouncer.DebounceRequest(
+              'WorkflowEngineTest.HappyWorkflow',
+              'deb_key_limits_2',
+              '{}'
+            )
+            .withDebounce(10)
+            .withMaxWait(15)
+            .withAttributesJson(JSON.serialize(longKeyAttrs))
+            .withCausationId('causation2')
         );
         System.assert(false, 'Should have failed due to key length limit');
       } catch (WorkflowEngine.WorkflowException ex) {
@@ -655,13 +683,15 @@ private class WorkflowDebounceTest {
       };
       try {
         WorkflowEngine.startDebounced(
-          'WorkflowEngineTest.HappyWorkflow',
-          'deb_key_limits_3',
-          '{}',
-          10,
-          15,
-          JSON.serialize(longValAttrs),
-          'causation3'
+          new WorkflowDebouncer.DebounceRequest(
+              'WorkflowEngineTest.HappyWorkflow',
+              'deb_key_limits_3',
+              '{}'
+            )
+            .withDebounce(10)
+            .withMaxWait(15)
+            .withAttributesJson(JSON.serialize(longValAttrs))
+            .withCausationId('causation3')
         );
         System.assert(false, 'Should have failed due to value length limit');
       } catch (WorkflowEngine.WorkflowException ex) {
@@ -684,10 +714,12 @@ private class WorkflowDebounceTest {
       Test.startTest();
       // 1. Enqueue state with invalid workflow to force a failure
       WorkflowEngine.startDebounced(
-        'InvalidWorkflowToForceFailure',
-        'deb_key_rearm_reset',
-        '{}',
-        10
+        new WorkflowDebouncer.DebounceRequest(
+            'InvalidWorkflowToForceFailure',
+            'deb_key_rearm_reset',
+            '{}'
+          )
+          .withDebounce(10)
       );
 
       // Run sweep to fail the state and increment Retry_Count__c to 1
@@ -711,10 +743,12 @@ private class WorkflowDebounceTest {
       // 2. Re-arm the same key with the SAME invalid workflow name but new payload/timing
       WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(10);
       WorkflowEngine.startDebounced(
-        'InvalidWorkflowToForceFailure',
-        'deb_key_rearm_reset',
-        '{"newVal":1}',
-        10
+        new WorkflowDebouncer.DebounceRequest(
+            'InvalidWorkflowToForceFailure',
+            'deb_key_rearm_reset',
+            '{"newVal":1}'
+          )
+          .withDebounce(10)
       );
 
       // Verify retry state reset and first triggered timestamp updated
@@ -774,16 +808,20 @@ private class WorkflowDebounceTest {
       Test.startTest();
       // 1. Enqueue one valid and one invalid workflow start request
       WorkflowEngine.startDebounced(
-        'WorkflowEngineTest.HappyWorkflow',
-        'deb_key_valid_part',
-        '{}',
-        10
+        new WorkflowDebouncer.DebounceRequest(
+            'WorkflowEngineTest.HappyWorkflow',
+            'deb_key_valid_part',
+            '{}'
+          )
+          .withDebounce(10)
       );
       WorkflowEngine.startDebounced(
-        'InvalidWorkflowToForceFailure',
-        'deb_key_invalid_part',
-        '{}',
-        10
+        new WorkflowDebouncer.DebounceRequest(
+            'InvalidWorkflowToForceFailure',
+            'deb_key_invalid_part',
+            '{}'
+          )
+          .withDebounce(10)
       );
 
       // 2. Advance time and sweep

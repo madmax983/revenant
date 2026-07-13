@@ -1448,84 +1448,15 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Arms a durable trailing-edge debounce timer for starting a workflow.
-   * @param workflowName developer name of the workflow definition to start
-   * @param correlationKey dedup/correlation key coalescing the debounced starts
-   * @param inputJson serialized start input applied when the timer fires
-   * @param debounceSeconds trailing-edge quiet period before the start fires
+   * Arms a durable trailing-edge debounce timer for starting a workflow. Build
+   * the request with workflowName, correlationKey, inputJson and debounceSeconds
+   * (and optionally maxWaitSeconds, attributesJson and causationId). Replaces the
+   * former positional startDebounced overloads.
+   * @param request the debounce request describing the coalesced start
    */
-  public static void startDebounced(
-    String workflowName,
-    String correlationKey,
-    String inputJson,
-    Integer debounceSeconds
-  ) {
-    startDebounced(
-      workflowName,
-      correlationKey,
-      inputJson,
-      debounceSeconds,
-      null,
-      null,
-      null
-    );
-  }
-
-  /**
-   * Arms a durable trailing-edge debounce timer for starting a workflow, with a maxWaitSeconds cap.
-   * @param workflowName developer name of the workflow definition to start
-   * @param correlationKey dedup/correlation key coalescing the debounced starts
-   * @param inputJson serialized start input applied when the timer fires
-   * @param debounceSeconds trailing-edge quiet period before the start fires
-   * @param maxWaitSeconds ceiling on total wait, forcing the start even if events keep arriving
-   */
-  public static void startDebounced(
-    String workflowName,
-    String correlationKey,
-    String inputJson,
-    Integer debounceSeconds,
-    Integer maxWaitSeconds
-  ) {
-    startDebounced(
-      workflowName,
-      correlationKey,
-      inputJson,
-      debounceSeconds,
-      maxWaitSeconds,
-      null,
-      null
-    );
-  }
-
-  /**
-   * Arms a durable trailing-edge debounce timer for starting a workflow, with a maxWaitSeconds cap, search attributes, and a causation ID.
-   * @param workflowName developer name of the workflow definition to start
-   * @param correlationKey dedup/correlation key coalescing the debounced starts
-   * @param inputJson serialized start input applied when the timer fires
-   * @param debounceSeconds trailing-edge quiet period before the start fires
-   * @param maxWaitSeconds ceiling on total wait, forcing the start even if events keep arriving
-   * @param attributesJson serialized searchable attributes to stamp on the instance
-   * @param causationId causation id linking the start to the triggering event
-   */
-  public static void startDebounced(
-    String workflowName,
-    String correlationKey,
-    String inputJson,
-    Integer debounceSeconds,
-    Integer maxWaitSeconds,
-    String attributesJson,
-    String causationId
-  ) {
-    WorkflowDebouncer.DebounceRequest debounceReq = new WorkflowDebouncer.DebounceRequest();
-    debounceReq.workflowName = workflowName;
-    debounceReq.correlationKey = correlationKey;
-    debounceReq.inputJson = inputJson;
-    debounceReq.debounceSeconds = debounceSeconds;
-    debounceReq.maxWaitSeconds = maxWaitSeconds;
-    debounceReq.attributesJson = attributesJson;
-    debounceReq.causationId = causationId;
+  public static void startDebounced(WorkflowDebouncer.DebounceRequest request) {
     WorkflowDebouncer.startDebounced(
-      new List<WorkflowDebouncer.DebounceRequest>{ debounceReq }
+      new List<WorkflowDebouncer.DebounceRequest>{ request }
     );
   }
 
