@@ -1,4 +1,13 @@
 /* eslint-disable @lwc/lwc/no-async-operation */
+// This file keeps three intentional timers that have no behavior-preserving,
+// platform-native replacement in LWC:
+//  - handleSearchChange: 300ms debounce over SERVER-SIDE search (SOQL LIKE across
+//    Name/Correlation_Key__c/Workflow_Name__c/Error_Message__c, paginated) — no timer-free debounce exists.
+//  - startPolling: short self-terminating burst poll (2s x10) for immediate feedback after an operator action.
+//  - startAutoRefresh: steady 5s refresh of list + stats + stalled/unrouted counts, including NON-terminal
+//    changes the Workflow_Lifecycle__e (terminal-only, config-toggleable) and Workflow_Event__e (internal
+//    control-plane) platform events do not emit. An empApi migration would change behavior and needs a live org.
+// The requestAnimationFrame scroll-restore that this disable also covered was replaced by renderedCallback.
 import { LightningElement, wire } from "lwc";
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
@@ -137,6 +146,8 @@ export default class WorkflowDashboard extends LightningElement {
   _trendRequestId = 0;
   _instanceRequestId = 0;
   _isConnected = false;
+  _restoreScroll = false;
+  _pendingScrollTop = 0;
   // Stable option array (see note above workflowOptions on why getters are avoided).
   trendWindowOptions = [
     { label: "Last 1 hour", value: "1h" },
@@ -221,6 +232,17 @@ export default class WorkflowDashboard extends LightningElement {
     this.stopAutoRefresh();
     if (this.searchTimeout) {
       clearTimeout(this.searchTimeout);
+    }
+  }
+
+  renderedCallback() {
+    if (!this._restoreScroll) {
+      return;
+    }
+    this._restoreScroll = false;
+    const el = this.template.querySelector(".slds-scrollable_y");
+    if (el) {
+      el.scrollTop = this._pendingScrollTop;
     }
   }
 
@@ -545,10 +567,8 @@ export default class WorkflowDashboard extends LightningElement {
         }
 
         // Restore scroll position after LWC reconciles the list DOM
-        requestAnimationFrame(() => {
-          const el = this.template.querySelector(".slds-scrollable_y");
-          if (el) el.scrollTop = savedScrollTop;
-        });
+        this._pendingScrollTop = savedScrollTop;
+        this._restoreScroll = true;
       })
       .catch((error) => {
         if (!this._isConnected || requestId !== this._instanceRequestId) return;
