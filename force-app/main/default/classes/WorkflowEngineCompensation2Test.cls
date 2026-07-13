@@ -34,7 +34,7 @@ public class WorkflowEngineCompensation2Test {
       );
 
       Test.startTest();
-      WorkflowEngine.cancel(parent.Id, true);
+      WorkflowEngine.cancelWithCompensations(parent.Id);
 
       // The stalled child must now be resumed under the cancel phase.
       Workflow_Instance__c resumedChild = [
@@ -89,7 +89,7 @@ public class WorkflowEngineCompensation2Test {
       insert child;
 
       Test.startTest();
-      WorkflowEngine.cancel(parent.Id, false);
+      WorkflowEngine.cancel(parent.Id);
       Test.stopTest();
 
       Workflow_Instance__c finalChild = [

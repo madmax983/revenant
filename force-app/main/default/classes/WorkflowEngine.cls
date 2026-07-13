@@ -333,14 +333,23 @@ public inherited sharing class WorkflowEngine {
     public Boolean isNew;
 
     /**
-     * @description Builds an admission result.
+     * @description Builds an admission result for an existing (deduplicated)
+     * instance. Call markNew() to flag a newly-inserted instance.
      * @param instanceId Id of the resolved workflow instance
-     * @param isNew true when a new instance was inserted; false when an existing
-     * instance was returned by deduplication
      */
-    public StartResult(Id instanceId, Boolean isNew) {
+    public StartResult(Id instanceId) {
       this.instanceId = instanceId;
-      this.isNew = isNew;
+      this.isNew = false;
+    }
+
+    /**
+     * @description Flags this result as a newly-inserted instance and returns it
+     * for fluent construction.
+     * @return this StartResult with isNew set to true
+     */
+    public StartResult markNew() {
+      this.isNew = true;
+      return this;
     }
   }
 
@@ -1811,7 +1820,7 @@ public inherited sharing class WorkflowEngine {
         )
         .get(normalizeKey(correlationKey));
       if (match != null) {
-        return new StartResult(match.Id, false);
+        return new StartResult(match.Id);
       }
     }
 
@@ -1844,7 +1853,7 @@ public inherited sharing class WorkflowEngine {
           )
           .get(normalizeKey(correlationKey));
         if (winner != null) {
-          return new StartResult(winner.Id, false);
+          return new StartResult(winner.Id);
         }
         throw new WorkflowException(
           'An active workflow already exists with correlation key: ' +
@@ -1914,7 +1923,7 @@ public inherited sharing class WorkflowEngine {
     if (parkAtStart) {
       instance.Status__c = 'Paused';
       Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-      return new StartResult(instance.Id, true);
+      return new StartResult(instance.Id).markNew();
     }
 
     // Schedule watchdog for the initial step before executing it — unless this is a
@@ -1925,7 +1934,7 @@ public inherited sharing class WorkflowEngine {
 
     // Enqueue the first step execution
     enqueueOrchestrators(new List<Id>{ instance.Id });
-    return new StartResult(instance.Id, true);
+    return new StartResult(instance.Id).markNew();
   }
 
   /**
@@ -2979,7 +2988,7 @@ public inherited sharing class WorkflowEngine {
       String normKey = normalizeKey(key);
 
       if (String.isNotBlank(key) && existingByKey.containsKey(normKey)) {
-        results[i] = new StartResult(existingByKey.get(normKey).Id, false);
+        results[i] = new StartResult(existingByKey.get(normKey).Id);
         continue;
       }
       if (String.isNotBlank(key) && newKeysInBatch.contains(normKey)) {
@@ -3014,7 +3023,7 @@ public inherited sharing class WorkflowEngine {
           Workflow_Instance__c inst = toInsert[j];
           insertedInstances.add(inst);
           insertedReqIndexes.add(reqIdx);
-          results[reqIdx] = new StartResult(inst.Id, true);
+          results[reqIdx] = new StartResult(inst.Id).markNew();
         } else {
           Boolean isDup = false;
           for (Database.Error err : sr.getErrors()) {
@@ -3100,7 +3109,7 @@ public inherited sharing class WorkflowEngine {
         String.isNotBlank(requests[i].correlationKey) &&
         resolvedIdByKey.containsKey(normKey)
       ) {
-        results[i] = new StartResult(resolvedIdByKey.get(normKey), false);
+        results[i] = new StartResult(resolvedIdByKey.get(normKey));
       }
     }
 
@@ -3414,7 +3423,7 @@ public inherited sharing class WorkflowEngine {
           cancelClaimRunComp.add(runCompensations);
         } else {
           // Unkeyed cancel: execute immediately
-          cancel(instanceId, runCompensations);
+          cancelInstance(instanceId, runCompensations);
           attemptedCancelIds.add(instanceId);
         }
       }
@@ -3429,7 +3438,7 @@ public inherited sharing class WorkflowEngine {
         for (Integer i = 0; i < claimResults.size(); i++) {
           Database.SaveResult sr = claimResults[i];
           if (sr.isSuccess()) {
-            cancel(cancelClaimInstIds[i], cancelClaimRunComp[i]);
+            cancelInstance(cancelClaimInstIds[i], cancelClaimRunComp[i]);
             attemptedCancelIds.add(cancelClaimInstIds[i]);
           } else {
             Boolean isDup = false;
@@ -7647,14 +7656,14 @@ public inherited sharing class WorkflowEngine {
           return;
         }
         try {
-          cancel(instance.Id, runCompensations);
+          cancelInstance(instance.Id, runCompensations);
         } catch (Exception e) {
           Database.rollback(sp);
           throw e;
         }
         return;
       }
-      cancel(instance.Id, runCompensations);
+      cancelInstance(instance.Id, runCompensations);
       return;
     }
 
@@ -7962,7 +7971,7 @@ public inherited sharing class WorkflowEngine {
       Set<Id> attemptedCancelIds = new Set<Id>();
       try {
         for (Integer i : freshClaims) {
-          cancel(cancelClaimInstIds[i], cancelClaimRunComp[i]);
+          cancelInstance(cancelClaimInstIds[i], cancelClaimRunComp[i]);
           attemptedCancelIds.add(cancelClaimInstIds[i]);
         }
       } catch (Exception e) {
@@ -8035,7 +8044,7 @@ public inherited sharing class WorkflowEngine {
           if (String.isNotBlank(req.idempotencyKey)) {
             continue; // keyed cancel handled in the bulk-claim pre-pass above
           }
-          cancel(inst.Id, parseRunCompensations(req.payload));
+          cancelInstance(inst.Id, parseRunCompensations(req.payload));
           // Refresh the cached status so later sibling signals see the post-cancel
           // state: a terminal (no-compensation) cancel must skip them (otherwise
           // the stale SObject is woken back to Running), while a compensating
@@ -10381,11 +10390,29 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Cancels a workflow instance (and its active descendants) and aborts scheduled
+   * jobs WITHOUT running saga compensations.
+   * @param instanceId Id of the target instance to cancel (with its active descendants)
+   */
+  public static void cancel(Id instanceId) {
+    cancelInstance(instanceId, false);
+  }
+
+  /**
+   * Cancels a workflow instance (and its active descendants), aborts scheduled jobs,
+   * and rolls back completed steps via saga compensation.
+   * @param instanceId Id of the target instance to cancel (with its active descendants)
+   */
+  public static void cancelWithCompensations(Id instanceId) {
+    cancelInstance(instanceId, true);
+  }
+
+  /**
    * Cancels a workflow instance, aborts scheduled jobs, and optionally runs saga compensations.
    * @param instanceId Id of the target instance to cancel (with its active descendants)
    * @param runCompensations true to roll back completed steps via saga compensation
    */
-  public static void cancel(Id instanceId, Boolean runCompensations) {
+  private static void cancelInstance(Id instanceId, Boolean runCompensations) {
     // Cancel the target instance and its entire active descendant tree. Descendants are
     // gathered iteratively (one set-based query per tree level) rather than via recursive
     // cancel() calls, so deep/wide trees cannot blow the SOQL or stack-depth governor

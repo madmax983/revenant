@@ -137,7 +137,7 @@ public class ChildWorkflowCompositionExampleTest {
    * [AC-d] Cancellation propagation.
    *
    * After the parent launches the child (parent Suspended, child Pending/Running)
-   * WorkflowEngine.cancel(parentId, false) must cancel both the parent and the
+   * WorkflowEngine.cancel(parentId) must cancel both the parent and the
    * in-flight child instance.
    */
   @IsTest
@@ -187,7 +187,7 @@ public class ChildWorkflowCompositionExampleTest {
       // Cancel the parent — the engine cancels the parent and all of its active
       // descendants (root-first traversal over Parent_Instance__c), reaping the
       // in-flight child.
-      WorkflowEngine.cancel(parentId, false);
+      WorkflowEngine.cancel(parentId);
 
       Workflow_Instance__c cancelledParent = [
         SELECT Status__c
@@ -456,7 +456,7 @@ public class ChildWorkflowCompositionExampleTest {
       System.assertEquals('Pending', childInst.Status__c);
 
       // Cancel the child directly
-      WorkflowEngine.cancel(childInst.Id, false);
+      WorkflowEngine.cancel(childInst.Id);
 
       // Deliver events and drive the parent
       WorkflowTestHarness.Result result = harness.drive();
@@ -652,7 +652,7 @@ public class ChildWorkflowCompositionExampleTest {
       System.assertEquals('Pending', childInst.Status__c);
 
       // Cancel the parent - this will cancel both parent and child
-      WorkflowEngine.cancel(parentId, false);
+      WorkflowEngine.cancel(parentId);
       Test.getEventBus().deliver();
 
       // Verify both are cancelled

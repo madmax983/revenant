@@ -766,7 +766,7 @@ public class WorkflowPauseTest {
       insert inst;
 
       Test.startTest();
-      WorkflowEngine.cancel(inst.Id, false);
+      WorkflowEngine.cancel(inst.Id);
       Test.stopTest();
 
       Workflow_Instance__c cancelled = [
@@ -1305,7 +1305,7 @@ public class WorkflowPauseTest {
       insert child;
 
       Test.startTest();
-      WorkflowEngine.cancel(parent.Id, false);
+      WorkflowEngine.cancel(parent.Id);
       Test.stopTest();
 
       Workflow_Instance__c afterChild = [

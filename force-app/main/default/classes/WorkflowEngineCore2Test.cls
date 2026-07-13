@@ -901,7 +901,7 @@ public class WorkflowEngineCore2Test {
       );
       Test.stopTest(); // Runs SignaledStep which suspends awaiting a signal
 
-      WorkflowEngine.cancel(instanceId, false); // No compensations -> Cancelled
+      WorkflowEngine.cancel(instanceId); // No compensations -> Cancelled
 
       Workflow_Instance__c inst = [
         SELECT Status__c
@@ -1058,7 +1058,7 @@ public class WorkflowEngineCore2Test {
       ];
 
       Test.startTest();
-      WorkflowEngine.cancel(parentId, false); // cancels parent + child, then bulk-publishes
+      WorkflowEngine.cancel(parentId); // cancels parent + child, then bulk-publishes
       Test.stopTest();
 
       System.assertEquals(
