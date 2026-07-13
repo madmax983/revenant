@@ -5946,39 +5946,8 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Marks the signals a step matched consumed at its successful transition.
-   * The exact rows the step observed/claimed (context.getConsumedSignalIds())
-   * are consumed FIRST so they can never be starved by the row cap when a name
-   * has a large backlog of duplicates; only then is any remaining budget spent
-   * cleaning up same-name at-least-once duplicates (including one delivered
-   * mid-execution after the snapshot was taken). A name only probed absent never
-   * consumes a signal that arrives afterwards (it contributes no matched id and
-   * no matched name).
-   *
-   * Ownership-scoped consumption (per signal id, not per transition kind):
-   *  - CLAIMED ids (this branch holds them as exclusive Processing) are consumed
-   *    while Received OR Processing -- promoting this branch's own claim.
-   *  - OBSERVED-ONLY ids (matched but not claimed: serial reads, SPLIT spawn,
-   *    compensation, CalloutStep branches, and claim-budget overflow rows) are
-   *    consumed only while STILL Received. If a sibling has since claimed one
-   *    (Processing), it now belongs to that sibling and is left alone, so this
-   *    branch can never consume a row out from under a sibling's rollback.
-   *  - Same-name duplicate cleanup (serial only, and only when no read was
-   *    capped) catches an at-least-once redelivery that arrived after the
-   *    snapshot, restricted to still-Received rows. It is skipped when a read
-   *    was capped, because backlog rows the step never saw would otherwise be
-   *    consumed and lost.
-   *
-   * Matched ids are consumed first so the exact row the step read is never left
-   * behind in favor of unrelated duplicates. The combined update is capped at
-   * 9 000 rows to stay below the 10 000 DML-row governor limit; any excess rows
-   * are consumed on the next COMPLETE that observes them.
-   * @param instanceId Id of the instance whose signals are consumed
-   * @param context step context carrying the matched/claimed signal ids and names
-   * @param parallelBranch true when consuming for a parallel-branch step (enables
-   * ownership-scoped claim promotion; disables serial same-name cleanup)
-   */
-  /**
+   * Coalesces a possibly-null id set to a usable set.
+   * @param ids the id set, possibly null
    * @return the given id set, or a new empty set when it is null
    */
   private static Set<Id> orEmptyIds(Set<Id> ids) {
@@ -5986,6 +5955,8 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Coalesces a possibly-null string set to a usable set.
+   * @param vals the string set, possibly null
    * @return the given string set, or a new empty set when it is null
    */
   private static Set<String> orEmptyStrings(Set<String> vals) {
@@ -6090,6 +6061,39 @@ public inherited sharing class WorkflowEngine {
     Database.update(toConsume.values(), true, AccessLevel.SYSTEM_MODE);
   }
 
+  /**
+   * Marks the signals a step matched consumed at its successful transition.
+   * The exact rows the step observed/claimed (context.getConsumedSignalIds())
+   * are consumed FIRST so they can never be starved by the row cap when a name
+   * has a large backlog of duplicates; only then is any remaining budget spent
+   * cleaning up same-name at-least-once duplicates (including one delivered
+   * mid-execution after the snapshot was taken). A name only probed absent never
+   * consumes a signal that arrives afterwards (it contributes no matched id and
+   * no matched name).
+   *
+   * Ownership-scoped consumption (per signal id, not per transition kind):
+   *  - CLAIMED ids (this branch holds them as exclusive Processing) are consumed
+   *    while Received OR Processing -- promoting this branch's own claim.
+   *  - OBSERVED-ONLY ids (matched but not claimed: serial reads, SPLIT spawn,
+   *    compensation, CalloutStep branches, and claim-budget overflow rows) are
+   *    consumed only while STILL Received. If a sibling has since claimed one
+   *    (Processing), it now belongs to that sibling and is left alone, so this
+   *    branch can never consume a row out from under a sibling's rollback.
+   *  - Same-name duplicate cleanup (serial only, and only when no read was
+   *    capped) catches an at-least-once redelivery that arrived after the
+   *    snapshot, restricted to still-Received rows. It is skipped when a read
+   *    was capped, because backlog rows the step never saw would otherwise be
+   *    consumed and lost.
+   *
+   * Matched ids are consumed first so the exact row the step read is never left
+   * behind in favor of unrelated duplicates. The combined update is capped at
+   * 9 000 rows to stay below the 10 000 DML-row governor limit; any excess rows
+   * are consumed on the next COMPLETE that observes them.
+   * @param instanceId Id of the instance whose signals are consumed
+   * @param context step context carrying the matched/claimed signal ids and names
+   * @param parallelBranch true when consuming for a parallel-branch step (enables
+   * ownership-scoped claim promotion; disables serial same-name cleanup)
+   */
   private static void markSignalsConsumed(
     Id instanceId,
     StepContext context,
