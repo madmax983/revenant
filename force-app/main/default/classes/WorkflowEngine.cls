@@ -1449,7 +1449,7 @@ public inherited sharing class WorkflowEngine {
     String correlationKey,
     Object input
   ) {
-    return doStart(workflowName, correlationKey, input, null, true, null, null)
+    return doStart(new StartRequest(workflowName, correlationKey, input), true)
       .instanceId;
   }
 
@@ -1469,13 +1469,8 @@ public inherited sharing class WorkflowEngine {
     Map<String, String> attributes
   ) {
     return doStart(
-        workflowName,
-        correlationKey,
-        input,
-        null,
-        true,
-        attributes,
-        null
+        new StartRequest(workflowName, correlationKey, input, attributes),
+        true
       )
       .instanceId;
   }
@@ -1496,13 +1491,8 @@ public inherited sharing class WorkflowEngine {
     Id parentInstanceId
   ) {
     return doStart(
-        workflowName,
-        correlationKey,
-        input,
-        parentInstanceId,
-        true,
-        null,
-        null
+        new StartRequest(workflowName, correlationKey, input, parentInstanceId),
+        true
       )
       .instanceId;
   }
@@ -1525,13 +1515,14 @@ public inherited sharing class WorkflowEngine {
     Map<String, String> attributes
   ) {
     return doStart(
-        workflowName,
-        correlationKey,
-        input,
-        parentInstanceId,
-        true,
-        attributes,
-        null
+        new StartRequest(
+          workflowName,
+          correlationKey,
+          input,
+          parentInstanceId,
+          attributes
+        ),
+        true
       )
       .instanceId;
   }
@@ -1631,7 +1622,7 @@ public inherited sharing class WorkflowEngine {
     String correlationKey,
     Object input
   ) {
-    return doStart(workflowName, correlationKey, input, null, true, null, null);
+    return doStart(new StartRequest(workflowName, correlationKey, input), true);
   }
 
   /**
@@ -1649,13 +1640,8 @@ public inherited sharing class WorkflowEngine {
     Map<String, String> attributes
   ) {
     return doStart(
-      workflowName,
-      correlationKey,
-      input,
-      null,
-      true,
-      attributes,
-      null
+      new StartRequest(workflowName, correlationKey, input, attributes),
+      true
     );
   }
 
@@ -1674,13 +1660,8 @@ public inherited sharing class WorkflowEngine {
     Id parentInstanceId
   ) {
     return doStart(
-      workflowName,
-      correlationKey,
-      input,
-      parentInstanceId,
-      true,
-      null,
-      null
+      new StartRequest(workflowName, correlationKey, input, parentInstanceId),
+      true
     );
   }
 
@@ -1701,13 +1682,14 @@ public inherited sharing class WorkflowEngine {
     Map<String, String> attributes
   ) {
     return doStart(
-      workflowName,
-      correlationKey,
-      input,
-      parentInstanceId,
-      true,
-      attributes,
-      null
+      new StartRequest(
+        workflowName,
+        correlationKey,
+        input,
+        parentInstanceId,
+        attributes
+      ),
+      true
     );
   }
 
@@ -1726,7 +1708,7 @@ public inherited sharing class WorkflowEngine {
     String correlationKey,
     Object input
   ) {
-    return doStart(workflowName, correlationKey, input, null, false, null, null)
+    return doStart(new StartRequest(workflowName, correlationKey, input), false)
       .instanceId;
   }
 
@@ -1787,14 +1769,12 @@ public inherited sharing class WorkflowEngine {
   }
 
   private static StartResult doStart(
-    String workflowName,
-    String correlationKey,
-    Object input,
-    Id parentInstanceId,
-    Boolean includeTerminal,
-    Map<String, String> attributes,
-    String causationId
+    StartRequest req,
+    Boolean includeTerminal
   ) {
+    String correlationKey = req.correlationKey;
+    Object input = req.input;
+    Map<String, String> attributes = req.attributes;
     validateCorrelationKey(correlationKey);
     validateAttributes(attributes);
 
@@ -1824,13 +1804,6 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    StartRequest req = new StartRequest(
-      workflowName,
-      correlationKey,
-      input,
-      parentInstanceId
-    );
-    req.causationId = causationId;
     Workflow_Instance__c instance = buildInstance(req);
 
     try {
