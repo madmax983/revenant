@@ -14227,7 +14227,41 @@ public inherited sharing class WorkflowEngine {
 
     Map<String, Workflow_Signal__c> keyedRows = new Map<String, Workflow_Signal__c>();
     List<Workflow_Signal__c> unkeyedRows = new List<Workflow_Signal__c>();
+    buildUnroutedSignalRows(unmatched, keyedRows, unkeyedRows);
 
+    // A savepoint restores all-or-none semantics: the keyed insert uses
+    // allOrNone=false so a concurrent-duplicate loser is swallowed as a no-op,
+    // but a genuine (non-duplicate) row error — or a failure of the unkeyed
+    // insert below — must roll back the already-captured rows before the method
+    // throws. Otherwise a caller that catches the exception and retries the same
+    // batch would treat the committed captures as duplicates while the rest of
+    // the request never ran.
+    if (keyedRows.isEmpty() && unkeyedRows.isEmpty()) {
+      return;
+    }
+    Savepoint sp = Database.setSavepoint();
+
+    if (!keyedRows.isEmpty()) {
+      insertKeyedUnroutedSignals(keyedRows.values(), sp);
+    }
+    if (!unkeyedRows.isEmpty()) {
+      try {
+        Database.insert(unkeyedRows, true, AccessLevel.SYSTEM_MODE);
+      } catch (Exception e) {
+        Database.rollback(sp);
+        throw e;
+      }
+    }
+  }
+
+  // Build the Unrouted signal rows, splitting them into dedup-keyed rows (kept
+  // first-wins in a map) and unkeyed rows (a plain list). Mutates the two
+  // supplied collections in place.
+  private static void buildUnroutedSignalRows(
+    List<SignalRequest> unmatched,
+    Map<String, Workflow_Signal__c> keyedRows,
+    List<Workflow_Signal__c> unkeyedRows
+  ) {
     for (SignalRequest req : unmatched) {
       Workflow_Signal__c sig = new Workflow_Signal__c(
         Correlation_Key__c = req.keyOrId,
@@ -14265,60 +14299,50 @@ public inherited sharing class WorkflowEngine {
         unkeyedRows.add(sig);
       }
     }
+  }
 
-    // A savepoint restores all-or-none semantics: the keyed insert uses
-    // allOrNone=false so a concurrent-duplicate loser is swallowed as a no-op,
-    // but a genuine (non-duplicate) row error — or a failure of the unkeyed
-    // insert below — must roll back the already-captured rows before the method
-    // throws. Otherwise a caller that catches the exception and retries the same
-    // batch would treat the committed captures as duplicates while the rest of
-    // the request never ran.
-    if (keyedRows.isEmpty() && unkeyedRows.isEmpty()) {
-      return;
-    }
-    Savepoint sp = Database.setSavepoint();
-
-    // First-wins: insert (allOrNone=false) and swallow per-row DUPLICATE_VALUE so
-    // a duplicate capture (same key, possibly different payload/name) is a no-op
-    // against the already-captured row — matching the routed keyed path — rather
-    // than overwriting it the way an upsert would. Genuine errors surface.
-    if (!keyedRows.isEmpty()) {
-      Database.SaveResult[] srs = Database.insert(
-        keyedRows.values(),
-        false,
-        AccessLevel.SYSTEM_MODE
+  // First-wins: insert (allOrNone=false) and swallow per-row DUPLICATE_VALUE so
+  // a duplicate capture (same key, possibly different payload/name) is a no-op
+  // against the already-captured row — matching the routed keyed path — rather
+  // than overwriting it the way an upsert would. A genuine error rolls back to
+  // the savepoint and surfaces.
+  private static void insertKeyedUnroutedSignals(
+    List<Workflow_Signal__c> keyedRows,
+    Savepoint sp
+  ) {
+    Database.SaveResult[] srs = Database.insert(
+      keyedRows,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    String genuineError = findGenuineSaveError(srs);
+    if (genuineError != null) {
+      Database.rollback(sp);
+      throw new WorkflowException(
+        'Failed to capture unrouted signal: ' + genuineError
       );
-      String genuineError = null;
-      for (Database.SaveResult sr : srs) {
-        if (sr.isSuccess()) {
-          continue;
-        }
-        Boolean isDup = false;
-        for (Database.Error err : sr.getErrors()) {
-          if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
-            isDup = true;
-            break;
-          }
-        }
-        if (!isDup && genuineError == null) {
-          genuineError = sr.getErrors()[0].getMessage();
+    }
+  }
+
+  // Return the first non-DUPLICATE_VALUE row-error message across the save
+  // results, or null when every failure was a swallowed duplicate.
+  private static String findGenuineSaveError(Database.SaveResult[] srs) {
+    for (Database.SaveResult sr : srs) {
+      if (sr.isSuccess()) {
+        continue;
+      }
+      Boolean isDup = false;
+      for (Database.Error err : sr.getErrors()) {
+        if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+          isDup = true;
+          break;
         }
       }
-      if (genuineError != null) {
-        Database.rollback(sp);
-        throw new WorkflowException(
-          'Failed to capture unrouted signal: ' + genuineError
-        );
+      if (!isDup) {
+        return sr.getErrors()[0].getMessage();
       }
     }
-    if (!unkeyedRows.isEmpty()) {
-      try {
-        Database.insert(unkeyedRows, true, AccessLevel.SYSTEM_MODE);
-      } catch (Exception e) {
-        Database.rollback(sp);
-        throw e;
-      }
-    }
+    return null;
   }
 
   /**
