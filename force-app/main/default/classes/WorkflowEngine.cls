@@ -5568,6 +5568,20 @@ public inherited sharing class WorkflowEngine {
       // Try to claim a page; if a sibling claimed the entire page between query
       // and lock, re-page past it (bounded) so we do not return empty while
       // later Received rows remain unclaimed and unwoken.
+      return claimReceivedSignalPages(signalName);
+    }
+
+    /**
+     * Pages through Received rows of the given name, locking and claiming a full
+     * page at a time and re-paging past pages fully lost to siblings. Keeps the
+     * FOR UPDATE query and claim update inside the paging loop by design.
+     * @param signalName the signal name to claim
+     * @return the claimed signals from the first successfully-locked page, or an
+     *   empty list when no matching Received rows survive claiming
+     */
+    private List<StepContext.Signal> claimReceivedSignalPages(
+      String signalName
+    ) {
       Set<Id> tried = new Set<Id>();
       Integer attempts = 0;
       while (
@@ -5617,44 +5631,68 @@ public inherited sharing class WorkflowEngine {
           continue; // whole page lost to siblings; try the next page
         }
 
-        Set<Id> claimedIds = new Set<Id>();
-        for (Workflow_Signal__c sig : locked) {
-          sig.Status__c = 'Processing';
-          claimedIds.add(sig.Id);
-        }
+        Set<Id> claimedIds = markSignalsProcessing(locked);
         Database.update(locked, true, AccessLevel.SYSTEM_MODE); // one statement for the whole page
         claimBudget -= claimedIds.size();
         claimStatementBudget -= 1;
 
-        List<Workflow_Signal__c> claimedRows = new List<Workflow_Signal__c>();
-        List<String> rawPayloads = new List<String>();
-        for (Workflow_Signal__c c : candidates) {
-          if (claimedIds.contains(c.Id)) {
-            claimedRows.add(c);
-            rawPayloads.add(c.Payload__c);
-          }
-        }
-        // Resolve any offloaded payloads with a single bulk query (not one per
-        // row), matching the read-only list path: a claimed page of offloaded
-        // child-completion signals would otherwise run one ContentVersion query
-        // each and could exhaust SOQL.
-        List<String> resolvedPayloads = resolvePayloads(rawPayloads);
-        List<StepContext.Signal> result = new List<StepContext.Signal>();
-        for (Integer i = 0; i < claimedRows.size(); i++) {
-          // claimed = true: this branch now exclusively owns the row.
-          result.add(
-            new StepContext.Signal(
-                claimedRows[i].Id,
-                claimedRows[i].Signal_Name__c,
-                resolvedPayloads[i]
-              )
-              .withCreatedDate(claimedRows[i].CreatedDate)
-              .asClaimed()
-          );
-        }
-        return result;
+        return buildClaimedSignals(candidates, claimedIds);
       }
       return new List<StepContext.Signal>();
+    }
+
+    /**
+     * Flips each locked row to Processing (in memory) and returns the claimed ids.
+     * @param locked the FOR UPDATE-locked Received rows
+     * @return the set of ids marked Processing
+     */
+    private Set<Id> markSignalsProcessing(List<Workflow_Signal__c> locked) {
+      Set<Id> claimedIds = new Set<Id>();
+      for (Workflow_Signal__c sig : locked) {
+        sig.Status__c = 'Processing';
+        claimedIds.add(sig.Id);
+      }
+      return claimedIds;
+    }
+
+    /**
+     * Builds claimed StepContext.Signals for the subset of candidates this branch
+     * won, bulk-resolving any offloaded payloads in a single query.
+     * @param candidates the candidate rows queried this page
+     * @param claimedIds the ids this branch exclusively claimed
+     * @return the claimed signals, marked claimed with their created dates
+     */
+    private List<StepContext.Signal> buildClaimedSignals(
+      List<Workflow_Signal__c> candidates,
+      Set<Id> claimedIds
+    ) {
+      List<Workflow_Signal__c> claimedRows = new List<Workflow_Signal__c>();
+      List<String> rawPayloads = new List<String>();
+      for (Workflow_Signal__c c : candidates) {
+        if (claimedIds.contains(c.Id)) {
+          claimedRows.add(c);
+          rawPayloads.add(c.Payload__c);
+        }
+      }
+      // Resolve any offloaded payloads with a single bulk query (not one per
+      // row), matching the read-only list path: a claimed page of offloaded
+      // child-completion signals would otherwise run one ContentVersion query
+      // each and could exhaust SOQL.
+      List<String> resolvedPayloads = resolvePayloads(rawPayloads);
+      List<StepContext.Signal> result = new List<StepContext.Signal>();
+      for (Integer i = 0; i < claimedRows.size(); i++) {
+        // claimed = true: this branch now exclusively owns the row.
+        result.add(
+          new StepContext.Signal(
+              claimedRows[i].Id,
+              claimedRows[i].Signal_Name__c,
+              resolvedPayloads[i]
+            )
+            .withCreatedDate(claimedRows[i].CreatedDate)
+            .asClaimed()
+        );
+      }
+      return result;
     }
 
     /**
