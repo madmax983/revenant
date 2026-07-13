@@ -444,7 +444,7 @@ private class WorkflowEngineGetStatusTest {
       // Shrink the row cap so one hot key would fill a single global-LIMIT scan; the
       // per-key resolution must still resolve the other requested key (not return
       // null for it). The cap must leave room for one group per requested key.
-      WorkflowEngine.DEDUP_LOOKUP_ROW_CAP = 2;
+      WorkflowEngine.dedupLookupRowCap = 2;
 
       // Anchor every age off one base so the CreatedDate values are exact and
       // distinct. Phase 1b of the bulk resolver keys on CreatedDate (not

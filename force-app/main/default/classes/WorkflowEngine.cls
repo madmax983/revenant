@@ -88,7 +88,7 @@ public inherited sharing class WorkflowEngine {
   // Single-key lookups (the common start path) read only the top row.
   // @TestVisible (non-final) so tests can shrink it to exercise the cap cheaply.
   @TestVisible
-  private static Integer DEDUP_LOOKUP_ROW_CAP = 10000;
+  private static Integer dedupLookupRowCap = 10000;
 
   // Search Attributes configuration limits
   public static final Integer MAX_ATTRIBUTES_PER_INSTANCE = 10;
@@ -99,13 +99,13 @@ public inherited sharing class WorkflowEngine {
   // triggers failWorkflowInstance() (its own SOQL/DML + optional alert queries), so this
   // bounds the heartbeat's governor usage. Remaining timeouts drain on the next heartbeat.
   @TestVisible
-  private static Integer WATCHDOG_TIMEOUT_BATCH_SIZE = 50;
+  private static Integer watchdogTimeoutBatchSize = 50;
   // Max number of sleeping instances a single heartbeat resumes, for the same reason.
   @TestVisible
-  private static Integer WATCHDOG_RESUME_BATCH_SIZE = 200;
+  private static Integer watchdogResumeBatchSize = 200;
   // Max number of expired instances a single heartbeat fails/compensates, for the same reason.
   @TestVisible
-  private static Integer WATCHDOG_DEADLINE_BATCH_SIZE = 100;
+  private static Integer watchdogDeadlineBatchSize = 100;
 
   @TestVisible
   private static Set<Id> enqueuedInstanceIds = new Set<Id>();
@@ -138,14 +138,14 @@ public inherited sharing class WorkflowEngine {
   // @TestVisible (non-final) so a test can shrink the cap to exercise budget
   // exhaustion without inserting thousands of rows.
   @TestVisible
-  private static Integer SERIAL_SIGNAL_ROW_CAP = 8000;
+  private static Integer serialSignalRowCap = 8000;
 
   @TestVisible
-  private static Integer BREADCRUMB_DML_STATEMENT_RESERVE = 10;
+  private static Integer breadcrumbDmlStatementReserve = 10;
   @TestVisible
-  private static Integer BREADCRUMB_DML_ROW_RESERVE = 20;
+  private static Integer breadcrumbDmlRowReserve = 20;
   @TestVisible
-  private static Integer BREADCRUMB_SOQL_RESERVE = 5;
+  private static Integer breadcrumbSoqlReserve = 5;
 
   // Caps how many signals a single parallel-branch accessor call claims at read
   // time. A claim writes Processing now and the matching COMPLETE writes
@@ -619,7 +619,7 @@ public inherited sharing class WorkflowEngine {
           Active_Correlation_Key__c NULLS LAST,
           Terminal_At__c DESC NULLS FIRST,
           CreatedDate DESC
-        LIMIT :DEDUP_LOOKUP_ROW_CAP
+        LIMIT :dedupLookupRowCap
       ]
     );
     if (winner == null) {
@@ -654,7 +654,7 @@ public inherited sharing class WorkflowEngine {
             Active_Correlation_Key__c NULLS LAST,
             Terminal_At__c DESC NULLS FIRST,
             CreatedDate DESC
-          LIMIT :DEDUP_LOOKUP_ROW_CAP
+          LIMIT :dedupLookupRowCap
         ]
       );
       if (chainWinner != null && isPreferredForGetStatus(chainWinner, winner)) {
@@ -743,7 +743,7 @@ public inherited sharing class WorkflowEngine {
           WHERE Correlation_Key__c IN :remaining AND CreatedDate IN :maxTimes
           WITH SYSTEM_MODE
           ORDER BY CreatedDate DESC
-          LIMIT :DEDUP_LOOKUP_ROW_CAP
+          LIMIT :dedupLookupRowCap
         ]) {
           if (
             inst.CreatedDate ==
@@ -881,7 +881,7 @@ public inherited sharing class WorkflowEngine {
             AND CreatedDate IN :maxTimes
           WITH SYSTEM_MODE
           ORDER BY CreatedDate DESC
-          LIMIT :DEDUP_LOOKUP_ROW_CAP
+          LIMIT :dedupLookupRowCap
         ]) {
           String r = normalizeKey(inst.Root_Correlation_Key__c);
           if (inst.CreatedDate == maxByRoot.get(r)) {
@@ -907,7 +907,7 @@ public inherited sharing class WorkflowEngine {
         WHERE Root_Correlation_Key__c IN :stuckRoots
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC
-        LIMIT :DEDUP_LOOKUP_ROW_CAP
+        LIMIT :dedupLookupRowCap
       ]) {
         putBestByRoot(
           winnerByRoot,
@@ -2572,7 +2572,7 @@ public inherited sharing class WorkflowEngine {
     if (keys == null || keys.isEmpty()) {
       return result;
     }
-    Integer rowLimit = keys.size() == 1 ? 1 : DEDUP_LOOKUP_ROW_CAP;
+    Integer rowLimit = keys.size() == 1 ? 1 : dedupLookupRowCap;
     for (Workflow_Instance__c inst : [
       SELECT Id, Correlation_Key__c
       FROM Workflow_Instance__c
@@ -4672,7 +4672,7 @@ public inherited sharing class WorkflowEngine {
   @TestVisible
   private class PendingSignalSource implements StepContext.SignalSource {
     private final Id instanceId;
-    private Integer rowBudget = SERIAL_SIGNAL_ROW_CAP;
+    private Integer rowBudget = serialSignalRowCap;
     private Boolean capped = false;
 
     @TestVisible
@@ -4733,7 +4733,7 @@ public inherited sharing class WorkflowEngine {
       // (StepContext caches per name via latestByName), so the number of extra
       // observed rows past budget exhaustion is bounded by the SOQL-query
       // governor limit (~200 async) -- far under the 1 000-row headroom between
-      // SERIAL_SIGNAL_ROW_CAP (8 000) and the 9 000-row consume cap. A step
+      // serialSignalRowCap (8 000) and the 9 000-row consume cap. A step
       // would exhaust SOQL long before it could match more ids than
       // markSignalsConsumed() can update, so no consume-overflow redelivery
       // arises (Codex L1108 documented as not reachable, not gated).
@@ -5132,7 +5132,7 @@ public inherited sharing class WorkflowEngine {
    * persist a Workflow_Signal__c record, so they are structurally excluded here.
    * @param instanceId Id of the instance whose signals are read
    * @param signalName name to scope the read to, or blank to load all names
-   * @param rowLimit maximum rows to read (falls back to SERIAL_SIGNAL_ROW_CAP)
+   * @param rowLimit maximum rows to read (falls back to serialSignalRowCap)
    * @return the pending signals in arrival order, up to the effective limit
    */
   private static List<StepContext.Signal> loadPendingSignals(
@@ -5143,7 +5143,7 @@ public inherited sharing class WorkflowEngine {
     Integer effectiveLimit = (rowLimit != null &&
       rowLimit > 0)
       ? rowLimit
-      : SERIAL_SIGNAL_ROW_CAP;
+      : serialSignalRowCap;
     List<Workflow_Signal__c> records;
     if (String.isBlank(signalName)) {
       records = [
@@ -11006,7 +11006,7 @@ public inherited sharing class WorkflowEngine {
         AND Workflow_Instance__r.Status__c != 'Paused'
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
-      LIMIT :WATCHDOG_TIMEOUT_BATCH_SIZE
+      LIMIT :watchdogTimeoutBatchSize
     ];
 
     if (!timedOutSteps.isEmpty()) {
@@ -11411,7 +11411,7 @@ public inherited sharing class WorkflowEngine {
         Status__c IN ('Pending', 'Running', 'Suspended')
         AND Deadline_At__c <= :now
       WITH SYSTEM_MODE
-      LIMIT :WATCHDOG_DEADLINE_BATCH_SIZE
+      LIMIT :watchdogDeadlineBatchSize
       FOR UPDATE
     ];
 
@@ -11529,7 +11529,7 @@ public inherited sharing class WorkflowEngine {
           AND Sleep_Until__c <= :now
           AND Workflow_Name__c NOT IN :pausedDefNames
         WITH SYSTEM_MODE
-        LIMIT :WATCHDOG_RESUME_BATCH_SIZE
+        LIMIT :watchdogResumeBatchSize
         FOR UPDATE
       ];
     }
@@ -11851,7 +11851,7 @@ public inherited sharing class WorkflowEngine {
               AND Workflow_Instance__r.Current_Step__c LIKE '%,%'
               AND Workflow_Instance__r.Workflow_Name__c NOT IN :orphanPausedDefs
             WITH SYSTEM_MODE
-            LIMIT :WATCHDOG_RESUME_BATCH_SIZE
+            LIMIT :watchdogResumeBatchSize
           ]
         );
       }
@@ -13194,7 +13194,7 @@ public inherited sharing class WorkflowEngine {
 
     // Keep breadcrumbs from exhausting checkpoint SOQL (best-effort observability log drop)
     if (
-      Limits.getQueries() + BREADCRUMB_SOQL_RESERVE > Limits.getLimitQueries()
+      Limits.getQueries() + breadcrumbSoqlReserve > Limits.getLimitQueries()
     ) {
       // SOQL budget exhausted; drop best-effort breadcrumbs rather than risk the checkpoint.
       return;
@@ -13285,9 +13285,9 @@ public inherited sharing class WorkflowEngine {
 
     // Keep breadcrumbs from exhausting checkpoint DML (best-effort observability log drop)
     if (
-      Limits.getDmlStatements() + 1 + BREADCRUMB_DML_STATEMENT_RESERVE >
+      Limits.getDmlStatements() + 1 + breadcrumbDmlStatementReserve >
       Limits.getLimitDmlStatements() ||
-      Limits.getDmlRows() + crumbs.size() + BREADCRUMB_DML_ROW_RESERVE +
+      Limits.getDmlRows() + crumbs.size() + breadcrumbDmlRowReserve +
       dynamicRowReserve > Limits.getLimitDmlRows()
     ) {
       // DML budget exhausted; drop best-effort breadcrumbs rather than risk the checkpoint.
