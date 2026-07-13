@@ -11650,12 +11650,11 @@ public inherited sharing class WorkflowEngine {
           capturesMap = (Map<String, Object>) JSON.deserializeUntyped(
             resolvedCaptures
           );
-          if (
-            !(compensatableStepInstance instanceof RetryConfigurable) &&
-            capturesMap.containsKey('__maxAttempts')
-          ) {
-            maxAttempts = Integer.valueOf(capturesMap.get('__maxAttempts'));
-          }
+          maxAttempts = resolveCapturedMaxAttempts(
+            compensatableStepInstance,
+            capturesMap,
+            maxAttempts
+          );
         } catch (Exception ignored) {
           // Malformed captured values; retain the default maxAttempts.
         }
@@ -11663,6 +11662,22 @@ public inherited sharing class WorkflowEngine {
     }
     run.maxAttempts = maxAttempts;
     run.capturesMap = capturesMap;
+  }
+
+  // For a non-RetryConfigurable compensation step, honor a persisted
+  // '__maxAttempts' captured value; otherwise keep the supplied default.
+  private static Integer resolveCapturedMaxAttempts(
+    CompensatableStep compensatableStepInstance,
+    Map<String, Object> capturesMap,
+    Integer defaultMaxAttempts
+  ) {
+    if (compensatableStepInstance instanceof RetryConfigurable) {
+      return defaultMaxAttempts;
+    }
+    if (!capturesMap.containsKey('__maxAttempts')) {
+      return defaultMaxAttempts;
+    }
+    return Integer.valueOf(capturesMap.get('__maxAttempts'));
   }
 
   // Commit the pre-execution step status/timeout so the watchdog can detect
