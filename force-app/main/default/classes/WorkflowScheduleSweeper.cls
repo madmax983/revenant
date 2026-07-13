@@ -391,6 +391,11 @@ public inherited sharing class WorkflowScheduleSweeper {
    * @param scheduleId The Id of the schedule to arm a dedicated CronTrigger for.
    */
   public static void registerDedicatedJob(Id scheduleId) {
+    if (scheduleId == null) {
+      throw new WorkflowScheduleException(
+        'scheduleId is required to register a dedicated job.'
+      );
+    }
     Workflow_Schedule__c sched = [
       SELECT Id, Name, Cron_Expression__c
       FROM Workflow_Schedule__c
@@ -426,6 +431,11 @@ public inherited sharing class WorkflowScheduleSweeper {
    * @return The Id of the started workflow instance.
    */
   public static Id runNow(Id scheduleId) {
+    if (scheduleId == null) {
+      throw new WorkflowScheduleException(
+        'scheduleId is required to run a schedule now.'
+      );
+    }
     Workflow_Schedule__c sched = [
       SELECT
         Id,
@@ -484,6 +494,12 @@ public inherited sharing class WorkflowScheduleSweeper {
    */
   public static void unregisterDedicatedJob(Id scheduleId) {
     String jobName = dedicatedJobName(scheduleId);
+    if (jobName == null) {
+      return;
+    }
+    if (String.isBlank(jobName)) {
+      return;
+    }
     List<CronTrigger> triggers = [
       SELECT Id
       FROM CronTrigger

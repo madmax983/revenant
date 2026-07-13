@@ -126,6 +126,9 @@ public with sharing class WorkflowScheduleController {
   @AuraEnabled
   public static Map<String, Object> getScheduleDetail(Id scheduleId) {
     checkAuthorization();
+    if (scheduleId == null) {
+      throw new AuraHandledException('scheduleId is required.');
+    }
 
     Workflow_Schedule__c sched = [
       SELECT
@@ -449,6 +452,9 @@ public with sharing class WorkflowScheduleController {
   @AuraEnabled
   public static void deleteSchedule(Id scheduleId) {
     checkAuthorization();
+    if (scheduleId == null) {
+      throw new AuraHandledException('scheduleId is required.');
+    }
     // Remove any armed dedicated job first so nothing is orphaned.
     try {
       WorkflowScheduleSweeper.unregisterDedicatedJob(scheduleId);
@@ -519,6 +525,9 @@ public with sharing class WorkflowScheduleController {
   }
 
   private static Workflow_Schedule__c loadScheduleForToggle(Id scheduleId) {
+    if (scheduleId == null) {
+      throw new AuraHandledException('scheduleId is required.');
+    }
     return [
       SELECT Id, Enabled__c, Dedicated_Slot__c, Cron_Expression__c
       FROM Workflow_Schedule__c
