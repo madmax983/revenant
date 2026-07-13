@@ -9626,11 +9626,59 @@ public inherited sharing class WorkflowEngine {
     Database.insert(compStepExec, true, AccessLevel.SYSTEM_MODE);
   }
 
+  // Mutable accumulator threaded through the compensation-step phase helpers so
+  // each helper stays within the parameter and complexity budgets.
+  private class CompensationRun {
+    Workflow_Instance__c instance;
+    String reassertedStatus;
+    Id forwardSourceInstanceId;
+    List<String> stack;
+    String activeStepName;
+    String compensationStepLogName;
+    List<Workflow_Step_Execution__c> stepExecs;
+    Workflow_Step_Execution__c stepExec;
+    Integer compensateVisit = 0;
+    Integer attempt;
+    Integer maxAttempts;
+    Map<String, Object> capturesMap;
+    Boolean deferPreExecDml;
+    Integer timeoutSeconds;
+    StepResult result;
+  }
+
   private static void runCompensationStep(
     Workflow_Instance__c instance,
     String reassertedStatus
   ) {
+    CompensationRun run = new CompensationRun();
+    run.instance = instance;
+    run.reassertedStatus = reassertedStatus;
     // Determine the source of the forward executions (original completed run or this run)
+    run.forwardSourceInstanceId = resolveForwardSourceInstanceId(instance);
+
+    // 1. Read the compensation stack
+    if (finalizeIfCompensationStackEmpty(run)) {
+      return;
+    }
+
+    // 2. Get the top step to compensate (do not pop yet, only pop on success)
+    run.activeStepName = run.stack[run.stack.size() - 1];
+    run.compensationStepLogName = run.activeStepName + '_Compensate';
+
+    // 3. Create or retrieve the compensation step execution log with FOR UPDATE lock.
+    if (!prepareCompensationStepExec(run)) {
+      return;
+    }
+
+    // 4. Instantiate the step and execute compensate
+    executeCompensation(run);
+  }
+
+  // Resolve the instance whose completed forward executions supply compensation
+  // inputs -- the predecessor run when it committed Completed, else this run.
+  private static Id resolveForwardSourceInstanceId(
+    Workflow_Instance__c instance
+  ) {
     Id forwardSourceInstanceId = instance.Id;
     Id prevInstId = null;
     try {
@@ -9659,43 +9707,50 @@ public inherited sharing class WorkflowEngine {
         forwardSourceInstanceId = prevInstId;
       }
     }
+    return forwardSourceInstanceId;
+  }
 
-    // 1. Read the compensation stack
+  // Read/parse the compensation stack; when empty, drive the instance to its
+  // terminal state and return true to signal the caller to stop.
+  private static Boolean finalizeIfCompensationStackEmpty(CompensationRun run) {
+    Workflow_Instance__c instance = run.instance;
     if (String.isBlank(instance.Compensation_Stack__c)) {
-      instance.Status__c = (instance.Status__c == 'Cancelling')
-        ? 'Cancelled'
-        : 'Compensated';
-      instance.Current_Step__c = null;
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-      notifyParentCompletion(instance);
-      // Fire-and-forget outbound lifecycle event on terminal transition.
-      WorkflowLifecyclePublisher.publish(instance);
-      return;
+      finalizeEmptyCompensationStack(instance);
+      return true;
     }
-
-    List<String> stack = (List<String>) JSON.deserialize(
+    run.stack = (List<String>) JSON.deserialize(
       instance.Compensation_Stack__c,
       List<String>.class
     );
-    if (stack.isEmpty()) {
-      instance.Status__c = (instance.Status__c == 'Cancelling')
-        ? 'Cancelled'
-        : 'Compensated';
-      instance.Current_Step__c = null;
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-      notifyParentCompletion(instance);
-      // Fire-and-forget outbound lifecycle event on terminal transition.
-      WorkflowLifecyclePublisher.publish(instance);
-      return;
+    if (run.stack.isEmpty()) {
+      finalizeEmptyCompensationStack(instance);
+      return true;
     }
+    return false;
+  }
 
-    // 2. Get the top step to compensate (do not pop yet, only pop on success)
-    String activeStepName = stack[stack.size() - 1];
+  // Terminal transition for an instance whose compensation stack is exhausted.
+  private static void finalizeEmptyCompensationStack(
+    Workflow_Instance__c instance
+  ) {
+    instance.Status__c = (instance.Status__c == 'Cancelling')
+      ? 'Cancelled'
+      : 'Compensated';
+    instance.Current_Step__c = null;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+    notifyParentCompletion(instance);
+    // Fire-and-forget outbound lifecycle event on terminal transition.
+    WorkflowLifecyclePublisher.publish(instance);
+  }
 
-    // 3. Create or retrieve the compensation step execution log with FOR UPDATE lock.
+  // Load/lock the compensation step execution, re-query the instance under the
+  // lock, and build (or short-circuit) the step exec. Returns false when an
+  // early-exit branch handled the run and the caller should stop.
+  private static Boolean prepareCompensationStepExec(CompensationRun run) {
+    Workflow_Instance__c instance = run.instance;
+    String compensationStepLogName = run.compensationStepLogName;
     // Load all executions so compensateVisit can be derived in Apex without an
     // extra COUNT() SOQL query.
-    String compensationStepLogName = activeStepName + '_Compensate';
     // Captured_Values__c is selected only on the single-row FOR UPDATE requery
     // below, not on this all-rows visit-count read, to avoid loading every
     // historical capture payload into heap (see the forward runStep path).
@@ -9709,12 +9764,7 @@ public inherited sharing class WorkflowEngine {
       ORDER BY CreatedDate DESC, Id DESC
     ];
 
-    Integer compensateVisit = 0;
-    for (Workflow_Step_Execution__c exec : stepExecs) {
-      if (exec.Status__c == 'Compensated' || exec.Status__c == 'Completed') {
-        compensateVisit++;
-      }
-    }
+    run.compensateVisit = countCompensateVisits(stepExecs);
 
     if (!stepExecs.isEmpty()) {
       stepExecs = [
@@ -9732,6 +9782,7 @@ public inherited sharing class WorkflowEngine {
         FOR UPDATE
       ];
     }
+    run.stepExecs = stepExecs;
 
     // Re-query the instance after acquiring the lock on the step execution to get the most up-to-date committed state
     List<Workflow_Instance__c> freshInstances = [
@@ -9757,6 +9808,7 @@ public inherited sharing class WorkflowEngine {
       );
     }
     instance = freshInstances[0];
+    run.instance = instance;
 
     // A signal-resumed compensation: runStep detected the rollback but DEFERRED
     // the Suspended/Running -> Compensating status DML (so a CalloutStep callout
@@ -9767,11 +9819,11 @@ public inherited sharing class WorkflowEngine {
     // restore from Suspended/Running -- a status another transaction drove to a
     // terminal/failed value is left intact so the guard can early-exit on it.
     if (
-      reassertedStatus != null &&
+      run.reassertedStatus != null &&
       (instance.Status__c == 'Suspended' ||
       instance.Status__c == 'Running')
     ) {
-      instance.Status__c = reassertedStatus;
+      instance.Status__c = run.reassertedStatus;
       instance.Async_Job_Id__c = null;
     }
 
@@ -9780,14 +9832,35 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c != 'Compensating' &&
       instance.Status__c != 'Cancelling'
     ) {
-      return; // Already completed compensation or aborted
+      return false; // Already completed compensation or aborted
     }
 
+    return buildCompensationStepExec(run);
+  }
+
+  // Count prior compensate visits (Compensated/Completed executions) in Apex.
+  private static Integer countCompensateVisits(
+    List<Workflow_Step_Execution__c> stepExecs
+  ) {
+    Integer compensateVisit = 0;
+    for (Workflow_Step_Execution__c exec : stepExecs) {
+      if (exec.Status__c == 'Compensated' || exec.Status__c == 'Completed') {
+        compensateVisit++;
+      }
+    }
+    return compensateVisit;
+  }
+
+  // Build a fresh compensation step exec, or reuse the locked one. Returns false
+  // when the locked exec is already terminal and the run was advanced/enqueued.
+  private static Boolean buildCompensationStepExec(CompensationRun run) {
+    Workflow_Instance__c instance = run.instance;
+    List<Workflow_Step_Execution__c> stepExecs = run.stepExecs;
     Workflow_Step_Execution__c stepExec;
     if (stepExecs.isEmpty()) {
       stepExec = new Workflow_Step_Execution__c();
       stepExec.Workflow_Instance__c = instance.Id;
-      stepExec.Step_Name__c = compensationStepLogName;
+      stepExec.Step_Name__c = run.compensationStepLogName;
       stepExec.Status__c = 'Running';
       stepExec.Retry_Count__c = 0;
 
@@ -9796,8 +9869,8 @@ public inherited sharing class WorkflowEngine {
         SELECT Input__c, Output__c
         FROM Workflow_Step_Execution__c
         WHERE
-          Workflow_Instance__c = :forwardSourceInstanceId
-          AND Step_Name__c = :activeStepName
+          Workflow_Instance__c = :run.forwardSourceInstanceId
+          AND Step_Name__c = :run.activeStepName
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
         LIMIT 1
@@ -9817,43 +9890,92 @@ public inherited sharing class WorkflowEngine {
         stepExec.Status__c == 'Failed' ||
         stepExec.Status__c == 'Cancelled'
       ) {
-        stack.remove(stack.size() - 1);
-        instance.Compensation_Stack__c = JSON.serialize(stack);
-        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-        if (!stack.isEmpty()) {
-          preCreateFirstCompensationStep(instance);
-          scheduleTimeoutJobForInstance(instance.Id);
-        }
-
-        if (Test.isRunningTest()) {
-          if (!disableQueueableInTest) {
-            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-          }
-        } else {
-          enqueueOrchestrator(instance.Id, null);
-        }
-        return;
+        finalizeAlreadyCompensatedStep(run);
+        return false;
       }
       stepExec.Status__c = 'Running';
     }
+    run.stepExec = stepExec;
+    return true;
+  }
 
-    // 4. Instantiate the step and execute compensate
+  // Pop the already-terminal top step, advance the stack, and re-enqueue.
+  private static void finalizeAlreadyCompensatedStep(CompensationRun run) {
+    Workflow_Instance__c instance = run.instance;
+    List<String> stack = run.stack;
+    stack.remove(stack.size() - 1);
+    instance.Compensation_Stack__c = JSON.serialize(stack);
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+
+    if (!stack.isEmpty()) {
+      preCreateFirstCompensationStep(instance);
+      scheduleTimeoutJobForInstance(instance.Id);
+    }
+
+    enqueueCompensationOrchestrator(instance.Id);
+  }
+
+  // Enqueue the next orchestrator pass for a compensating instance.
+  private static void enqueueCompensationOrchestrator(Id instanceId) {
+    if (Test.isRunningTest()) {
+      if (!disableQueueableInTest) {
+        System.enqueueJob(new WorkflowOrchestrator(instanceId));
+      }
+    } else {
+      enqueueOrchestrator(instanceId, null);
+    }
+  }
+
+  // Instantiate the compensatable step, build its context, execute compensate,
+  // and dispatch the outcome. Non-compensatable steps are auto-compensated.
+  private static void executeCompensation(CompensationRun run) {
+    CompensatableStep compensatableStepInstance = resolveCompensatableStep(run);
+    if (compensatableStepInstance == null) {
+      return;
+    }
+
+    StepContext context = buildCompensationContext(
+      run,
+      compensatableStepInstance
+    );
+    commitPreCompensationState(run, compensatableStepInstance);
+
+    if (!invokeCompensation(run, compensatableStepInstance, context)) {
+      return;
+    }
+
+    StepOutcomeContext outcome = new StepOutcomeContext();
+    outcome.instance = run.instance;
+    outcome.stepExec = run.stepExec;
+    outcome.result = run.result;
+    outcome.stack = run.stack;
+    outcome.context = context;
+    handleCompensationStepResult(outcome);
+  }
+
+  // Resolve the compensatable step instance. Returns null (after auto-marking
+  // the step Compensated and advancing the stack) for non-compensatable steps.
+  private static CompensatableStep resolveCompensatableStep(
+    CompensationRun run
+  ) {
+    Workflow_Instance__c instance = run.instance;
     Type stepType = WorkflowTypeResolver.resolve(
-      activeStepName,
+      run.activeStepName,
       WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
     );
     if (stepType == null) {
       throw new WorkflowException(
-        'Could not resolve class for step compensation: ' + activeStepName
+        'Could not resolve class for step compensation: ' + run.activeStepName
       );
     }
 
     Object stepInstanceObj = stepType.newInstance();
     if (!(stepInstanceObj instanceof CompensatableStep)) {
+      Workflow_Step_Execution__c stepExec = run.stepExec;
       stepExec.Status__c = 'Compensated';
       saveStepExec(stepExec);
 
+      List<String> stack = run.stack;
       stack.remove(stack.size() - 1);
       instance.Compensation_Stack__c = JSON.serialize(stack);
       Database.update(instance, true, AccessLevel.SYSTEM_MODE);
@@ -9862,28 +9984,30 @@ public inherited sharing class WorkflowEngine {
         scheduleTimeoutJobForInstance(instance.Id);
       }
 
-      if (Test.isRunningTest()) {
-        if (!disableQueueableInTest) {
-          System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-        }
-      } else {
-        enqueueOrchestrator(instance.Id, null);
-      }
-      return;
+      enqueueCompensationOrchestrator(instance.Id);
+      return null;
     }
 
-    CompensatableStep compensatableStepInstance = (CompensatableStep) stepInstanceObj;
+    return (CompensatableStep) stepInstanceObj;
+  }
 
-    // Build context for compensate
+  // Build the StepContext for the compensate() invocation.
+  private static StepContext buildCompensationContext(
+    CompensationRun run,
+    CompensatableStep compensatableStepInstance
+  ) {
+    Workflow_Instance__c instance = run.instance;
+    Workflow_Step_Execution__c stepExec = run.stepExec;
+
     String prevOutput = null;
     List<Workflow_Step_Execution__c> completedBefore = [
       SELECT Output__c
       FROM Workflow_Step_Execution__c
       WHERE
-        Workflow_Instance__c = :forwardSourceInstanceId
+        Workflow_Instance__c = :run.forwardSourceInstanceId
         AND Status__c IN ('Completed', 'OperatorSkipped')
-        AND Step_Name__c != :activeStepName
-        AND Step_Name__c != :compensationStepLogName
+        AND Step_Name__c != :run.activeStepName
+        AND Step_Name__c != :run.compensationStepLogName
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
       LIMIT 1
@@ -9892,7 +10016,37 @@ public inherited sharing class WorkflowEngine {
       prevOutput = completedBefore[0].Output__c;
     }
 
-    Integer attempt = stepExec.Retry_Count__c != null
+    resolveCompensationRetryState(run, compensatableStepInstance);
+
+    return new StepContext.Builder()
+      .instanceId(instance.Id)
+      .workflowName(instance.Workflow_Name__c)
+      .stepName(run.compensationStepLogName)
+      .inputJson(resolvePayload(stepExec.Input__c))
+      .previousStepOutput(resolvePayload(prevOutput))
+      .stepStateJson(resolvePayload(stepExec.Output__c))
+      .workflowInputJson(resolvePayload(instance.Input__c))
+      .workflowVersion(
+        instance.Definition_Version__c != null
+          ? (Integer) instance.Definition_Version__c
+          : 1
+      )
+      .stepVisit(run.compensateVisit)
+      .signalSource(new PendingSignalSource(instance.Id))
+      .previousRunAt(instance.Previous_Run_At__c)
+      .capturedValuesMap(run.capturesMap)
+      .attempt(run.attempt)
+      .maxAttempts(run.maxAttempts)
+      .build();
+  }
+
+  // Derive attempt/maxAttempts and captured-values map for the compensation.
+  private static void resolveCompensationRetryState(
+    CompensationRun run,
+    CompensatableStep compensatableStepInstance
+  ) {
+    Workflow_Step_Execution__c stepExec = run.stepExec;
+    run.attempt = stepExec.Retry_Count__c != null
       ? (Integer) stepExec.Retry_Count__c + 1
       : 1;
     Integer maxAttempts = 1;
@@ -9921,28 +10075,18 @@ public inherited sharing class WorkflowEngine {
         }
       }
     }
+    run.maxAttempts = maxAttempts;
+    run.capturesMap = capturesMap;
+  }
 
-    StepContext context = new StepContext.Builder()
-      .instanceId(instance.Id)
-      .workflowName(instance.Workflow_Name__c)
-      .stepName(compensationStepLogName)
-      .inputJson(resolvePayload(stepExec.Input__c))
-      .previousStepOutput(resolvePayload(prevOutput))
-      .stepStateJson(resolvePayload(stepExec.Output__c))
-      .workflowInputJson(resolvePayload(instance.Input__c))
-      .workflowVersion(
-        instance.Definition_Version__c != null
-          ? (Integer) instance.Definition_Version__c
-          : 1
-      )
-      .stepVisit(compensateVisit)
-      .signalSource(new PendingSignalSource(instance.Id))
-      .previousRunAt(instance.Previous_Run_At__c)
-      .capturedValuesMap(capturesMap)
-      .attempt(attempt)
-      .maxAttempts(maxAttempts)
-      .build();
-
+  // Commit the pre-execution step status/timeout so the watchdog can detect
+  // timeouts. Deferred for a CalloutStep so its payload-driven callout is legal.
+  private static void commitPreCompensationState(
+    CompensationRun run,
+    CompensatableStep compensatableStepInstance
+  ) {
+    Workflow_Instance__c instance = run.instance;
+    Workflow_Step_Execution__c stepExec = run.stepExec;
     // Save/Commit step execution status and set Timeout_At__c before executing compensation so watchdog can detect timeouts.
     // As in the forward execute() path, a CalloutStep performs a synchronous,
     // payload-driven callout inside compensate() and Salesforce forbids a
@@ -9951,6 +10095,7 @@ public inherited sharing class WorkflowEngine {
     // scheduled job were already committed when it was queued, so the watchdog
     // stays armed; the finally block reconciles the timeout afterward.
     Boolean deferPreExecDml = compensatableStepInstance instanceof CalloutStep;
+    run.deferPreExecDml = deferPreExecDml;
     // Persist the compensating status that runStep re-asserted in memory. For an
     // ordinary step commit it now (matching the prior commit-before-compensate()
     // behavior); for a CalloutStep leave it uncommitted so the payload-driven
@@ -9958,7 +10103,7 @@ public inherited sharing class WorkflowEngine {
     // writes the instance after compensate() returns. The earlier early-return
     // branches (already-terminal exec, non-CompensatableStep) commit the status
     // via their own update, so a pending re-assert is never dropped.
-    if (reassertedStatus != null && !deferPreExecDml) {
+    if (run.reassertedStatus != null && !deferPreExecDml) {
       Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     }
     stepExec.Status__c = 'Running';
@@ -9978,33 +10123,24 @@ public inherited sharing class WorkflowEngine {
         saveStepExec(stepExec);
       }
     }
+    run.timeoutSeconds = timeoutSeconds;
+  }
 
+  // Execute compensate() (honoring test fault injection), reconciling the
+  // timeout in the finally block. Returns false when the step failed and the
+  // failure was already handled; otherwise stores the result on the run.
+  private static Boolean invokeCompensation(
+    CompensationRun run,
+    CompensatableStep compensatableStepInstance,
+    StepContext context
+  ) {
+    Workflow_Instance__c instance = run.instance;
+    Workflow_Step_Execution__c stepExec = run.stepExec;
+    String compensationStepLogName = run.compensationStepLogName;
+    Integer timeoutSeconds = run.timeoutSeconds;
     StepResult result;
     try {
-      if (
-        Test.isRunningTest() &&
-        injectedFaults != null &&
-        !injectedFaults.isEmpty()
-      ) {
-        Id rootId = getRootInstanceId(instance.Id);
-        String compKey =
-          (rootId != null ? String.valueOf(rootId) : '') +
-          ':' +
-          compensationStepLogName.toLowerCase();
-        if (injectedFaults.containsKey(compKey)) {
-          result = checkAndInjectFault(
-            instance.Id,
-            compensationStepLogName,
-            compensatableStepInstance
-          );
-        } else {
-          result = checkAndInjectFault(
-            instance.Id,
-            activeStepName,
-            compensatableStepInstance
-          );
-        }
-      }
+      result = resolveInjectedCompensationFault(run, compensatableStepInstance);
       if (result == null) {
         result = compensatableStepInstance.compensate(context);
       }
@@ -10025,7 +10161,7 @@ public inherited sharing class WorkflowEngine {
         compensationStepLogName,
         ex.getMessage()
       );
-      return;
+      return false;
     } finally {
       if (timeoutSeconds != null && timeoutSeconds > 0) {
         stepExec.Timeout_At__c = null;
@@ -10033,14 +10169,42 @@ public inherited sharing class WorkflowEngine {
         cancelTimeoutJob(instance.Id, compensationStepLogName);
       }
     }
+    run.result = result;
+    return true;
+  }
 
-    StepOutcomeContext outcome = new StepOutcomeContext();
-    outcome.instance = instance;
-    outcome.stepExec = stepExec;
-    outcome.result = result;
-    outcome.stack = stack;
-    outcome.context = context;
-    handleCompensationStepResult(outcome);
+  // Return an injected fault result for the compensation when test fault
+  // injection is armed for this step; otherwise null (run compensate normally).
+  private static StepResult resolveInjectedCompensationFault(
+    CompensationRun run,
+    CompensatableStep compensatableStepInstance
+  ) {
+    if (
+      !(Test.isRunningTest() &&
+      injectedFaults != null &&
+      !injectedFaults.isEmpty())
+    ) {
+      return null;
+    }
+    Workflow_Instance__c instance = run.instance;
+    String compensationStepLogName = run.compensationStepLogName;
+    Id rootId = getRootInstanceId(instance.Id);
+    String compKey =
+      (rootId != null ? String.valueOf(rootId) : '') +
+      ':' +
+      compensationStepLogName.toLowerCase();
+    if (injectedFaults.containsKey(compKey)) {
+      return checkAndInjectFault(
+        instance.Id,
+        compensationStepLogName,
+        compensatableStepInstance
+      );
+    }
+    return checkAndInjectFault(
+      instance.Id,
+      run.activeStepName,
+      compensatableStepInstance
+    );
   }
 
   private static void handleCompensationStepResult(StepOutcomeContext outcome) {
