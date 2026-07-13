@@ -2562,6 +2562,29 @@ public inherited sharing class WorkflowEngine {
     return ids;
   }
 
+  // Mutable accumulator threaded through the startOrGet phase helpers so each
+  // helper stays within the parameter and complexity budgets.
+  private class StartOrGetRun {
+    List<StartRequest> requests;
+    List<StartResult> results;
+    List<Workflow_Instance__c> toInsert;
+    List<Integer> insertReqIndexes;
+    List<Workflow_Instance__c> insertedInstances = new List<Workflow_Instance__c>();
+    List<Integer> insertedReqIndexes = new List<Integer>();
+    Set<String> concurrentLoserKeys = new Set<String>();
+    Set<Id> parkedIds = new Set<Id>();
+    Set<Id> deferTimeoutIds = new Set<Id>();
+    List<Workflow_Instance__c> instancesToPark = new List<Workflow_Instance__c>();
+  }
+
+  // Candidate class-name / namespace sets to query for workflow-name validation,
+  // plus the raw-spelling back-references keyed by resolved class name.
+  private class WorkflowNameQuery {
+    Set<String> localNames = new Set<String>();
+    Set<String> namespaces = new Set<String>();
+    Map<String, List<String>> rawNamesByResolved = new Map<String, List<String>>();
+  }
+
   /**
    * Bulk get-or-start. Returns a result per request (index-aligned) reporting
    * the resolved instance Id and whether it was newly created or deduped.
@@ -2573,8 +2596,61 @@ public inherited sharing class WorkflowEngine {
     if (requests == null || requests.isEmpty()) {
       return results;
     }
+    StartOrGetRun run = new StartOrGetRun();
+    run.requests = requests;
+    run.results = results;
 
     // 1. Validate and gather correlation keys, and pre-validate workflow names in bulk
+    Set<String> correlationKeys = validateAndPrevalidateStarts(requests);
+
+    // 2. Pre-resolve existing instances within the dedup scope (keyed by the
+    //    normalized correlation key to honor case-insensitive matching).
+    Map<String, Workflow_Instance__c> existingByKey = findExistingByKey(
+      correlationKeys,
+      true
+    );
+
+    // 3. Decide per request (preserving order): dedup to an existing instance,
+    //    dedup to an intra-batch sibling, or build a fresh instance to insert.
+    decideStartRequests(run, existingByKey);
+
+    // 4. Insert fresh instances, tolerating per-row DUPLICATE_VALUE from a
+    //    concurrent winner (the unique Active_Correlation_Key__c backstop).
+    insertFreshInstances(run);
+    insertStartSearchAttributes(run);
+
+    // 5. Build a key -> resolved Id map for newly inserted instances and for
+    //    any concurrent winners, then fill remaining results and assert resolution.
+    fillRemainingStartResults(run);
+    assertAllStartsResolved(run);
+
+    // 6. Resolve input payloads for newly inserted instances
+    resolveStartInputPayloads(run);
+
+    // Operator pause gate and concurrency-bounded deferral (mirror doStart).
+    applyStartPauseGate(run);
+    applyStartConcurrencyGate(run);
+
+    // 7. Construct initial Step Execution logs for inserted instances only
+    buildInitialStepExecs(run);
+
+    // Persist the parked status transition; parked instances are neither scheduled
+    // nor enqueued — the resume path drives them when the definition is resumed.
+    if (!run.instancesToPark.isEmpty()) {
+      Database.update(run.instancesToPark, true, AccessLevel.SYSTEM_MODE);
+    }
+
+    // 8. Schedule timeout jobs and enqueue orchestrators for eligible instances.
+    scheduleAndEnqueueStarts(run);
+
+    return results;
+  }
+
+  // §1: validate each request and gather correlation keys; pre-validate any
+  // not-yet-cached workflow names in bulk via ApexTypeImplementor.
+  private static Set<String> validateAndPrevalidateStarts(
+    List<StartRequest> requests
+  ) {
     Set<String> correlationKeys = new Set<String>();
     Set<String> workflowNamesToQuery = new Set<String>();
     for (StartRequest req : requests) {
@@ -2595,78 +2671,96 @@ public inherited sharing class WorkflowEngine {
     }
 
     if (!workflowNamesToQuery.isEmpty()) {
-      Set<String> localNamesToQuery = new Set<String>();
-      Set<String> namespacesToQuery = new Set<String>();
-      Map<String, List<String>> rawNamesByResolved = new Map<String, List<String>>();
-      for (String rawName : workflowNamesToQuery) {
-        Type resolved = WorkflowTypeResolver.resolve(
-          rawName,
-          WorkflowTypeResolver.extractNamespace(rawName)
-        );
-        String localName1 = rawName;
-        String ns1 = '';
-        String localName2 = rawName;
-        String ns2 = '';
-        if (resolved != null) {
-          String fqName = String.valueOf(resolved);
-          String resName = fqName.toLowerCase();
-          if (!rawNamesByResolved.containsKey(resName)) {
-            rawNamesByResolved.put(resName, new List<String>());
-          }
-          rawNamesByResolved.get(resName).add(rawName);
+      prevalidateWorkflowNames(workflowNamesToQuery);
+    }
+    return correlationKeys;
+  }
 
-          if (fqName.contains('.')) {
-            ns1 = fqName.substringBefore('.');
-            localName1 = fqName.substringAfter('.');
-            ns2 = '';
-            localName2 = fqName;
-          } else {
-            localName1 = fqName;
-            localName2 = fqName;
-          }
-        }
-        localNamesToQuery.add(localName1);
-        localNamesToQuery.add(localName2);
-        namespacesToQuery.add(ns1);
-        namespacesToQuery.add(ns2);
-      }
+  // Query ApexTypeImplementor for the candidate class/namespace pairs and mark
+  // the matching workflow names validated (both resolved and raw spellings).
+  private static void prevalidateWorkflowNames(
+    Set<String> workflowNamesToQuery
+  ) {
+    WorkflowNameQuery q = buildWorkflowNameQuery(workflowNamesToQuery);
+    Set<String> localNamesToQuery = q.localNames;
+    Set<String> namespacesToQuery = q.namespaces;
 
-      for (ApexTypeImplementor impl : [
-        SELECT ClassName, ClassNamespacePrefix
-        FROM ApexTypeImplementor
-        WHERE
-          ClassName IN :localNamesToQuery
-          AND ClassNamespacePrefix IN :namespacesToQuery
-          AND InterfaceName IN (
-            'WorkflowDefinition',
-            'VersionedWorkflow',
-            'ErrorRoutingWorkflow'
-          )
-        WITH SYSTEM_MODE
-      ]) {
-        String matchName = String.isBlank(impl.ClassNamespacePrefix)
-          ? impl.ClassName
-          : (impl.ClassNamespacePrefix + '.' + impl.ClassName);
-        String matchLower = matchName.toLowerCase();
-        validatedWorkflows.put(matchLower, true);
+    for (ApexTypeImplementor impl : [
+      SELECT ClassName, ClassNamespacePrefix
+      FROM ApexTypeImplementor
+      WHERE
+        ClassName IN :localNamesToQuery
+        AND ClassNamespacePrefix IN :namespacesToQuery
+        AND InterfaceName IN (
+          'WorkflowDefinition',
+          'VersionedWorkflow',
+          'ErrorRoutingWorkflow'
+        )
+      WITH SYSTEM_MODE
+    ]) {
+      String matchName = String.isBlank(impl.ClassNamespacePrefix)
+        ? impl.ClassName
+        : (impl.ClassNamespacePrefix + '.' + impl.ClassName);
+      String matchLower = matchName.toLowerCase();
+      validatedWorkflows.put(matchLower, true);
 
-        if (rawNamesByResolved.containsKey(matchLower)) {
-          for (String rawName : rawNamesByResolved.get(matchLower)) {
-            validatedWorkflows.put(rawName.toLowerCase(), true);
-          }
+      if (q.rawNamesByResolved.containsKey(matchLower)) {
+        for (String rawName : q.rawNamesByResolved.get(matchLower)) {
+          validatedWorkflows.put(rawName.toLowerCase(), true);
         }
       }
     }
+  }
 
-    // 2. Pre-resolve existing instances within the dedup scope (keyed by the
-    //    normalized correlation key to honor case-insensitive matching).
-    Map<String, Workflow_Instance__c> existingByKey = findExistingByKey(
-      correlationKeys,
-      true
-    );
+  // Resolve each raw workflow name into the local-name/namespace candidates to
+  // query, tracking which raw spellings map to each resolved class.
+  private static WorkflowNameQuery buildWorkflowNameQuery(
+    Set<String> workflowNamesToQuery
+  ) {
+    WorkflowNameQuery q = new WorkflowNameQuery();
+    for (String rawName : workflowNamesToQuery) {
+      Type resolved = WorkflowTypeResolver.resolve(
+        rawName,
+        WorkflowTypeResolver.extractNamespace(rawName)
+      );
+      String localName1 = rawName;
+      String ns1 = '';
+      String localName2 = rawName;
+      String ns2 = '';
+      if (resolved != null) {
+        String fqName = String.valueOf(resolved);
+        String resName = fqName.toLowerCase();
+        if (!q.rawNamesByResolved.containsKey(resName)) {
+          q.rawNamesByResolved.put(resName, new List<String>());
+        }
+        q.rawNamesByResolved.get(resName).add(rawName);
 
-    // 3. Decide per request (preserving order): dedup to an existing instance,
-    //    dedup to an intra-batch sibling, or build a fresh instance to insert.
+        if (fqName.contains('.')) {
+          ns1 = fqName.substringBefore('.');
+          localName1 = fqName.substringAfter('.');
+          ns2 = '';
+          localName2 = fqName;
+        } else {
+          localName1 = fqName;
+          localName2 = fqName;
+        }
+      }
+      q.localNames.add(localName1);
+      q.localNames.add(localName2);
+      q.namespaces.add(ns1);
+      q.namespaces.add(ns2);
+    }
+    return q;
+  }
+
+  // §3: per request, dedup to an existing/intra-batch instance or queue a fresh
+  // instance for insertion, populating run.toInsert / run.insertReqIndexes.
+  private static void decideStartRequests(
+    StartOrGetRun run,
+    Map<String, Workflow_Instance__c> existingByKey
+  ) {
+    List<StartRequest> requests = run.requests;
+    List<StartResult> results = run.results;
     for (Integer i = 0; i < requests.size(); i++) {
       results.add(null);
     }
@@ -2697,104 +2791,109 @@ public inherited sharing class WorkflowEngine {
         newKeysInBatch.add(normKey);
       }
     }
+    run.toInsert = toInsert;
+    run.insertReqIndexes = insertReqIndexes;
+  }
 
-    // 4. Insert fresh instances, tolerating per-row DUPLICATE_VALUE from a
-    //    concurrent winner (the unique Active_Correlation_Key__c backstop).
-    List<Workflow_Instance__c> insertedInstances = new List<Workflow_Instance__c>();
-    List<Integer> insertedReqIndexes = new List<Integer>();
-    Set<String> concurrentLoserKeys = new Set<String>();
-
-    if (!toInsert.isEmpty()) {
-      Database.SaveResult[] saveResults = Database.insert(
-        toInsert,
-        false,
-        AccessLevel.SYSTEM_MODE
-      );
-      String genuineError = null;
-      for (Integer j = 0; j < saveResults.size(); j++) {
-        Database.SaveResult sr = saveResults[j];
-        Integer reqIdx = insertReqIndexes[j];
-        if (sr.isSuccess()) {
-          Workflow_Instance__c inst = toInsert[j];
-          insertedInstances.add(inst);
-          insertedReqIndexes.add(reqIdx);
-          results[reqIdx] = new StartResult(inst.Id).markNew();
-        } else {
-          Boolean isDup = false;
-          for (Database.Error err : sr.getErrors()) {
-            if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
-              isDup = true;
-              break;
-            }
-          }
-          String key = requests[reqIdx].correlationKey;
-          if (isDup && String.isNotBlank(key)) {
-            concurrentLoserKeys.add(key);
-          } else if (genuineError == null) {
-            genuineError = sr.getErrors()[0].getMessage();
-          }
-        }
-      }
-      // A genuine (non-duplicate) row failure restores all-or-none semantics:
-      // delete every sibling row that succeeded in this partial insert (no
-      // savepoint is spent on the all-success path) and surface the error so no
-      // orphan Pending instances are left behind.
-      if (genuineError != null) {
-        if (!insertedInstances.isEmpty()) {
-          Database.delete(insertedInstances, true, AccessLevel.SYSTEM_MODE);
-        }
-        throw new WorkflowException(
-          'Failed to start workflow: ' + genuineError
-        );
+  // §4a: insert the fresh instances, resolving new results and tolerating
+  // per-row DUPLICATE_VALUE losers; a genuine failure deletes siblings + throws.
+  private static void insertFreshInstances(StartOrGetRun run) {
+    List<Workflow_Instance__c> toInsert = run.toInsert;
+    if (toInsert.isEmpty()) {
+      return;
+    }
+    Database.SaveResult[] saveResults = Database.insert(
+      toInsert,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    String genuineError = null;
+    for (Integer j = 0; j < saveResults.size(); j++) {
+      String rowError = processStartInsertRow(run, saveResults[j], j);
+      if (rowError != null && genuineError == null) {
+        genuineError = rowError;
       }
     }
-
-    if (!insertedInstances.isEmpty()) {
-      List<Workflow_Search_Attribute__c> attrsToInsert = new List<Workflow_Search_Attribute__c>();
-      for (Integer j = 0; j < insertedInstances.size(); j++) {
-        StartRequest req = requests[insertedReqIndexes[j]];
-        Workflow_Instance__c instance = insertedInstances[j];
-        if (req.attributes != null && !req.attributes.isEmpty()) {
-          for (String key : req.attributes.keySet()) {
-            String val = req.attributes.get(key);
-            attrsToInsert.add(
-              new Workflow_Search_Attribute__c(
-                Workflow_Instance__c = instance.Id,
-                Key__c = key,
-                Value__c = val,
-                Key_Value__c = key + '=' + (val == null ? '' : val)
-              )
-            );
-          }
-        }
+    // A genuine (non-duplicate) row failure restores all-or-none semantics:
+    // delete every sibling row that succeeded in this partial insert (no
+    // savepoint is spent on the all-success path) and surface the error so no
+    // orphan Pending instances are left behind.
+    if (genuineError != null) {
+      if (!run.insertedInstances.isEmpty()) {
+        Database.delete(run.insertedInstances, true, AccessLevel.SYSTEM_MODE);
       }
-      if (!attrsToInsert.isEmpty()) {
-        Database.insert(attrsToInsert, true, AccessLevel.SYSTEM_MODE);
+      throw new WorkflowException('Failed to start workflow: ' + genuineError);
+    }
+  }
+
+  // Handle one insert save-result row: record a success/new result or a
+  // concurrent DUPLICATE_VALUE loser key. Returns a genuine error message
+  // (a non-duplicate failure, or a duplicate on a blank key) or null.
+  private static String processStartInsertRow(
+    StartOrGetRun run,
+    Database.SaveResult sr,
+    Integer j
+  ) {
+    Integer reqIdx = run.insertReqIndexes[j];
+    if (sr.isSuccess()) {
+      Workflow_Instance__c inst = run.toInsert[j];
+      run.insertedInstances.add(inst);
+      run.insertedReqIndexes.add(reqIdx);
+      run.results[reqIdx] = new StartResult(inst.Id).markNew();
+      return null;
+    }
+    Boolean isDup = isDuplicateSaveError(sr);
+    String key = run.requests[reqIdx].correlationKey;
+    if (isDup && String.isNotBlank(key)) {
+      run.concurrentLoserKeys.add(key);
+      return null;
+    }
+    return sr.getErrors()[0].getMessage();
+  }
+
+  // True when every error on the save result is a DUPLICATE_VALUE.
+  private static Boolean isDuplicateSaveError(Database.SaveResult sr) {
+    for (Database.Error err : sr.getErrors()) {
+      if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+        return true;
       }
     }
+    return false;
+  }
 
-    // 5. Build a key -> resolved Id map for newly inserted instances and for
-    //    any concurrent winners, then fill remaining (intra-batch / loser)
-    //    results. A DUPLICATE_VALUE proves a sibling exists, so losers are
-    //    resolved regardless of the dedup window (the winner may have completed
-    //    mid-race, including when the window is disabled).
-    Map<String, Id> resolvedIdByKey = new Map<String, Id>();
-    for (Integer j = 0; j < insertedInstances.size(); j++) {
-      String key = requests[insertedReqIndexes[j]].correlationKey;
-      if (String.isNotBlank(key)) {
-        resolvedIdByKey.put(normalizeKey(key), insertedInstances[j].Id);
-      }
+  // §4b: insert search-attribute rows for the freshly inserted instances.
+  private static void insertStartSearchAttributes(StartOrGetRun run) {
+    if (run.insertedInstances.isEmpty()) {
+      return;
     }
-    if (!concurrentLoserKeys.isEmpty()) {
-      Map<String, Workflow_Instance__c> winners = findAnyByKey(
-        concurrentLoserKeys
-      );
-      for (String normalized : winners.keySet()) {
-        if (!resolvedIdByKey.containsKey(normalized)) {
-          resolvedIdByKey.put(normalized, winners.get(normalized).Id);
+    List<Workflow_Search_Attribute__c> attrsToInsert = new List<Workflow_Search_Attribute__c>();
+    for (Integer j = 0; j < run.insertedInstances.size(); j++) {
+      StartRequest req = run.requests[run.insertedReqIndexes[j]];
+      Workflow_Instance__c instance = run.insertedInstances[j];
+      if (req.attributes != null && !req.attributes.isEmpty()) {
+        for (String key : req.attributes.keySet()) {
+          String val = req.attributes.get(key);
+          attrsToInsert.add(
+            new Workflow_Search_Attribute__c(
+              Workflow_Instance__c = instance.Id,
+              Key__c = key,
+              Value__c = val,
+              Key_Value__c = key + '=' + (val == null ? '' : val)
+            )
+          );
         }
       }
     }
+    if (!attrsToInsert.isEmpty()) {
+      Database.insert(attrsToInsert, true, AccessLevel.SYSTEM_MODE);
+    }
+  }
+
+  // §5a: resolve remaining (intra-batch / concurrent-loser) results by key.
+  private static void fillRemainingStartResults(StartOrGetRun run) {
+    Map<String, Id> resolvedIdByKey = buildResolvedIdByKey(run);
+    List<StartRequest> requests = run.requests;
+    List<StartResult> results = run.results;
     for (Integer i = 0; i < requests.size(); i++) {
       if (requests[i] == null || results[i] != null) {
         continue;
@@ -2807,11 +2906,36 @@ public inherited sharing class WorkflowEngine {
         results[i] = new StartResult(resolvedIdByKey.get(normKey));
       }
     }
+  }
 
-    // Safety net: every request carries a non-blank key (validated above) and
-    // must resolve to an instance. A lingering null would mean a duplicate
-    // loser whose winner could not be located; rather than return a null
-    // instance Id, roll back this invocation's inserts and surface an error.
+  // Build the normalized-key -> Id map from inserted instances and any
+  // concurrent winners located for DUPLICATE_VALUE loser keys.
+  private static Map<String, Id> buildResolvedIdByKey(StartOrGetRun run) {
+    Map<String, Id> resolvedIdByKey = new Map<String, Id>();
+    for (Integer j = 0; j < run.insertedInstances.size(); j++) {
+      String key = run.requests[run.insertedReqIndexes[j]].correlationKey;
+      if (String.isNotBlank(key)) {
+        resolvedIdByKey.put(normalizeKey(key), run.insertedInstances[j].Id);
+      }
+    }
+    if (!run.concurrentLoserKeys.isEmpty()) {
+      Map<String, Workflow_Instance__c> winners = findAnyByKey(
+        run.concurrentLoserKeys
+      );
+      for (String normalized : winners.keySet()) {
+        if (!resolvedIdByKey.containsKey(normalized)) {
+          resolvedIdByKey.put(normalized, winners.get(normalized).Id);
+        }
+      }
+    }
+    return resolvedIdByKey;
+  }
+
+  // §5b safety net: a lingering unresolved (non-null) request would mean a
+  // duplicate loser whose winner could not be found; roll back and surface it.
+  private static void assertAllStartsResolved(StartOrGetRun run) {
+    List<StartRequest> requests = run.requests;
+    List<StartResult> results = run.results;
     List<String> unresolvedKeys = new List<String>();
     for (Integer i = 0; i < requests.size(); i++) {
       if (requests[i] == null) {
@@ -2822,20 +2946,23 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    if (!unresolvedKeys.isEmpty()) {
-      if (!insertedInstances.isEmpty()) {
-        Database.delete(insertedInstances, true, AccessLevel.SYSTEM_MODE);
-      }
-      throw new WorkflowException(
-        'Failed to resolve workflow start for correlation key(s): ' +
-        String.join(unresolvedKeys, ', ')
-      );
+    if (unresolvedKeys.isEmpty()) {
+      return;
     }
+    if (!run.insertedInstances.isEmpty()) {
+      Database.delete(run.insertedInstances, true, AccessLevel.SYSTEM_MODE);
+    }
+    throw new WorkflowException(
+      'Failed to resolve workflow start for correlation key(s): ' +
+      String.join(unresolvedKeys, ', ')
+    );
+  }
 
-    // 6. Resolve input payloads for newly inserted instances
-    for (Integer j = 0; j < insertedInstances.size(); j++) {
-      StartRequest req = requests[insertedReqIndexes[j]];
-      Workflow_Instance__c instance = insertedInstances[j];
+  // §6: resolve/persist input payloads for the freshly inserted instances.
+  private static void resolveStartInputPayloads(StartOrGetRun run) {
+    for (Integer j = 0; j < run.insertedInstances.size(); j++) {
+      StartRequest req = run.requests[run.insertedReqIndexes[j]];
+      Workflow_Instance__c instance = run.insertedInstances[j];
       String inputJson = (req.inputJson != null)
         ? req.inputJson
         : ((req.input != null) ? JSON.serialize(req.input) : null);
@@ -2845,43 +2972,44 @@ public inherited sharing class WorkflowEngine {
         'Input_' + instance.Id
       );
     }
-    if (!insertedInstances.isEmpty()) {
-      Database.update(insertedInstances, true, AccessLevel.SYSTEM_MODE);
+    if (!run.insertedInstances.isEmpty()) {
+      Database.update(run.insertedInstances, true, AccessLevel.SYSTEM_MODE);
     }
+  }
 
-    // Operator pause gate (bulk path — used by scheduled jobs and the Flow
-    // invocable): instances whose definition is paused are parked at start. They
-    // get a Pending initial step with NO timeout clock and are excluded from
-    // timeout scheduling and the initial enqueue, mirroring the scalar doStart.
-    Boolean anyPaused = WorkflowPauseGate.anyPaused();
-    Set<Id> parkedIds = new Set<Id>();
-    List<Workflow_Instance__c> instancesToPark = new List<Workflow_Instance__c>();
-    if (anyPaused) {
-      for (Workflow_Instance__c instance : insertedInstances) {
-        if (WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c)) {
-          instance.Status__c = 'Paused';
-          parkedIds.add(instance.Id);
-          instancesToPark.add(instance);
-        }
+  // Operator pause gate (bulk path — used by scheduled jobs and the Flow
+  // invocable): instances whose definition is paused are parked at start. They
+  // get a Pending initial step with NO timeout clock and are excluded from
+  // timeout scheduling and the initial enqueue, mirroring the scalar doStart.
+  private static void applyStartPauseGate(StartOrGetRun run) {
+    if (!WorkflowPauseGate.anyPaused()) {
+      return;
+    }
+    for (Workflow_Instance__c instance : run.insertedInstances) {
+      if (WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c)) {
+        instance.Status__c = 'Paused';
+        run.parkedIds.add(instance.Id);
+        run.instancesToPark.add(instance);
       }
     }
+  }
 
-    // Concurrency-bounded workflows defer the initial timeout clock until the
-    // admission gate wins a slot (mirrors doStart). A bounded first step is enqueued
-    // so its RUN_STEP reaches the gate, but a still-Pending overflow item sitting in
-    // the event/queue backlog during a burst would be failed by the timeout sweep
-    // before it ever reaches the gate to park. Admission re-arms the timeout via
-    // reArmTimeoutsForResume. isConfigured is memoized per name, so this is bulk-safe.
-    Set<Id> deferTimeoutIds = new Set<Id>();
+  // Concurrency-bounded workflows defer the initial timeout clock until the
+  // admission gate wins a slot (mirrors doStart). A bounded first step is enqueued
+  // so its RUN_STEP reaches the gate, but a still-Pending overflow item sitting in
+  // the event/queue backlog during a burst would be failed by the timeout sweep
+  // before it ever reaches the gate to park. Admission re-arms the timeout via
+  // reArmTimeoutsForResume. isConfigured is memoized per name, so this is bulk-safe.
+  private static void applyStartConcurrencyGate(StartOrGetRun run) {
     List<Workflow_Instance__c> deferredToMark = new List<Workflow_Instance__c>();
-    for (Workflow_Instance__c instance : insertedInstances) {
+    for (Workflow_Instance__c instance : run.insertedInstances) {
       if (ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
-        deferTimeoutIds.add(instance.Id);
+        run.deferTimeoutIds.add(instance.Id);
         // Durable awaiting-admission marker (see doStart): the pre-start watchdog
         // keys its null-deadline skip off this, not the live CMDT, so a ceiling added
         // later cannot silence a genuine unbounded pre-start watchdog. Cleared on
         // admission. Parked-at-start instances are handled by instancesToPark below.
-        if (!parkedIds.contains(instance.Id)) {
+        if (!run.parkedIds.contains(instance.Id)) {
           deferredToMark.add(
             new Workflow_Instance__c(
               Id = instance.Id,
@@ -2894,57 +3022,54 @@ public inherited sharing class WorkflowEngine {
     if (!deferredToMark.isEmpty()) {
       Database.update(deferredToMark, true, AccessLevel.SYSTEM_MODE);
     }
+  }
 
-    // 7. Construct initial Step Execution logs for inserted instances only
+  // §7: construct initial Step Execution logs for the inserted instances.
+  private static void buildInitialStepExecs(StartOrGetRun run) {
     List<Workflow_Step_Execution__c> stepExecs = new List<Workflow_Step_Execution__c>();
-    for (Workflow_Instance__c instance : insertedInstances) {
-      if (String.isNotBlank(instance.Current_Step__c)) {
-        Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
-        stepExec.Workflow_Instance__c = instance.Id;
-        stepExec.Step_Name__c = instance.Current_Step__c;
-        stepExec.Status__c = 'Pending';
-        stepExec.Input__c = instance.Input__c;
-        stepExec.Retry_Count__c = 0;
-        // No timeout clock for a parked step (see doStart) or a bounded start awaiting
-        // admission — either would otherwise pollute the watchdog timeout batch or fail
-        // a still-Pending bounded start before admission. Resume/admission re-establishes it.
-        if (
-          !parkedIds.contains(instance.Id) &&
-          !deferTimeoutIds.contains(instance.Id)
-        ) {
-          Integer timeout = getStepTimeoutSeconds(
-            instance.Current_Step__c,
-            WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
-          );
-          if (timeout != null && timeout > 0) {
-            stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
-          }
-        }
-        stepExecs.add(stepExec);
+    for (Workflow_Instance__c instance : run.insertedInstances) {
+      if (String.isBlank(instance.Current_Step__c)) {
+        continue;
       }
+      Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
+      stepExec.Workflow_Instance__c = instance.Id;
+      stepExec.Step_Name__c = instance.Current_Step__c;
+      stepExec.Status__c = 'Pending';
+      stepExec.Input__c = instance.Input__c;
+      stepExec.Retry_Count__c = 0;
+      // No timeout clock for a parked step (see doStart) or a bounded start awaiting
+      // admission — either would otherwise pollute the watchdog timeout batch or fail
+      // a still-Pending bounded start before admission. Resume/admission re-establishes it.
+      if (
+        !run.parkedIds.contains(instance.Id) &&
+        !run.deferTimeoutIds.contains(instance.Id)
+      ) {
+        Integer timeout = getStepTimeoutSeconds(
+          instance.Current_Step__c,
+          WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+        );
+        if (timeout != null && timeout > 0) {
+          stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+        }
+      }
+      stepExecs.add(stepExec);
     }
     if (!stepExecs.isEmpty()) {
       Database.insert(stepExecs, true, AccessLevel.SYSTEM_MODE);
     }
+  }
 
-    // Persist the parked status transition; parked instances are neither scheduled
-    // nor enqueued — the resume path drives them when the definition is resumed.
-    if (!instancesToPark.isEmpty()) {
-      Database.update(instancesToPark, true, AccessLevel.SYSTEM_MODE);
-    }
-
-    // 8. Schedule timeout jobs for non-parked, non-deferred instances and enqueue
-    // orchestrators for all non-parked instances. Concurrency-bounded instances are
-    // still enqueued so their first RUN_STEP reaches the admission gate, but their
-    // timeout job is deferred until the gate arms it on admission (see deferTimeoutIds).
+  // §8: schedule timeout jobs for non-parked, non-deferred instances and enqueue
+  // orchestrators for all non-parked instances.
+  private static void scheduleAndEnqueueStarts(StartOrGetRun run) {
     List<Workflow_Instance__c> instancesToSchedule = new List<Workflow_Instance__c>();
     List<Id> instanceIds = new List<Id>();
-    for (Workflow_Instance__c instance : insertedInstances) {
-      if (parkedIds.contains(instance.Id)) {
+    for (Workflow_Instance__c instance : run.insertedInstances) {
+      if (run.parkedIds.contains(instance.Id)) {
         continue;
       }
       instanceIds.add(instance.Id);
-      if (!deferTimeoutIds.contains(instance.Id)) {
+      if (!run.deferTimeoutIds.contains(instance.Id)) {
         instancesToSchedule.add(instance);
       }
     }
@@ -2954,8 +3079,6 @@ public inherited sharing class WorkflowEngine {
     if (!instanceIds.isEmpty()) {
       enqueueOrchestrators(instanceIds);
     }
-
-    return results;
   }
 
   /**
