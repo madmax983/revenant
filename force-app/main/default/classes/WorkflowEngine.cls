@@ -8944,6 +8944,20 @@ public inherited sharing class WorkflowEngine {
     return (wasCancelling ? 'Cancelled by user. ' : '') + detail;
   }
 
+  // Mutable accumulator threaded through the resume-past-step phase helpers so
+  // each helper stays within the parameter and complexity budgets.
+  private class ResumeSkipRun {
+    Workflow_Instance__c instance;
+    Id instanceId;
+    String stepName;
+    String suppliedOutputJson;
+    Workflow_Step_Execution__c latestExec;
+    Workflow_Step_Execution__c skipExec;
+    WorkflowDefinition def;
+    List<String> activeParallelSteps;
+    Map<String, Workflow_Step_Execution__c> latestParallelMap;
+  }
+
   /**
    * Operator action to resume a failed instance past a failed step by supplying
    * that step's resolved output and resuming forward execution.
@@ -8963,7 +8977,44 @@ public inherited sharing class WorkflowEngine {
       throw new WorkflowException('Step name is required.');
     }
 
-    // 1. Fetch and lock instance state
+    // 1. Fetch and lock instance state + 2. Validate status
+    Workflow_Instance__c instance = lockFailedInstanceForSkip(instanceId);
+
+    // 3. Validate step is currently active and normalize casing to match definition exactly
+    stepName = validateAndNormalizeSkipStep(instance, stepName);
+
+    // 4. Retrieve latest step execution with row lock (FOR UPDATE)
+    Workflow_Step_Execution__c latestExec = lockLatestFailedStepExec(
+      instanceId,
+      stepName
+    );
+
+    // 5. Parse and validate supplied output JSON
+    validateSuppliedSkipOutput(suppliedOutputJson);
+
+    ResumeSkipRun run = new ResumeSkipRun();
+    run.instance = instance;
+    run.instanceId = instanceId;
+    run.stepName = stepName;
+    run.suppliedOutputJson = suppliedOutputJson;
+    run.latestExec = latestExec;
+
+    Savepoint sp = Database.setSavepoint();
+    try {
+      // 6. Record skip as a new Step Execution row
+      recordOperatorSkip(run);
+      // 7. Log operator intervention
+      logOperatorSkipIntervention(run);
+      // 8. Determine next step and advance
+      advanceAfterSkip(run);
+    } catch (Exception ex) {
+      Database.rollback(sp);
+      throw ex;
+    }
+  }
+
+  // Fetch/lock the instance and require Failed status for a resume-past-step.
+  private static Workflow_Instance__c lockFailedInstanceForSkip(Id instanceId) {
     List<Workflow_Instance__c> instances = [
       SELECT
         Id,
@@ -8989,15 +9040,21 @@ public inherited sharing class WorkflowEngine {
     }
     Workflow_Instance__c instance = instances[0];
 
-    // 2. Validate status
     if (instance.Status__c != 'Failed') {
       throw new WorkflowException(
         'Resume past step is only allowed for instances in Failed state. Current status: ' +
         instance.Status__c
       );
     }
+    return instance;
+  }
 
-    // 3. Validate step is currently active and normalize casing to match definition exactly
+  // Confirm the requested step is the active/expected step, returning the
+  // definition-normalized casing. Throws when the step is not resumable.
+  private static String validateAndNormalizeSkipStep(
+    Workflow_Instance__c instance,
+    String stepName
+  ) {
     Boolean stepIsValid = false;
     if (String.isNotBlank(instance.Current_Step__c)) {
       if (instance.Current_Step__c.contains(',')) {
@@ -9008,11 +9065,9 @@ public inherited sharing class WorkflowEngine {
             break;
           }
         }
-      } else {
-        if (instance.Current_Step__c.equalsIgnoreCase(stepName)) {
-          stepIsValid = true;
-          stepName = instance.Current_Step__c;
-        }
+      } else if (instance.Current_Step__c.equalsIgnoreCase(stepName)) {
+        stepIsValid = true;
+        stepName = instance.Current_Step__c;
       }
     }
     if (!stepIsValid) {
@@ -9023,8 +9078,15 @@ public inherited sharing class WorkflowEngine {
           instance.Current_Step__c
       );
     }
+    return stepName;
+  }
 
-    // 4. Retrieve latest step execution with row lock (FOR UPDATE)
+  // Retrieve and FOR UPDATE-lock the latest execution for the step, requiring
+  // it to be in Failed status before it can be operator-skipped.
+  private static Workflow_Step_Execution__c lockLatestFailedStepExec(
+    Id instanceId,
+    String stepName
+  ) {
     List<Workflow_Step_Execution__c> stepExecsWithoutLock = [
       SELECT Id
       FROM Workflow_Step_Execution__c
@@ -9056,381 +9118,442 @@ public inherited sharing class WorkflowEngine {
           latestExec.Status__c
       );
     }
+    return latestExec;
+  }
 
-    // 5. Parse and validate supplied output JSON
-    if (String.isNotBlank(suppliedOutputJson)) {
-      if (suppliedOutputJson.length() > 250000) {
-        throw new WorkflowException(
-          'Supplied output size exceeds maximum allowed limit of 250KB.'
+  // Validate operator-supplied output JSON: size, reserved markers, parseability.
+  private static void validateSuppliedSkipOutput(String suppliedOutputJson) {
+    if (String.isBlank(suppliedOutputJson)) {
+      return;
+    }
+    if (suppliedOutputJson.length() > 250000) {
+      throw new WorkflowException(
+        'Supplied output size exceeds maximum allowed limit of 250KB.'
+      );
+    }
+    if (suppliedOutputJson.contains('"$attachmentId"')) {
+      throw new WorkflowException(
+        'Operator-supplied payload cannot contain reserved "$attachmentId" markers.'
+      );
+    }
+    try {
+      JSON.deserializeUntyped(suppliedOutputJson);
+    } catch (Exception ex) {
+      throw new WorkflowException(
+        'Supplied output is not valid JSON: ' + ex.getMessage()
+      );
+    }
+  }
+
+  // Record the operator skip as a new OperatorSkipped step execution row.
+  private static void recordOperatorSkip(ResumeSkipRun run) {
+    Workflow_Step_Execution__c skipExec = new Workflow_Step_Execution__c();
+    skipExec.Workflow_Instance__c = run.instanceId;
+    skipExec.Step_Name__c = run.stepName;
+    skipExec.Status__c = 'OperatorSkipped';
+    skipExec.Retry_Count__c = 0;
+    skipExec.Transient_Retry_Count__c = 0;
+    skipExec.Input__c = run.latestExec.Input__c;
+    skipExec.Output__c = savePayloadIfNeeded(
+      run.instanceId,
+      run.suppliedOutputJson,
+      'Output_' + run.stepName.replaceAll('[^a-zA-Z0-9]', '_')
+    );
+    Database.insert(skipExec, true, AccessLevel.SYSTEM_MODE);
+    run.skipExec = skipExec;
+  }
+
+  // Write the operator-intervention audit log for the skip.
+  private static void logOperatorSkipIntervention(ResumeSkipRun run) {
+    Workflow_Instance__c instance = run.instance;
+    String suppliedOutputJson = run.suppliedOutputJson;
+    String msg =
+      'User ' +
+      UserInfo.getUserName() +
+      ' (' +
+      UserInfo.getName() +
+      ') skipped step ' +
+      run.stepName +
+      ' on instance ' +
+      instance.Name +
+      ' (Correlation Key: ' +
+      instance.Correlation_Key__c +
+      ') providing output: ' +
+      (suppliedOutputJson != null &&
+        suppliedOutputJson.length() > 500
+        ? suppliedOutputJson.substring(0, 500) + '...'
+        : suppliedOutputJson);
+
+    Workflow_Log__c interventionLog = new Workflow_Log__c(
+      Workflow_Instance__c = run.instanceId,
+      Workflow_Name__c = instance.Workflow_Name__c,
+      Correlation_Key__c = instance.Correlation_Key__c,
+      Log_Type__c = 'OperatorIntervention',
+      Message__c = msg.left(131072),
+      Outcome__c = 'Success',
+      Level__c = 'INFO',
+      Fire_Time__c = DateTime.now()
+    );
+    Database.insert(interventionLog, true, AccessLevel.SYSTEM_MODE);
+  }
+
+  // Resolve the workflow definition and dispatch to the single-branch or
+  // parallel-branch advancement path.
+  private static void advanceAfterSkip(ResumeSkipRun run) {
+    Workflow_Instance__c instance = run.instance;
+    Type wflowType = WorkflowTypeResolver.resolve(
+      instance.Workflow_Name__c,
+      WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+    );
+    if (wflowType == null) {
+      throw new WorkflowException(
+        'Could not resolve workflow definition class: ' +
+        instance.Workflow_Name__c
+      );
+    }
+    run.def = (WorkflowDefinition) wflowType.newInstance();
+
+    Boolean isParallel =
+      String.isNotBlank(instance.Current_Step__c) &&
+      instance.Current_Step__c.contains(',');
+
+    if (!isParallel) {
+      advanceSingleBranchSkip(run);
+    } else {
+      advanceParallelSkip(run);
+    }
+  }
+
+  // Advance a single (non-parallel) branch after an operator skip.
+  private static void advanceSingleBranchSkip(ResumeSkipRun run) {
+    Workflow_Instance__c instance = run.instance;
+    String stepName = run.stepName;
+    String suppliedOutputJson = run.suppliedOutputJson;
+
+    StepResult mockResult = new StepResult();
+    mockResult.action = StepResult.ActionType.COMPLETE;
+    mockResult.nextStepName = 'SENTINEL_NEXT_STEP';
+    mockResult.outputJson = suppliedOutputJson;
+    String nextStepName;
+    if (run.def instanceof VersionedWorkflow) {
+      nextStepName = ((VersionedWorkflow) run.def)
+        .getNextStep(
+          stepName,
+          mockResult,
+          instance.Definition_Version__c != null
+            ? (Integer) instance.Definition_Version__c
+            : 1
         );
-      }
-      if (suppliedOutputJson.contains('"$attachmentId"')) {
-        throw new WorkflowException(
-          'Operator-supplied payload cannot contain reserved "$attachmentId" markers.'
-        );
-      }
-      try {
-        JSON.deserializeUntyped(suppliedOutputJson);
-      } catch (Exception ex) {
-        throw new WorkflowException(
-          'Supplied output is not valid JSON: ' + ex.getMessage()
-        );
-      }
+    } else {
+      nextStepName = run.def.getNextStep(stepName, mockResult);
     }
 
-    Savepoint sp = Database.setSavepoint();
-    try {
-      // 6. Record skip as a new Step Execution row
-      Workflow_Step_Execution__c skipExec = new Workflow_Step_Execution__c();
-      skipExec.Workflow_Instance__c = instanceId;
-      skipExec.Step_Name__c = stepName;
-      skipExec.Status__c = 'OperatorSkipped';
-      skipExec.Retry_Count__c = 0;
-      skipExec.Transient_Retry_Count__c = 0;
-      skipExec.Input__c = latestExec.Input__c;
-      skipExec.Output__c = savePayloadIfNeeded(
-        instanceId,
-        suppliedOutputJson,
-        'Output_' + stepName.replaceAll('[^a-zA-Z0-9]', '_')
+    if (nextStepName == 'SENTINEL_NEXT_STEP') {
+      throw new WorkflowException(
+        'Skip is not supported for dynamic-next step definitions.'
       );
-      Database.insert(skipExec, true, AccessLevel.SYSTEM_MODE);
+    }
 
-      // 7. Log operator intervention
-      String msg =
-        'User ' +
-        UserInfo.getUserName() +
-        ' (' +
-        UserInfo.getName() +
-        ') skipped step ' +
-        stepName +
-        ' on instance ' +
-        instance.Name +
-        ' (Correlation Key: ' +
-        instance.Correlation_Key__c +
-        ') providing output: ' +
-        (suppliedOutputJson != null &&
-          suppliedOutputJson.length() > 500
-          ? suppliedOutputJson.substring(0, 500) + '...'
-          : suppliedOutputJson);
+    if (String.isBlank(nextStepName)) {
+      // Workflow is completed
+      markSkipInstanceCompleted(run, suppliedOutputJson, 'Output_Final');
+      return;
+    }
 
-      Workflow_Log__c interventionLog = new Workflow_Log__c(
-        Workflow_Instance__c = instanceId,
-        Workflow_Name__c = instance.Workflow_Name__c,
-        Correlation_Key__c = instance.Correlation_Key__c,
-        Log_Type__c = 'OperatorIntervention',
-        Message__c = msg.left(131072),
-        Outcome__c = 'Success',
-        Level__c = 'INFO',
-        Fire_Time__c = DateTime.now()
-      );
-      Database.insert(interventionLog, true, AccessLevel.SYSTEM_MODE);
+    // Advance to next step
+    instance.Current_Step__c = nextStepName;
+    instance.Status__c = 'Running';
+    instance.Error_Message__c = null;
+    instance.Failure_Category__c = null;
+    Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(
+      instance.Workflow_Name__c
+    );
+    if (deferTimeoutForConcurrency) {
+      instance.Concurrency_Parked__c = true;
+    }
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
-      // 8. Determine Next Step
-      Type wflowType = WorkflowTypeResolver.resolve(
-        instance.Workflow_Name__c,
-        WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
-      );
-      if (wflowType == null) {
-        throw new WorkflowException(
-          'Could not resolve workflow definition class: ' +
-          instance.Workflow_Name__c
-        );
+    Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
+    nextStepExec.Workflow_Instance__c = instance.Id;
+    nextStepExec.Step_Name__c = nextStepName;
+    nextStepExec.Status__c = 'Pending';
+    nextStepExec.Input__c = run.skipExec.Output__c;
+    nextStepExec.Retry_Count__c = 0;
+    Database.insert(nextStepExec, true, AccessLevel.SYSTEM_MODE);
+
+    if (!deferTimeoutForConcurrency) {
+      scheduleTimeoutJobForInstance(instance.Id);
+    }
+    enqueueSkipOrchestrator(instance.Id);
+  }
+
+  // Advance parallel branches after an operator skip: join when all done,
+  // otherwise re-drive the incomplete siblings.
+  private static void advanceParallelSkip(ResumeSkipRun run) {
+    // Parallel branches: load all parallel step executions to see if we can join
+    run.activeParallelSteps = run.instance.Current_Step__c.split(',');
+    run.latestParallelMap = loadResumeParallelExecs(run);
+
+    Boolean allDone = isAllParallelDone(
+      run.activeParallelSteps,
+      run.latestParallelMap
+    );
+
+    String nextStepName = resolveParallelSkipNextStep(run);
+
+    if (allDone) {
+      completeOrJoinParallel(run, nextStepName);
+    } else {
+      resumeIncompleteParallel(run);
+    }
+  }
+
+  // Load the latest execution per active parallel step (including Timeout_At__c).
+  private static Map<String, Workflow_Step_Execution__c> loadResumeParallelExecs(
+    ResumeSkipRun run
+  ) {
+    Id instanceId = run.instanceId;
+    List<String> activeParallelSteps = run.activeParallelSteps;
+    Map<String, Workflow_Step_Execution__c> latestParallelMap = new Map<String, Workflow_Step_Execution__c>();
+    for (Workflow_Step_Execution__c pe : [
+      SELECT Step_Name__c, Status__c, Output__c, CPU_Time_Ms__c, Timeout_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c IN :activeParallelSteps
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ]) {
+      if (!latestParallelMap.containsKey(pe.Step_Name__c)) {
+        latestParallelMap.put(pe.Step_Name__c, pe);
       }
-      WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
+    }
+    return latestParallelMap;
+  }
 
-      Boolean isParallel =
-        String.isNotBlank(instance.Current_Step__c) &&
-        instance.Current_Step__c.contains(',');
+  // Resolve the join/next step for the parallel skip via the spawning step.
+  private static String resolveParallelSkipNextStep(ResumeSkipRun run) {
+    Workflow_Instance__c instance = run.instance;
+    Id instanceId = run.instanceId;
+    List<String> activeParallelSteps = run.activeParallelSteps;
+    // Spawning step
+    List<Workflow_Step_Execution__c> spawningSteps = [
+      SELECT Step_Name__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Status__c IN ('Completed', 'OperatorSkipped')
+        AND Step_Name__c NOT IN :activeParallelSteps
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    String spawningStepName = !spawningSteps.isEmpty()
+      ? spawningSteps[0].Step_Name__c
+      : '';
+    StepResult mockSpawningResult = StepResult.complete(
+      'SENTINEL_NEXT_STEP',
+      !spawningSteps.isEmpty() ? spawningSteps[0].Output__c : null
+    );
 
-      if (!isParallel) {
-        StepResult mockResult = new StepResult();
-        mockResult.action = StepResult.ActionType.COMPLETE;
-        mockResult.nextStepName = 'SENTINEL_NEXT_STEP';
-        mockResult.outputJson = suppliedOutputJson;
-        String nextStepName;
-        if (def instanceof VersionedWorkflow) {
-          nextStepName = ((VersionedWorkflow) def)
-            .getNextStep(
-              stepName,
-              mockResult,
-              instance.Definition_Version__c != null
-                ? (Integer) instance.Definition_Version__c
-                : 1
-            );
-        } else {
-          nextStepName = def.getNextStep(stepName, mockResult);
-        }
-
-        if (nextStepName == 'SENTINEL_NEXT_STEP') {
-          throw new WorkflowException(
-            'Skip is not supported for dynamic-next step definitions.'
-          );
-        }
-
-        if (String.isBlank(nextStepName)) {
-          // Workflow is completed
-          instance.Status__c = 'Completed';
-          instance.Terminal_At__c = DateTime.now();
-          instance.Output__c = savePayloadIfNeeded(
-            instanceId,
-            suppliedOutputJson,
-            'Output_Final'
-          );
-          instance.Current_Step__c = null;
-          instance.Error_Message__c = null;
-          instance.Failure_Category__c = null;
-          Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-          notifyParentCompletion(instance);
-          WorkflowLifecyclePublisher.publish(instance);
-          return;
-        }
-
-        // Advance to next step
-        instance.Current_Step__c = nextStepName;
-        instance.Status__c = 'Running';
-        instance.Error_Message__c = null;
-        instance.Failure_Category__c = null;
-        Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(
-          instance.Workflow_Name__c
+    String nextStepName;
+    if (run.def instanceof VersionedWorkflow) {
+      nextStepName = ((VersionedWorkflow) run.def)
+        .getNextStep(
+          spawningStepName,
+          mockSpawningResult,
+          instance.Definition_Version__c != null
+            ? (Integer) instance.Definition_Version__c
+            : 1
         );
-        if (deferTimeoutForConcurrency) {
-          instance.Concurrency_Parked__c = true;
-        }
-        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+    } else {
+      nextStepName = run.def.getNextStep(spawningStepName, mockSpawningResult);
+    }
 
-        Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
-        nextStepExec.Workflow_Instance__c = instance.Id;
-        nextStepExec.Step_Name__c = nextStepName;
-        nextStepExec.Status__c = 'Pending';
-        nextStepExec.Input__c = skipExec.Output__c;
-        nextStepExec.Retry_Count__c = 0;
-        Database.insert(nextStepExec, true, AccessLevel.SYSTEM_MODE);
+    if (nextStepName == 'SENTINEL_NEXT_STEP') {
+      throw new WorkflowException(
+        'Skip is not supported for dynamic-next step definitions.'
+      );
+    }
+    return nextStepName;
+  }
 
-        if (!deferTimeoutForConcurrency) {
-          scheduleTimeoutJobForInstance(instance.Id);
+  // All parallel branches are done: build the join input and either complete
+  // the workflow or spawn the join step.
+  private static void completeOrJoinParallel(
+    ResumeSkipRun run,
+    String nextStepName
+  ) {
+    Workflow_Instance__c instance = run.instance;
+    String joinInputJson = buildParallelJoinInput(run);
+
+    if (String.isBlank(nextStepName)) {
+      markSkipInstanceCompleted(run, joinInputJson, 'Output_Join');
+      return;
+    }
+
+    Workflow_Step_Execution__c joinStepExec = new Workflow_Step_Execution__c();
+    joinStepExec.Workflow_Instance__c = instance.Id;
+    joinStepExec.Step_Name__c = nextStepName;
+    joinStepExec.Status__c = 'Pending';
+    joinStepExec.Input__c = savePayloadIfNeeded(
+      instance.Id,
+      joinInputJson,
+      'Input_' + nextStepName.replaceAll('[^a-zA-Z0-9]', '_')
+    );
+    joinStepExec.Retry_Count__c = 0;
+    Database.insert(joinStepExec, true, AccessLevel.SYSTEM_MODE);
+
+    instance.Current_Step__c = nextStepName;
+    instance.Status__c = 'Running';
+    instance.Error_Message__c = null;
+    instance.Failure_Category__c = null;
+    Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(
+      instance.Workflow_Name__c
+    );
+    if (deferTimeoutForConcurrency) {
+      instance.Concurrency_Parked__c = true;
+    }
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+
+    if (!deferTimeoutForConcurrency) {
+      scheduleTimeoutJobForInstance(instance.Id);
+    }
+    enqueueSkipOrchestrator(instance.Id);
+  }
+
+  // Assemble the merged join input JSON from every parallel branch's output.
+  private static String buildParallelJoinInput(ResumeSkipRun run) {
+    Map<String, Object> joinInput = new Map<String, Object>();
+    for (String ps : run.latestParallelMap.keySet()) {
+      Workflow_Step_Execution__c pe = run.latestParallelMap.get(ps);
+      Object outputVal = null;
+      String resolvedOutput = resolvePayload(pe.Output__c);
+      if (String.isNotBlank(resolvedOutput)) {
+        try {
+          outputVal = JSON.deserializeUntyped(resolvedOutput);
+        } catch (Exception ex) {
+          outputVal = resolvedOutput;
         }
-        if (Test.isRunningTest() && disableQueueableInTest) {
-          System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-        } else {
-          enqueueOrchestrator(instance.Id, null);
+      }
+      joinInput.put(pe.Step_Name__c, outputVal);
+    }
+    return JSON.serialize(joinInput);
+  }
+
+  // Drive an instance to Completed terminal state after an operator skip.
+  private static void markSkipInstanceCompleted(
+    ResumeSkipRun run,
+    String outputJson,
+    String payloadName
+  ) {
+    Workflow_Instance__c instance = run.instance;
+    instance.Status__c = 'Completed';
+    instance.Terminal_At__c = DateTime.now();
+    instance.Output__c = savePayloadIfNeeded(
+      run.instanceId,
+      outputJson,
+      payloadName
+    );
+    instance.Current_Step__c = null;
+    instance.Error_Message__c = null;
+    instance.Failure_Category__c = null;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+
+    notifyParentCompletion(instance);
+    WorkflowLifecyclePublisher.publish(instance);
+  }
+
+  // Enqueue the next orchestrator pass after a single/join skip advancement.
+  private static void enqueueSkipOrchestrator(Id instanceId) {
+    if (Test.isRunningTest() && disableQueueableInTest) {
+      System.enqueueJob(new WorkflowOrchestrator(instanceId));
+    } else {
+      enqueueOrchestrator(instanceId, null);
+    }
+  }
+
+  // Not all parallel branches are done: re-drive the incomplete siblings.
+  private static void resumeIncompleteParallel(ResumeSkipRun run) {
+    Workflow_Instance__c instance = run.instance;
+    Boolean hasParkedSibling = hasParkedParallelSibling(run);
+
+    instance.Status__c = hasParkedSibling ? 'Suspended' : 'Running';
+    instance.Error_Message__c = null;
+    instance.Failure_Category__c = null;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+
+    Set<String> stepsToEnqueue = new Set<String>();
+    List<Workflow_Step_Execution__c> stepsToReset = new List<Workflow_Step_Execution__c>();
+    collectParallelResumeSteps(run, stepsToEnqueue, stepsToReset);
+    if (!stepsToReset.isEmpty()) {
+      Database.update(stepsToReset, true, AccessLevel.SYSTEM_MODE);
+    }
+
+    for (String ps : stepsToEnqueue) {
+      if (Test.isRunningTest()) {
+        if (!disableQueueableInTest) {
+          System.enqueueJob(new WorkflowOrchestrator(run.instanceId, ps));
         }
       } else {
-        // Parallel branches: load all parallel step executions to see if we can join
-        List<String> activeParallelSteps = instance.Current_Step__c.split(',');
-
-        Map<String, Workflow_Step_Execution__c> latestParallelMap = new Map<String, Workflow_Step_Execution__c>();
-        for (Workflow_Step_Execution__c pe : [
-          SELECT
-            Step_Name__c,
-            Status__c,
-            Output__c,
-            CPU_Time_Ms__c,
-            Timeout_At__c
-          FROM Workflow_Step_Execution__c
-          WHERE
-            Workflow_Instance__c = :instanceId
-            AND Step_Name__c IN :activeParallelSteps
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate DESC, Id DESC
-        ]) {
-          if (!latestParallelMap.containsKey(pe.Step_Name__c)) {
-            latestParallelMap.put(pe.Step_Name__c, pe);
-          }
-        }
-
-        Boolean allDone = true;
-        for (String ps : activeParallelSteps) {
-          Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
-          if (
-            pe == null ||
-            (pe.Status__c != 'Completed' &&
-            pe.Status__c != 'OperatorSkipped')
-          ) {
-            allDone = false;
-            break;
-          }
-        }
-
-        // Spawning step
-        List<Workflow_Step_Execution__c> spawningSteps = [
-          SELECT Step_Name__c, Output__c
-          FROM Workflow_Step_Execution__c
-          WHERE
-            Workflow_Instance__c = :instanceId
-            AND Status__c IN ('Completed', 'OperatorSkipped')
-            AND Step_Name__c NOT IN :activeParallelSteps
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate DESC, Id DESC
-          LIMIT 1
-        ];
-        String spawningStepName = !spawningSteps.isEmpty()
-          ? spawningSteps[0].Step_Name__c
-          : '';
-        StepResult mockSpawningResult = StepResult.complete(
-          'SENTINEL_NEXT_STEP',
-          !spawningSteps.isEmpty() ? spawningSteps[0].Output__c : null
-        );
-
-        String nextStepName;
-        if (def instanceof VersionedWorkflow) {
-          nextStepName = ((VersionedWorkflow) def)
-            .getNextStep(
-              spawningStepName,
-              mockSpawningResult,
-              instance.Definition_Version__c != null
-                ? (Integer) instance.Definition_Version__c
-                : 1
-            );
-        } else {
-          nextStepName = def.getNextStep(spawningStepName, mockSpawningResult);
-        }
-
-        if (nextStepName == 'SENTINEL_NEXT_STEP') {
-          throw new WorkflowException(
-            'Skip is not supported for dynamic-next step definitions.'
-          );
-        }
-
-        if (allDone) {
-          Map<String, Object> joinInput = new Map<String, Object>();
-          for (String ps : latestParallelMap.keySet()) {
-            Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
-            Object outputVal = null;
-            String resolvedOutput = resolvePayload(pe.Output__c);
-            if (String.isNotBlank(resolvedOutput)) {
-              try {
-                outputVal = JSON.deserializeUntyped(resolvedOutput);
-              } catch (Exception ex) {
-                outputVal = resolvedOutput;
-              }
-            }
-            joinInput.put(pe.Step_Name__c, outputVal);
-          }
-          String joinInputJson = JSON.serialize(joinInput);
-
-          if (String.isBlank(nextStepName)) {
-            instance.Status__c = 'Completed';
-            instance.Terminal_At__c = DateTime.now();
-            instance.Output__c = savePayloadIfNeeded(
-              instanceId,
-              joinInputJson,
-              'Output_Join'
-            );
-            instance.Current_Step__c = null;
-            instance.Error_Message__c = null;
-            instance.Failure_Category__c = null;
-            Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-            notifyParentCompletion(instance);
-            WorkflowLifecyclePublisher.publish(instance);
-            return;
-          }
-
-          Workflow_Step_Execution__c joinStepExec = new Workflow_Step_Execution__c();
-          joinStepExec.Workflow_Instance__c = instance.Id;
-          joinStepExec.Step_Name__c = nextStepName;
-          joinStepExec.Status__c = 'Pending';
-          joinStepExec.Input__c = savePayloadIfNeeded(
-            instance.Id,
-            joinInputJson,
-            'Input_' + nextStepName.replaceAll('[^a-zA-Z0-9]', '_')
-          );
-          joinStepExec.Retry_Count__c = 0;
-          Database.insert(joinStepExec, true, AccessLevel.SYSTEM_MODE);
-
-          instance.Current_Step__c = nextStepName;
-          instance.Status__c = 'Running';
-          instance.Error_Message__c = null;
-          instance.Failure_Category__c = null;
-          Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(
-            instance.Workflow_Name__c
-          );
-          if (deferTimeoutForConcurrency) {
-            instance.Concurrency_Parked__c = true;
-          }
-          Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-          if (!deferTimeoutForConcurrency) {
-            scheduleTimeoutJobForInstance(instance.Id);
-          }
-          if (Test.isRunningTest() && disableQueueableInTest) {
-            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-          } else {
-            enqueueOrchestrator(instance.Id, null);
-          }
-        } else {
-          // Resume incomplete parallel branches
-          Boolean hasParkedSibling = false;
-          for (String ps : activeParallelSteps) {
-            if (ps.equalsIgnoreCase(stepName)) {
-              continue;
-            }
-            Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
-            if (
-              pe != null &&
-              (pe.Status__c == 'Retrying' ||
-              (pe.Status__c == 'Pending' &&
-              pe.CPU_Time_Ms__c != null))
-            ) {
-              hasParkedSibling = true;
-              break;
-            }
-          }
-
-          instance.Status__c = hasParkedSibling ? 'Suspended' : 'Running';
-          instance.Error_Message__c = null;
-          instance.Failure_Category__c = null;
-          Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-          Set<String> stepsToEnqueue = new Set<String>();
-          List<Workflow_Step_Execution__c> stepsToReset = new List<Workflow_Step_Execution__c>();
-          for (String ps : activeParallelSteps) {
-            if (ps.equalsIgnoreCase(stepName)) {
-              continue;
-            }
-            Workflow_Step_Execution__c pe = latestParallelMap.get(ps);
-            if (pe == null) {
-              stepsToEnqueue.add(ps);
-            } else if (pe.Status__c == 'Failed') {
-              pe.Status__c = 'Pending';
-              pe.Retry_Count__c = 0;
-              pe.Error_Details__c = null;
-              stepsToReset.add(pe);
-              stepsToEnqueue.add(ps);
-            } else if (pe.Status__c == 'Pending' && pe.CPU_Time_Ms__c == null) {
-              // Initial/undriven pending branch: enqueue it directly after re-arming/clearing timeout
-              Integer timeout = getStepTimeoutSeconds(
-                ps,
-                WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
-              );
-              if (timeout != null && timeout > 0) {
-                pe.Timeout_At__c = DateTime.now().addSeconds(timeout);
-              } else {
-                pe.Timeout_At__c = null;
-              }
-              stepsToReset.add(pe);
-              stepsToEnqueue.add(ps);
-            }
-          }
-          if (!stepsToReset.isEmpty()) {
-            Database.update(stepsToReset, true, AccessLevel.SYSTEM_MODE);
-          }
-
-          for (String ps : stepsToEnqueue) {
-            if (Test.isRunningTest()) {
-              if (!disableQueueableInTest) {
-                System.enqueueJob(new WorkflowOrchestrator(instanceId, ps));
-              }
-            } else {
-              enqueueOrchestrator(instanceId, ps);
-            }
-          }
-        }
+        enqueueOrchestrator(run.instanceId, ps);
       }
-    } catch (Exception ex) {
-      Database.rollback(sp);
-      throw ex;
+    }
+  }
+
+  // True when a non-skipped sibling branch is parked (Retrying, or Pending with
+  // recorded CPU time), meaning the instance should stay Suspended.
+  private static Boolean hasParkedParallelSibling(ResumeSkipRun run) {
+    for (String ps : run.activeParallelSteps) {
+      if (ps.equalsIgnoreCase(run.stepName)) {
+        continue;
+      }
+      Workflow_Step_Execution__c pe = run.latestParallelMap.get(ps);
+      if (
+        pe != null &&
+        (pe.Status__c == 'Retrying' ||
+        (pe.Status__c == 'Pending' &&
+        pe.CPU_Time_Ms__c != null))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Determine which sibling branches to reset/enqueue for parallel resume.
+  private static void collectParallelResumeSteps(
+    ResumeSkipRun run,
+    Set<String> stepsToEnqueue,
+    List<Workflow_Step_Execution__c> stepsToReset
+  ) {
+    for (String ps : run.activeParallelSteps) {
+      if (ps.equalsIgnoreCase(run.stepName)) {
+        continue;
+      }
+      Workflow_Step_Execution__c pe = run.latestParallelMap.get(ps);
+      if (pe == null) {
+        stepsToEnqueue.add(ps);
+      } else if (pe.Status__c == 'Failed') {
+        pe.Status__c = 'Pending';
+        pe.Retry_Count__c = 0;
+        pe.Error_Details__c = null;
+        stepsToReset.add(pe);
+        stepsToEnqueue.add(ps);
+      } else if (pe.Status__c == 'Pending' && pe.CPU_Time_Ms__c == null) {
+        // Initial/undriven pending branch: enqueue it directly after re-arming/clearing timeout
+        Integer timeout = getStepTimeoutSeconds(
+          ps,
+          WorkflowTypeResolver.extractNamespace(run.instance.Workflow_Name__c)
+        );
+        if (timeout != null && timeout > 0) {
+          pe.Timeout_At__c = DateTime.now().addSeconds(timeout);
+        } else {
+          pe.Timeout_At__c = null;
+        }
+        stepsToReset.add(pe);
+        stepsToEnqueue.add(ps);
+      }
     }
   }
 
