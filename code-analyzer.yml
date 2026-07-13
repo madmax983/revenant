@@ -1,0 +1,10 @@
+engines:
+  sfge:
+    # Raise the per-path/rule evaluation timeout from the 30000 ms default so that
+    # long-running entry points finish evaluating instead of aborting with
+    # "Path evaluation timed out after 30000 ms".
+    java_thread_timeout: 180000
+
+    # Raise the JVM max heap so complex path expansion has headroom and to reduce
+    # LimitReached / OutOfMemory pressure during evaluation.
+    java_max_heap_size: 6g
