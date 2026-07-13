@@ -2355,6 +2355,124 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Fast path for a single requested key: one indexed LIMIT 1 query returns the
+   * single most-relevant row (an active instance preferred via NULLS FIRST, else
+   * the newest in-window terminal), bounding the row governor regardless of how
+   * many historical terminal runs the key has.
+   * @param keys the single-element requested key set
+   * @param terminalEnabled when true, allow an in-window terminal instance to win
+   * @return the (at most one) resolved key-to-instance mapping
+   */
+  private static Map<String, Workflow_Instance__c> findSingleKeyWinner(
+    Set<String> keys,
+    Boolean terminalEnabled
+  ) {
+    Map<String, Workflow_Instance__c> result = new Map<String, Workflow_Instance__c>();
+    DateTime windowStart = terminalEnabled
+      ? dedupWindowStart()
+      : DateTime.now().addYears(1000);
+    for (Workflow_Instance__c inst : [
+      SELECT Id, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE
+        Correlation_Key__c IN :keys
+        AND (Status__c IN :ACTIVE_STATUSES
+        OR Terminal_At__c >= :windowStart)
+      WITH SYSTEM_MODE
+      ORDER BY Terminal_At__c DESC NULLS FIRST, CreatedDate DESC
+      LIMIT 1
+    ]) {
+      result.put(normalizeKey(inst.Correlation_Key__c), inst);
+    }
+    return result;
+  }
+
+  /**
+   * Computes the maximum in-window Terminal_At__c per remaining key via an
+   * aggregate (each grouped result counts as a single SOQL row, so a hot key
+   * cannot exhaust the row limit), filling maxTimeByKey and returning the set of
+   * distinct max timestamps for the follow-up bounded fetch.
+   * @param remaining the keys still unresolved after the active-instance pass
+   * @param windowStart the dedup-window lower bound
+   * @param maxTimeByKey out: normalized key to its max Terminal_At__c
+   * @return the distinct max timestamps across the remaining keys
+   */
+  private static Set<Datetime> computeMaxTerminalTimes(
+    Set<String> remaining,
+    DateTime windowStart,
+    Map<String, Datetime> maxTimeByKey
+  ) {
+    Set<Datetime> maxTimes = new Set<Datetime>();
+    for (AggregateResult ar : [
+      SELECT Correlation_Key__c ck, MAX(Terminal_At__c) mt
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c IN :remaining AND Terminal_At__c >= :windowStart
+      WITH SYSTEM_MODE
+      GROUP BY Correlation_Key__c
+    ]) {
+      Datetime mt = (Datetime) ar.get('mt');
+      if (mt == null) {
+        continue;
+      }
+      String n = normalizeKey((String) ar.get('ck'));
+      Datetime existing = maxTimeByKey.get(n);
+      if (existing == null || mt > existing) {
+        maxTimeByKey.put(n, mt);
+      }
+      maxTimes.add(mt);
+    }
+    return maxTimes;
+  }
+
+  /**
+   * Bulk terminal pass (phase 2): resolves the most-recent in-window terminal
+   * instance for each key not already resolved to an active instance. Mutates
+   * result in place.
+   * @param keys the full requested key set
+   * @param result the accumulating key-to-instance map to extend
+   */
+  private static void resolveTerminalWinners(
+    Set<String> keys,
+    Map<String, Workflow_Instance__c> result
+  ) {
+    Set<String> remaining = new Set<String>();
+    for (String k : keys) {
+      if (!result.containsKey(normalizeKey(k))) {
+        remaining.add(k);
+      }
+    }
+    if (remaining.isEmpty()) {
+      return;
+    }
+
+    DateTime windowStart = dedupWindowStart();
+    Map<String, Datetime> maxTimeByKey = new Map<String, Datetime>();
+    Set<Datetime> maxTimes = computeMaxTerminalTimes(
+      remaining,
+      windowStart,
+      maxTimeByKey
+    );
+    if (maxTimes.isEmpty()) {
+      return;
+    }
+
+    for (Workflow_Instance__c inst : [
+      SELECT Id, Correlation_Key__c, Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c IN :remaining AND Terminal_At__c IN :maxTimes
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+    ]) {
+      String n = normalizeKey(inst.Correlation_Key__c);
+      if (
+        !result.containsKey(n) && inst.Terminal_At__c == maxTimeByKey.get(n)
+      ) {
+        result.put(n, inst);
+      }
+    }
+  }
+
+  /**
    * Resolves the dedup-winner instance for each correlation key: an active
    * instance if one exists, otherwise (when includeTerminal is true) the most
    * recent terminal instance that became terminal within the configured dedup
@@ -2376,30 +2494,10 @@ public inherited sharing class WorkflowEngine {
       dedupWindowMinutes != null &&
       dedupWindowMinutes > 0;
 
-    // Fast path: a single key needs only the single most-relevant row (an active
-    // instance preferred via NULLS FIRST, else the newest in-window terminal).
-    // One indexed SOQL with LIMIT 1 keeps the common start path to a single
-    // query and bounds the row governor regardless of how many historical
-    // terminal runs the key has. SOQL equality is case-insensitive, so a stored
-    // "Foo" matches a requested "foo".
+    // Fast path: a single key needs only the single most-relevant row. SOQL
+    // equality is case-insensitive, so a stored "Foo" matches a requested "foo".
     if (keys.size() == 1) {
-      DateTime windowStart = terminalEnabled
-        ? dedupWindowStart()
-        : DateTime.now().addYears(1000);
-      for (Workflow_Instance__c inst : [
-        SELECT Id, Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE
-          Correlation_Key__c IN :keys
-          AND (Status__c IN :ACTIVE_STATUSES
-          OR Terminal_At__c >= :windowStart)
-        WITH SYSTEM_MODE
-        ORDER BY Terminal_At__c DESC NULLS FIRST, CreatedDate DESC
-        LIMIT 1
-      ]) {
-        result.put(normalizeKey(inst.Correlation_Key__c), inst);
-      }
-      return result;
+      return findSingleKeyWinner(keys, terminalEnabled);
     }
 
     // Bulk path: resolve each key independently so no single hot key can crowd
@@ -2422,62 +2520,8 @@ public inherited sharing class WorkflowEngine {
       return result;
     }
 
-    // 2) Most-recent terminal per key not already resolved to an active
-    //    instance. An aggregate yields one MAX(Terminal_At__c) per key (each
-    //    grouped result counts as a single row toward the SOQL row limit, so a
-    //    hot key cannot exhaust it), then a bounded fetch resolves the Id at
-    //    those timestamps. Because the unique active-key index forces terminal
-    //    runs of one key to occur serially, their Terminal_At__c values are
-    //    distinct, so the fetch matches ~one row per key.
-    Set<String> remaining = new Set<String>();
-    for (String k : keys) {
-      if (!result.containsKey(normalizeKey(k))) {
-        remaining.add(k);
-      }
-    }
-    if (remaining.isEmpty()) {
-      return result;
-    }
-
-    DateTime windowStart = dedupWindowStart();
-    Map<String, Datetime> maxTimeByKey = new Map<String, Datetime>();
-    Set<Datetime> maxTimes = new Set<Datetime>();
-    for (AggregateResult ar : [
-      SELECT Correlation_Key__c ck, MAX(Terminal_At__c) mt
-      FROM Workflow_Instance__c
-      WHERE Correlation_Key__c IN :remaining AND Terminal_At__c >= :windowStart
-      WITH SYSTEM_MODE
-      GROUP BY Correlation_Key__c
-    ]) {
-      Datetime mt = (Datetime) ar.get('mt');
-      if (mt == null) {
-        continue;
-      }
-      String n = normalizeKey((String) ar.get('ck'));
-      Datetime existing = maxTimeByKey.get(n);
-      if (existing == null || mt > existing) {
-        maxTimeByKey.put(n, mt);
-      }
-      maxTimes.add(mt);
-    }
-    if (maxTimes.isEmpty()) {
-      return result;
-    }
-
-    for (Workflow_Instance__c inst : [
-      SELECT Id, Correlation_Key__c, Terminal_At__c
-      FROM Workflow_Instance__c
-      WHERE Correlation_Key__c IN :remaining AND Terminal_At__c IN :maxTimes
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC
-    ]) {
-      String n = normalizeKey(inst.Correlation_Key__c);
-      if (
-        !result.containsKey(n) && inst.Terminal_At__c == maxTimeByKey.get(n)
-      ) {
-        result.put(n, inst);
-      }
-    }
+    // 2) Most-recent terminal per key not already resolved to an active instance.
+    resolveTerminalWinners(keys, result);
     return result;
   }
 
