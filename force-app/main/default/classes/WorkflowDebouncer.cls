@@ -20,13 +20,6 @@ public inherited sharing class WorkflowDebouncer {
     public String causationId;
 
     /**
-     * @description Builds an empty debounce request; populate fields directly or
-     * via the fluent setters.
-     */
-    public DebounceRequest() {
-    }
-
-    /**
      * @description Builds a minimal debounce request. Set the debounce window and
      * any optional caps/attributes with the fluent setters.
      * @param workflowName developer name of the workflow definition to start
