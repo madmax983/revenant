@@ -14903,68 +14903,115 @@ public inherited sharing class WorkflowEngine {
       return;
     }
     try {
-      String ns = null;
-      if (String.isNotBlank(workflowName)) {
-        ns = WorkflowTypeResolver.extractNamespace(workflowName);
-      } else {
-        List<Workflow_Instance__c> insts = [
-          SELECT Workflow_Name__c
-          FROM Workflow_Instance__c
-          WHERE Id = :instanceId
-          WITH SYSTEM_MODE
-          LIMIT 1
-        ];
-        if (!insts.isEmpty()) {
-          ns = WorkflowTypeResolver.extractNamespace(insts[0].Workflow_Name__c);
-        }
-      }
+      String ns = resolveNamespaceForStep(instanceId, workflowName);
       Integer timeoutSeconds = getStepTimeoutSeconds(stepName, ns);
-      if (timeoutSeconds != null && timeoutSeconds > 0) {
-        if (
-          !Test.isRunningTest() &&
-          timeoutSeconds >= 60 &&
-          timeoutSeconds <= 600 &&
-          Math.mod(timeoutSeconds, 60) == 0
-        ) {
-          if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
-            System.enqueueJob(
-              new WorkflowTimeoutJob.QueueableTimeoutJob(instanceId, stepName),
-              timeoutSeconds / 60
-            );
-            return;
-          }
-        }
-        WorkflowTimeoutJob job = new WorkflowTimeoutJob(instanceId, stepName);
-        Datetime runTime = Datetime.now()
-          .addSeconds(
-            Test.isRunningTest() ? timeoutSeconds + 60 : timeoutSeconds
-          );
-        String cronStr =
-          runTime.second() +
-          ' ' +
-          runTime.minute() +
-          ' ' +
-          runTime.hour() +
-          ' ' +
-          runTime.day() +
-          ' ' +
-          runTime.month() +
-          ' ? ' +
-          runTime.year();
-        String cleanStepName = stepName.replaceAll('[^a-zA-Z0-9]', '_');
-        String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
-        // The job name is deterministic, so a re-schedule (e.g. retry, or a yielded step
-        // that re-enters before its prior timeout job fires) collides with the existing
-        // scheduled job and System.schedule() throws. Clear any stale job with this name
-        // first so the new timeout is actually registered instead of silently dropped.
-        cancelTimeoutJob(instanceId, stepName);
-        System.schedule(jobName, cronStr, job);
+      if (timeoutSeconds == null || timeoutSeconds <= 0) {
+        return;
       }
+      if (tryEnqueueTimeoutJob(instanceId, stepName, timeoutSeconds)) {
+        return;
+      }
+      scheduleTimeoutCronJob(instanceId, stepName, timeoutSeconds);
     } catch (AsyncException ignored) {
       // Scheduling limit reached; the watchdog heartbeat enforces the timeout instead.
     } catch (Exception ignored) {
       // Timeout scheduling is best-effort; the watchdog heartbeat is the backstop.
     }
+  }
+
+  /**
+   * Resolves the namespace for timeout scheduling, using the supplied workflow
+   * name when present to avoid a query, otherwise looking it up by instance.
+   * @param instanceId the instance owning the step
+   * @param workflowName the workflow developer name, or null to resolve it
+   * @return the resolved namespace, or null when it cannot be determined
+   */
+  private static String resolveNamespaceForStep(
+    Id instanceId,
+    String workflowName
+  ) {
+    if (String.isNotBlank(workflowName)) {
+      return WorkflowTypeResolver.extractNamespace(workflowName);
+    }
+    List<Workflow_Instance__c> insts = [
+      SELECT Workflow_Name__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    if (insts.isEmpty()) {
+      return null;
+    }
+    return WorkflowTypeResolver.extractNamespace(insts[0].Workflow_Name__c);
+  }
+
+  /**
+   * Fast path: enqueues a minute-granular queueable timeout job when the timeout
+   * qualifies (outside test, 60-600s, whole minutes) and queueable budget remains.
+   * @param instanceId the instance owning the step
+   * @param stepName the step to arm a timeout for
+   * @param timeoutSeconds the configured positive timeout in seconds
+   * @return true when a queueable job was enqueued (caller is done), else false
+   */
+  private static Boolean tryEnqueueTimeoutJob(
+    Id instanceId,
+    String stepName,
+    Integer timeoutSeconds
+  ) {
+    if (
+      Test.isRunningTest() ||
+      timeoutSeconds < 60 ||
+      timeoutSeconds > 600 ||
+      Math.mod(timeoutSeconds, 60) != 0
+    ) {
+      return false;
+    }
+    if (Limits.getQueueableJobs() >= Limits.getLimitQueueableJobs()) {
+      return false;
+    }
+    System.enqueueJob(
+      new WorkflowTimeoutJob.QueueableTimeoutJob(instanceId, stepName),
+      timeoutSeconds / 60
+    );
+    return true;
+  }
+
+  /**
+   * Schedules a cron-based timeout job, first clearing any stale deterministically
+   * -named job so a re-schedule is registered rather than silently dropped.
+   * @param instanceId the instance owning the step
+   * @param stepName the step to arm a timeout for
+   * @param timeoutSeconds the configured positive timeout in seconds
+   */
+  private static void scheduleTimeoutCronJob(
+    Id instanceId,
+    String stepName,
+    Integer timeoutSeconds
+  ) {
+    WorkflowTimeoutJob job = new WorkflowTimeoutJob(instanceId, stepName);
+    Datetime runTime = Datetime.now()
+      .addSeconds(Test.isRunningTest() ? timeoutSeconds + 60 : timeoutSeconds);
+    String cronStr =
+      runTime.second() +
+      ' ' +
+      runTime.minute() +
+      ' ' +
+      runTime.hour() +
+      ' ' +
+      runTime.day() +
+      ' ' +
+      runTime.month() +
+      ' ? ' +
+      runTime.year();
+    String cleanStepName = stepName.replaceAll('[^a-zA-Z0-9]', '_');
+    String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
+    // The job name is deterministic, so a re-schedule (e.g. retry, or a yielded step
+    // that re-enters before its prior timeout job fires) collides with the existing
+    // scheduled job and System.schedule() throws. Clear any stale job with this name
+    // first so the new timeout is actually registered instead of silently dropped.
+    cancelTimeoutJob(instanceId, stepName);
+    System.schedule(jobName, cronStr, job);
   }
 
   private static String scheduleRetry(
