@@ -212,11 +212,8 @@ public inherited sharing class WorkflowEngine {
             .Reclaim_Threshold_Minutes__c.intValue();
         }
       }
-    } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.WARN,
-        'Revenant configuration metadata query failed: ' + ex.getMessage()
-      );
+    } catch (Exception ignored) {
+      // Configuration metadata is optional; fall back to defaults on any read failure.
     }
   }
 
@@ -1062,11 +1059,8 @@ public inherited sharing class WorkflowEngine {
           textValue
         );
         return (Id) marker.get('$attachmentId');
-      } catch (Exception ex) {
-        System.debug(
-          LoggingLevel.FINE,
-          'getStatus: offload marker parse fallback: ' + ex.getMessage()
-        );
+      } catch (Exception ignored) {
+        // Not a valid offload marker; treat as a non-offloaded value.
       }
     }
     return null;
@@ -2209,14 +2203,7 @@ public inherited sharing class WorkflowEngine {
               }
             }
 
-            System.debug(
-              '--- Parent ' + parentId + ' expectedKeys: ' + expectedKeys
-            );
-            System.debug(
-              '--- Parent ' + parentId + ' finishedKeys: ' + finishedKeys
-            );
             if (!finishedKeys.containsAll(expectedKeys)) {
-              System.debug('--- Parent ' + parentId + ' is GATED (not ready)');
               nonReadyParents.add(parentId);
             }
           }
@@ -2391,12 +2378,8 @@ public inherited sharing class WorkflowEngine {
       if (params.containsKey('runCompensations')) {
         return (Boolean) params.get('runCompensations');
       }
-    } catch (Exception e) {
-      System.debug(
-        LoggingLevel.WARN,
-        'Failed to parse cancel payload, using default runCompensations: ' +
-        e.getMessage()
-      );
+    } catch (Exception ignored) {
+      // Malformed cancel payload; fall through to the default runCompensations.
     }
     return true;
   }
@@ -4598,11 +4581,8 @@ public inherited sharing class WorkflowEngine {
           ) {
             maxAttempts = Integer.valueOf(capturesMap.get('__maxAttempts'));
           }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.ERROR,
-            'Failed to deserialize captured values: ' + e.getMessage()
-          );
+        } catch (Exception ignored) {
+          // Malformed captured values; retain the default maxAttempts.
         }
       }
     }
@@ -5853,12 +5833,8 @@ public inherited sharing class WorkflowEngine {
           if (String.isNotBlank(resolvedOutput)) {
             try {
               outputVal = JSON.deserializeUntyped(resolvedOutput);
-            } catch (Exception ex) {
-              System.debug(
-                LoggingLevel.FINE,
-                'Parallel step output was not JSON, falling back to raw string: ' +
-                ex.getMessage()
-              );
+            } catch (Exception ignored) {
+              // Output was not JSON; fall back to the raw string value.
               outputVal = resolvedOutput;
             }
           }
@@ -6168,12 +6144,8 @@ public inherited sharing class WorkflowEngine {
             captures = (Map<String, Object>) JSON.deserializeUntyped(
               resolvedCaptures
             );
-          } catch (Exception e) {
-            System.debug(
-              LoggingLevel.ERROR,
-              'Failed to deserialize captures in retry handler: ' +
-              e.getMessage()
-            );
+          } catch (Exception ignored) {
+            // Malformed captures; proceed with an empty captures map.
           }
         }
       }
@@ -6917,14 +6889,8 @@ public inherited sharing class WorkflowEngine {
             }
           }
         }
-      } catch (Exception ex) {
-        System.debug(
-          LoggingLevel.ERROR,
-          'Error in error routing: ' +
-            ex.getMessage() +
-            '\n' +
-            ex.getStackTraceString()
-        );
+      } catch (Exception ignored) {
+        // Error-routing is best-effort; a routing failure must not mask the original error.
       }
     }
 
@@ -7787,12 +7753,8 @@ public inherited sharing class WorkflowEngine {
         } else {
           enqueueOrchestrator(instanceId, null);
         }
-      } catch (Exception ex) {
-        System.debug(
-          LoggingLevel.WARN,
-          'Queueable enqueue failed, falling back to Platform Event: ' +
-          ex.getMessage()
-        );
+      } catch (Exception ignored) {
+        // Queueable enqueue failed; fall back to the Platform Event path.
         enqueueOrchestrator(instanceId, null);
       }
     }
@@ -9704,11 +9666,8 @@ public inherited sharing class WorkflowEngine {
           ) {
             maxAttempts = Integer.valueOf(capturesMap.get('__maxAttempts'));
           }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.ERROR,
-            'Failed to deserialize captured values: ' + e.getMessage()
-          );
+        } catch (Exception ignored) {
+          // Malformed captured values; retain the default maxAttempts.
         }
       }
     }
@@ -9952,13 +9911,7 @@ public inherited sharing class WorkflowEngine {
       scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestrator(instance.Id, null);
     } else if (result.action == StepResult.ActionType.SUSPEND) {
-      if (String.isNotBlank(result.timeoutStep)) {
-        System.debug(
-          LoggingLevel.WARN,
-          'StepResult.suspend(timeoutSeconds, timeoutStep) used from compensate() — ' +
-          'timed-wait timeout is not supported in compensation steps; the timeout will not be armed.'
-        );
-      }
+      // Note: timed-wait timeout is not supported in compensation steps and is not armed here.
       stepExec.Status__c = 'Pending';
       stepExec.Output__c = String.isNotBlank(result.stepStateJson)
         ? savePayloadIfNeeded(
@@ -9991,13 +9944,7 @@ public inherited sharing class WorkflowEngine {
       }
       Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     } else if (result.action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
-      if (String.isNotBlank(result.timeoutStep)) {
-        System.debug(
-          LoggingLevel.WARN,
-          'StepResult.waitForApproval(..., timeoutSeconds, timeoutStep) used from compensate() — ' +
-          'timed-wait timeout is not supported in compensation steps; the timeout will not be armed.'
-        );
-      }
+      // Note: timed-wait timeout is not supported in compensation steps and is not armed here.
       stepExec.Status__c = 'Pending';
       Map<String, Object> state = new Map<String, Object>{
         'waitingForApproval' => true,
@@ -10026,12 +9973,8 @@ public inherited sharing class WorkflowEngine {
             captures = (Map<String, Object>) JSON.deserializeUntyped(
               resolvedCaptures
             );
-          } catch (Exception e) {
-            System.debug(
-              LoggingLevel.ERROR,
-              'Failed to deserialize captures in compensation retry handler: ' +
-              e.getMessage()
-            );
+          } catch (Exception ignored) {
+            // Malformed captures; proceed with an empty captures map.
           }
         }
       }
@@ -10721,11 +10664,8 @@ public inherited sharing class WorkflowEngine {
     for (CronTrigger triggerJob : triggers) {
       try {
         System.abortJob(triggerJob.Id);
-      } catch (Exception e) {
-        System.debug(
-          LoggingLevel.WARN,
-          'Failed to abort job ' + triggerJob.Id + ': ' + e.getMessage()
-        );
+      } catch (Exception ignored) {
+        // Job may already have completed or been aborted; nothing further to do.
       }
     }
   }
@@ -10770,14 +10710,8 @@ public inherited sharing class WorkflowEngine {
           if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
             System.enqueueJob(new WorkflowOrchestrator(instId));
           }
-        } catch (Exception e) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to enqueue WorkflowOrchestrator for ' +
-              instId +
-              ': ' +
-              e.getMessage()
-          );
+        } catch (Exception ignored) {
+          // Best-effort enqueue; the watchdog re-drives any instance left un-enqueued.
         }
       }
       return;
@@ -10934,12 +10868,8 @@ public inherited sharing class WorkflowEngine {
         if (!cvs.isEmpty()) {
           return cvs[0].VersionData.toString();
         }
-      } catch (Exception ex) {
-        System.debug(
-          LoggingLevel.WARN,
-          'Failed to resolve offloaded payload, falling back to raw value: ' +
-          ex.getMessage()
-        );
+      } catch (Exception ignored) {
+        // Offload resolution is best-effort; fall back to the raw stored value.
       }
     }
     return textValue;
@@ -10970,12 +10900,8 @@ public inherited sharing class WorkflowEngine {
           Id docId = (Id) marker.get('$attachmentId');
           markerDocByIndex.put(i, docId);
           docIds.add(docId);
-        } catch (Exception ex) {
-          System.debug(
-            LoggingLevel.WARN,
-            'Failed to parse offload marker, using raw value: ' +
-            ex.getMessage()
-          );
+        } catch (Exception ignored) {
+          // Not a valid offload marker; leave this entry to pass through as-is.
         }
       }
     }
@@ -11039,12 +10965,8 @@ public inherited sharing class WorkflowEngine {
       cdl.Visibility = 'InternalUsers';
       try {
         Database.insert(cdl, true, AccessLevel.SYSTEM_MODE);
-      } catch (DmlException ex) {
-        System.debug(
-          LoggingLevel.FINE,
-          'ContentDocumentLink insert failed with default visibility, retrying with AllUsers: ' +
-          ex.getMessage()
-        );
+      } catch (DmlException ignored) {
+        // Default visibility rejected; retry the link with AllUsers visibility.
         cdl.Visibility = 'AllUsers';
         Database.insert(cdl, true, AccessLevel.SYSTEM_MODE);
       }
@@ -11880,21 +11802,15 @@ public inherited sharing class WorkflowEngine {
     // so enabling N Workflow_Schedule__c records adds 0 scheduled-job slots).
     try {
       WorkflowScheduleSweeper.sweep();
-    } catch (Exception scheduleEx) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'WorkflowEngine: schedule sweep failed: ' + scheduleEx.getMessage()
-      );
+    } catch (Exception ignored) {
+      // Best-effort sweep; a failure here must not abort the watchdog heartbeat.
     }
 
     // 3b. Process due debounced starts (0-slot: runs inside the watchdog heartbeat).
     try {
       WorkflowDebouncer.sweep();
-    } catch (Exception debounceEx) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'WorkflowEngine: debounce sweep failed: ' + debounceEx.getMessage()
-      );
+    } catch (Exception ignored) {
+      // Best-effort sweep; a failure here must not abort the watchdog heartbeat.
     }
 
     // 4. Reconcile concurrency slot counters. Recomputes each configured workflow's
@@ -11903,11 +11819,8 @@ public inherited sharing class WorkflowEngine {
     // killed transaction) so a parked instance is never starved indefinitely.
     try {
       ConcurrencyGate.reconcileAll();
-    } catch (Exception concEx) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'WorkflowEngine: concurrency reconcile failed: ' + concEx.getMessage()
-      );
+    } catch (Exception ignored) {
+      // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
     }
 
     // 5. Rescue transient-lock retry branches orphaned when a parallel sibling that
@@ -11944,12 +11857,8 @@ public inherited sharing class WorkflowEngine {
           ]
         );
       }
-    } catch (Exception orphanEx) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'WorkflowEngine: orphaned transient-retry sweep failed: ' +
-        orphanEx.getMessage()
-      );
+    } catch (Exception ignored) {
+      // Best-effort re-drive; Sleep_Until__c is left intact so the next heartbeat retries.
     }
 
     // 6. Auto-reclaim orphaned instances. Sweeps for instances stuck in a self-driving status
@@ -12221,21 +12130,15 @@ public inherited sharing class WorkflowEngine {
           }
         }
       }
-    } catch (Exception reclaimEx) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'WorkflowEngine: auto-reclaim sweep failed: ' + reclaimEx.getMessage()
-      );
+    } catch (Exception ignored) {
+      // Best-effort sweep; a failure here must not abort the watchdog heartbeat.
     }
 
     // Run proactive stall detection and alerting hook
     try {
       WorkflowAlertManager.detectAndAlertStalls();
-    } catch (Exception stallEx) {
-      System.debug(
-        LoggingLevel.ERROR,
-        'WorkflowEngine: stall detection sweep failed: ' + stallEx.getMessage()
-      );
+    } catch (Exception ignored) {
+      // Best-effort stall detection; a failure here must not abort the watchdog heartbeat.
     }
 
     // All required heartbeat work (timed-out-step failures, sleep resumptions,
@@ -12269,14 +12172,8 @@ public inherited sharing class WorkflowEngine {
           timeout = ((TimeoutConfigurable) stepObj).getTimeoutSeconds();
         }
       }
-    } catch (Exception e) {
-      System.debug(
-        LoggingLevel.FINE,
-        'Failed to instantiate type to read timeout duration for step: ' +
-          className +
-          ', error: ' +
-          e.getMessage()
-      );
+    } catch (Exception ignored) {
+      // Step type may not be instantiable here; leave timeout unset.
     }
     stepTimeoutCache.put(cacheKey, timeout);
     return timeout;
@@ -12664,17 +12561,10 @@ public inherited sharing class WorkflowEngine {
         cancelTimeoutJob(instanceId, stepName);
         System.schedule(jobName, cronStr, job);
       }
-    } catch (AsyncException ex) {
-      System.debug(
-        LoggingLevel.INFO,
-        'Async timeout scheduling limit reached, relying on watchdog: ' +
-        ex.getMessage()
-      );
-    } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.WARN,
-        'Failed to schedule timeout job: ' + ex.getMessage()
-      );
+    } catch (AsyncException ignored) {
+      // Scheduling limit reached; the watchdog heartbeat enforces the timeout instead.
+    } catch (Exception ignored) {
+      // Timeout scheduling is best-effort; the watchdog heartbeat is the backstop.
     }
   }
 
@@ -12724,18 +12614,11 @@ public inherited sharing class WorkflowEngine {
           job
         )
       );
-    } catch (AsyncException ex) {
-      System.debug(
-        LoggingLevel.INFO,
-        'Async retry scheduling limit reached, relying on watchdog: ' +
-        ex.getMessage()
-      );
+    } catch (AsyncException ignored) {
+      // Scheduling limit reached; the watchdog heartbeat re-drives the retry instead.
       return null;
-    } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.WARN,
-        'Failed to schedule retry job: ' + ex.getMessage()
-      );
+    } catch (Exception ignored) {
+      // Retry scheduling is best-effort; the watchdog heartbeat is the backstop.
       return null;
     }
   }
@@ -12836,18 +12719,11 @@ public inherited sharing class WorkflowEngine {
         '_' +
         runTime.getTime();
       return String.valueOf(System.schedule(jobName, cronStr, job));
-    } catch (AsyncException ex) {
-      System.debug(
-        LoggingLevel.INFO,
-        'Async sleep scheduling limit reached, relying on watchdog: ' +
-        ex.getMessage()
-      );
+    } catch (AsyncException ignored) {
+      // Scheduling limit reached; the watchdog heartbeat resumes the sleep instead.
       return null;
-    } catch (Exception ex) {
-      System.debug(
-        LoggingLevel.WARN,
-        'Failed to schedule sleep job: ' + ex.getMessage()
-      );
+    } catch (Exception ignored) {
+      // Sleep scheduling is best-effort; the watchdog heartbeat is the backstop.
       return null;
     }
   }
@@ -12886,14 +12762,8 @@ public inherited sharing class WorkflowEngine {
     for (CronTrigger triggerJob : triggers) {
       try {
         System.abortJob(triggerJob.Id);
-      } catch (Exception e) {
-        System.debug(
-          LoggingLevel.WARN,
-          'Failed to cancel timeout job ' +
-            triggerJob.Id +
-            ': ' +
-            e.getMessage()
-        );
+      } catch (Exception ignored) {
+        // Job may already have fired or been removed; nothing further to do.
       }
     }
   }
@@ -13326,14 +13196,7 @@ public inherited sharing class WorkflowEngine {
     if (
       Limits.getQueries() + BREADCRUMB_SOQL_RESERVE > Limits.getLimitQueries()
     ) {
-      System.debug(
-        LoggingLevel.WARN,
-        'Skipping step breadcrumbs persist: SOQL query budget exhausted (queries=' +
-          Limits.getQueries() +
-          '/' +
-          Limits.getLimitQueries() +
-          ').'
-      );
+      // SOQL budget exhausted; drop best-effort breadcrumbs rather than risk the checkpoint.
       return;
     }
 
@@ -13427,18 +13290,7 @@ public inherited sharing class WorkflowEngine {
       Limits.getDmlRows() + crumbs.size() + BREADCRUMB_DML_ROW_RESERVE +
       dynamicRowReserve > Limits.getLimitDmlRows()
     ) {
-      System.debug(
-        LoggingLevel.WARN,
-        'Skipping step breadcrumbs persist: DML budget exhausted (statements=' +
-          Limits.getDmlStatements() +
-          '/' +
-          Limits.getLimitDmlStatements() +
-          ', rows=' +
-          Limits.getDmlRows() +
-          '/' +
-          Limits.getLimitDmlRows() +
-          ').'
-      );
+      // DML budget exhausted; drop best-effort breadcrumbs rather than risk the checkpoint.
       return;
     }
 
@@ -13621,13 +13473,6 @@ public inherited sharing class WorkflowEngine {
       for (Integer i = 0; i < stepSRs.size(); i++) {
         if (!stepSRs[i].isSuccess()) {
           failedInstanceIds.add(stepsList[i].Workflow_Instance__c);
-          System.debug(
-            LoggingLevel.WARN,
-            'Auto-reclaim failed to reset step ' +
-              stepsList[i].Step_Name__c +
-              ': ' +
-              stepSRs[i].getErrors()[0].getMessage()
-          );
         }
       }
     }
@@ -13650,14 +13495,6 @@ public inherited sharing class WorkflowEngine {
       for (Integer i = 0; i < instSRs.size(); i++) {
         if (instSRs[i].isSuccess()) {
           succeededInstanceIds.add(instancesToUpdate[i].Id);
-        } else {
-          System.debug(
-            LoggingLevel.WARN,
-            'Auto-reclaim failed to update instance ' +
-              instancesToUpdate[i].Id +
-              ': ' +
-              instSRs[i].getErrors()[0].getMessage()
-          );
         }
       }
     }
@@ -13720,11 +13557,8 @@ public inherited sharing class WorkflowEngine {
     if (!requests.isEmpty()) {
       try {
         enqueueOrchestrators(requests);
-      } catch (Exception publishEx) {
-        System.debug(
-          LoggingLevel.ERROR,
-          'Auto-reclaim orchestrator enqueue failed: ' + publishEx.getMessage()
-        );
+      } catch (Exception ignored) {
+        // Best-effort re-enqueue; the next watchdog heartbeat re-drives on failure.
       }
     }
   }
