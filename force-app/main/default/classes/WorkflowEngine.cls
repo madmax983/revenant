@@ -14355,6 +14355,90 @@ public inherited sharing class WorkflowEngine {
    * @param retryBranches the transient-retry-marked parallel branch step executions
    * to re-drive by name
    */
+  /**
+   * Raises a WorkflowException if any platform-event publish result failed.
+   * @param srs the save results returned by EventBus.publish
+   * @param errorPrefix message prefix identifying the failing publish site
+   */
+  private static void throwOnPublishErrors(
+    List<Database.SaveResult> srs,
+    String errorPrefix
+  ) {
+    for (Database.SaveResult sr : srs) {
+      if (sr.isSuccess()) {
+        continue;
+      }
+      List<String> errMsgs = new List<String>();
+      for (Database.Error err : sr.getErrors()) {
+        errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
+      }
+      throw new WorkflowException(errorPrefix + String.join(errMsgs, ', '));
+    }
+  }
+
+  /**
+   * Builds the fresh Timeout_At__c re-arm updates for transient-retry branches
+   * that have a positive step timeout configured.
+   * @param retryBranches the retry-marked step rows
+   * @return the step updates to apply (may be empty)
+   */
+  private static List<Workflow_Step_Execution__c> buildTransientRetryReArm(
+    List<Workflow_Step_Execution__c> retryBranches
+  ) {
+    List<Workflow_Step_Execution__c> toReArm = new List<Workflow_Step_Execution__c>();
+    for (Workflow_Step_Execution__c branch : retryBranches) {
+      Integer timeout = getStepTimeoutSeconds(
+        branch.Step_Name__c,
+        WorkflowTypeResolver.extractNamespace(
+          branch.Workflow_Instance__r.Workflow_Name__c
+        )
+      );
+      if (timeout == null || timeout <= 0) {
+        continue;
+      }
+      toReArm.add(
+        new Workflow_Step_Execution__c(
+          Id = branch.Id,
+          Timeout_At__c = DateTime.now().addSeconds(timeout)
+        )
+      );
+    }
+    return toReArm;
+  }
+
+  /**
+   * Dispatches each transient-retry branch: enqueues the orchestrator directly
+   * under test, otherwise collects a RUN_STEP event for bulk publish.
+   * @param retryBranches the retry-marked step rows
+   * @return the RUN_STEP events to publish (empty under test)
+   */
+  private static List<Workflow_Event__e> dispatchTransientRetryBranches(
+    List<Workflow_Step_Execution__c> retryBranches
+  ) {
+    List<Workflow_Event__e> branchEvents = new List<Workflow_Event__e>();
+    for (Workflow_Step_Execution__c branch : retryBranches) {
+      if (!Test.isRunningTest()) {
+        branchEvents.add(
+          new Workflow_Event__e(
+            Workflow_Instance_Id__c = branch.Workflow_Instance__c,
+            Event_Type__c = 'RUN_STEP',
+            Payload__c = branch.Step_Name__c
+          )
+        );
+        continue;
+      }
+      if (!disableQueueableInTest) {
+        System.enqueueJob(
+          new WorkflowOrchestrator(
+            branch.Workflow_Instance__c,
+            branch.Step_Name__c
+          )
+        );
+      }
+    }
+    return branchEvents;
+  }
+
   private static void reDriveTransientRetryBranches(
     List<Workflow_Step_Execution__c> retryBranches
   ) {
@@ -14364,63 +14448,23 @@ public inherited sharing class WorkflowEngine {
     // Re-arm only the retry-marked rows whose deadline scheduleTransientLockRetry
     // cleared for backoff (their instance is necessarily past admission, so no
     // concurrency-defer check is needed) — never every active step on the instance.
-    List<Workflow_Step_Execution__c> toReArm = new List<Workflow_Step_Execution__c>();
-    for (Workflow_Step_Execution__c branch : retryBranches) {
-      Integer timeout = getStepTimeoutSeconds(
-        branch.Step_Name__c,
-        WorkflowTypeResolver.extractNamespace(
-          branch.Workflow_Instance__r.Workflow_Name__c
-        )
-      );
-      if (timeout != null && timeout > 0) {
-        toReArm.add(
-          new Workflow_Step_Execution__c(
-            Id = branch.Id,
-            Timeout_At__c = DateTime.now().addSeconds(timeout)
-          )
-        );
-      }
-    }
+    List<Workflow_Step_Execution__c> toReArm = buildTransientRetryReArm(
+      retryBranches
+    );
     if (!toReArm.isEmpty()) {
       Database.update(toReArm, true, AccessLevel.SYSTEM_MODE);
     }
 
-    List<Workflow_Event__e> branchEvents = new List<Workflow_Event__e>();
-    for (Workflow_Step_Execution__c branch : retryBranches) {
-      if (Test.isRunningTest()) {
-        if (!disableQueueableInTest) {
-          System.enqueueJob(
-            new WorkflowOrchestrator(
-              branch.Workflow_Instance__c,
-              branch.Step_Name__c
-            )
-          );
-        }
-      } else {
-        branchEvents.add(
-          new Workflow_Event__e(
-            Workflow_Instance_Id__c = branch.Workflow_Instance__c,
-            Event_Type__c = 'RUN_STEP',
-            Payload__c = branch.Step_Name__c
-          )
-        );
-      }
-    }
+    List<Workflow_Event__e> branchEvents = dispatchTransientRetryBranches(
+      retryBranches
+    );
     if (!branchEvents.isEmpty()) {
       WorkflowWatchdog.bootstrap();
       List<Database.SaveResult> srs = EventBus.publish(branchEvents);
-      for (Database.SaveResult sr : srs) {
-        if (!sr.isSuccess()) {
-          List<String> errMsgs = new List<String>();
-          for (Database.Error err : sr.getErrors()) {
-            errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
-          }
-          throw new WorkflowException(
-            'Failed to publish transient-retry branch event: ' +
-            String.join(errMsgs, ', ')
-          );
-        }
-      }
+      throwOnPublishErrors(
+        srs,
+        'Failed to publish transient-retry branch event: '
+      );
     }
   }
 
