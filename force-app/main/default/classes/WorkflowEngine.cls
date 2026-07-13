@@ -1166,8 +1166,8 @@ public inherited sharing class WorkflowEngine {
             correlationKey = (String) data.get('k');
             Long ms = (Long) data.get('t');
             earliestCreatedDate = DateTime.newInstance(ms);
-          } catch (Exception ex) {
-            // fallback
+          } catch (Exception ignored) {
+            // fallback: leave earliestCreatedDate unresolved and continue
           }
         } else {
           Integer tsIndex = correlationKey.lastIndexOf('::ts::');
@@ -1178,8 +1178,8 @@ public inherited sharing class WorkflowEngine {
                 Long ms = Long.valueOf(tsStr);
                 earliestCreatedDate = DateTime.newInstance(ms);
                 correlationKey = correlationKey.substring(0, tsIndex);
-              } catch (Exception ex) {
-                // fallback
+              } catch (Exception ignored) {
+                // fallback: leave earliestCreatedDate unresolved and continue
               }
             }
           }
@@ -1194,8 +1194,8 @@ public inherited sharing class WorkflowEngine {
                 Long ms = Long.valueOf(tsStr);
                 earliestCreatedDate = DateTime.newInstance(ms);
                 correlationKey = correlationKey.substring(0, hashIndex);
-              } catch (Exception ex) {
-                // fallback
+              } catch (Exception ignored) {
+                // fallback: leave earliestCreatedDate unresolved and continue
               }
             }
           }
@@ -1266,8 +1266,8 @@ public inherited sharing class WorkflowEngine {
             jsonStr
           );
           return 'key:' + (String) data.get('k');
-        } catch (Exception ex) {
-          // fallback
+        } catch (Exception ignored) {
+          // fallback: fall through to the legacy suffix-trimming path below
         }
       }
       // Backwards compatibility fallback for older formats
@@ -1278,7 +1278,7 @@ public inherited sharing class WorkflowEngine {
           try {
             Long.valueOf(suffix);
             return val.substring(0, tsIndex);
-          } catch (Exception ex) {
+          } catch (Exception ignored) {
             // not a valid long, keep suffix
           }
         }
@@ -1290,7 +1290,7 @@ public inherited sharing class WorkflowEngine {
           try {
             Long.valueOf(suffix);
             return val.substring(0, hashIndex);
-          } catch (Exception ex) {
+          } catch (Exception ignored) {
             // not a valid long, keep suffix
           }
         }
@@ -2208,7 +2208,7 @@ public inherited sharing class WorkflowEngine {
             }
           }
         }
-      } catch (Exception ex) {
+      } catch (Exception ignored) {
         // If JSON parse fails or does not contain childCorrelationKeys, treat as ready
       }
     }
@@ -6590,7 +6590,7 @@ public inherited sharing class WorkflowEngine {
             return true;
           }
         }
-      } catch (Exception unexpected) {
+      } catch (Exception ignored) {
         // Safeguard against programmatically constructed DmlExceptions in tests
       }
     }
@@ -8646,7 +8646,7 @@ public inherited sharing class WorkflowEngine {
                 instancesWithExplicitFalse.add(exec.Workflow_Instance__c);
               }
             }
-          } catch (Exception e) {
+          } catch (Exception ignored) {
             // Ignore malformed JSON
           }
         }
@@ -11379,12 +11379,11 @@ public inherited sharing class WorkflowEngine {
         WorkflowAlertManager.sendAlert(parent, parent.Error_Message__c);
       }
 
-      if (!orchestratorInstanceIds.isEmpty()) {
-        if (Test.isRunningTest() && disableQueueableInTest) {
-          // Do nothing
-        } else {
-          enqueueOrchestrators(orchestratorInstanceIds);
-        }
+      if (
+        !orchestratorInstanceIds.isEmpty() &&
+        !(Test.isRunningTest() && disableQueueableInTest)
+      ) {
+        enqueueOrchestrators(orchestratorInstanceIds);
       }
 
       // Defer lifecycle publishing to the end of the heartbeat. Only the parents
@@ -11490,12 +11489,11 @@ public inherited sharing class WorkflowEngine {
         }
       }
 
-      if (!deadlineOrchestratorIds.isEmpty()) {
-        if (Test.isRunningTest() && disableQueueableInTest) {
-          // Do nothing
-        } else {
-          enqueueOrchestrators(deadlineOrchestratorIds);
-        }
+      if (
+        !deadlineOrchestratorIds.isEmpty() &&
+        !(Test.isRunningTest() && disableQueueableInTest)
+      ) {
+        enqueueOrchestrators(deadlineOrchestratorIds);
       }
     }
 
@@ -11902,7 +11900,8 @@ public inherited sharing class WorkflowEngine {
               ) {
                 try {
                   jobIds.add((Id) jobIdStr);
-                } catch (Exception e) {
+                } catch (Exception ignored) {
+                  // Malformed Async_Job_Id__c; skip the liveness check for this instance.
                 }
               }
             }
@@ -12025,7 +12024,8 @@ public inherited sharing class WorkflowEngine {
                   ) {
                     try {
                       newJobIds.add((Id) jobIdStr);
-                    } catch (Exception e) {
+                    } catch (Exception ignored) {
+                      // Malformed Async_Job_Id__c; skip the liveness check for this instance.
                     }
                   }
                 }
@@ -13340,7 +13340,8 @@ public inherited sharing class WorkflowEngine {
             List<String>.class
           );
           hasCompensations = !stack.isEmpty();
-        } catch (Exception ex) {
+        } catch (Exception ignored) {
+          // Malformed Compensation_Stack__c; treat as having no compensations.
         }
       }
       hasCompensationsByInstanceId.put(inst.Id, hasCompensations);
@@ -13372,7 +13373,8 @@ public inherited sharing class WorkflowEngine {
               if (defObj instanceof WorkflowDefinition) {
                 initialStep = ((WorkflowDefinition) defObj).getInitialStep();
               }
-            } catch (Exception ex) {
+            } catch (Exception ignored) {
+              // Workflow type not instantiable here; leave initialStep null.
             }
           }
           initialStepByWorkflowName.put(wflowName, initialStep);
