@@ -14281,7 +14281,6 @@ public inherited sharing class WorkflowEngine {
   private static void persistStepBreadcrumbs(StepOutcomeContext outcome) {
     Workflow_Instance__c instance = outcome.instance;
     Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
     StepContext context = outcome.context;
     if (context == null || stepExec == null || instance == null) {
       return;
@@ -14299,96 +14298,10 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    Integer dynamicRowReserve = 0;
-    if (result != null) {
-      if (result.childRequests != null) {
-        for (StepResult.ChildRequest req : result.childRequests) {
-          dynamicRowReserve += 3;
-          if (
-            String.isNotBlank(req.inputJson) && req.inputJson.length() > 100000
-          ) {
-            dynamicRowReserve += 2; // ContentVersion + ContentDocumentLink
-          }
-        }
-      }
-      if (result.parallelStepNames != null) {
-        for (String ps : result.parallelStepNames) {
-          dynamicRowReserve += 1;
-          String inputPayload = result.parallelInputJson != null
-            ? result.parallelInputJson
-            : stepExec.Output__c;
-          if (
-            String.isNotBlank(inputPayload) && inputPayload.length() > 100000
-          ) {
-            dynamicRowReserve += 2; // ContentVersion + ContentDocumentLink
-          }
-        }
-      }
-      if (result.outboundEvents != null) {
-        dynamicRowReserve += result.outboundEvents.size();
-      }
-
-      Boolean willConsumeSignals = (result.action ==
-      StepResult.ActionType.COMPLETE ||
-      result.action == StepResult.ActionType.SPLIT ||
-      result.action == StepResult.ActionType.FAIL);
-      if (willConsumeSignals) {
-        Set<String> matchedNames = context.getConsumedSignalNames();
-        if (matchedNames != null && !matchedNames.isEmpty()) {
-          Boolean isParallel =
-            String.isNotBlank(instance.Current_Step__c) &&
-            instance.Current_Step__c.contains(',');
-          Boolean runDuplicateCleanup =
-            !isParallel && !context.signalReadWasCapped();
-          if (runDuplicateCleanup) {
-            dynamicRowReserve += [
-              SELECT COUNT()
-              FROM Workflow_Signal__c
-              WHERE
-                Workflow_Instance__c = :instance.Id
-                AND Status__c = 'Received'
-                AND Signal_Name__c IN :matchedNames
-              WITH SYSTEM_MODE
-            ];
-            Set<Id> claimedIds = context.getClaimedSignalIds();
-            if (claimedIds != null && !claimedIds.isEmpty()) {
-              dynamicRowReserve += [
-                SELECT COUNT()
-                FROM Workflow_Signal__c
-                WHERE Id IN :claimedIds AND Status__c = 'Processing'
-                WITH SYSTEM_MODE
-              ];
-            }
-          } else {
-            Set<Id> consumedIds = context.getConsumedSignalIds();
-            Set<Id> claimedIds = context.getClaimedSignalIds();
-            Set<Id> allIds = new Set<Id>();
-            if (consumedIds != null) {
-              allIds.addAll(consumedIds);
-            }
-            if (claimedIds != null) {
-              allIds.addAll(claimedIds);
-            }
-            if (!allIds.isEmpty()) {
-              dynamicRowReserve += [
-                SELECT COUNT()
-                FROM Workflow_Signal__c
-                WHERE Id IN :allIds AND Status__c IN ('Received', 'Processing')
-                WITH SYSTEM_MODE
-              ];
-            }
-          }
-        }
-      }
-    }
+    Integer dynamicRowReserve = computeBreadcrumbRowReserve(outcome);
 
     // Keep breadcrumbs from exhausting checkpoint DML (best-effort observability log drop)
-    if (
-      Limits.getDmlStatements() + 1 + breadcrumbDmlStatementReserve >
-      Limits.getLimitDmlStatements() ||
-      Limits.getDmlRows() + crumbs.size() + breadcrumbDmlRowReserve +
-      dynamicRowReserve > Limits.getLimitDmlRows()
-    ) {
+    if (breadcrumbDmlBudgetExceeded(crumbs.size(), dynamicRowReserve)) {
       // DML budget exhausted; drop best-effort breadcrumbs rather than risk the checkpoint.
       return;
     }
@@ -14397,6 +14310,157 @@ public inherited sharing class WorkflowEngine {
       saveStepExec(stepExec);
     }
 
+    insertBreadcrumbLogs(outcome, crumbs);
+  }
+
+  private static Boolean breadcrumbDmlBudgetExceeded(
+    Integer crumbCount,
+    Integer dynamicRowReserve
+  ) {
+    return Limits.getDmlStatements() + 1 + breadcrumbDmlStatementReserve >
+      Limits.getLimitDmlStatements() ||
+      Limits.getDmlRows() + crumbCount + breadcrumbDmlRowReserve +
+      dynamicRowReserve > Limits.getLimitDmlRows();
+  }
+
+  // Best-effort estimate of the extra DML rows the checkpoint may insert, used
+  // to decide whether breadcrumb logs fit within the remaining DML budget.
+  private static Integer computeBreadcrumbRowReserve(
+    StepOutcomeContext outcome
+  ) {
+    StepResult result = outcome.result;
+    if (result == null) {
+      return 0;
+    }
+    Integer dynamicRowReserve = 0;
+    dynamicRowReserve += reserveForChildRequests(result.childRequests);
+    dynamicRowReserve += reserveForParallelSteps(result, outcome.stepExec);
+    if (result.outboundEvents != null) {
+      dynamicRowReserve += result.outboundEvents.size();
+    }
+    dynamicRowReserve += computeSignalCleanupRowReserve(outcome);
+    return dynamicRowReserve;
+  }
+
+  private static Integer reserveForChildRequests(
+    List<StepResult.ChildRequest> childRequests
+  ) {
+    Integer reserve = 0;
+    if (childRequests == null) {
+      return reserve;
+    }
+    for (StepResult.ChildRequest req : childRequests) {
+      reserve += 3;
+      if (String.isNotBlank(req.inputJson) && req.inputJson.length() > 100000) {
+        reserve += 2; // ContentVersion + ContentDocumentLink
+      }
+    }
+    return reserve;
+  }
+
+  private static Integer reserveForParallelSteps(
+    StepResult result,
+    Workflow_Step_Execution__c stepExec
+  ) {
+    Integer reserve = 0;
+    if (result.parallelStepNames == null) {
+      return reserve;
+    }
+    for (String ps : result.parallelStepNames) {
+      reserve += 1;
+      String inputPayload = result.parallelInputJson != null
+        ? result.parallelInputJson
+        : stepExec.Output__c;
+      if (String.isNotBlank(inputPayload) && inputPayload.length() > 100000) {
+        reserve += 2; // ContentVersion + ContentDocumentLink
+      }
+    }
+    return reserve;
+  }
+
+  // Reserve for the signal-cleanup DML the checkpoint performs when the step
+  // consumes signals (COMPLETE / SPLIT / FAIL). Only reached with a non-null
+  // result (guarded by the caller).
+  private static Integer computeSignalCleanupRowReserve(
+    StepOutcomeContext outcome
+  ) {
+    StepResult result = outcome.result;
+    StepContext context = outcome.context;
+    Workflow_Instance__c instance = outcome.instance;
+    Boolean willConsumeSignals = (result.action ==
+    StepResult.ActionType.COMPLETE ||
+    result.action == StepResult.ActionType.SPLIT ||
+    result.action == StepResult.ActionType.FAIL);
+    if (!willConsumeSignals) {
+      return 0;
+    }
+    Set<String> matchedNames = context.getConsumedSignalNames();
+    if (matchedNames == null || matchedNames.isEmpty()) {
+      return 0;
+    }
+    Boolean isParallel =
+      String.isNotBlank(instance.Current_Step__c) &&
+      instance.Current_Step__c.contains(',');
+    Boolean runDuplicateCleanup = !isParallel && !context.signalReadWasCapped();
+    if (runDuplicateCleanup) {
+      return reserveForDuplicateCleanup(instance, context, matchedNames);
+    }
+    return reserveForConsumedSignals(context);
+  }
+
+  private static Integer reserveForDuplicateCleanup(
+    Workflow_Instance__c instance,
+    StepContext context,
+    Set<String> matchedNames
+  ) {
+    Integer reserve = [
+      SELECT COUNT()
+      FROM Workflow_Signal__c
+      WHERE
+        Workflow_Instance__c = :instance.Id
+        AND Status__c = 'Received'
+        AND Signal_Name__c IN :matchedNames
+      WITH SYSTEM_MODE
+    ];
+    Set<Id> claimedIds = context.getClaimedSignalIds();
+    if (claimedIds != null && !claimedIds.isEmpty()) {
+      reserve += [
+        SELECT COUNT()
+        FROM Workflow_Signal__c
+        WHERE Id IN :claimedIds AND Status__c = 'Processing'
+        WITH SYSTEM_MODE
+      ];
+    }
+    return reserve;
+  }
+
+  private static Integer reserveForConsumedSignals(StepContext context) {
+    Set<Id> consumedIds = context.getConsumedSignalIds();
+    Set<Id> claimedIds = context.getClaimedSignalIds();
+    Set<Id> allIds = new Set<Id>();
+    if (consumedIds != null) {
+      allIds.addAll(consumedIds);
+    }
+    if (claimedIds != null) {
+      allIds.addAll(claimedIds);
+    }
+    if (allIds.isEmpty()) {
+      return 0;
+    }
+    return [
+      SELECT COUNT()
+      FROM Workflow_Signal__c
+      WHERE Id IN :allIds AND Status__c IN ('Received', 'Processing')
+      WITH SYSTEM_MODE
+    ];
+  }
+
+  private static void insertBreadcrumbLogs(
+    StepOutcomeContext outcome,
+    List<StepContext.Breadcrumb> crumbs
+  ) {
+    Workflow_Instance__c instance = outcome.instance;
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
     List<Workflow_Log__c> logsToInsert = new List<Workflow_Log__c>();
     for (StepContext.Breadcrumb b : crumbs) {
       logsToInsert.add(
