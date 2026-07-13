@@ -4770,7 +4770,7 @@ public inherited sharing class WorkflowEngine {
    * reads a signal and then calls out on its payload must implement CalloutStep
    * to opt into a non-claiming (at-least-once) read instead.
    */
-  private class ParallelBranchSignalSource implements StepContext.SignalSource {
+  private inherited sharing class ParallelBranchSignalSource implements StepContext.SignalSource {
     private final Id instanceId;
     // Cumulative claim ROW budget across all accessor calls in this execution,
     // so claim DML (now) + the matching consume DML (at COMPLETE, same
