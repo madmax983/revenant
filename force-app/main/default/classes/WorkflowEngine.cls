@@ -3096,6 +3096,31 @@ public inherited sharing class WorkflowEngine {
     return results[0];
   }
 
+  // Mutable accumulator threaded through the signalOrStart phase helpers so each
+  // helper stays within the parameter and complexity budgets.
+  private class SignalOrStartRun {
+    List<SignalOrStartRequest> requests;
+    System.Savepoint sp;
+    List<StartResult> startResults;
+    Map<Id, Workflow_Instance__c> existingInstances = new Map<Id, Workflow_Instance__c>();
+    Set<Id> cancelledInstanceIds = new Set<Id>();
+    Set<Id> activeInstIdsToWake = new Set<Id>();
+    List<Workflow_Signal__c> signalsToInsert = new List<Workflow_Signal__c>();
+    List<Id> signalsInstIds = new List<Id>();
+    Set<Id> instancesWithFreshSignal = new Set<Id>();
+    Set<Id> gatedNonReadyParents = new Set<Id>();
+    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+    List<Workflow_Instance__c> instancesToWake = new List<Workflow_Instance__c>();
+  }
+
+  // Keyed cancel claims and the instances whose cancellation was attempted.
+  private class CancelClaimBatch {
+    List<Workflow_Signal__c> claims = new List<Workflow_Signal__c>();
+    List<Id> instIds = new List<Id>();
+    List<Boolean> runComp = new List<Boolean>();
+    Set<Id> attemptedIds = new Set<Id>();
+  }
+
   /**
    * @description Bulk signal-or-start. For each request, resolves the target
    * instance by the embedded start request's correlation key and delivers the
@@ -3112,401 +3137,511 @@ public inherited sharing class WorkflowEngine {
     }
 
     System.Savepoint sp = Database.setSavepoint();
-    Set<Id> activeInstIdsToWake = new Set<Id>();
+    SignalOrStartRun run = new SignalOrStartRun();
+    run.requests = requests;
+    run.sp = sp;
 
     try {
       // 1. Gather all start requests and call startOrGet bulk
-      List<StartRequest> startReqs = new List<StartRequest>();
-      for (SignalOrStartRequest req : requests) {
-        if (req == null) {
-          startReqs.add(null);
-          continue;
-        }
-        if (req.start == null) {
-          throw new WorkflowException(
-            'StartRequest cannot be null in SignalOrStartRequest'
-          );
-        }
-        startReqs.add(req.start);
-      }
+      run.startResults = startOrGet(buildSignalOrStartRequests(requests));
 
-      List<StartResult> startResults = startOrGet(startReqs);
-
-      // 2. Query details of existing instances (where isNew = false) to determine if they are active vs terminal
-      Set<Id> existingIds = new Set<Id>();
-      for (Integer i = 0; i < requests.size(); i++) {
-        SignalOrStartRequest req = requests[i];
-        if (req == null) {
-          continue;
-        }
-        StartResult res = startResults[i];
-        if (res != null && !res.isNew) {
-          existingIds.add(res.instanceId);
-        }
-      }
-
-      Map<Id, Workflow_Instance__c> existingInstances = new Map<Id, Workflow_Instance__c>();
-      if (!existingIds.isEmpty()) {
-        existingInstances = new Map<Id, Workflow_Instance__c>(
-          [
-            SELECT
-              Id,
-              Status__c,
-              Current_Step__c,
-              Concurrency_Parked__c,
-              Concurrency_Slot_Held__c,
-              Sleep_Until__c
-            FROM Workflow_Instance__c
-            WHERE Id IN :existingIds
-            WITH SYSTEM_MODE
-            FOR UPDATE
-          ]
-        );
-      }
+      // 2. Query details of existing instances to determine active vs terminal
+      run.existingInstances = querySignalOrStartExisting(run);
 
       // 3. Prepare keyed cancel claims and run cancellations
-      List<Workflow_Signal__c> cancelClaims = new List<Workflow_Signal__c>();
-      List<Id> cancelClaimInstIds = new List<Id>();
-      List<Boolean> cancelClaimRunComp = new List<Boolean>();
-      Set<String> seenCancelKeys = new Set<String>();
-      Set<Id> cancelledInstanceIds = new Set<Id>();
-      Set<Id> attemptedCancelIds = new Set<Id>();
-
-      for (Integer i = 0; i < requests.size(); i++) {
-        SignalOrStartRequest req = requests[i];
-        StartResult res = startResults[i];
-        if (res == null) {
-          continue;
-        }
-
-        Id instanceId = res.instanceId;
-        Boolean isNew = res.isNew;
-
-        Boolean isCancel =
-          String.isNotBlank(req.signalName) &&
-          (req.signalName.equalsIgnoreCase('Cancel') ||
-          req.signalName.equalsIgnoreCase('CancelWorkflow'));
-
-        if (!isCancel) {
-          continue;
-        }
-
-        Boolean isTerminal = false;
-        if (!isNew) {
-          Workflow_Instance__c existingInst = existingInstances.get(instanceId);
-          if (existingInst != null) {
-            isTerminal =
-              TERMINAL_GETSTATUS_STATUSES.contains(existingInst.Status__c) ||
-              existingInst.Status__c == 'ContinuedAsNew';
-          }
-        }
-
-        if (isTerminal) {
-          continue; // Terminal or continued-as-new instance: cancel is an idempotent no-op
-        }
-
-        Boolean runCompensations = parseRunCompensations(req.payload);
-
-        if (String.isNotBlank(req.idempotencyKey)) {
-          String claimKey = deriveSignalDedupKey(
-            instanceId,
-            req.idempotencyKey
-          );
-          if (seenCancelKeys.contains(claimKey)) {
-            continue; // in-batch duplicate keyed cancel
-          }
-          seenCancelKeys.add(claimKey);
-          cancelClaims.add(
-            new Workflow_Signal__c(
-              Workflow_Instance__c = instanceId,
-              Signal_Name__c = req.signalName,
-              Status__c = 'Consumed',
-              Signal_Key__c = claimKey
-            )
-          );
-          cancelClaimInstIds.add(instanceId);
-          cancelClaimRunComp.add(runCompensations);
-        } else {
-          // Unkeyed cancel: execute immediately
-          cancelInstance(instanceId, runCompensations);
-          attemptedCancelIds.add(instanceId);
-        }
-      }
-
-      if (!cancelClaims.isEmpty()) {
-        Database.SaveResult[] claimResults = Database.insert(
-          cancelClaims,
-          false,
-          AccessLevel.SYSTEM_MODE
-        );
-        String claimError = null;
-        for (Integer i = 0; i < claimResults.size(); i++) {
-          Database.SaveResult sr = claimResults[i];
-          if (sr.isSuccess()) {
-            cancelInstance(cancelClaimInstIds[i], cancelClaimRunComp[i]);
-            attemptedCancelIds.add(cancelClaimInstIds[i]);
-          } else {
-            Boolean isDup = false;
-            for (Database.Error err : sr.getErrors()) {
-              if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
-                isDup = true;
-                break;
-              }
-            }
-            if (!isDup && claimError == null) {
-              claimError = sr.getErrors()[0].getMessage();
-            }
-          }
-        }
-        if (claimError != null) {
-          Database.rollback(sp);
-          throw new WorkflowException('Failed to claim cancel: ' + claimError);
-        }
-      }
-
-      if (!attemptedCancelIds.isEmpty()) {
-        for (Workflow_Instance__c refreshed : [
-          SELECT Id, Status__c
-          FROM Workflow_Instance__c
-          WHERE Id IN :attemptedCancelIds
-          WITH SYSTEM_MODE
-        ]) {
-          Workflow_Instance__c cached = existingInstances.get(refreshed.Id);
-          if (cached != null) {
-            cached.Status__c = refreshed.Status__c;
-          }
-          if (!isWakeableStatus(refreshed.Status__c)) {
-            cancelledInstanceIds.add(refreshed.Id);
-          }
-        }
-      }
+      processSignalOrStartCancels(run);
 
       // 4. Prepare ordinary signal records to insert and identify active instances to wake
-      List<Workflow_Signal__c> signalsToInsert = new List<Workflow_Signal__c>();
-      List<Id> signalsInstIds = new List<Id>(); // Parallel list for identifying instance of each signal
-      Set<String> seenCompositeKeys = new Set<String>();
+      prepareSignalOrStartRecords(run);
 
-      for (Integer i = 0; i < requests.size(); i++) {
-        SignalOrStartRequest req = requests[i];
-        StartResult res = startResults[i];
-        if (res == null) {
-          continue;
-        }
+      // 5. Insert signals
+      insertSignalOrStartSignals(run);
 
-        Id instanceId = res.instanceId;
-        Boolean isNew = res.isNew;
+      // 6. Wake active instances that received a fresh signal
+      wakeSignalOrStartInstances(run);
 
-        Boolean isCancel =
-          String.isNotBlank(req.signalName) &&
-          (req.signalName.equalsIgnoreCase('Cancel') ||
-          req.signalName.equalsIgnoreCase('CancelWorkflow'));
-
-        // Skip cancellation signals (already handled above) or instances that were cancelled in this batch
-        if (isCancel || cancelledInstanceIds.contains(instanceId)) {
-          continue;
-        }
-
-        Boolean isTerminal = false;
-        Boolean isCompensationFailed = false;
-        Workflow_Instance__c existingInst = null;
-
-        if (!isNew) {
-          existingInst = existingInstances.get(instanceId);
-          if (existingInst != null) {
-            isTerminal =
-              TERMINAL_GETSTATUS_STATUSES.contains(existingInst.Status__c) ||
-              existingInst.Status__c == 'ContinuedAsNew';
-            isCompensationFailed = (existingInst.Status__c ==
-            'CompensationFailed');
-          }
-        }
-
-        if (isTerminal || isCompensationFailed) {
-          // Discard/swallow signal for terminal, stalled rollback, or continued-as-new instances (idempotent no-op)
-          continue;
-        }
-
-        // Build signal record
-        Workflow_Signal__c sig = new Workflow_Signal__c(
-          Workflow_Instance__c = instanceId,
-          Signal_Name__c = req.signalName,
-          Payload__c = req.payload,
-          Status__c = 'Received'
-        );
-
-        if (String.isNotBlank(req.idempotencyKey)) {
-          String compositeKey = deriveSignalDedupKey(
-            instanceId,
-            req.idempotencyKey
-          );
-          if (seenCompositeKeys.contains(compositeKey)) {
-            // In-batch duplicate: skip insertion of this signal
-            continue;
-          }
-          seenCompositeKeys.add(compositeKey);
-          sig.Signal_Key__c = compositeKey;
-        }
-
-        signalsToInsert.add(sig);
-        signalsInstIds.add(instanceId);
-
-        // If it's an existing active instance, we may need to wake it.
-        // Brand-new instances are already enqueued to run by startOrGet, so we don't wake them.
-        if (!isNew && existingInst != null) {
-          // Check if wakeable
-          Boolean isWakeable =
-            existingInst.Status__c == 'Suspended' ||
-            existingInst.Status__c == 'Running' ||
-            existingInst.Status__c == 'Compensating' ||
-            existingInst.Status__c == 'Cancelling';
-
-          if (isWakeable) {
-            activeInstIdsToWake.add(instanceId);
-          }
-        }
-      }
-
-      // 5. Insert signals.
-      Set<Id> instancesWithFreshSignal = new Set<Id>();
-
-      if (!signalsToInsert.isEmpty()) {
-        // Insert signals using allOrNone=false so concurrent duplicates are swallowed as no-ops,
-        // but genuine errors are rolled back and thrown.
-        Database.SaveResult[] srs = Database.insert(
-          signalsToInsert,
-          false,
-          AccessLevel.SYSTEM_MODE
-        );
-
-        String genuineError = null;
-        for (Integer i = 0; i < srs.size(); i++) {
-          Database.SaveResult sr = srs[i];
-          if (sr.isSuccess()) {
-            instancesWithFreshSignal.add(signalsInstIds[i]);
-          } else {
-            Boolean isDup = false;
-            for (Database.Error err : sr.getErrors()) {
-              if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
-                isDup = true;
-                break;
-              }
-            }
-            if (!isDup && genuineError == null) {
-              genuineError = sr.getErrors()[0].getMessage();
-            }
-          }
-        }
-
-        if (genuineError != null) {
-          Database.rollback(sp);
-          throw new WorkflowException(
-            'Failed to insert signal: ' + genuineError
-          );
-        }
-      }
-
-      // 5. Wake active instances that received a fresh signal
-      Map<Id, Set<String>> signalsByInstanceId = new Map<Id, Set<String>>();
-      for (Integer i = 0; i < requests.size(); i++) {
-        SignalOrStartRequest req = requests[i];
-        StartResult res = startResults[i];
-        if (res != null) {
-          Id instanceId = res.instanceId;
-          if (!signalsByInstanceId.containsKey(instanceId)) {
-            signalsByInstanceId.put(instanceId, new Set<String>());
-          }
-          if (String.isNotBlank(req.signalName)) {
-            signalsByInstanceId.get(instanceId).add(req.signalName);
-          }
-        }
-      }
-
-      List<Workflow_Instance__c> activeInstancesList = new List<Workflow_Instance__c>();
-      for (Id instId : activeInstIdsToWake) {
-        Workflow_Instance__c inst = existingInstances.get(instId);
-        if (inst != null) {
-          activeInstancesList.add(inst);
-        }
-      }
-      Set<Id> gatedNonReadyParents = getGatedNonReadyParents(
-        activeInstancesList,
-        signalsByInstanceId
-      );
-
-      List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
-      List<Workflow_Instance__c> instancesToWake = new List<Workflow_Instance__c>();
-
-      for (Id instId : activeInstIdsToWake) {
-        // Only wake if a fresh signal actually landed (i.e. not a duplicate signal)
-        if (!instancesWithFreshSignal.contains(instId)) {
-          continue;
-        }
-
-        Workflow_Instance__c inst = existingInstances.get(instId);
-        if (inst == null) {
-          continue;
-        }
-
-        // If the instance is suspended, change status to Running and clear Sleep_Until__c
-        if (inst.Status__c == 'Suspended') {
-          // Skip if concurrency-parked and doesn't hold slot
-          if (
-            inst.Concurrency_Parked__c == true &&
-            inst.Concurrency_Slot_Held__c != true
-          ) {
-            continue;
-          }
-          if (gatedNonReadyParents.contains(instId)) {
-            continue;
-          }
-          inst.Status__c = 'Running';
-          inst.Sleep_Until__c = null;
-          instancesToUpdate.add(inst);
-        }
-        if (!gatedNonReadyParents.contains(instId)) {
-          instancesToWake.add(inst);
-        }
-      }
-
-      if (!instancesToUpdate.isEmpty()) {
-        Database.update(instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
-      }
-
-      // Enqueue the woken instances exactly once
-      List<Id> instanceIdsToEnqueue = new List<Id>();
-      List<Workflow_Instance__c> parallelInstances = new List<Workflow_Instance__c>();
-
-      for (Workflow_Instance__c inst : instancesToWake) {
-        Boolean isCompensatingInst =
-          inst.Status__c == 'Compensating' ||
-          inst.Status__c == 'Cancelling';
-
-        if (
-          !isCompensatingInst &&
-          String.isNotBlank(inst.Current_Step__c) &&
-          inst.Current_Step__c.contains(',')
-        ) {
-          parallelInstances.add(inst);
-        } else {
-          if (!enqueuedInstanceIds.contains(inst.Id)) {
-            enqueuedInstanceIds.add(inst.Id);
-            instanceIdsToEnqueue.add(inst.Id);
-          }
-        }
-      }
-
-      if (!instanceIdsToEnqueue.isEmpty()) {
-        enqueueOrchestrators(instanceIdsToEnqueue);
-      }
-      if (!parallelInstances.isEmpty()) {
-        enqueueResumeBulk(parallelInstances);
-      }
-
-      return startResults;
+      return run.startResults;
     } catch (Exception e) {
       Database.rollback(sp);
-      clearEnqueueGuards(activeInstIdsToWake);
+      clearEnqueueGuards(run.activeInstIdsToWake);
       throw e;
+    }
+  }
+
+  // True when a signal name is a cancellation (Cancel / CancelWorkflow).
+  private static Boolean isCancelSignalName(String signalName) {
+    return String.isNotBlank(signalName) &&
+      (signalName.equalsIgnoreCase('Cancel') ||
+      signalName.equalsIgnoreCase('CancelWorkflow'));
+  }
+
+  // True when an existing (non-new) instance is terminal or continued-as-new.
+  private static Boolean isSignalTargetTerminal(
+    Workflow_Instance__c existingInst,
+    Boolean isNew
+  ) {
+    if (isNew || existingInst == null) {
+      return false;
+    }
+    return TERMINAL_GETSTATUS_STATUSES.contains(existingInst.Status__c) ||
+      existingInst.Status__c == 'ContinuedAsNew';
+  }
+
+  // True when a signal to an existing instance must be swallowed: the instance
+  // is terminal/continued-as-new or in a stalled CompensationFailed rollback.
+  private static Boolean isSignalTargetTerminalOrStalled(
+    Workflow_Instance__c existingInst,
+    Boolean isNew
+  ) {
+    if (isNew || existingInst == null) {
+      return false;
+    }
+    return isSignalTargetTerminal(existingInst, isNew) ||
+      existingInst.Status__c == 'CompensationFailed';
+  }
+
+  // True when an instance's status is signal-wakeable.
+  private static Boolean isWakeableSignalStatus(String status) {
+    return status == 'Suspended' ||
+      status == 'Running' ||
+      status == 'Compensating' ||
+      status == 'Cancelling';
+  }
+
+  // True when an instance is concurrency-parked without holding a slot.
+  private static Boolean isConcurrencyParkedUnadmitted(
+    Workflow_Instance__c inst
+  ) {
+    return inst.Concurrency_Parked__c == true &&
+      inst.Concurrency_Slot_Held__c != true;
+  }
+
+  // §1: map each signal-or-start request to its embedded StartRequest (null
+  // preserved for a null request), rejecting a null embedded start.
+  private static List<StartRequest> buildSignalOrStartRequests(
+    List<SignalOrStartRequest> requests
+  ) {
+    List<StartRequest> startReqs = new List<StartRequest>();
+    for (SignalOrStartRequest req : requests) {
+      if (req == null) {
+        startReqs.add(null);
+        continue;
+      }
+      if (req.start == null) {
+        throw new WorkflowException(
+          'StartRequest cannot be null in SignalOrStartRequest'
+        );
+      }
+      startReqs.add(req.start);
+    }
+    return startReqs;
+  }
+
+  // §2: FOR UPDATE-lock the existing (deduped, non-new) instances so their live
+  // status can be inspected for cancel/wake decisions.
+  private static Map<Id, Workflow_Instance__c> querySignalOrStartExisting(
+    SignalOrStartRun run
+  ) {
+    List<SignalOrStartRequest> requests = run.requests;
+    List<StartResult> startResults = run.startResults;
+    Set<Id> existingIds = new Set<Id>();
+    for (Integer i = 0; i < requests.size(); i++) {
+      SignalOrStartRequest req = requests[i];
+      if (req == null) {
+        continue;
+      }
+      StartResult res = startResults[i];
+      if (res != null && !res.isNew) {
+        existingIds.add(res.instanceId);
+      }
+    }
+
+    Map<Id, Workflow_Instance__c> existingInstances = new Map<Id, Workflow_Instance__c>();
+    if (!existingIds.isEmpty()) {
+      existingInstances = new Map<Id, Workflow_Instance__c>(
+        [
+          SELECT
+            Id,
+            Status__c,
+            Current_Step__c,
+            Concurrency_Parked__c,
+            Concurrency_Slot_Held__c,
+            Sleep_Until__c
+          FROM Workflow_Instance__c
+          WHERE Id IN :existingIds
+          WITH SYSTEM_MODE
+          FOR UPDATE
+        ]
+      );
+    }
+    return existingInstances;
+  }
+
+  // §3: build keyed cancel claims, run cancellations, and refresh post-cancel
+  // statuses so cancelled instances are excluded from the forward signal pass.
+  private static void processSignalOrStartCancels(SignalOrStartRun run) {
+    CancelClaimBatch batch = buildSignalOrStartCancelClaims(run);
+    insertSignalOrStartCancelClaims(run, batch);
+    refreshCancelledInstances(run, batch);
+  }
+
+  // Build keyed cancel claims (deduped in-batch) and immediately run unkeyed
+  // cancels; skips non-cancel and already-terminal targets.
+  private static CancelClaimBatch buildSignalOrStartCancelClaims(
+    SignalOrStartRun run
+  ) {
+    CancelClaimBatch batch = new CancelClaimBatch();
+    Set<String> seenCancelKeys = new Set<String>();
+    List<SignalOrStartRequest> requests = run.requests;
+    List<StartResult> startResults = run.startResults;
+
+    for (Integer i = 0; i < requests.size(); i++) {
+      SignalOrStartRequest req = requests[i];
+      StartResult res = startResults[i];
+      if (res == null) {
+        continue;
+      }
+
+      Id instanceId = res.instanceId;
+      Boolean isNew = res.isNew;
+
+      if (!isCancelSignalName(req.signalName)) {
+        continue;
+      }
+      if (
+        isSignalTargetTerminal(run.existingInstances.get(instanceId), isNew)
+      ) {
+        continue; // Terminal or continued-as-new instance: cancel is an idempotent no-op
+      }
+
+      Boolean runCompensations = parseRunCompensations(req.payload);
+
+      if (String.isNotBlank(req.idempotencyKey)) {
+        String claimKey = deriveSignalDedupKey(instanceId, req.idempotencyKey);
+        if (seenCancelKeys.contains(claimKey)) {
+          continue; // in-batch duplicate keyed cancel
+        }
+        seenCancelKeys.add(claimKey);
+        batch.claims.add(
+          new Workflow_Signal__c(
+            Workflow_Instance__c = instanceId,
+            Signal_Name__c = req.signalName,
+            Status__c = 'Consumed',
+            Signal_Key__c = claimKey
+          )
+        );
+        batch.instIds.add(instanceId);
+        batch.runComp.add(runCompensations);
+      } else {
+        // Unkeyed cancel: execute immediately
+        cancelInstance(instanceId, runCompensations);
+        batch.attemptedIds.add(instanceId);
+      }
+    }
+    return batch;
+  }
+
+  // Insert the keyed cancel claims (allOrNone=false); each winner runs its
+  // cancel, a genuine (non-duplicate) claim failure rolls back and throws.
+  private static void insertSignalOrStartCancelClaims(
+    SignalOrStartRun run,
+    CancelClaimBatch batch
+  ) {
+    if (batch.claims.isEmpty()) {
+      return;
+    }
+    Database.SaveResult[] claimResults = Database.insert(
+      batch.claims,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    String claimError = null;
+    for (Integer i = 0; i < claimResults.size(); i++) {
+      Database.SaveResult sr = claimResults[i];
+      if (sr.isSuccess()) {
+        cancelInstance(batch.instIds[i], batch.runComp[i]);
+        batch.attemptedIds.add(batch.instIds[i]);
+      } else if (!isDuplicateSaveError(sr) && claimError == null) {
+        claimError = sr.getErrors()[0].getMessage();
+      }
+    }
+    if (claimError != null) {
+      Database.rollback(run.sp);
+      throw new WorkflowException('Failed to claim cancel: ' + claimError);
+    }
+  }
+
+  // Refresh post-cancel statuses in one query; non-wakeable results are recorded
+  // so the forward signal pass skips them.
+  private static void refreshCancelledInstances(
+    SignalOrStartRun run,
+    CancelClaimBatch batch
+  ) {
+    if (batch.attemptedIds.isEmpty()) {
+      return;
+    }
+    Set<Id> attemptedCancelIds = batch.attemptedIds;
+    for (Workflow_Instance__c refreshed : [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :attemptedCancelIds
+      WITH SYSTEM_MODE
+    ]) {
+      Workflow_Instance__c cached = run.existingInstances.get(refreshed.Id);
+      if (cached != null) {
+        cached.Status__c = refreshed.Status__c;
+      }
+      if (!isWakeableStatus(refreshed.Status__c)) {
+        run.cancelledInstanceIds.add(refreshed.Id);
+      }
+    }
+  }
+
+  // §4: build the ordinary signal records to insert (in-batch keyed dedup) and
+  // collect the active existing instances that may need waking.
+  private static void prepareSignalOrStartRecords(SignalOrStartRun run) {
+    Set<String> seenCompositeKeys = new Set<String>();
+    for (Integer i = 0; i < run.requests.size(); i++) {
+      prepareSignalOrStartRecord(run, i, seenCompositeKeys);
+    }
+  }
+
+  // Build/track the signal record for one request, skipping cancels, already
+  // cancelled/terminal/stalled targets, and in-batch keyed duplicates.
+  private static void prepareSignalOrStartRecord(
+    SignalOrStartRun run,
+    Integer i,
+    Set<String> seenCompositeKeys
+  ) {
+    StartResult res = run.startResults[i];
+    if (res == null) {
+      return;
+    }
+    SignalOrStartRequest req = run.requests[i];
+    Id instanceId = res.instanceId;
+    Boolean isNew = res.isNew;
+
+    // Skip cancellation signals (already handled above) or instances that were cancelled in this batch
+    if (
+      isCancelSignalName(req.signalName) ||
+      run.cancelledInstanceIds.contains(instanceId)
+    ) {
+      return;
+    }
+
+    Workflow_Instance__c existingInst = isNew
+      ? null
+      : run.existingInstances.get(instanceId);
+    if (isSignalTargetTerminalOrStalled(existingInst, isNew)) {
+      // Discard/swallow signal for terminal, stalled rollback, or continued-as-new instances (idempotent no-op)
+      return;
+    }
+
+    Workflow_Signal__c sig = buildSignalOrStartSignalRecord(
+      req,
+      instanceId,
+      seenCompositeKeys
+    );
+    if (sig == null) {
+      // In-batch duplicate: skip insertion of this signal
+      return;
+    }
+
+    run.signalsToInsert.add(sig);
+    run.signalsInstIds.add(instanceId);
+
+    // If it's an existing active instance, we may need to wake it. Brand-new
+    // instances are already enqueued to run by startOrGet, so we don't wake them.
+    if (shouldTrackSignalWake(existingInst, isNew)) {
+      run.activeInstIdsToWake.add(instanceId);
+    }
+  }
+
+  // True when an existing, non-new instance is signal-wakeable and so should be
+  // tracked for a possible wake after its fresh signal lands.
+  private static Boolean shouldTrackSignalWake(
+    Workflow_Instance__c existingInst,
+    Boolean isNew
+  ) {
+    return !isNew &&
+      existingInst != null &&
+      isWakeableSignalStatus(existingInst.Status__c);
+  }
+
+  // Build a Received signal record; keyed signals dedup in-batch (null return
+  // means an in-batch duplicate that must be skipped).
+  private static Workflow_Signal__c buildSignalOrStartSignalRecord(
+    SignalOrStartRequest req,
+    Id instanceId,
+    Set<String> seenCompositeKeys
+  ) {
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Workflow_Instance__c = instanceId,
+      Signal_Name__c = req.signalName,
+      Payload__c = req.payload,
+      Status__c = 'Received'
+    );
+
+    if (String.isNotBlank(req.idempotencyKey)) {
+      String compositeKey = deriveSignalDedupKey(
+        instanceId,
+        req.idempotencyKey
+      );
+      if (seenCompositeKeys.contains(compositeKey)) {
+        return null;
+      }
+      seenCompositeKeys.add(compositeKey);
+      sig.Signal_Key__c = compositeKey;
+    }
+    return sig;
+  }
+
+  // §5: insert the signal records (allOrNone=false); a genuine (non-duplicate)
+  // failure rolls back and throws, otherwise fresh-signal instances are tracked.
+  private static void insertSignalOrStartSignals(SignalOrStartRun run) {
+    if (run.signalsToInsert.isEmpty()) {
+      return;
+    }
+    // Insert signals using allOrNone=false so concurrent duplicates are swallowed as no-ops,
+    // but genuine errors are rolled back and thrown.
+    Database.SaveResult[] srs = Database.insert(
+      run.signalsToInsert,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+
+    String genuineError = null;
+    for (Integer i = 0; i < srs.size(); i++) {
+      Database.SaveResult sr = srs[i];
+      if (sr.isSuccess()) {
+        run.instancesWithFreshSignal.add(run.signalsInstIds[i]);
+      } else if (!isDuplicateSaveError(sr) && genuineError == null) {
+        genuineError = sr.getErrors()[0].getMessage();
+      }
+    }
+
+    if (genuineError != null) {
+      Database.rollback(run.sp);
+      throw new WorkflowException('Failed to insert signal: ' + genuineError);
+    }
+  }
+
+  // §6: compute the join-readiness gate, flip eligible suspended instances to
+  // Running, and enqueue the woken instances.
+  private static void wakeSignalOrStartInstances(SignalOrStartRun run) {
+    Map<Id, Set<String>> signalsByInstanceId = buildSignalsByInstanceId(run);
+
+    List<Workflow_Instance__c> activeInstancesList = new List<Workflow_Instance__c>();
+    for (Id instId : run.activeInstIdsToWake) {
+      Workflow_Instance__c inst = run.existingInstances.get(instId);
+      if (inst != null) {
+        activeInstancesList.add(inst);
+      }
+    }
+    run.gatedNonReadyParents = getGatedNonReadyParents(
+      activeInstancesList,
+      signalsByInstanceId
+    );
+
+    collectSignalOrStartWakes(run);
+    enqueueSignalOrStartWakes(run);
+  }
+
+  // Map each request's instance to the set of signal names it received.
+  private static Map<Id, Set<String>> buildSignalsByInstanceId(
+    SignalOrStartRun run
+  ) {
+    Map<Id, Set<String>> signalsByInstanceId = new Map<Id, Set<String>>();
+    List<SignalOrStartRequest> requests = run.requests;
+    List<StartResult> startResults = run.startResults;
+    for (Integer i = 0; i < requests.size(); i++) {
+      SignalOrStartRequest req = requests[i];
+      StartResult res = startResults[i];
+      if (res == null) {
+        continue;
+      }
+      Id instanceId = res.instanceId;
+      if (!signalsByInstanceId.containsKey(instanceId)) {
+        signalsByInstanceId.put(instanceId, new Set<String>());
+      }
+      if (String.isNotBlank(req.signalName)) {
+        signalsByInstanceId.get(instanceId).add(req.signalName);
+      }
+    }
+    return signalsByInstanceId;
+  }
+
+  // Determine which woken instances flip to Running (persisting that update) and
+  // which are eligible to enqueue, honoring the join-readiness gate.
+  private static void collectSignalOrStartWakes(SignalOrStartRun run) {
+    for (Id instId : run.activeInstIdsToWake) {
+      collectSignalOrStartWakeForInstance(run, instId);
+    }
+    if (!run.instancesToUpdate.isEmpty()) {
+      Database.update(run.instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
+    }
+  }
+
+  // Wake decision for a single active instance: only a fresh signal wakes it; a
+  // suspended, admitted, non-gated instance flips to Running.
+  private static void collectSignalOrStartWakeForInstance(
+    SignalOrStartRun run,
+    Id instId
+  ) {
+    // Only wake if a fresh signal actually landed (i.e. not a duplicate signal)
+    if (!run.instancesWithFreshSignal.contains(instId)) {
+      return;
+    }
+    Workflow_Instance__c inst = run.existingInstances.get(instId);
+    if (inst == null) {
+      return;
+    }
+
+    // If the instance is suspended, change status to Running and clear Sleep_Until__c
+    if (inst.Status__c == 'Suspended') {
+      // Skip if concurrency-parked and doesn't hold slot
+      if (isConcurrencyParkedUnadmitted(inst)) {
+        return;
+      }
+      if (run.gatedNonReadyParents.contains(instId)) {
+        return;
+      }
+      inst.Status__c = 'Running';
+      inst.Sleep_Until__c = null;
+      run.instancesToUpdate.add(inst);
+    }
+    if (!run.gatedNonReadyParents.contains(instId)) {
+      run.instancesToWake.add(inst);
+    }
+  }
+
+  // Enqueue the woken instances exactly once (parallel instances via bulk resume).
+  private static void enqueueSignalOrStartWakes(SignalOrStartRun run) {
+    List<Id> instanceIdsToEnqueue = new List<Id>();
+    List<Workflow_Instance__c> parallelInstances = new List<Workflow_Instance__c>();
+
+    for (Workflow_Instance__c inst : run.instancesToWake) {
+      Boolean isCompensatingInst =
+        inst.Status__c == 'Compensating' ||
+        inst.Status__c == 'Cancelling';
+
+      if (
+        !isCompensatingInst &&
+        String.isNotBlank(inst.Current_Step__c) &&
+        inst.Current_Step__c.contains(',')
+      ) {
+        parallelInstances.add(inst);
+      } else if (!enqueuedInstanceIds.contains(inst.Id)) {
+        enqueuedInstanceIds.add(inst.Id);
+        instanceIdsToEnqueue.add(inst.Id);
+      }
+    }
+
+    if (!instanceIdsToEnqueue.isEmpty()) {
+      enqueueOrchestrators(instanceIdsToEnqueue);
+    }
+    if (!parallelInstances.isEmpty()) {
+      enqueueResumeBulk(parallelInstances);
     }
   }
 
