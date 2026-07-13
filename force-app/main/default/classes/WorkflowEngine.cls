@@ -7352,6 +7352,22 @@ public inherited sharing class WorkflowEngine {
     spawnContinueAsNewSuccessor(instance, result, newKey);
   }
 
+  /**
+   * Resolves the successor's execution deadline from an execution-timeout-
+   * configurable workflow definition.
+   * @param defObj the instantiated workflow definition object
+   * @return the deadline DateTime, or null when no positive execution timeout is
+   *   configured
+   */
+  private static Datetime resolveExecutionDeadline(Object defObj) {
+    if (!(defObj instanceof ExecutionTimeoutConfigurable)) {
+      return null;
+    }
+    Integer timeoutSecs = ((ExecutionTimeoutConfigurable) defObj)
+      .getExecutionTimeoutSeconds();
+    return timeoutSecs != null ? DateTime.now().addSeconds(timeoutSecs) : null;
+  }
+
   // Create and enqueue the successor instance for a CONTINUE_AS_NEW transition.
   private static void spawnContinueAsNewSuccessor(
     Workflow_Instance__c instance,
@@ -7370,13 +7386,7 @@ public inherited sharing class WorkflowEngine {
       if (defObj instanceof WorkflowDefinition) {
         initialStep = ((WorkflowDefinition) defObj).getInitialStep();
       }
-      if (defObj instanceof ExecutionTimeoutConfigurable) {
-        Integer timeoutSecs = ((ExecutionTimeoutConfigurable) defObj)
-          .getExecutionTimeoutSeconds();
-        if (timeoutSecs != null) {
-          nextDeadline = DateTime.now().addSeconds(timeoutSecs);
-        }
-      }
+      nextDeadline = resolveExecutionDeadline(defObj);
     }
 
     // Spawn successor instance. Carry the chain's root correlation key forward
