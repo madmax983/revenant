@@ -15058,15 +15058,19 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
-  private static void redeliverCapturedSignalsBulk(
+  /**
+   * Re-homes each captured signal onto its matched instance (Received, with a
+   * per-instance dedup key when idempotency-keyed) and returns the flat list of
+   * signals to update.
+   * @param matchInsts the matched instances to redeliver to
+   * @param instIdToSignals the captured signals grouped by instance id
+   * @return the signals prepared for the redelivery update
+   */
+  private static List<Workflow_Signal__c> collectSignalsToRedeliver(
     List<Workflow_Instance__c> matchInsts,
     Map<Id, List<Workflow_Signal__c>> instIdToSignals
   ) {
     List<Workflow_Signal__c> signalsToUpdate = new List<Workflow_Signal__c>();
-    Map<Id, Workflow_Instance__c> instMap = new Map<Id, Workflow_Instance__c>(
-      matchInsts
-    );
-
     for (Workflow_Instance__c inst : matchInsts) {
       List<Workflow_Signal__c> sigs = instIdToSignals.get(inst.Id);
       if (sigs == null) {
@@ -15084,6 +15088,87 @@ public inherited sharing class WorkflowEngine {
         signalsToUpdate.add(sig);
       }
     }
+    return signalsToUpdate;
+  }
+
+  /**
+   * Tests whether a partial-success save result failed with a duplicate-value
+   * error.
+   * @param sr the save result to inspect
+   * @return true when any of the result's errors is DUPLICATE_VALUE
+   */
+  private static Boolean isDuplicateError(Database.SaveResult sr) {
+    for (Database.Error err : sr.getErrors()) {
+      if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Partitions the redelivery save results: successful signals are appended to
+   * successfulSignals, duplicate failures are reset to a Consumed tombstone and
+   * returned, and any other failure is rethrown as a DmlException.
+   * @param srs the partial-success save results (positionally aligned)
+   * @param signalsToUpdate the signals that were updated (positionally aligned)
+   * @param successfulSignals out: signals that updated successfully
+   * @return the duplicate signals reset to Consumed tombstones
+   */
+  private static List<Workflow_Signal__c> partitionSaveResults(
+    Database.SaveResult[] srs,
+    List<Workflow_Signal__c> signalsToUpdate,
+    List<Workflow_Signal__c> successfulSignals
+  ) {
+    List<Workflow_Signal__c> duplicateSignals = new List<Workflow_Signal__c>();
+    for (Integer i = 0; i < srs.size(); i++) {
+      Database.SaveResult sr = srs[i];
+      Workflow_Signal__c sig = signalsToUpdate[i];
+      if (sr.isSuccess()) {
+        successfulSignals.add(sig);
+      } else if (isDuplicateError(sr)) {
+        sig.Workflow_Instance__c = null;
+        sig.Signal_Key__c = null;
+        sig.Status__c = 'Consumed';
+        duplicateSignals.add(sig);
+      } else {
+        throw new DmlException(sr.getErrors()[0].getMessage());
+      }
+    }
+    return duplicateSignals;
+  }
+
+  /**
+   * Wakes each distinct instance that had a signal successfully redelivered.
+   * @param successfulSignals the signals that updated successfully
+   * @param instMap the matched instances by id
+   */
+  private static void wakeSuccessfulInstances(
+    List<Workflow_Signal__c> successfulSignals,
+    Map<Id, Workflow_Instance__c> instMap
+  ) {
+    Set<Id> wokenInstanceIds = new Set<Id>();
+    for (Workflow_Signal__c sig : successfulSignals) {
+      if (wokenInstanceIds.add(sig.Workflow_Instance__c)) {
+        Workflow_Instance__c inst = instMap.get(sig.Workflow_Instance__c);
+        if (inst != null) {
+          wakeInstanceForSignal(inst);
+        }
+      }
+    }
+  }
+
+  private static void redeliverCapturedSignalsBulk(
+    List<Workflow_Instance__c> matchInsts,
+    Map<Id, List<Workflow_Signal__c>> instIdToSignals
+  ) {
+    List<Workflow_Signal__c> signalsToUpdate = collectSignalsToRedeliver(
+      matchInsts,
+      instIdToSignals
+    );
+    Map<Id, Workflow_Instance__c> instMap = new Map<Id, Workflow_Instance__c>(
+      matchInsts
+    );
 
     if (signalsToUpdate.isEmpty()) {
       return;
@@ -15097,46 +15182,18 @@ public inherited sharing class WorkflowEngine {
         AccessLevel.SYSTEM_MODE
       );
 
-      List<Workflow_Signal__c> duplicateSignals = new List<Workflow_Signal__c>();
       List<Workflow_Signal__c> successfulSignals = new List<Workflow_Signal__c>();
-
-      for (Integer i = 0; i < srs.size(); i++) {
-        Database.SaveResult sr = srs[i];
-        Workflow_Signal__c sig = signalsToUpdate[i];
-        if (sr.isSuccess()) {
-          successfulSignals.add(sig);
-        } else {
-          Boolean isDup = false;
-          for (Database.Error err : sr.getErrors()) {
-            if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
-              isDup = true;
-              break;
-            }
-          }
-          if (isDup) {
-            sig.Workflow_Instance__c = null;
-            sig.Signal_Key__c = null;
-            sig.Status__c = 'Consumed';
-            duplicateSignals.add(sig);
-          } else {
-            throw new DmlException(sr.getErrors()[0].getMessage());
-          }
-        }
-      }
+      List<Workflow_Signal__c> duplicateSignals = partitionSaveResults(
+        srs,
+        signalsToUpdate,
+        successfulSignals
+      );
 
       if (!duplicateSignals.isEmpty()) {
         Database.update(duplicateSignals, true, AccessLevel.SYSTEM_MODE);
       }
 
-      Set<Id> wokenInstanceIds = new Set<Id>();
-      for (Workflow_Signal__c sig : successfulSignals) {
-        if (wokenInstanceIds.add(sig.Workflow_Instance__c)) {
-          Workflow_Instance__c inst = instMap.get(sig.Workflow_Instance__c);
-          if (inst != null) {
-            wakeInstanceForSignal(inst);
-          }
-        }
-      }
+      wakeSuccessfulInstances(successfulSignals, instMap);
     } catch (Exception e) {
       Database.rollback(sp);
       Set<Id> instIdsToClear = new Set<Id>();
