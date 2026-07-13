@@ -381,6 +381,7 @@ public inherited sharing class WorkflowEngine {
     public String causationId { get; private set; }
 
     private WorkflowStatus() {
+      this.isTerminal = false;
     }
   }
 
