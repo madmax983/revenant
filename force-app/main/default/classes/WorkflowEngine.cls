@@ -7844,6 +7844,7 @@ public inherited sharing class WorkflowEngine {
    * there is no step row to retry
    */
   /**
+   * Determines whether an instance is already terminal for transient-retry gating.
    * @param instance the instance whose status is checked
    * @return true when the instance is in a terminal state that must not be
    *   resurrected by a transient-lock retry (excludes CompensationFailed, which is
@@ -15166,6 +15167,7 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Determines whether a delay can be scheduled as a minute-granular queueable job.
    * @param delaySeconds the configured delay in seconds
    * @return true when the delay qualifies for a minute-granular queueable job
    *   (outside test, 60-600s, whole minutes) and queueable budget remains
