@@ -11831,18 +11831,31 @@ public inherited sharing class WorkflowEngine {
     Database.insert(compStepExec, true, AccessLevel.SYSTEM_MODE);
   }
 
-  private static void preCreateFirstCompensationSteps(
-    List<Workflow_Instance__c> instances
-  ) {
-    if (instances == null || instances.isEmpty()) {
-      return;
-    }
-
+  /**
+   * The per-instance plan for pre-creating first compensation steps: the valid
+   * instances (those with a parseable, non-empty compensation stack) and, per
+   * instance id, the top-of-stack active step name and its derived compensation
+   * step log name.
+   */
+  private class CompStepPlan {
     Set<Id> instanceIds = new Set<Id>();
     List<Workflow_Instance__c> validInstances = new List<Workflow_Instance__c>();
     Map<Id, String> activeStepNames = new Map<Id, String>();
     Map<Id, String> compStepNames = new Map<Id, String>();
+  }
 
+  /**
+   * Builds the compensation-step plan from the candidate instances, skipping any
+   * with a blank, unparseable, or empty compensation stack. For each valid
+   * instance it records the top-of-stack active step and its '_Compensate' log
+   * name.
+   * @param instances the candidate instances entering compensation
+   * @return the per-instance compensation-step plan
+   */
+  private static CompStepPlan planCompensationSteps(
+    List<Workflow_Instance__c> instances
+  ) {
+    CompStepPlan plan = new CompStepPlan();
     for (Workflow_Instance__c instance : instances) {
       if (String.isBlank(instance.Compensation_Stack__c)) {
         continue;
@@ -11862,17 +11875,22 @@ public inherited sharing class WorkflowEngine {
       String activeStepName = stack[stack.size() - 1];
       String compensationStepLogName = activeStepName + '_Compensate';
 
-      instanceIds.add(instance.Id);
-      validInstances.add(instance);
-      activeStepNames.put(instance.Id, activeStepName);
-      compStepNames.put(instance.Id, compensationStepLogName);
+      plan.instanceIds.add(instance.Id);
+      plan.validInstances.add(instance);
+      plan.activeStepNames.put(instance.Id, activeStepName);
+      plan.compStepNames.put(instance.Id, compensationStepLogName);
     }
+    return plan;
+  }
 
-    if (instanceIds.isEmpty()) {
-      return;
-    }
-
-    // Query existing compensation steps in bulk to avoid duplicates.
+  /**
+   * Queries existing compensation step executions for the instances in bulk and
+   * returns their '{instanceId}:{stepName}' keys, used to avoid creating
+   * duplicate compensation steps.
+   * @param instanceIds the instances whose existing compensation steps are read
+   * @return the set of existing '{instanceId}:{stepName}' keys
+   */
+  private static Set<String> queryExistingCompKeys(Set<Id> instanceIds) {
     // Bind the LIKE pattern so the escaped underscore ('\_', matching a literal
     // '_') lives in an Apex string literal rather than inline SOQL.
     String compensateSuffixPattern = '%\\_Compensate';
@@ -11888,8 +11906,19 @@ public inherited sharing class WorkflowEngine {
     for (Workflow_Step_Execution__c step : existingCompSteps) {
       existingKeys.add(step.Workflow_Instance__c + ':' + step.Step_Name__c);
     }
+    return existingKeys;
+  }
 
-    // Query original executions to map Input/Output in bulk
+  /**
+   * Queries the step executions for the instances in bulk and maps the latest
+   * (newest-first) execution per '{instanceId}:{stepName}' key, used to carry
+   * the original step's Input/Output onto its compensation step.
+   * @param instanceIds the instances whose step executions are read
+   * @return the latest execution per '{instanceId}:{stepName}' key
+   */
+  private static Map<String, Workflow_Step_Execution__c> buildLatestOrigExecs(
+    Set<Id> instanceIds
+  ) {
     List<Workflow_Step_Execution__c> originalExecs = [
       SELECT Workflow_Instance__c, Step_Name__c, Input__c, Output__c
       FROM Workflow_Step_Execution__c
@@ -11898,7 +11927,6 @@ public inherited sharing class WorkflowEngine {
       ORDER BY CreatedDate DESC, Id DESC
     ];
 
-    // Build a map of the latest execution for each step to resolve Input/Output
     Map<String, Workflow_Step_Execution__c> latestOrigExecs = new Map<String, Workflow_Step_Execution__c>();
     for (Workflow_Step_Execution__c exec : originalExecs) {
       String key = exec.Workflow_Instance__c + ':' + exec.Step_Name__c;
@@ -11906,16 +11934,31 @@ public inherited sharing class WorkflowEngine {
         latestOrigExecs.put(key, exec);
       }
     }
+    return latestOrigExecs;
+  }
 
+  /**
+   * Builds the Pending compensation step executions to insert, skipping any that
+   * already exist, and carrying the original step's Input/Output where available.
+   * @param plan the per-instance compensation-step plan
+   * @param existingKeys the '{instanceId}:{stepName}' keys already present
+   * @param latestOrigExecs the latest original execution per step key
+   * @return the compensation step executions to insert
+   */
+  private static List<Workflow_Step_Execution__c> buildCompStepsToInsert(
+    CompStepPlan plan,
+    Set<String> existingKeys,
+    Map<String, Workflow_Step_Execution__c> latestOrigExecs
+  ) {
     List<Workflow_Step_Execution__c> stepsToInsert = new List<Workflow_Step_Execution__c>();
-    for (Workflow_Instance__c instance : validInstances) {
-      String compName = compStepNames.get(instance.Id);
+    for (Workflow_Instance__c instance : plan.validInstances) {
+      String compName = plan.compStepNames.get(instance.Id);
       String key = instance.Id + ':' + compName;
       if (existingKeys.contains(key)) {
         continue;
       }
 
-      String activeName = activeStepNames.get(instance.Id);
+      String activeName = plan.activeStepNames.get(instance.Id);
       String origKey = instance.Id + ':' + activeName;
       Workflow_Step_Execution__c origExec = latestOrigExecs.get(origKey);
 
@@ -11928,6 +11971,34 @@ public inherited sharing class WorkflowEngine {
       compStepExec.Retry_Count__c = 0;
       stepsToInsert.add(compStepExec);
     }
+    return stepsToInsert;
+  }
+
+  private static void preCreateFirstCompensationSteps(
+    List<Workflow_Instance__c> instances
+  ) {
+    if (instances == null || instances.isEmpty()) {
+      return;
+    }
+
+    CompStepPlan plan = planCompensationSteps(instances);
+    if (plan.instanceIds.isEmpty()) {
+      return;
+    }
+
+    // Query existing compensation steps in bulk to avoid duplicates.
+    Set<String> existingKeys = queryExistingCompKeys(plan.instanceIds);
+
+    // Query original executions to map Input/Output in bulk.
+    Map<String, Workflow_Step_Execution__c> latestOrigExecs = buildLatestOrigExecs(
+      plan.instanceIds
+    );
+
+    List<Workflow_Step_Execution__c> stepsToInsert = buildCompStepsToInsert(
+      plan,
+      existingKeys,
+      latestOrigExecs
+    );
 
     if (!stepsToInsert.isEmpty()) {
       Database.insert(stepsToInsert, true, AccessLevel.SYSTEM_MODE);
