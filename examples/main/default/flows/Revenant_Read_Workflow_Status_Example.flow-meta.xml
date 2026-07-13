@@ -32,6 +32,9 @@
         <label>Log Fault</label>
         <locationX>836</locationX>
         <locationY>134</locationY>
+        <connector>
+            <targetReference>Capture_Fault</targetReference>
+        </connector>
         <faultConnector>
             <targetReference>Capture_Fault</targetReference>
         </faultConnector>
