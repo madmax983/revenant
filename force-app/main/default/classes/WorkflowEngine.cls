@@ -3029,26 +3029,13 @@ public inherited sharing class WorkflowEngine {
 
   /**
    * @description Single-request convenience for signalOrStart: delivers a signal
-   * to the instance resolved from the start request's correlation key, starting a
-   * new instance first when none exists.
-   * @param start start request used to resolve or create the target instance
-   * @param signalName name of the signal to deliver
-   * @param payloadJson serialized signal payload
-   * @param idempotencyKey per-delivery idempotency key
+   * to the instance resolved from the request's embedded start correlation key,
+   * starting a new instance first when none exists.
+   * @param req the signal-or-start request (embedded start request, signal name,
+   * payload and optional idempotency key)
    * @return the StartResult for the resolved or created instance
    */
-  public static StartResult signalOrStart(
-    StartRequest start,
-    String signalName,
-    String payloadJson,
-    String idempotencyKey
-  ) {
-    SignalOrStartRequest req = new SignalOrStartRequest(
-        start,
-        signalName,
-        payloadJson
-      )
-      .withIdempotencyKey(idempotencyKey);
+  public static StartResult signalOrStart(SignalOrStartRequest req) {
     List<StartResult> results = signalOrStart(
       new List<SignalOrStartRequest>{ req }
     );
