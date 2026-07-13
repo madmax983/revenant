@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Flow xmlns="http://soap.sforce.com/2006/04/metadata">
     <apiVersion>67.0</apiVersion>
+    <description>Test fixture autolaunched flow that creates an Account from the supplied name, used by Revenant integration tests to exercise a flow side effect and its fault path.</description>
     <recordCreates>
+        <description>Creates an Account whose Name is the accountName input; routes any DML fault to Log_Fault.</description>
         <name>Create_Account</name>
         <label>Create Account</label>
         <locationX>176</locationX>
         <locationY>134</locationY>
+        <faultConnector>
+            <targetReference>Log_Fault</targetReference>
+        </faultConnector>
         <inputAssignments>
             <field>Name</field>
             <value>
@@ -14,16 +19,68 @@
         </inputAssignments>
         <object>Account</object>
     </recordCreates>
+    <recordCreates>
+        <description>Fault handler: persists the flow fault message to a Workflow_Log__c error record, mirroring the Apex WorkflowLog.error sink, so the failure surfaces in the durable log.</description>
+        <name>Log_Fault</name>
+        <label>Log Fault</label>
+        <locationX>176</locationX>
+        <locationY>278</locationY>
+        <faultConnector>
+            <targetReference>Capture_Fault</targetReference>
+        </faultConnector>
+        <inputAssignments>
+            <field>Level__c</field>
+            <value>
+                <stringValue>Error</stringValue>
+            </value>
+        </inputAssignments>
+        <inputAssignments>
+            <field>Log_Type__c</field>
+            <value>
+                <stringValue>FlowFault</stringValue>
+            </value>
+        </inputAssignments>
+        <inputAssignments>
+            <field>Message__c</field>
+            <value>
+                <elementReference>$Flow.FaultMessage</elementReference>
+            </value>
+        </inputAssignments>
+        <object>Workflow_Log__c</object>
+    </recordCreates>
+    <assignments>
+        <description>Terminal fault handler: captures the fault message into faultMessage if even the error log insert fails, so the flow ends cleanly (mirrors WorkflowLog.error swallowing its own insert failures).</description>
+        <name>Capture_Fault</name>
+        <label>Capture Fault</label>
+        <locationX>176</locationX>
+        <locationY>398</locationY>
+        <assignmentItems>
+            <assignToReference>faultMessage</assignToReference>
+            <operator>Assign</operator>
+            <value>
+                <elementReference>$Flow.FaultMessage</elementReference>
+            </value>
+        </assignmentItems>
+    </assignments>
     <environments>Default</environments>
     <interviewLabel>Test Side Effect Flow {!$Flow.CurrentDateTime}</interviewLabel>
     <label>Test Side Effect Flow</label>
     <processType>AutoLaunchedFlow</processType>
     <variables>
+        <description>Name used for the Account created by this flow.</description>
         <name>accountName</name>
         <dataType>String</dataType>
         <isCollection>false</isCollection>
         <isInput>true</isInput>
         <isOutput>false</isOutput>
+    </variables>
+    <variables>
+        <description>Captured fault message when a DML operation in this flow fails.</description>
+        <name>faultMessage</name>
+        <dataType>String</dataType>
+        <isCollection>false</isCollection>
+        <isInput>false</isInput>
+        <isOutput>true</isOutput>
     </variables>
     <start>
         <locationX>50</locationX>
