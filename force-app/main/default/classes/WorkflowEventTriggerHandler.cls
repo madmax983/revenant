@@ -110,11 +110,11 @@ public inherited sharing class WorkflowEventTriggerHandler {
     processedResumeSignals++;
     String signalName = event.Event_Type__c.substringAfter('SIGNAL:');
     WorkflowEngine.SignalRequest sigReq = new WorkflowEngine.SignalRequest(
-      event.Workflow_Instance_Id__c,
-      signalName,
-      event.Payload__c,
-      event.EventUuid
-    );
+        event.Workflow_Instance_Id__c,
+        signalName,
+        event.Payload__c
+      )
+      .withDedupKey(event.EventUuid);
     sigReq.idempotencyKey = event.Idempotency_Key__c;
     signalRequests.add(sigReq);
   }

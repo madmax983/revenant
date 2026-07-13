@@ -2558,45 +2558,23 @@ public inherited sharing class WorkflowEngine {
     }
 
     /**
-     * @description Builds a signal request with a routing dedup key.
-     * @param keyOrId correlation key or instance Id of the target
-     * @param signalName name of the signal
-     * @param payload signal payload
-     * @param dedupKey routing-level dedup key
+     * @description Fluent setter stamping a routing-level dedup key.
+     * @param dedupKeyArg routing-level dedup key
+     * @return this request, for call chaining
      */
-    public SignalRequest(
-      String keyOrId,
-      String signalName,
-      String payload,
-      String dedupKey
-    ) {
-      this.keyOrId = keyOrId;
-      this.signalName = signalName;
-      this.payload = payload;
-      this.dedupKey = dedupKey;
+    public SignalRequest withDedupKey(String dedupKeyArg) {
+      this.dedupKey = dedupKeyArg;
+      return this;
     }
 
     /**
-     * @description Builds a signal request with both a dedup key and an
-     * idempotency key.
-     * @param keyOrId correlation key or instance Id of the target
-     * @param signalName name of the signal
-     * @param payload signal payload
-     * @param dedupKey routing-level dedup key
-     * @param idempotencyKey per-delivery idempotency key
+     * @description Fluent setter stamping a per-delivery idempotency key.
+     * @param idempotencyKeyArg per-delivery idempotency key
+     * @return this request, for call chaining
      */
-    public SignalRequest(
-      String keyOrId,
-      String signalName,
-      String payload,
-      String dedupKey,
-      String idempotencyKey
-    ) {
-      this.keyOrId = keyOrId;
-      this.signalName = signalName;
-      this.payload = payload;
-      this.dedupKey = dedupKey;
-      this.idempotencyKey = idempotencyKey;
+    public SignalRequest withIdempotencyKey(String idempotencyKeyArg) {
+      this.idempotencyKey = idempotencyKeyArg;
+      return this;
     }
   }
 
@@ -7461,7 +7439,8 @@ public inherited sharing class WorkflowEngine {
       // never silently lost and can be re-delivered by an operator.
       captureUnroutedSignals(
         new List<SignalRequest>{
-          new SignalRequest(keyOrId, signalName, payload, null, idempotencyKey)
+          new SignalRequest(keyOrId, signalName, payload)
+            .withIdempotencyKey(idempotencyKey)
         }
       );
       return;

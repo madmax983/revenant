@@ -488,20 +488,10 @@ public class WorkflowSignalIdempotencyTest {
       String tooLongName = 'X'.repeat(500);
 
       List<WorkflowEngine.SignalRequest> reqs = new List<WorkflowEngine.SignalRequest>{
-        new WorkflowEngine.SignalRequest(
-          'idem-test-8',
-          'Approve',
-          '{"v":1}',
-          null,
-          'good-key'
-        ),
-        new WorkflowEngine.SignalRequest(
-          'idem-test-8',
-          tooLongName,
-          '{"v":2}',
-          null,
-          'bad-key'
-        )
+        new WorkflowEngine.SignalRequest('idem-test-8', 'Approve', '{"v":1}')
+          .withIdempotencyKey('good-key'),
+        new WorkflowEngine.SignalRequest('idem-test-8', tooLongName, '{"v":2}')
+          .withIdempotencyKey('bad-key')
       };
 
       Boolean threw = false;
@@ -592,19 +582,17 @@ public class WorkflowSignalIdempotencyTest {
 
       List<WorkflowEngine.SignalRequest> reqs = new List<WorkflowEngine.SignalRequest>{
         new WorkflowEngine.SignalRequest(
-          'idem-cancel-2',
-          'Cancel',
-          '{"runCompensations":false}',
-          null,
-          'cancel-key-2'
-        ),
+            'idem-cancel-2',
+            'Cancel',
+            '{"runCompensations":false}'
+          )
+          .withIdempotencyKey('cancel-key-2'),
         new WorkflowEngine.SignalRequest(
-          'idem-cancel-2',
-          'Cancel',
-          '{"runCompensations":false}',
-          null,
-          'cancel-key-2'
-        )
+            'idem-cancel-2',
+            'Cancel',
+            '{"runCompensations":false}'
+          )
+          .withIdempotencyKey('cancel-key-2')
       };
       WorkflowEngine.signal(reqs);
 
@@ -879,13 +867,8 @@ public class WorkflowSignalIdempotencyTest {
       WorkflowEngine.signal(
         new List<WorkflowEngine.SignalRequest>{
           new WorkflowEngine.SignalRequest('resurrect-1', 'Go', null),
-          new WorkflowEngine.SignalRequest(
-            'resurrect-1',
-            'Cancel',
-            null,
-            null,
-            'cancel-key'
-          )
+          new WorkflowEngine.SignalRequest('resurrect-1', 'Cancel', null)
+            .withIdempotencyKey('cancel-key')
         }
       );
       Test.stopTest();
@@ -935,13 +918,8 @@ public class WorkflowSignalIdempotencyTest {
       Test.startTest();
       WorkflowEngine.signal(
         new List<WorkflowEngine.SignalRequest>{
-          new WorkflowEngine.SignalRequest(
-            'order-ci-1',
-            'Cancel',
-            null,
-            null,
-            'ci-cancel-key'
-          )
+          new WorkflowEngine.SignalRequest('order-ci-1', 'Cancel', null)
+            .withIdempotencyKey('ci-cancel-key')
         }
       );
       Test.stopTest();

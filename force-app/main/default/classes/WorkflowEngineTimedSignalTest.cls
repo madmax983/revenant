@@ -96,32 +96,20 @@ public class WorkflowEngineTimedSignalTest {
       Test.startTest();
       WorkflowEngine.signal(
         new List<WorkflowEngine.SignalRequest>{
-          new WorkflowEngine.SignalRequest(
-            'IdempKey',
-            'Arrive',
-            '{"n":1}',
-            dedupKey
-          )
+          new WorkflowEngine.SignalRequest('IdempKey', 'Arrive', '{"n":1}')
+            .withDedupKey(dedupKey)
         }
       );
       WorkflowEngine.signal(
         new List<WorkflowEngine.SignalRequest>{
-          new WorkflowEngine.SignalRequest(
-            'IdempKey',
-            'Arrive',
-            '{"n":1}',
-            dedupKey
-          )
+          new WorkflowEngine.SignalRequest('IdempKey', 'Arrive', '{"n":1}')
+            .withDedupKey(dedupKey)
         }
       );
       WorkflowEngine.signal(
         new List<WorkflowEngine.SignalRequest>{
-          new WorkflowEngine.SignalRequest(
-            'IdempKey',
-            'Arrive',
-            '{"n":1}',
-            dedupKey
-          )
+          new WorkflowEngine.SignalRequest('IdempKey', 'Arrive', '{"n":1}')
+            .withDedupKey(dedupKey)
         }
       );
       Test.stopTest();
