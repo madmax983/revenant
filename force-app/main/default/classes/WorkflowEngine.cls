@@ -380,24 +380,7 @@ public inherited sharing class WorkflowEngine {
     /** @description Causation Id linking this run to the event that caused it. */
     public String causationId { get; private set; }
 
-    private WorkflowStatus(
-      Id instanceId,
-      String definitionName,
-      String correlationKey,
-      String status,
-      Boolean isTerminal,
-      String errorMessage,
-      String output,
-      String causationId
-    ) {
-      this.instanceId = instanceId;
-      this.definitionName = definitionName;
-      this.correlationKey = correlationKey;
-      this.status = status;
-      this.isTerminal = isTerminal;
-      this.errorMessage = errorMessage;
-      this.output = output;
-      this.causationId = causationId;
+    private WorkflowStatus() {
     }
   }
 
@@ -1017,17 +1000,16 @@ public inherited sharing class WorkflowEngine {
         output = '';
       }
     }
-    String cleanCausationId = cleanCausationId(inst.Causation_Id__c);
-    return new WorkflowStatus(
-      inst.Id,
-      inst.Workflow_Name__c,
-      inst.Correlation_Key__c,
-      inst.Status__c,
-      terminal,
-      inst.Error_Message__c,
-      output,
-      cleanCausationId
-    );
+    WorkflowStatus statusDto = new WorkflowStatus();
+    statusDto.instanceId = inst.Id;
+    statusDto.definitionName = inst.Workflow_Name__c;
+    statusDto.correlationKey = inst.Correlation_Key__c;
+    statusDto.status = inst.Status__c;
+    statusDto.isTerminal = terminal;
+    statusDto.errorMessage = inst.Error_Message__c;
+    statusDto.output = output;
+    statusDto.causationId = cleanCausationId(inst.Causation_Id__c);
+    return statusDto;
   }
 
   // Resolves all offload markers found in a collection of instances in one
@@ -5992,12 +5974,12 @@ public inherited sharing class WorkflowEngine {
         instance.Correlation_Key__c
       );
 
-      startChildWorkflow(
-        instance.Id,
-        result.childWorkflowName,
-        result.childCorrelationKey,
-        result.childInputJson
-      );
+      ChildWorkflowStartRequest childReq = new ChildWorkflowStartRequest();
+      childReq.parentId = instance.Id;
+      childReq.workflowName = result.childWorkflowName;
+      childReq.correlationKey = result.childCorrelationKey;
+      childReq.inputJson = result.childInputJson;
+      startChildWorkflow(childReq);
     } else if (result.action == StepResult.ActionType.START_CHILDREN) {
       if (result.childRequests == null || result.childRequests.isEmpty()) {
         throw new WorkflowException(
@@ -6164,12 +6146,12 @@ public inherited sharing class WorkflowEngine {
           ') exceeded.';
         saveStepExec(stepExec);
 
-        failWorkflowInstance(
-          instance.Id,
-          instance.Current_Step__c,
-          'Max retries exceeded.',
-          CAT_RETRIES_EXHAUSTED
-        );
+        FailInstanceRequest maxRetriesReq = new FailInstanceRequest();
+        maxRetriesReq.instanceId = instance.Id;
+        maxRetriesReq.stepName = instance.Current_Step__c;
+        maxRetriesReq.errorMessage = 'Max retries exceeded.';
+        maxRetriesReq.failureCategory = CAT_RETRIES_EXHAUSTED;
+        failWorkflowInstance(maxRetriesReq);
       } else {
         stepExec.Status__c = 'Retrying';
         stepExec.Output__c = null;
@@ -6377,12 +6359,12 @@ public inherited sharing class WorkflowEngine {
       // callers never silently lose events on deliberate terminal failures.
       publishOutboundEvents(result, context);
 
-      failWorkflowInstance(
-        instance.Id,
-        stepExec.Step_Name__c,
-        result.failureReason,
-        CAT_EXPLICIT_FAIL
-      );
+      FailInstanceRequest explicitFailReq = new FailInstanceRequest();
+      explicitFailReq.instanceId = instance.Id;
+      explicitFailReq.stepName = stepExec.Step_Name__c;
+      explicitFailReq.errorMessage = result.failureReason;
+      explicitFailReq.failureCategory = CAT_EXPLICIT_FAIL;
+      failWorkflowInstance(explicitFailReq);
     }
   }
 
@@ -6561,12 +6543,12 @@ public inherited sharing class WorkflowEngine {
     String errorMsg =
       'Transaction crashed: ' +
       (ex != null ? ex.getMessage() : 'Unknown governor limit');
-    failWorkflowInstance(
-      instanceId,
-      targetStepName,
-      errorMsg,
-      CAT_STEP_EXCEPTION
-    );
+    FailInstanceRequest stepExceptionReq = new FailInstanceRequest();
+    stepExceptionReq.instanceId = instanceId;
+    stepExceptionReq.stepName = targetStepName;
+    stepExceptionReq.errorMessage = errorMsg;
+    stepExceptionReq.failureCategory = CAT_STEP_EXCEPTION;
+    failWorkflowInstance(stepExceptionReq);
   }
 
   /**
@@ -6707,6 +6689,21 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * @description Request DTO for failing a workflow instance. Carries the target
+   * (by Id, or by pre-queried record on the resolved path), the failing step, the
+   * error message, the failure category, and — on the resolved path — the attempt
+   * count. Populated field-by-field to avoid a wide constructor.
+   */
+  public class FailInstanceRequest {
+    public Id instanceId;
+    public Workflow_Instance__c instance;
+    public String stepName;
+    public String errorMessage;
+    public String failureCategory;
+    public Integer attemptCount;
+  }
+
+  /**
    * Transitions a workflow instance to Failed or Compensating state.
    * @param instanceId Id of the instance to fail
    * @param stepName name of the step that failed
@@ -6717,24 +6714,24 @@ public inherited sharing class WorkflowEngine {
     String stepName,
     String errorMessage
   ) {
-    failWorkflowInstance(instanceId, stepName, errorMessage, CAT_UNKNOWN);
+    FailInstanceRequest req = new FailInstanceRequest();
+    req.instanceId = instanceId;
+    req.stepName = stepName;
+    req.errorMessage = errorMessage;
+    req.failureCategory = CAT_UNKNOWN;
+    failWorkflowInstance(req);
   }
 
   /**
    * @description Fails an instance with an explicit failure category, resolving
    * the current attempt count from the step's latest execution before delegating
-   * to the record-level overload.
-   * @param instanceId Id of the instance to fail
-   * @param stepName name of the step that failed
-   * @param errorMessage failure message to record
-   * @param failureCategory failure category picklist value (see CAT_* constants)
+   * to the record-level path.
+   * @param req the fail request (instanceId, stepName, errorMessage, failureCategory)
    */
-  public static void failWorkflowInstance(
-    Id instanceId,
-    String stepName,
-    String errorMessage,
-    String failureCategory
-  ) {
+  public static void failWorkflowInstance(FailInstanceRequest req) {
+    Id instanceId = req.instanceId;
+    String stepName = req.stepName;
+    String failureCategory = req.failureCategory;
     List<Workflow_Instance__c> instances = [
       SELECT
         Id,
@@ -6777,32 +6774,23 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    failWorkflowInstance(
-      instance,
-      stepName,
-      errorMessage,
-      failureCategory,
-      attemptCount
-    );
+    req.instance = instance;
+    req.attemptCount = attemptCount;
+    failResolvedInstance(req);
   }
 
   /**
    * @description Record-level fail transition: routes the instance to Failed, or
    * to Compensating when a compensable saga has completed steps to unwind, records
    * the error/category/attempt count, and publishes lifecycle/alert side effects.
-   * @param instance the instance record to fail (queried FOR UPDATE by the caller)
-   * @param stepName name of the step that failed
-   * @param errorMessage failure message to record
-   * @param failureCategory failure category picklist value (see CAT_* constants)
-   * @param attemptCount attempt number to record on the failure
+   * @param req the fail request with a pre-queried instance record and attempt count
    */
-  public static void failWorkflowInstance(
-    Workflow_Instance__c instance,
-    String stepName,
-    String errorMessage,
-    String failureCategory,
-    Integer attemptCount
-  ) {
+  private static void failResolvedInstance(FailInstanceRequest req) {
+    Workflow_Instance__c instance = req.instance;
+    String stepName = req.stepName;
+    String errorMessage = req.errorMessage;
+    String failureCategory = req.failureCategory;
+    Integer attemptCount = req.attemptCount;
     Boolean isCompFailure = (instance.Status__c == 'Compensating' ||
     instance.Status__c == 'Cancelling' ||
     (String.isNotBlank(stepName) && stepName.endsWith('_Compensate')));
@@ -6965,13 +6953,24 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  /**
+   * @description Request DTO for starting a single child workflow. Populated
+   * field-by-field to avoid a wide constructor.
+   */
   @TestVisible
-  private static void startChildWorkflow(
-    Id parentId,
-    String workflowName,
-    String correlationKey,
-    String inputJson
-  ) {
+  private class ChildWorkflowStartRequest {
+    public Id parentId;
+    public String workflowName;
+    public String correlationKey;
+    public String inputJson;
+  }
+
+  @TestVisible
+  private static void startChildWorkflow(ChildWorkflowStartRequest req) {
+    Id parentId = req.parentId;
+    String workflowName = req.workflowName;
+    String correlationKey = req.correlationKey;
+    String inputJson = req.inputJson;
     validateCorrelationKey(correlationKey);
     if (String.isNotBlank(correlationKey)) {
       // 1. Check for active globally unique key
@@ -11229,13 +11228,13 @@ public inherited sharing class WorkflowEngine {
               ? latestRetryCounts.get(key)
               : 0) + 1;
 
-          failWorkflowInstance(
-            parent,
-            step.Step_Name__c,
-            errorMsg,
-            CAT_TIMEOUT,
-            attemptCount
-          );
+          FailInstanceRequest timeoutFailReq = new FailInstanceRequest();
+          timeoutFailReq.instance = parent;
+          timeoutFailReq.stepName = step.Step_Name__c;
+          timeoutFailReq.errorMessage = errorMsg;
+          timeoutFailReq.failureCategory = CAT_TIMEOUT;
+          timeoutFailReq.attemptCount = attemptCount;
+          failResolvedInstance(timeoutFailReq);
           continue;
         }
 
