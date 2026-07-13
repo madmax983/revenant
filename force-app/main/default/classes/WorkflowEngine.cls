@@ -502,21 +502,63 @@ public inherited sharing class WorkflowEngine {
    * @return status DTOs positionally aligned with correlationKeys (null per blank
    * or unmatched key)
    */
-  public static List<WorkflowStatus> getStatus(List<String> correlationKeys) {
-    List<WorkflowStatus> out = new List<WorkflowStatus>();
-    if (correlationKeys == null || correlationKeys.isEmpty()) {
-      return out;
-    }
-
-    // Correlation key fields are case-insensitive in SOQL but Apex Set/Map lookups
-    // are case-sensitive, so all bucketing is done on the normalized (lower-cased)
-    // key to keep in-memory matching consistent with what the query returns.
+  /**
+   * Normalizes the non-blank correlation keys for consistent in-memory bucketing.
+   * Correlation key fields are case-insensitive in SOQL but Apex Set/Map lookups
+   * are case-sensitive, so all bucketing is done on the normalized (lower-cased)
+   * key to keep in-memory matching consistent with what the query returns.
+   * @param correlationKeys the requested correlation keys
+   * @return the set of normalized non-blank keys
+   */
+  private static Set<String> normalizeStatusKeys(
+    List<String> correlationKeys
+  ) {
     Set<String> normalizedKeys = new Set<String>();
     for (String k : correlationKeys) {
       if (String.isNotBlank(k)) {
         normalizedKeys.add(normalizeKey(k));
       }
     }
+    return normalizedKeys;
+  }
+
+  /**
+   * Fetches the winner instances' DTO fields (including Output__c) by id.
+   * @param winnerIds the resolved winning instance ids
+   * @return a map of instance id to its loaded record (empty when no winners)
+   */
+  private static Map<Id, Workflow_Instance__c> queryWinnerInstances(
+    Set<Id> winnerIds
+  ) {
+    Map<Id, Workflow_Instance__c> instById = new Map<Id, Workflow_Instance__c>();
+    if (winnerIds.isEmpty()) {
+      return instById;
+    }
+    for (Workflow_Instance__c inst : [
+      SELECT
+        Id,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Status__c,
+        Error_Message__c,
+        Output__c,
+        Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :winnerIds
+      WITH SYSTEM_MODE
+    ]) {
+      instById.put(inst.Id, inst);
+    }
+    return instById;
+  }
+
+  public static List<WorkflowStatus> getStatus(List<String> correlationKeys) {
+    List<WorkflowStatus> out = new List<WorkflowStatus>();
+    if (correlationKeys == null || correlationKeys.isEmpty()) {
+      return out;
+    }
+
+    Set<String> normalizedKeys = normalizeStatusKeys(correlationKeys);
 
     // Resolve the winning instance Id per requested key using metadata only (no
     // Output__c), so a hot key's many candidate rows can never load enough inline
@@ -527,25 +569,9 @@ public inherited sharing class WorkflowEngine {
     // Fetch Output__c (and the remaining DTO fields) only for the winners, then
     // rehydrate any offloaded outputs in one ContentVersion query — the same bounded
     // tail used by the Id-based overload.
-    Set<Id> winnerIds = new Set<Id>(winnerIdByKey.values());
-    Map<Id, Workflow_Instance__c> instById = new Map<Id, Workflow_Instance__c>();
-    if (!winnerIds.isEmpty()) {
-      for (Workflow_Instance__c inst : [
-        SELECT
-          Id,
-          Workflow_Name__c,
-          Correlation_Key__c,
-          Status__c,
-          Error_Message__c,
-          Output__c,
-          Causation_Id__c
-        FROM Workflow_Instance__c
-        WHERE Id IN :winnerIds
-        WITH SYSTEM_MODE
-      ]) {
-        instById.put(inst.Id, inst);
-      }
-    }
+    Map<Id, Workflow_Instance__c> instById = queryWinnerInstances(
+      new Set<Id>(winnerIdByKey.values())
+    );
 
     Map<Id, String> resolvedOutputByDocId = bulkResolveOffloadedOutputs(
       instById.values()
