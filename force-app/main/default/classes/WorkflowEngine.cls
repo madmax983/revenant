@@ -1905,11 +1905,34 @@ public inherited sharing class WorkflowEngine {
     // resume path a concrete step to drive. Skip timeout scheduling and the first
     // enqueue; the watchdog re-drives held work on resume.
     if (parkAtStart) {
-      instance.Status__c = 'Paused';
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-      return new StartResult(instance.Id).markNew();
+      return parkStartInstance(instance);
     }
 
+    return finalizeStart(instance, deferTimeoutForConcurrency);
+  }
+
+  /**
+   * Parks a freshly-started instance under the operator pause gate.
+   * @param instance the inserted instance to park
+   * @return a new-marked StartResult for the parked instance
+   */
+  private static StartResult parkStartInstance(Workflow_Instance__c instance) {
+    instance.Status__c = 'Paused';
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+    return new StartResult(instance.Id).markNew();
+  }
+
+  /**
+   * Schedules the initial-step watchdog (unless concurrency-deferred) and enqueues
+   * the first step execution for a non-parked start.
+   * @param instance the inserted instance to drive
+   * @param deferTimeoutForConcurrency whether admission will arm the timeout
+   * @return a new-marked StartResult for the started instance
+   */
+  private static StartResult finalizeStart(
+    Workflow_Instance__c instance,
+    Boolean deferTimeoutForConcurrency
+  ) {
     // Schedule watchdog for the initial step before executing it — unless this is a
     // bounded workflow, where the admission gate arms the timeout once a slot is won.
     if (!deferTimeoutForConcurrency) {
