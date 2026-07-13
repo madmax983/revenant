@@ -3922,6 +3922,229 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Lookup index of the suspended instances found for a batch of resume
+   * requests, keyed by both Id and correlation key.
+   */
+  private class ResumeInstanceIndex {
+    Map<Id, Workflow_Instance__c> instById = new Map<Id, Workflow_Instance__c>();
+    Map<String, Workflow_Instance__c> instByKey = new Map<String, Workflow_Instance__c>();
+  }
+
+  /**
+   * Accumulated instance and step-execution records to persist for a batch of
+   * resume requests.
+   */
+  private class ResumeUpdates {
+    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+    List<Workflow_Step_Execution__c> stepsToUpdate = new List<Workflow_Step_Execution__c>();
+  }
+
+  /**
+   * Collects the explicit instance ids referenced by the resume requests.
+   * @param requests the resume requests
+   * @return the set of non-null request instance ids
+   */
+  private static Set<Id> collectResumeIds(List<ResumeRequest> requests) {
+    Set<Id> ids = new Set<Id>();
+    for (ResumeRequest req : requests) {
+      if (req.instanceId != null) {
+        ids.add(req.instanceId);
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * Collects the correlation keys referenced by the resume requests that do not
+   * carry an explicit instance id.
+   * @param requests the resume requests
+   * @return the set of correlation keys used for lookup
+   */
+  private static Set<String> collectResumeKeys(List<ResumeRequest> requests) {
+    Set<String> keys = new Set<String>();
+    for (ResumeRequest req : requests) {
+      if (req.instanceId == null && String.isNotBlank(req.correlationKey)) {
+        keys.add(req.correlationKey);
+      }
+    }
+    return keys;
+  }
+
+  /**
+   * Builds the by-Id and by-correlation-key lookup index over the queried
+   * suspended instances.
+   * @param instances the suspended instances found for the batch
+   * @return the populated lookup index
+   */
+  private static ResumeInstanceIndex buildResumeInstanceIndex(
+    List<Workflow_Instance__c> instances
+  ) {
+    ResumeInstanceIndex index = new ResumeInstanceIndex();
+    for (Workflow_Instance__c inst : instances) {
+      index.instById.put(inst.Id, inst);
+      if (String.isNotBlank(inst.Correlation_Key__c)) {
+        index.instByKey.put(inst.Correlation_Key__c, inst);
+      }
+    }
+    return index;
+  }
+
+  /**
+   * Resolves the suspended instance targeted by a resume request, preferring an
+   * explicit instance id and falling back to the correlation key.
+   * @param req the resume request
+   * @param index the instance lookup index
+   * @return the matching instance, or null when none was found
+   */
+  private static Workflow_Instance__c resolveResumeInstance(
+    ResumeRequest req,
+    ResumeInstanceIndex index
+  ) {
+    if (req.instanceId != null) {
+      return index.instById.get(req.instanceId);
+    }
+    if (String.isNotBlank(req.correlationKey)) {
+      return index.instByKey.get(req.correlationKey);
+    }
+    return null;
+  }
+
+  /**
+   * Verifies that a suspended instance was found for every resume request,
+   * throwing if any request cannot be satisfied.
+   * @param requests the resume requests
+   * @param index the instance lookup index
+   */
+  private static void verifyAllResumeTargetsFound(
+    List<ResumeRequest> requests,
+    ResumeInstanceIndex index
+  ) {
+    for (ResumeRequest req : requests) {
+      Workflow_Instance__c inst = resolveResumeInstance(req, index);
+      if (inst == null) {
+        throw new WorkflowException(
+          'No suspended workflow found with key or ID: ' +
+          (req.instanceId != null
+            ? (String) req.instanceId
+            : req.correlationKey)
+        );
+      }
+    }
+  }
+
+  /**
+   * Tests whether a step name is (one of) the instance's current active step(s),
+   * supporting comma-separated parallel branch step names.
+   * @param inst the instance whose Current_Step__c is inspected
+   * @param stepName the step execution's step name to test
+   * @return true when the step name matches the instance's current step
+   */
+  private static Boolean stepMatchesCurrentStep(
+    Workflow_Instance__c inst,
+    String stepName
+  ) {
+    if (inst == null || String.isBlank(inst.Current_Step__c)) {
+      return false;
+    }
+    if (inst.Current_Step__c.contains(',')) {
+      for (String pStep : inst.Current_Step__c.split(',')) {
+        if (pStep.trim() == stepName) {
+          return true;
+        }
+      }
+      return false;
+    }
+    return inst.Current_Step__c == stepName;
+  }
+
+  /**
+   * Picks the latest active step execution per instance that matches the
+   * instance's current step, from a list ordered newest-first.
+   * @param allActiveSteps the instances' step executions, newest first
+   * @param instById the instance lookup by id
+   * @return the matching latest step execution per instance id
+   */
+  private static Map<Id, Workflow_Step_Execution__c> buildLatestStepByInstanceId(
+    List<Workflow_Step_Execution__c> allActiveSteps,
+    Map<Id, Workflow_Instance__c> instById
+  ) {
+    Map<Id, Workflow_Step_Execution__c> latestStepByInstanceId = new Map<Id, Workflow_Step_Execution__c>();
+    for (Workflow_Step_Execution__c step : allActiveSteps) {
+      if (!latestStepByInstanceId.containsKey(step.Workflow_Instance__c)) {
+        Workflow_Instance__c inst = instById.get(step.Workflow_Instance__c);
+        if (stepMatchesCurrentStep(inst, step.Step_Name__c)) {
+          latestStepByInstanceId.put(step.Workflow_Instance__c, step);
+        }
+      }
+    }
+    return latestStepByInstanceId;
+  }
+
+  /**
+   * Applies the resume mutation to a matched step execution: marks it Running,
+   * persists the resume payload as its output, and (re)arms its step timeout.
+   * @param stepExec the step execution to mutate
+   * @param inst the owning instance (for id, current step and namespace)
+   * @param payload the resume payload to persist
+   */
+  private static void applyResumeToStep(
+    Workflow_Step_Execution__c stepExec,
+    Workflow_Instance__c inst,
+    String payload
+  ) {
+    stepExec.Status__c = 'Running';
+    stepExec.Output__c = savePayloadIfNeeded(
+      inst.Id,
+      payload,
+      'Resume_' + stepExec.Id
+    );
+    Integer timeout = getStepTimeoutSeconds(
+      inst.Current_Step__c,
+      WorkflowTypeResolver.extractNamespace(inst.Workflow_Name__c)
+    );
+    if (timeout != null && timeout > 0) {
+      stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
+    } else {
+      stepExec.Timeout_At__c = null;
+    }
+  }
+
+  /**
+   * Builds the pending instance/step-execution mutations for a batch of resume
+   * requests: each matched instance is flipped to Running with its timed-wait
+   * disarmed, and its matched step execution (if any) is resumed.
+   * @param requests the resume requests
+   * @param index the instance lookup index
+   * @param latestStepByInstanceId the matched latest step execution per instance
+   * @return the accumulated records to update
+   */
+  private static ResumeUpdates buildResumeUpdates(
+    List<ResumeRequest> requests,
+    ResumeInstanceIndex index,
+    Map<Id, Workflow_Step_Execution__c> latestStepByInstanceId
+  ) {
+    ResumeUpdates updates = new ResumeUpdates();
+    for (ResumeRequest req : requests) {
+      Workflow_Instance__c inst = resolveResumeInstance(req, index);
+      if (inst == null) {
+        continue;
+      }
+      inst.Status__c = 'Running';
+      // Disarm any armed timed-wait timeout so the watchdog does not mis-route
+      // to the fallback step after a manual resume wins the race (issue #35).
+      inst.Sleep_Until__c = null;
+      updates.instancesToUpdate.add(inst);
+
+      Workflow_Step_Execution__c stepExec = latestStepByInstanceId.get(inst.Id);
+      if (stepExec != null) {
+        applyResumeToStep(stepExec, inst, req.payload);
+        updates.stepsToUpdate.add(stepExec);
+      }
+    }
+    return updates;
+  }
+
+  /**
    * Resumes multiple suspended workflows in a bulk-friendly transaction.
    * @param requests the resume requests to process
    */
@@ -3930,15 +4153,8 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    Set<String> keys = new Set<String>();
-    Set<Id> ids = new Set<Id>();
-    for (ResumeRequest req : requests) {
-      if (req.instanceId != null) {
-        ids.add(req.instanceId);
-      } else if (String.isNotBlank(req.correlationKey)) {
-        keys.add(req.correlationKey);
-      }
-    }
+    Set<Id> ids = collectResumeIds(requests);
+    Set<String> keys = collectResumeKeys(requests);
 
     List<Workflow_Instance__c> instances = [
       SELECT Id, Workflow_Name__c, Current_Step__c, Correlation_Key__c
@@ -3951,35 +4167,13 @@ public inherited sharing class WorkflowEngine {
       FOR UPDATE
     ];
 
-    Map<Id, Workflow_Instance__c> instById = new Map<Id, Workflow_Instance__c>();
-    Map<String, Workflow_Instance__c> instByKey = new Map<String, Workflow_Instance__c>();
-    for (Workflow_Instance__c inst : instances) {
-      instById.put(inst.Id, inst);
-      if (String.isNotBlank(inst.Correlation_Key__c)) {
-        instByKey.put(inst.Correlation_Key__c, inst);
-      }
-    }
+    ResumeInstanceIndex index = buildResumeInstanceIndex(instances);
 
     // Verify that we found a suspended instance for every request
-    for (ResumeRequest req : requests) {
-      Workflow_Instance__c inst = null;
-      if (req.instanceId != null) {
-        inst = instById.get(req.instanceId);
-      } else if (String.isNotBlank(req.correlationKey)) {
-        inst = instByKey.get(req.correlationKey);
-      }
-      if (inst == null) {
-        throw new WorkflowException(
-          'No suspended workflow found with key or ID: ' +
-          (req.instanceId != null
-            ? (String) req.instanceId
-            : req.correlationKey)
-        );
-      }
-    }
+    verifyAllResumeTargetsFound(requests, index);
 
     // Gathers active step execution logs for the instances in bulk
-    Set<Id> activeInstIds = instById.keySet();
+    Set<Id> activeInstIds = index.instById.keySet();
     List<Workflow_Step_Execution__c> allActiveSteps = [
       SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Output__c
       FROM Workflow_Step_Execution__c
@@ -3988,80 +4182,26 @@ public inherited sharing class WorkflowEngine {
       ORDER BY CreatedDate DESC, Id DESC
     ];
 
-    Map<Id, Workflow_Step_Execution__c> latestStepByInstanceId = new Map<Id, Workflow_Step_Execution__c>();
-    for (Workflow_Step_Execution__c step : allActiveSteps) {
-      if (!latestStepByInstanceId.containsKey(step.Workflow_Instance__c)) {
-        Workflow_Instance__c inst = instById.get(step.Workflow_Instance__c);
-        if (inst != null && String.isNotBlank(inst.Current_Step__c)) {
-          Boolean stepMatches = false;
-          if (inst.Current_Step__c.contains(',')) {
-            for (String pStep : inst.Current_Step__c.split(',')) {
-              if (pStep.trim() == step.Step_Name__c) {
-                stepMatches = true;
-                break;
-              }
-            }
-          } else if (inst.Current_Step__c == step.Step_Name__c) {
-            stepMatches = true;
-          }
-          if (stepMatches) {
-            latestStepByInstanceId.put(step.Workflow_Instance__c, step);
-          }
-        }
-      }
+    Map<Id, Workflow_Step_Execution__c> latestStepByInstanceId = buildLatestStepByInstanceId(
+      allActiveSteps,
+      index.instById
+    );
+
+    ResumeUpdates updates = buildResumeUpdates(
+      requests,
+      index,
+      latestStepByInstanceId
+    );
+
+    Database.update(updates.instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
+    if (!updates.stepsToUpdate.isEmpty()) {
+      Database.update(updates.stepsToUpdate, true, AccessLevel.SYSTEM_MODE);
     }
 
-    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
-    List<Workflow_Step_Execution__c> stepsToUpdate = new List<Workflow_Step_Execution__c>();
-
-    for (ResumeRequest req : requests) {
-      Workflow_Instance__c inst = null;
-      if (req.instanceId != null) {
-        inst = instById.get(req.instanceId);
-      } else if (String.isNotBlank(req.correlationKey)) {
-        inst = instByKey.get(req.correlationKey);
-      }
-
-      if (inst != null) {
-        inst.Status__c = 'Running';
-        // Disarm any armed timed-wait timeout so the watchdog does not mis-route
-        // to the fallback step after a manual resume wins the race (issue #35).
-        inst.Sleep_Until__c = null;
-        instancesToUpdate.add(inst);
-
-        Workflow_Step_Execution__c stepExec = latestStepByInstanceId.get(
-          inst.Id
-        );
-        if (stepExec != null) {
-          stepExec.Status__c = 'Running';
-          stepExec.Output__c = savePayloadIfNeeded(
-            inst.Id,
-            req.payload,
-            'Resume_' + stepExec.Id
-          );
-          Integer timeout = getStepTimeoutSeconds(
-            inst.Current_Step__c,
-            WorkflowTypeResolver.extractNamespace(inst.Workflow_Name__c)
-          );
-          if (timeout != null && timeout > 0) {
-            stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
-          } else {
-            stepExec.Timeout_At__c = null;
-          }
-          stepsToUpdate.add(stepExec);
-        }
-      }
-    }
-
-    Database.update(instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
-    if (!stepsToUpdate.isEmpty()) {
-      Database.update(stepsToUpdate, true, AccessLevel.SYSTEM_MODE);
-    }
-
-    scheduleTimeoutJobsForInstances(instancesToUpdate);
+    scheduleTimeoutJobsForInstances(updates.instancesToUpdate);
 
     List<Id> instanceIds = new List<Id>();
-    for (Workflow_Instance__c inst : instancesToUpdate) {
+    for (Workflow_Instance__c inst : updates.instancesToUpdate) {
       instanceIds.add(inst.Id);
     }
     enqueueOrchestrators(instanceIds);
