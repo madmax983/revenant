@@ -6953,22 +6953,48 @@ public inherited sharing class WorkflowEngine {
 
     Workflow_Instance__c instance = instances[0];
 
-    // Resolve target step name. An explicit stepName always wins. Otherwise, if the
-    // instance is mid-rollback the crashing work is the top-of-stack compensation (the
-    // compensation orchestrator is enqueued without a stepName), so record the crash
-    // against that '_Compensate' step rather than the stale forward Current_Step__c.
-    // This keeps the failed compensation in the append-only audit trail and lets the
-    // resume path append a fresh attempt instead of mistaking a stale log for in-flight.
-    //
-    // The instance is mid-rollback when its status is Compensating/Cancelling, OR when it
-    // is Suspended and its most recent step execution is a '_Compensate' attempt. The
-    // latter is the sleeping/approval-gated compensation case: a compensation returned
-    // SLEEP/SUSPEND/WAIT_FOR_APPROVAL, so the engine parked the instance as Suspended and
-    // resumed it later via WorkflowOrchestrator(instanceId) with no stepName. runStep()
-    // flips that Suspended status back to Compensating/Cancelling in-transaction (using
-    // the same latest-'_Compensate' signal), but a crash rolls that flip back, leaving the
-    // persisted status as Suspended here. Detect it the same way runStep() does so the
-    // crash is recorded against the '_Compensate' step instead of the stale forward step.
+    Boolean midRollback = isMidRollback(instance);
+    String targetStepName = resolveCrashStepName(
+      instance,
+      stepName,
+      midRollback
+    );
+
+    // Transient row-lock contention (UNABLE_TO_LOCK_ROW) is retryable, not a crash:
+    // it arises when many transactions touch the same row at once — e.g. a fan-in
+    // where every child-completion signal locks the shared parent row — and clears on
+    // its own once the competing transactions commit. Re-drive the step after a short
+    // backoff instead of failing/compensating the whole workflow. Bounded by the
+    // step's consecutive Transient_Retry_Count__c so a genuinely stuck row still fails.
+    if (
+      isTransientLockError(ex) &&
+      String.isNotBlank(targetStepName) &&
+      scheduleTransientLockRetry(instance, targetStepName)
+    ) {
+      return;
+    }
+
+    recordCrashedStep(instance, targetStepName, ex);
+
+    // Use fail helper
+    String errorMsg =
+      'Transaction crashed: ' +
+      (ex != null ? ex.getMessage() : 'Unknown governor limit');
+    FailInstanceRequest stepExceptionReq = new FailInstanceRequest();
+    stepExceptionReq.instanceId = instanceId;
+    stepExceptionReq.stepName = targetStepName;
+    stepExceptionReq.errorMessage = errorMsg;
+    stepExceptionReq.failureCategory = CAT_STEP_EXCEPTION;
+    failWorkflowInstance(stepExceptionReq);
+  }
+
+  // The instance is mid-rollback when its status is Compensating/Cancelling, OR
+  // when it is Suspended and its most recent step execution is a '_Compensate'
+  // attempt (a sleeping/approval-gated compensation whose in-transaction status
+  // flip was rolled back by the crash). Detected the same way runStep() does so
+  // the crash is recorded against the '_Compensate' step, not the stale forward
+  // step.
+  private static Boolean isMidRollback(Workflow_Instance__c instance) {
     Boolean midRollback =
       instance.Status__c == 'Compensating' ||
       instance.Status__c == 'Cancelling';
@@ -6986,118 +7012,139 @@ public inherited sharing class WorkflowEngine {
         latestSteps[0].Step_Name__c != null &&
         latestSteps[0].Step_Name__c.endsWith('_Compensate');
     }
+    return midRollback;
+  }
 
-    String targetStepName;
+  // Resolve the step the crash is recorded against. An explicit stepName always
+  // wins; otherwise a mid-rollback crash targets the top-of-stack '_Compensate'
+  // step, and a forward crash targets the stale Current_Step__c.
+  private static String resolveCrashStepName(
+    Workflow_Instance__c instance,
+    String stepName,
+    Boolean midRollback
+  ) {
     if (String.isNotBlank(stepName)) {
-      targetStepName = stepName;
-    } else if (
-      midRollback && String.isNotBlank(instance.Compensation_Stack__c)
-    ) {
+      return stepName;
+    }
+    if (midRollback && String.isNotBlank(instance.Compensation_Stack__c)) {
       List<String> stack = (List<String>) JSON.deserialize(
         instance.Compensation_Stack__c,
         List<String>.class
       );
-      targetStepName = stack.isEmpty()
+      return stack.isEmpty()
         ? instance.Current_Step__c
         : stack[stack.size() - 1] + '_Compensate';
-    } else {
-      targetStepName = instance.Current_Step__c;
     }
+    return instance.Current_Step__c;
+  }
 
-    // Transient row-lock contention (UNABLE_TO_LOCK_ROW) is retryable, not a crash:
-    // it arises when many transactions touch the same row at once — e.g. a fan-in
-    // where every child-completion signal locks the shared parent row — and clears on
-    // its own once the competing transactions commit. Re-drive the step after a short
-    // backoff instead of failing/compensating the whole workflow. Bounded by the
-    // step's consecutive Transient_Retry_Count__c so a genuinely stuck row still fails.
-    if (
-      isTransientLockError(ex) &&
-      String.isNotBlank(targetStepName) &&
-      scheduleTransientLockRetry(instance, targetStepName)
-    ) {
+  private static String crashErrorDetails(Exception ex) {
+    return ex != null
+      ? ex.getMessage() + '\n' + ex.getStackTraceString()
+      : 'Unknown governor limit / crash';
+  }
+
+  // Mark the crashing step's execution log Failed (updating the latest log if it
+  // exists, otherwise inserting a fresh Failed log seeded with the right undo
+  // context).
+  private static void recordCrashedStep(
+    Workflow_Instance__c instance,
+    String targetStepName,
+    Exception ex
+  ) {
+    if (String.isBlank(targetStepName)) {
       return;
     }
-
-    // Mark step failed first
-    if (String.isNotBlank(targetStepName)) {
-      List<Workflow_Step_Execution__c> stepExecs = [
-        SELECT Id
-        FROM Workflow_Step_Execution__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Step_Name__c = :targetStepName
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC, Id DESC
-        LIMIT 1
-      ];
-      if (!stepExecs.isEmpty()) {
-        Workflow_Step_Execution__c stepExec = stepExecs[0];
-        stepExec.Status__c = 'Failed';
-        stepExec.Error_Details__c = (ex != null
-          ? ex.getMessage() + '\n' + ex.getStackTraceString()
-          : 'Unknown governor limit / crash');
-        saveStepExec(stepExec, true);
-      } else {
-        // Construct and insert the step execution log with failed status
-        Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
-        stepExec.Workflow_Instance__c = instanceId;
-        stepExec.Step_Name__c = targetStepName;
-        stepExec.Status__c = 'Failed';
-        stepExec.Error_Details__c = (ex != null
-          ? ex.getMessage() + '\n' + ex.getStackTraceString()
-          : 'Unknown governor limit / crash');
-
-        if (targetStepName.endsWith('_Compensate')) {
-          // Crash row for a compensation step: seed from THIS step's own forward
-          // execution (input/output), matching how compensation logs are seeded
-          // everywhere else. Using the latest completed step overall would be wrong
-          // once earlier compensations have popped — that row belongs to a step that
-          // is already reversed, giving the wrong undo context on resume.
-          String forwardStepName = targetStepName.removeEnd('_Compensate');
-          List<Workflow_Step_Execution__c> forwardExecs = [
-            SELECT Input__c, Output__c
-            FROM Workflow_Step_Execution__c
-            WHERE
-              Workflow_Instance__c = :instanceId
-              AND Step_Name__c = :forwardStepName
-            WITH SYSTEM_MODE
-            ORDER BY CreatedDate DESC, Id DESC
-            LIMIT 1
-          ];
-          if (!forwardExecs.isEmpty()) {
-            stepExec.Input__c = forwardExecs[0].Input__c;
-            stepExec.Output__c = forwardExecs[0].Output__c;
-          }
-        } else {
-          // Forward step crash: feed the previous step's output as input.
-          List<Workflow_Step_Execution__c> completedSteps = [
-            SELECT Output__c
-            FROM Workflow_Step_Execution__c
-            WHERE
-              Workflow_Instance__c = :instanceId
-              AND Status__c IN ('Completed', 'OperatorSkipped')
-            WITH SYSTEM_MODE
-            ORDER BY CreatedDate DESC, Id DESC
-            LIMIT 1
-          ];
-          stepExec.Input__c = !completedSteps.isEmpty()
-            ? completedSteps[0].Output__c
-            : instance.Input__c;
-        }
-        saveStepExec(stepExec, true);
-      }
+    List<Workflow_Step_Execution__c> stepExecs = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instance.Id
+        AND Step_Name__c = :targetStepName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    if (!stepExecs.isEmpty()) {
+      Workflow_Step_Execution__c stepExec = stepExecs[0];
+      stepExec.Status__c = 'Failed';
+      stepExec.Error_Details__c = crashErrorDetails(ex);
+      saveStepExec(stepExec, true);
+      return;
     }
+    // Construct and insert the step execution log with failed status
+    Workflow_Step_Execution__c stepExec = buildCrashedStepExec(
+      instance,
+      targetStepName,
+      ex
+    );
+    saveStepExec(stepExec, true);
+  }
 
-    // Use fail helper
-    String errorMsg =
-      'Transaction crashed: ' +
-      (ex != null ? ex.getMessage() : 'Unknown governor limit');
-    FailInstanceRequest stepExceptionReq = new FailInstanceRequest();
-    stepExceptionReq.instanceId = instanceId;
-    stepExceptionReq.stepName = targetStepName;
-    stepExceptionReq.errorMessage = errorMsg;
-    stepExceptionReq.failureCategory = CAT_STEP_EXCEPTION;
-    failWorkflowInstance(stepExceptionReq);
+  private static Workflow_Step_Execution__c buildCrashedStepExec(
+    Workflow_Instance__c instance,
+    String targetStepName,
+    Exception ex
+  ) {
+    Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
+    stepExec.Workflow_Instance__c = instance.Id;
+    stepExec.Step_Name__c = targetStepName;
+    stepExec.Status__c = 'Failed';
+    stepExec.Error_Details__c = crashErrorDetails(ex);
+
+    if (targetStepName.endsWith('_Compensate')) {
+      seedCompensationCrashInput(stepExec, instance.Id, targetStepName);
+    } else {
+      seedForwardCrashInput(stepExec, instance);
+    }
+    return stepExec;
+  }
+
+  // Crash row for a compensation step: seed from THIS step's own forward
+  // execution (input/output), matching how compensation logs are seeded
+  // everywhere else. Using the latest completed step overall would be wrong once
+  // earlier compensations have popped — that row belongs to an already-reversed
+  // step, giving the wrong undo context on resume.
+  private static void seedCompensationCrashInput(
+    Workflow_Step_Execution__c stepExec,
+    Id instanceId,
+    String targetStepName
+  ) {
+    String forwardStepName = targetStepName.removeEnd('_Compensate');
+    List<Workflow_Step_Execution__c> forwardExecs = [
+      SELECT Input__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = :forwardStepName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    if (!forwardExecs.isEmpty()) {
+      stepExec.Input__c = forwardExecs[0].Input__c;
+      stepExec.Output__c = forwardExecs[0].Output__c;
+    }
+  }
+
+  // Forward step crash: feed the previous step's output as input.
+  private static void seedForwardCrashInput(
+    Workflow_Step_Execution__c stepExec,
+    Workflow_Instance__c instance
+  ) {
+    List<Workflow_Step_Execution__c> completedSteps = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instance.Id
+        AND Status__c IN ('Completed', 'OperatorSkipped')
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    stepExec.Input__c = !completedSteps.isEmpty()
+      ? completedSteps[0].Output__c
+      : instance.Input__c;
   }
 
   /**
