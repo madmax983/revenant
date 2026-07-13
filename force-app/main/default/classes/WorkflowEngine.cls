@@ -15454,6 +15454,30 @@ public inherited sharing class WorkflowEngine {
    * @return true when the signal was matched and re-parented; false when still unmatched
    */
   public static Boolean redeliverCapturedSignal(Id signalId) {
+    Workflow_Signal__c sig = loadUnroutedSignal(signalId);
+    if (sig == null) {
+      return false;
+    }
+
+    String keyOrId = sig.Correlation_Key__c;
+    if (String.isBlank(keyOrId)) {
+      return false;
+    }
+
+    Workflow_Instance__c instance = resolveRedeliveryTarget(keyOrId);
+    if (instance == null) {
+      return false;
+    }
+
+    return deliverRedeliveredSignal(sig, instance);
+  }
+
+  /**
+   * Loads and locks the Unrouted captured signal to redeliver.
+   * @param signalId the captured signal id
+   * @return the locked Unrouted signal row, or null when none matches
+   */
+  private static Workflow_Signal__c loadUnroutedSignal(Id signalId) {
     List<Workflow_Signal__c> rows = [
       SELECT
         Id,
@@ -15469,24 +15493,17 @@ public inherited sharing class WorkflowEngine {
       LIMIT 1
       FOR UPDATE
     ];
-    if (rows.isEmpty()) {
-      return false;
-    }
-    Workflow_Signal__c sig = rows[0];
+    return rows.isEmpty() ? null : rows[0];
+  }
 
-    String keyOrId = sig.Correlation_Key__c;
-    if (String.isBlank(keyOrId)) {
-      return false;
-    }
-
-    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
-        SObjectDescribeOptions.DEFERRED
-      )
-      .getKeyPrefix();
-    Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
-    Boolean isId =
-      idPattern.matcher(keyOrId).matches() && keyOrId.startsWith(wflowPrefix);
-
+  /**
+   * Resolves and locks the active instance to redeliver the captured signal to,
+   * preferring an id-shaped key match, then falling back to a correlation-key
+   * match.
+   * @param keyOrId the captured signal's correlation key (id or key)
+   * @return the locked active instance, or null when none is active
+   */
+  private static Workflow_Instance__c resolveRedeliveryTarget(String keyOrId) {
     List<String> activeStatuses = new List<String>{
       'Pending',
       'Running',
@@ -15497,7 +15514,7 @@ public inherited sharing class WorkflowEngine {
     };
 
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
-    if (isId) {
+    if (isInstanceId(keyOrId)) {
       instances = [
         SELECT Id, Status__c, Concurrency_Parked__c, Concurrency_Slot_Held__c
         FROM Workflow_Instance__c
@@ -15517,13 +15534,22 @@ public inherited sharing class WorkflowEngine {
         FOR UPDATE
       ];
     }
+    return instances.isEmpty() ? null : instances[0];
+  }
 
-    if (instances.isEmpty()) {
-      return false;
-    }
-
-    Workflow_Instance__c instance = instances[0];
-
+  /**
+   * Re-parents the captured signal to the resolved instance and wakes it, sharing
+   * one savepoint so the redelivery is all-or-none. On a unique-key collision with
+   * a routed delivery that already claimed this instance+key, retires this row as a
+   * keyless Consumed tombstone rather than delivering a second copy.
+   * @param sig the captured Unrouted signal (locked)
+   * @param instance the resolved active instance (locked)
+   * @return true once the signal has been delivered or tombstoned
+   */
+  private static Boolean deliverRedeliveredSignal(
+    Workflow_Signal__c sig,
+    Workflow_Instance__c instance
+  ) {
     sig.Workflow_Instance__c = instance.Id;
     sig.Status__c = 'Received';
     if (String.isNotBlank(sig.Idempotency_Key__c)) {
@@ -15546,18 +15572,18 @@ public inherited sharing class WorkflowEngine {
     try {
       Database.update(sig, true, AccessLevel.SYSTEM_MODE);
     } catch (DmlException ex) {
-      if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
-        // A routed delivery already claimed this instance+key, so the canonical
-        // Received row exists and was (or will be) woken. This captured row is a
-        // duplicate: retire it as a keyless Consumed tombstone (releasing the
-        // key it could not take) rather than delivering a second copy.
-        sig.Workflow_Instance__c = null;
-        sig.Signal_Key__c = null;
-        sig.Status__c = 'Consumed';
-        Database.update(sig, true, AccessLevel.SYSTEM_MODE);
-        return true;
+      if (ex.getDmlStatusCode(0) != 'DUPLICATE_VALUE') {
+        throw ex;
       }
-      throw ex;
+      // A routed delivery already claimed this instance+key, so the canonical
+      // Received row exists and was (or will be) woken. This captured row is a
+      // duplicate: retire it as a keyless Consumed tombstone (releasing the
+      // key it could not take) rather than delivering a second copy.
+      sig.Workflow_Instance__c = null;
+      sig.Signal_Key__c = null;
+      sig.Status__c = 'Consumed';
+      Database.update(sig, true, AccessLevel.SYSTEM_MODE);
+      return true;
     }
 
     try {
