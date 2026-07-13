@@ -7644,6 +7644,16 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  /**
+   * Parallel arrays pairing each freshly built child instance with the
+   * originating ChildRequest, so payload resolution can re-associate them
+   * positionally after the bulk insert assigns Ids.
+   */
+  private class ChildStartPlan {
+    List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
+    List<StepResult.ChildRequest> requests = new List<StepResult.ChildRequest>();
+  }
+
   private static void startChildWorkflows(
     Id parentId,
     List<StepResult.ChildRequest> requests
@@ -7652,22 +7662,67 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    String parentNamespace = '';
-    if (parentId != null) {
-      List<Workflow_Instance__c> parentInsts = [
-        SELECT Workflow_Name__c
-        FROM Workflow_Instance__c
-        WHERE Id = :parentId
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (!parentInsts.isEmpty()) {
-        parentNamespace = WorkflowTypeResolver.extractNamespace(
-          parentInsts[0].Workflow_Name__c
-        );
+    String parentNamespace = resolveParentNamespace(parentId);
+    Set<String> correlationKeys = validateChildRequests(
+      requests,
+      parentNamespace
+    );
+    Map<String, Workflow_Instance__c> existingByCorrKey = findExistingChildren(
+      parentId,
+      correlationKeys
+    );
+
+    ChildStartPlan plan = new ChildStartPlan();
+    for (StepResult.ChildRequest req : requests) {
+      if (
+        String.isNotBlank(req.correlationKey) &&
+        existingByCorrKey.containsKey(normalizeKey(req.correlationKey))
+      ) {
+        continue;
       }
+      plan.instances.add(buildChildInstance(req, parentId, parentNamespace));
+      plan.requests.add(req);
     }
 
+    if (plan.instances.isEmpty()) {
+      return;
+    }
+
+    if (!insertChildInstances(plan.instances, parentId)) {
+      return;
+    }
+
+    List<Workflow_Instance__c> instancesToUpdate = applyChildInputPayloads(
+      plan
+    );
+    insertChildInitialSteps(instancesToUpdate);
+    scheduleOrPauseChildren(instancesToUpdate);
+    enqueueChildOrchestrators(instancesToUpdate);
+  }
+
+  private static String resolveParentNamespace(Id parentId) {
+    if (parentId == null) {
+      return '';
+    }
+    List<Workflow_Instance__c> parentInsts = [
+      SELECT Workflow_Name__c
+      FROM Workflow_Instance__c
+      WHERE Id = :parentId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    if (parentInsts.isEmpty()) {
+      return '';
+    }
+    return WorkflowTypeResolver.extractNamespace(
+      parentInsts[0].Workflow_Name__c
+    );
+  }
+
+  private static Set<String> validateChildRequests(
+    List<StepResult.ChildRequest> requests,
+    String parentNamespace
+  ) {
     Set<String> correlationKeys = new Set<String>();
     for (StepResult.ChildRequest req : requests) {
       validateCorrelationKey(req.correlationKey);
@@ -7692,84 +7747,89 @@ public inherited sharing class WorkflowEngine {
         );
       }
     }
+    return correlationKeys;
+  }
 
+  private static Map<String, Workflow_Instance__c> findExistingChildren(
+    Id parentId,
+    Set<String> correlationKeys
+  ) {
     Map<String, Workflow_Instance__c> existingByCorrKey = new Map<String, Workflow_Instance__c>();
-    if (!correlationKeys.isEmpty()) {
-      List<Workflow_Instance__c> existingActive = [
-        SELECT Id, Parent_Instance__c, Status__c, Active_Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE Active_Correlation_Key__c IN :correlationKeys
-        WITH SYSTEM_MODE
-      ];
-      for (Workflow_Instance__c existing : existingActive) {
-        if (existing.Parent_Instance__c == parentId) {
-          existingByCorrKey.put(
-            normalizeKey(existing.Active_Correlation_Key__c),
-            existing
-          );
-        } else {
-          throw new WorkflowException(
-            'An active workflow already exists with correlation key: ' +
-            existing.Active_Correlation_Key__c
-          );
-        }
-      }
+    if (correlationKeys.isEmpty()) {
+      return existingByCorrKey;
+    }
 
-      List<Workflow_Instance__c> existingSiblings = [
-        SELECT Id, Parent_Instance__c, Status__c, Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE
-          Correlation_Key__c IN :correlationKeys
-          AND Parent_Instance__c = :parentId
-        WITH SYSTEM_MODE
-      ];
-      for (Workflow_Instance__c existing : existingSiblings) {
+    List<Workflow_Instance__c> existingActive = [
+      SELECT Id, Parent_Instance__c, Status__c, Active_Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Active_Correlation_Key__c IN :correlationKeys
+      WITH SYSTEM_MODE
+    ];
+    for (Workflow_Instance__c existing : existingActive) {
+      if (existing.Parent_Instance__c == parentId) {
         existingByCorrKey.put(
-          normalizeKey(existing.Correlation_Key__c),
+          normalizeKey(existing.Active_Correlation_Key__c),
           existing
+        );
+      } else {
+        throw new WorkflowException(
+          'An active workflow already exists with correlation key: ' +
+          existing.Active_Correlation_Key__c
         );
       }
     }
 
-    List<Workflow_Instance__c> instancesToInsert = new List<Workflow_Instance__c>();
-    List<StepResult.ChildRequest> requestsToProcess = new List<StepResult.ChildRequest>();
-
-    for (StepResult.ChildRequest req : requests) {
-      if (
-        String.isNotBlank(req.correlationKey) &&
-        existingByCorrKey.containsKey(normalizeKey(req.correlationKey))
-      ) {
-        continue;
-      }
-
-      Type wflowType = WorkflowTypeResolver.resolve(
-        req.workflowName,
-        parentNamespace
+    List<Workflow_Instance__c> existingSiblings = [
+      SELECT Id, Parent_Instance__c, Status__c, Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE
+        Correlation_Key__c IN :correlationKeys
+        AND Parent_Instance__c = :parentId
+      WITH SYSTEM_MODE
+    ];
+    for (Workflow_Instance__c existing : existingSiblings) {
+      existingByCorrKey.put(
+        normalizeKey(existing.Correlation_Key__c),
+        existing
       );
-      Workflow_Instance__c instance = new Workflow_Instance__c();
-      // wflowType is guaranteed non-null by the validation loop above
-      instance.Workflow_Name__c = String.valueOf(wflowType);
-      instance.Status__c = 'Pending';
-      instance.Correlation_Key__c = req.correlationKey;
-      instance.Parent_Instance__c = parentId;
-      instance.Causation_Id__c = parentId;
-      Object defObj = wflowType.newInstance();
-      if (defObj instanceof VersionedWorkflow) {
-        instance.Definition_Version__c = ((VersionedWorkflow) defObj)
-          .getLatestVersion();
-      } else {
-        instance.Definition_Version__c = 1;
-      }
-      instance.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
-
-      instancesToInsert.add(instance);
-      requestsToProcess.add(req);
     }
+    return existingByCorrKey;
+  }
 
-    if (instancesToInsert.isEmpty()) {
-      return;
+  private static Workflow_Instance__c buildChildInstance(
+    StepResult.ChildRequest req,
+    Id parentId,
+    String parentNamespace
+  ) {
+    Type wflowType = WorkflowTypeResolver.resolve(
+      req.workflowName,
+      parentNamespace
+    );
+    Workflow_Instance__c instance = new Workflow_Instance__c();
+    // wflowType is guaranteed non-null by the validation loop above
+    instance.Workflow_Name__c = String.valueOf(wflowType);
+    instance.Status__c = 'Pending';
+    instance.Correlation_Key__c = req.correlationKey;
+    instance.Parent_Instance__c = parentId;
+    instance.Causation_Id__c = parentId;
+    Object defObj = wflowType.newInstance();
+    if (defObj instanceof VersionedWorkflow) {
+      instance.Definition_Version__c = ((VersionedWorkflow) defObj)
+        .getLatestVersion();
+    } else {
+      instance.Definition_Version__c = 1;
     }
+    instance.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
+    return instance;
+  }
 
+  // Inserts the child instances, returning true when processing should
+  // continue and false when a DUPLICATE_VALUE race was reconciled against
+  // existing siblings (the original early return).
+  private static Boolean insertChildInstances(
+    List<Workflow_Instance__c> instancesToInsert,
+    Id parentId
+  ) {
     try {
       Database.insert(instancesToInsert, true, AccessLevel.SYSTEM_MODE);
       if (Test.isRunningTest()) {
@@ -7777,50 +7837,72 @@ public inherited sharing class WorkflowEngine {
           registerChildParent(inst.Id, parentId);
         }
       }
+      return true;
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
-        Set<String> corrKeys = new Set<String>();
-        for (Workflow_Instance__c inst : instancesToInsert) {
-          if (String.isNotBlank(inst.Correlation_Key__c)) {
-            corrKeys.add(normalizeKey(inst.Correlation_Key__c));
-          }
-        }
-        Map<String, Workflow_Instance__c> siblingsMap = new Map<String, Workflow_Instance__c>();
-        if (!corrKeys.isEmpty()) {
-          for (Workflow_Instance__c sibling : [
-            SELECT Id, Parent_Instance__c, Active_Correlation_Key__c
-            FROM Workflow_Instance__c
-            WHERE Active_Correlation_Key__c IN :corrKeys
-            WITH SYSTEM_MODE
-          ]) {
-            siblingsMap.put(
-              normalizeKey(sibling.Active_Correlation_Key__c),
-              sibling
-            );
-          }
-        }
-        for (Workflow_Instance__c inst : instancesToInsert) {
-          if (String.isNotBlank(inst.Correlation_Key__c)) {
-            Workflow_Instance__c sibling = siblingsMap.get(
-              normalizeKey(inst.Correlation_Key__c)
-            );
-            if (sibling == null || sibling.Parent_Instance__c != parentId) {
-              throw new WorkflowException(
-                'An active workflow already exists with correlation key: ' +
-                inst.Correlation_Key__c
-              );
-            }
-          }
-        }
-        return;
+        reconcileDuplicateChildren(instancesToInsert, parentId);
+        return false;
       }
       throw ex;
     }
+  }
 
+  private static Set<String> collectChildCorrelationKeys(
+    List<Workflow_Instance__c> instances
+  ) {
+    Set<String> corrKeys = new Set<String>();
+    for (Workflow_Instance__c inst : instances) {
+      if (String.isNotBlank(inst.Correlation_Key__c)) {
+        corrKeys.add(normalizeKey(inst.Correlation_Key__c));
+      }
+    }
+    return corrKeys;
+  }
+
+  // Re-verifies that each duplicate-keyed child already exists as a sibling of
+  // this parent; throws only for a correlation-key collision with a foreign
+  // instance. Mirrors the original in-catch reconciliation exactly.
+  private static void reconcileDuplicateChildren(
+    List<Workflow_Instance__c> instancesToInsert,
+    Id parentId
+  ) {
+    Set<String> corrKeys = collectChildCorrelationKeys(instancesToInsert);
+    Map<String, Workflow_Instance__c> siblingsMap = new Map<String, Workflow_Instance__c>();
+    if (!corrKeys.isEmpty()) {
+      for (Workflow_Instance__c sibling : [
+        SELECT Id, Parent_Instance__c, Active_Correlation_Key__c
+        FROM Workflow_Instance__c
+        WHERE Active_Correlation_Key__c IN :corrKeys
+        WITH SYSTEM_MODE
+      ]) {
+        siblingsMap.put(
+          normalizeKey(sibling.Active_Correlation_Key__c),
+          sibling
+        );
+      }
+    }
+    for (Workflow_Instance__c inst : instancesToInsert) {
+      if (String.isNotBlank(inst.Correlation_Key__c)) {
+        Workflow_Instance__c sibling = siblingsMap.get(
+          normalizeKey(inst.Correlation_Key__c)
+        );
+        if (sibling == null || sibling.Parent_Instance__c != parentId) {
+          throw new WorkflowException(
+            'An active workflow already exists with correlation key: ' +
+            inst.Correlation_Key__c
+          );
+        }
+      }
+    }
+  }
+
+  private static List<Workflow_Instance__c> applyChildInputPayloads(
+    ChildStartPlan plan
+  ) {
     List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
-    for (Integer i = 0; i < instancesToInsert.size(); i++) {
-      Workflow_Instance__c inst = instancesToInsert[i];
-      StepResult.ChildRequest req = requestsToProcess[i];
+    for (Integer i = 0; i < plan.instances.size(); i++) {
+      Workflow_Instance__c inst = plan.instances[i];
+      StepResult.ChildRequest req = plan.requests[i];
       inst.Input__c = savePayloadIfNeeded(
         inst.Id,
         req.inputJson,
@@ -7829,7 +7911,12 @@ public inherited sharing class WorkflowEngine {
       instancesToUpdate.add(inst);
     }
     Database.update(instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
+    return instancesToUpdate;
+  }
 
+  private static void insertChildInitialSteps(
+    List<Workflow_Instance__c> instancesToUpdate
+  ) {
     List<Workflow_Step_Execution__c> stepExecsToInsert = new List<Workflow_Step_Execution__c>();
     for (Workflow_Instance__c inst : instancesToUpdate) {
       if (String.isNotBlank(inst.Current_Step__c)) {
@@ -7845,7 +7932,11 @@ public inherited sharing class WorkflowEngine {
     if (!stepExecsToInsert.isEmpty()) {
       Database.insert(stepExecsToInsert, true, AccessLevel.SYSTEM_MODE);
     }
+  }
 
+  private static void scheduleOrPauseChildren(
+    List<Workflow_Instance__c> instancesToUpdate
+  ) {
     List<Workflow_Instance__c> instancesToSchedule = new List<Workflow_Instance__c>();
     List<Workflow_Instance__c> instancesToPause = new List<Workflow_Instance__c>();
     Boolean checkPause = WorkflowPauseGate.anyPaused();
@@ -7874,17 +7965,22 @@ public inherited sharing class WorkflowEngine {
     if (!instancesToSchedule.isEmpty()) {
       scheduleTimeoutJobsForInstances(instancesToSchedule);
     }
+  }
 
-    if (!Test.isRunningTest()) {
-      List<Id> instanceIdsToEnqueue = new List<Id>();
-      for (Workflow_Instance__c inst : instancesToUpdate) {
-        if (inst.Status__c != 'Paused') {
-          instanceIdsToEnqueue.add(inst.Id);
-        }
+  private static void enqueueChildOrchestrators(
+    List<Workflow_Instance__c> instancesToUpdate
+  ) {
+    if (Test.isRunningTest()) {
+      return;
+    }
+    List<Id> instanceIdsToEnqueue = new List<Id>();
+    for (Workflow_Instance__c inst : instancesToUpdate) {
+      if (inst.Status__c != 'Paused') {
+        instanceIdsToEnqueue.add(inst.Id);
       }
-      if (!instanceIdsToEnqueue.isEmpty()) {
-        enqueueOrchestrators(instanceIdsToEnqueue);
-      }
+    }
+    if (!instanceIdsToEnqueue.isEmpty()) {
+      enqueueOrchestrators(instanceIdsToEnqueue);
     }
   }
 
