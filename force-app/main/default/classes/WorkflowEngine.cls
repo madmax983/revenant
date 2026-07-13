@@ -9250,6 +9250,14 @@ public inherited sharing class WorkflowEngine {
     return getPatchAdoptionCount(null, changeId, introducedAt);
   }
 
+  // Mutable accumulator threaded through the patch-adoption scan helpers so each
+  // helper stays within the parameter and complexity budgets.
+  private class AdoptionScan {
+    String key;
+    Set<String> targetWorkflows = new Set<String>();
+    Set<Id> instancesWithExplicitFalse = new Set<Id>();
+  }
+
   /**
    * Returns the count of non-terminal workflow instances that have recorded
    * a decision of 'false' for the given changeId, scoped to a specific workflow name
@@ -9268,30 +9276,13 @@ public inherited sharing class WorkflowEngine {
     if (String.isBlank(changeId)) {
       return 0;
     }
-    String key = '__patch:' + changeId;
     Integer queryLimit = adoptionQueryLimit;
 
     // 1. Query all active (non-terminal) workflow instances directly
-    List<Workflow_Instance__c> instances;
-    if (Test.isRunningTest() && mockInstancesForAdoption != null) {
-      instances = mockInstancesForAdoption;
-    } else if (String.isNotBlank(workflowName)) {
-      instances = [
-        SELECT Id, Workflow_Name__c, CreatedDate
-        FROM Workflow_Instance__c
-        WHERE Status__c IN :ACTIVE_STATUSES AND Workflow_Name__c = :workflowName
-        WITH SYSTEM_MODE
-        LIMIT :queryLimit
-      ];
-    } else {
-      instances = [
-        SELECT Id, Workflow_Name__c, CreatedDate
-        FROM Workflow_Instance__c
-        WHERE Status__c IN :ACTIVE_STATUSES
-        WITH SYSTEM_MODE
-        LIMIT :queryLimit
-      ];
-    }
+    List<Workflow_Instance__c> instances = queryAdoptionInstances(
+      workflowName,
+      queryLimit
+    );
 
     if (instances.size() >= queryLimit) {
       throw new WorkflowException(
@@ -9301,22 +9292,57 @@ public inherited sharing class WorkflowEngine {
       );
     }
 
-    Set<String> targetWorkflows = new Set<String>();
+    AdoptionScan scan = new AdoptionScan();
+    scan.key = '__patch:' + changeId;
     if (String.isNotBlank(workflowName)) {
-      targetWorkflows.add(workflowName);
+      scan.targetWorkflows.add(workflowName);
     }
 
-    Set<Id> instancesWithExplicitFalse = new Set<Id>();
-
     // 2. Query step executions in batches of 1,000 instances to stay under 50k SOQL row limits
+    scanInstancesForExplicitFalse(instances, scan);
+
+    // 3. Count instances pinning the legacy branch
+    return countPinnedInstances(instances, introducedAt, scan);
+  }
+
+  private static List<Workflow_Instance__c> queryAdoptionInstances(
+    String workflowName,
+    Integer queryLimit
+  ) {
+    if (Test.isRunningTest() && mockInstancesForAdoption != null) {
+      return mockInstancesForAdoption;
+    }
+    if (String.isNotBlank(workflowName)) {
+      return [
+        SELECT Id, Workflow_Name__c, CreatedDate
+        FROM Workflow_Instance__c
+        WHERE Status__c IN :ACTIVE_STATUSES AND Workflow_Name__c = :workflowName
+        WITH SYSTEM_MODE
+        LIMIT :queryLimit
+      ];
+    }
+    return [
+      SELECT Id, Workflow_Name__c, CreatedDate
+      FROM Workflow_Instance__c
+      WHERE Status__c IN :ACTIVE_STATUSES
+      WITH SYSTEM_MODE
+      LIMIT :queryLimit
+    ];
+  }
+
+  // Batch step-execution query stays in-loop (OperationWithLimitsInLoop deferred
+  // to PR #3): one SOQL per 1,000-instance batch to stay under the 50k row cap.
+  private static void scanInstancesForExplicitFalse(
+    List<Workflow_Instance__c> instances,
+    AdoptionScan scan
+  ) {
     Integer instanceBatchSize = 1000;
     for (Integer i = 0; i < instances.size(); i += instanceBatchSize) {
-      List<Workflow_Instance__c> batchInstances = new List<Workflow_Instance__c>();
-      for (
-        Integer j = i; j < i + instanceBatchSize && j < instances.size(); j++
-      ) {
-        batchInstances.add(instances[j]);
-      }
+      List<Workflow_Instance__c> batchInstances = sliceInstances(
+        instances,
+        i,
+        instanceBatchSize
+      );
 
       List<Workflow_Step_Execution__c> execs = [
         SELECT
@@ -9328,47 +9354,87 @@ public inherited sharing class WorkflowEngine {
         WITH SYSTEM_MODE
       ];
 
-      // Process offloaded payloads in small batches of 40 to stay under Apex Heap Limits (synchronous cap is 6 MB)
-      Integer offloadBatchSize = 40;
-      List<String> resolvedCaptures = new List<String>();
-      for (Integer k = 0; k < execs.size(); k += offloadBatchSize) {
-        List<String> batchRaw = new List<String>();
-        for (Integer m = k; m < k + offloadBatchSize && m < execs.size(); m++) {
-          batchRaw.add(execs[m].Captured_Values__c);
-        }
-        resolvedCaptures.addAll(resolvePayloads(batchRaw));
-      }
-
-      for (Integer k = 0; k < execs.size(); k++) {
-        Workflow_Step_Execution__c exec = execs[k];
-        String capturesJson = resolvedCaptures[k];
-        if (String.isBlank(capturesJson)) {
-          continue;
-        }
-
-        if (capturesJson.contains(key)) {
-          try {
-            Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
-              capturesJson
-            );
-            if (captures.containsKey(key)) {
-              targetWorkflows.add(exec.Workflow_Instance__r.Workflow_Name__c);
-              if (captures.get(key) == false) {
-                instancesWithExplicitFalse.add(exec.Workflow_Instance__c);
-              }
-            }
-          } catch (Exception ignored) {
-            // Ignore malformed JSON
-          }
-        }
-      }
+      List<String> resolvedCaptures = resolveCapturesInBatches(execs);
+      applyExecCaptures(execs, resolvedCaptures, scan);
     }
+  }
 
-    // 3. Count instances pinning the legacy branch
+  private static List<Workflow_Instance__c> sliceInstances(
+    List<Workflow_Instance__c> instances,
+    Integer start,
+    Integer batchSize
+  ) {
+    List<Workflow_Instance__c> batch = new List<Workflow_Instance__c>();
+    for (
+      Integer j = start; j < start + batchSize && j < instances.size(); j++
+    ) {
+      batch.add(instances[j]);
+    }
+    return batch;
+  }
+
+  // Process offloaded payloads in small batches of 40 to stay under Apex Heap
+  // Limits (synchronous cap is 6 MB).
+  private static List<String> resolveCapturesInBatches(
+    List<Workflow_Step_Execution__c> execs
+  ) {
+    Integer offloadBatchSize = 40;
+    List<String> resolvedCaptures = new List<String>();
+    for (Integer k = 0; k < execs.size(); k += offloadBatchSize) {
+      List<String> batchRaw = new List<String>();
+      for (Integer m = k; m < k + offloadBatchSize && m < execs.size(); m++) {
+        batchRaw.add(execs[m].Captured_Values__c);
+      }
+      resolvedCaptures.addAll(resolvePayloads(batchRaw));
+    }
+    return resolvedCaptures;
+  }
+
+  private static void applyExecCaptures(
+    List<Workflow_Step_Execution__c> execs,
+    List<String> resolvedCaptures,
+    AdoptionScan scan
+  ) {
+    for (Integer k = 0; k < execs.size(); k++) {
+      applyExecCapture(execs[k], resolvedCaptures[k], scan);
+    }
+  }
+
+  private static void applyExecCapture(
+    Workflow_Step_Execution__c exec,
+    String capturesJson,
+    AdoptionScan scan
+  ) {
+    if (String.isBlank(capturesJson)) {
+      return;
+    }
+    if (!capturesJson.contains(scan.key)) {
+      return;
+    }
+    try {
+      Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
+        capturesJson
+      );
+      if (captures.containsKey(scan.key)) {
+        scan.targetWorkflows.add(exec.Workflow_Instance__r.Workflow_Name__c);
+        if (captures.get(scan.key) == false) {
+          scan.instancesWithExplicitFalse.add(exec.Workflow_Instance__c);
+        }
+      }
+    } catch (Exception ignored) {
+      // Ignore malformed JSON
+    }
+  }
+
+  private static Integer countPinnedInstances(
+    List<Workflow_Instance__c> instances,
+    DateTime introducedAt,
+    AdoptionScan scan
+  ) {
     Set<Id> instancesWithFalse = new Set<Id>();
     for (Workflow_Instance__c inst : instances) {
       String wflow = inst.Workflow_Name__c;
-      if (!targetWorkflows.contains(wflow)) {
+      if (!scan.targetWorkflows.contains(wflow)) {
         continue;
       }
 
@@ -9378,7 +9444,7 @@ public inherited sharing class WorkflowEngine {
         continue;
       }
 
-      if (instancesWithExplicitFalse.contains(inst.Id)) {
+      if (scan.instancesWithExplicitFalse.contains(inst.Id)) {
         instancesWithFalse.add(inst.Id);
       }
     }
