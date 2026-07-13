@@ -9018,6 +9018,48 @@ public inherited sharing class WorkflowEngine {
    * @param instanceId Id of the failed instance to retry
    */
   public static void retryWorkflow(Id instanceId) {
+    Workflow_Instance__c instance = loadInstanceForRetry(instanceId);
+
+    List<String> stack = parseCompensationStack(instance);
+    Boolean hasCompensations = !stack.isEmpty();
+
+    List<String> targetStepNames = resolveRetryTargetSteps(
+      instance,
+      stack,
+      hasCompensations
+    );
+
+    // Reset the failed step's execution status to let it execute again. Bulk-load the
+    // latest execution per target step in ONE query (was one SOQL per step in a loop),
+    // build a name->latest map, then update the resettable ones together.
+    Map<String, Workflow_Step_Execution__c> latestStepByName = resetRetryTargetSteps(
+      instanceId,
+      targetStepNames
+    );
+
+    if (hasCompensations) {
+      instance.Status__c = 'Compensating';
+    } else {
+      instance.Status__c = 'Running';
+    }
+    instance.Error_Message__c = null;
+    instance.Failure_Category__c = null;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+
+    // Enqueue the orchestrator to resume execution
+    if (
+      hasCompensations ||
+      String.isBlank(instance.Current_Step__c) ||
+      !instance.Current_Step__c.contains(',')
+    ) {
+      enqueueOrchestratorForInstance(instanceId);
+      return;
+    }
+
+    enqueueParallelBranchRetries(instanceId, targetStepNames, latestStepByName);
+  }
+
+  private static Workflow_Instance__c loadInstanceForRetry(Id instanceId) {
     List<Workflow_Instance__c> instances = [
       SELECT
         Id,
@@ -9043,17 +9085,29 @@ public inherited sharing class WorkflowEngine {
         instance.Status__c
       );
     }
+    return instance;
+  }
 
-    Boolean hasCompensations = false;
-    List<String> stack = new List<String>();
-    if (String.isNotBlank(instance.Compensation_Stack__c)) {
-      stack = (List<String>) JSON.deserialize(
-        instance.Compensation_Stack__c,
-        List<String>.class
-      );
-      hasCompensations = !stack.isEmpty();
+  // Deserialize the compensation stack (empty when blank). Unlike the reclaim
+  // path this intentionally lets malformed JSON surface, matching the original
+  // retry semantics.
+  private static List<String> parseCompensationStack(
+    Workflow_Instance__c instance
+  ) {
+    if (String.isBlank(instance.Compensation_Stack__c)) {
+      return new List<String>();
     }
+    return (List<String>) JSON.deserialize(
+      instance.Compensation_Stack__c,
+      List<String>.class
+    );
+  }
 
+  private static List<String> resolveRetryTargetSteps(
+    Workflow_Instance__c instance,
+    List<String> stack,
+    Boolean hasCompensations
+  ) {
     List<String> targetStepNames = new List<String>();
     if (hasCompensations) {
       targetStepNames.add(stack[stack.size() - 1] + '_Compensate');
@@ -9066,25 +9120,39 @@ public inherited sharing class WorkflowEngine {
         targetStepNames.add(instance.Current_Step__c);
       }
     }
+    applyRetryInitialStepFallback(instance, targetStepNames, hasCompensations);
+    return targetStepNames;
+  }
 
-    if (String.isBlank(instance.Current_Step__c) && !hasCompensations) {
-      Type wflowType = WorkflowTypeResolver.resolve(
-        instance.Workflow_Name__c,
-        WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
-      );
-      if (wflowType != null) {
-        Object defObj = wflowType.newInstance();
-        if (defObj instanceof WorkflowDefinition) {
-          instance.Current_Step__c = ((WorkflowDefinition) defObj)
-            .getInitialStep();
-          targetStepNames.add(instance.Current_Step__c);
-        }
-      }
+  // When a Failed instance has no current step and no compensations, resolve
+  // the workflow's initial step so retry has a concrete step to drive. Mutates
+  // instance.Current_Step__c and appends to targetStepNames in place.
+  private static void applyRetryInitialStepFallback(
+    Workflow_Instance__c instance,
+    List<String> targetStepNames,
+    Boolean hasCompensations
+  ) {
+    if (!(String.isBlank(instance.Current_Step__c) && !hasCompensations)) {
+      return;
     }
+    Type wflowType = WorkflowTypeResolver.resolve(
+      instance.Workflow_Name__c,
+      WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
+    );
+    if (wflowType == null) {
+      return;
+    }
+    Object defObj = wflowType.newInstance();
+    if (defObj instanceof WorkflowDefinition) {
+      instance.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
+      targetStepNames.add(instance.Current_Step__c);
+    }
+  }
 
-    // Reset the failed step's execution status to let it execute again. Bulk-load the
-    // latest execution per target step in ONE query (was one SOQL per step in a loop),
-    // build a name->latest map, then update the resettable ones together.
+  private static Map<String, Workflow_Step_Execution__c> resetRetryTargetSteps(
+    Id instanceId,
+    List<String> targetStepNames
+  ) {
     Map<String, Workflow_Step_Execution__c> latestStepByName = new Map<String, Workflow_Step_Execution__c>();
     if (!targetStepNames.isEmpty()) {
       for (Workflow_Step_Execution__c se : [
@@ -9121,35 +9189,18 @@ public inherited sharing class WorkflowEngine {
     if (!stepsToReset.isEmpty()) {
       Database.update(stepsToReset, true, AccessLevel.SYSTEM_MODE);
     }
+    return latestStepByName;
+  }
 
-    if (hasCompensations) {
-      instance.Status__c = 'Compensating';
-    } else {
-      instance.Status__c = 'Running';
-    }
-    instance.Error_Message__c = null;
-    instance.Failure_Category__c = null;
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-    // Enqueue the orchestrator to resume execution
-    if (
-      hasCompensations ||
-      String.isBlank(instance.Current_Step__c) ||
-      !instance.Current_Step__c.contains(',')
-    ) {
-      if (Test.isRunningTest()) {
-        if (!disableQueueableInTest) {
-          System.enqueueJob(new WorkflowOrchestrator(instanceId));
-        }
-      } else {
-        enqueueOrchestrator(instanceId, null);
-      }
-      return;
-    }
-
-    // Parallel forward execution retry: enqueue only incomplete branches. Reuse the
-    // already-loaded step map (reset steps are now 'Pending' in memory) instead of
-    // re-querying once per branch.
+  // Parallel forward execution retry: enqueue only incomplete branches. Reuse the
+  // already-loaded step map (reset steps are now 'Pending' in memory) instead of
+  // re-querying once per branch. The per-branch enqueue is intentionally in-loop
+  // (OperationWithLimitsInLoop deferred to PR #3).
+  private static void enqueueParallelBranchRetries(
+    Id instanceId,
+    List<String> targetStepNames,
+    Map<String, Workflow_Step_Execution__c> latestStepByName
+  ) {
     for (String targetStepName : targetStepNames) {
       Workflow_Step_Execution__c stepExec = latestStepByName.get(
         targetStepName
