@@ -1699,26 +1699,35 @@ public inherited sharing class WorkflowEngine {
       );
     }
     for (String key : attributes.keySet()) {
-      if (String.isBlank(key)) {
-        throw new WorkflowException('Attribute key cannot be blank');
-      }
-      if (key.length() > MAX_ATTRIBUTE_KEY_LENGTH) {
-        throw new WorkflowException(
-          'Attribute key length exceeds maximum limit of ' +
-            MAX_ATTRIBUTE_KEY_LENGTH +
-            ' characters: ' +
-            key
-        );
-      }
-      String val = attributes.get(key);
-      if (val != null && val.length() > MAX_ATTRIBUTE_VALUE_LENGTH) {
-        throw new WorkflowException(
-          'Attribute value length exceeds maximum limit of ' +
-            MAX_ATTRIBUTE_VALUE_LENGTH +
-            ' characters: ' +
-            val
-        );
-      }
+      validateAttributeEntry(key, attributes.get(key));
+    }
+  }
+
+  /**
+   * Validates a single search-attribute key/value pair against the key-blankness,
+   * key-length, and value-length limits.
+   * @param key the attribute key
+   * @param val the attribute value (may be null)
+   */
+  private static void validateAttributeEntry(String key, String val) {
+    if (String.isBlank(key)) {
+      throw new WorkflowException('Attribute key cannot be blank');
+    }
+    if (key.length() > MAX_ATTRIBUTE_KEY_LENGTH) {
+      throw new WorkflowException(
+        'Attribute key length exceeds maximum limit of ' +
+          MAX_ATTRIBUTE_KEY_LENGTH +
+          ' characters: ' +
+          key
+      );
+    }
+    if (val != null && val.length() > MAX_ATTRIBUTE_VALUE_LENGTH) {
+      throw new WorkflowException(
+        'Attribute value length exceeds maximum limit of ' +
+          MAX_ATTRIBUTE_VALUE_LENGTH +
+          ' characters: ' +
+          val
+      );
     }
   }
 
