@@ -13773,84 +13773,190 @@ public inherited sharing class WorkflowEngine {
     Database.insert(logsToInsert, true, AccessLevel.SYSTEM_MODE);
   }
 
-  private static void reclaimOrphanedInstances(
-    List<Workflow_Instance__c> orphanedInstances
-  ) {
+  // Mutable accumulator threaded through the reclaim phase helpers so each
+  // helper stays within the parameter and complexity budgets.
+  private class ReclaimState {
     Set<Id> instanceIds = new Set<Id>();
     Set<String> allTargetStepNames = new Set<String>();
     Map<Id, List<String>> targetStepsByInstanceId = new Map<Id, List<String>>();
     Map<Id, Boolean> hasCompensationsByInstanceId = new Map<Id, Boolean>();
+    Map<String, Workflow_Step_Execution__c> latestStepByName = new Map<String, Workflow_Step_Execution__c>();
+    Set<Id> failedInstanceIds = new Set<Id>();
+    Set<Id> succeededInstanceIds = new Set<Id>();
+  }
+
+  private static void reclaimOrphanedInstances(
+    List<Workflow_Instance__c> orphanedInstances
+  ) {
+    ReclaimState state = new ReclaimState();
+    buildReclaimPlan(orphanedInstances, state);
+    lockLatestReclaimSteps(state);
+    Map<Id, Workflow_Step_Execution__c> stepsToResetMap = collectReclaimStepsToReset(
+      orphanedInstances,
+      state
+    );
+    resetReclaimSteps(stepsToResetMap, state);
+    clearReclaimAsyncJobIds(orphanedInstances, state);
+    writeReclaimAuditLogs(orphanedInstances, state);
+    enqueueReclaimOrchestrators(orphanedInstances, state);
+  }
+
+  // Derive, per orphaned instance, the target step names to reset and whether
+  // the instance carries pending compensations, populating the shared state.
+  private static void buildReclaimPlan(
+    List<Workflow_Instance__c> orphanedInstances,
+    ReclaimState state
+  ) {
     Map<String, String> initialStepByWorkflowName = new Map<String, String>();
-
     for (Workflow_Instance__c inst : orphanedInstances) {
-      instanceIds.add(inst.Id);
-      Boolean isCompensatingOrCancelling = (inst.Status__c == 'Compensating' ||
-      inst.Status__c == 'Cancelling');
-      Boolean hasCompensations = false;
-      List<String> stack = new List<String>();
-      if (
-        isCompensatingOrCancelling &&
-        String.isNotBlank(inst.Compensation_Stack__c)
-      ) {
-        try {
-          stack = (List<String>) JSON.deserialize(
-            inst.Compensation_Stack__c,
-            List<String>.class
-          );
-          hasCompensations = !stack.isEmpty();
-        } catch (Exception ignored) {
-          // Malformed Compensation_Stack__c; treat as having no compensations.
-        }
-      }
-      hasCompensationsByInstanceId.put(inst.Id, hasCompensations);
+      planReclaimForInstance(inst, state, initialStepByWorkflowName);
+    }
+  }
 
-      List<String> targetStepNames = new List<String>();
-      if (isCompensatingOrCancelling && hasCompensations) {
-        targetStepNames.add(stack[stack.size() - 1] + '_Compensate');
-      } else if (String.isNotBlank(inst.Current_Step__c)) {
-        if (inst.Current_Step__c.contains(',')) {
-          for (String pStep : inst.Current_Step__c.split(',')) {
-            targetStepNames.add(pStep.trim());
-          }
-        } else {
-          targetStepNames.add(inst.Current_Step__c);
-        }
-      }
+  // Compute the target steps / compensation flag for a single orphaned instance.
+  private static void planReclaimForInstance(
+    Workflow_Instance__c inst,
+    ReclaimState state,
+    Map<String, String> initialStepByWorkflowName
+  ) {
+    state.instanceIds.add(inst.Id);
+    Boolean isCompensatingOrCancelling = (inst.Status__c == 'Compensating' ||
+    inst.Status__c == 'Cancelling');
+    List<String> stack = new List<String>();
+    if (
+      isCompensatingOrCancelling &&
+      String.isNotBlank(inst.Compensation_Stack__c)
+    ) {
+      stack = parseReclaimCompensationStack(inst);
+    }
+    Boolean hasCompensations = (stack != null && !stack.isEmpty());
+    state.hasCompensationsByInstanceId.put(inst.Id, hasCompensations);
 
-      if (String.isBlank(inst.Current_Step__c) && !hasCompensations) {
-        String wflowName = inst.Workflow_Name__c;
-        if (!initialStepByWorkflowName.containsKey(wflowName)) {
-          String initialStep = null;
-          Type wflowType = WorkflowTypeResolver.resolve(
-            wflowName,
-            WorkflowTypeResolver.extractNamespace(wflowName)
-          );
-          if (wflowType != null) {
-            try {
-              Object defObj = wflowType.newInstance();
-              if (defObj instanceof WorkflowDefinition) {
-                initialStep = ((WorkflowDefinition) defObj).getInitialStep();
-              }
-            } catch (Exception ignored) {
-              // Workflow type not instantiable here; leave initialStep null.
-            }
-          }
-          initialStepByWorkflowName.put(wflowName, initialStep);
-        }
-        String initialStep = initialStepByWorkflowName.get(wflowName);
-        if (initialStep != null) {
-          inst.Current_Step__c = initialStep;
-          targetStepNames.add(initialStep);
-        }
-      }
+    List<String> targetStepNames = computeReclaimTargetSteps(
+      inst,
+      stack,
+      hasCompensations
+    );
 
-      targetStepsByInstanceId.put(inst.Id, targetStepNames);
-      allTargetStepNames.addAll(targetStepNames);
+    if (String.isBlank(inst.Current_Step__c) && !hasCompensations) {
+      String initialStep = resolveReclaimInitialStep(
+        inst.Workflow_Name__c,
+        initialStepByWorkflowName
+      );
+      if (initialStep != null) {
+        inst.Current_Step__c = initialStep;
+        targetStepNames.add(initialStep);
+      }
     }
 
+    state.targetStepsByInstanceId.put(inst.Id, targetStepNames);
+    state.allTargetStepNames.addAll(targetStepNames);
+  }
+
+  // Derive the target step names for reclaim from the instance status, its
+  // compensation stack, and any comma-separated parallel current steps.
+  private static List<String> computeReclaimTargetSteps(
+    Workflow_Instance__c inst,
+    List<String> stack,
+    Boolean hasCompensations
+  ) {
+    Boolean isCompensatingOrCancelling = (inst.Status__c == 'Compensating' ||
+    inst.Status__c == 'Cancelling');
+    List<String> targetStepNames = new List<String>();
+    if (isCompensatingOrCancelling && hasCompensations) {
+      targetStepNames.add(stack[stack.size() - 1] + '_Compensate');
+    } else if (String.isNotBlank(inst.Current_Step__c)) {
+      if (inst.Current_Step__c.contains(',')) {
+        for (String pStep : inst.Current_Step__c.split(',')) {
+          targetStepNames.add(pStep.trim());
+        }
+      } else {
+        targetStepNames.add(inst.Current_Step__c);
+      }
+    }
+    return targetStepNames;
+  }
+
+  // Deserialize the compensation stack; malformed JSON yields an empty stack.
+  private static List<String> parseReclaimCompensationStack(
+    Workflow_Instance__c inst
+  ) {
+    try {
+      return (List<String>) JSON.deserialize(
+        inst.Compensation_Stack__c,
+        List<String>.class
+      );
+    } catch (Exception ignored) {
+      // Malformed Compensation_Stack__c; treat as having no compensations.
+      return new List<String>();
+    }
+  }
+
+  // Resolve (and memoize) a workflow's initial step name for reclaim routing.
+  private static String resolveReclaimInitialStep(
+    String wflowName,
+    Map<String, String> initialStepByWorkflowName
+  ) {
+    if (initialStepByWorkflowName.containsKey(wflowName)) {
+      return initialStepByWorkflowName.get(wflowName);
+    }
+    String initialStep = null;
+    Type wflowType = WorkflowTypeResolver.resolve(
+      wflowName,
+      WorkflowTypeResolver.extractNamespace(wflowName)
+    );
+    if (wflowType != null) {
+      try {
+        Object defObj = wflowType.newInstance();
+        if (defObj instanceof WorkflowDefinition) {
+          initialStep = ((WorkflowDefinition) defObj).getInitialStep();
+        }
+      } catch (Exception ignored) {
+        // Workflow type not instantiable here; leave initialStep null.
+      }
+    }
+    initialStepByWorkflowName.put(wflowName, initialStep);
+    return initialStep;
+  }
+
+  // Query the latest step executions for the target steps and lock them
+  // FOR UPDATE, storing the resolved map on the shared state.
+  private static void lockLatestReclaimSteps(ReclaimState state) {
+    if (state.allTargetStepNames.isEmpty()) {
+      return;
+    }
+    Set<Id> instanceIds = state.instanceIds;
+    Set<String> allTargetStepNames = state.allTargetStepNames;
     // Query step executions to reset: first identify latest step execution IDs
-    Map<String, Workflow_Step_Execution__c> latestStepByName = new Map<String, Workflow_Step_Execution__c>();
-    if (!allTargetStepNames.isEmpty()) {
+    for (Workflow_Step_Execution__c se : [
+      SELECT
+        Id,
+        Workflow_Instance__c,
+        Step_Name__c,
+        Status__c,
+        Retry_Count__c,
+        Error_Details__c,
+        Timeout_At__c,
+        CPU_Time_Ms__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c IN :instanceIds
+        AND Step_Name__c IN :allTargetStepNames
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ]) {
+      String key = se.Workflow_Instance__c + ':' + se.Step_Name__c;
+      if (!state.latestStepByName.containsKey(key)) {
+        state.latestStepByName.put(key, se);
+      }
+    }
+
+    // Then lock those specific records using FOR UPDATE
+    Set<Id> stepIdsToLock = new Set<Id>();
+    for (Workflow_Step_Execution__c se : state.latestStepByName.values()) {
+      stepIdsToLock.add(se.Id);
+    }
+    if (!stepIdsToLock.isEmpty()) {
       for (Workflow_Step_Execution__c se : [
         SELECT
           Id,
@@ -13862,51 +13968,27 @@ public inherited sharing class WorkflowEngine {
           Timeout_At__c,
           CPU_Time_Ms__c
         FROM Workflow_Step_Execution__c
-        WHERE
-          Workflow_Instance__c IN :instanceIds
-          AND Step_Name__c IN :allTargetStepNames
+        WHERE Id IN :stepIdsToLock
         WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC, Id DESC
+        FOR UPDATE
       ]) {
         String key = se.Workflow_Instance__c + ':' + se.Step_Name__c;
-        if (!latestStepByName.containsKey(key)) {
-          latestStepByName.put(key, se);
-        }
-      }
-
-      // Then lock those specific records using FOR UPDATE
-      Set<Id> stepIdsToLock = new Set<Id>();
-      for (Workflow_Step_Execution__c se : latestStepByName.values()) {
-        stepIdsToLock.add(se.Id);
-      }
-      if (!stepIdsToLock.isEmpty()) {
-        for (Workflow_Step_Execution__c se : [
-          SELECT
-            Id,
-            Workflow_Instance__c,
-            Step_Name__c,
-            Status__c,
-            Retry_Count__c,
-            Error_Details__c,
-            Timeout_At__c,
-            CPU_Time_Ms__c
-          FROM Workflow_Step_Execution__c
-          WHERE Id IN :stepIdsToLock
-          WITH SYSTEM_MODE
-          FOR UPDATE
-        ]) {
-          String key = se.Workflow_Instance__c + ':' + se.Step_Name__c;
-          latestStepByName.put(key, se);
-        }
+        state.latestStepByName.put(key, se);
       }
     }
+  }
 
+  // Build the map of step executions whose status must be reset to Pending.
+  private static Map<Id, Workflow_Step_Execution__c> collectReclaimStepsToReset(
+    List<Workflow_Instance__c> orphanedInstances,
+    ReclaimState state
+  ) {
     Map<Id, Workflow_Step_Execution__c> stepsToResetMap = new Map<Id, Workflow_Step_Execution__c>();
     for (Workflow_Instance__c inst : orphanedInstances) {
-      List<String> targetStepNames = targetStepsByInstanceId.get(inst.Id);
+      List<String> targetStepNames = state.targetStepsByInstanceId.get(inst.Id);
       for (String targetStepName : targetStepNames) {
         String key = inst.Id + ':' + targetStepName;
-        Workflow_Step_Execution__c stepExec = latestStepByName.get(key);
+        Workflow_Step_Execution__c stepExec = state.latestStepByName.get(key);
         if (
           stepExec != null &&
           stepExec.Status__c != 'Completed' &&
@@ -13921,97 +14003,100 @@ public inherited sharing class WorkflowEngine {
         }
       }
     }
+    return stepsToResetMap;
+  }
 
-    Set<Id> failedInstanceIds = new Set<Id>();
-    if (!stepsToResetMap.isEmpty()) {
-      List<Workflow_Step_Execution__c> stepsList = stepsToResetMap.values();
-      Database.SaveResult[] stepSRs = Database.update(
-        stepsList,
-        false,
-        AccessLevel.SYSTEM_MODE
-      );
-      for (Integer i = 0; i < stepSRs.size(); i++) {
-        if (!stepSRs[i].isSuccess()) {
-          failedInstanceIds.add(stepsList[i].Workflow_Instance__c);
-        }
+  // Persist the step-execution resets, recording instances whose reset failed.
+  private static void resetReclaimSteps(
+    Map<Id, Workflow_Step_Execution__c> stepsToResetMap,
+    ReclaimState state
+  ) {
+    if (stepsToResetMap.isEmpty()) {
+      return;
+    }
+    List<Workflow_Step_Execution__c> stepsList = stepsToResetMap.values();
+    Database.SaveResult[] stepSRs = Database.update(
+      stepsList,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    for (Integer i = 0; i < stepSRs.size(); i++) {
+      if (!stepSRs[i].isSuccess()) {
+        state.failedInstanceIds.add(stepsList[i].Workflow_Instance__c);
       }
     }
+  }
 
+  // Clear the async job id on reclaimable instances, tracking which persisted.
+  private static void clearReclaimAsyncJobIds(
+    List<Workflow_Instance__c> orphanedInstances,
+    ReclaimState state
+  ) {
     List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
     for (Workflow_Instance__c inst : orphanedInstances) {
-      if (!failedInstanceIds.contains(inst.Id)) {
+      if (!state.failedInstanceIds.contains(inst.Id)) {
         inst.Async_Job_Id__c = null;
         instancesToUpdate.add(inst);
       }
     }
-
-    Set<Id> succeededInstanceIds = new Set<Id>();
-    if (!instancesToUpdate.isEmpty()) {
-      Database.SaveResult[] instSRs = Database.update(
-        instancesToUpdate,
-        false,
-        AccessLevel.SYSTEM_MODE
-      );
-      for (Integer i = 0; i < instSRs.size(); i++) {
-        if (instSRs[i].isSuccess()) {
-          succeededInstanceIds.add(instancesToUpdate[i].Id);
-        }
+    if (instancesToUpdate.isEmpty()) {
+      return;
+    }
+    Database.SaveResult[] instSRs = Database.update(
+      instancesToUpdate,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    for (Integer i = 0; i < instSRs.size(); i++) {
+      if (instSRs[i].isSuccess()) {
+        state.succeededInstanceIds.add(instancesToUpdate[i].Id);
       }
     }
+  }
 
-    // Write audit logs
+  // Emit operator-intervention audit logs for successfully reclaimed instances.
+  private static void writeReclaimAuditLogs(
+    List<Workflow_Instance__c> orphanedInstances,
+    ReclaimState state
+  ) {
     List<Workflow_Log__c> auditLogs = new List<Workflow_Log__c>();
     for (Workflow_Instance__c inst : orphanedInstances) {
-      if (succeededInstanceIds.contains(inst.Id)) {
-        String stepDetail = String.isNotBlank(inst.Current_Step__c)
-          ? inst.Current_Step__c
-          : '(initial step)';
-        auditLogs.add(
-          new Workflow_Log__c(
-            Workflow_Instance__c = inst.Id,
-            Workflow_Name__c = inst.Workflow_Name__c,
-            Correlation_Key__c = inst.Correlation_Key__c,
-            Log_Type__c = 'OperatorIntervention',
-            Message__c = 'Auto-reclaimed orphaned instance from step: ' +
-              stepDetail,
-            Outcome__c = 'Success',
-            Level__c = 'INFO',
-            Fire_Time__c = DateTime.now()
-          )
-        );
+      if (!state.succeededInstanceIds.contains(inst.Id)) {
+        continue;
       }
+      String stepDetail = String.isNotBlank(inst.Current_Step__c)
+        ? inst.Current_Step__c
+        : '(initial step)';
+      auditLogs.add(
+        new Workflow_Log__c(
+          Workflow_Instance__c = inst.Id,
+          Workflow_Name__c = inst.Workflow_Name__c,
+          Correlation_Key__c = inst.Correlation_Key__c,
+          Log_Type__c = 'OperatorIntervention',
+          Message__c = 'Auto-reclaimed orphaned instance from step: ' +
+            stepDetail,
+          Outcome__c = 'Success',
+          Level__c = 'INFO',
+          Fire_Time__c = DateTime.now()
+        )
+      );
     }
     if (!auditLogs.isEmpty()) {
       Database.insert(auditLogs, false, AccessLevel.SYSTEM_MODE);
     }
+  }
 
-    // Enqueue fresh orchestrators in a bulk fashion
+  // Re-enqueue orchestrators for reclaimed instances in a bulk fashion.
+  private static void enqueueReclaimOrchestrators(
+    List<Workflow_Instance__c> orphanedInstances,
+    ReclaimState state
+  ) {
     List<OrchestratorRequest> requests = new List<OrchestratorRequest>();
     for (Workflow_Instance__c inst : orphanedInstances) {
-      if (succeededInstanceIds.contains(inst.Id)) {
-        List<String> targetStepNames = targetStepsByInstanceId.get(inst.Id);
-        Boolean hasCompensations = hasCompensationsByInstanceId.get(inst.Id);
-
-        if (
-          hasCompensations ||
-          String.isBlank(inst.Current_Step__c) ||
-          !inst.Current_Step__c.contains(',')
-        ) {
-          requests.add(new OrchestratorRequest(inst.Id, null));
-        } else {
-          for (String targetStepName : targetStepNames) {
-            String key = inst.Id + ':' + targetStepName;
-            Workflow_Step_Execution__c stepExec = latestStepByName.get(key);
-            if (
-              stepExec == null ||
-              (stepExec.Status__c != 'Completed' &&
-              stepExec.Status__c != 'OperatorSkipped')
-            ) {
-              requests.add(new OrchestratorRequest(inst.Id, targetStepName));
-            }
-          }
-        }
+      if (!state.succeededInstanceIds.contains(inst.Id)) {
+        continue;
       }
+      requests.addAll(buildReclaimOrchestratorRequests(inst, state));
     }
 
     if (!requests.isEmpty()) {
@@ -14021,5 +14106,36 @@ public inherited sharing class WorkflowEngine {
         // Best-effort re-enqueue; the next watchdog heartbeat re-drives on failure.
       }
     }
+  }
+
+  // Build the orchestrator re-drive requests for a single reclaimed instance.
+  private static List<OrchestratorRequest> buildReclaimOrchestratorRequests(
+    Workflow_Instance__c inst,
+    ReclaimState state
+  ) {
+    List<OrchestratorRequest> requests = new List<OrchestratorRequest>();
+    List<String> targetStepNames = state.targetStepsByInstanceId.get(inst.Id);
+    Boolean hasCompensations = state.hasCompensationsByInstanceId.get(inst.Id);
+
+    if (
+      hasCompensations ||
+      String.isBlank(inst.Current_Step__c) ||
+      !inst.Current_Step__c.contains(',')
+    ) {
+      requests.add(new OrchestratorRequest(inst.Id, null));
+    } else {
+      for (String targetStepName : targetStepNames) {
+        String key = inst.Id + ':' + targetStepName;
+        Workflow_Step_Execution__c stepExec = state.latestStepByName.get(key);
+        if (
+          stepExec == null ||
+          (stepExec.Status__c != 'Completed' &&
+          stepExec.Status__c != 'OperatorSkipped')
+        ) {
+          requests.add(new OrchestratorRequest(inst.Id, targetStepName));
+        }
+      }
+    }
+    return requests;
   }
 }
