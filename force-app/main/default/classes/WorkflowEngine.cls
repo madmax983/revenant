@@ -493,9 +493,7 @@ public inherited sharing class WorkflowEngine {
    * @param correlationKeys the requested correlation keys
    * @return the set of normalized non-blank keys
    */
-  private static Set<String> normalizeStatusKeys(
-    List<String> correlationKeys
-  ) {
+  private static Set<String> normalizeStatusKeys(List<String> correlationKeys) {
     Set<String> normalizedKeys = new Set<String>();
     for (String k : correlationKeys) {
       if (String.isNotBlank(k)) {
@@ -1763,10 +1761,7 @@ public inherited sharing class WorkflowEngine {
     String correlationKey,
     Boolean includeTerminal
   ) {
-    return findExistingByKey(
-        new Set<String>{ correlationKey },
-        includeTerminal
-      )
+    return findExistingByKey(new Set<String>{ correlationKey }, includeTerminal)
       .get(normalizeKey(correlationKey));
   }
 
@@ -4127,7 +4122,8 @@ public inherited sharing class WorkflowEngine {
       instance.Current_Step__c,
       WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
     );
-    stepExec.Timeout_At__c = (timeout != null && timeout > 0)
+    stepExec.Timeout_At__c = (timeout != null &&
+      timeout > 0)
       ? DateTime.now().addSeconds(timeout)
       : null;
     Database.update(stepExec, true, AccessLevel.SYSTEM_MODE);
@@ -6057,9 +6053,7 @@ public inherited sharing class WorkflowEngine {
     StepContext context,
     Map<Id, Workflow_Signal__c> toConsume
   ) {
-    Set<String> matchedNames = orEmptyStrings(
-      context.getConsumedSignalNames()
-    );
+    Set<String> matchedNames = orEmptyStrings(context.getConsumedSignalNames());
     Set<Id> matchedIds = orEmptyIds(context.getConsumedSignalIds());
     Integer remaining = 9000 - toConsume.size();
     if (matchedNames.isEmpty() || remaining <= 0) {
@@ -6137,9 +6131,7 @@ public inherited sharing class WorkflowEngine {
     }
     Set<Id> matchedIds = orEmptyIds(context.getConsumedSignalIds());
     Set<Id> claimedIds = orEmptyIds(context.getClaimedSignalIds());
-    Set<String> matchedNames = orEmptyStrings(
-      context.getConsumedSignalNames()
-    );
+    Set<String> matchedNames = orEmptyStrings(context.getConsumedSignalNames());
     // A step that matched nothing triggers no query, keeping non-signal steps cheap.
     if (matchedIds.isEmpty() && matchedNames.isEmpty()) {
       return;
@@ -8858,9 +8850,7 @@ public inherited sharing class WorkflowEngine {
    * @param parent the parent workflow instance
    * @return true when the parent status is terminal/inactive
    */
-  private static Boolean isParentInTerminalState(
-    Workflow_Instance__c parent
-  ) {
+  private static Boolean isParentInTerminalState(Workflow_Instance__c parent) {
     return parent.Status__c == 'Completed' ||
       parent.Status__c == 'Failed' ||
       parent.Status__c == 'Compensated' ||
@@ -10499,22 +10489,11 @@ public inherited sharing class WorkflowEngine {
     Workflow_Instance__c instance,
     String stepName
   ) {
-    Boolean stepIsValid = false;
-    if (String.isNotBlank(instance.Current_Step__c)) {
-      if (instance.Current_Step__c.contains(',')) {
-        for (String s : instance.Current_Step__c.split(',')) {
-          if (s.trim().equalsIgnoreCase(stepName)) {
-            stepIsValid = true;
-            stepName = s.trim();
-            break;
-          }
-        }
-      } else if (instance.Current_Step__c.equalsIgnoreCase(stepName)) {
-        stepIsValid = true;
-        stepName = instance.Current_Step__c;
-      }
-    }
-    if (!stepIsValid) {
+    String normalized = matchStepNameCandidate(
+      instance.Current_Step__c,
+      stepName
+    );
+    if (normalized == null) {
       throw new WorkflowException(
         'Step ' +
           stepName +
@@ -10522,7 +10501,28 @@ public inherited sharing class WorkflowEngine {
           instance.Current_Step__c
       );
     }
-    return stepName;
+    return normalized;
+  }
+
+  // Resolve the definition-normalized casing for stepName within currentStep
+  // (which may be a comma-separated parallel-branch list). Returns null when the
+  // step is not among the active steps.
+  private static String matchStepNameCandidate(
+    String currentStep,
+    String stepName
+  ) {
+    if (String.isBlank(currentStep)) {
+      return null;
+    }
+    if (!currentStep.contains(',')) {
+      return currentStep.equalsIgnoreCase(stepName) ? currentStep : null;
+    }
+    for (String s : currentStep.split(',')) {
+      if (s.trim().equalsIgnoreCase(stepName)) {
+        return s.trim();
+      }
+    }
+    return null;
   }
 
   // Retrieve and FOR UPDATE-lock the latest execution for the step, requiring
@@ -14666,9 +14666,7 @@ public inherited sharing class WorkflowEngine {
    * compensation step for a compensating saga, otherwise the active step(s).
    * @param instance the instance whose timeout jobs are armed
    */
-  private static void armTimeoutJobsForInstance(
-    Workflow_Instance__c instance
-  ) {
+  private static void armTimeoutJobsForInstance(Workflow_Instance__c instance) {
     if (
       instance.Status__c == 'Compensating' ||
       instance.Status__c == 'Cancelling'
@@ -14686,9 +14684,7 @@ public inherited sharing class WorkflowEngine {
    * Arms the timeout job for the top of a compensating saga's compensation stack.
    * @param instance the compensating/cancelling instance
    */
-  private static void armCompensationTimeoutJob(
-    Workflow_Instance__c instance
-  ) {
+  private static void armCompensationTimeoutJob(Workflow_Instance__c instance) {
     if (String.isBlank(instance.Compensation_Stack__c)) {
       return;
     }
@@ -14711,9 +14707,7 @@ public inherited sharing class WorkflowEngine {
    * comma-separated parallel steps when present.
    * @param instance the running instance whose active step(s) are armed
    */
-  private static void armActiveStepTimeoutJobs(
-    Workflow_Instance__c instance
-  ) {
+  private static void armActiveStepTimeoutJobs(Workflow_Instance__c instance) {
     if (!instance.Current_Step__c.contains(',')) {
       scheduleTimeoutJobIfNeeded(
         instance.Id,
