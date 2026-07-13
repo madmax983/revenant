@@ -216,6 +216,9 @@ public inherited sharing class WorkflowStatusInvocableAction {
     String wflowPrefix,
     Pattern idPattern
   ) {
+    if (raw == null) {
+      return null;
+    }
     if (
       String.isNotBlank(raw) &&
       idPattern.matcher(raw).matches() &&
