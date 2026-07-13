@@ -5275,27 +5275,42 @@ public inherited sharing class WorkflowEngine {
       );
       cc.maxAttempts = policy.maximumAttempts;
     }
-    if (String.isNotBlank(stepExec.Captured_Values__c)) {
-      String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
-      if (String.isNotBlank(resolvedCaptures)) {
-        try {
-          cc.capturesMap = (Map<String, Object>) JSON.deserializeUntyped(
-            resolvedCaptures
-          );
-          if (
-            !(stepInstance instanceof RetryConfigurable) &&
-            cc.capturesMap.containsKey('__maxAttempts')
-          ) {
-            cc.maxAttempts = Integer.valueOf(
-              cc.capturesMap.get('__maxAttempts')
-            );
-          }
-        } catch (Exception ignored) {
-          // Malformed captured values; retain the default maxAttempts.
-        }
-      }
-    }
+    applyCapturedValues(cc, stepInstance, stepExec);
     return cc;
+  }
+
+  /**
+   * Merges the step's persisted captured-values map into the capture context and,
+   * for a non-RetryConfigurable step, adopts a persisted __maxAttempts override.
+   * @param cc the capture context to populate
+   * @param stepInstance the step being executed
+   * @param stepExec the step execution row carrying Captured_Values__c
+   */
+  private static void applyCapturedValues(
+    CaptureContext cc,
+    WorkflowStep stepInstance,
+    Workflow_Step_Execution__c stepExec
+  ) {
+    if (String.isBlank(stepExec.Captured_Values__c)) {
+      return;
+    }
+    String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
+    if (String.isBlank(resolvedCaptures)) {
+      return;
+    }
+    try {
+      cc.capturesMap = (Map<String, Object>) JSON.deserializeUntyped(
+        resolvedCaptures
+      );
+      if (
+        !(stepInstance instanceof RetryConfigurable) &&
+        cc.capturesMap.containsKey('__maxAttempts')
+      ) {
+        cc.maxAttempts = Integer.valueOf(cc.capturesMap.get('__maxAttempts'));
+      }
+    } catch (Exception ignored) {
+      // Malformed captured values; retain the default maxAttempts.
+    }
   }
 
   // Set the pre-exec Running status and Timeout_At__c (deferring the DML write for
