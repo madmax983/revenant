@@ -277,49 +277,79 @@ public inherited sharing class WorkflowEngine {
     return currentId;
   }
 
+  /**
+   * Consumes one injected-fault occurrence for the key and reports whether this
+   * invocation should fail. A null remainingFailures fails every time; a
+   * positive count is decremented (and the fault removed when it reaches zero);
+   * a zero/negative count does not fail.
+   * @param config the fault configuration (mutated when it has a finite count)
+   * @param key the injected-fault map key, removed when the count is exhausted
+   * @return true when this invocation should inject the fault
+   */
+  private static Boolean consumeFaultShouldFail(
+    FaultConfig config,
+    String key
+  ) {
+    if (config.remainingFailures == null) {
+      return true;
+    }
+    if (config.remainingFailures > 0) {
+      config.remainingFailures--;
+      if (config.remainingFailures == 0) {
+        injectedFaults.remove(key);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Builds the injected-fault outcome: a retry when the step is RetryConfigurable
+   * with a policy, otherwise a thrown WorkflowException carrying the fault
+   * message.
+   * @param stepInstance the step being executed
+   * @param config the fault configuration supplying the failure message
+   * @return a retry StepResult when a retry policy applies
+   */
+  private static StepResult faultResult(
+    WorkflowStep stepInstance,
+    FaultConfig config
+  ) {
+    if (stepInstance instanceof RetryConfigurable) {
+      RetryPolicy policy = ((RetryConfigurable) stepInstance).getRetryPolicy();
+      if (policy != null) {
+        return StepResult.retry(policy);
+      }
+    }
+    throw new WorkflowException(config.message);
+  }
+
   private static StepResult checkAndInjectFault(
     Id instanceId,
     String stepName,
     WorkflowStep stepInstance
   ) {
     if (
-      Test.isRunningTest() &&
+      !(Test.isRunningTest() &&
       injectedFaults != null &&
       !injectedFaults.isEmpty() &&
-      String.isNotBlank(stepName)
+      String.isNotBlank(stepName))
     ) {
-      Id rootId = getRootInstanceId(instanceId);
-      String key =
-        (rootId != null ? String.valueOf(rootId) : '') +
-        ':' +
-        stepName.toLowerCase();
-      if (injectedFaults.containsKey(key)) {
-        FaultConfig config = injectedFaults.get(key);
-        if (config != null) {
-          Boolean shouldFail = false;
-          if (config.remainingFailures == null) {
-            shouldFail = true;
-          } else if (config.remainingFailures > 0) {
-            config.remainingFailures--;
-            shouldFail = true;
-            if (config.remainingFailures == 0) {
-              injectedFaults.remove(key);
-            }
-          }
-          if (shouldFail) {
-            if (stepInstance instanceof RetryConfigurable) {
-              RetryPolicy policy = ((RetryConfigurable) stepInstance)
-                .getRetryPolicy();
-              if (policy != null) {
-                return StepResult.retry(policy);
-              }
-            }
-            throw new WorkflowException(config.message);
-          }
-        }
-      }
+      return null;
     }
-    return null;
+    Id rootId = getRootInstanceId(instanceId);
+    String key =
+      (rootId != null ? String.valueOf(rootId) : '') +
+      ':' +
+      stepName.toLowerCase();
+    FaultConfig config = injectedFaults.get(key);
+    if (config == null) {
+      return null;
+    }
+    if (!consumeFaultShouldFail(config, key)) {
+      return null;
+    }
+    return faultResult(stepInstance, config);
   }
 
   /**
