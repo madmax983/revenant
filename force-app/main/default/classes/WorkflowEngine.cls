@@ -15165,6 +15165,19 @@ public inherited sharing class WorkflowEngine {
     System.schedule(jobName, cronStr, job);
   }
 
+  /**
+   * @param delaySeconds the configured delay in seconds
+   * @return true when the delay qualifies for a minute-granular queueable job
+   *   (outside test, 60-600s, whole minutes) and queueable budget remains
+   */
+  private static Boolean qualifiesForMinuteQueueable(Integer delaySeconds) {
+    return !Test.isRunningTest() &&
+      delaySeconds >= 60 &&
+      delaySeconds <= 600 &&
+      Math.mod(delaySeconds, 60) == 0 &&
+      Limits.getQueueableJobs() < Limits.getLimitQueueableJobs();
+  }
+
   private static String scheduleRetry(
     Id instanceId,
     String stepName,
@@ -15174,20 +15187,13 @@ public inherited sharing class WorkflowEngine {
       return null;
     }
     try {
-      if (
-        !Test.isRunningTest() &&
-        delaySeconds >= 60 &&
-        delaySeconds <= 600 &&
-        Math.mod(delaySeconds, 60) == 0
-      ) {
-        if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
-          return String.valueOf(
-            System.enqueueJob(
-              new WorkflowRetryJob.QueueableRetryJob(instanceId, stepName),
-              delaySeconds / 60
-            )
-          );
-        }
+      if (qualifiesForMinuteQueueable(delaySeconds)) {
+        return String.valueOf(
+          System.enqueueJob(
+            new WorkflowRetryJob.QueueableRetryJob(instanceId, stepName),
+            delaySeconds / 60
+          )
+        );
       }
       WorkflowRetryJob job = new WorkflowRetryJob(instanceId, stepName);
       Datetime runTime = Datetime.now()
@@ -15281,20 +15287,13 @@ public inherited sharing class WorkflowEngine {
       return null;
     }
     try {
-      if (
-        !Test.isRunningTest() &&
-        delaySeconds >= 60 &&
-        delaySeconds <= 600 &&
-        Math.mod(delaySeconds, 60) == 0
-      ) {
-        if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
-          return String.valueOf(
-            System.enqueueJob(
-              new WorkflowSleepJob.QueueableSleepJob(instanceId, stepName),
-              delaySeconds / 60
-            )
-          );
-        }
+      if (qualifiesForMinuteQueueable(delaySeconds)) {
+        return String.valueOf(
+          System.enqueueJob(
+            new WorkflowSleepJob.QueueableSleepJob(instanceId, stepName),
+            delaySeconds / 60
+          )
+        );
       }
       WorkflowSleepJob job = new WorkflowSleepJob(instanceId, stepName);
       Datetime runTime = Datetime.now()
