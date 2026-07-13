@@ -9127,6 +9127,7 @@ public inherited sharing class WorkflowEngine {
     captureUnroutedSignals(
       new List<SignalRequest>{
         new SignalRequest(req.keyOrId, req.signalName, req.payload)
+          .withDedupKey(req.dedupKey)
           .withIdempotencyKey(req.idempotencyKey)
       }
     );
