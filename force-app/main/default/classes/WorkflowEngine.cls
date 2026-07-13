@@ -14748,13 +14748,33 @@ public inherited sharing class WorkflowEngine {
       instanceIds.add(inst.Id);
     }
 
-    // A concurrency-bounded instance that has not yet won an admission slot must NOT
-    // have its initial step's deadline re-armed here. It is re-driven through the
-    // admission gate (the paused-resume and watchdog wake paths both enqueue it), and
-    // a deadline stamped before admission could fail the still-waiting step in the
-    // backlog. The admission path itself calls this method AFTER acquiring a slot
-    // (Concurrency_Slot_Held__c = true), so re-admitted steps still get re-armed.
-    // Re-query the authoritative slot flag so an in-memory caller value cannot skew it.
+    Set<Id> deferIds = collectConcurrencyDeferIds(instanceIds);
+
+    List<Workflow_Step_Execution__c> steps = [
+      SELECT
+        Id,
+        Workflow_Instance__c,
+        Step_Name__c,
+        Workflow_Instance__r.Workflow_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c IN :instanceIds
+        AND Status__c IN ('Pending', 'Running')
+      WITH SYSTEM_MODE
+    ];
+    reArmStepDeadlines(steps, deferIds);
+    scheduleActiveStepTimeoutJobs(steps, deferIds);
+  }
+
+  /**
+   * Re-queries the authoritative slot flag and collects the ids of concurrency-
+   * bounded instances that have not yet won an admission slot. Their initial step
+   * deadline must NOT be re-armed here (the admission gate re-arms it once a slot
+   * is won); an in-memory caller value cannot skew this decision.
+   * @param instanceIds the candidate instance ids being resumed
+   * @return the ids whose deadline re-arm must be deferred to the admission gate
+   */
+  private static Set<Id> collectConcurrencyDeferIds(Set<Id> instanceIds) {
     Set<Id> deferIds = new Set<Id>();
     for (Workflow_Instance__c inst : [
       SELECT Id, Workflow_Name__c, Concurrency_Slot_Held__c
@@ -14769,19 +14789,19 @@ public inherited sharing class WorkflowEngine {
         deferIds.add(inst.Id);
       }
     }
+    return deferIds;
+  }
 
-    List<Workflow_Step_Execution__c> steps = [
-      SELECT
-        Id,
-        Workflow_Instance__c,
-        Step_Name__c,
-        Workflow_Instance__r.Workflow_Name__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c IN :instanceIds
-        AND Status__c IN ('Pending', 'Running')
-      WITH SYSTEM_MODE
-    ];
+  /**
+   * Re-stamps a fresh watchdog deadline on each non-deferred active step that has
+   * a positive configured timeout, then persists them in a single update.
+   * @param steps the queried Pending/Running step rows
+   * @param deferIds instance ids whose steps must not be re-armed
+   */
+  private static void reArmStepDeadlines(
+    List<Workflow_Step_Execution__c> steps,
+    Set<Id> deferIds
+  ) {
     List<Workflow_Step_Execution__c> toUpdate = new List<Workflow_Step_Execution__c>();
     for (Workflow_Step_Execution__c step : steps) {
       if (deferIds.contains(step.Workflow_Instance__c)) {
@@ -14793,20 +14813,31 @@ public inherited sharing class WorkflowEngine {
           step.Workflow_Instance__r.Workflow_Name__c
         )
       );
-      if (timeout != null && timeout > 0) {
-        step.Timeout_At__c = DateTime.now().addSeconds(timeout);
-        toUpdate.add(step);
+      if (timeout == null || timeout <= 0) {
+        continue;
       }
+      step.Timeout_At__c = DateTime.now().addSeconds(timeout);
+      toUpdate.add(step);
     }
     if (!toUpdate.isEmpty()) {
       Database.update(toUpdate, true, AccessLevel.SYSTEM_MODE);
     }
-    // Schedule the dynamic timeout jobs (Schedulable/Queueable) for the genuinely
-    // active step rows only. A parallel instance keeps every branch name in
-    // Current_Step__c until the join, so a completed branch lingers there; driving
-    // off the queried Pending/Running rows (instead of parsing Current_Step__c)
-    // avoids scheduling a timeout for a completed branch that would later find no
-    // active step row and wrongly fail the whole instance "before starting".
+  }
+
+  /**
+   * Schedules the dynamic timeout jobs for the genuinely active (non-deferred)
+   * step rows only. A parallel instance keeps every branch name in Current_Step__c
+   * until the join, so a completed branch lingers there; driving off the queried
+   * Pending/Running rows (instead of parsing Current_Step__c) avoids scheduling a
+   * timeout for a completed branch that would later find no active step row and
+   * wrongly fail the whole instance "before starting".
+   * @param steps the queried Pending/Running step rows
+   * @param deferIds instance ids whose steps must not be scheduled
+   */
+  private static void scheduleActiveStepTimeoutJobs(
+    List<Workflow_Step_Execution__c> steps,
+    Set<Id> deferIds
+  ) {
     for (Workflow_Step_Execution__c step : steps) {
       if (deferIds.contains(step.Workflow_Instance__c)) {
         continue;
