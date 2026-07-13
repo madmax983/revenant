@@ -1298,6 +1298,51 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Recovers the bare key from the current JSON causation form (`key:{...}`).
+   * @param val a `key:`-scoped causation id
+   * @return the `key:<k>` display value, or null when val is not JSON-shaped or
+   *   cannot be parsed (so callers fall through to legacy trimming)
+   */
+  private static String parseKeyScopedJson(String val) {
+    if (!val.startsWith('key:{"')) {
+      return null;
+    }
+    try {
+      String jsonStr = val.substring(4);
+      Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
+        jsonStr
+      );
+      return 'key:' + (String) data.get('k');
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
+
+  /**
+   * Trims a legacy numeric uniqueness suffix delimited by the given separator.
+   * @param val the raw value
+   * @param separator the delimiter preceding the numeric suffix
+   * @return the value with the suffix removed, or null when there is no valid
+   *   12-15 digit numeric suffix to strip
+   */
+  private static String stripNumericSuffix(String val, String separator) {
+    Integer idx = val.lastIndexOf(separator);
+    if (idx == -1) {
+      return null;
+    }
+    String suffix = val.substring(idx + separator.length());
+    if (suffix.length() < 12 || suffix.length() > 15) {
+      return null;
+    }
+    try {
+      Long.valueOf(suffix);
+      return val.substring(0, idx);
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
+
+  /**
    * @description Normalizes a stored causation id for display by stripping the
    * uniqueness suffix from a `key:`-scoped value. Parses the current JSON form
    * (`key:{...}`) to recover the bare key, and falls back to trimming legacy
@@ -1306,43 +1351,21 @@ public inherited sharing class WorkflowEngine {
    * @return the display causation id, or the original value when nothing to strip
    */
   public static String cleanCausationId(String val) {
-    if (String.isNotBlank(val) && val.startsWith('key:')) {
-      if (val.startsWith('key:{"')) {
-        try {
-          String jsonStr = val.substring(4);
-          Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
-            jsonStr
-          );
-          return 'key:' + (String) data.get('k');
-        } catch (Exception ignored) {
-          // fallback: fall through to the legacy suffix-trimming path below
-        }
-      }
-      // Backwards compatibility fallback for older formats
-      Integer tsIndex = val.lastIndexOf('::ts::');
-      if (tsIndex != -1) {
-        String suffix = val.substring(tsIndex + 6);
-        if (suffix.length() >= 12 && suffix.length() <= 15) {
-          try {
-            Long.valueOf(suffix);
-            return val.substring(0, tsIndex);
-          } catch (Exception ignored) {
-            // not a valid long, keep suffix
-          }
-        }
-      }
-      Integer hashIndex = val.lastIndexOf('#');
-      if (hashIndex != -1) {
-        String suffix = val.substring(hashIndex + 1);
-        if (suffix.length() >= 12 && suffix.length() <= 15) {
-          try {
-            Long.valueOf(suffix);
-            return val.substring(0, hashIndex);
-          } catch (Exception ignored) {
-            // not a valid long, keep suffix
-          }
-        }
-      }
+    if (String.isBlank(val) || !val.startsWith('key:')) {
+      return val;
+    }
+    String fromJson = parseKeyScopedJson(val);
+    if (fromJson != null) {
+      return fromJson;
+    }
+    // Backwards compatibility fallback for older formats
+    String tsTrimmed = stripNumericSuffix(val, '::ts::');
+    if (tsTrimmed != null) {
+      return tsTrimmed;
+    }
+    String hashTrimmed = stripNumericSuffix(val, '#');
+    if (hashTrimmed != null) {
+      return hashTrimmed;
     }
     return val;
   }
