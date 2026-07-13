@@ -1641,13 +1641,13 @@ public inherited sharing class WorkflowEngine {
     Workflow_Instance__c instance = buildInstance(req);
 
     try {
-      insert as system instance;
+      Database.insert(instance, true, AccessLevel.SYSTEM_MODE);
       List<Workflow_Search_Attribute__c> attrsToInsert = buildAttributes(
         instance.Id,
         attributes
       );
       if (!attrsToInsert.isEmpty()) {
-        insert as system attrsToInsert;
+        Database.insert(attrsToInsert, true, AccessLevel.SYSTEM_MODE);
       }
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
@@ -1698,7 +1698,7 @@ public inherited sharing class WorkflowEngine {
     if (deferTimeoutForConcurrency) {
       instance.Concurrency_Parked__c = true;
     }
-    update as system instance;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     if (String.isNotBlank(instance.Current_Step__c)) {
       Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
@@ -1720,7 +1720,7 @@ public inherited sharing class WorkflowEngine {
           stepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
         }
       }
-      insert as system stepExec;
+      Database.insert(stepExec, true, AccessLevel.SYSTEM_MODE);
     }
 
     // Park at start if the definition is currently paused. The initial Pending
@@ -1729,7 +1729,7 @@ public inherited sharing class WorkflowEngine {
     // enqueue; the watchdog re-drives held work on resume.
     if (parkAtStart) {
       instance.Status__c = 'Paused';
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       return new StartResult(instance.Id, true);
     }
 
@@ -2155,7 +2155,7 @@ public inherited sharing class WorkflowEngine {
       Signal_Key__c = deriveSignalDedupKey(instanceId, idempotencyKey)
     );
     try {
-      insert as system marker;
+      Database.insert(marker, true, AccessLevel.SYSTEM_MODE);
       return true;
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
@@ -2225,7 +2225,7 @@ public inherited sharing class WorkflowEngine {
         // re-select this instance and mis-route/double-wake it. The resumed step
         // re-arms its own deadline if it suspends or sleeps again.
         instance.Sleep_Until__c = null;
-        update as system instance;
+        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       }
       enqueueResume(instance.Id);
     }
@@ -2736,7 +2736,7 @@ public inherited sharing class WorkflowEngine {
       // orphan Pending instances are left behind.
       if (genuineError != null) {
         if (!insertedInstances.isEmpty()) {
-          delete as system insertedInstances;
+          Database.delete(insertedInstances, true, AccessLevel.SYSTEM_MODE);
         }
         throw new WorkflowException(
           'Failed to start workflow: ' + genuineError
@@ -2764,7 +2764,7 @@ public inherited sharing class WorkflowEngine {
         }
       }
       if (!attrsToInsert.isEmpty()) {
-        insert as system attrsToInsert;
+        Database.insert(attrsToInsert, true, AccessLevel.SYSTEM_MODE);
       }
     }
 
@@ -2819,7 +2819,7 @@ public inherited sharing class WorkflowEngine {
 
     if (!unresolvedKeys.isEmpty()) {
       if (!insertedInstances.isEmpty()) {
-        delete as system insertedInstances;
+        Database.delete(insertedInstances, true, AccessLevel.SYSTEM_MODE);
       }
       throw new WorkflowException(
         'Failed to resolve workflow start for correlation key(s): ' +
@@ -2841,7 +2841,7 @@ public inherited sharing class WorkflowEngine {
       );
     }
     if (!insertedInstances.isEmpty()) {
-      update as system insertedInstances;
+      Database.update(insertedInstances, true, AccessLevel.SYSTEM_MODE);
     }
 
     // Operator pause gate (bulk path — used by scheduled jobs and the Flow
@@ -2887,7 +2887,7 @@ public inherited sharing class WorkflowEngine {
       }
     }
     if (!deferredToMark.isEmpty()) {
-      update as system deferredToMark;
+      Database.update(deferredToMark, true, AccessLevel.SYSTEM_MODE);
     }
 
     // 7. Construct initial Step Execution logs for inserted instances only
@@ -2919,13 +2919,13 @@ public inherited sharing class WorkflowEngine {
       }
     }
     if (!stepExecs.isEmpty()) {
-      insert as system stepExecs;
+      Database.insert(stepExecs, true, AccessLevel.SYSTEM_MODE);
     }
 
     // Persist the parked status transition; parked instances are neither scheduled
     // nor enqueued — the resume path drives them when the definition is resumed.
     if (!instancesToPark.isEmpty()) {
-      update as system instancesToPark;
+      Database.update(instancesToPark, true, AccessLevel.SYSTEM_MODE);
     }
 
     // 8. Schedule timeout jobs for non-parked, non-deferred instances and enqueue
@@ -3336,7 +3336,7 @@ public inherited sharing class WorkflowEngine {
       }
 
       if (!instancesToUpdate.isEmpty()) {
-        update as system instancesToUpdate;
+        Database.update(instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
       }
 
       // Enqueue the woken instances exactly once
@@ -3401,7 +3401,7 @@ public inherited sharing class WorkflowEngine {
     // Disarm any armed timed-wait timeout so the watchdog does not mis-route to
     // the fallback step after a manual resume wins the race (issue #35).
     instance.Sleep_Until__c = null;
-    update as system instance;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     // If there is an active step, we can store the resume payload in its step execution record
     if (String.isNotBlank(instance.Current_Step__c)) {
@@ -3432,7 +3432,7 @@ public inherited sharing class WorkflowEngine {
         } else {
           stepExec.Timeout_At__c = null;
         }
-        update as system stepExec;
+        Database.update(stepExec, true, AccessLevel.SYSTEM_MODE);
       }
     }
 
@@ -3469,7 +3469,7 @@ public inherited sharing class WorkflowEngine {
     // Disarm any armed timed-wait timeout so the watchdog does not mis-route to
     // the fallback step after a manual resume wins the race (issue #35).
     instance.Sleep_Until__c = null;
-    update as system instance;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     // If there is an active step, we can store the resume payload in its step execution record
     if (String.isNotBlank(instance.Current_Step__c)) {
@@ -3500,7 +3500,7 @@ public inherited sharing class WorkflowEngine {
         } else {
           stepExec.Timeout_At__c = null;
         }
-        update as system stepExec;
+        Database.update(stepExec, true, AccessLevel.SYSTEM_MODE);
       }
     }
 
@@ -3651,9 +3651,9 @@ public inherited sharing class WorkflowEngine {
       }
     }
 
-    update as system instancesToUpdate;
+    Database.update(instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
     if (!stepsToUpdate.isEmpty()) {
-      update as system stepsToUpdate;
+      Database.update(stepsToUpdate, true, AccessLevel.SYSTEM_MODE);
     }
 
     scheduleTimeoutJobsForInstances(instancesToUpdate);
@@ -3809,7 +3809,7 @@ public inherited sharing class WorkflowEngine {
       // already-Paused row is just a no-op until the drain flips it to Running.
       if (definitionPaused && instance.Status__c != 'Paused') {
         instance.Status__c = 'Paused';
-        update as system instance;
+        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       }
       return;
     }
@@ -3896,7 +3896,7 @@ public inherited sharing class WorkflowEngine {
           instance.Status__c = 'Running';
           instance.Sleep_Until__c = null;
           instance.Async_Job_Id__c = null;
-          update as system instance;
+          Database.update(instance, true, AccessLevel.SYSTEM_MODE);
           reArmTimeoutsForResume(new List<Workflow_Instance__c>{ instance });
           if (!(Test.isRunningTest() && disableQueueableInTest)) {
             enqueueResume(instance.Id);
@@ -3917,7 +3917,7 @@ public inherited sharing class WorkflowEngine {
         instance.Concurrency_Parked__c = false;
         instance.Sleep_Until__c = null;
         instance.Async_Job_Id__c = null;
-        update as system instance;
+        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
         // Re-arm the pending step's watchdog deadline that parkForConcurrency cleared,
         // mirroring the successful-admission path above. Without this a re-drive that
         // is delayed or lost (and a CalloutStep, whose pre-exec bookkeeping relies on
@@ -4627,7 +4627,7 @@ public inherited sharing class WorkflowEngine {
           sig.Status__c = 'Processing';
           claimedIds.add(sig.Id);
         }
-        update as system locked; // one statement for the whole page
+        Database.update(locked, true, AccessLevel.SYSTEM_MODE); // one statement for the whole page
         claimBudget -= claimedIds.size();
         claimStatementBudget -= 1;
 
@@ -4721,7 +4721,7 @@ public inherited sharing class WorkflowEngine {
             continue; // lost the race on this row; try the next-newest
           }
           locked[0].Status__c = 'Processing';
-          update as system locked[0];
+          Database.update(locked[0], true, AccessLevel.SYSTEM_MODE);
           claimBudget -= 1;
           claimStatementBudget -= 1;
           // claimed = true: this branch now exclusively owns the row.
@@ -4871,7 +4871,7 @@ public inherited sharing class WorkflowEngine {
     for (Workflow_Signal__c sig : toRollback) {
       sig.Status__c = 'Received';
     }
-    update as system toRollback;
+    Database.update(toRollback, true, AccessLevel.SYSTEM_MODE);
   }
 
   /**
@@ -5004,7 +5004,7 @@ public inherited sharing class WorkflowEngine {
     for (Workflow_Signal__c sig : toConsume.values()) {
       sig.Status__c = 'Consumed';
     }
-    update as system toConsume.values();
+    Database.update(toConsume.values(), true, AccessLevel.SYSTEM_MODE);
   }
 
   private static void populateTelemetry(
@@ -5034,9 +5034,9 @@ public inherited sharing class WorkflowEngine {
   ) {
     populateTelemetry(stepExec, isCrash);
     if (stepExec.Id == null) {
-      insert as system stepExec;
+      Database.insert(stepExec, true, AccessLevel.SYSTEM_MODE);
     } else {
-      update as system stepExec;
+      Database.update(stepExec, true, AccessLevel.SYSTEM_MODE);
     }
   }
 
@@ -5153,7 +5153,7 @@ public inherited sharing class WorkflowEngine {
         stepExec.Status__c == 'Running'
       ) {
         stepExec.Status__c = 'Cancelled';
-        update as system stepExec;
+        Database.update(stepExec, true, AccessLevel.SYSTEM_MODE);
       }
       return;
     }
@@ -5209,9 +5209,13 @@ public inherited sharing class WorkflowEngine {
     ) {
       // Targeted single-field update so this early reset never persists any other
       // in-memory staging the outcome branches below have yet to commit.
-      update as system new Workflow_Step_Execution__c(
-        Id = stepExec.Id,
-        Transient_Retry_Count__c = 0
+      Database.update(
+        new Workflow_Step_Execution__c(
+          Id = stepExec.Id,
+          Transient_Retry_Count__c = 0
+        ),
+        true,
+        AccessLevel.SYSTEM_MODE
       );
       stepExec.Transient_Retry_Count__c = 0;
     }
@@ -5279,7 +5283,7 @@ public inherited sharing class WorkflowEngine {
           instance.Compensation_Stack__c = JSON.serialize(stack);
           // If not parallel or if parallel and not all done, update here so stack is saved.
           // (Parallel allDone paths will update instance later, but doing a single update here is safe).
-          update as system instance;
+          Database.update(instance, true, AccessLevel.SYSTEM_MODE);
         }
       }
 
@@ -5319,7 +5323,7 @@ public inherited sharing class WorkflowEngine {
             'Output_Final'
           );
           instance.Current_Step__c = null;
-          update as system instance;
+          Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
           // Notify parent completion if this is a child workflow. This publishes
           // the load-bearing Workflow_Event__e, so it must run BEFORE the
@@ -5333,7 +5337,7 @@ public inherited sharing class WorkflowEngine {
 
         // Advance to next step
         instance.Current_Step__c = nextStepName;
-        update as system instance;
+        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
         Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
         nextStepExec.Workflow_Instance__c = instance.Id;
@@ -5341,7 +5345,7 @@ public inherited sharing class WorkflowEngine {
         nextStepExec.Status__c = 'Pending';
         nextStepExec.Input__c = stepExec.Output__c;
         nextStepExec.Retry_Count__c = 0;
-        insert as system nextStepExec;
+        Database.insert(nextStepExec, true, AccessLevel.SYSTEM_MODE);
 
         // Pass the in-memory instance (Current_Step__c just advanced to nextStepName,
         // committed above) so the per-advance watchdog scheduling does not re-query the
@@ -5408,10 +5412,10 @@ public inherited sharing class WorkflowEngine {
         }
         if (hasPending && !hasRunning) {
           instance.Status__c = 'Suspended';
-          update as system instance;
+          Database.update(instance, true, AccessLevel.SYSTEM_MODE);
         } else if (!hasPending && !hasRunning && hasFailed) {
           instance.Status__c = 'Failed';
-          update as system instance;
+          Database.update(instance, true, AccessLevel.SYSTEM_MODE);
         }
         return;
       }
@@ -5494,7 +5498,7 @@ public inherited sharing class WorkflowEngine {
           'Output_Join'
         );
         instance.Current_Step__c = null;
-        update as system instance;
+        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
         // Parent notification publishes the load-bearing Workflow_Event__e, so it
         // runs BEFORE the best-effort lifecycle publish (first claim on DML budget).
@@ -5515,10 +5519,10 @@ public inherited sharing class WorkflowEngine {
         'Input_' + nextStepName.replaceAll('[^a-zA-Z0-9]', '_')
       );
       joinStepExec.Retry_Count__c = 0;
-      insert as system joinStepExec;
+      Database.insert(joinStepExec, true, AccessLevel.SYSTEM_MODE);
 
       instance.Current_Step__c = nextStepName;
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
       scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestrator(instance.Id, null);
@@ -5535,7 +5539,7 @@ public inherited sharing class WorkflowEngine {
       );
       saveStepExec(stepExec);
 
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
       scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestrator(instance.Id, null);
@@ -5575,7 +5579,7 @@ public inherited sharing class WorkflowEngine {
       saveStepExec(stepExec);
 
       instance.Status__c = 'Suspended';
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       redeliverMatchingSignalsForInstance(
         instance.Id,
         instance.Correlation_Key__c
@@ -5601,7 +5605,7 @@ public inherited sharing class WorkflowEngine {
         stepExec.Step_Name__c,
         result.sleepDurationSeconds
       );
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     } else if (result.action == StepResult.ActionType.START_CHILD) {
       // Step requested child workflow.
       //
@@ -5629,7 +5633,7 @@ public inherited sharing class WorkflowEngine {
       saveStepExec(stepExec);
 
       instance.Status__c = 'Suspended';
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       redeliverMatchingSignalsForInstance(
         instance.Id,
         instance.Correlation_Key__c
@@ -5667,7 +5671,7 @@ public inherited sharing class WorkflowEngine {
       saveStepExec(stepExec);
 
       instance.Status__c = 'Suspended';
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       redeliverMatchingSignalsForInstance(
         instance.Id,
         instance.Correlation_Key__c
@@ -5703,7 +5707,7 @@ public inherited sharing class WorkflowEngine {
       saveStepExec(stepExec);
 
       instance.Status__c = 'Suspended';
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       redeliverMatchingSignalsForInstance(
         instance.Id,
         instance.Correlation_Key__c
@@ -5729,7 +5733,7 @@ public inherited sharing class WorkflowEngine {
       String parallelStepsStr = String.join(result.parallelStepNames, ',');
       instance.Current_Step__c = parallelStepsStr;
       instance.Status__c = 'Running';
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
       List<Workflow_Step_Execution__c> parallelExecs = new List<Workflow_Step_Execution__c>();
       for (String ps : result.parallelStepNames) {
@@ -5754,7 +5758,7 @@ public inherited sharing class WorkflowEngine {
         }
         parallelExecs.add(pe);
       }
-      insert as system parallelExecs;
+      Database.insert(parallelExecs, true, AccessLevel.SYSTEM_MODE);
 
       scheduleTimeoutJobForInstance(instance.Id);
       for (String ps : result.parallelStepNames) {
@@ -5837,7 +5841,7 @@ public inherited sharing class WorkflowEngine {
           stepExec.Step_Name__c,
           delay
         );
-        update as system instance;
+        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       }
     } else if (result.action == StepResult.ActionType.CONTINUE_AS_NEW) {
       if (isParallel) {
@@ -5860,7 +5864,7 @@ public inherited sharing class WorkflowEngine {
       // Mark current instance as ContinuedAsNew
       instance.Status__c = 'ContinuedAsNew';
       instance.Current_Step__c = null;
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
       // Resolve initial step for successor instance
       String initialStep = null;
@@ -5912,7 +5916,7 @@ public inherited sharing class WorkflowEngine {
         Previous_Run_At__c = instance.CreatedDate
       );
       try {
-        insert as system nextInstance;
+        Database.insert(nextInstance, true, AccessLevel.SYSTEM_MODE);
       } catch (DmlException ex) {
         if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
           throw new WorkflowException(
@@ -5942,7 +5946,7 @@ public inherited sharing class WorkflowEngine {
             )
           );
         }
-        insert as system successorAttrs;
+        Database.insert(successorAttrs, true, AccessLevel.SYSTEM_MODE);
       }
 
       // Set input and save payload
@@ -5964,7 +5968,7 @@ public inherited sharing class WorkflowEngine {
       if (deferTimeoutForConcurrency) {
         nextInstance.Concurrency_Parked__c = true;
       }
-      update as system nextInstance;
+      Database.update(nextInstance, true, AccessLevel.SYSTEM_MODE);
 
       // Pre-create the successor's first step execution log
       if (String.isNotBlank(initialStep)) {
@@ -5981,7 +5985,7 @@ public inherited sharing class WorkflowEngine {
         if (timeout != null && timeout > 0 && !deferTimeoutForConcurrency) {
           nextStepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
         }
-        insert as system nextStepExec;
+        Database.insert(nextStepExec, true, AccessLevel.SYSTEM_MODE);
       }
 
       // Enqueue the successor run
@@ -6298,7 +6302,7 @@ public inherited sharing class WorkflowEngine {
     // re-drives it. runStep re-stamps a fresh deadline before execute() on the
     // re-drive, mirroring how the RETRY action parks its step out of the timeout batch.
     stepExec.Timeout_At__c = null;
-    update as system stepExec;
+    Database.update(stepExec, true, AccessLevel.SYSTEM_MODE);
 
     // Exponential backoff (capped) with jitter so the contention wave drains before
     // the re-drive and a fan-in of re-drives does not re-synchronize into a new storm.
@@ -6314,7 +6318,7 @@ public inherited sharing class WorkflowEngine {
     instance.Status__c = 'Suspended';
     instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
     instance.Async_Job_Id__c = jobId;
-    update as system instance;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     if (jobId == null) {
       // No delayed job was created (dynamic scheduling off, or async limit), so this
@@ -6455,7 +6459,7 @@ public inherited sharing class WorkflowEngine {
                   sibling.Status__c = 'Cancelled';
                 }
                 if (!siblingExecs.isEmpty()) {
-                  update as system siblingExecs;
+                  Database.update(siblingExecs, true, AccessLevel.SYSTEM_MODE);
                 }
               }
 
@@ -6477,13 +6481,13 @@ public inherited sharing class WorkflowEngine {
                 JSON.serialize(errorCaptures),
                 'Captures_' + errorStepName.replaceAll('[^a-zA-Z0-9]', '_')
               );
-              insert as system nextStepExec;
+              Database.insert(nextStepExec, true, AccessLevel.SYSTEM_MODE);
 
               instance.Current_Step__c = errorStepName;
               instance.Status__c = 'Running';
               instance.Sleep_Until__c = null;
               instance.Async_Job_Id__c = null;
-              update as system instance;
+              Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
               scheduleTimeoutJobForInstance(instance);
               if (Test.isRunningTest()) {
@@ -6526,7 +6530,7 @@ public inherited sharing class WorkflowEngine {
         ': ' +
         errorMessage)
         .left(255);
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       notifyParentCompletion(instance);
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       WorkflowLifecyclePublisher.publish(instance);
@@ -6554,7 +6558,7 @@ public inherited sharing class WorkflowEngine {
         .left(255);
       instance.Sleep_Until__c = null;
       instance.Async_Job_Id__c = null;
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       notifyParentCompletion(instance);
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       WorkflowLifecyclePublisher.publish(instance);
@@ -6568,7 +6572,7 @@ public inherited sharing class WorkflowEngine {
       errorMessage)
       .left(255);
     preCreateFirstCompensationStep(instance);
-    update as system instance;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     if (Test.isRunningTest()) {
       if (!disableQueueableInTest) {
@@ -6671,7 +6675,7 @@ public inherited sharing class WorkflowEngine {
     instance.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
 
     try {
-      insert as system instance;
+      Database.insert(instance, true, AccessLevel.SYSTEM_MODE);
       if (Test.isRunningTest() && parentId != null) {
         registerChildParent(instance.Id, parentId);
       }
@@ -6701,7 +6705,7 @@ public inherited sharing class WorkflowEngine {
       inputJson,
       'Input_Child_' + instance.Id
     );
-    update as system instance;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     if (String.isNotBlank(instance.Current_Step__c)) {
       Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
@@ -6710,7 +6714,7 @@ public inherited sharing class WorkflowEngine {
       stepExec.Status__c = 'Pending';
       stepExec.Input__c = instance.Input__c;
       stepExec.Retry_Count__c = 0;
-      insert as system stepExec;
+      Database.insert(stepExec, true, AccessLevel.SYSTEM_MODE);
     }
 
     // Operator pause gate — park the child at start if its definition is paused, so a
@@ -6723,7 +6727,7 @@ public inherited sharing class WorkflowEngine {
       WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c)
     ) {
       instance.Status__c = 'Paused';
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       return;
     }
 
@@ -6740,7 +6744,7 @@ public inherited sharing class WorkflowEngine {
       // its null-deadline skip off this, not the live CMDT, so a ceiling added later
       // cannot silence a genuine unbounded pre-start watchdog. Cleared on admission.
       instance.Concurrency_Parked__c = true;
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     }
 
     if (!Test.isRunningTest()) {
@@ -6875,7 +6879,7 @@ public inherited sharing class WorkflowEngine {
     }
 
     try {
-      insert as system instancesToInsert;
+      Database.insert(instancesToInsert, true, AccessLevel.SYSTEM_MODE);
       if (Test.isRunningTest()) {
         for (Workflow_Instance__c inst : instancesToInsert) {
           registerChildParent(inst.Id, parentId);
@@ -6932,7 +6936,7 @@ public inherited sharing class WorkflowEngine {
       );
       instancesToUpdate.add(inst);
     }
-    update as system instancesToUpdate;
+    Database.update(instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
 
     List<Workflow_Step_Execution__c> stepExecsToInsert = new List<Workflow_Step_Execution__c>();
     for (Workflow_Instance__c inst : instancesToUpdate) {
@@ -6947,7 +6951,7 @@ public inherited sharing class WorkflowEngine {
       }
     }
     if (!stepExecsToInsert.isEmpty()) {
-      insert as system stepExecsToInsert;
+      Database.insert(stepExecsToInsert, true, AccessLevel.SYSTEM_MODE);
     }
 
     List<Workflow_Instance__c> instancesToSchedule = new List<Workflow_Instance__c>();
@@ -6972,7 +6976,7 @@ public inherited sharing class WorkflowEngine {
     }
 
     if (!instancesToPause.isEmpty()) {
-      update as system instancesToPause;
+      Database.update(instancesToPause, true, AccessLevel.SYSTEM_MODE);
     }
 
     if (!instancesToSchedule.isEmpty()) {
@@ -7283,7 +7287,7 @@ public inherited sharing class WorkflowEngine {
       sig.Signal_Key__c = deriveSignalDedupKey(instance.Id, idempotencyKey);
       Savepoint sp = Database.setSavepoint();
       try {
-        insert as system sig;
+        Database.insert(sig, true, AccessLevel.SYSTEM_MODE);
       } catch (DmlException ex) {
         if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
           return; // idempotent no-op: duplicate key already delivered
@@ -7300,7 +7304,7 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    insert as system sig;
+    Database.insert(sig, true, AccessLevel.SYSTEM_MODE);
     wakeInstanceForSignal(instance);
   }
 
@@ -7721,7 +7725,7 @@ public inherited sharing class WorkflowEngine {
 
       // Insert unkeyed signals (plain insert, unchanged at-least-once behavior).
       if (!unkeyedSignals.isEmpty()) {
-        insert as system unkeyedSignals;
+        Database.insert(unkeyedSignals, true, AccessLevel.SYSTEM_MODE);
       }
 
       // Insert keyed signals with allOrNone=false; swallow per-row
@@ -7829,7 +7833,7 @@ public inherited sharing class WorkflowEngine {
       }
 
       if (!instancesToUpdate.isEmpty()) {
-        update as system instancesToUpdate;
+        Database.update(instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
       }
 
       List<Id> instanceIdsToEnqueue = new List<Id>();
@@ -8066,7 +8070,7 @@ public inherited sharing class WorkflowEngine {
       }
     }
     if (!stepsToReset.isEmpty()) {
-      update as system stepsToReset;
+      Database.update(stepsToReset, true, AccessLevel.SYSTEM_MODE);
     }
 
     if (hasCompensations) {
@@ -8076,7 +8080,7 @@ public inherited sharing class WorkflowEngine {
     }
     instance.Error_Message__c = null;
     instance.Failure_Category__c = null;
-    update as system instance;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     // Enqueue the orchestrator to resume execution
     if (
@@ -8450,7 +8454,7 @@ public inherited sharing class WorkflowEngine {
         suppliedOutputJson,
         'Output_' + stepName.replaceAll('[^a-zA-Z0-9]', '_')
       );
-      insert as system skipExec;
+      Database.insert(skipExec, true, AccessLevel.SYSTEM_MODE);
 
       // 7. Log operator intervention
       String msg =
@@ -8480,7 +8484,7 @@ public inherited sharing class WorkflowEngine {
         Level__c = 'INFO',
         Fire_Time__c = DateTime.now()
       );
-      insert as system interventionLog;
+      Database.insert(interventionLog, true, AccessLevel.SYSTEM_MODE);
 
       // 8. Determine Next Step
       Type wflowType = WorkflowTypeResolver.resolve(
@@ -8536,7 +8540,7 @@ public inherited sharing class WorkflowEngine {
           instance.Current_Step__c = null;
           instance.Error_Message__c = null;
           instance.Failure_Category__c = null;
-          update as system instance;
+          Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
           notifyParentCompletion(instance);
           WorkflowLifecyclePublisher.publish(instance);
@@ -8554,7 +8558,7 @@ public inherited sharing class WorkflowEngine {
         if (deferTimeoutForConcurrency) {
           instance.Concurrency_Parked__c = true;
         }
-        update as system instance;
+        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
         Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
         nextStepExec.Workflow_Instance__c = instance.Id;
@@ -8562,7 +8566,7 @@ public inherited sharing class WorkflowEngine {
         nextStepExec.Status__c = 'Pending';
         nextStepExec.Input__c = skipExec.Output__c;
         nextStepExec.Retry_Count__c = 0;
-        insert as system nextStepExec;
+        Database.insert(nextStepExec, true, AccessLevel.SYSTEM_MODE);
 
         if (!deferTimeoutForConcurrency) {
           scheduleTimeoutJobForInstance(instance.Id);
@@ -8677,7 +8681,7 @@ public inherited sharing class WorkflowEngine {
             instance.Current_Step__c = null;
             instance.Error_Message__c = null;
             instance.Failure_Category__c = null;
-            update as system instance;
+            Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
             notifyParentCompletion(instance);
             WorkflowLifecyclePublisher.publish(instance);
@@ -8694,7 +8698,7 @@ public inherited sharing class WorkflowEngine {
             'Input_' + nextStepName.replaceAll('[^a-zA-Z0-9]', '_')
           );
           joinStepExec.Retry_Count__c = 0;
-          insert as system joinStepExec;
+          Database.insert(joinStepExec, true, AccessLevel.SYSTEM_MODE);
 
           instance.Current_Step__c = nextStepName;
           instance.Status__c = 'Running';
@@ -8706,7 +8710,7 @@ public inherited sharing class WorkflowEngine {
           if (deferTimeoutForConcurrency) {
             instance.Concurrency_Parked__c = true;
           }
-          update as system instance;
+          Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
           if (!deferTimeoutForConcurrency) {
             scheduleTimeoutJobForInstance(instance.Id);
@@ -8738,7 +8742,7 @@ public inherited sharing class WorkflowEngine {
           instance.Status__c = hasParkedSibling ? 'Suspended' : 'Running';
           instance.Error_Message__c = null;
           instance.Failure_Category__c = null;
-          update as system instance;
+          Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
           Set<String> stepsToEnqueue = new Set<String>();
           List<Workflow_Step_Execution__c> stepsToReset = new List<Workflow_Step_Execution__c>();
@@ -8771,7 +8775,7 @@ public inherited sharing class WorkflowEngine {
             }
           }
           if (!stepsToReset.isEmpty()) {
-            update as system stepsToReset;
+            Database.update(stepsToReset, true, AccessLevel.SYSTEM_MODE);
           }
 
           for (String ps : stepsToEnqueue) {
@@ -8839,7 +8843,7 @@ public inherited sharing class WorkflowEngine {
       instance.Current_Step__c = null;
       instance.Error_Message__c = null;
       instance.Failure_Category__c = null;
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       return;
     }
 
@@ -8865,7 +8869,7 @@ public inherited sharing class WorkflowEngine {
     instance.Sleep_Until__c = null;
     instance.Async_Job_Id__c = null;
     instance.Failure_Category__c = null;
-    update as system instance;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     // Append-only: create a FRESH pending compensation attempt for the stalled
     // top-of-stack step, leaving the failed attempt's record intact for the audit
@@ -8977,7 +8981,7 @@ public inherited sharing class WorkflowEngine {
     compStepExec.Output__c = checkpointOutput;
     compStepExec.Captured_Values__c = priorCaptures;
     compStepExec.Retry_Count__c = 0;
-    insert as system compStepExec;
+    Database.insert(compStepExec, true, AccessLevel.SYSTEM_MODE);
   }
 
   private static void runCompensationStep(
@@ -9020,7 +9024,7 @@ public inherited sharing class WorkflowEngine {
         ? 'Cancelled'
         : 'Compensated';
       instance.Current_Step__c = null;
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       notifyParentCompletion(instance);
       // Fire-and-forget outbound lifecycle event on terminal transition.
       WorkflowLifecyclePublisher.publish(instance);
@@ -9036,7 +9040,7 @@ public inherited sharing class WorkflowEngine {
         ? 'Cancelled'
         : 'Compensated';
       instance.Current_Step__c = null;
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       notifyParentCompletion(instance);
       // Fire-and-forget outbound lifecycle event on terminal transition.
       WorkflowLifecyclePublisher.publish(instance);
@@ -9173,7 +9177,7 @@ public inherited sharing class WorkflowEngine {
       ) {
         stack.remove(stack.size() - 1);
         instance.Compensation_Stack__c = JSON.serialize(stack);
-        update as system instance;
+        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
         if (!stack.isEmpty()) {
           preCreateFirstCompensationStep(instance);
@@ -9210,7 +9214,7 @@ public inherited sharing class WorkflowEngine {
 
       stack.remove(stack.size() - 1);
       instance.Compensation_Stack__c = JSON.serialize(stack);
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
       if (!stack.isEmpty()) {
         scheduleTimeoutJobForInstance(instance.Id);
@@ -9316,7 +9320,7 @@ public inherited sharing class WorkflowEngine {
     // branches (already-terminal exec, non-CompensatableStep) commit the status
     // via their own update, so a pending re-assert is never dropped.
     if (reassertedStatus != null && !deferPreExecDml) {
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     }
     stepExec.Status__c = 'Running';
     Integer timeoutSeconds = null;
@@ -9484,7 +9488,7 @@ public inherited sharing class WorkflowEngine {
           : 'Compensated';
         instance.Current_Step__c = null;
       }
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
       if (stack.isEmpty()) {
         notifyParentCompletion(instance);
@@ -9513,7 +9517,7 @@ public inherited sharing class WorkflowEngine {
       );
       saveStepExec(stepExec);
 
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
       scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestrator(instance.Id, null);
@@ -9536,7 +9540,7 @@ public inherited sharing class WorkflowEngine {
         : null;
       saveStepExec(stepExec);
       instance.Status__c = 'Suspended';
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     } else if (result.action == StepResult.ActionType.SLEEP) {
       stepExec.Status__c = 'Pending';
       stepExec.Output__c = savePayloadIfNeeded(
@@ -9555,7 +9559,7 @@ public inherited sharing class WorkflowEngine {
           result.sleepDurationSeconds
         );
       }
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     } else if (result.action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
       if (String.isNotBlank(result.timeoutStep)) {
         System.debug(
@@ -9578,7 +9582,7 @@ public inherited sharing class WorkflowEngine {
       );
       saveStepExec(stepExec);
       instance.Status__c = 'Suspended';
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     } else if (result.action == StepResult.ActionType.RETRY) {
       stepExec.Retry_Count__c += 1;
       // Get and sanitize retry policy
@@ -9634,7 +9638,7 @@ public inherited sharing class WorkflowEngine {
         // immediately re-woken by the watchdog (Sleep_Until__c <= now).
         instance.Sleep_Until__c = null;
         instance.Async_Job_Id__c = null;
-        update as system instance;
+        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
         notifyParentCompletion(instance);
         WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
         WorkflowLifecyclePublisher.publish(instance);
@@ -9656,7 +9660,7 @@ public inherited sharing class WorkflowEngine {
           stepExec.Step_Name__c,
           delay
         );
-        update as system instance;
+        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       }
     } else if (result.action == StepResult.ActionType.FAIL) {
       // A compensation step returned an explicit fail() — treat it as a deliberate
@@ -9682,7 +9686,7 @@ public inherited sharing class WorkflowEngine {
         .left(255);
       instance.Sleep_Until__c = null;
       instance.Async_Job_Id__c = null;
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       notifyParentCompletion(instance);
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       WorkflowLifecyclePublisher.publish(instance);
@@ -9707,7 +9711,7 @@ public inherited sharing class WorkflowEngine {
       // Clear any stale sleep/retry deadline (see the max-retries branch above).
       instance.Sleep_Until__c = null;
       instance.Async_Job_Id__c = null;
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
       notifyParentCompletion(instance);
       WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
       WorkflowLifecyclePublisher.publish(instance);
@@ -9796,7 +9800,7 @@ public inherited sharing class WorkflowEngine {
       ? originalExecs[0].Output__c
       : null;
     compStepExec.Retry_Count__c = 0;
-    insert as system compStepExec;
+    Database.insert(compStepExec, true, AccessLevel.SYSTEM_MODE);
   }
 
   private static void preCreateFirstCompensationSteps(
@@ -9840,13 +9844,16 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    // Query existing compensation steps in bulk to avoid duplicates
+    // Query existing compensation steps in bulk to avoid duplicates.
+    // Bind the LIKE pattern so the escaped underscore ('\_', matching a literal
+    // '_') lives in an Apex string literal rather than inline SOQL.
+    String compensateSuffixPattern = '%\\_Compensate';
     List<Workflow_Step_Execution__c> existingCompSteps = [
       SELECT Workflow_Instance__c, Step_Name__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c IN :instanceIds
-        AND Step_Name__c LIKE '%\_Compensate'
+        AND Step_Name__c LIKE :compensateSuffixPattern
       WITH SYSTEM_MODE
     ];
     Set<String> existingKeys = new Set<String>();
@@ -9895,7 +9902,7 @@ public inherited sharing class WorkflowEngine {
     }
 
     if (!stepsToInsert.isEmpty()) {
-      insert as system stepsToInsert;
+      Database.insert(stepsToInsert, true, AccessLevel.SYSTEM_MODE);
     }
   }
 
@@ -9976,11 +9983,11 @@ public inherited sharing class WorkflowEngine {
         : target.Parent_Instance__c
     );
 
-    insert as system compensatingInstance;
+    Database.insert(compensatingInstance, true, AccessLevel.SYSTEM_MODE);
 
     // Link original instance to new compensating instance
     target.Compensated_By__c = compensatingInstance.Id;
-    update as system target;
+    Database.update(target, true, AccessLevel.SYSTEM_MODE);
 
     // Pre-create the first compensation step execution log
     preCreateFirstCompensationStep(compensatingInstance);
@@ -10159,7 +10166,7 @@ public inherited sharing class WorkflowEngine {
       stepExec.Status__c = 'Cancelled';
     }
     if (!stepExecs.isEmpty()) {
-      update as system stepExecs;
+      Database.update(stepExecs, true, AccessLevel.SYSTEM_MODE);
     }
 
     // A stalled rollback (CompensationFailed) being cancelled is handled per cancel mode:
@@ -10177,7 +10184,7 @@ public inherited sharing class WorkflowEngine {
       if (runCompensations && !remaining.isEmpty()) {
         instance.Status__c = 'Cancelling';
         instance.Error_Message__c = 'Cancelled by user. Compensating.';
-        update as system instance;
+        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
         // Append a fresh attempt for the stalled top-of-stack step (the prior Failed
         // attempt is preserved) so the existing compensation loop re-runs it.
@@ -10196,7 +10203,7 @@ public inherited sharing class WorkflowEngine {
       } else {
         instance.Status__c = 'Cancelled';
         instance.Error_Message__c = 'Cancelled by user.';
-        update as system instance;
+        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
         // Terminal immediately — hand back to cancel() for bulk lifecycle publish.
         return instance;
       }
@@ -10216,7 +10223,7 @@ public inherited sharing class WorkflowEngine {
       instance.Status__c = 'Cancelling';
       instance.Error_Message__c = 'Cancelled by user. Compensating.';
       preCreateFirstCompensationStep(instance);
-      update as system instance;
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
       // Kick off rollback loop
       if (Test.isRunningTest()) {
@@ -10233,7 +10240,7 @@ public inherited sharing class WorkflowEngine {
 
     instance.Status__c = 'Cancelled';
     instance.Error_Message__c = 'Cancelled by user.';
-    update as system instance;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     // Terminal: hand the instance back to cancel() for a single bulk publish after
     // the whole descendant tree is cancelled (preserves DML headroom mid-loop).
     // Active child workflows are handled by the caller (cancel()) via iterative
@@ -10521,7 +10528,7 @@ public inherited sharing class WorkflowEngine {
       cv.Title = title;
       cv.PathOnClient = title + '.json';
       cv.VersionData = Blob.valueOf(textValue);
-      insert as system cv;
+      Database.insert(cv, true, AccessLevel.SYSTEM_MODE);
 
       Id docId = [
         SELECT ContentDocumentId
@@ -10537,7 +10544,7 @@ public inherited sharing class WorkflowEngine {
       cdl.ShareType = 'V';
       cdl.Visibility = 'InternalUsers';
       try {
-        insert as system cdl;
+        Database.insert(cdl, true, AccessLevel.SYSTEM_MODE);
       } catch (DmlException ex) {
         System.debug(
           LoggingLevel.FINE,
@@ -10545,7 +10552,7 @@ public inherited sharing class WorkflowEngine {
           ex.getMessage()
         );
         cdl.Visibility = 'AllUsers';
-        insert as system cdl;
+        Database.insert(cdl, true, AccessLevel.SYSTEM_MODE);
       }
 
       return JSON.serialize(
@@ -10771,7 +10778,7 @@ public inherited sharing class WorkflowEngine {
           lockedStep.Status__c = 'Failed';
           lockedStep.Error_Details__c = errorMsg;
           lockedStep.Timeout_At__c = null;
-          update as system lockedStep;
+          Database.update(lockedStep, true, AccessLevel.SYSTEM_MODE);
 
           String key = parent.Id + ':' + step.Step_Name__c;
           Integer attemptCount =
@@ -10860,12 +10867,15 @@ public inherited sharing class WorkflowEngine {
       Map<String, Workflow_Step_Execution__c> originalStepsMap = new Map<String, Workflow_Step_Execution__c>();
 
       if (!instancesNeedingCompensationInfo.isEmpty()) {
+        // Bind the LIKE pattern so the escaped underscore ('\_', matching a
+        // literal '_') lives in an Apex string literal rather than inline SOQL.
+        String compensateSuffixPattern = '%\\_Compensate';
         List<Workflow_Step_Execution__c> existing = [
           SELECT Id, Workflow_Instance__c, Step_Name__c
           FROM Workflow_Step_Execution__c
           WHERE
             Workflow_Instance__c IN :instancesNeedingCompensationInfo
-            AND Step_Name__c LIKE '%\_Compensate'
+            AND Step_Name__c LIKE :compensateSuffixPattern
           WITH SYSTEM_MODE
         ];
         for (Workflow_Step_Execution__c e : existing) {
@@ -10925,13 +10935,21 @@ public inherited sharing class WorkflowEngine {
       }
 
       if (!stepsToUpdate.isEmpty()) {
-        update as system stepsToUpdate;
+        Database.update(stepsToUpdate, true, AccessLevel.SYSTEM_MODE);
       }
       if (!compensationStepsToInsert.isEmpty()) {
-        insert as system compensationStepsToInsert;
+        Database.insert(
+          compensationStepsToInsert,
+          true,
+          AccessLevel.SYSTEM_MODE
+        );
       }
       if (!instancesToUpdate.isEmpty()) {
-        update as system instancesToUpdate.values();
+        Database.update(
+          instancesToUpdate.values(),
+          true,
+          AccessLevel.SYSTEM_MODE
+        );
         List<Workflow_Instance__c> terminalUpdated = new List<Workflow_Instance__c>();
         for (Workflow_Instance__c inst : instancesToUpdate.values()) {
           if (inst.Status__c == 'Failed') {
@@ -11034,13 +11052,13 @@ public inherited sharing class WorkflowEngine {
       }
 
       if (!deadlineStepsToInsert.isEmpty()) {
-        insert as system deadlineStepsToInsert;
+        Database.insert(deadlineStepsToInsert, true, AccessLevel.SYSTEM_MODE);
       }
 
       preCreateFirstCompensationSteps(expiredInstances);
 
       if (!instancesToFail.isEmpty()) {
-        update as system instancesToFail;
+        Database.update(instancesToFail, true, AccessLevel.SYSTEM_MODE);
         List<Workflow_Instance__c> terminalUpdated = new List<Workflow_Instance__c>();
         for (Workflow_Instance__c inst : instancesToFail) {
           if (inst.Status__c == 'Failed') {
@@ -11197,13 +11215,13 @@ public inherited sharing class WorkflowEngine {
         instancesToUpdate.add(inst);
       }
       if (!timedWaitFallbackExecs.isEmpty()) {
-        insert as system timedWaitFallbackExecs;
+        Database.insert(timedWaitFallbackExecs, true, AccessLevel.SYSTEM_MODE);
       }
       if (!instancesToUpdate.isEmpty()) {
         for (Workflow_Instance__c inst : instancesToUpdate) {
           resumedInstanceIds.add(inst.Id);
         }
-        update as system instancesToUpdate;
+        Database.update(instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
       }
       // Honor the test opt-out (mirrors the timed-out-step enqueue above) so a
       // suite asserting only the Suspended -> Running wake transition is not
@@ -11871,7 +11889,7 @@ public inherited sharing class WorkflowEngine {
       }
     }
     if (!toReArm.isEmpty()) {
-      update as system toReArm;
+      Database.update(toReArm, true, AccessLevel.SYSTEM_MODE);
     }
 
     List<Workflow_Event__e> branchEvents = new List<Workflow_Event__e>();
@@ -11984,7 +12002,7 @@ public inherited sharing class WorkflowEngine {
       }
     }
     if (!toUpdate.isEmpty()) {
-      update as system toUpdate;
+      Database.update(toUpdate, true, AccessLevel.SYSTEM_MODE);
     }
     // Schedule the dynamic timeout jobs (Schedulable/Queueable) for the genuinely
     // active step rows only. A parallel instance keeps every branch name in
@@ -12226,7 +12244,7 @@ public inherited sharing class WorkflowEngine {
         step.Status__c = 'Pending';
         step.Timeout_At__c = null;
       }
-      update as system pending;
+      Database.update(pending, true, AccessLevel.SYSTEM_MODE);
     }
 
     Integer retrySeconds =
@@ -12243,7 +12261,7 @@ public inherited sharing class WorkflowEngine {
       resolvedStep,
       retrySeconds
     );
-    update as system instance;
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
   }
 
   private static String scheduleSleepResume(
@@ -12458,7 +12476,7 @@ public inherited sharing class WorkflowEngine {
     }
     if (!unkeyedRows.isEmpty()) {
       try {
-        insert as system unkeyedRows;
+        Database.insert(unkeyedRows, true, AccessLevel.SYSTEM_MODE);
       } catch (Exception e) {
         Database.rollback(sp);
         throw e;
@@ -12564,7 +12582,7 @@ public inherited sharing class WorkflowEngine {
     // idempotency key to no-op, leaving the workflow unwoken.
     Savepoint sp = Database.setSavepoint();
     try {
-      update as system sig;
+      Database.update(sig, true, AccessLevel.SYSTEM_MODE);
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
         // A routed delivery already claimed this instance+key, so the canonical
@@ -12574,7 +12592,7 @@ public inherited sharing class WorkflowEngine {
         sig.Workflow_Instance__c = null;
         sig.Signal_Key__c = null;
         sig.Status__c = 'Consumed';
-        update as system sig;
+        Database.update(sig, true, AccessLevel.SYSTEM_MODE);
         return true;
       }
       throw ex;
@@ -12707,7 +12725,7 @@ public inherited sharing class WorkflowEngine {
       }
 
       if (!duplicateSignals.isEmpty()) {
-        update as system duplicateSignals;
+        Database.update(duplicateSignals, true, AccessLevel.SYSTEM_MODE);
       }
 
       Set<Id> wokenInstanceIds = new Set<Id>();
@@ -12902,7 +12920,7 @@ public inherited sharing class WorkflowEngine {
         )
       );
     }
-    insert as system logsToInsert;
+    Database.insert(logsToInsert, true, AccessLevel.SYSTEM_MODE);
   }
 
   private static void reclaimOrphanedInstances(
