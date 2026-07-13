@@ -486,23 +486,6 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Bulk variant — accepts a list of correlation keys and returns a correspondingly
-   * ordered list of WorkflowStatus DTOs (null where no instance was found or the
-   * key entry is blank). A live/active run is preferred over a terminal one when a
-   * key maps to several rows; a ContinuedAsNew hand-off always loses to a real
-   * generation of its chain. Lookup follows a continue-as-new chain via the shared
-   * Root_Correlation_Key__c, so polling the original key — or any intermediate
-   * successor key — resolves to the live/final generation.
-   *
-   * Winners are resolved from metadata only (Output__c is fetched solely for the
-   * winners), per key (no single hot key can crowd out others or exhaust the heap).
-   * Costs a small constant number of SOQL queries regardless of list size, and zero
-   * DML. (The Id-based overloads remain bounded at <= 2 SOQL.)
-   * @param correlationKeys correlation keys to resolve
-   * @return status DTOs positionally aligned with correlationKeys (null per blank
-   * or unmatched key)
-   */
-  /**
    * Normalizes the non-blank correlation keys for consistent in-memory bucketing.
    * Correlation key fields are case-insensitive in SOQL but Apex Set/Map lookups
    * are case-sensitive, so all bucketing is done on the normalized (lower-cased)
@@ -552,6 +535,23 @@ public inherited sharing class WorkflowEngine {
     return instById;
   }
 
+  /**
+   * Bulk variant — accepts a list of correlation keys and returns a correspondingly
+   * ordered list of WorkflowStatus DTOs (null where no instance was found or the
+   * key entry is blank). A live/active run is preferred over a terminal one when a
+   * key maps to several rows; a ContinuedAsNew hand-off always loses to a real
+   * generation of its chain. Lookup follows a continue-as-new chain via the shared
+   * Root_Correlation_Key__c, so polling the original key — or any intermediate
+   * successor key — resolves to the live/final generation.
+   *
+   * Winners are resolved from metadata only (Output__c is fetched solely for the
+   * winners), per key (no single hot key can crowd out others or exhaust the heap).
+   * Costs a small constant number of SOQL queries regardless of list size, and zero
+   * DML. (The Id-based overloads remain bounded at <= 2 SOQL.)
+   * @param correlationKeys correlation keys to resolve
+   * @return status DTOs positionally aligned with correlationKeys (null per blank
+   * or unmatched key)
+   */
   public static List<WorkflowStatus> getStatus(List<String> correlationKeys) {
     List<WorkflowStatus> out = new List<WorkflowStatus>();
     if (correlationKeys == null || correlationKeys.isEmpty()) {
@@ -11097,6 +11097,7 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Determines whether the latest compensation-step attempt is still in flight.
    * @param existing the latest compensation-step attempt (LIMIT 1, may be empty)
    * @return true when the latest attempt is Pending/Running/Retrying (in flight)
    */
