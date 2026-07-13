@@ -5955,6 +5955,118 @@ public inherited sharing class WorkflowEngine {
    * @param parallelBranch true when consuming for a parallel-branch step (enables
    * ownership-scoped claim promotion; disables serial same-name cleanup)
    */
+  /**
+   * @return the given id set, or a new empty set when it is null
+   */
+  private static Set<Id> orEmptyIds(Set<Id> ids) {
+    return ids == null ? new Set<Id>() : ids;
+  }
+
+  /**
+   * @return the given string set, or a new empty set when it is null
+   */
+  private static Set<String> orEmptyStrings(Set<String> vals) {
+    return vals == null ? new Set<String>() : vals;
+  }
+
+  /**
+   * 1a. Claimed ids: buckets rows to consume while Received OR Processing (this
+   * branch's own exclusive claim).
+   * @param claimedIds ids exclusively claimed by this branch
+   * @param toConsume the accumulating rows-to-consume map
+   */
+  private static void addClaimedConsumable(
+    Set<Id> claimedIds,
+    Map<Id, Workflow_Signal__c> toConsume
+  ) {
+    if (claimedIds.isEmpty()) {
+      return;
+    }
+    for (Workflow_Signal__c sig : [
+      SELECT Id
+      FROM Workflow_Signal__c
+      WHERE Id IN :claimedIds AND Status__c IN ('Received', 'Processing')
+      WITH SYSTEM_MODE
+      LIMIT 9000
+    ]) {
+      toConsume.put(sig.Id, sig);
+    }
+  }
+
+  /**
+   * 1b. Observed-but-not-claimed ids: buckets rows only while STILL Received, so
+   * a row a sibling has since claimed (Processing) is left for the sibling.
+   * @param observedOnly matched-but-unclaimed ids
+   * @param toConsume the accumulating rows-to-consume map
+   */
+  private static void addObservedConsumable(
+    Set<Id> observedOnly,
+    Map<Id, Workflow_Signal__c> toConsume
+  ) {
+    if (observedOnly.isEmpty() || toConsume.size() >= 9000) {
+      return;
+    }
+    for (Workflow_Signal__c sig : [
+      SELECT Id
+      FROM Workflow_Signal__c
+      WHERE Id IN :observedOnly AND Status__c = 'Received'
+      WITH SYSTEM_MODE
+      LIMIT 9000
+    ]) {
+      toConsume.put(sig.Id, sig);
+    }
+  }
+
+  /**
+   * 2. Serial same-name at-least-once duplicate cleanup (caller gates on serial +
+   * uncapped read): buckets still-Received same-name rows the step did not match.
+   * Restricted to still-Received rows so it never steals a sibling's claim.
+   * @param instanceId the instance whose duplicates are cleaned up
+   * @param context step context carrying matched names/ids
+   * @param toConsume the accumulating rows-to-consume map
+   */
+  private static void addDuplicateConsumable(
+    Id instanceId,
+    StepContext context,
+    Map<Id, Workflow_Signal__c> toConsume
+  ) {
+    Set<String> matchedNames = orEmptyStrings(
+      context.getConsumedSignalNames()
+    );
+    Set<Id> matchedIds = orEmptyIds(context.getConsumedSignalIds());
+    Integer remaining = 9000 - toConsume.size();
+    if (matchedNames.isEmpty() || remaining <= 0) {
+      return;
+    }
+    for (Workflow_Signal__c sig : [
+      SELECT Id
+      FROM Workflow_Signal__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Status__c = 'Received'
+        AND Signal_Name__c IN :matchedNames
+        AND Id NOT IN :matchedIds
+      WITH SYSTEM_MODE
+      LIMIT :remaining
+    ]) {
+      toConsume.put(sig.Id, sig);
+    }
+  }
+
+  /**
+   * Flips the bucketed rows to Consumed and persists them in a single update.
+   * @param toConsume the rows to consume (may be empty)
+   */
+  private static void consumeSignals(Map<Id, Workflow_Signal__c> toConsume) {
+    if (toConsume.isEmpty()) {
+      return;
+    }
+    for (Workflow_Signal__c sig : toConsume.values()) {
+      sig.Status__c = 'Consumed';
+    }
+    Database.update(toConsume.values(), true, AccessLevel.SYSTEM_MODE);
+  }
+
   private static void markSignalsConsumed(
     Id instanceId,
     StepContext context,
@@ -5963,100 +6075,34 @@ public inherited sharing class WorkflowEngine {
     if (context == null) {
       return;
     }
-    Set<Id> matchedIds = context.getConsumedSignalIds();
-    if (matchedIds == null) {
-      matchedIds = new Set<Id>();
-    }
-    Set<Id> claimedIds = context.getClaimedSignalIds();
-    if (claimedIds == null) {
-      claimedIds = new Set<Id>();
-    }
-    Set<String> matchedNames = context.getConsumedSignalNames();
-    if (matchedNames == null) {
-      matchedNames = new Set<String>();
-    }
+    Set<Id> matchedIds = orEmptyIds(context.getConsumedSignalIds());
+    Set<Id> claimedIds = orEmptyIds(context.getClaimedSignalIds());
+    Set<String> matchedNames = orEmptyStrings(
+      context.getConsumedSignalNames()
+    );
     // A step that matched nothing triggers no query, keeping non-signal steps cheap.
     if (matchedIds.isEmpty() && matchedNames.isEmpty()) {
       return;
     }
 
-    final Integer rowCap = 9000;
     Map<Id, Workflow_Signal__c> toConsume = new Map<Id, Workflow_Signal__c>();
+    addClaimedConsumable(claimedIds, toConsume);
 
-    // 1a. Claimed ids: consume while Received OR Processing (this branch's own
-    //     exclusive claim).
-    if (!claimedIds.isEmpty()) {
-      for (Workflow_Signal__c sig : [
-        SELECT Id
-        FROM Workflow_Signal__c
-        WHERE Id IN :claimedIds AND Status__c IN ('Received', 'Processing')
-        WITH SYSTEM_MODE
-        LIMIT 9000
-      ]) {
-        toConsume.put(sig.Id, sig);
-      }
-    }
-
-    // 1b. Observed-but-not-claimed ids: consume only while STILL Received, so a
-    //     row a sibling has since claimed (Processing) is left for the sibling.
     Set<Id> observedOnly = new Set<Id>(matchedIds);
     observedOnly.removeAll(claimedIds);
-    if (!observedOnly.isEmpty() && toConsume.size() < rowCap) {
-      for (Workflow_Signal__c sig : [
-        SELECT Id
-        FROM Workflow_Signal__c
-        WHERE Id IN :observedOnly AND Status__c = 'Received'
-        WITH SYSTEM_MODE
-        LIMIT 9000
-      ]) {
-        toConsume.put(sig.Id, sig);
-      }
+    addObservedConsumable(observedOnly, toConsume);
+
+    // Serial steps only, and only when no read was capped (see addDuplicateConsumable).
+    // Skipped on a capped read so backlog rows the step never observed are not
+    // consumed (lost). Known limitation: signalReadWasCapped() is a single flag for
+    // the whole execution, so if ANY name's read was capped, duplicate cleanup is
+    // suppressed for EVERY matched name -- those names degrade to at-least-once. The
+    // cap only triggers at pathological scale, where at-least-once is the contract.
+    if (!parallelBranch && !context.signalReadWasCapped()) {
+      addDuplicateConsumable(instanceId, context, toConsume);
     }
 
-    // 2. Serial steps only, and only when no read was capped: clean up same-name
-    //    at-least-once duplicates that arrived after the snapshot. Skipped on a
-    //    capped read so backlog rows the step never observed are not consumed
-    //    (lost); restricted to still-Received rows so it never steals a sibling's
-    //    claim.
-    //
-    //    Known limitation (accepted): signalReadWasCapped() is a single flag for
-    //    the whole execution, so if ANY name's read was capped, duplicate cleanup
-    //    is suppressed for EVERY matched name -- even names whose own read was not
-    //    capped. Those names then degrade to at-least-once (an older duplicate may
-    //    survive and be reprocessed later). Scoping suppression per-name would
-    //    require threading capped-name tracking through the SignalSource into
-    //    consume; it is not done because the cap only triggers at pathological
-    //    scale (thousands of unconsumed same-name rows on one instance), where
-    //    at-least-once is already the documented contract.
-    Integer remaining = rowCap - toConsume.size();
-    if (
-      !parallelBranch &&
-      !context.signalReadWasCapped() &&
-      !matchedNames.isEmpty() &&
-      remaining > 0
-    ) {
-      for (Workflow_Signal__c sig : [
-        SELECT Id
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Status__c = 'Received'
-          AND Signal_Name__c IN :matchedNames
-          AND Id NOT IN :matchedIds
-        WITH SYSTEM_MODE
-        LIMIT :remaining
-      ]) {
-        toConsume.put(sig.Id, sig);
-      }
-    }
-
-    if (toConsume.isEmpty()) {
-      return;
-    }
-    for (Workflow_Signal__c sig : toConsume.values()) {
-      sig.Status__c = 'Consumed';
-    }
-    Database.update(toConsume.values(), true, AccessLevel.SYSTEM_MODE);
+    consumeSignals(toConsume);
   }
 
   private static void populateTelemetry(
