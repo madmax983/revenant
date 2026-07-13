@@ -11054,23 +11054,47 @@ public inherited sharing class WorkflowEngine {
     ];
 
     // If an attempt is already in flight, do not stack a duplicate (idempotency).
-    if (!existing.isEmpty()) {
-      String latestStatus = existing[0].Status__c;
-      if (
-        latestStatus == 'Pending' ||
-        latestStatus == 'Running' ||
-        latestStatus == 'Retrying'
-      ) {
-        return;
-      }
+    if (isCompensationAttemptInFlight(existing)) {
+      return;
     }
 
-    // Seed the retry attempt. Prefer any checkpoint the failed compensation already saved
-    // (a YIELD stores progress in its own Output__c → StepContext.stepStateJson), so a
-    // resumed compensation continues from where it left off rather than re-running partial
-    // rollback side effects from the start. Fall back to the original forward execution's
-    // input/output (the initial undo context) when the failed attempt has no saved state
-    // (e.g. a RETRY attempt nulls its Output before exhausting).
+    insertCompensationRetryStep(instance, activeStepName, existing);
+  }
+
+  /**
+   * @param existing the latest compensation-step attempt (LIMIT 1, may be empty)
+   * @return true when the latest attempt is Pending/Running/Retrying (in flight)
+   */
+  private static Boolean isCompensationAttemptInFlight(
+    List<Workflow_Step_Execution__c> existing
+  ) {
+    if (existing.isEmpty()) {
+      return false;
+    }
+    String latestStatus = existing[0].Status__c;
+    return latestStatus == 'Pending' ||
+      latestStatus == 'Running' ||
+      latestStatus == 'Retrying';
+  }
+
+  /**
+   * Seeds and inserts the appended compensation retry step. Prefers any checkpoint
+   * the failed compensation already saved (a YIELD stores progress in its own
+   * Output__c) so a resumed compensation continues from where it left off, falling
+   * back to the original forward execution's input/output (the initial undo
+   * context) when the failed attempt has no saved state. Carries the failed
+   * attempt's capture-once values forward (append-only) so a resumed compensation
+   * replays the same once() values instead of re-invoking their producers.
+   * @param instance the compensating instance
+   * @param activeStepName the forward step name being compensated
+   * @param existing the latest compensation-step attempt (LIMIT 1, may be empty)
+   */
+  private static void insertCompensationRetryStep(
+    Workflow_Instance__c instance,
+    String activeStepName,
+    List<Workflow_Step_Execution__c> existing
+  ) {
+    String compensationStepLogName = activeStepName + '_Compensate';
     List<Workflow_Step_Execution__c> originalExecs = [
       SELECT Input__c, Output__c
       FROM Workflow_Step_Execution__c
@@ -11096,12 +11120,6 @@ public inherited sharing class WorkflowEngine {
       String.isNotBlank(existing[0].Output__c))
       ? existing[0].Output__c
       : forwardOutput;
-
-    // Carry the failed attempt's capture-once values onto the appended retry so a
-    // resumed compensation replays the same once() values instead of re-invoking
-    // its producers (which would drift generated undo reference numbers/timestamps
-    // across operator resumes). Append-only: the prior captures are copied, never
-    // mutated.
     String priorCaptures = (!existing.isEmpty() &&
       String.isNotBlank(existing[0].Captured_Values__c))
       ? existing[0].Captured_Values__c
