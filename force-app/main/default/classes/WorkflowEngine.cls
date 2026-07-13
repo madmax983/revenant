@@ -11988,6 +11988,121 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Tests whether a status is terminal for the purposes of cancellation, i.e.
+   * cancellation should be skipped because the instance is already finished.
+   * @param status the instance status to test
+   * @return true when the status is a terminal (non-cancellable) state
+   */
+  private static Boolean isTerminalForCancel(String status) {
+    return status == 'Completed' ||
+      status == 'Failed' ||
+      status == 'Compensated' ||
+      status == 'Cancelled' ||
+      status == 'ContinuedAsNew';
+  }
+
+  /**
+   * Enqueues the orchestrator for an instance, honoring the in-test queueable
+   * disable flag so tests can drive the loop deterministically.
+   * @param instanceId the instance to enqueue an orchestrator for
+   */
+  private static void enqueueOrchestratorTestAware(Id instanceId) {
+    if (Test.isRunningTest()) {
+      if (!disableQueueableInTest) {
+        System.enqueueJob(new WorkflowOrchestrator(instanceId));
+      }
+    } else {
+      enqueueOrchestrator(instanceId, null);
+    }
+  }
+
+  /**
+   * Locks (FOR UPDATE) the active step executions for the instance's current
+   * step(s), supporting comma-separated parallel branch step names. Returns an
+   * empty list when the instance has no current step.
+   * @param instance the instance whose active steps are locked
+   * @return the locked active step executions
+   */
+  private static List<Workflow_Step_Execution__c> lockActiveStepExecs(
+    Workflow_Instance__c instance
+  ) {
+    List<Workflow_Step_Execution__c> stepExecs = new List<Workflow_Step_Execution__c>();
+    if (String.isNotBlank(instance.Current_Step__c)) {
+      List<String> activeStepNames = new List<String>();
+      if (instance.Current_Step__c.contains(',')) {
+        activeStepNames = instance.Current_Step__c.split(',');
+      } else {
+        activeStepNames.add(instance.Current_Step__c);
+      }
+
+      Id instanceId = instance.Id;
+      stepExecs = [
+        SELECT Id, Status__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c IN :activeStepNames
+          AND Status__c IN ('Running', 'Pending', 'Retrying')
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ];
+    }
+    return stepExecs;
+  }
+
+  /**
+   * Cancels an instance stalled in CompensationFailed. With compensations
+   * requested and remaining rollback work, it resumes the rollback under the
+   * cancel phase (returns null, non-terminal); otherwise it forces the instance
+   * terminal Cancelled (returns the instance for bulk lifecycle publish).
+   * @param instance the CompensationFailed instance being cancelled
+   * @param runCompensations true to drain remaining compensations before cancelling
+   * @return the instance when driven terminal, otherwise null
+   */
+  private static Workflow_Instance__c cancelCompensationFailed(
+    Workflow_Instance__c instance,
+    Boolean runCompensations
+  ) {
+    List<String> remaining = parseCompensationStack(instance);
+    if (runCompensations && !remaining.isEmpty()) {
+      instance.Status__c = 'Cancelling';
+      instance.Error_Message__c = 'Cancelled by user. Compensating.';
+      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+
+      // Append a fresh attempt for the stalled top-of-stack step (the prior Failed
+      // attempt is preserved) so the existing compensation loop re-runs it.
+      appendCompensationRetryStep(instance, remaining);
+      scheduleTimeoutJobForInstance(instance.Id);
+      enqueueOrchestratorTestAware(instance.Id);
+      // Not terminal yet — the orchestrator emits the lifecycle event when the
+      // compensation stack drains to Cancelled.
+      return null;
+    }
+    instance.Status__c = 'Cancelled';
+    instance.Error_Message__c = 'Cancelled by user.';
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+    // Terminal immediately — hand back to cancel() for bulk lifecycle publish.
+    return instance;
+  }
+
+  /**
+   * Determines whether a cancel should first drain a live compensation stack,
+   * i.e. compensations were requested and the instance has a non-empty stack.
+   * @param runCompensations true when the cancel requested saga compensation
+   * @param instance the instance being cancelled
+   * @return true when the cancel must run compensations before terminating
+   */
+  private static Boolean hasCancelCompensations(
+    Boolean runCompensations,
+    Workflow_Instance__c instance
+  ) {
+    if (!runCompensations || String.isBlank(instance.Compensation_Stack__c)) {
+      return false;
+    }
+    return !parseCompensationStack(instance).isEmpty();
+  }
+
+  /**
    * Cancels a single workflow instance (no descendant traversal). When throwIfMissing is
    * true the original not-found exception is preserved for the top-level target.
    *
@@ -12033,13 +12148,7 @@ public inherited sharing class WorkflowEngine {
     }
 
     Workflow_Instance__c instance = instances[0];
-    if (
-      instance.Status__c == 'Completed' ||
-      instance.Status__c == 'Failed' ||
-      instance.Status__c == 'Compensated' ||
-      instance.Status__c == 'Cancelled' ||
-      instance.Status__c == 'ContinuedAsNew'
-    ) {
+    if (isTerminalForCancel(instance.Status__c)) {
       return null; // Already in terminal state
     }
     // Note: CompensationFailed is intentionally NOT treated as terminal here — a stalled
@@ -12047,26 +12156,7 @@ public inherited sharing class WorkflowEngine {
     // reach it (handled explicitly below) rather than skip it.
 
     // Lock active step executions FOR UPDATE second
-    List<Workflow_Step_Execution__c> stepExecs = new List<Workflow_Step_Execution__c>();
-    if (String.isNotBlank(instance.Current_Step__c)) {
-      List<String> activeStepNames = new List<String>();
-      if (instance.Current_Step__c.contains(',')) {
-        activeStepNames = instance.Current_Step__c.split(',');
-      } else {
-        activeStepNames.add(instance.Current_Step__c);
-      }
-
-      stepExecs = [
-        SELECT Id, Status__c
-        FROM Workflow_Step_Execution__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Step_Name__c IN :activeStepNames
-          AND Status__c IN ('Running', 'Pending', 'Retrying')
-        WITH SYSTEM_MODE
-        FOR UPDATE
-      ];
-    }
+    List<Workflow_Step_Execution__c> stepExecs = lockActiveStepExecs(instance);
 
     // Abort all scheduled jobs for this instance (sleeps, retries, timeouts)
     abortScheduledJobs(instanceId);
@@ -12089,65 +12179,17 @@ public inherited sharing class WorkflowEngine {
     // it drains to 'Cancelled' (every remaining side effect reversed); without, force it
     // terminal 'Cancelled', abandoning the un-run compensations but releasing its key.
     if (instance.Status__c == 'CompensationFailed') {
-      List<String> remaining = new List<String>();
-      if (String.isNotBlank(instance.Compensation_Stack__c)) {
-        remaining = (List<String>) JSON.deserialize(
-          instance.Compensation_Stack__c,
-          List<String>.class
-        );
-      }
-      if (runCompensations && !remaining.isEmpty()) {
-        instance.Status__c = 'Cancelling';
-        instance.Error_Message__c = 'Cancelled by user. Compensating.';
-        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-        // Append a fresh attempt for the stalled top-of-stack step (the prior Failed
-        // attempt is preserved) so the existing compensation loop re-runs it.
-        appendCompensationRetryStep(instance, remaining);
-        scheduleTimeoutJobForInstance(instance.Id);
-        if (Test.isRunningTest()) {
-          if (!disableQueueableInTest) {
-            System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-          }
-        } else {
-          enqueueOrchestrator(instance.Id, null);
-        }
-        // Not terminal yet — the orchestrator emits the lifecycle event when the
-        // compensation stack drains to Cancelled.
-        return null;
-      } else {
-        instance.Status__c = 'Cancelled';
-        instance.Error_Message__c = 'Cancelled by user.';
-        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-        // Terminal immediately — hand back to cancel() for bulk lifecycle publish.
-        return instance;
-      }
+      return cancelCompensationFailed(instance, runCompensations);
     }
 
-    // Check for compensations
-    Boolean hasCompensations = false;
-    if (runCompensations && String.isNotBlank(instance.Compensation_Stack__c)) {
-      List<String> stack = (List<String>) JSON.deserialize(
-        instance.Compensation_Stack__c,
-        List<String>.class
-      );
-      hasCompensations = !stack.isEmpty();
-    }
-
-    if (hasCompensations) {
+    if (hasCancelCompensations(runCompensations, instance)) {
       instance.Status__c = 'Cancelling';
       instance.Error_Message__c = 'Cancelled by user. Compensating.';
       preCreateFirstCompensationStep(instance);
       Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
       // Kick off rollback loop
-      if (Test.isRunningTest()) {
-        if (!disableQueueableInTest) {
-          System.enqueueJob(new WorkflowOrchestrator(instance.Id));
-        }
-      } else {
-        enqueueOrchestrator(instance.Id, null);
-      }
+      enqueueOrchestratorTestAware(instance.Id);
       // Not terminal yet (Cancelling); the orchestrator emits the lifecycle event
       // when the compensation stack drains to Cancelled.
       return null;
