@@ -6248,24 +6248,35 @@ public inherited sharing class WorkflowEngine {
     // same batch. ctx.emit(null) is already ignored at the buffer; do the same
     // for the complete(..., events) overload, where an author may have built the
     // list conditionally.
-    if (context != null && context.getPendingEmits() != null) {
-      for (SObject e : context.getPendingEmits()) {
-        if (e != null) {
-          events.add(e);
-        }
-      }
+    if (context != null) {
+      addNonNullEvents(context.getPendingEmits(), events);
     }
-    if (result != null && result.outboundEvents != null) {
-      for (SObject e : result.outboundEvents) {
-        if (e != null) {
-          events.add(e);
-        }
-      }
+    if (result != null) {
+      addNonNullEvents(result.outboundEvents, events);
     }
     if (events.isEmpty()) {
       return;
     }
     WorkflowOutboundEventPublisher.publish(events);
+  }
+
+  /**
+   * Appends the non-null entries of a source event list onto the publish list.
+   * @param source the candidate events (may be null)
+   * @param events the accumulating publish list
+   */
+  private static void addNonNullEvents(
+    List<SObject> source,
+    List<SObject> events
+  ) {
+    if (source == null) {
+      return;
+    }
+    for (SObject e : source) {
+      if (e != null) {
+        events.add(e);
+      }
+    }
   }
 
   /**
