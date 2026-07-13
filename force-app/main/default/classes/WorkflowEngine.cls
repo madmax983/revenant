@@ -7843,19 +7843,29 @@ public inherited sharing class WorkflowEngine {
    * @return true when a retry was scheduled; false when the budget is spent or
    * there is no step row to retry
    */
+  /**
+   * @param instance the instance whose status is checked
+   * @return true when the instance is in a terminal state that must not be
+   *   resurrected by a transient-lock retry (excludes CompensationFailed, which is
+   *   recoverable via operator resume)
+   */
+  private static Boolean isInstanceTerminalForRetry(
+    Workflow_Instance__c instance
+  ) {
+    return instance.Status__c == 'Completed' ||
+      instance.Status__c == 'Failed' ||
+      instance.Status__c == 'Compensated' ||
+      instance.Status__c == 'Cancelled' ||
+      instance.Status__c == 'ContinuedAsNew';
+  }
+
   private static Boolean scheduleTransientLockRetry(
     Workflow_Instance__c instance,
     String stepName
   ) {
     // Never resurrect an already-terminal instance: a stray late crash must fall
     // through to the (idempotent) fail path, not flip a finished run back to Suspended.
-    if (
-      instance.Status__c == 'Completed' ||
-      instance.Status__c == 'Failed' ||
-      instance.Status__c == 'Compensated' ||
-      instance.Status__c == 'Cancelled' ||
-      instance.Status__c == 'ContinuedAsNew'
-    ) {
+    if (isInstanceTerminalForRetry(instance)) {
       return false;
     }
 
