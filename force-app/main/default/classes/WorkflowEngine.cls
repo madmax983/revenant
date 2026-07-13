@@ -1437,75 +1437,14 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * @description Get-or-start overload that also stamps searchable attributes on
-   * the new instance.
-   * @param workflowName developer name of the workflow definition to start
-   * @param correlationKey dedup/correlation key for the instance
-   * @param input start input payload passed to the first step
-   * @param attributes searchable key/value attributes to store on the instance
+   * @description Get-or-start from a fully-built request (attributes and/or
+   * parent reference set fluently on the request). Replaces the former positional
+   * start overloads that took attributes and/or a parent instance id.
+   * @param request the start request describing the instance to get-or-start
    * @return Id of the new or deduplicated existing instance
    */
-  public static Id start(
-    String workflowName,
-    String correlationKey,
-    Object input,
-    Map<String, String> attributes
-  ) {
-    return doStart(
-        new StartRequest(workflowName, correlationKey, input)
-          .withAttributes(attributes),
-        true
-      )
-      .instanceId;
-  }
-
-  /**
-   * Starts a new durable workflow instance with a parent workflow reference
-   * (get-or-start).
-   * @param workflowName developer name of the workflow definition to start
-   * @param correlationKey dedup/correlation key for the instance
-   * @param input start input payload passed to the first step
-   * @param parentInstanceId Id of the parent workflow instance
-   * @return Id of the new or deduplicated existing instance
-   */
-  public static Id start(
-    String workflowName,
-    String correlationKey,
-    Object input,
-    Id parentInstanceId
-  ) {
-    return doStart(
-        new StartRequest(workflowName, correlationKey, input)
-          .withParent(parentInstanceId),
-        true
-      )
-      .instanceId;
-  }
-
-  /**
-   * @description Get-or-start overload with both a parent instance reference and
-   * searchable attributes.
-   * @param workflowName developer name of the workflow definition to start
-   * @param correlationKey dedup/correlation key for the instance
-   * @param input start input payload passed to the first step
-   * @param parentInstanceId Id of the parent workflow instance
-   * @param attributes searchable key/value attributes to store on the instance
-   * @return Id of the new or deduplicated existing instance
-   */
-  public static Id start(
-    String workflowName,
-    String correlationKey,
-    Object input,
-    Id parentInstanceId,
-    Map<String, String> attributes
-  ) {
-    return doStart(
-        new StartRequest(workflowName, correlationKey, input)
-          .withParent(parentInstanceId)
-          .withAttributes(attributes),
-        true
-      )
-      .instanceId;
+  public static Id start(StartRequest request) {
+    return doStart(request, true).instanceId;
   }
 
   /**
@@ -1607,69 +1546,14 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * @description startOrGet overload that also stamps searchable attributes.
-   * @param workflowName developer name of the workflow definition to start
-   * @param correlationKey dedup/correlation key for the instance
-   * @param input start input payload passed to the first step
-   * @param attributes searchable key/value attributes to store on the instance
+   * @description startOrGet from a fully-built request (attributes and/or parent
+   * reference set fluently on the request). Replaces the former positional
+   * startOrGet overloads that took attributes and/or a parent instance id.
+   * @param request the start request describing the instance to get-or-start
    * @return a StartResult carrying the instance Id and whether it was newly created
    */
-  public static StartResult startOrGet(
-    String workflowName,
-    String correlationKey,
-    Object input,
-    Map<String, String> attributes
-  ) {
-    return doStart(
-      new StartRequest(workflowName, correlationKey, input)
-        .withAttributes(attributes),
-      true
-    );
-  }
-
-  /**
-   * @description startOrGet overload with a parent workflow reference.
-   * @param workflowName developer name of the workflow definition to start
-   * @param correlationKey dedup/correlation key for the instance
-   * @param input start input payload passed to the first step
-   * @param parentInstanceId Id of the parent workflow instance
-   * @return a StartResult carrying the instance Id and whether it was newly created
-   */
-  public static StartResult startOrGet(
-    String workflowName,
-    String correlationKey,
-    Object input,
-    Id parentInstanceId
-  ) {
-    return doStart(
-      new StartRequest(workflowName, correlationKey, input)
-        .withParent(parentInstanceId),
-      true
-    );
-  }
-
-  /**
-   * @description startOrGet overload with both a parent reference and attributes.
-   * @param workflowName developer name of the workflow definition to start
-   * @param correlationKey dedup/correlation key for the instance
-   * @param input start input payload passed to the first step
-   * @param parentInstanceId Id of the parent workflow instance
-   * @param attributes searchable key/value attributes to store on the instance
-   * @return a StartResult carrying the instance Id and whether it was newly created
-   */
-  public static StartResult startOrGet(
-    String workflowName,
-    String correlationKey,
-    Object input,
-    Id parentInstanceId,
-    Map<String, String> attributes
-  ) {
-    return doStart(
-      new StartRequest(workflowName, correlationKey, input)
-        .withParent(parentInstanceId)
-        .withAttributes(attributes),
-      true
-    );
+  public static StartResult startOrGet(StartRequest request) {
+    return doStart(request, true);
   }
 
   /**

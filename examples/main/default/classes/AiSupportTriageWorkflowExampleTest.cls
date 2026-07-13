@@ -11,12 +11,16 @@ public class AiSupportTriageWorkflowExampleTest {
 
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'AiSupportTriageWorkflowExample.TriageWorkflow',
-        'Triage_Billing_1',
-        new Map<String, Object>{
-          'inquiryText' => 'I was charged twice for my subscription last month.'
-        },
-        new Map<String, String>{ 'region' => 'US', 'tier' => 'premium' }
+        new WorkflowEngine.StartRequest(
+            'AiSupportTriageWorkflowExample.TriageWorkflow',
+            'Triage_Billing_1',
+            new Map<String, Object>{
+              'inquiryText' => 'I was charged twice for my subscription last month.'
+            }
+          )
+          .withAttributes(
+            new Map<String, String>{ 'region' => 'US', 'tier' => 'premium' }
+          )
       );
       WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
         .drive();

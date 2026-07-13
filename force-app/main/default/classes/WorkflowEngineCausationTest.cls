@@ -124,10 +124,12 @@ public class WorkflowEngineCausationTest {
 
       // Start Child under Parent
       Id childId = WorkflowEngine.start(
-        'WorkflowEngineTest.HappyWorkflow',
-        'ChildKey',
-        null,
-        parentId
+        new WorkflowEngine.StartRequest(
+            'WorkflowEngineTest.HappyWorkflow',
+            'ChildKey',
+            null
+          )
+          .withParent(parentId)
       );
 
       Workflow_Instance__c child = [
@@ -312,10 +314,12 @@ public class WorkflowEngineCausationTest {
 
       // Start Child under Parent
       Id childId = WorkflowEngine.start(
-        'WorkflowEngineTest.HappyWorkflow',
-        'ChildKey',
-        null,
-        parentId
+        new WorkflowEngine.StartRequest(
+            'WorkflowEngineTest.HappyWorkflow',
+            'ChildKey',
+            null
+          )
+          .withParent(parentId)
       );
 
       // Get causation lineage on Child

@@ -4,10 +4,14 @@ public class WorkflowSearchAttributesDashboardTest {
   static void testGetInstanceDetailsAttributes() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = WorkflowEngine.start(
-        'StepContextSignalEngineTest.PlainWaitWorkflow',
-        'CK_DET_1',
-        null,
-        new Map<String, String>{ 'region' => 'EU', 'tier' => 'enterprise' }
+        new WorkflowEngine.StartRequest(
+            'StepContextSignalEngineTest.PlainWaitWorkflow',
+            'CK_DET_1',
+            null
+          )
+          .withAttributes(
+            new Map<String, String>{ 'region' => 'EU', 'tier' => 'enterprise' }
+          )
       );
 
       Test.startTest();
@@ -36,24 +40,36 @@ public class WorkflowSearchAttributesDashboardTest {
   static void testGetFilteredInstancesByAttributes() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instId1 = WorkflowEngine.start(
-        'StepContextSignalEngineTest.PlainWaitWorkflow',
-        'CK_FILT_1',
-        null,
-        new Map<String, String>{ 'region' => 'EU', 'tier' => 'enterprise' }
+        new WorkflowEngine.StartRequest(
+            'StepContextSignalEngineTest.PlainWaitWorkflow',
+            'CK_FILT_1',
+            null
+          )
+          .withAttributes(
+            new Map<String, String>{ 'region' => 'EU', 'tier' => 'enterprise' }
+          )
       );
 
       WorkflowEngine.start(
-        'StepContextSignalEngineTest.PlainWaitWorkflow',
-        'CK_FILT_2',
-        null,
-        new Map<String, String>{ 'region' => 'US', 'tier' => 'enterprise' }
+        new WorkflowEngine.StartRequest(
+            'StepContextSignalEngineTest.PlainWaitWorkflow',
+            'CK_FILT_2',
+            null
+          )
+          .withAttributes(
+            new Map<String, String>{ 'region' => 'US', 'tier' => 'enterprise' }
+          )
       );
 
       Id instId3 = WorkflowEngine.start(
-        'StepContextSignalEngineTest.PlainWaitWorkflow',
-        'CK_FILT_3',
-        null,
-        new Map<String, String>{ 'region' => 'EU', 'tier' => 'standard' }
+        new WorkflowEngine.StartRequest(
+            'StepContextSignalEngineTest.PlainWaitWorkflow',
+            'CK_FILT_3',
+            null
+          )
+          .withAttributes(
+            new Map<String, String>{ 'region' => 'EU', 'tier' => 'standard' }
+          )
       );
 
       Test.startTest();
@@ -118,10 +134,12 @@ public class WorkflowSearchAttributesDashboardTest {
   static void testGetStalledInstancesByAttributes() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instId = WorkflowEngine.start(
-        'StepContextSignalEngineTest.PlainWaitWorkflow',
-        'CK_STALL_1',
-        null,
-        new Map<String, String>{ 'region' => 'EU' }
+        new WorkflowEngine.StartRequest(
+            'StepContextSignalEngineTest.PlainWaitWorkflow',
+            'CK_STALL_1',
+            null
+          )
+          .withAttributes(new Map<String, String>{ 'region' => 'EU' })
       );
 
       // Force status to Suspended and delete any pending step executions so it is considered stalled

@@ -264,10 +264,12 @@ public inherited sharing class BatchFanoutWorkflowExample {
 
         if (!spawnedChildKeys.contains(childKey)) {
           WorkflowEngine.start(
-            'BatchFanoutWorkflowExample.ProcessRecordWorkflow',
-            childKey,
-            acc,
-            ctx.workflowInstanceId
+            new WorkflowEngine.StartRequest(
+                'BatchFanoutWorkflowExample.ProcessRecordWorkflow',
+                childKey,
+                acc
+              )
+              .withParent(ctx.workflowInstanceId)
           );
         }
       }

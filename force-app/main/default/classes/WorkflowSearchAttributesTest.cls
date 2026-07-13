@@ -10,10 +10,12 @@ public class WorkflowSearchAttributesTest {
       }
       try {
         WorkflowEngine.start(
-          'StepContextSignalEngineTest.PlainWaitWorkflow',
-          'CK_VAL_1',
-          null,
-          overCountAttrs
+          new WorkflowEngine.StartRequest(
+              'StepContextSignalEngineTest.PlainWaitWorkflow',
+              'CK_VAL_1',
+              null
+            )
+            .withAttributes(overCountAttrs)
         );
         System.assert(
           false,
@@ -34,10 +36,12 @@ public class WorkflowSearchAttributesTest {
       };
       try {
         WorkflowEngine.start(
-          'StepContextSignalEngineTest.PlainWaitWorkflow',
-          'CK_VAL_2',
-          null,
-          overKeyLenAttrs
+          new WorkflowEngine.StartRequest(
+              'StepContextSignalEngineTest.PlainWaitWorkflow',
+              'CK_VAL_2',
+              null
+            )
+            .withAttributes(overKeyLenAttrs)
         );
         System.assert(
           false,
@@ -60,10 +64,12 @@ public class WorkflowSearchAttributesTest {
       };
       try {
         WorkflowEngine.start(
-          'StepContextSignalEngineTest.PlainWaitWorkflow',
-          'CK_VAL_3',
-          null,
-          overValLenAttrs
+          new WorkflowEngine.StartRequest(
+              'StepContextSignalEngineTest.PlainWaitWorkflow',
+              'CK_VAL_3',
+              null
+            )
+            .withAttributes(overValLenAttrs)
         );
         System.assert(
           false,
@@ -86,10 +92,14 @@ public class WorkflowSearchAttributesTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
-        'StepContextSignalEngineTest.PlainWaitWorkflow',
-        'CK_PERSIST_1',
-        null,
-        new Map<String, String>{ 'region' => 'EU', 'tier' => 'enterprise' }
+        new WorkflowEngine.StartRequest(
+            'StepContextSignalEngineTest.PlainWaitWorkflow',
+            'CK_PERSIST_1',
+            null
+          )
+          .withAttributes(
+            new Map<String, String>{ 'region' => 'EU', 'tier' => 'enterprise' }
+          )
       );
       Test.stopTest();
 
@@ -121,19 +131,23 @@ public class WorkflowSearchAttributesTest {
 
       Test.startTest();
       WorkflowEngine.StartResult res1 = WorkflowEngine.startOrGet(
-        'StepContextSignalEngineTest.PlainWaitWorkflow',
-        'CK_DEDUP_1',
-        null,
-        attrs1
+        new WorkflowEngine.StartRequest(
+            'StepContextSignalEngineTest.PlainWaitWorkflow',
+            'CK_DEDUP_1',
+            null
+          )
+          .withAttributes(attrs1)
       );
       System.assert(res1.isNew, 'First start should be new');
 
       // Sibling / redelivery start with same correlation key but different attributes
       WorkflowEngine.StartResult res2 = WorkflowEngine.startOrGet(
-        'StepContextSignalEngineTest.PlainWaitWorkflow',
-        'CK_DEDUP_1',
-        null,
-        attrs2
+        new WorkflowEngine.StartRequest(
+            'StepContextSignalEngineTest.PlainWaitWorkflow',
+            'CK_DEDUP_1',
+            null
+          )
+          .withAttributes(attrs2)
       );
       System.assert(!res2.isNew, 'Second start should be deduped');
       System.assertEquals(
