@@ -10729,6 +10729,38 @@ public inherited sharing class WorkflowEngine {
     return textValue;
   }
 
+  // Mutable accumulator for the timed-out-steps section (§1). Bundled so the
+  // per-step helpers stay under the parameter-count limit while still sharing
+  // the collections the section finalizes and flushes.
+  private class TimedOutStepContext {
+    Map<Id, Workflow_Instance__c> parents;
+    Map<Id, Workflow_Step_Execution__c> lockedSteps;
+    Map<String, Boolean> isRoutingWflow;
+    Map<String, Integer> latestRetryCounts;
+    List<Workflow_Step_Execution__c> stepsToUpdate = new List<Workflow_Step_Execution__c>();
+    Map<Id, Workflow_Instance__c> instancesToUpdate = new Map<Id, Workflow_Instance__c>();
+    List<Workflow_Step_Execution__c> compensationStepsToInsert = new List<Workflow_Step_Execution__c>();
+    List<Id> orchestratorInstanceIds = new List<Id>();
+    Set<Id> instancesNeedingCompensationInfo = new Set<Id>();
+    Set<String> activeStepNamesForComp = new Set<String>();
+  }
+
+  // Mutable accumulator for the exceeded-deadline section (§1b).
+  private class DeadlineBatch {
+    List<Workflow_Step_Execution__c> deadlineStepsToInsert = new List<Workflow_Step_Execution__c>();
+    List<Workflow_Instance__c> instancesToFail = new List<Workflow_Instance__c>();
+    List<Id> deadlineOrchestratorIds = new List<Id>();
+  }
+
+  // Mutable accumulator for the sleep-resumption section (§2).
+  private class SleepResumeBatch {
+    Map<Id, Workflow_Step_Execution__c> latestStepByInstId = new Map<Id, Workflow_Step_Execution__c>();
+    List<Id> instanceIds = new List<Id>();
+    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+    List<Id> parallelResumeIds = new List<Id>();
+    List<Workflow_Step_Execution__c> timedWaitFallbackExecs = new List<Workflow_Step_Execution__c>();
+  }
+
   /**
    * Evaluates and resumes suspended workflows that have exceeded their sleep time,
    * and terminates active steps that have exceeded their timeout limits.
@@ -10736,18 +10768,82 @@ public inherited sharing class WorkflowEngine {
   public static void processWatchdogHeartbeat() {
     Datetime now = mockNow != null ? mockNow : System.now();
 
-    // Terminal instances finalized by the timed-out-steps section below. Their
-    // lifecycle events are published once at the very END of the heartbeat, after
-    // ALL required work (including the sleep-resume section) is done, so the
-    // best-effort publish can never spend a DML statement the resume section needs.
+    // Terminal instances finalized by the timed-out-steps / deadline sections
+    // below. Their lifecycle events are published once at the very END of the
+    // heartbeat, after ALL required work (including the sleep-resume section) is
+    // done, so the best-effort publish can never spend a DML statement the
+    // resume section needs.
     List<Workflow_Instance__c> watchdogTerminalInstances = new List<Workflow_Instance__c>();
 
-    // 1. Process Timed-out Steps. Exclude steps whose parent is Paused: a parked
-    // parent is not runnable, so its step rows (e.g. parallel branch rows the SPLIT
-    // path stamped with Timeout_At__c before their RUN_STEP reached the gate, or a
-    // parked initial step) would otherwise be selected and skipped, wasting the
-    // bounded batch and delaying real timeouts in other workflows. Resume re-arms
-    // these deadlines (see reArmTimeoutsForResume).
+    // 1. Process timed-out steps.
+    processTimedOutSteps(now, watchdogTerminalInstances);
+
+    // 1b. Process exceeded execution deadlines (bounded per heartbeat).
+    processExceededDeadlines(now, watchdogTerminalInstances);
+
+    // 2. Process sleep resumptions (bounded per heartbeat).
+    processSleepResumptions(now);
+
+    // 2b. Sweep Suspended instances for matching Unrouted signals (safety net).
+    sweepUnroutedSuspendedSignals();
+
+    // 3. Process due recurring schedules (0-slot: runs inside the watchdog
+    // heartbeat, so enabling N Workflow_Schedule__c records adds 0 scheduled-job
+    // slots).
+    try {
+      WorkflowScheduleSweeper.sweep();
+    } catch (Exception ignored) {
+      // Best-effort sweep; a failure here must not abort the watchdog heartbeat.
+    }
+
+    // 3b. Process due debounced starts (0-slot: runs inside the watchdog heartbeat).
+    try {
+      WorkflowDebouncer.sweep();
+    } catch (Exception ignored) {
+      // Best-effort sweep; a failure here must not abort the watchdog heartbeat.
+    }
+
+    // 4. Reconcile concurrency slot counters. Recomputes each configured
+    // workflow's in-flight count from the true number of non-terminal
+    // slot-holding instances, reclaiming any slot leaked by an instance that
+    // died without releasing (crash, killed transaction) so a parked instance is
+    // never starved indefinitely.
+    try {
+      ConcurrencyGate.reconcileAll();
+    } catch (Exception ignored) {
+      // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
+    }
+
+    // 5. Rescue transient-lock retry branches orphaned when a parallel sibling
+    // that completed during the backoff flipped the parent out of Suspended.
+    rescueOrphanedTransientRetryBranches(now);
+
+    // 6. Auto-reclaim orphaned instances.
+    autoReclaimOrphanedInstances(now);
+
+    // Run proactive stall detection and alerting hook
+    try {
+      WorkflowAlertManager.detectAndAlertStalls();
+    } catch (Exception ignored) {
+      // Best-effort stall detection; a failure here must not abort the watchdog heartbeat.
+    }
+
+    // All required heartbeat work (timed-out-step failures, sleep resumptions,
+    // and schedule sweeps) is now done, so the best-effort lifecycle publish
+    // runs last with no risk of starving a required update/enqueue of its DML budget.
+    WorkflowLifecyclePublisher.publish(watchdogTerminalInstances);
+  }
+
+  // §1. Process Timed-out Steps. Exclude steps whose parent is Paused: a parked
+  // parent is not runnable, so its step rows (e.g. parallel branch rows the SPLIT
+  // path stamped with Timeout_At__c before their RUN_STEP reached the gate, or a
+  // parked initial step) would otherwise be selected and skipped, wasting the
+  // bounded batch and delaying real timeouts in other workflows. Resume re-arms
+  // these deadlines (see reArmTimeoutsForResume).
+  private static void processTimedOutSteps(
+    Datetime now,
+    List<Workflow_Instance__c> watchdogTerminalInstances
+  ) {
     List<Workflow_Step_Execution__c> timedOutSteps = [
       SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Error_Details__c
       FROM Workflow_Step_Execution__c
@@ -10760,390 +10856,522 @@ public inherited sharing class WorkflowEngine {
       LIMIT :watchdogTimeoutBatchSize
     ];
 
-    if (!timedOutSteps.isEmpty()) {
-      Set<Id> stepIds = new Set<Id>();
-      Set<Id> instanceIds = new Set<Id>();
-      for (Workflow_Step_Execution__c step : timedOutSteps) {
-        stepIds.add(step.Id);
-        instanceIds.add(step.Workflow_Instance__c);
-      }
-
-      // Lock parent instances
-      Map<Id, Workflow_Instance__c> parents = new Map<Id, Workflow_Instance__c>(
-        [
-          SELECT
-            Id,
-            Name,
-            Status__c,
-            Current_Step__c,
-            Compensation_Stack__c,
-            Error_Message__c,
-            Workflow_Name__c,
-            Correlation_Key__c,
-            Root_Correlation_Key__c,
-            Failure_Category__c,
-            Concurrency_Parked__c,
-            Concurrency_Slot_Held__c
-          FROM Workflow_Instance__c
-          WHERE Id IN :instanceIds
-          WITH SYSTEM_MODE
-          FOR UPDATE
-        ]
-      );
-
-      // Lock step executions
-      Map<Id, Workflow_Step_Execution__c> lockedSteps = new Map<Id, Workflow_Step_Execution__c>(
-        [
-          SELECT
-            Id,
-            Status__c,
-            Error_Details__c,
-            Timeout_At__c,
-            Step_Name__c,
-            Workflow_Instance__c
-          FROM Workflow_Step_Execution__c
-          WHERE Id IN :stepIds
-          WITH SYSTEM_MODE
-          FOR UPDATE
-        ]
-      );
-
-      List<Workflow_Step_Execution__c> stepsToUpdate = new List<Workflow_Step_Execution__c>();
-      Map<Id, Workflow_Instance__c> instancesToUpdate = new Map<Id, Workflow_Instance__c>();
-      List<Workflow_Step_Execution__c> compensationStepsToInsert = new List<Workflow_Step_Execution__c>();
-      List<Id> orchestratorInstanceIds = new List<Id>();
-
-      Set<Id> instancesNeedingCompensationInfo = new Set<Id>();
-      Set<String> activeStepNamesForComp = new Set<String>();
-
-      // Bulk determine which instances run ErrorRoutingWorkflows and fetch their retry counts
-      Set<Id> routingInstanceIds = new Set<Id>();
-      Map<String, Boolean> isRoutingWflow = new Map<String, Boolean>();
-      for (Workflow_Instance__c parent : parents.values()) {
-        if (String.isNotBlank(parent.Workflow_Name__c)) {
-          String wfName = parent.Workflow_Name__c;
-          if (!isRoutingWflow.containsKey(wfName)) {
-            Type wflowType = WorkflowTypeResolver.resolve(
-              wfName,
-              WorkflowTypeResolver.extractNamespace(wfName)
-            );
-            if (wflowType != null) {
-              Object instObj = wflowType.newInstance();
-              isRoutingWflow.put(
-                wfName,
-                instObj instanceof ErrorRoutingWorkflow
-              );
-            } else {
-              isRoutingWflow.put(wfName, false);
-            }
-          }
-          if (isRoutingWflow.get(wfName)) {
-            routingInstanceIds.add(parent.Id);
-          }
-        }
-      }
-
-      Map<String, Integer> latestRetryCounts = new Map<String, Integer>();
-      if (!routingInstanceIds.isEmpty()) {
-        for (Workflow_Step_Execution__c exec : [
-          SELECT Workflow_Instance__c, Step_Name__c, Retry_Count__c
-          FROM Workflow_Step_Execution__c
-          WHERE Workflow_Instance__c IN :routingInstanceIds
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate DESC, Id DESC
-        ]) {
-          String key = exec.Workflow_Instance__c + ':' + exec.Step_Name__c;
-          if (!latestRetryCounts.containsKey(key)) {
-            latestRetryCounts.put(
-              key,
-              exec.Retry_Count__c != null ? (Integer) exec.Retry_Count__c : 0
-            );
-          }
-        }
-      }
-
-      for (Workflow_Step_Execution__c step : timedOutSteps) {
-        Workflow_Instance__c parent = parents.get(step.Workflow_Instance__c);
-        if (parent == null) {
-          continue;
-        }
-        if (
-          parent.Status__c != 'Pending' &&
-          parent.Status__c != 'Running' &&
-          parent.Status__c != 'Compensating' &&
-          parent.Status__c != 'Cancelling'
-        ) {
-          continue;
-        }
-
-        Workflow_Step_Execution__c lockedStep = lockedSteps.get(step.Id);
-        if (lockedStep == null) {
-          continue;
-        }
-        if (
-          lockedStep.Status__c != 'Running' &&
-          lockedStep.Status__c != 'Pending'
-        ) {
-          continue;
-        }
-
-        // Operator pause gate (mirrors WorkflowTimeoutJob): if the definition is
-        // paused while the parent is still Pending/Running (handoff armed the
-        // deadline before the delayed RUN_STEP reached the gate), only hold
-        // pre-start Pending steps — clear their deadline so a post-resume
-        // heartbeat cannot fire instantly; re-armed on park/re-run.
-        // Running (stuck) steps are NOT held: the instance stays Running so
-        // reArmTimeoutsForResume will not re-arm them on resume; clearing their
-        // deadline here would leave them permanently unenforceable.
-        // Compensating/Cancelling bypass the pause gate normally.
-        if (
-          (parent.Status__c == 'Pending' ||
-          parent.Status__c == 'Running') &&
-          WorkflowPauseGate.anyPaused() &&
-          WorkflowPauseGate.isDefinitionPaused(parent.Workflow_Name__c)
-        ) {
-          if (lockedStep.Status__c == 'Pending') {
-            lockedStep.Timeout_At__c = null;
-            stepsToUpdate.add(lockedStep);
-            continue;
-          }
-          // Running step — fall through to enforce the timeout normally
-        }
-
-        String errorMsg = (lockedStep.Status__c == 'Running')
-          ? 'Step execution timed out.'
-          : 'Step execution timed out before starting.';
-
-        // Check if error routing is defined for this timed-out step
-        String errorStepName = null;
-        if (
-          isRoutingWflow.containsKey(parent.Workflow_Name__c) &&
-          isRoutingWflow.get(parent.Workflow_Name__c)
-        ) {
-          Type wflowType = WorkflowTypeResolver.resolve(
-            parent.Workflow_Name__c,
-            WorkflowTypeResolver.extractNamespace(parent.Workflow_Name__c)
-          );
-          if (wflowType != null) {
-            WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
-            String key = parent.Id + ':' + step.Step_Name__c;
-            Integer attemptCount =
-              (latestRetryCounts.containsKey(key)
-                ? latestRetryCounts.get(key)
-                : 0) + 1;
-            StepError err = new StepError(
-              step.Step_Name__c,
-              errorMsg,
-              attemptCount
-            );
-            errorStepName = ((ErrorRoutingWorkflow) def)
-              .getErrorStep(step.Step_Name__c, err);
-          }
-        }
-
-        if (String.isNotBlank(errorStepName)) {
-          lockedStep.Status__c = 'Failed';
-          lockedStep.Error_Details__c = errorMsg;
-          lockedStep.Timeout_At__c = null;
-          Database.update(lockedStep, true, AccessLevel.SYSTEM_MODE);
-
-          String key = parent.Id + ':' + step.Step_Name__c;
-          Integer attemptCount =
-            (latestRetryCounts.containsKey(key)
-              ? latestRetryCounts.get(key)
-              : 0) + 1;
-
-          FailInstanceRequest timeoutFailReq = new FailInstanceRequest();
-          timeoutFailReq.instance = parent;
-          timeoutFailReq.stepName = step.Step_Name__c;
-          timeoutFailReq.errorMessage = errorMsg;
-          timeoutFailReq.failureCategory = CAT_TIMEOUT;
-          timeoutFailReq.attemptCount = attemptCount;
-          failResolvedInstance(timeoutFailReq);
-          continue;
-        }
-
-        lockedStep.Status__c = 'Failed';
-        lockedStep.Error_Details__c = errorMsg;
-        lockedStep.Timeout_At__c = null;
-        stepsToUpdate.add(lockedStep);
-
-        if (!instancesToUpdate.containsKey(parent.Id)) {
-          // Check if there are compensations to run
-          Boolean hasCompensations = false;
-          List<String> stack = new List<String>();
-          if (String.isNotBlank(parent.Compensation_Stack__c)) {
-            stack = (List<String>) JSON.deserialize(
-              parent.Compensation_Stack__c,
-              List<String>.class
-            );
-            hasCompensations = !stack.isEmpty();
-          }
-
-          Boolean isCompensationFailure = (parent.Status__c == 'Compensating' ||
-          parent.Status__c == 'Cancelling' ||
-          (String.isNotBlank(step.Step_Name__c) &&
-          step.Step_Name__c.endsWith('_Compensate')));
-
-          if (isCompensationFailure && hasCompensations) {
-            // A compensation step timed out mid-rollback. The remaining stack is
-            // intact, so park the saga in the recoverable "rollback incomplete"
-            // state rather than abandoning the deeper compensations.
-            Boolean wasCancelling = (parent.Status__c == 'Cancelling');
-            parent.Status__c = 'CompensationFailed';
-            parent.Failure_Category__c = CAT_COMPENSATION_FAILED;
-            parent.Error_Message__c = buildRollbackIncompleteMessage(
-              wasCancelling,
-              'Rollback incomplete at compensation step ' +
-                step.Step_Name__c +
-                ': ' +
-                errorMsg
-            );
-            // Clear any stale sleep/retry deadline so a later resumed SUSPEND/approval
-            // gate is not prematurely woken by the watchdog.
-            parent.Sleep_Until__c = null;
-            parent.Async_Job_Id__c = null;
-            instancesToUpdate.put(parent.Id, parent);
-          } else if (!hasCompensations) {
-            parent.Status__c = 'Failed';
-            parent.Failure_Category__c = CAT_TIMEOUT;
-            parent.Error_Message__c =
-              'Failed at step ' +
-              step.Step_Name__c +
-              ': ' +
-              errorMsg;
-            instancesToUpdate.put(parent.Id, parent);
-          } else {
-            parent.Status__c = 'Compensating';
-            parent.Error_Message__c =
-              'Failed at step ' +
-              step.Step_Name__c +
-              ': ' +
-              errorMsg;
-            instancesToUpdate.put(parent.Id, parent);
-
-            instancesNeedingCompensationInfo.add(parent.Id);
-            if (!stack.isEmpty()) {
-              activeStepNamesForComp.add(stack[stack.size() - 1]);
-            }
-          }
-        }
-      }
-
-      Map<String, Workflow_Step_Execution__c> existingCompSteps = new Map<String, Workflow_Step_Execution__c>();
-      Map<String, Workflow_Step_Execution__c> originalStepsMap = new Map<String, Workflow_Step_Execution__c>();
-
-      if (!instancesNeedingCompensationInfo.isEmpty()) {
-        // Bind the LIKE pattern so the escaped underscore ('\_', matching a
-        // literal '_') lives in an Apex string literal rather than inline SOQL.
-        String compensateSuffixPattern = '%\\_Compensate';
-        List<Workflow_Step_Execution__c> existing = [
-          SELECT Id, Workflow_Instance__c, Step_Name__c
-          FROM Workflow_Step_Execution__c
-          WHERE
-            Workflow_Instance__c IN :instancesNeedingCompensationInfo
-            AND Step_Name__c LIKE :compensateSuffixPattern
-          WITH SYSTEM_MODE
-        ];
-        for (Workflow_Step_Execution__c e : existing) {
-          existingCompSteps.put(
-            e.Workflow_Instance__c + ':' + e.Step_Name__c,
-            e
-          );
-        }
-
-        List<Workflow_Step_Execution__c> originalExecs = [
-          SELECT Workflow_Instance__c, Step_Name__c, Input__c, Output__c
-          FROM Workflow_Step_Execution__c
-          WHERE
-            Workflow_Instance__c IN :instancesNeedingCompensationInfo
-            AND Step_Name__c IN :activeStepNamesForComp
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate DESC, Id DESC
-        ];
-        for (Workflow_Step_Execution__c o : originalExecs) {
-          String key = o.Workflow_Instance__c + ':' + o.Step_Name__c;
-          if (!originalStepsMap.containsKey(key)) {
-            originalStepsMap.put(key, o);
-          }
-        }
-      }
-
-      for (Id instId : instancesNeedingCompensationInfo) {
-        Workflow_Instance__c parent = parents.get(instId);
-        List<String> stack = (List<String>) JSON.deserialize(
-          parent.Compensation_Stack__c,
-          List<String>.class
-        );
-        String activeStepName = stack[stack.size() - 1];
-        String compensationStepLogName = activeStepName + '_Compensate';
-
-        if (
-          existingCompSteps.containsKey(
-            parent.Id + ':' + compensationStepLogName
-          )
-        ) {
-          continue;
-        }
-
-        Workflow_Step_Execution__c orig = originalStepsMap.get(
-          parent.Id + ':' + activeStepName
-        );
-
-        Workflow_Step_Execution__c compStepExec = new Workflow_Step_Execution__c();
-        compStepExec.Workflow_Instance__c = parent.Id;
-        compStepExec.Step_Name__c = compensationStepLogName;
-        compStepExec.Status__c = 'Pending';
-        compStepExec.Input__c = (orig != null) ? orig.Input__c : null;
-        compStepExec.Output__c = (orig != null) ? orig.Output__c : null;
-        compStepExec.Retry_Count__c = 0;
-        compensationStepsToInsert.add(compStepExec);
-        orchestratorInstanceIds.add(parent.Id);
-      }
-
-      if (!stepsToUpdate.isEmpty()) {
-        Database.update(stepsToUpdate, true, AccessLevel.SYSTEM_MODE);
-      }
-      if (!compensationStepsToInsert.isEmpty()) {
-        Database.insert(
-          compensationStepsToInsert,
-          true,
-          AccessLevel.SYSTEM_MODE
-        );
-      }
-      if (!instancesToUpdate.isEmpty()) {
-        Database.update(
-          instancesToUpdate.values(),
-          true,
-          AccessLevel.SYSTEM_MODE
-        );
-        List<Workflow_Instance__c> terminalUpdated = new List<Workflow_Instance__c>();
-        for (Workflow_Instance__c inst : instancesToUpdate.values()) {
-          if (inst.Status__c == 'Failed') {
-            terminalUpdated.add(inst);
-          }
-        }
-        notifyParentCompletion(terminalUpdated);
-      }
-
-      for (Workflow_Instance__c parent : instancesToUpdate.values()) {
-        WorkflowAlertManager.sendAlert(parent, parent.Error_Message__c);
-      }
-
-      if (
-        !orchestratorInstanceIds.isEmpty() &&
-        !(Test.isRunningTest() && disableQueueableInTest)
-      ) {
-        enqueueOrchestrators(orchestratorInstanceIds);
-      }
-
-      // Defer lifecycle publishing to the end of the heartbeat. Only the parents
-      // transitioned to a terminal state (Failed) emit — Compensating parents are
-      // skipped by the publisher.
-      watchdogTerminalInstances.addAll(instancesToUpdate.values());
+    if (timedOutSteps.isEmpty()) {
+      return;
     }
 
-    // 1b. Process Exceeded Execution Deadlines (bounded per heartbeat).
+    Set<Id> stepIds = new Set<Id>();
+    Set<Id> instanceIds = new Set<Id>();
+    for (Workflow_Step_Execution__c step : timedOutSteps) {
+      stepIds.add(step.Id);
+      instanceIds.add(step.Workflow_Instance__c);
+    }
+
+    // Lock parent instances
+    Map<Id, Workflow_Instance__c> parents = new Map<Id, Workflow_Instance__c>(
+      [
+        SELECT
+          Id,
+          Name,
+          Status__c,
+          Current_Step__c,
+          Compensation_Stack__c,
+          Error_Message__c,
+          Workflow_Name__c,
+          Correlation_Key__c,
+          Root_Correlation_Key__c,
+          Failure_Category__c,
+          Concurrency_Parked__c,
+          Concurrency_Slot_Held__c
+        FROM Workflow_Instance__c
+        WHERE Id IN :instanceIds
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ]
+    );
+
+    // Lock step executions
+    Map<Id, Workflow_Step_Execution__c> lockedSteps = new Map<Id, Workflow_Step_Execution__c>(
+      [
+        SELECT
+          Id,
+          Status__c,
+          Error_Details__c,
+          Timeout_At__c,
+          Step_Name__c,
+          Workflow_Instance__c
+        FROM Workflow_Step_Execution__c
+        WHERE Id IN :stepIds
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ]
+    );
+
+    TimedOutStepContext ctx = new TimedOutStepContext();
+    ctx.parents = parents;
+    ctx.lockedSteps = lockedSteps;
+    ctx.isRoutingWflow = classifyRoutingWorkflows(parents);
+    ctx.latestRetryCounts = loadLatestRetryCounts(parents, ctx.isRoutingWflow);
+
+    for (Workflow_Step_Execution__c step : timedOutSteps) {
+      finalizeTimedOutStep(step, ctx);
+    }
+
+    createCompensationStepsForTimedOut(ctx);
+    flushTimedOutStepResults(ctx, watchdogTerminalInstances);
+  }
+
+  // Determine, per distinct workflow name, whether it is an ErrorRoutingWorkflow.
+  private static Map<String, Boolean> classifyRoutingWorkflows(
+    Map<Id, Workflow_Instance__c> parents
+  ) {
+    Map<String, Boolean> isRoutingWflow = new Map<String, Boolean>();
+    for (Workflow_Instance__c parent : parents.values()) {
+      if (String.isBlank(parent.Workflow_Name__c)) {
+        continue;
+      }
+      String wfName = parent.Workflow_Name__c;
+      if (isRoutingWflow.containsKey(wfName)) {
+        continue;
+      }
+      Type wflowType = WorkflowTypeResolver.resolve(
+        wfName,
+        WorkflowTypeResolver.extractNamespace(wfName)
+      );
+      if (wflowType != null) {
+        Object instObj = wflowType.newInstance();
+        isRoutingWflow.put(wfName, instObj instanceof ErrorRoutingWorkflow);
+      } else {
+        isRoutingWflow.put(wfName, false);
+      }
+    }
+    return isRoutingWflow;
+  }
+
+  // Fetch the latest retry count per (instance, step) for routing instances only.
+  private static Map<String, Integer> loadLatestRetryCounts(
+    Map<Id, Workflow_Instance__c> parents,
+    Map<String, Boolean> isRoutingWflow
+  ) {
+    Set<Id> routingInstanceIds = new Set<Id>();
+    for (Workflow_Instance__c parent : parents.values()) {
+      if (
+        String.isNotBlank(parent.Workflow_Name__c) &&
+        isRoutingWflow.get(parent.Workflow_Name__c) == true
+      ) {
+        routingInstanceIds.add(parent.Id);
+      }
+    }
+
+    Map<String, Integer> latestRetryCounts = new Map<String, Integer>();
+    if (routingInstanceIds.isEmpty()) {
+      return latestRetryCounts;
+    }
+    for (Workflow_Step_Execution__c exec : [
+      SELECT Workflow_Instance__c, Step_Name__c, Retry_Count__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :routingInstanceIds
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ]) {
+      String key = exec.Workflow_Instance__c + ':' + exec.Step_Name__c;
+      if (!latestRetryCounts.containsKey(key)) {
+        latestRetryCounts.put(
+          key,
+          exec.Retry_Count__c != null ? (Integer) exec.Retry_Count__c : 0
+        );
+      }
+    }
+    return latestRetryCounts;
+  }
+
+  // Process a single timed-out step: enforce the pause gate, route to an error
+  // step if configured, otherwise mark the step Failed and transition the parent.
+  // A parent is actionable for a timed-out step only in a self-driving status.
+  private static Boolean isTimedOutParentActionable(
+    Workflow_Instance__c parent
+  ) {
+    return parent.Status__c == 'Pending' ||
+      parent.Status__c == 'Running' ||
+      parent.Status__c == 'Compensating' ||
+      parent.Status__c == 'Cancelling';
+  }
+
+  // A step is still enforceable while Running or Pending.
+  private static Boolean isRunnableStepStatus(Workflow_Step_Execution__c s) {
+    return s.Status__c == 'Running' || s.Status__c == 'Pending';
+  }
+
+  // Notify parent-completion for exactly the instances that reached a terminal
+  // Failed state (shared by the timed-out-step and deadline flush paths).
+  private static void notifyTerminalFailures(
+    List<Workflow_Instance__c> updated
+  ) {
+    List<Workflow_Instance__c> terminalUpdated = new List<Workflow_Instance__c>();
+    for (Workflow_Instance__c inst : updated) {
+      if (inst.Status__c == 'Failed') {
+        terminalUpdated.add(inst);
+      }
+    }
+    notifyParentCompletion(terminalUpdated);
+  }
+
+  // Enqueue orchestrators for the given instances unless nothing is pending or
+  // the test opt-out is active.
+  private static void enqueueOrchestratorsBounded(List<Id> ids) {
+    if (ids.isEmpty()) {
+      return;
+    }
+    if (Test.isRunningTest() && disableQueueableInTest) {
+      return;
+    }
+    enqueueOrchestrators(ids);
+  }
+
+  private static void finalizeTimedOutStep(
+    Workflow_Step_Execution__c step,
+    TimedOutStepContext ctx
+  ) {
+    Workflow_Instance__c parent = ctx.parents.get(step.Workflow_Instance__c);
+    if (parent == null) {
+      return;
+    }
+    if (!isTimedOutParentActionable(parent)) {
+      return;
+    }
+
+    Workflow_Step_Execution__c lockedStep = ctx.lockedSteps.get(step.Id);
+    if (lockedStep == null) {
+      return;
+    }
+    if (!isRunnableStepStatus(lockedStep)) {
+      return;
+    }
+
+    if (holdPausedPendingStep(parent, lockedStep, ctx)) {
+      return;
+    }
+
+    String errorMsg = (lockedStep.Status__c == 'Running')
+      ? 'Step execution timed out.'
+      : 'Step execution timed out before starting.';
+
+    String errorStepName = resolveTimeoutErrorRouting(step, errorMsg, ctx);
+
+    if (String.isNotBlank(errorStepName)) {
+      routeTimedOutStepFailure(step, errorMsg, ctx);
+      return;
+    }
+
+    lockedStep.Status__c = 'Failed';
+    lockedStep.Error_Details__c = errorMsg;
+    lockedStep.Timeout_At__c = null;
+    ctx.stepsToUpdate.add(lockedStep);
+
+    if (!ctx.instancesToUpdate.containsKey(parent.Id)) {
+      applyTimedOutInstanceTransition(step, errorMsg, ctx);
+    }
+  }
+
+  // Operator pause gate (mirrors WorkflowTimeoutJob): if the definition is
+  // paused while the parent is still Pending/Running (handoff armed the deadline
+  // before the delayed RUN_STEP reached the gate), only hold pre-start Pending
+  // steps — clear their deadline so a post-resume heartbeat cannot fire
+  // instantly; re-armed on park/re-run. Running (stuck) steps are NOT held: the
+  // instance stays Running so reArmTimeoutsForResume will not re-arm them on
+  // resume; clearing their deadline here would leave them permanently
+  // unenforceable. Compensating/Cancelling bypass the pause gate normally.
+  // Returns true when the step was held (and the caller must skip it).
+  private static Boolean holdPausedPendingStep(
+    Workflow_Instance__c parent,
+    Workflow_Step_Execution__c lockedStep,
+    TimedOutStepContext ctx
+  ) {
+    if (
+      (parent.Status__c == 'Pending' ||
+      parent.Status__c == 'Running') &&
+      WorkflowPauseGate.anyPaused() &&
+      WorkflowPauseGate.isDefinitionPaused(parent.Workflow_Name__c)
+    ) {
+      if (lockedStep.Status__c == 'Pending') {
+        lockedStep.Timeout_At__c = null;
+        ctx.stepsToUpdate.add(lockedStep);
+        return true;
+      }
+      // Running step — fall through to enforce the timeout normally
+    }
+    return false;
+  }
+
+  // Check if error routing is defined for this timed-out step; returns the error
+  // step name to route to, or null/blank when no routing applies.
+  private static String resolveTimeoutErrorRouting(
+    Workflow_Step_Execution__c step,
+    String errorMsg,
+    TimedOutStepContext ctx
+  ) {
+    Workflow_Instance__c parent = ctx.parents.get(step.Workflow_Instance__c);
+    if (
+      !(ctx.isRoutingWflow.containsKey(parent.Workflow_Name__c) &&
+      ctx.isRoutingWflow.get(parent.Workflow_Name__c))
+    ) {
+      return null;
+    }
+    Type wflowType = WorkflowTypeResolver.resolve(
+      parent.Workflow_Name__c,
+      WorkflowTypeResolver.extractNamespace(parent.Workflow_Name__c)
+    );
+    if (wflowType == null) {
+      return null;
+    }
+    WorkflowDefinition def = (WorkflowDefinition) wflowType.newInstance();
+    String key = parent.Id + ':' + step.Step_Name__c;
+    Integer attemptCount =
+      (ctx.latestRetryCounts.containsKey(key)
+        ? ctx.latestRetryCounts.get(key)
+        : 0) + 1;
+    StepError err = new StepError(step.Step_Name__c, errorMsg, attemptCount);
+    return ((ErrorRoutingWorkflow) def).getErrorStep(step.Step_Name__c, err);
+  }
+
+  // A routed timed-out step: mark it Failed immediately and fail the instance
+  // through the resolved-error path.
+  private static void routeTimedOutStepFailure(
+    Workflow_Step_Execution__c step,
+    String errorMsg,
+    TimedOutStepContext ctx
+  ) {
+    Workflow_Instance__c parent = ctx.parents.get(step.Workflow_Instance__c);
+    Workflow_Step_Execution__c lockedStep = ctx.lockedSteps.get(step.Id);
+
+    lockedStep.Status__c = 'Failed';
+    lockedStep.Error_Details__c = errorMsg;
+    lockedStep.Timeout_At__c = null;
+    Database.update(lockedStep, true, AccessLevel.SYSTEM_MODE);
+
+    String key = parent.Id + ':' + step.Step_Name__c;
+    Integer attemptCount =
+      (ctx.latestRetryCounts.containsKey(key)
+        ? ctx.latestRetryCounts.get(key)
+        : 0) + 1;
+
+    FailInstanceRequest timeoutFailReq = new FailInstanceRequest();
+    timeoutFailReq.instance = parent;
+    timeoutFailReq.stepName = step.Step_Name__c;
+    timeoutFailReq.errorMessage = errorMsg;
+    timeoutFailReq.failureCategory = CAT_TIMEOUT;
+    timeoutFailReq.attemptCount = attemptCount;
+    failResolvedInstance(timeoutFailReq);
+  }
+
+  // Transition the (not-yet-transitioned) parent instance for a timed-out step:
+  // recoverable rollback-incomplete, terminal Failed, or start compensation.
+  private static void applyTimedOutInstanceTransition(
+    Workflow_Step_Execution__c step,
+    String errorMsg,
+    TimedOutStepContext ctx
+  ) {
+    Workflow_Instance__c parent = ctx.parents.get(step.Workflow_Instance__c);
+
+    // Check if there are compensations to run
+    Boolean hasCompensations = false;
+    List<String> stack = new List<String>();
+    if (String.isNotBlank(parent.Compensation_Stack__c)) {
+      stack = (List<String>) JSON.deserialize(
+        parent.Compensation_Stack__c,
+        List<String>.class
+      );
+      hasCompensations = !stack.isEmpty();
+    }
+
+    Boolean isCompensationFailure = (parent.Status__c == 'Compensating' ||
+    parent.Status__c == 'Cancelling' ||
+    (String.isNotBlank(step.Step_Name__c) &&
+    step.Step_Name__c.endsWith('_Compensate')));
+
+    if (isCompensationFailure && hasCompensations) {
+      // A compensation step timed out mid-rollback. The remaining stack is
+      // intact, so park the saga in the recoverable "rollback incomplete"
+      // state rather than abandoning the deeper compensations.
+      Boolean wasCancelling = (parent.Status__c == 'Cancelling');
+      parent.Status__c = 'CompensationFailed';
+      parent.Failure_Category__c = CAT_COMPENSATION_FAILED;
+      parent.Error_Message__c = buildRollbackIncompleteMessage(
+        wasCancelling,
+        'Rollback incomplete at compensation step ' +
+          step.Step_Name__c +
+          ': ' +
+          errorMsg
+      );
+      // Clear any stale sleep/retry deadline so a later resumed SUSPEND/approval
+      // gate is not prematurely woken by the watchdog.
+      parent.Sleep_Until__c = null;
+      parent.Async_Job_Id__c = null;
+      ctx.instancesToUpdate.put(parent.Id, parent);
+    } else if (!hasCompensations) {
+      parent.Status__c = 'Failed';
+      parent.Failure_Category__c = CAT_TIMEOUT;
+      parent.Error_Message__c =
+        'Failed at step ' +
+        step.Step_Name__c +
+        ': ' +
+        errorMsg;
+      ctx.instancesToUpdate.put(parent.Id, parent);
+    } else {
+      parent.Status__c = 'Compensating';
+      parent.Error_Message__c =
+        'Failed at step ' +
+        step.Step_Name__c +
+        ': ' +
+        errorMsg;
+      ctx.instancesToUpdate.put(parent.Id, parent);
+
+      ctx.instancesNeedingCompensationInfo.add(parent.Id);
+      if (!stack.isEmpty()) {
+        ctx.activeStepNamesForComp.add(stack[stack.size() - 1]);
+      }
+    }
+  }
+
+  // Map of "<instanceId>:<stepName>_Compensate" -> existing compensation step
+  // for the instances entering compensation (avoids duplicating a comp step).
+  private static Map<String, Workflow_Step_Execution__c> buildExistingCompSteps(
+    Set<Id> instancesNeedingCompensationInfo
+  ) {
+    Map<String, Workflow_Step_Execution__c> existingCompSteps = new Map<String, Workflow_Step_Execution__c>();
+    if (instancesNeedingCompensationInfo.isEmpty()) {
+      return existingCompSteps;
+    }
+    // Bind the LIKE pattern so the escaped underscore ('\_', matching a
+    // literal '_') lives in an Apex string literal rather than inline SOQL.
+    String compensateSuffixPattern = '%\\_Compensate';
+    for (Workflow_Step_Execution__c e : [
+      SELECT Id, Workflow_Instance__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c IN :instancesNeedingCompensationInfo
+        AND Step_Name__c LIKE :compensateSuffixPattern
+      WITH SYSTEM_MODE
+    ]) {
+      existingCompSteps.put(e.Workflow_Instance__c + ':' + e.Step_Name__c, e);
+    }
+    return existingCompSteps;
+  }
+
+  // Map of "<instanceId>:<stepName>" -> most recent original step exec, used to
+  // seed the compensation step's Input/Output.
+  private static Map<String, Workflow_Step_Execution__c> buildOriginalStepExecs(
+    Set<Id> instancesNeedingCompensationInfo,
+    Set<String> activeStepNamesForComp
+  ) {
+    Map<String, Workflow_Step_Execution__c> originalStepsMap = new Map<String, Workflow_Step_Execution__c>();
+    if (instancesNeedingCompensationInfo.isEmpty()) {
+      return originalStepsMap;
+    }
+    for (Workflow_Step_Execution__c o : [
+      SELECT Workflow_Instance__c, Step_Name__c, Input__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c IN :instancesNeedingCompensationInfo
+        AND Step_Name__c IN :activeStepNamesForComp
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ]) {
+      String key = o.Workflow_Instance__c + ':' + o.Step_Name__c;
+      if (!originalStepsMap.containsKey(key)) {
+        originalStepsMap.put(key, o);
+      }
+    }
+    return originalStepsMap;
+  }
+
+  // Pre-create the first compensation step-exec log for each instance entering
+  // compensation from a timed-out step.
+  private static void createCompensationStepsForTimedOut(
+    TimedOutStepContext ctx
+  ) {
+    Map<String, Workflow_Step_Execution__c> existingCompSteps = buildExistingCompSteps(
+      ctx.instancesNeedingCompensationInfo
+    );
+    Map<String, Workflow_Step_Execution__c> originalStepsMap = buildOriginalStepExecs(
+      ctx.instancesNeedingCompensationInfo,
+      ctx.activeStepNamesForComp
+    );
+
+    for (Id instId : ctx.instancesNeedingCompensationInfo) {
+      Workflow_Instance__c parent = ctx.parents.get(instId);
+      List<String> stack = (List<String>) JSON.deserialize(
+        parent.Compensation_Stack__c,
+        List<String>.class
+      );
+      String activeStepName = stack[stack.size() - 1];
+      String compensationStepLogName = activeStepName + '_Compensate';
+
+      if (
+        existingCompSteps.containsKey(parent.Id + ':' + compensationStepLogName)
+      ) {
+        continue;
+      }
+
+      Workflow_Step_Execution__c orig = originalStepsMap.get(
+        parent.Id + ':' + activeStepName
+      );
+
+      Workflow_Step_Execution__c compStepExec = new Workflow_Step_Execution__c();
+      compStepExec.Workflow_Instance__c = parent.Id;
+      compStepExec.Step_Name__c = compensationStepLogName;
+      compStepExec.Status__c = 'Pending';
+      compStepExec.Input__c = (orig != null) ? orig.Input__c : null;
+      compStepExec.Output__c = (orig != null) ? orig.Output__c : null;
+      compStepExec.Retry_Count__c = 0;
+      ctx.compensationStepsToInsert.add(compStepExec);
+      ctx.orchestratorInstanceIds.add(parent.Id);
+    }
+  }
+
+  // Flush all accumulated DML for the timed-out-steps section, publish alerts,
+  // enqueue orchestrators, and record terminal instances for the deferred
+  // lifecycle publish.
+  private static void flushTimedOutStepResults(
+    TimedOutStepContext ctx,
+    List<Workflow_Instance__c> watchdogTerminalInstances
+  ) {
+    if (!ctx.stepsToUpdate.isEmpty()) {
+      Database.update(ctx.stepsToUpdate, true, AccessLevel.SYSTEM_MODE);
+    }
+    if (!ctx.compensationStepsToInsert.isEmpty()) {
+      Database.insert(
+        ctx.compensationStepsToInsert,
+        true,
+        AccessLevel.SYSTEM_MODE
+      );
+    }
+    if (!ctx.instancesToUpdate.isEmpty()) {
+      Database.update(
+        ctx.instancesToUpdate.values(),
+        true,
+        AccessLevel.SYSTEM_MODE
+      );
+      notifyTerminalFailures(ctx.instancesToUpdate.values());
+    }
+
+    for (Workflow_Instance__c parent : ctx.instancesToUpdate.values()) {
+      WorkflowAlertManager.sendAlert(parent, parent.Error_Message__c);
+    }
+
+    enqueueOrchestratorsBounded(ctx.orchestratorInstanceIds);
+
+    // Defer lifecycle publishing to the end of the heartbeat. Only the parents
+    // transitioned to a terminal state (Failed) emit — Compensating parents are
+    // skipped by the publisher.
+    watchdogTerminalInstances.addAll(ctx.instancesToUpdate.values());
+  }
+
+  // §1b. Process Exceeded Execution Deadlines (bounded per heartbeat).
+  private static void processExceededDeadlines(
+    Datetime now,
+    List<Workflow_Instance__c> watchdogTerminalInstances
+  ) {
     List<Workflow_Instance__c> expiredInstances = [
       SELECT
         Id,
@@ -11166,94 +11394,107 @@ public inherited sharing class WorkflowEngine {
       FOR UPDATE
     ];
 
-    if (!expiredInstances.isEmpty()) {
-      List<Workflow_Step_Execution__c> deadlineStepsToInsert = new List<Workflow_Step_Execution__c>();
-      List<Workflow_Instance__c> instancesToFail = new List<Workflow_Instance__c>();
-      List<Id> deadlineOrchestratorIds = new List<Id>();
-
-      // Bulk abort all scheduled jobs for all expired instances
-      Set<Id> expiredInstanceIds = new Set<Id>();
-      for (Workflow_Instance__c inst : expiredInstances) {
-        expiredInstanceIds.add(inst.Id);
-      }
-      abortScheduledJobs(expiredInstanceIds);
-
-      for (Workflow_Instance__c inst : expiredInstances) {
-        inst.Sleep_Until__c = null;
-        inst.Async_Job_Id__c = null;
-
-        // Check if there are compensations to run
-        Boolean hasCompensations = false;
-        List<String> stack = new List<String>();
-        if (String.isNotBlank(inst.Compensation_Stack__c)) {
-          stack = (List<String>) JSON.deserialize(
-            inst.Compensation_Stack__c,
-            List<String>.class
-          );
-          hasCompensations = !stack.isEmpty();
-        }
-
-        // Append a new failed step execution record (audit trail)
-        Workflow_Step_Execution__c deadlineStep = new Workflow_Step_Execution__c(
-          Workflow_Instance__c = inst.Id,
-          Step_Name__c = 'Workflow_Deadline',
-          Status__c = 'Failed',
-          Error_Details__c = 'Execution deadline exceeded',
-          Retry_Count__c = 0
-        );
-        deadlineStepsToInsert.add(deadlineStep);
-
-        if (hasCompensations) {
-          inst.Status__c = 'Compensating';
-          inst.Error_Message__c = 'Execution deadline exceeded';
-          instancesToFail.add(inst);
-          deadlineOrchestratorIds.add(inst.Id);
-        } else {
-          inst.Status__c = 'Failed';
-          inst.Failure_Category__c = CAT_TIMEOUT;
-          inst.Error_Message__c = 'Execution deadline exceeded';
-          instancesToFail.add(inst);
-          watchdogTerminalInstances.add(inst);
-        }
-      }
-
-      if (!deadlineStepsToInsert.isEmpty()) {
-        Database.insert(deadlineStepsToInsert, true, AccessLevel.SYSTEM_MODE);
-      }
-
-      preCreateFirstCompensationSteps(expiredInstances);
-
-      if (!instancesToFail.isEmpty()) {
-        Database.update(instancesToFail, true, AccessLevel.SYSTEM_MODE);
-        List<Workflow_Instance__c> terminalUpdated = new List<Workflow_Instance__c>();
-        for (Workflow_Instance__c inst : instancesToFail) {
-          if (inst.Status__c == 'Failed') {
-            terminalUpdated.add(inst);
-          }
-        }
-        notifyParentCompletion(terminalUpdated);
-      }
-
-      for (Workflow_Instance__c inst : instancesToFail) {
-        if (inst.Status__c == 'Failed') {
-          WorkflowAlertManager.sendAlert(inst, inst.Error_Message__c);
-        }
-      }
-
-      if (
-        !deadlineOrchestratorIds.isEmpty() &&
-        !(Test.isRunningTest() && disableQueueableInTest)
-      ) {
-        enqueueOrchestrators(deadlineOrchestratorIds);
-      }
+    if (expiredInstances.isEmpty()) {
+      return;
     }
 
-    // 2. Process Sleep Resumptions (bounded per heartbeat; backlog drains on subsequent
-    // heartbeats so an unbounded suspended-instance backlog cannot blow row/heap limits).
-    // Paused definitions are excluded at the SOQL level so paused sleepers cannot fill
-    // the bounded batch and starve resumable rows from other workflows (they would be
-    // re-selected and skipped every heartbeat). An org-wide '*' pause means nothing is
-    // resumable, so the phase is skipped entirely.
+    DeadlineBatch batch = new DeadlineBatch();
+
+    // Bulk abort all scheduled jobs for all expired instances
+    Set<Id> expiredInstanceIds = new Set<Id>();
+    for (Workflow_Instance__c inst : expiredInstances) {
+      expiredInstanceIds.add(inst.Id);
+    }
+    abortScheduledJobs(expiredInstanceIds);
+
+    for (Workflow_Instance__c inst : expiredInstances) {
+      applyDeadlineExpiry(inst, batch, watchdogTerminalInstances);
+    }
+
+    if (!batch.deadlineStepsToInsert.isEmpty()) {
+      Database.insert(
+        batch.deadlineStepsToInsert,
+        true,
+        AccessLevel.SYSTEM_MODE
+      );
+    }
+
+    preCreateFirstCompensationSteps(expiredInstances);
+
+    if (!batch.instancesToFail.isEmpty()) {
+      Database.update(batch.instancesToFail, true, AccessLevel.SYSTEM_MODE);
+      notifyTerminalFailures(batch.instancesToFail);
+    }
+
+    alertDeadlineFailures(batch.instancesToFail);
+
+    enqueueOrchestratorsBounded(batch.deadlineOrchestratorIds);
+  }
+
+  // Alert on exactly the deadline-expired instances that reached terminal Failed.
+  private static void alertDeadlineFailures(
+    List<Workflow_Instance__c> instancesToFail
+  ) {
+    for (Workflow_Instance__c inst : instancesToFail) {
+      if (inst.Status__c == 'Failed') {
+        WorkflowAlertManager.sendAlert(inst, inst.Error_Message__c);
+      }
+    }
+  }
+
+  // Apply the deadline-exceeded transition to a single instance: append the
+  // audit step and route to compensation or terminal failure.
+  private static void applyDeadlineExpiry(
+    Workflow_Instance__c inst,
+    DeadlineBatch batch,
+    List<Workflow_Instance__c> watchdogTerminalInstances
+  ) {
+    inst.Sleep_Until__c = null;
+    inst.Async_Job_Id__c = null;
+
+    // Check if there are compensations to run
+    Boolean hasCompensations = false;
+    List<String> stack = new List<String>();
+    if (String.isNotBlank(inst.Compensation_Stack__c)) {
+      stack = (List<String>) JSON.deserialize(
+        inst.Compensation_Stack__c,
+        List<String>.class
+      );
+      hasCompensations = !stack.isEmpty();
+    }
+
+    // Append a new failed step execution record (audit trail)
+    Workflow_Step_Execution__c deadlineStep = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = inst.Id,
+      Step_Name__c = 'Workflow_Deadline',
+      Status__c = 'Failed',
+      Error_Details__c = 'Execution deadline exceeded',
+      Retry_Count__c = 0
+    );
+    batch.deadlineStepsToInsert.add(deadlineStep);
+
+    if (hasCompensations) {
+      inst.Status__c = 'Compensating';
+      inst.Error_Message__c = 'Execution deadline exceeded';
+      batch.instancesToFail.add(inst);
+      batch.deadlineOrchestratorIds.add(inst.Id);
+    } else {
+      inst.Status__c = 'Failed';
+      inst.Failure_Category__c = CAT_TIMEOUT;
+      inst.Error_Message__c = 'Execution deadline exceeded';
+      batch.instancesToFail.add(inst);
+      watchdogTerminalInstances.add(inst);
+    }
+  }
+
+  // §2. Process Sleep Resumptions (bounded per heartbeat; backlog drains on
+  // subsequent heartbeats so an unbounded suspended-instance backlog cannot blow
+  // row/heap limits). Paused definitions are excluded at the SOQL level so paused
+  // sleepers cannot fill the bounded batch and starve resumable rows from other
+  // workflows (they would be re-selected and skipped every heartbeat). An
+  // org-wide '*' pause means nothing is resumable, so the phase is skipped
+  // entirely.
+  private static void processSleepResumptions(Datetime now) {
     List<Workflow_Instance__c> readyToResume = new List<Workflow_Instance__c>();
     if (!WorkflowPauseGate.wildcardPaused()) {
       Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
@@ -11285,617 +11526,558 @@ public inherited sharing class WorkflowEngine {
       ];
     }
 
-    if (!readyToResume.isEmpty()) {
-      Map<Id, Workflow_Step_Execution__c> latestStepByInstId = new Map<Id, Workflow_Step_Execution__c>();
-      for (Workflow_Instance__c inst : readyToResume) {
-        if (
-          inst.Workflow_Step_Executions__r != null &&
-          !inst.Workflow_Step_Executions__r.isEmpty()
-        ) {
-          latestStepByInstId.put(inst.Id, inst.Workflow_Step_Executions__r[0]);
-        }
-      }
+    if (readyToResume.isEmpty()) {
+      return;
+    }
 
-      List<Id> instanceIds = new List<Id>();
-      List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
-      // Parallel instances (comma-separated Current_Step__c) ignore the blank-stepName
-      // orchestrator enqueued below, so a branch suspended for a transient row-lock
-      // retry would never re-drive off the watchdog. Collect them here to re-drive
-      // their retrying branches BY NAME after the loop.
-      List<Id> parallelResumeIds = new List<Id>();
-      // Timed-wait fallback execs to bulk-insert after the loop (issue #35).
-      List<Workflow_Step_Execution__c> timedWaitFallbackExecs = new List<Workflow_Step_Execution__c>();
-      for (Workflow_Instance__c inst : readyToResume) {
-        // Hold, not drop: if the definition is paused, leave the instance Suspended
-        // with Sleep_Until__c intact so it re-fires on the next heartbeat after resume.
-        if (
-          WorkflowPauseGate.anyPaused() &&
-          WorkflowPauseGate.isDefinitionPaused(inst.Workflow_Name__c)
-        ) {
-          continue;
-        }
-        // A concurrency-parked sleeper has not yet won an admission slot. Do NOT flip
-        // it to Running here: that would leave Running rows holding no slot (violating
-        // the status/cap invariant) and hide them from the parked count. Drive it back
-        // through the admission gate while leaving it Suspended/parked — the gate flips
-        // it to Running on a successful acquire, or re-parks it (bumping Sleep_Until__c
-        // into the future) on denial. Leave Sleep_Until__c/Async_Job_Id__c intact so
-        // the gate owns the transition; the next heartbeat will not re-select it once
-        // a re-park has pushed Sleep_Until__c forward, and a duplicate delivery before
-        // then is idempotent at the gate's locked re-read.
-        if (
-          inst.Concurrency_Parked__c == true &&
-          inst.Concurrency_Slot_Held__c != true
-        ) {
-          instanceIds.add(inst.Id);
-          continue;
-        }
-        Workflow_Step_Execution__c latestStep = latestStepByInstId.get(inst.Id);
-        if (
-          latestStep != null &&
-          latestStep.Step_Name__c != null &&
-          latestStep.Step_Name__c.endsWith('_Compensate')
-        ) {
-          if (
-            inst.Error_Message__c != null &&
-            inst.Error_Message__c.contains('Cancelled by user')
-          ) {
-            inst.Status__c = 'Cancelling';
-          } else {
-            inst.Status__c = 'Compensating';
-          }
-        } else {
-          // Timed-wait detection (issue #35): if the latest step exec carries a
-          // $timeoutStep key in its Output, the timer fired for a timed suspend/
-          // approval wait. Route to the fallback step instead of re-running the
-          // current step. Non-compensating, serial instances only.
-          String timedWaitTarget = extractTimedWaitTarget(latestStep);
-          Boolean isSerial =
-            String.isBlank(inst.Current_Step__c) ||
-            !inst.Current_Step__c.contains(',');
-          if (String.isNotBlank(timedWaitTarget) && isSerial) {
-            // Route to the fallback step: create a new Pending exec (append-only)
-            // and advance Current_Step__c. The prior wait exec is never mutated.
-            Workflow_Step_Execution__c fallbackExec = new Workflow_Step_Execution__c();
-            fallbackExec.Workflow_Instance__c = inst.Id;
-            fallbackExec.Step_Name__c = timedWaitTarget;
-            fallbackExec.Status__c = 'Pending';
-            fallbackExec.Input__c = '{"$timeoutResume":true}';
-            fallbackExec.Retry_Count__c = 0;
-            fallbackExec.Transient_Retry_Count__c = 0;
-            timedWaitFallbackExecs.add(fallbackExec);
-            inst.Current_Step__c = timedWaitTarget;
-          }
-          inst.Status__c = 'Running';
-          if (
-            String.isNotBlank(inst.Current_Step__c) &&
-            inst.Current_Step__c.contains(',')
-          ) {
-            parallelResumeIds.add(inst.Id);
-          }
-        }
-        inst.Sleep_Until__c = null;
-        inst.Async_Job_Id__c = null;
-        instanceIds.add(inst.Id);
-        instancesToUpdate.add(inst);
-      }
-      if (!timedWaitFallbackExecs.isEmpty()) {
-        Database.insert(timedWaitFallbackExecs, true, AccessLevel.SYSTEM_MODE);
-      }
-      if (!instancesToUpdate.isEmpty()) {
-        for (Workflow_Instance__c inst : instancesToUpdate) {
-          resumedInstanceIds.add(inst.Id);
-        }
-        Database.update(instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
-      }
-      // Honor the test opt-out (mirrors the timed-out-step enqueue above) so a
-      // suite asserting only the Suspended -> Running wake transition is not
-      // carried to completion by a worker draining at Test.stopTest().
-      if (!(Test.isRunningTest() && disableQueueableInTest)) {
-        enqueueOrchestrators(instanceIds);
-      }
-      // For a resumed parallel instance the blank-stepName orchestrator above is a
-      // no-op (runStep ignores it for a comma-separated Current_Step__c), so re-drive
-      // each branch parked for a transient row-lock retry BY NAME. Scoped to Pending/
-      // Running steps carrying Transient_Retry_Count__c > 0 — the durable target the
-      // transient-lock backoff persists. handleCrash leaves the row Pending after a
-      // rollback, or Running when the synchronous harness calls it without one, so both
-      // statuses are matched; genuinely in-flight branches (count 0) and ordinary
-      // fan-out steps are left untouched. The actual enqueue honors the test opt-out
-      // internally (like the bulk signal path) so the query/re-arm still run under it.
-      if (!parallelResumeIds.isEmpty()) {
-        reDriveTransientRetryBranches(
-          [
-            SELECT
-              Id,
-              Workflow_Instance__c,
-              Step_Name__c,
-              Workflow_Instance__r.Workflow_Name__c
-            FROM Workflow_Step_Execution__c
-            WHERE
-              Workflow_Instance__c IN :parallelResumeIds
-              AND Status__c IN ('Pending', 'Running')
-              AND Transient_Retry_Count__c > 0
-            WITH SYSTEM_MODE
-          ]
-        );
+    SleepResumeBatch b = new SleepResumeBatch();
+    for (Workflow_Instance__c inst : readyToResume) {
+      if (
+        inst.Workflow_Step_Executions__r != null &&
+        !inst.Workflow_Step_Executions__r.isEmpty()
+      ) {
+        b.latestStepByInstId.put(inst.Id, inst.Workflow_Step_Executions__r[0]);
       }
     }
 
-    // 2b. Sweep Suspended instances for matching Unrouted signals (safety net)
-    if (!WorkflowPauseGate.wildcardPaused()) {
-      Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
+    for (Workflow_Instance__c inst : readyToResume) {
+      resumeSuspendedInstance(inst, b);
+    }
 
-      // 1. Query sparse Unrouted signals first (safety net capped backlog)
-      List<Workflow_Signal__c> unrouted = [
-        SELECT
-          Id,
-          Correlation_Key__c,
-          Status__c,
-          Idempotency_Key__c,
-          Signal_Key__c
-        FROM Workflow_Signal__c
-        WHERE Status__c = 'Unrouted'
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate ASC, Id ASC
-        LIMIT 1000
-      ];
+    flushSleepResumptions(b);
+  }
 
-      if (!unrouted.isEmpty()) {
-        Set<String> keys = new Set<String>();
-        for (Workflow_Signal__c sig : unrouted) {
-          if (String.isNotBlank(sig.Correlation_Key__c)) {
-            keys.add(sig.Correlation_Key__c);
-          }
-        }
+  // Persist the resume batch: insert timed-wait fallbacks, flip instances to
+  // their resumed status, enqueue orchestrators, and re-drive parallel branches.
+  private static void flushSleepResumptions(SleepResumeBatch b) {
+    if (!b.timedWaitFallbackExecs.isEmpty()) {
+      Database.insert(b.timedWaitFallbackExecs, true, AccessLevel.SYSTEM_MODE);
+    }
+    if (!b.instancesToUpdate.isEmpty()) {
+      for (Workflow_Instance__c inst : b.instancesToUpdate) {
+        resumedInstanceIds.add(inst.Id);
+      }
+      Database.update(b.instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
+    }
+    // Honor the test opt-out (mirrors the timed-out-step enqueue above) so a
+    // suite asserting only the Suspended -> Running wake transition is not
+    // carried to completion by a worker draining at Test.stopTest().
+    if (!(Test.isRunningTest() && disableQueueableInTest)) {
+      enqueueOrchestrators(b.instanceIds);
+    }
+    // For a resumed parallel instance the blank-stepName orchestrator above is a
+    // no-op (runStep ignores it for a comma-separated Current_Step__c), so
+    // re-drive each branch parked for a transient row-lock retry BY NAME. Scoped
+    // to Pending/Running steps carrying Transient_Retry_Count__c > 0 — the
+    // durable target the transient-lock backoff persists. handleCrash leaves the
+    // row Pending after a rollback, or Running when the synchronous harness calls
+    // it without one, so both statuses are matched; genuinely in-flight branches
+    // (count 0) and ordinary fan-out steps are left untouched. The actual enqueue
+    // honors the test opt-out internally (like the bulk signal path) so the
+    // query/re-arm still run under it.
+    if (!b.parallelResumeIds.isEmpty()) {
+      reDriveTransientRetryBranches(
+        [
+          SELECT
+            Id,
+            Workflow_Instance__c,
+            Step_Name__c,
+            Workflow_Instance__r.Workflow_Name__c
+          FROM Workflow_Step_Execution__c
+          WHERE
+            Workflow_Instance__c IN :b.parallelResumeIds
+            AND Status__c IN ('Pending', 'Running')
+            AND Transient_Retry_Count__c > 0
+          WITH SYSTEM_MODE
+        ]
+      );
+    }
+  }
 
-        if (!keys.isEmpty()) {
-          // Limit batch size defensively for this non-bulkified redelivery loop
-          Integer sweepLimit = 20;
+  // A suspended instance's resume is held when its definition is paused.
+  private static Boolean isDefinitionResumeHeld(Workflow_Instance__c inst) {
+    return WorkflowPauseGate.anyPaused() &&
+      WorkflowPauseGate.isDefinitionPaused(inst.Workflow_Name__c);
+  }
 
-          // Split correlation keys from Id binds to avoid System.QueryException: Invalid ID
-          String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
-              SObjectDescribeOptions.DEFERRED
-            )
-            .getKeyPrefix();
-          Pattern idPattern = Pattern.compile(
-            '^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$'
-          );
-          Set<Id> instIds = new Set<Id>();
-          Set<String> corrKeys = new Set<String>();
+  // Resume a single suspended instance: honor the pause gate and concurrency
+  // parking, then flip to the appropriate running/compensating status.
+  private static void resumeSuspendedInstance(
+    Workflow_Instance__c inst,
+    SleepResumeBatch b
+  ) {
+    // Hold, not drop: if the definition is paused, leave the instance Suspended
+    // with Sleep_Until__c intact so it re-fires on the next heartbeat after resume.
+    if (isDefinitionResumeHeld(inst)) {
+      return;
+    }
+    // A concurrency-parked sleeper has not yet won an admission slot. Do NOT flip
+    // it to Running here: that would leave Running rows holding no slot (violating
+    // the status/cap invariant) and hide them from the parked count. Drive it back
+    // through the admission gate while leaving it Suspended/parked — the gate flips
+    // it to Running on a successful acquire, or re-parks it (bumping Sleep_Until__c
+    // into the future) on denial. Leave Sleep_Until__c/Async_Job_Id__c intact so
+    // the gate owns the transition; the next heartbeat will not re-select it once
+    // a re-park has pushed Sleep_Until__c forward, and a duplicate delivery before
+    // then is idempotent at the gate's locked re-read.
+    if (
+      inst.Concurrency_Parked__c == true &&
+      inst.Concurrency_Slot_Held__c != true
+    ) {
+      b.instanceIds.add(inst.Id);
+      return;
+    }
+    Workflow_Step_Execution__c latestStep = b.latestStepByInstId.get(inst.Id);
+    if (
+      latestStep != null &&
+      latestStep.Step_Name__c != null &&
+      latestStep.Step_Name__c.endsWith('_Compensate')
+    ) {
+      if (
+        inst.Error_Message__c != null &&
+        inst.Error_Message__c.contains('Cancelled by user')
+      ) {
+        inst.Status__c = 'Cancelling';
+      } else {
+        inst.Status__c = 'Compensating';
+      }
+    } else {
+      routeNonCompensatingResume(inst, latestStep, b);
+    }
+    inst.Sleep_Until__c = null;
+    inst.Async_Job_Id__c = null;
+    b.instanceIds.add(inst.Id);
+    b.instancesToUpdate.add(inst);
+  }
 
-          for (String key : keys) {
-            if (
-              idPattern.matcher(key).matches() && key.startsWith(wflowPrefix)
-            ) {
-              instIds.add((Id) key);
-            } else {
-              corrKeys.add(key);
-            }
-          }
+  // Non-compensating resume path: detect a fired timed-wait and route to the
+  // fallback step, otherwise flip to Running and track parallel branches.
+  private static void routeNonCompensatingResume(
+    Workflow_Instance__c inst,
+    Workflow_Step_Execution__c latestStep,
+    SleepResumeBatch b
+  ) {
+    // Timed-wait detection (issue #35): if the latest step exec carries a
+    // $timeoutStep key in its Output, the timer fired for a timed suspend/
+    // approval wait. Route to the fallback step instead of re-running the
+    // current step. Non-compensating, serial instances only.
+    String timedWaitTarget = extractTimedWaitTarget(latestStep);
+    Boolean isSerial =
+      String.isBlank(inst.Current_Step__c) ||
+      !inst.Current_Step__c.contains(',');
+    if (String.isNotBlank(timedWaitTarget) && isSerial) {
+      // Route to the fallback step: create a new Pending exec (append-only)
+      // and advance Current_Step__c. The prior wait exec is never mutated.
+      Workflow_Step_Execution__c fallbackExec = new Workflow_Step_Execution__c();
+      fallbackExec.Workflow_Instance__c = inst.Id;
+      fallbackExec.Step_Name__c = timedWaitTarget;
+      fallbackExec.Status__c = 'Pending';
+      fallbackExec.Input__c = '{"$timeoutResume":true}';
+      fallbackExec.Retry_Count__c = 0;
+      fallbackExec.Transient_Retry_Count__c = 0;
+      b.timedWaitFallbackExecs.add(fallbackExec);
+      inst.Current_Step__c = timedWaitTarget;
+    }
+    inst.Status__c = 'Running';
+    if (
+      String.isNotBlank(inst.Current_Step__c) &&
+      inst.Current_Step__c.contains(',')
+    ) {
+      b.parallelResumeIds.add(inst.Id);
+    }
+  }
 
-          List<Workflow_Instance__c> matchInsts = [
-            SELECT
-              Id,
-              Correlation_Key__c,
-              Status__c,
-              Concurrency_Parked__c,
-              Concurrency_Slot_Held__c
-            FROM Workflow_Instance__c
-            WHERE
-              Status__c = 'Suspended'
-              AND (Id IN :instIds
-              OR Correlation_Key__c IN :corrKeys)
-              AND Workflow_Name__c NOT IN :pausedDefNames
-            WITH SYSTEM_MODE
-            LIMIT :sweepLimit
-            FOR UPDATE
-          ];
+  // §2b. Sweep Suspended instances for matching Unrouted signals (safety net).
+  private static void sweepUnroutedSuspendedSignals() {
+    if (WorkflowPauseGate.wildcardPaused()) {
+      return;
+    }
 
-          if (!matchInsts.isEmpty()) {
-            Map<String, Workflow_Instance__c> keyToInst = new Map<String, Workflow_Instance__c>();
-            Set<String> matchInstKeys = new Set<String>();
-            for (Workflow_Instance__c inst : matchInsts) {
-              String instIdStr = String.valueOf(inst.Id);
-              keyToInst.put(normalizeKey(instIdStr), inst);
-              matchInstKeys.add(instIdStr);
-              if (String.isNotBlank(inst.Correlation_Key__c)) {
-                keyToInst.put(normalizeKey(inst.Correlation_Key__c), inst);
-                matchInstKeys.add(inst.Correlation_Key__c);
-              }
-            }
+    // 1. Query sparse Unrouted signals first (safety net capped backlog)
+    List<Workflow_Signal__c> unrouted = [
+      SELECT
+        Id,
+        Correlation_Key__c,
+        Status__c,
+        Idempotency_Key__c,
+        Signal_Key__c
+      FROM Workflow_Signal__c
+      WHERE Status__c = 'Unrouted'
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate ASC, Id ASC
+      LIMIT 1000
+    ];
 
-            List<Workflow_Signal__c> allMatchSignals = [
-              SELECT
-                Id,
-                Correlation_Key__c,
-                Status__c,
-                Idempotency_Key__c,
-                Signal_Key__c,
-                CreatedDate
-              FROM Workflow_Signal__c
-              WHERE
-                Status__c = 'Unrouted'
-                AND Correlation_Key__c IN :matchInstKeys
-              WITH SYSTEM_MODE
-              ORDER BY CreatedDate ASC, Id ASC
-              LIMIT 10000
-            ];
+    if (unrouted.isEmpty()) {
+      return;
+    }
 
-            if (!allMatchSignals.isEmpty()) {
-              Map<Id, List<Workflow_Signal__c>> instIdToSignals = new Map<Id, List<Workflow_Signal__c>>();
-              for (Workflow_Signal__c sig : allMatchSignals) {
-                if (String.isNotBlank(sig.Correlation_Key__c)) {
-                  String normKey = normalizeKey(sig.Correlation_Key__c);
-                  Workflow_Instance__c inst = keyToInst.get(normKey);
-                  if (inst != null) {
-                    if (!instIdToSignals.containsKey(inst.Id)) {
-                      instIdToSignals.put(
-                        inst.Id,
-                        new List<Workflow_Signal__c>()
-                      );
-                    }
-                    instIdToSignals.get(inst.Id).add(sig);
-                  }
-                }
-              }
-
-              redeliverCapturedSignalsBulk(matchInsts, instIdToSignals);
-            }
-          }
-        }
+    Set<String> keys = new Set<String>();
+    for (Workflow_Signal__c sig : unrouted) {
+      if (String.isNotBlank(sig.Correlation_Key__c)) {
+        keys.add(sig.Correlation_Key__c);
       }
     }
 
-    // 3. Process due recurring schedules (0-slot: runs inside the watchdog heartbeat,
-    // so enabling N Workflow_Schedule__c records adds 0 scheduled-job slots).
+    if (keys.isEmpty()) {
+      return;
+    }
+
+    List<Workflow_Instance__c> matchInsts = findSuspendedInstancesForKeys(keys);
+    if (matchInsts.isEmpty()) {
+      return;
+    }
+
+    redeliverUnroutedSignalsFor(matchInsts);
+  }
+
+  // Resolve the Suspended instances whose Id or Correlation_Key matches any of
+  // the given Unrouted-signal keys (bounded, excluding paused definitions).
+  private static List<Workflow_Instance__c> findSuspendedInstancesForKeys(
+    Set<String> keys
+  ) {
+    Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
+
+    // Limit batch size defensively for this non-bulkified redelivery loop
+    Integer sweepLimit = 20;
+
+    // Split correlation keys from Id binds to avoid System.QueryException: Invalid ID
+    String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
+        SObjectDescribeOptions.DEFERRED
+      )
+      .getKeyPrefix();
+    Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
+    Set<Id> instIds = new Set<Id>();
+    Set<String> corrKeys = new Set<String>();
+
+    for (String key : keys) {
+      if (idPattern.matcher(key).matches() && key.startsWith(wflowPrefix)) {
+        instIds.add((Id) key);
+      } else {
+        corrKeys.add(key);
+      }
+    }
+
+    return [
+      SELECT
+        Id,
+        Correlation_Key__c,
+        Status__c,
+        Concurrency_Parked__c,
+        Concurrency_Slot_Held__c
+      FROM Workflow_Instance__c
+      WHERE
+        Status__c = 'Suspended'
+        AND (Id IN :instIds
+        OR Correlation_Key__c IN :corrKeys)
+        AND Workflow_Name__c NOT IN :pausedDefNames
+      WITH SYSTEM_MODE
+      LIMIT :sweepLimit
+      FOR UPDATE
+    ];
+  }
+
+  // Group all still-Unrouted signals for the matched instances and redeliver them.
+  private static void redeliverUnroutedSignalsFor(
+    List<Workflow_Instance__c> matchInsts
+  ) {
+    Map<String, Workflow_Instance__c> keyToInst = new Map<String, Workflow_Instance__c>();
+    Set<String> matchInstKeys = new Set<String>();
+    for (Workflow_Instance__c inst : matchInsts) {
+      String instIdStr = String.valueOf(inst.Id);
+      keyToInst.put(normalizeKey(instIdStr), inst);
+      matchInstKeys.add(instIdStr);
+      if (String.isNotBlank(inst.Correlation_Key__c)) {
+        keyToInst.put(normalizeKey(inst.Correlation_Key__c), inst);
+        matchInstKeys.add(inst.Correlation_Key__c);
+      }
+    }
+
+    List<Workflow_Signal__c> allMatchSignals = [
+      SELECT
+        Id,
+        Correlation_Key__c,
+        Status__c,
+        Idempotency_Key__c,
+        Signal_Key__c,
+        CreatedDate
+      FROM Workflow_Signal__c
+      WHERE Status__c = 'Unrouted' AND Correlation_Key__c IN :matchInstKeys
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate ASC, Id ASC
+      LIMIT 10000
+    ];
+
+    if (allMatchSignals.isEmpty()) {
+      return;
+    }
+
+    Map<Id, List<Workflow_Signal__c>> instIdToSignals = new Map<Id, List<Workflow_Signal__c>>();
+    for (Workflow_Signal__c sig : allMatchSignals) {
+      if (String.isBlank(sig.Correlation_Key__c)) {
+        continue;
+      }
+      Workflow_Instance__c inst = keyToInst.get(
+        normalizeKey(sig.Correlation_Key__c)
+      );
+      if (inst == null) {
+        continue;
+      }
+      if (!instIdToSignals.containsKey(inst.Id)) {
+        instIdToSignals.put(inst.Id, new List<Workflow_Signal__c>());
+      }
+      instIdToSignals.get(inst.Id).add(sig);
+    }
+
+    redeliverCapturedSignalsBulk(matchInsts, instIdToSignals);
+  }
+
+  // §5. Rescue transient-lock retry branches orphaned when a parallel sibling
+  // that completed during the backoff flipped the parent out of Suspended (e.g. a
+  // CompensatableStep persisting the parent as Running). The sleep-resume above
+  // only selects Suspended parents, so such a retry branch would otherwise never
+  // be re-driven and the workflow would hang. Sleep_Until__c survives on the
+  // instance, so re-drive any due retry-marked branch under a non-terminal,
+  // non-Suspended (Running) parallel parent. Best-effort like the sweeps above: a
+  // publish hiccup retries on the next heartbeat (Sleep_Until__c is left intact)
+  // instead of aborting the core wake/timeout work. Self-resolving — once
+  // re-driven the branch either succeeds (counter resets to 0) or re-crashes back
+  // to Suspended (handled above).
+  private static void rescueOrphanedTransientRetryBranches(Datetime now) {
     try {
-      WorkflowScheduleSweeper.sweep();
-    } catch (Exception ignored) {
-      // Best-effort sweep; a failure here must not abort the watchdog heartbeat.
-    }
-
-    // 3b. Process due debounced starts (0-slot: runs inside the watchdog heartbeat).
-    try {
-      WorkflowDebouncer.sweep();
-    } catch (Exception ignored) {
-      // Best-effort sweep; a failure here must not abort the watchdog heartbeat.
-    }
-
-    // 4. Reconcile concurrency slot counters. Recomputes each configured workflow's
-    // in-flight count from the true number of non-terminal slot-holding instances,
-    // reclaiming any slot leaked by an instance that died without releasing (crash,
-    // killed transaction) so a parked instance is never starved indefinitely.
-    try {
-      ConcurrencyGate.reconcileAll();
-    } catch (Exception ignored) {
-      // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
-    }
-
-    // 5. Rescue transient-lock retry branches orphaned when a parallel sibling that
-    // completed during the backoff flipped the parent out of Suspended (e.g. a
-    // CompensatableStep persisting the parent as Running). The sleep-resume above only
-    // selects Suspended parents, so such a retry branch would otherwise never be
-    // re-driven and the workflow would hang. Sleep_Until__c survives on the instance,
-    // so re-drive any due retry-marked branch under a non-terminal, non-Suspended
-    // (Running) parallel parent. Best-effort like the sweeps above: a publish hiccup
-    // retries on the next heartbeat (Sleep_Until__c is left intact) instead of aborting
-    // the core wake/timeout work. Self-resolving — once re-driven the branch either
-    // succeeds (counter resets to 0) or re-crashes back to Suspended (handled above).
-    try {
-      if (!WorkflowPauseGate.wildcardPaused()) {
-        Set<String> orphanPausedDefs = WorkflowPauseGate.pausedNames();
-        reDriveTransientRetryBranches(
-          [
-            SELECT
-              Id,
-              Workflow_Instance__c,
-              Step_Name__c,
-              Workflow_Instance__r.Workflow_Name__c
-            FROM Workflow_Step_Execution__c
-            WHERE
-              Transient_Retry_Count__c > 0
-              AND Status__c IN ('Pending', 'Running')
-              AND Workflow_Instance__r.Status__c = 'Running'
-              AND Workflow_Instance__r.Sleep_Until__c != NULL
-              AND Workflow_Instance__r.Sleep_Until__c <= :now
-              AND Workflow_Instance__r.Current_Step__c LIKE '%,%'
-              AND Workflow_Instance__r.Workflow_Name__c NOT IN :orphanPausedDefs
-            WITH SYSTEM_MODE
-            LIMIT :watchdogResumeBatchSize
-          ]
-        );
+      if (WorkflowPauseGate.wildcardPaused()) {
+        return;
       }
+      Set<String> orphanPausedDefs = WorkflowPauseGate.pausedNames();
+      reDriveTransientRetryBranches(
+        [
+          SELECT
+            Id,
+            Workflow_Instance__c,
+            Step_Name__c,
+            Workflow_Instance__r.Workflow_Name__c
+          FROM Workflow_Step_Execution__c
+          WHERE
+            Transient_Retry_Count__c > 0
+            AND Status__c IN ('Pending', 'Running')
+            AND Workflow_Instance__r.Status__c = 'Running'
+            AND Workflow_Instance__r.Sleep_Until__c != NULL
+            AND Workflow_Instance__r.Sleep_Until__c <= :now
+            AND Workflow_Instance__r.Current_Step__c LIKE '%,%'
+            AND Workflow_Instance__r.Workflow_Name__c NOT IN :orphanPausedDefs
+          WITH SYSTEM_MODE
+          LIMIT :watchdogResumeBatchSize
+        ]
+      );
     } catch (Exception ignored) {
       // Best-effort re-drive; Sleep_Until__c is left intact so the next heartbeat retries.
     }
+  }
 
-    // 6. Auto-reclaim orphaned instances. Sweeps for instances stuck in a self-driving status
-    // (Pending/Running/Compensating/Cancelling) whose referenced async job is no longer alive,
-    // and re-enqueues them at their last durable step.
+  // §6. Auto-reclaim orphaned instances. Sweeps for instances stuck in a
+  // self-driving status (Pending/Running/Compensating/Cancelling) whose
+  // referenced async job is no longer alive, and re-enqueues them at their last
+  // durable step.
+  private static void autoReclaimOrphanedInstances(Datetime now) {
     try {
       if (
-        reclaimThresholdMinutes != null &&
-        reclaimThresholdMinutes > 0 &&
-        !WorkflowPauseGate.wildcardPaused()
+        reclaimThresholdMinutes == null ||
+        reclaimThresholdMinutes <= 0 ||
+        WorkflowPauseGate.wildcardPaused()
       ) {
-        Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
-        List<Workflow_Instance__c> candidates = [
-          SELECT
-            Id,
-            Name,
-            Status__c,
-            Current_Step__c,
-            Compensation_Stack__c,
-            Async_Job_Id__c,
-            Workflow_Name__c,
-            Correlation_Key__c
-          FROM Workflow_Instance__c
-          WHERE
-            Status__c IN ('Pending', 'Running', 'Compensating', 'Cancelling')
-            AND LastModifiedDate <= :now.addMinutes(-reclaimThresholdMinutes)
-            AND Workflow_Name__c NOT IN :pausedDefNames
-          WITH SYSTEM_MODE
-          ORDER BY LastModifiedDate ASC, Id ASC
-          LIMIT 50
-        ];
+        return;
+      }
+      Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
+      List<Workflow_Instance__c> candidates = [
+        SELECT
+          Id,
+          Name,
+          Status__c,
+          Current_Step__c,
+          Compensation_Stack__c,
+          Async_Job_Id__c,
+          Workflow_Name__c,
+          Correlation_Key__c
+        FROM Workflow_Instance__c
+        WHERE
+          Status__c IN ('Pending', 'Running', 'Compensating', 'Cancelling')
+          AND LastModifiedDate <= :now.addMinutes(-reclaimThresholdMinutes)
+          AND Workflow_Name__c NOT IN :pausedDefNames
+        WITH SYSTEM_MODE
+        ORDER BY LastModifiedDate ASC, Id ASC
+        LIMIT 50
+      ];
 
-        if (!candidates.isEmpty()) {
-          Set<Id> jobIds = new Set<Id>();
-          for (Workflow_Instance__c inst : candidates) {
-            if (String.isNotBlank(inst.Async_Job_Id__c)) {
-              String jobIdStr = inst.Async_Job_Id__c;
-              if (
-                (jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
-                (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))
-              ) {
-                try {
-                  jobIds.add((Id) jobIdStr);
-                } catch (Exception ignored) {
-                  // Malformed Async_Job_Id__c; skip the liveness check for this instance.
-                }
-              }
-            }
-          }
+      if (candidates.isEmpty()) {
+        return;
+      }
 
-          Set<Id> activeCronIds = new Set<Id>();
-          Set<Id> activeAsyncIds = new Set<Id>();
+      Set<Id> orphanIds = findOrphanCandidateIds(candidates);
+      if (orphanIds.isEmpty()) {
+        return;
+      }
 
-          Set<Id> cronIds = new Set<Id>();
-          Set<Id> asyncIds = new Set<Id>();
-          for (Id jobId : jobIds) {
-            if (jobId.getSobjectType() == CronTrigger.SObjectType) {
-              cronIds.add(jobId);
-            } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
-              asyncIds.add(jobId);
-            }
-          }
+      List<Workflow_Instance__c> lockedOrphans = [
+        SELECT
+          Id,
+          Name,
+          Status__c,
+          Current_Step__c,
+          Compensation_Stack__c,
+          Async_Job_Id__c,
+          Workflow_Name__c,
+          Correlation_Key__c,
+          LastModifiedDate
+        FROM Workflow_Instance__c
+        WHERE
+          Id IN :orphanIds
+          AND Status__c IN ('Pending', 'Running', 'Compensating', 'Cancelling')
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ];
 
-          if (!cronIds.isEmpty()) {
-            for (CronTrigger ct : [
-              SELECT Id
-              FROM CronTrigger
-              WHERE
-                Id IN :cronIds
-                AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING')
-              WITH SYSTEM_MODE
-            ]) {
-              activeCronIds.add(ct.Id);
-            }
-          }
+      if (lockedOrphans.isEmpty()) {
+        return;
+      }
 
-          if (!asyncIds.isEmpty()) {
-            for (AsyncApexJob aaj : [
-              SELECT Id
-              FROM AsyncApexJob
-              WHERE
-                Id IN :asyncIds
-                AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing')
-              WITH SYSTEM_MODE
-            ]) {
-              activeAsyncIds.add(aaj.Id);
-            }
-          }
+      // Re-check liveness of the locked candidates to make sure they didn't
+      // progress in the race window.
+      List<Workflow_Instance__c> confirmedOrphans = confirmLockedOrphans(
+        lockedOrphans,
+        now
+      );
 
-          Set<Id> orphanIds = new Set<Id>();
-          for (Workflow_Instance__c inst : candidates) {
-            Boolean isOrphaned = false;
-            if (String.isBlank(inst.Async_Job_Id__c)) {
-              isOrphaned = true;
-            } else {
-              String jobIdStr = inst.Async_Job_Id__c;
-              if (
-                (jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
-                (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))
-              ) {
-                try {
-                  Id jobId = (Id) jobIdStr;
-                  Boolean jobIsAlive = false;
-                  if (
-                    jobId.getSobjectType() == CronTrigger.SObjectType &&
-                    activeCronIds.contains(jobId)
-                  ) {
-                    jobIsAlive = true;
-                  } else if (
-                    jobId.getSobjectType() == AsyncApexJob.SObjectType &&
-                    activeAsyncIds.contains(jobId)
-                  ) {
-                    jobIsAlive = true;
-                  }
-                  if (!jobIsAlive) {
-                    isOrphaned = true;
-                  }
-                } catch (Exception ex) {
-                  isOrphaned = true;
-                }
-              } else {
-                isOrphaned = true;
-              }
-            }
-
-            if (isOrphaned) {
-              orphanIds.add(inst.Id);
-            }
-          }
-
-          if (!orphanIds.isEmpty()) {
-            List<Workflow_Instance__c> lockedOrphans = [
-              SELECT
-                Id,
-                Name,
-                Status__c,
-                Current_Step__c,
-                Compensation_Stack__c,
-                Async_Job_Id__c,
-                Workflow_Name__c,
-                Correlation_Key__c,
-                LastModifiedDate
-              FROM Workflow_Instance__c
-              WHERE
-                Id IN :orphanIds
-                AND Status__c IN (
-                  'Pending',
-                  'Running',
-                  'Compensating',
-                  'Cancelling'
-                )
-              WITH SYSTEM_MODE
-              FOR UPDATE
-            ];
-
-            if (!lockedOrphans.isEmpty()) {
-              // Re-check liveness of the locked candidates to make sure they didn't progress in the race window.
-              Set<Id> newJobIds = new Set<Id>();
-              for (Workflow_Instance__c inst : lockedOrphans) {
-                if (String.isNotBlank(inst.Async_Job_Id__c)) {
-                  String jobIdStr = inst.Async_Job_Id__c;
-                  if (
-                    (jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
-                    (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))
-                  ) {
-                    try {
-                      newJobIds.add((Id) jobIdStr);
-                    } catch (Exception ignored) {
-                      // Malformed Async_Job_Id__c; skip the liveness check for this instance.
-                    }
-                  }
-                }
-              }
-
-              Set<Id> lockedActiveCronIds = new Set<Id>();
-              Set<Id> lockedActiveAsyncIds = new Set<Id>();
-
-              Set<Id> newCronIds = new Set<Id>();
-              Set<Id> newAsyncIds = new Set<Id>();
-              for (Id jobId : newJobIds) {
-                if (jobId.getSobjectType() == CronTrigger.SObjectType) {
-                  newCronIds.add(jobId);
-                } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
-                  newAsyncIds.add(jobId);
-                }
-              }
-
-              if (!newCronIds.isEmpty()) {
-                for (CronTrigger ct : [
-                  SELECT Id
-                  FROM CronTrigger
-                  WHERE
-                    Id IN :newCronIds
-                    AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING')
-                  WITH SYSTEM_MODE
-                ]) {
-                  lockedActiveCronIds.add(ct.Id);
-                }
-              }
-
-              if (!newAsyncIds.isEmpty()) {
-                for (AsyncApexJob aaj : [
-                  SELECT Id
-                  FROM AsyncApexJob
-                  WHERE
-                    Id IN :newAsyncIds
-                    AND Status IN (
-                      'Queued',
-                      'Holding',
-                      'Preparing',
-                      'Processing'
-                    )
-                  WITH SYSTEM_MODE
-                ]) {
-                  lockedActiveAsyncIds.add(aaj.Id);
-                }
-              }
-
-              List<Workflow_Instance__c> confirmedOrphans = new List<Workflow_Instance__c>();
-              for (Workflow_Instance__c inst : lockedOrphans) {
-                if (
-                  inst.LastModifiedDate >
-                  now.addMinutes(-reclaimThresholdMinutes)
-                ) {
-                  continue; // legitimately progressed/touched recently
-                }
-
-                Boolean isOrphaned = false;
-                if (String.isBlank(inst.Async_Job_Id__c)) {
-                  isOrphaned = true;
-                } else {
-                  String jobIdStr = inst.Async_Job_Id__c;
-                  if (
-                    (jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
-                    (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707'))
-                  ) {
-                    try {
-                      Id jobId = (Id) jobIdStr;
-                      Boolean jobIsAlive = false;
-                      if (
-                        jobId.getSobjectType() == CronTrigger.SObjectType &&
-                        lockedActiveCronIds.contains(jobId)
-                      ) {
-                        jobIsAlive = true;
-                      } else if (
-                        jobId.getSobjectType() == AsyncApexJob.SObjectType &&
-                        lockedActiveAsyncIds.contains(jobId)
-                      ) {
-                        jobIsAlive = true;
-                      }
-                      if (!jobIsAlive) {
-                        isOrphaned = true;
-                      }
-                    } catch (Exception ex) {
-                      isOrphaned = true;
-                    }
-                  } else {
-                    isOrphaned = true;
-                  }
-                }
-
-                if (isOrphaned) {
-                  confirmedOrphans.add(inst);
-                }
-              }
-
-              if (!confirmedOrphans.isEmpty()) {
-                reclaimOrphanedInstances(confirmedOrphans);
-              }
-            }
-          }
-        }
+      if (!confirmedOrphans.isEmpty()) {
+        reclaimOrphanedInstances(confirmedOrphans);
       }
     } catch (Exception ignored) {
       // Best-effort sweep; a failure here must not abort the watchdog heartbeat.
     }
+  }
 
-    // Run proactive stall detection and alerting hook
-    try {
-      WorkflowAlertManager.detectAndAlertStalls();
-    } catch (Exception ignored) {
-      // Best-effort stall detection; a failure here must not abort the watchdog heartbeat.
+  // First-pass orphan detection: return the ids of candidate instances whose
+  // referenced async job is no longer alive.
+  private static Set<Id> findOrphanCandidateIds(
+    List<Workflow_Instance__c> candidates
+  ) {
+    Set<Id> activeJobIds = resolveActiveJobIds(collectValidJobIds(candidates));
+    Set<Id> orphanIds = new Set<Id>();
+    for (Workflow_Instance__c inst : candidates) {
+      if (isInstanceOrphaned(inst, activeJobIds)) {
+        orphanIds.add(inst.Id);
+      }
+    }
+    return orphanIds;
+  }
+
+  // Second-pass confirmation under the FOR UPDATE lock: drop any instance that
+  // progressed recently and re-check liveness of the rest.
+  private static List<Workflow_Instance__c> confirmLockedOrphans(
+    List<Workflow_Instance__c> lockedOrphans,
+    Datetime now
+  ) {
+    Set<Id> lockedActiveJobIds = resolveActiveJobIds(
+      collectValidJobIds(lockedOrphans)
+    );
+    List<Workflow_Instance__c> confirmedOrphans = new List<Workflow_Instance__c>();
+    for (Workflow_Instance__c inst : lockedOrphans) {
+      if (inst.LastModifiedDate > now.addMinutes(-reclaimThresholdMinutes)) {
+        continue; // legitimately progressed/touched recently
+      }
+      if (isInstanceOrphaned(inst, lockedActiveJobIds)) {
+        confirmedOrphans.add(inst);
+      }
+    }
+    return confirmedOrphans;
+  }
+
+  // Collect the well-formed CronTrigger/AsyncApexJob ids referenced by the given
+  // instances' Async_Job_Id__c.
+  private static Set<Id> collectValidJobIds(List<Workflow_Instance__c> insts) {
+    Set<Id> jobIds = new Set<Id>();
+    for (Workflow_Instance__c inst : insts) {
+      if (String.isBlank(inst.Async_Job_Id__c)) {
+        continue;
+      }
+      String jobIdStr = inst.Async_Job_Id__c;
+      if (
+        !((jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
+        (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707')))
+      ) {
+        continue;
+      }
+      try {
+        jobIds.add((Id) jobIdStr);
+      } catch (Exception ignored) {
+        // Malformed Async_Job_Id__c; skip the liveness check for this instance.
+      }
+    }
+    return jobIds;
+  }
+
+  // Resolve which of the given job ids are still alive (WAITING/ACQUIRED/QUEUED/
+  // EXECUTING crons or Queued/Holding/Preparing/Processing async jobs).
+  private static Set<Id> resolveActiveJobIds(Set<Id> jobIds) {
+    Set<Id> cronIds = new Set<Id>();
+    Set<Id> asyncIds = new Set<Id>();
+    for (Id jobId : jobIds) {
+      if (jobId.getSobjectType() == CronTrigger.SObjectType) {
+        cronIds.add(jobId);
+      } else if (jobId.getSobjectType() == AsyncApexJob.SObjectType) {
+        asyncIds.add(jobId);
+      }
     }
 
-    // All required heartbeat work (timed-out-step failures, sleep resumptions,
-    // and schedule sweeps) is now done, so the best-effort lifecycle publish
-    // runs last with no risk of starving a required update/enqueue of its DML budget.
-    WorkflowLifecyclePublisher.publish(watchdogTerminalInstances);
+    Set<Id> activeIds = new Set<Id>();
+    if (!cronIds.isEmpty()) {
+      for (CronTrigger ct : [
+        SELECT Id
+        FROM CronTrigger
+        WHERE
+          Id IN :cronIds
+          AND State IN ('WAITING', 'ACQUIRED', 'QUEUED', 'EXECUTING')
+        WITH SYSTEM_MODE
+      ]) {
+        activeIds.add(ct.Id);
+      }
+    }
+    if (!asyncIds.isEmpty()) {
+      for (AsyncApexJob aaj : [
+        SELECT Id
+        FROM AsyncApexJob
+        WHERE
+          Id IN :asyncIds
+          AND Status IN ('Queued', 'Holding', 'Preparing', 'Processing')
+        WITH SYSTEM_MODE
+      ]) {
+        activeIds.add(aaj.Id);
+      }
+    }
+    return activeIds;
+  }
+
+  // An instance is orphaned when it has no async job id, a malformed one, or a
+  // well-formed id that is not in the set of currently-alive jobs.
+  private static Boolean isInstanceOrphaned(
+    Workflow_Instance__c inst,
+    Set<Id> activeJobIds
+  ) {
+    if (String.isBlank(inst.Async_Job_Id__c)) {
+      return true;
+    }
+    String jobIdStr = inst.Async_Job_Id__c;
+    if (
+      !((jobIdStr.length() == 15 || jobIdStr.length() == 18) &&
+      (jobIdStr.startsWith('08e') || jobIdStr.startsWith('707')))
+    ) {
+      return true;
+    }
+    try {
+      Id jobId = (Id) jobIdStr;
+      return !activeJobIds.contains(jobId);
+    } catch (Exception ex) {
+      return true;
+    }
   }
 
   private static Integer getStepTimeoutSeconds(
