@@ -14528,40 +14528,77 @@ public inherited sharing class WorkflowEngine {
     List<Workflow_Instance__c> instances
   ) {
     for (Workflow_Instance__c instance : instances) {
-      if (
-        instance.Status__c == 'Compensating' ||
-        instance.Status__c == 'Cancelling'
-      ) {
-        if (String.isNotBlank(instance.Compensation_Stack__c)) {
-          List<String> stack = (List<String>) JSON.deserialize(
-            instance.Compensation_Stack__c,
-            List<String>.class
-          );
-          if (!stack.isEmpty()) {
-            scheduleTimeoutJobIfNeeded(
-              instance.Id,
-              stack[stack.size() - 1] + '_Compensate',
-              instance.Workflow_Name__c
-            );
-          }
-        }
-      } else if (String.isNotBlank(instance.Current_Step__c)) {
-        if (instance.Current_Step__c.contains(',')) {
-          for (String pStep : instance.Current_Step__c.split(',')) {
-            scheduleTimeoutJobIfNeeded(
-              instance.Id,
-              pStep.trim(),
-              instance.Workflow_Name__c
-            );
-          }
-        } else {
-          scheduleTimeoutJobIfNeeded(
-            instance.Id,
-            instance.Current_Step__c,
-            instance.Workflow_Name__c
-          );
-        }
-      }
+      armTimeoutJobsForInstance(instance);
+    }
+  }
+
+  /**
+   * Arms the timeout job(s) for a single instance's active work — the current
+   * compensation step for a compensating saga, otherwise the active step(s).
+   * @param instance the instance whose timeout jobs are armed
+   */
+  private static void armTimeoutJobsForInstance(
+    Workflow_Instance__c instance
+  ) {
+    if (
+      instance.Status__c == 'Compensating' ||
+      instance.Status__c == 'Cancelling'
+    ) {
+      armCompensationTimeoutJob(instance);
+      return;
+    }
+    if (String.isBlank(instance.Current_Step__c)) {
+      return;
+    }
+    armActiveStepTimeoutJobs(instance);
+  }
+
+  /**
+   * Arms the timeout job for the top of a compensating saga's compensation stack.
+   * @param instance the compensating/cancelling instance
+   */
+  private static void armCompensationTimeoutJob(
+    Workflow_Instance__c instance
+  ) {
+    if (String.isBlank(instance.Compensation_Stack__c)) {
+      return;
+    }
+    List<String> stack = (List<String>) JSON.deserialize(
+      instance.Compensation_Stack__c,
+      List<String>.class
+    );
+    if (stack.isEmpty()) {
+      return;
+    }
+    scheduleTimeoutJobIfNeeded(
+      instance.Id,
+      stack[stack.size() - 1] + '_Compensate',
+      instance.Workflow_Name__c
+    );
+  }
+
+  /**
+   * Arms timeout jobs for an instance's active step(s), fanning out over the
+   * comma-separated parallel steps when present.
+   * @param instance the running instance whose active step(s) are armed
+   */
+  private static void armActiveStepTimeoutJobs(
+    Workflow_Instance__c instance
+  ) {
+    if (!instance.Current_Step__c.contains(',')) {
+      scheduleTimeoutJobIfNeeded(
+        instance.Id,
+        instance.Current_Step__c,
+        instance.Workflow_Name__c
+      );
+      return;
+    }
+    for (String pStep : instance.Current_Step__c.split(',')) {
+      scheduleTimeoutJobIfNeeded(
+        instance.Id,
+        pStep.trim(),
+        instance.Workflow_Name__c
+      );
     }
   }
 
