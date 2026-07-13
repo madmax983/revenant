@@ -8545,43 +8545,32 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Sends an external signal with an optional caller-supplied idempotency key.
-   * When idempotencyKey is non-blank, at-most-once delivery is enforced per
-   * (instance, key) pair: a duplicate with the same key is swallowed as a
-   * successful no-op — no error is returned and no second wake-up fires. Dedup
-   * is constraint-based (unique Signal_Key__c per instance hash) so it holds
-   * across concurrent transactions without adding SOQL to the hot path.
-   * Passing null preserves the existing at-least-once behavior.
-   * @param req the signal request (keyOrId, signalName, payload and optional
-   * idempotencyKey); when idempotencyKey is null, at-least-once behavior applies
+   * Tests whether the given key-or-id string is a Workflow_Instance__c record id
+   * (15/18-char id-shaped and carrying the object's key prefix).
+   * @param keyOrId the correlation key or instance id supplied by the caller
+   * @return true when the value is a workflow instance id
    */
-  public static void signal(SignalRequest req) {
-    String keyOrId = req.keyOrId;
-    String signalName = req.signalName;
-    String payload = req.payload;
-    String idempotencyKey = req.idempotencyKey;
+  private static Boolean isInstanceId(String keyOrId) {
     String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
         SObjectDescribeOptions.DEFERRED
       )
       .getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
-    Boolean isId =
-      String.isNotBlank(keyOrId) &&
+    return String.isNotBlank(keyOrId) &&
       idPattern.matcher(keyOrId).matches() &&
       keyOrId.startsWith(wflowPrefix);
-    Id targetId = isId ? (Id) keyOrId : null;
+  }
 
-    // A Cancel signal must also be able to reach a stalled rollback (CompensationFailed)
-    // so cancellation can resume it to completion or force it terminal. Other signals keep
-    // the active-only lookup — a stalled rollback is not a forward-signal target.
-    Boolean isCancelSignal =
-      String.isNotBlank(signalName) &&
-      (signalName.equalsIgnoreCase('Cancel') ||
-      signalName.equalsIgnoreCase('CancelWorkflow'));
-    // 'Paused' is included in both branches so a signal reaches a parked instance:
-    // a forward signal is held (Received) and re-observed on resume, and a Cancel
-    // signal can still cancel a paused instance (matching the bulk signal path).
-    List<String> lookupStatuses = isCancelSignal
+  /**
+   * Resolves the instance statuses eligible to receive a signal. A Cancel signal
+   * must also reach a stalled rollback (CompensationFailed) so cancellation can
+   * resume or force it terminal; other signals keep the active-only lookup.
+   * 'Paused' is included in both so a signal reaches a parked instance.
+   * @param isCancelSignal true when the signal is a cancellation
+   * @return the statuses eligible for the signal lookup
+   */
+  private static List<String> signalLookupStatuses(Boolean isCancelSignal) {
+    return isCancelSignal
       ? new List<String>{
           'Pending',
           'Running',
@@ -8597,10 +8586,26 @@ public inherited sharing class WorkflowEngine {
           'Cancelling',
           'Paused'
         };
+  }
 
+  /**
+   * Locks (FOR UPDATE) the single signal target instance, preferring an id match
+   * (queried first so a correlation key equal to an id string cannot shadow it)
+   * and falling back to a correlation-key match.
+   * @param keyOrId the correlation key or instance id
+   * @param isId true when keyOrId is a workflow instance id
+   * @param lookupStatuses the statuses eligible for the lookup
+   * @return the matched instance in a (possibly empty) single-element list
+   */
+  private static List<Workflow_Instance__c> findSignalTargetInstances(
+    String keyOrId,
+    Boolean isId,
+    List<String> lookupStatuses
+  ) {
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
     if (isId) {
       // Query by ID first to prevent matching a correlation key that equals this ID string
+      Id targetId = (Id) keyOrId;
       instances = [
         SELECT
           Id,
@@ -8631,77 +8636,91 @@ public inherited sharing class WorkflowEngine {
         FOR UPDATE
       ];
     }
+    return instances;
+  }
 
-    if (instances.isEmpty()) {
-      if (isCancelSignal) {
-        // A keyed cancel with no active match is an idempotent no-op: either the
-        // first delivery already drove the instance terminal (and a duplicate is
-        // now arriving) or there is nothing to cancel. Swallow rather than throw
-        // so an at-least-once redelivered keyed cancel never faults the publisher.
-        if (String.isNotBlank(idempotencyKey)) {
-          return;
-        }
-        throw new WorkflowException(
-          'No active workflow found with key or ID: ' + keyOrId
-        );
-      }
-      // Non-cancel signal with no active match: capture as Unrouted so it is
-      // never silently lost and can be re-delivered by an operator.
-      captureUnroutedSignals(
-        new List<SignalRequest>{
-          new SignalRequest(keyOrId, signalName, payload)
-            .withIdempotencyKey(idempotencyKey)
-        }
-      );
-      return;
-    }
-
-    Workflow_Instance__c instance = instances[0];
-
-    if (
-      signalName.equalsIgnoreCase('Cancel') ||
-      signalName.equalsIgnoreCase('CancelWorkflow')
-    ) {
-      Boolean runCompensations = parseRunCompensations(payload);
-      // A keyed cancel is deduped via a Consumed tombstone so an at-least-once
-      // redelivery runs cancellation at most once. The claim and the cancellation
-      // share one savepoint: if cancel() fails the tombstone is rolled back so a
-      // retry of the same key re-attempts cancellation rather than no-op'ing on a
-      // claim for a cancel that never completed. A duplicate (DUPLICATE_VALUE on
-      // the per-instance hash) is a silent no-op.
-      if (String.isNotBlank(idempotencyKey)) {
-        Savepoint sp = Database.setSavepoint();
-        if (!claimKeyedCancel(instance.Id, signalName, idempotencyKey)) {
-          return;
-        }
-        try {
-          cancelInstance(instance.Id, runCompensations);
-        } catch (Exception e) {
-          Database.rollback(sp);
-          throw e;
-        }
+  /**
+   * Handles a signal that matched no active instance. A keyed cancel with no
+   * match is an idempotent no-op; an unkeyed cancel throws; a non-cancel signal
+   * is captured as Unrouted so it is never silently lost.
+   * @param req the original signal request
+   * @param isCancelSignal true when the signal is a cancellation
+   */
+  private static void handleUnmatchedSignal(
+    SignalRequest req,
+    Boolean isCancelSignal
+  ) {
+    if (isCancelSignal) {
+      // A keyed cancel with no active match is an idempotent no-op: either the
+      // first delivery already drove the instance terminal (and a duplicate is
+      // now arriving) or there is nothing to cancel. Swallow rather than throw
+      // so an at-least-once redelivered keyed cancel never faults the publisher.
+      if (String.isNotBlank(req.idempotencyKey)) {
         return;
       }
-      cancelInstance(instance.Id, runCompensations);
+      throw new WorkflowException(
+        'No active workflow found with key or ID: ' + req.keyOrId
+      );
+    }
+    // Non-cancel signal with no active match: capture as Unrouted so it is
+    // never silently lost and can be re-delivered by an operator.
+    captureUnroutedSignals(
+      new List<SignalRequest>{
+        new SignalRequest(req.keyOrId, req.signalName, req.payload)
+          .withIdempotencyKey(req.idempotencyKey)
+      }
+    );
+  }
+
+  /**
+   * Delivers a cancellation signal to a matched instance. A keyed cancel is
+   * deduped via a Consumed tombstone sharing one savepoint with the cancel, so
+   * an at-least-once redelivery runs cancellation at most once; a duplicate is a
+   * silent no-op.
+   * @param instance the matched target instance
+   * @param req the cancellation signal request
+   */
+  private static void handleCancelSignal(
+    Workflow_Instance__c instance,
+    SignalRequest req
+  ) {
+    Boolean runCompensations = parseRunCompensations(req.payload);
+    if (String.isNotBlank(req.idempotencyKey)) {
+      Savepoint sp = Database.setSavepoint();
+      if (!claimKeyedCancel(instance.Id, req.signalName, req.idempotencyKey)) {
+        return;
+      }
+      try {
+        cancelInstance(instance.Id, runCompensations);
+      } catch (Exception e) {
+        Database.rollback(sp);
+        throw e;
+      }
       return;
     }
+    cancelInstance(instance.Id, runCompensations);
+  }
 
-    // Insert the signal record. When a caller-supplied idempotency key is present,
-    // store a per-instance-scoped hash on Signal_Key__c and catch DUPLICATE_VALUE
-    // to treat a repeat delivery as an idempotent no-op (no row, no wake-up).
+  /**
+   * Inserts the Received signal record and wakes the instance. When a caller
+   * idempotency key is present, the row insert and wake-up share one savepoint
+   * (unique Signal_Key__c makes a duplicate insert a silent no-op; a failed
+   * wake-up rolls the row back so a retry re-inserts and re-wakes).
+   * @param instance the matched target instance
+   * @param req the signal request being delivered
+   */
+  private static void deliverSignal(
+    Workflow_Instance__c instance,
+    SignalRequest req
+  ) {
     Workflow_Signal__c sig = new Workflow_Signal__c();
     sig.Workflow_Instance__c = instance.Id;
-    sig.Signal_Name__c = signalName;
-    sig.Payload__c = payload;
+    sig.Signal_Name__c = req.signalName;
+    sig.Payload__c = req.payload;
     sig.Status__c = 'Received';
 
-    if (String.isNotBlank(idempotencyKey)) {
-      // Keyed delivery: the row insert and the wake-up share one savepoint. The
-      // unique Signal_Key__c makes a duplicate insert a silent no-op; if the
-      // wake-up then fails, the row is rolled back so a retry of the same key
-      // re-inserts and re-wakes rather than no-op'ing on a Received signal left
-      // stranded on a still-Suspended instance.
-      sig.Signal_Key__c = deriveSignalDedupKey(instance.Id, idempotencyKey);
+    if (String.isNotBlank(req.idempotencyKey)) {
+      sig.Signal_Key__c = deriveSignalDedupKey(instance.Id, req.idempotencyKey);
       Savepoint sp = Database.setSavepoint();
       try {
         Database.insert(sig, true, AccessLevel.SYSTEM_MODE);
@@ -8723,6 +8742,58 @@ public inherited sharing class WorkflowEngine {
 
     Database.insert(sig, true, AccessLevel.SYSTEM_MODE);
     wakeInstanceForSignal(instance);
+  }
+
+  /**
+   * Sends an external signal with an optional caller-supplied idempotency key.
+   * When idempotencyKey is non-blank, at-most-once delivery is enforced per
+   * (instance, key) pair: a duplicate with the same key is swallowed as a
+   * successful no-op — no error is returned and no second wake-up fires. Dedup
+   * is constraint-based (unique Signal_Key__c per instance hash) so it holds
+   * across concurrent transactions without adding SOQL to the hot path.
+   * Passing null preserves the existing at-least-once behavior.
+   * @param req the signal request (keyOrId, signalName, payload and optional
+   * idempotencyKey); when idempotencyKey is null, at-least-once behavior applies
+   */
+  public static void signal(SignalRequest req) {
+    String keyOrId = req.keyOrId;
+    String signalName = req.signalName;
+    Boolean isId = isInstanceId(keyOrId);
+
+    // A Cancel signal must also be able to reach a stalled rollback (CompensationFailed)
+    // so cancellation can resume it to completion or force it terminal. Other signals keep
+    // the active-only lookup — a stalled rollback is not a forward-signal target.
+    // 'Paused' is included in both branches so a signal reaches a parked instance:
+    // a forward signal is held (Received) and re-observed on resume, and a Cancel
+    // signal can still cancel a paused instance (matching the bulk signal path).
+    Boolean isCancelSignal = isCancelSignalName(signalName);
+    List<String> lookupStatuses = signalLookupStatuses(isCancelSignal);
+
+    List<Workflow_Instance__c> instances = findSignalTargetInstances(
+      keyOrId,
+      isId,
+      lookupStatuses
+    );
+
+    if (instances.isEmpty()) {
+      handleUnmatchedSignal(req, isCancelSignal);
+      return;
+    }
+
+    Workflow_Instance__c instance = instances[0];
+
+    if (
+      signalName.equalsIgnoreCase('Cancel') ||
+      signalName.equalsIgnoreCase('CancelWorkflow')
+    ) {
+      handleCancelSignal(instance, req);
+      return;
+    }
+
+    // Insert the signal record. When a caller-supplied idempotency key is present,
+    // store a per-instance-scoped hash on Signal_Key__c and catch DUPLICATE_VALUE
+    // to treat a repeat delivery as an idempotent no-op (no row, no wake-up).
+    deliverSignal(instance, req);
   }
 
   /**
