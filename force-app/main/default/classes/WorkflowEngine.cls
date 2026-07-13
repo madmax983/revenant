@@ -13118,33 +13118,8 @@ public inherited sharing class WorkflowEngine {
    */
   public static List<String> resolvePayloads(List<String> rawValues) {
     Map<Integer, Id> markerDocByIndex = new Map<Integer, Id>();
-    Set<Id> docIds = new Set<Id>();
-    for (Integer i = 0; i < rawValues.size(); i++) {
-      String v = rawValues[i];
-      if (String.isNotBlank(v) && v.startsWith('{"$attachmentId":')) {
-        try {
-          Map<String, Object> marker = (Map<String, Object>) JSON.deserializeUntyped(
-            v
-          );
-          Id docId = (Id) marker.get('$attachmentId');
-          markerDocByIndex.put(i, docId);
-          docIds.add(docId);
-        } catch (Exception ignored) {
-          // Not a valid offload marker; leave this entry to pass through as-is.
-        }
-      }
-    }
-    Map<Id, String> resolvedByDoc = new Map<Id, String>();
-    if (!docIds.isEmpty()) {
-      for (ContentVersion cv : [
-        SELECT ContentDocumentId, VersionData
-        FROM ContentVersion
-        WHERE ContentDocumentId IN :docIds AND IsLatest = TRUE
-        WITH SYSTEM_MODE
-      ]) {
-        resolvedByDoc.put(cv.ContentDocumentId, cv.VersionData.toString());
-      }
-    }
+    Set<Id> docIds = collectOffloadMarkers(rawValues, markerDocByIndex);
+    Map<Id, String> resolvedByDoc = queryResolvedDocs(docIds);
     List<String> out = new List<String>();
     for (Integer i = 0; i < rawValues.size(); i++) {
       Id docId = markerDocByIndex.get(i);
@@ -13155,6 +13130,58 @@ public inherited sharing class WorkflowEngine {
       );
     }
     return out;
+  }
+
+  /**
+   * Scans raw values for `{"$attachmentId":...}` offload markers, recording each
+   * marker's document id by index and collecting the distinct document ids.
+   * @param rawValues the raw payload values (inline or offload markers)
+   * @param markerDocByIndex out-param mapping each marker's index to its doc id
+   * @return the distinct offloaded ContentDocument ids to resolve
+   */
+  private static Set<Id> collectOffloadMarkers(
+    List<String> rawValues,
+    Map<Integer, Id> markerDocByIndex
+  ) {
+    Set<Id> docIds = new Set<Id>();
+    for (Integer i = 0; i < rawValues.size(); i++) {
+      String v = rawValues[i];
+      if (!(String.isNotBlank(v) && v.startsWith('{"$attachmentId":'))) {
+        continue;
+      }
+      try {
+        Map<String, Object> marker = (Map<String, Object>) JSON.deserializeUntyped(
+          v
+        );
+        Id docId = (Id) marker.get('$attachmentId');
+        markerDocByIndex.put(i, docId);
+        docIds.add(docId);
+      } catch (Exception ignored) {
+        // Not a valid offload marker; leave this entry to pass through as-is.
+      }
+    }
+    return docIds;
+  }
+
+  /**
+   * Bulk-resolves the latest ContentVersion text for the given document ids.
+   * @param docIds the offloaded ContentDocument ids to resolve
+   * @return a map of document id to its resolved payload text (empty when none)
+   */
+  private static Map<Id, String> queryResolvedDocs(Set<Id> docIds) {
+    Map<Id, String> resolvedByDoc = new Map<Id, String>();
+    if (docIds.isEmpty()) {
+      return resolvedByDoc;
+    }
+    for (ContentVersion cv : [
+      SELECT ContentDocumentId, VersionData
+      FROM ContentVersion
+      WHERE ContentDocumentId IN :docIds AND IsLatest = TRUE
+      WITH SYSTEM_MODE
+    ]) {
+      resolvedByDoc.put(cv.ContentDocumentId, cv.VersionData.toString());
+    }
+    return resolvedByDoc;
   }
 
   /**
