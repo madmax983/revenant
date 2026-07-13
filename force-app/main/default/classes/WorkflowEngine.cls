@@ -12609,27 +12609,40 @@ public inherited sharing class WorkflowEngine {
    * request so the platform event trigger drives the steps asynchronously.
    * @param requests the orchestrator requests to enqueue
    */
-  public static void enqueueOrchestrators(List<OrchestratorRequest> requests) {
-    WorkflowWatchdog.bootstrap();
-    if (Test.isRunningTest()) {
-      if (disableQueueableInTest) {
-        return;
-      }
-      Set<Id> instanceIds = new Set<Id>();
-      for (OrchestratorRequest req : requests) {
-        instanceIds.add(req.instanceId);
-      }
-      for (Id instId : instanceIds) {
-        try {
-          if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
-            System.enqueueJob(new WorkflowOrchestrator(instId));
-          }
-        } catch (Exception ignored) {
-          // Best-effort enqueue; the watchdog re-drives any instance left un-enqueued.
-        }
-      }
+  /**
+   * Under test, enqueues one orchestrator job per distinct instance directly
+   * (best-effort, honoring the queueable limit) rather than via platform events.
+   * @param requests the orchestrator requests to dispatch
+   */
+  private static void enqueueOrchestratorsInTest(
+    List<OrchestratorRequest> requests
+  ) {
+    if (disableQueueableInTest) {
       return;
     }
+    Set<Id> instanceIds = new Set<Id>();
+    for (OrchestratorRequest req : requests) {
+      instanceIds.add(req.instanceId);
+    }
+    for (Id instId : instanceIds) {
+      try {
+        if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+          System.enqueueJob(new WorkflowOrchestrator(instId));
+        }
+      } catch (Exception ignored) {
+        // Best-effort enqueue; the watchdog re-drives any instance left un-enqueued.
+      }
+    }
+  }
+
+  /**
+   * Builds the RUN_STEP platform events for a batch of orchestrator requests.
+   * @param requests the orchestrator requests
+   * @return the events to publish
+   */
+  private static List<Workflow_Event__e> buildOrchestratorEvents(
+    List<OrchestratorRequest> requests
+  ) {
     List<Workflow_Event__e> events = new List<Workflow_Event__e>();
     for (OrchestratorRequest req : requests) {
       events.add(
@@ -12640,20 +12653,19 @@ public inherited sharing class WorkflowEngine {
         )
       );
     }
+    return events;
+  }
+
+  public static void enqueueOrchestrators(List<OrchestratorRequest> requests) {
+    WorkflowWatchdog.bootstrap();
+    if (Test.isRunningTest()) {
+      enqueueOrchestratorsInTest(requests);
+      return;
+    }
+    List<Workflow_Event__e> events = buildOrchestratorEvents(requests);
     if (!events.isEmpty()) {
       List<Database.SaveResult> srs = EventBus.publish(events);
-      for (Database.SaveResult sr : srs) {
-        if (!sr.isSuccess()) {
-          List<String> errMsgs = new List<String>();
-          for (Database.Error err : sr.getErrors()) {
-            errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
-          }
-          throw new WorkflowException(
-            'Failed to publish orchestrator event: ' +
-            String.join(errMsgs, ', ')
-          );
-        }
-      }
+      throwOnPublishErrors(srs, 'Failed to publish orchestrator event: ');
     }
   }
 
