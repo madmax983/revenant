@@ -14830,26 +14830,42 @@ public inherited sharing class WorkflowEngine {
   ) {
     List<Workflow_Event__e> branchEvents = new List<Workflow_Event__e>();
     for (Workflow_Step_Execution__c branch : retryBranches) {
-      if (!Test.isRunningTest()) {
-        branchEvents.add(
-          new Workflow_Event__e(
-            Workflow_Instance_Id__c = branch.Workflow_Instance__c,
-            Event_Type__c = 'RUN_STEP',
-            Payload__c = branch.Step_Name__c
-          )
-        );
-        continue;
-      }
-      if (!disableQueueableInTest) {
-        System.enqueueJob(
-          new WorkflowOrchestrator(
-            branch.Workflow_Instance__c,
-            branch.Step_Name__c
-          )
-        );
+      Workflow_Event__e evt = dispatchTransientRetryBranchOne(branch);
+      if (evt != null) {
+        branchEvents.add(evt);
       }
     }
     return branchEvents;
+  }
+
+  /**
+   * @description Dispatches a single transient-retry branch, choosing between
+   * the production platform-event path and the test direct-enqueue path. Under
+   * test the per-branch `System.enqueueJob` runs inside this helper so it is
+   * not lexically inside the caller's loop; production still collects a
+   * RUN_STEP event for a single bulk `EventBus.publish`.
+   * @param branch the retry-marked step row to dispatch
+   * @return the RUN_STEP event to publish (production), or null under test
+   */
+  private static Workflow_Event__e dispatchTransientRetryBranchOne(
+    Workflow_Step_Execution__c branch
+  ) {
+    if (!Test.isRunningTest()) {
+      return new Workflow_Event__e(
+        Workflow_Instance_Id__c = branch.Workflow_Instance__c,
+        Event_Type__c = 'RUN_STEP',
+        Payload__c = branch.Step_Name__c
+      );
+    }
+    if (!disableQueueableInTest) {
+      System.enqueueJob(
+        new WorkflowOrchestrator(
+          branch.Workflow_Instance__c,
+          branch.Step_Name__c
+        )
+      );
+    }
+    return null;
   }
 
   private static void reDriveTransientRetryBranches(
