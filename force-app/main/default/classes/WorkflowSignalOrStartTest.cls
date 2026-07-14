@@ -44,7 +44,7 @@ public class WorkflowSignalOrStartTest {
      * @return A complete result if approved, otherwise a wait-for-approval result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal sig = ctx.getSignal('Approve:MySignal');
+      StepContext.Signal sig = ctx.signals().getSignal('Approve:MySignal');
       if (sig.isPresent()) {
         return StepResult.complete(null, 'ResumedWith_' + sig.payload);
       }

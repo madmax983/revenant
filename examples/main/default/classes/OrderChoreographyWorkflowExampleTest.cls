@@ -4,7 +4,7 @@
  *
  * Proves the producer-side effectively-once guarantee end-to-end: the shipping
  * step is forced through >=3 re-executions (yield -> retry -> complete) before
- * its COMPLETE commits, calling ctx.emit() on every one of them. A hand-rolled
+ * its COMPLETE commits, calling ctx.events().emit() on every one of them. A hand-rolled
  * EventBus.publish() in execute() would start workflow B three times. With the
  * engine coupling the publish to the COMPLETE commit, B is started exactly once.
  */

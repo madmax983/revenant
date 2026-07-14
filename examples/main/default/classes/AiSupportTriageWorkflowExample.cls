@@ -61,7 +61,7 @@ public with sharing class AiSupportTriageWorkflowExample {
     public String getNextStep(String currentStep, StepResult result) {
       if (currentStep == 'AiSupportTriageWorkflowExample.AiClassifyStep') {
         Map<String, Object> out = (Map<String, Object>) JSON.deserializeUntyped(
-          result.outputJson
+          result.directive().outputJson
         );
         String classification = (String) out.get('classification');
         if (classification == 'billing') {

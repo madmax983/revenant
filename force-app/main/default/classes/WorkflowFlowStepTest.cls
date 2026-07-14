@@ -253,16 +253,16 @@ public class WorkflowFlowStepTest {
 
       System.assertEquals(
         StepResult.ActionType.COMPLETE,
-        result.action,
+        result.directive().action,
         'Action type should be COMPLETE'
       );
       System.assertNotEquals(
         null,
-        result.outputJson,
+        result.directive().outputJson,
         'Output JSON should not be null'
       );
       Map<String, Object> outputMap = (Map<String, Object>) JSON.deserializeUntyped(
-        result.outputJson
+        result.directive().outputJson
       );
       System.assertEquals(
         'HelloFlow',
@@ -299,7 +299,10 @@ public class WorkflowFlowStepTest {
       // 2. First execution
       WorkflowFlowStep step = new WorkflowFlowStep();
       StepResult result1 = step.execute(ctx1);
-      System.assertEquals(StepResult.ActionType.COMPLETE, result1.action);
+      System.assertEquals(
+        StepResult.ActionType.COMPLETE,
+        result1.directive().action
+      );
 
       // Verify 1 Account was inserted
       System.assertEquals(
@@ -308,7 +311,7 @@ public class WorkflowFlowStepTest {
       );
 
       // 3. Serialize captured values from first run
-      String capturedJson = ctx1.getCapturedValuesJson();
+      String capturedJson = ctx1.captures().getCapturedValuesJson();
       System.assertNotEquals(null, capturedJson);
 
       // 4. Create StepContext for second execution, seeded with the captured values from the first execution
@@ -331,7 +334,10 @@ public class WorkflowFlowStepTest {
 
       // 5. Second execution
       StepResult result2 = step.execute(ctx2);
-      System.assertEquals(StepResult.ActionType.COMPLETE, result2.action);
+      System.assertEquals(
+        StepResult.ActionType.COMPLETE,
+        result2.directive().action
+      );
       Test.stopTest();
 
       // Verify that NO second Account was inserted! Count remains 1.
@@ -415,7 +421,10 @@ public class WorkflowFlowStepTest {
       StepResult result = step.execute(ctx);
       Test.stopTest();
 
-      Assert.areEqual(StepResult.ActionType.COMPLETE, result.action);
+      Assert.areEqual(
+        StepResult.ActionType.COMPLETE,
+        result.directive().action
+      );
     }
   }
 
@@ -457,10 +466,13 @@ public class WorkflowFlowStepTest {
       StepResult result = step.execute(ctx);
       Test.stopTest();
 
-      Assert.areEqual(StepResult.ActionType.COMPLETE, result.action);
-      Assert.isNotNull(result.outputJson);
+      Assert.areEqual(
+        StepResult.ActionType.COMPLETE,
+        result.directive().action
+      );
+      Assert.isNotNull(result.directive().outputJson);
       Map<String, Object> outputMap = (Map<String, Object>) JSON.deserializeUntyped(
-        result.outputJson
+        result.directive().outputJson
       );
       Assert.areEqual('CachedValue', outputMap.get('outputVal'));
     }

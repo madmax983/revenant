@@ -325,7 +325,7 @@ public class WorkflowEngineMocksBTest {
           ctx.stepStateJson
         );
       }
-      return StepResult.sleep(10, 'resumed_state');
+      return StepResult.sleep(10).withStepState('resumed_state');
     }
   }
 
@@ -492,7 +492,7 @@ public class WorkflowEngineMocksBTest {
      * @return The StepResult describing the outcome of compensation.
      */
     public StepResult compensate(StepContext ctx) {
-      ctx.getSignal('CompSig');
+      ctx.signals().getSignal('CompSig');
       HttpRequest req = new HttpRequest();
       req.setEndpoint('https://example.com/rollback');
       req.setMethod('POST');
@@ -522,7 +522,7 @@ public class WorkflowEngineMocksBTest {
      * @return The StepResult describing the outcome of compensation.
      */
     public StepResult compensate(StepContext ctx) {
-      if (!ctx.hasSignal('Rollback')) {
+      if (!ctx.signals().hasSignal('Rollback')) {
         return StepResult.suspend();
       }
       return StepResult.complete(null, 'CompensatedAfterSignal');
@@ -785,7 +785,7 @@ public class WorkflowEngineMocksBTest {
       WorkflowEngineMocksATest.dynamicObservedStates.add(
         new Map<String, Object>{
           'attempt' => ctx.attempt,
-          'maxAttempts' => ctx.maxAttempts,
+          'maxAttempts' => ctx.retry().maxAttempts,
           'isFinalAttempt' => ctx.isFinalAttempt()
         }
       );
@@ -818,7 +818,7 @@ public class WorkflowEngineMocksBTest {
       WorkflowEngineMocksBTest.compensationObservedStates.add(
         new Map<String, Object>{
           'attempt' => ctx.attempt,
-          'maxAttempts' => ctx.maxAttempts,
+          'maxAttempts' => ctx.retry().maxAttempts,
           'isFinalAttempt' => ctx.isFinalAttempt()
         }
       );
@@ -850,7 +850,7 @@ public class WorkflowEngineMocksBTest {
       WorkflowEngineMocksBTest.loopObservedStates.add(
         new Map<String, Object>{
           'attempt' => ctx.attempt,
-          'maxAttempts' => ctx.maxAttempts
+          'maxAttempts' => ctx.retry().maxAttempts
         }
       );
       WorkflowEngineMocksBTest.loopCounter++;
@@ -877,10 +877,10 @@ public class WorkflowEngineMocksBTest {
      */
     public StepResult execute(StepContext ctx) {
       if (String.isBlank(ctx.stepStateJson)) {
-        ctx.reportProgress(20.0, 'Step 1: Yielding first');
+        ctx.progress().reportProgress(20.0, 'Step 1: Yielding first');
         return StepResult.yield('{"yieldedOnce": true}');
       }
-      ctx.reportProgress(50.0, 'Step 1: Done');
+      ctx.progress().reportProgress(50.0, 'Step 1: Done');
       return StepResult.complete(
         'WorkflowEngineMocksATest.ProgressStep2',
         'Output1'
@@ -1133,12 +1133,13 @@ public class WorkflowEngineMocksBTest {
      * @return The StepResult describing the outcome of this step.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.log(
-        StepContext.Level.INFO,
-        'Step 1 execution started',
-        new Map<String, Object>{ 'status' => 'init' }
-      );
-      ctx.log(StepContext.Level.WARN, 'Step 1 warning encountered');
+      ctx.logger()
+        .log(
+          StepContext.Level.INFO,
+          'Step 1 execution started',
+          new Map<String, Object>{ 'status' => 'init' }
+        );
+      ctx.logger().log(StepContext.Level.WARN, 'Step 1 warning encountered');
       return StepResult.complete(null, 'Success');
     }
   }
@@ -1153,7 +1154,7 @@ public class WorkflowEngineMocksBTest {
      * @return The StepResult describing the outcome of this step.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.log(StepContext.Level.INFO, 'This should not be saved');
+      ctx.logger().log(StepContext.Level.INFO, 'This should not be saved');
       throw new WorkflowEngine.WorkflowException('Simulated Failure');
     }
   }
@@ -1435,7 +1436,7 @@ public class WorkflowEngineMocksBTest {
      * @return The StepResult describing the outcome of this step.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.getSignals('TestSignal');
+      ctx.signals().getSignals('TestSignal');
       Workflow_Instance__c inst = [
         SELECT Id, Current_Step__c
         FROM Workflow_Instance__c
@@ -1597,15 +1598,15 @@ public class WorkflowEngineMocksBTest {
       WorkflowEngineMocksBTest.routedStepsRun.add('RetryableHandlerStep');
       WorkflowEngineMocksBTest.routedStepContextData.put(
         'failedStepName',
-        ctx.failedStepName
+        ctx.retry().failedStepName
       );
       WorkflowEngineMocksBTest.routedStepContextData.put(
         'errorMessage',
-        ctx.errorMessage
+        ctx.retry().errorMessage
       );
       WorkflowEngineMocksBTest.routedStepContextData.put(
         'attemptCount',
-        ctx.attemptCount
+        ctx.retry().attemptCount
       );
       return StepResult.complete(null, 'HandlerDone');
     }

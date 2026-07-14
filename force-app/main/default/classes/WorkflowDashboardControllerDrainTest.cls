@@ -452,7 +452,7 @@ public class WorkflowDashboardControllerDrainTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Test.startTest();
-      Map<String, Object> result = WorkflowDashboardController.redeliverSignal(
+      Map<String, Object> result = WorkflowDashboardCommandController.redeliverSignal(
         sig.Id
       );
       Test.stopTest();
@@ -487,7 +487,7 @@ public class WorkflowDashboardControllerDrainTest {
       insert sig;
 
       Test.startTest();
-      Map<String, Object> result = WorkflowDashboardController.redeliverSignal(
+      Map<String, Object> result = WorkflowDashboardCommandController.redeliverSignal(
         sig.Id
       );
       Test.stopTest();
@@ -542,7 +542,7 @@ public class WorkflowDashboardControllerDrainTest {
           );
         }
         try {
-          WorkflowDashboardController.redeliverSignal(null);
+          WorkflowDashboardCommandController.redeliverSignal(null);
           System.assert(false, 'Expected AuraHandledException');
         } catch (AuraHandledException e) {
           System.assert(

@@ -564,7 +564,10 @@ public class CleanupWorkflowTest {
       Test.stopTest();
 
       // Verify it completed because it processed the single candidate successfully
-      System.assertEquals(StepResult.ActionType.COMPLETE, purgeResult.action);
+      System.assertEquals(
+        StepResult.ActionType.COMPLETE,
+        purgeResult.directive().action
+      );
 
       // Verify all 105 files and links were deleted
       List<ContentDocumentLink> remainingLinks = [

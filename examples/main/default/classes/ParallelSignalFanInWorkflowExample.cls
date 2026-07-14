@@ -5,14 +5,14 @@
  * A step running as one branch of a parallel SPLIT atomically CLAIMS each signal
  * it reads (Received -> Processing, promoted to Consumed at COMPLETE) so two
  * sibling branches can never both process the same payload. For governor safety
- * the claim is bounded: each per-name ctx.getSignal(name) / ctx.hasSignal(name)
+ * the claim is bounded: each per-name ctx.signals().getSignal(name) / ctx.signals().hasSignal(name)
  * spends one claim DML statement (and one FOR UPDATE lock query), so a fan-in
  * branch that probes many distinct names one-by-one approaches the DML-statement
  * / SOQL limits and, past the engine's internal per-branch budget, degrades to
  * at-least-once (it reads the overflow names without claiming).
  *
  * The recommended primitive for multi-name inspection is therefore a SINGLE
- * ctx.getSignals() call: it claims the whole pending page in one statement and
+ * ctx.signals().getSignals() call: it claims the whole pending page in one statement and
  * filters in memory, keeping the read exactly-once and within limits no matter
  * how many distinct names the branch cares about. CollectorBranch below shows
  * the pattern.
@@ -84,7 +84,7 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
      * @return A suspend result until kicked, or a split into the two branches.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal kick = ctx.getSignal('Kick');
+      StepContext.Signal kick = ctx.signals().getSignal('Kick');
       if (!kick.isPresent()) {
         // Nothing to gather yet -- suspend until the fan-out is kicked off.
         return StepResult.suspend();
@@ -102,9 +102,9 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
   /**
    * The fan-in branch. It needs to inspect several DISTINCT signal names (here,
    * one acknowledgement per upstream worker/region). Instead of issuing a
-   * separate ctx.getSignal('Ack:US'), ctx.getSignal('Ack:EU'), ... per name --
+   * separate ctx.signals().getSignal('Ack:US'), ctx.signals().getSignal('Ack:EU'), ... per name --
    * each its own claim statement that can spill past the per-branch budget into
-   * at-least-once -- it calls ctx.getSignals() ONCE (a single exactly-once claim
+   * at-least-once -- it calls ctx.signals().getSignals() ONCE (a single exactly-once claim
    * page) and filters the result in memory.
    *
    * It also waits for the WHOLE expected set: if only a subset of acks has been
@@ -142,7 +142,8 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
       // fill the still-missing names with name-scoped reads before deciding to
       // suspend (see fillMissingAcksViaScopedReads).
       if (
-        received.size() < EXPECTED_ACK_NAMES.size() && ctx.signalReadWasCapped()
+        received.size() < EXPECTED_ACK_NAMES.size() &&
+        ctx.signals().signalReadWasCapped()
       ) {
         fillMissingAcksViaScopedReads(ctx, received);
       }
@@ -175,7 +176,7 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
     // scope the read per name instead.
     private Map<String, String> collectExpectedAcks(StepContext ctx) {
       Map<String, String> received = new Map<String, String>();
-      for (StepContext.Signal s : ctx.getSignals()) {
+      for (StepContext.Signal s : ctx.signals().getSignals()) {
         String name = (s.name == null) ? null : s.name.toLowerCase();
         if (!EXPECTED_ACK_NAMES.contains(name)) {
           continue;
@@ -198,7 +199,7 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
     // whole oldest-first page, so an unscoped read never reaches 'Ack:EU' /
     // 'Ack:APAC'. Plain suspend would roll the claims back and re-read the
     // SAME oldest page on every re-drive, stranding the branch forever.
-    // ctx.signalReadWasCapped() detects exactly this truncation. When it
+    // ctx.signals().signalReadWasCapped() detects exactly this truncation. When it
     // fires, fall back to a NAME-SCOPED read per missing name: a per-name
     // query filters on Signal_Name__c, so it is not starved by a different
     // name's backlog and reaches the buried acks directly. This stays
@@ -212,7 +213,7 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
         if (received.containsKey(expected)) {
           continue;
         }
-        StepContext.Signal scoped = ctx.getSignal(expected);
+        StepContext.Signal scoped = ctx.signals().getSignal(expected);
         if (scoped.isPresent()) {
           received.put(expected, scoped.name);
         }

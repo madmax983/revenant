@@ -973,7 +973,7 @@ public class WorkflowPauseTest {
   static void testControllerPauseDefinition() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
-      WorkflowDashboardController.pauseDefinition(
+      WorkflowDashboardCommandController.pauseDefinition(
         'WorkflowPauseTest.TwoStepWorkflow',
         'Controller test'
       );
@@ -1001,7 +1001,7 @@ public class WorkflowPauseTest {
       );
 
       Test.startTest();
-      WorkflowDashboardController.resumeDefinition(
+      WorkflowDashboardCommandController.resumeDefinition(
         'WorkflowPauseTest.TwoStepWorkflow'
       );
       Test.stopTest();

@@ -6199,7 +6199,7 @@ public inherited sharing class WorkflowEngine {
     if (context == null) {
       return;
     }
-    Set<Id> claimedIds = context.getClaimedSignalIds();
+    Set<Id> claimedIds = context.signals().getClaimedSignalIds();
     if (claimedIds == null || claimedIds.isEmpty()) {
       return;
     }
@@ -6297,8 +6297,10 @@ public inherited sharing class WorkflowEngine {
     StepContext context,
     Map<Id, Workflow_Signal__c> toConsume
   ) {
-    Set<String> matchedNames = orEmptyStrings(context.getConsumedSignalNames());
-    Set<Id> matchedIds = orEmptyIds(context.getConsumedSignalIds());
+    Set<String> matchedNames = orEmptyStrings(
+      context.signals().getConsumedSignalNames()
+    );
+    Set<Id> matchedIds = orEmptyIds(context.signals().getConsumedSignalIds());
     Integer remaining = 9000 - toConsume.size();
     if (matchedNames.isEmpty() || remaining <= 0) {
       return;
@@ -6334,7 +6336,7 @@ public inherited sharing class WorkflowEngine {
 
   /**
    * Marks the signals a step matched consumed at its successful transition.
-   * The exact rows the step observed/claimed (context.getConsumedSignalIds())
+   * The exact rows the step observed/claimed (context.signals().getConsumedSignalIds())
    * are consumed FIRST so they can never be starved by the row cap when a name
    * has a large backlog of duplicates; only then is any remaining budget spent
    * cleaning up same-name at-least-once duplicates (including one delivered
@@ -6373,9 +6375,11 @@ public inherited sharing class WorkflowEngine {
     if (context == null) {
       return;
     }
-    Set<Id> matchedIds = orEmptyIds(context.getConsumedSignalIds());
-    Set<Id> claimedIds = orEmptyIds(context.getClaimedSignalIds());
-    Set<String> matchedNames = orEmptyStrings(context.getConsumedSignalNames());
+    Set<Id> matchedIds = orEmptyIds(context.signals().getConsumedSignalIds());
+    Set<Id> claimedIds = orEmptyIds(context.signals().getClaimedSignalIds());
+    Set<String> matchedNames = orEmptyStrings(
+      context.signals().getConsumedSignalNames()
+    );
     // A step that matched nothing triggers no query, keeping non-signal steps cheap.
     if (matchedIds.isEmpty() && matchedNames.isEmpty()) {
       return;
@@ -6394,7 +6398,7 @@ public inherited sharing class WorkflowEngine {
     // the whole execution, so if ANY name's read was capped, duplicate cleanup is
     // suppressed for EVERY matched name -- those names degrade to at-least-once. The
     // cap only triggers at pathological scale, where at-least-once is the contract.
-    if (!parallelBranch && !context.signalReadWasCapped()) {
+    if (!parallelBranch && !context.signals().signalReadWasCapped()) {
       addDuplicateConsumable(instanceId, context, toConsume);
     }
 
@@ -6461,7 +6465,7 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Publishes the union of the events a step buffered via ctx.emit() and those
+   * Publishes the union of the events a step buffered via ctx.events().emit() and those
    * handed to StepResult.complete(next, output, events), coupled to the step's
    * COMPLETE/SPLIT transition commit (issue #64). Called only from the COMPLETE
    * and SPLIT paths, in the same transaction as the Completed record write, so
@@ -6479,14 +6483,14 @@ public inherited sharing class WorkflowEngine {
     // Filter null entries from both sources: a null SObject in the EventBus
     // publish list throws before any per-row SaveResult, which the publisher then
     // swallows (fire-and-forget) — silently dropping every valid event in the
-    // same batch. ctx.emit(null) is already ignored at the buffer; do the same
+    // same batch. ctx.events().emit(null) is already ignored at the buffer; do the same
     // for the complete(..., events) overload, where an author may have built the
     // list conditionally.
     if (context != null) {
-      addNonNullEvents(context.getPendingEmits(), events);
+      addNonNullEvents(context.events().getPendingEmits(), events);
     }
     if (result != null) {
-      addNonNullEvents(result.outboundEvents, events);
+      addNonNullEvents(result.directive().outboundEvents, events);
     }
     if (events.isEmpty()) {
       return;
@@ -6620,8 +6624,8 @@ public inherited sharing class WorkflowEngine {
   ) {
     StepContext context = outcome.context;
     Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    if (context != null && context.isProgressReported()) {
-      String progJson = context.getProgressJson();
+    if (context != null && context.progress().isProgressReported()) {
+      String progJson = context.progress().getProgressJson();
       freshInstance.Progress__c = savePayloadIfNeeded(
         freshInstance.Id,
         progJson,
@@ -6707,8 +6711,8 @@ public inherited sharing class WorkflowEngine {
     StepContext context = outcome.context;
     Workflow_Step_Execution__c stepExec = outcome.stepExec;
     Workflow_Instance__c instance = outcome.instance;
-    if (context.hasNewCaptures()) {
-      String capturedJson = context.getCapturedValuesJson();
+    if (context.captures().hasNewCaptures()) {
+      String capturedJson = context.captures().getCapturedValuesJson();
       stepExec.Captured_Values__c = savePayloadIfNeeded(
         instance.Id,
         capturedJson,
@@ -6730,7 +6734,7 @@ public inherited sharing class WorkflowEngine {
   private static Boolean dispatchTerminalOrAdvanceOutcome(
     StepOutcomeContext outcome
   ) {
-    StepResult.ActionType action = outcome.result.action;
+    StepResult.ActionType action = outcome.result.directive().action;
     if (action == StepResult.ActionType.COMPLETE) {
       handleCompleteOutcome(outcome);
       return true;
@@ -6756,7 +6760,7 @@ public inherited sharing class WorkflowEngine {
 
   // Handlers that suspend the instance awaiting an external event.
   private static void dispatchSuspendingOutcome(StepOutcomeContext outcome) {
-    StepResult.ActionType action = outcome.result.action;
+    StepResult.ActionType action = outcome.result.directive().action;
     if (action == StepResult.ActionType.YIELD) {
       handleYieldOutcome(outcome);
     } else if (action == StepResult.ActionType.SUSPEND) {
@@ -6783,7 +6787,7 @@ public inherited sharing class WorkflowEngine {
     stepExec.Status__c = 'Completed';
     stepExec.Output__c = savePayloadIfNeeded(
       instance.Id,
-      result.outputJson,
+      result.directive().outputJson,
       'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     saveStepExec(stepExec);
@@ -6858,7 +6862,11 @@ public inherited sharing class WorkflowEngine {
 
     if (String.isBlank(nextStepName)) {
       // Workflow is finished
-      completeWorkflowInstance(instance, result.outputJson, 'Output_Final');
+      completeWorkflowInstance(
+        instance,
+        result.directive().outputJson,
+        'Output_Final'
+      );
       return;
     }
 
@@ -7197,7 +7205,7 @@ public inherited sharing class WorkflowEngine {
     stepExec.Status__c = 'Running';
     stepExec.Output__c = savePayloadIfNeeded(
       instance.Id,
-      result.stepStateJson,
+      result.directive().stepStateJson,
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     saveStepExec(stepExec);
@@ -7221,19 +7229,21 @@ public inherited sharing class WorkflowEngine {
     }
     stepExec.Status__c = 'Pending';
     String suspendStateJson;
-    if (String.isNotBlank(result.timeoutStep)) {
+    if (String.isNotBlank(result.directive().timeout.step)) {
       // Timed suspend (issue #35): persist the fallback step in a reserved key
       // so the watchdog can route to it when the deadline elapses.
       suspendStateJson = JSON.serialize(
-        new Map<String, Object>{ '$timeoutStep' => result.timeoutStep }
+        new Map<String, Object>{
+          '$timeoutStep' => result.directive().timeout.step
+        }
       );
       instance.Sleep_Until__c = DateTime.now()
-        .addSeconds(result.timeoutSeconds);
+        .addSeconds(result.directive().timeout.seconds);
     } else {
       // Explicit stepStateJson is preserved; no-arg suspend() nulls Output__c so
       // stale yield checkpoints from a prior YIELD in the same execution don't
       // survive into a retry and cause duplicate-spawn collisions.
-      suspendStateJson = result.stepStateJson;
+      suspendStateJson = result.directive().stepStateJson;
       // A plain (deadline-less) suspend must not inherit a stale timer left by
       // an earlier timed wait or a manual resume, or the watchdog would wake it
       // early. Reset the deadline defensively (issue #35).
@@ -7271,18 +7281,18 @@ public inherited sharing class WorkflowEngine {
     stepExec.Status__c = 'Pending';
     stepExec.Output__c = savePayloadIfNeeded(
       instance.Id,
-      result.stepStateJson,
+      result.directive().stepStateJson,
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     saveStepExec(stepExec);
 
     instance.Status__c = 'Suspended';
     instance.Sleep_Until__c = DateTime.now()
-      .addSeconds(result.sleepDurationSeconds);
+      .addSeconds(result.directive().sleepDurationSeconds);
     instance.Async_Job_Id__c = scheduleSleepResume(
       instance.Id,
       stepExec.Step_Name__c,
-      result.sleepDurationSeconds
+      result.directive().sleepDurationSeconds
     );
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
   }
@@ -7308,8 +7318,8 @@ public inherited sharing class WorkflowEngine {
     }
     stepExec.Status__c = 'Pending';
     Map<String, Object> childInfo = new Map<String, Object>{
-      'childWorkflowName' => result.childWorkflowName,
-      'childCorrelationKey' => result.childCorrelationKey
+      'childWorkflowName' => result.directive().childWorkflowName,
+      'childCorrelationKey' => result.directive().childCorrelationKey
     };
     stepExec.Output__c = savePayloadIfNeeded(
       instance.Id,
@@ -7327,9 +7337,9 @@ public inherited sharing class WorkflowEngine {
 
     ChildWorkflowStartRequest childReq = new ChildWorkflowStartRequest();
     childReq.parentId = instance.Id;
-    childReq.workflowName = result.childWorkflowName;
-    childReq.correlationKey = result.childCorrelationKey;
-    childReq.inputJson = result.childInputJson;
+    childReq.workflowName = result.directive().childWorkflowName;
+    childReq.correlationKey = result.directive().childCorrelationKey;
+    childReq.inputJson = result.directive().childInputJson;
     startChildWorkflow(childReq);
   }
 
@@ -7340,7 +7350,10 @@ public inherited sharing class WorkflowEngine {
     StepResult result = outcome.result;
     StepContext context = outcome.context;
     Boolean isParallel = outcome.isParallel;
-    if (result.childRequests == null || result.childRequests.isEmpty()) {
+    if (
+      result.directive().childRequests == null ||
+      result.directive().childRequests.isEmpty()
+    ) {
       throw new WorkflowException(
         'START_CHILDREN action requires at least one child request.'
       );
@@ -7350,7 +7363,7 @@ public inherited sharing class WorkflowEngine {
     }
     stepExec.Status__c = 'Pending';
     List<String> childKeys = new List<String>();
-    for (StepResult.ChildRequest req : result.childRequests) {
+    for (StepResult.ChildRequest req : result.directive().childRequests) {
       childKeys.add(req.correlationKey);
     }
     Map<String, Object> state = new Map<String, Object>{
@@ -7370,7 +7383,7 @@ public inherited sharing class WorkflowEngine {
       instance.Correlation_Key__c
     );
 
-    startChildWorkflows(instance.Id, result.childRequests);
+    startChildWorkflows(instance.Id, result.directive().childRequests);
   }
 
   // WAIT_FOR_APPROVAL: suspend awaiting an approval signal.
@@ -7386,14 +7399,14 @@ public inherited sharing class WorkflowEngine {
     stepExec.Status__c = 'Pending';
     Map<String, Object> state = new Map<String, Object>{
       'waitingForApproval' => true,
-      'approvalKey' => result.approvalKey,
-      'approvalRole' => result.approvalRole
+      'approvalKey' => result.directive().approvalKey,
+      'approvalRole' => result.directive().approvalRole
     };
-    if (String.isNotBlank(result.timeoutStep)) {
+    if (String.isNotBlank(result.directive().timeout.step)) {
       // Timed approval (issue #35): add fallback step so watchdog can route.
-      state.put('$timeoutStep', result.timeoutStep);
+      state.put('$timeoutStep', result.directive().timeout.step);
       instance.Sleep_Until__c = DateTime.now()
-        .addSeconds(result.timeoutSeconds);
+        .addSeconds(result.directive().timeout.seconds);
     } else {
       // A deadline-less approval wait must not inherit a stale timer left by an
       // earlier timed wait or a manual resume (issue #35).
@@ -7423,9 +7436,9 @@ public inherited sharing class WorkflowEngine {
     stepExec.Status__c = 'Completed';
     stepExec.Output__c = savePayloadIfNeeded(
       instance.Id,
-      result.parallelInputJson != null
-        ? result.parallelInputJson
-        : result.outputJson,
+      result.directive().parallelInputJson != null
+        ? result.directive().parallelInputJson
+        : result.directive().outputJson,
       'Output_Split_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     saveStepExec(stepExec);
@@ -7437,21 +7450,24 @@ public inherited sharing class WorkflowEngine {
     // duplicate cleanup.
     markSignalsConsumed(instance.Id, context, false);
 
-    String parallelStepsStr = String.join(result.parallelStepNames, ',');
+    String parallelStepsStr = String.join(
+      result.directive().parallelStepNames,
+      ','
+    );
     instance.Current_Step__c = parallelStepsStr;
     instance.Status__c = 'Running';
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     List<Workflow_Step_Execution__c> parallelExecs = new List<Workflow_Step_Execution__c>();
-    for (String ps : result.parallelStepNames) {
+    for (String ps : result.directive().parallelStepNames) {
       Workflow_Step_Execution__c pe = new Workflow_Step_Execution__c();
       pe.Workflow_Instance__c = instance.Id;
       pe.Step_Name__c = ps;
       pe.Status__c = 'Pending';
       pe.Input__c = savePayloadIfNeeded(
         instance.Id,
-        result.parallelInputJson != null
-          ? result.parallelInputJson
+        result.directive().parallelInputJson != null
+          ? result.directive().parallelInputJson
           : stepExec.Output__c,
         'Input_Parallel_' + ps.replaceAll('[^a-zA-Z0-9]', '_')
       );
@@ -7468,7 +7484,7 @@ public inherited sharing class WorkflowEngine {
     Database.insert(parallelExecs, true, AccessLevel.SYSTEM_MODE);
 
     scheduleTimeoutJobForInstance(instance.Id);
-    for (String ps : result.parallelStepNames) {
+    for (String ps : result.directive().parallelStepNames) {
       enqueueOrchestrator(instance.Id, ps);
     }
 
@@ -7496,7 +7512,7 @@ public inherited sharing class WorkflowEngine {
     stepExec.Retry_Count__c += 1;
 
     // Get and sanitize retry policy
-    RetryPolicy policy = sanitizePolicy(result.retryPolicy);
+    RetryPolicy policy = sanitizePolicy(result.directive().retry.policy);
 
     Map<String, Object> captures = new Map<String, Object>();
     if (String.isNotBlank(stepExec.Captured_Values__c)) {
@@ -7569,7 +7585,7 @@ public inherited sharing class WorkflowEngine {
     stepExec.Status__c = 'ContinuedAsNew';
     stepExec.Output__c = savePayloadIfNeeded(
       instance.Id,
-      result.nextInputJson,
+      result.directive().continuation.nextInputJson,
       'ContinueInput_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     saveStepExec(stepExec);
@@ -7577,7 +7593,7 @@ public inherited sharing class WorkflowEngine {
     // Resolve the new correlation key
     String newKey = resolveContinueAsNewKey(
       instance.Correlation_Key__c,
-      result.newCorrelationKey
+      result.directive().continuation.newCorrelationKey
     );
 
     // Mark current instance as ContinuedAsNew
@@ -7715,7 +7731,7 @@ public inherited sharing class WorkflowEngine {
     // Set input and save payload
     nextInstance.Input__c = savePayloadIfNeeded(
       nextInstance.Id,
-      result.nextInputJson,
+      result.directive().continuation.nextInputJson,
       'Input_' + nextInstance.Id
     );
 
@@ -7789,9 +7805,11 @@ public inherited sharing class WorkflowEngine {
     // Plain-text schema matches RETRY/crash paths. When failureData is present
     // the raw JSON is appended on a second line for downstream inspection without
     // needing to detect a JSON envelope.
-    stepExec.Error_Details__c = (result.failureDataJson != null)
-      ? result.failureReason + '\nfailureData: ' + result.failureDataJson
-      : result.failureReason;
+    stepExec.Error_Details__c = (result.directive().failureDataJson != null)
+      ? result.directive().failureReason +
+        '\nfailureData: ' +
+        result.directive().failureDataJson
+      : result.directive().failureReason;
     saveStepExec(stepExec);
 
     // Publish any domain events the step buffered via StepContext.emit() before
@@ -7802,7 +7820,7 @@ public inherited sharing class WorkflowEngine {
     FailInstanceRequest explicitFailReq = new FailInstanceRequest();
     explicitFailReq.instanceId = instance.Id;
     explicitFailReq.stepName = stepExec.Step_Name__c;
-    explicitFailReq.errorMessage = result.failureReason;
+    explicitFailReq.errorMessage = result.directive().failureReason;
     explicitFailReq.failureCategory = CAT_EXPLICIT_FAIL;
     failWorkflowInstance(explicitFailReq);
   }
@@ -11328,9 +11346,9 @@ public inherited sharing class WorkflowEngine {
     String suppliedOutputJson = run.suppliedOutputJson;
 
     StepResult mockResult = new StepResult();
-    mockResult.action = StepResult.ActionType.COMPLETE;
-    mockResult.nextStepName = 'SENTINEL_NEXT_STEP';
-    mockResult.outputJson = suppliedOutputJson;
+    mockResult.directive().action = StepResult.ActionType.COMPLETE;
+    mockResult.directive().nextStepName = 'SENTINEL_NEXT_STEP';
+    mockResult.directive().outputJson = suppliedOutputJson;
     String nextStepName;
     if (run.def instanceof VersionedWorkflow) {
       nextStepName = ((VersionedWorkflow) run.def)
@@ -12484,7 +12502,7 @@ public inherited sharing class WorkflowEngine {
     );
     persistCompensationProgressAndCaptures(outcome, instance);
 
-    StepResult.ActionType action = outcome.result.action;
+    StepResult.ActionType action = outcome.result.directive().action;
     if (action == StepResult.ActionType.COMPLETE) {
       handleCompensationComplete(outcome, instance);
     } else if (action == StepResult.ActionType.YIELD) {
@@ -12550,8 +12568,8 @@ public inherited sharing class WorkflowEngine {
   ) {
     Workflow_Step_Execution__c stepExec = outcome.stepExec;
     StepContext context = outcome.context;
-    if (context != null && context.isProgressReported()) {
-      String progJson = context.getProgressJson();
+    if (context != null && context.progress().isProgressReported()) {
+      String progJson = context.progress().getProgressJson();
       instance.Progress__c = savePayloadIfNeeded(
         instance.Id,
         progJson,
@@ -12563,8 +12581,8 @@ public inherited sharing class WorkflowEngine {
     }
 
     // Persist capture-once values produced during this compensation execution.
-    if (context.hasNewCaptures()) {
-      String capturedJson = context.getCapturedValuesJson();
+    if (context.captures().hasNewCaptures()) {
+      String capturedJson = context.captures().getCapturedValuesJson();
       stepExec.Captured_Values__c = savePayloadIfNeeded(
         instance.Id,
         capturedJson,
@@ -12609,7 +12627,7 @@ public inherited sharing class WorkflowEngine {
     stepExec.Status__c = 'Compensated';
     stepExec.Output__c = savePayloadIfNeeded(
       instance.Id,
-      result.outputJson,
+      result.directive().outputJson,
       'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     saveStepExec(stepExec);
@@ -12621,7 +12639,7 @@ public inherited sharing class WorkflowEngine {
     markSignalsConsumed(instance.Id, context, false);
 
     // Effectively-once outbound emit from compensation (issue #64): a
-    // CompensatableStep.compensate() that calls ctx.emit() or the
+    // CompensatableStep.compensate() that calls ctx.events().emit() or the
     // complete(..., events) overload publishes here, coupled to the durable
     // Compensated transition — the same commit-coupling as the forward path,
     // so the public emit API does not silently drop events in rollback flows.
@@ -12661,7 +12679,7 @@ public inherited sharing class WorkflowEngine {
     stepExec.Status__c = 'Running';
     stepExec.Output__c = savePayloadIfNeeded(
       instance.Id,
-      result.stepStateJson,
+      result.directive().stepStateJson,
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     saveStepExec(stepExec);
@@ -12680,10 +12698,10 @@ public inherited sharing class WorkflowEngine {
     StepResult result = outcome.result;
     // Note: timed-wait timeout is not supported in compensation steps and is not armed here.
     stepExec.Status__c = 'Pending';
-    stepExec.Output__c = String.isNotBlank(result.stepStateJson)
+    stepExec.Output__c = String.isNotBlank(result.directive().stepStateJson)
       ? savePayloadIfNeeded(
           instance.Id,
-          result.stepStateJson,
+          result.directive().stepStateJson,
           'State_Suspend_' +
           stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
         )
@@ -12702,18 +12720,18 @@ public inherited sharing class WorkflowEngine {
     stepExec.Status__c = 'Pending';
     stepExec.Output__c = savePayloadIfNeeded(
       instance.Id,
-      result.stepStateJson,
+      result.directive().stepStateJson,
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     saveStepExec(stepExec);
     instance.Status__c = 'Suspended';
-    if (result.sleepDurationSeconds != null) {
+    if (result.directive().sleepDurationSeconds != null) {
       instance.Sleep_Until__c = DateTime.now()
-        .addSeconds(result.sleepDurationSeconds);
+        .addSeconds(result.directive().sleepDurationSeconds);
       instance.Async_Job_Id__c = scheduleSleepResume(
         instance.Id,
         stepExec.Step_Name__c,
-        result.sleepDurationSeconds
+        result.directive().sleepDurationSeconds
       );
     }
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
@@ -12729,8 +12747,8 @@ public inherited sharing class WorkflowEngine {
     stepExec.Status__c = 'Pending';
     Map<String, Object> state = new Map<String, Object>{
       'waitingForApproval' => true,
-      'approvalKey' => result.approvalKey,
-      'approvalRole' => result.approvalRole
+      'approvalKey' => result.directive().approvalKey,
+      'approvalRole' => result.directive().approvalRole
     };
     stepExec.Output__c = savePayloadIfNeeded(
       instance.Id,
@@ -12750,7 +12768,7 @@ public inherited sharing class WorkflowEngine {
     StepResult result = outcome.result;
     stepExec.Retry_Count__c += 1;
     // Get and sanitize retry policy
-    RetryPolicy policy = sanitizePolicy(result.retryPolicy);
+    RetryPolicy policy = sanitizePolicy(result.directive().retry.policy);
 
     Map<String, Object> captures = new Map<String, Object>();
     if (String.isNotBlank(stepExec.Captured_Values__c)) {
@@ -12822,9 +12840,11 @@ public inherited sharing class WorkflowEngine {
     // with the author's reason, preserving the remaining LIFO stack for operator
     // resume. Same format as the RETRY-exhausted and thrown-exception paths.
     stepExec.Status__c = 'Failed';
-    stepExec.Error_Details__c = (result.failureDataJson != null)
-      ? result.failureReason + '\nfailureData: ' + result.failureDataJson
-      : result.failureReason;
+    stepExec.Error_Details__c = (result.directive().failureDataJson != null)
+      ? result.directive().failureReason +
+        '\nfailureData: ' +
+        result.directive().failureDataJson
+      : result.directive().failureReason;
     saveStepExec(stepExec);
 
     failCompensationRecoverable(
@@ -12832,7 +12852,7 @@ public inherited sharing class WorkflowEngine {
       'Rollback incomplete: compensation step ' +
         stepExec.Step_Name__c +
         ' failed: ' +
-        result.failureReason
+        result.directive().failureReason
     );
   }
 
@@ -12845,7 +12865,7 @@ public inherited sharing class WorkflowEngine {
     stepExec.Status__c = 'Failed';
     stepExec.Error_Details__c =
       'Unsupported compensation action: ' +
-      (result != null ? result.action : null);
+      (result != null ? result.directive().action : null);
     saveStepExec(stepExec);
 
     // Remaining stack is intact; leave the saga recoverable rather than abandoning it.
@@ -16626,7 +16646,7 @@ public inherited sharing class WorkflowEngine {
     if (context == null || stepExec == null || instance == null) {
       return;
     }
-    List<StepContext.Breadcrumb> crumbs = context.getBreadcrumbs();
+    List<StepContext.Breadcrumb> crumbs = context.logger().getBreadcrumbs();
     if (crumbs == null || crumbs.isEmpty()) {
       return;
     }
@@ -16674,10 +16694,12 @@ public inherited sharing class WorkflowEngine {
       return 0;
     }
     Integer dynamicRowReserve = 0;
-    dynamicRowReserve += reserveForChildRequests(result.childRequests);
+    dynamicRowReserve += reserveForChildRequests(
+      result.directive().childRequests
+    );
     dynamicRowReserve += reserveForParallelSteps(result, outcome.stepExec);
-    if (result.outboundEvents != null) {
-      dynamicRowReserve += result.outboundEvents.size();
+    if (result.directive().outboundEvents != null) {
+      dynamicRowReserve += result.directive().outboundEvents.size();
     }
     dynamicRowReserve += computeSignalCleanupRowReserve(outcome);
     return dynamicRowReserve;
@@ -16704,13 +16726,13 @@ public inherited sharing class WorkflowEngine {
     Workflow_Step_Execution__c stepExec
   ) {
     Integer reserve = 0;
-    if (result.parallelStepNames == null) {
+    if (result.directive().parallelStepNames == null) {
       return reserve;
     }
-    for (String ps : result.parallelStepNames) {
+    for (String ps : result.directive().parallelStepNames) {
       reserve += 1;
-      String inputPayload = result.parallelInputJson != null
-        ? result.parallelInputJson
+      String inputPayload = result.directive().parallelInputJson != null
+        ? result.directive().parallelInputJson
         : stepExec.Output__c;
       if (String.isNotBlank(inputPayload) && inputPayload.length() > 100000) {
         reserve += 2; // ContentVersion + ContentDocumentLink
@@ -16728,21 +16750,22 @@ public inherited sharing class WorkflowEngine {
     StepResult result = outcome.result;
     StepContext context = outcome.context;
     Workflow_Instance__c instance = outcome.instance;
-    Boolean willConsumeSignals = (result.action ==
+    Boolean willConsumeSignals = (result.directive().action ==
     StepResult.ActionType.COMPLETE ||
-    result.action == StepResult.ActionType.SPLIT ||
-    result.action == StepResult.ActionType.FAIL);
+    result.directive().action == StepResult.ActionType.SPLIT ||
+    result.directive().action == StepResult.ActionType.FAIL);
     if (!willConsumeSignals) {
       return 0;
     }
-    Set<String> matchedNames = context.getConsumedSignalNames();
+    Set<String> matchedNames = context.signals().getConsumedSignalNames();
     if (matchedNames == null || matchedNames.isEmpty()) {
       return 0;
     }
     Boolean isParallel =
       String.isNotBlank(instance.Current_Step__c) &&
       instance.Current_Step__c.contains(',');
-    Boolean runDuplicateCleanup = !isParallel && !context.signalReadWasCapped();
+    Boolean runDuplicateCleanup =
+      !isParallel && !context.signals().signalReadWasCapped();
     if (runDuplicateCleanup) {
       return reserveForDuplicateCleanup(instance, context, matchedNames);
     }
@@ -16763,7 +16786,7 @@ public inherited sharing class WorkflowEngine {
         AND Signal_Name__c IN :matchedNames
       WITH SYSTEM_MODE
     ];
-    Set<Id> claimedIds = context.getClaimedSignalIds();
+    Set<Id> claimedIds = context.signals().getClaimedSignalIds();
     if (claimedIds != null && !claimedIds.isEmpty()) {
       reserve += [
         SELECT COUNT()
@@ -16776,8 +16799,8 @@ public inherited sharing class WorkflowEngine {
   }
 
   private static Integer reserveForConsumedSignals(StepContext context) {
-    Set<Id> consumedIds = context.getConsumedSignalIds();
-    Set<Id> claimedIds = context.getClaimedSignalIds();
+    Set<Id> consumedIds = context.signals().getConsumedSignalIds();
+    Set<Id> claimedIds = context.signals().getClaimedSignalIds();
     Set<Id> allIds = new Set<Id>();
     if (consumedIds != null) {
       allIds.addAll(consumedIds);

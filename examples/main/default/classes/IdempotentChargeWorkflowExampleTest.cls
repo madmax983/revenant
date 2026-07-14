@@ -113,7 +113,7 @@ public class IdempotentChargeWorkflowExampleTest {
         StepResult res = new IdempotentChargeWorkflowExample.ChargePaymentStep()
           .execute(ctx);
         Map<String, Object> out = (Map<String, Object>) JSON.deserializeUntyped(
-          res.outputJson
+          res.directive().outputJson
         );
         System.assertEquals(
           firstChargeId,
@@ -185,11 +185,13 @@ public class IdempotentChargeWorkflowExampleTest {
       Map<String, Object> outZero = (Map<String, Object>) JSON.deserializeUntyped(
         new IdempotentChargeWorkflowExample.ChargePaymentStep()
           .execute(visitZero)
+          .directive()
           .outputJson
       );
       Map<String, Object> outOne = (Map<String, Object>) JSON.deserializeUntyped(
         new IdempotentChargeWorkflowExample.ChargePaymentStep()
           .execute(visitOne)
+          .directive()
           .outputJson
       );
 
@@ -230,12 +232,12 @@ public class IdempotentChargeWorkflowExampleTest {
         .execute(ctx1);
       System.assertEquals(
         null,
-        res1.nextStepName,
+        res1.directive().nextStepName,
         'Terminal step should have no routing target'
       );
 
       Map<String, Object> out1 = (Map<String, Object>) JSON.deserializeUntyped(
-        res1.outputJson
+        res1.directive().outputJson
       );
       System.assertEquals(3500, (Integer) out1.get('amountCents'));
       System.assertEquals(false, (Boolean) out1.get('deduplicated'));
@@ -259,7 +261,7 @@ public class IdempotentChargeWorkflowExampleTest {
       StepResult res2 = new IdempotentChargeWorkflowExample.ChargePaymentStep()
         .execute(ctx2);
       Map<String, Object> out2 = (Map<String, Object>) JSON.deserializeUntyped(
-        res2.outputJson
+        res2.directive().outputJson
       );
       System.assertEquals(3500, (Integer) out2.get('amountCents'));
       System.assertEquals(

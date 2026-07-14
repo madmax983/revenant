@@ -60,7 +60,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Go');
+      StepContext.Signal s = ctx.signals().getSignal('Go');
       if (!s.isPresent()) {
         return StepResult.suspend();
       }
@@ -84,7 +84,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      if (!ctx.getSignal('Resume').isPresent()) {
+      if (!ctx.signals().getSignal('Resume').isPresent()) {
         return StepResult.suspend();
       }
       return StepResult.complete(null, 'resumed');
@@ -206,7 +206,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Kick');
+      StepContext.Signal s = ctx.signals().getSignal('Kick');
       if (!s.isPresent()) {
         return StepResult.suspend();
       }
@@ -231,7 +231,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('ProbeA');
+      StepContext.Signal s = ctx.signals().getSignal('ProbeA');
       String status = '';
       if (s.isPresent()) {
         status = [
@@ -257,7 +257,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('ProbeB');
+      StepContext.Signal s = ctx.signals().getSignal('ProbeB');
       String status = '';
       if (s.isPresent()) {
         status = [
@@ -389,7 +389,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Kick');
+      StepContext.Signal s = ctx.signals().getSignal('Kick');
       if (!s.isPresent()) {
         return StepResult.suspend();
       }
@@ -422,7 +422,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.getSignal('CTSig');
+      ctx.signals().getSignal('CTSig');
       HttpRequest req = new HttpRequest();
       req.setEndpoint('https://example.com/probe');
       req.setMethod('GET');
@@ -560,7 +560,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Kick');
+      StepContext.Signal s = ctx.signals().getSignal('Kick');
       if (!s.isPresent()) {
         return StepResult.suspend();
       }
@@ -586,9 +586,9 @@ public class StepContextSignalEngineBranchTest {
     public StepResult execute(StepContext ctx) {
       // Claim the older 'Foo' first, then read the full list. The merged-in
       // claimed Foo must sort before the newer still-Received Bar.
-      ctx.getSignal('Foo');
+      ctx.signals().getSignal('Foo');
       String names = '';
-      for (StepContext.Signal s : ctx.getSignals()) {
+      for (StepContext.Signal s : ctx.signals().getSignals()) {
         names += s.name + ',';
       }
       return StepResult.complete(null, names);
@@ -721,7 +721,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Kick');
+      StepContext.Signal s = ctx.signals().getSignal('Kick');
       if (!s.isPresent()) {
         return StepResult.suspend();
       }
@@ -745,7 +745,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Foo');
+      StepContext.Signal s = ctx.signals().getSignal('Foo');
       return StepResult.complete(null, s.isPresent() ? s.payload : 'absent');
     }
   }
@@ -887,7 +887,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Kick');
+      StepContext.Signal s = ctx.signals().getSignal('Kick');
       if (!s.isPresent()) {
         return StepResult.suspend();
       }
@@ -914,7 +914,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Shared');
+      StepContext.Signal s = ctx.signals().getSignal('Shared');
       if (s.isPresent()) {
         // Simulate a sibling claiming the same row mid-flight.
         update new Workflow_Signal__c(
@@ -1102,7 +1102,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Kick');
+      StepContext.Signal s = ctx.signals().getSignal('Kick');
       if (!s.isPresent()) {
         return StepResult.suspend();
       }
@@ -1129,7 +1129,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Shared');
+      StepContext.Signal s = ctx.signals().getSignal('Shared');
       if (s.isPresent() && String.isBlank(ctx.stepStateJson)) {
         // A sibling claims the same row mid-flight.
         update new Workflow_Signal__c(
@@ -1252,9 +1252,10 @@ public class StepContextSignalEngineBranchTest {
       // Spend the row budget on a noisy name, then probe a different name via
       // both the latest lookup and the list accessor: neither may report a
       // false absence even though the budget is now exhausted.
-      List<StepContext.Signal> noise = ctx.getSignals('Noise');
-      Boolean importantPresent = ctx.hasSignal('Important');
-      List<StepContext.Signal> importantList = ctx.getSignals('Important');
+      List<StepContext.Signal> noise = ctx.signals().getSignals('Noise');
+      Boolean importantPresent = ctx.signals().hasSignal('Important');
+      List<StepContext.Signal> importantList = ctx.signals()
+        .getSignals('Important');
       return StepResult.complete(
         null,
         new Map<String, Object>{
@@ -1374,7 +1375,7 @@ public class StepContextSignalEngineBranchTest {
      * @return The step's outcome result.
      */
     public StepResult execute(StepContext ctx) {
-      List<StepContext.Signal> sigs = ctx.getSignals('Big');
+      List<StepContext.Signal> sigs = ctx.signals().getSignals('Big');
       List<Integer> lens = new List<Integer>();
       for (StepContext.Signal s : sigs) {
         lens.add(s.payload == null ? -1 : s.payload.length());
@@ -1463,7 +1464,7 @@ public class StepContextSignalEngineBranchTest {
       if (ctx.shouldYield()) {
         return StepResult.suspend();
       }
-      if (ctx.getSignal('E2EGo').isPresent()) {
+      if (ctx.signals().getSignal('E2EGo').isPresent()) {
         return StepResult.complete(null, 'completed');
       }
       return StepResult.suspend();

@@ -15,16 +15,16 @@ public class WorkflowDashboardControllerAuthTest {
 
   // Placeholder cancelWorkflow request for the authorization check (the values are
   // irrelevant because the call is rejected before they are read).
-  private static WorkflowDashboardController.CancelRequest unauthCancelReq() {
-    WorkflowDashboardController.CancelRequest r = new WorkflowDashboardController.CancelRequest();
+  private static WorkflowDashboardCommandController.CancelRequest unauthCancelReq() {
+    WorkflowDashboardCommandController.CancelRequest r = new WorkflowDashboardCommandController.CancelRequest();
     r.instanceId = null;
     r.runCompensations = false;
     return r;
   }
 
   // Placeholder submitApproval request for the authorization check.
-  private static WorkflowDashboardController.ApprovalRequest unauthApprovalReq() {
-    WorkflowDashboardController.ApprovalRequest r = new WorkflowDashboardController.ApprovalRequest();
+  private static WorkflowDashboardCommandController.ApprovalRequest unauthApprovalReq() {
+    WorkflowDashboardCommandController.ApprovalRequest r = new WorkflowDashboardCommandController.ApprovalRequest();
     r.instanceId = null;
     r.approvalKey = '';
     r.approved = false;
@@ -113,7 +113,7 @@ public class WorkflowDashboardControllerAuthTest {
 
         // 5. startWorkflow
         try {
-          WorkflowDashboardController.startWorkflow('', '', '');
+          WorkflowDashboardCommandController.startWorkflow('', '', '');
           System.assert(
             false,
             'Expected AuraHandledException for startWorkflow'
@@ -124,7 +124,7 @@ public class WorkflowDashboardControllerAuthTest {
 
         // 6. retryWorkflowInstance
         try {
-          WorkflowDashboardController.retryWorkflowInstance(null);
+          WorkflowDashboardCommandController.retryWorkflowInstance(null);
           System.assert(
             false,
             'Expected AuraHandledException for retryWorkflowInstance'
@@ -135,7 +135,7 @@ public class WorkflowDashboardControllerAuthTest {
 
         // 7. cancelWorkflow
         try {
-          WorkflowDashboardController.cancelWorkflow(unauthCancelReq());
+          WorkflowDashboardCommandController.cancelWorkflow(unauthCancelReq());
           System.assert(
             false,
             'Expected AuraHandledException for cancelWorkflow'
@@ -146,7 +146,9 @@ public class WorkflowDashboardControllerAuthTest {
 
         // 8. submitApproval
         try {
-          WorkflowDashboardController.submitApproval(unauthApprovalReq());
+          WorkflowDashboardCommandController.submitApproval(
+            unauthApprovalReq()
+          );
           System.assert(
             false,
             'Expected AuraHandledException for submitApproval'
@@ -538,7 +540,7 @@ public class WorkflowDashboardControllerAuthTest {
 
       Test.startTest();
       Map<String, Object> status = WorkflowDashboardController.getWatchdogStatus();
-      WorkflowDashboardController.enqueueWatchdog();
+      WorkflowDashboardCommandController.enqueueWatchdog();
       Test.stopTest();
 
       System.assertNotEquals(null, status);
@@ -632,7 +634,7 @@ public class WorkflowDashboardControllerAuthTest {
       System.assertEquals('Watchdog', (String) details.get('waitingOn'));
 
       // Test resumeWorkflowInstance
-      WorkflowDashboardController.resumeWorkflowInstance(inst.Id);
+      WorkflowDashboardCommandController.resumeWorkflowInstance(inst.Id);
       Test.stopTest();
 
       // Verify it updated the status and cleared sleep and async job fields
@@ -789,12 +791,12 @@ public class WorkflowDashboardControllerAuthTest {
       System.runAs(stdUser) {
         Boolean threw = false;
         try {
-          WorkflowDashboardController.ApprovalRequest approvalReq = new WorkflowDashboardController.ApprovalRequest();
+          WorkflowDashboardCommandController.ApprovalRequest approvalReq = new WorkflowDashboardCommandController.ApprovalRequest();
           approvalReq.instanceId = inst.Id;
           approvalReq.approvalKey = 'ExpenseApproval';
           approvalReq.approved = true;
           approvalReq.comments = 'Approving without the role';
-          WorkflowDashboardController.submitApproval(approvalReq);
+          WorkflowDashboardCommandController.submitApproval(approvalReq);
         } catch (AuraHandledException e) {
           threw = true;
           System.assert(

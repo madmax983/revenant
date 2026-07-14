@@ -199,11 +199,11 @@ public class StepResultFailTest {
   static void testFailFactoryDefaults() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       StepResult r = StepResult.fail('boom');
-      System.assertEquals(StepResult.ActionType.FAIL, r.action);
-      System.assertEquals('boom', r.failureReason);
+      System.assertEquals(StepResult.ActionType.FAIL, r.directive().action);
+      System.assertEquals('boom', r.directive().failureReason);
       System.assertEquals(
         null,
-        r.failureDataJson,
+        r.directive().failureDataJson,
         'No failureData -> null json'
       );
     }
@@ -216,10 +216,11 @@ public class StepResultFailTest {
         'boom',
         new Map<String, Object>{ 'k' => 'v' }
       );
-      System.assertEquals(StepResult.ActionType.FAIL, r.action);
-      System.assertEquals('boom', r.failureReason);
+      System.assertEquals(StepResult.ActionType.FAIL, r.directive().action);
+      System.assertEquals('boom', r.directive().failureReason);
       System.assert(
-        r.failureDataJson != null && r.failureDataJson.contains('"v"'),
+        r.directive().failureDataJson != null &&
+        r.directive().failureDataJson.contains('"v"'),
         'failureData should be serialized to JSON'
       );
     }

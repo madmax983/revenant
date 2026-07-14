@@ -83,7 +83,7 @@ public inherited sharing class ParallelSagaFanoutWorkflowExample {
      * @return A suspend result until signalled, otherwise a complete result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal sig = ctx.getSignal('Branch1_Complete');
+      StepContext.Signal sig = ctx.signals().getSignal('Branch1_Complete');
       if (!sig.isPresent()) {
         return StepResult.suspend();
       }
@@ -119,7 +119,7 @@ public inherited sharing class ParallelSagaFanoutWorkflowExample {
      * @return A suspend result until signalled, otherwise a complete result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal sig = ctx.getSignal('Branch2_Complete');
+      StepContext.Signal sig = ctx.signals().getSignal('Branch2_Complete');
       if (!sig.isPresent()) {
         return StepResult.suspend();
       }
@@ -156,7 +156,7 @@ public inherited sharing class ParallelSagaFanoutWorkflowExample {
      * @return A suspend result until signalled, otherwise a complete result (or throws).
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal sig = ctx.getSignal('Branch3_Complete');
+      StepContext.Signal sig = ctx.signals().getSignal('Branch3_Complete');
       if (!sig.isPresent()) {
         return StepResult.suspend();
       }
@@ -195,7 +195,7 @@ public inherited sharing class ParallelSagaFanoutWorkflowExample {
      * @return A suspend result until signalled, otherwise a complete result.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal sig = ctx.getSignal('Branch4_Complete');
+      StepContext.Signal sig = ctx.signals().getSignal('Branch4_Complete');
       if (!sig.isPresent()) {
         return StepResult.suspend();
       }

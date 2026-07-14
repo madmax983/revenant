@@ -155,7 +155,7 @@ public class WorkflowDashboardControllerTest {
   static void testStartWorkflow() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
-      Id instanceId = WorkflowDashboardController.startWorkflow(
+      Id instanceId = WorkflowDashboardCommandController.startWorkflow(
         'WorkflowEngineTest.HappyWorkflow',
         'StartDashboardKey',
         '"InputPayload"'
@@ -205,7 +205,7 @@ public class WorkflowDashboardControllerTest {
       insert step;
 
       Test.startTest();
-      WorkflowDashboardController.retryWorkflowInstance(inst.Id);
+      WorkflowDashboardCommandController.retryWorkflowInstance(inst.Id);
       Test.stopTest();
 
       Workflow_Instance__c updatedInst = [
@@ -240,12 +240,12 @@ public class WorkflowDashboardControllerTest {
       insert inst;
 
       Test.startTest();
-      WorkflowDashboardController.ApprovalRequest approvalReq = new WorkflowDashboardController.ApprovalRequest();
+      WorkflowDashboardCommandController.ApprovalRequest approvalReq = new WorkflowDashboardCommandController.ApprovalRequest();
       approvalReq.instanceId = inst.Id;
       approvalReq.approvalKey = 'ExpenseApproval';
       approvalReq.approved = true;
       approvalReq.comments = 'Looks good';
-      WorkflowDashboardController.submitApproval(approvalReq);
+      WorkflowDashboardCommandController.submitApproval(approvalReq);
       Test.stopTest();
 
       // Deliver Platform Event
@@ -277,10 +277,10 @@ public class WorkflowDashboardControllerTest {
       insert inst;
 
       Test.startTest();
-      WorkflowDashboardController.CancelRequest cancelReq = new WorkflowDashboardController.CancelRequest();
+      WorkflowDashboardCommandController.CancelRequest cancelReq = new WorkflowDashboardCommandController.CancelRequest();
       cancelReq.instanceId = inst.Id;
       cancelReq.runCompensations = false;
-      WorkflowDashboardController.cancelWorkflow(cancelReq);
+      WorkflowDashboardCommandController.cancelWorkflow(cancelReq);
       Test.stopTest();
 
       Workflow_Instance__c updatedInst = [

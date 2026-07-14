@@ -49,7 +49,7 @@ public class StepContextSignalEngineTest {
      * @return A suspend, yield, or complete StepResult depending on signal and state.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Tick');
+      StepContext.Signal s = ctx.signals().getSignal('Tick');
       if (!s.isPresent()) {
         return StepResult.suspend();
       }
@@ -157,10 +157,10 @@ public class StepContextSignalEngineTest {
       // Asserts the control signal is never visible as a readable payload.
       System.assertEquals(
         0,
-        ctx.getSignals('Cancel').size(),
+        ctx.signals().getSignals('Cancel').size(),
         'Cancel must never be surfaced as a readable signal'
       );
-      if (ctx.getSignal('Go').isPresent()) {
+      if (ctx.signals().getSignal('Go').isPresent()) {
         return StepResult.complete(null, 'went');
       }
       return StepResult.suspend();
@@ -250,7 +250,7 @@ public class StepContextSignalEngineTest {
      * @return A suspend StepResult when unsignalled, else a completed StepResult.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Dup');
+      StepContext.Signal s = ctx.signals().getSignal('Dup');
       if (!s.isPresent()) {
         return StepResult.suspend();
       }
@@ -355,7 +355,7 @@ public class StepContextSignalEngineTest {
      * @return A suspend StepResult when unsignalled, else a split StepResult.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Fan');
+      StepContext.Signal s = ctx.signals().getSignal('Fan');
       if (!s.isPresent()) {
         return StepResult.suspend();
       }
@@ -382,7 +382,7 @@ public class StepContextSignalEngineTest {
     public StepResult execute(StepContext ctx) {
       System.assertEquals(
         false,
-        ctx.hasSignal('Fan'),
+        ctx.signals().hasSignal('Fan'),
         'The spawning step signal must not leak into a parallel branch'
       );
       return StepResult.complete(null, 'A');
@@ -402,7 +402,7 @@ public class StepContextSignalEngineTest {
     public StepResult execute(StepContext ctx) {
       System.assertEquals(
         false,
-        ctx.hasSignal('Fan'),
+        ctx.signals().hasSignal('Fan'),
         'The spawning step signal must not leak into a parallel branch'
       );
       return StepResult.complete(null, 'B');
@@ -507,14 +507,14 @@ public class StepContextSignalEngineTest {
      * @return A suspend StepResult when unsignalled, else a completed StepResult.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal triggerSig = ctx.getSignal('Trigger');
+      StepContext.Signal triggerSig = ctx.signals().getSignal('Trigger');
       if (!triggerSig.isPresent()) {
         return StepResult.suspend();
       }
       // Probe a name that is absent now -- this records nothing as matched.
       System.assertEquals(
         false,
-        ctx.hasSignal('LateGhost'),
+        ctx.signals().hasSignal('LateGhost'),
         'LateGhost is not pending at probe time'
       );
       // A signal of that probed-absent name now arrives mid-execution.
@@ -622,7 +622,7 @@ public class StepContextSignalEngineTest {
      * @return A suspend StepResult when unsignalled, else a split StepResult.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Fan');
+      StepContext.Signal s = ctx.signals().getSignal('Fan');
       if (!s.isPresent()) {
         return StepResult.suspend();
       }
@@ -648,7 +648,7 @@ public class StepContextSignalEngineTest {
      * @return A completed StepResult carrying 'claimed' or 'absent'.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Shared');
+      StepContext.Signal s = ctx.signals().getSignal('Shared');
       return StepResult.complete(null, s.isPresent() ? 'claimed' : 'absent');
     }
   }
@@ -664,7 +664,7 @@ public class StepContextSignalEngineTest {
      * @return A completed StepResult carrying 'claimed' or 'absent'.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Shared');
+      StepContext.Signal s = ctx.signals().getSignal('Shared');
       return StepResult.complete(null, s.isPresent() ? 'claimed' : 'absent');
     }
   }
@@ -895,7 +895,7 @@ public class StepContextSignalEngineTest {
      * @return A suspend StepResult when unsignalled, else a split StepResult.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal s = ctx.getSignal('Fan');
+      StepContext.Signal s = ctx.signals().getSignal('Fan');
       if (!s.isPresent()) {
         return StepResult.suspend();
       }
@@ -924,8 +924,8 @@ public class StepContextSignalEngineTest {
      * @return A completed StepResult carrying the guard/count/payload marker.
      */
     public StepResult execute(StepContext ctx) {
-      Boolean guard = ctx.hasSignal('Shared');
-      List<StepContext.Signal> all = ctx.getSignals('Shared');
+      Boolean guard = ctx.signals().hasSignal('Shared');
+      List<StepContext.Signal> all = ctx.signals().getSignals('Shared');
       String marker = guard
         ? 'guard=true;count=' + all.size()
         : 'guard=false;count=' + all.size();

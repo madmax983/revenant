@@ -76,9 +76,9 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
     if (
       currentStepName == 'NativeApprovalWorkflowExample.RequestApprovalStep'
     ) {
-      if (result.outputJson != null) {
+      if (result.directive().outputJson != null) {
         Map<String, Object> decision = (Map<String, Object>) JSON.deserializeUntyped(
-          result.outputJson
+          result.directive().outputJson
         );
         Boolean approved =
           decision.get('approved') != null &&
@@ -187,7 +187,7 @@ public inherited sharing class NativeApprovalWorkflowExample implements Workflow
      * carrying the decision payload on resume.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal decision = ctx.getSignal(DECISION_SIGNAL);
+      StepContext.Signal decision = ctx.signals().getSignal(DECISION_SIGNAL);
 
       if (!decision.isPresent()) {
         // Query the Workflow_Instance__c record to retrieve its Correlation_Key__c.

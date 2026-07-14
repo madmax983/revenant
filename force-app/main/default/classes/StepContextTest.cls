@@ -175,21 +175,21 @@ public class StepContextTest {
         .build();
 
       // Set mock to trigger SOQL query row limits checking logic
-      StepContext.mockQueryRowsFraction = 0.81;
+      StepGovernor.mockQueryRowsFraction = 0.81;
       System.assertEquals(
         true,
         ctx.shouldYield(),
         'shouldYield should return true when query rows exceed 80%'
       );
 
-      StepContext.mockQueryRowsFraction = 0.80;
+      StepGovernor.mockQueryRowsFraction = 0.80;
       System.assertEquals(
         false,
         ctx.shouldYield(),
         'shouldYield should return false when query rows are exactly 80%'
       );
 
-      StepContext.mockQueryRowsFraction = 0.79;
+      StepGovernor.mockQueryRowsFraction = 0.79;
       System.assertEquals(
         false,
         ctx.shouldYield(),
@@ -209,7 +209,7 @@ public class StepContextTest {
         .build();
 
       // Set mock fraction above 80%
-      StepContext.mockAsyncExecutionsFraction = 0.81;
+      StepGovernor.mockAsyncExecutionsFraction = 0.81;
       System.assertEquals(
         true,
         ctx.shouldYield(),
@@ -217,7 +217,7 @@ public class StepContextTest {
       );
 
       // Set mock fraction at 80%
-      StepContext.mockAsyncExecutionsFraction = 0.80;
+      StepGovernor.mockAsyncExecutionsFraction = 0.80;
       System.assertEquals(
         false,
         ctx.shouldYield(),
@@ -225,7 +225,7 @@ public class StepContextTest {
       );
 
       // Set mock fraction below 80%
-      StepContext.mockAsyncExecutionsFraction = 0.79;
+      StepGovernor.mockAsyncExecutionsFraction = 0.79;
       System.assertEquals(
         false,
         ctx.shouldYield(),
@@ -233,7 +233,7 @@ public class StepContextTest {
       );
 
       // Reset
-      StepContext.mockAsyncExecutionsFraction = null;
+      StepGovernor.mockAsyncExecutionsFraction = null;
     }
   }
 
@@ -252,21 +252,21 @@ public class StepContextTest {
 
       System.assertEquals(
         0,
-        ctx.getSignals().size(),
+        ctx.signals().getSignals().size(),
         'getSignals() must return an empty (never null) list when none pending'
       );
       System.assertEquals(
         0,
-        ctx.getSignals('Anything').size(),
+        ctx.signals().getSignals('Anything').size(),
         'getSignals(name) must return an empty list when none pending'
       );
       System.assertEquals(
         false,
-        ctx.hasSignal('Anything'),
+        ctx.signals().hasSignal('Anything'),
         'hasSignal must be false when none pending'
       );
 
-      StepContext.Signal sig = ctx.getSignal('Anything');
+      StepContext.Signal sig = ctx.signals().getSignal('Anything');
       System.assertNotEquals(
         null,
         sig,
@@ -301,7 +301,7 @@ public class StepContextTest {
         .pendingSignals(pending)
         .build();
 
-      List<StepContext.Signal> all = ctx.getSignals();
+      List<StepContext.Signal> all = ctx.signals().getSignals();
       System.assertEquals(3, all.size(), 'All pending signals must be exposed');
       System.assertEquals('First', all[0].name);
       System.assertEquals('{"n":1}', all[0].payload);
@@ -326,7 +326,7 @@ public class StepContextTest {
         .pendingSignals(pending)
         .build();
 
-      StepContext.Signal latest = ctx.getSignal('Approval');
+      StepContext.Signal latest = ctx.signals().getSignal('Approval');
       System.assertEquals(true, latest.isPresent());
       System.assertEquals(
         '{"approved":false}',
@@ -334,10 +334,10 @@ public class StepContextTest {
         'getSignal must return the most recent (last-arriving) signal of that name'
       );
 
-      List<StepContext.Signal> approvals = ctx.getSignals('Approval');
+      List<StepContext.Signal> approvals = ctx.signals().getSignals('Approval');
       System.assertEquals(2, approvals.size());
-      System.assertEquals(true, ctx.hasSignal('Approval'));
-      System.assertEquals(false, ctx.hasSignal('Nope'));
+      System.assertEquals(true, ctx.signals().hasSignal('Approval'));
+      System.assertEquals(false, ctx.signals().hasSignal('Nope'));
     }
   }
 
@@ -378,13 +378,13 @@ public class StepContextTest {
       // Before observing anything, nothing is consumable.
       System.assertEquals(
         0,
-        ctx.getConsumedSignalIds().size(),
+        ctx.signals().getConsumedSignalIds().size(),
         'Nothing is consumed until observed'
       );
 
       // Observe only the "Approval" name.
-      ctx.getSignal('Approval');
-      Set<Id> consumed = ctx.getConsumedSignalIds();
+      ctx.signals().getSignal('Approval');
+      Set<Id> consumed = ctx.signals().getConsumedSignalIds();
       System.assertEquals(
         1,
         consumed.size(),
@@ -436,10 +436,10 @@ public class StepContextTest {
         .build();
 
       // Reading the full list observes every pending signal.
-      ctx.getSignals();
+      ctx.signals().getSignals();
       System.assertEquals(
         2,
-        ctx.getConsumedSignalIds().size(),
+        ctx.signals().getConsumedSignalIds().size(),
         'getSignals() (all) must mark every pending signal observed'
       );
     }
@@ -461,13 +461,13 @@ public class StepContextTest {
 
       // A blank/null name must never fall through to the unscoped (all) query and
       // must not mark unrelated signals observed/consumable.
-      System.assertEquals(false, ctx.getSignal('').isPresent());
-      System.assertEquals(false, ctx.getSignal(null).isPresent());
-      System.assertEquals(false, ctx.hasSignal(''));
-      System.assertEquals(0, ctx.getSignals('').size());
+      System.assertEquals(false, ctx.signals().getSignal('').isPresent());
+      System.assertEquals(false, ctx.signals().getSignal(null).isPresent());
+      System.assertEquals(false, ctx.signals().hasSignal(''));
+      System.assertEquals(0, ctx.signals().getSignals('').size());
       System.assertEquals(
         0,
-        ctx.getConsumedSignalIds().size(),
+        ctx.signals().getConsumedSignalIds().size(),
         'A blank named lookup must not mark any signal consumable'
       );
     }
@@ -508,11 +508,11 @@ public class StepContextTest {
         .build();
 
       // Read the (capped) list first; this populates the partial per-name cache.
-      System.assertEquals(2, ctx.getSignals('Evt').size());
+      System.assertEquals(2, ctx.signals().getSignals('Evt').size());
 
       // A subsequent latest lookup must NOT return the last row of the partial
       // page ({"seq":2}); it must reflect the true most-recent pending signal.
-      StepContext.Signal latest = ctx.getSignal('Evt');
+      StepContext.Signal latest = ctx.signals().getSignal('Evt');
       System.assertEquals(true, latest.isPresent());
       System.assertEquals(
         '{"seq":99}',
@@ -547,9 +547,9 @@ public class StepContextTest {
         )
         .build();
 
-      System.assertEquals(2, ctx.getSignals('Foo').size());
+      System.assertEquals(2, ctx.signals().getSignals('Foo').size());
 
-      StepContext.Signal latest = ctx.getSignal('Foo');
+      StepContext.Signal latest = ctx.signals().getSignal('Foo');
       System.assertEquals(
         true,
         latest.isPresent(),
@@ -595,8 +595,8 @@ public class StepContextTest {
         )
         .build();
 
-      System.assertEquals(2, ctx.getSignals('Evt').size());
-      StepContext.Signal latest = ctx.getSignal('Evt');
+      System.assertEquals(2, ctx.signals().getSignals('Evt').size());
+      StepContext.Signal latest = ctx.signals().getSignal('Evt');
       System.assertEquals(
         '{"seq":2}',
         latest.payload,
@@ -638,17 +638,20 @@ public class StepContextTest {
         .build();
 
       // Unscoped read caps and only sees the Noise page.
-      System.assertEquals(2, ctx.getSignals().size());
+      System.assertEquals(2, ctx.signals().getSignals().size());
 
       // A named latest lookup must NOT be answered from the partial full-list
       // cache (which would report 'Important' absent); it must reflect the true
       // pending signal so the step does not suspend and strand.
       System.assertEquals(
         true,
-        ctx.hasSignal('Important'),
+        ctx.signals().hasSignal('Important'),
         'hasSignal after a capped full-list read must not falsely report absence'
       );
-      System.assertEquals('{"go":true}', ctx.getSignal('Important').payload);
+      System.assertEquals(
+        '{"go":true}',
+        ctx.signals().getSignal('Important').payload
+      );
     }
   }
 
@@ -671,17 +674,17 @@ public class StepContextTest {
       // with different casing. The source SOQL and lower-cased caches match names
       // case-insensitively, so the in-memory path must too -- a case-only mismatch
       // must not make an already-delivered signal look absent.
-      ctx.getSignals();
+      ctx.signals().getSignals();
       System.assertEquals(
         true,
-        ctx.hasSignal('approve:order'),
+        ctx.signals().hasSignal('approve:order'),
         'Cached named lookup must match case-insensitively'
       );
       System.assertEquals(
         '{"ok":true}',
-        ctx.getSignal('APPROVE:ORDER').payload
+        ctx.signals().getSignal('APPROVE:ORDER').payload
       );
-      System.assertEquals(1, ctx.getSignals('approve:ORDER').size());
+      System.assertEquals(1, ctx.signals().getSignals('approve:ORDER').size());
     }
   }
 
@@ -712,12 +715,12 @@ public class StepContextTest {
         .build();
 
       // Capped full read claims both rows and marks them for consumption.
-      System.assertEquals(2, ctx.getSignals().size());
+      System.assertEquals(2, ctx.signals().getSignals().size());
 
       // 'Foo' was claimed out of the Received view by the full read, but this
       // branch owns it and already marked it -- it must still appear in the named
       // list, or the step would consume it without ever handling the payload.
-      List<StepContext.Signal> foos = ctx.getSignals('Foo');
+      List<StepContext.Signal> foos = ctx.signals().getSignals('Foo');
       System.assertEquals(
         1,
         foos.size(),
@@ -762,8 +765,8 @@ public class StepContextTest {
         )
         .build();
 
-      ctx.getSignals('Foo');
-      StepContext.Signal latest = ctx.getSignal('Foo');
+      ctx.signals().getSignals('Foo');
+      StepContext.Signal latest = ctx.signals().getSignal('Foo');
       System.assertEquals(
         '{"seq":3}',
         latest.payload,

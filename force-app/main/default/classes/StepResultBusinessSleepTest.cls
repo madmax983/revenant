@@ -7,28 +7,32 @@ private class StepResultBusinessSleepTest {
       StepResult r1 = StepResult.sleep(10);
       Assert.areEqual(
         StepResult.ActionType.SLEEP,
-        r1.action,
+        r1.directive().action,
         'Action should be SLEEP'
       );
       Assert.areEqual(
         10,
-        r1.sleepDurationSeconds,
+        r1.directive().sleepDurationSeconds,
         'Duration should be 10 seconds'
       );
-      Assert.isNull(r1.stepStateJson, 'State JSON should be null');
+      Assert.isNull(r1.directive().stepStateJson, 'State JSON should be null');
 
-      StepResult r2 = StepResult.sleep(20, 'my_state');
+      StepResult r2 = StepResult.sleep(20).withStepState('my_state');
       Assert.areEqual(
         StepResult.ActionType.SLEEP,
-        r2.action,
+        r2.directive().action,
         'Action should be SLEEP'
       );
       Assert.areEqual(
         20,
-        r2.sleepDurationSeconds,
+        r2.directive().sleepDurationSeconds,
         'Duration should be 20 seconds'
       );
-      Assert.areEqual('my_state', r2.stepStateJson, 'State JSON should match');
+      Assert.areEqual(
+        'my_state',
+        r2.directive().stepStateJson,
+        'State JSON should match'
+      );
     }
   }
 
@@ -37,7 +41,7 @@ private class StepResultBusinessSleepTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Start at Friday 16:00:00 (July 3, 2026) - No holidays in this window
       DateTime startTime = DateTime.newInstance(2026, 7, 3, 16, 0, 0);
-      StepResult.mockCurrentDateTime = startTime;
+      BusinessSleepCalculator.mockCurrentDateTime = startTime;
 
       // Use default active business hours dynamically with all fields queried
       BusinessHours defaultBh = [
@@ -79,13 +83,17 @@ private class StepResultBusinessSleepTest {
 
       Assert.areEqual(
         StepResult.ActionType.SLEEP,
-        r.action,
+        r.directive().action,
         'Action should be SLEEP'
       );
-      Assert.areEqual('state_abc', r.stepStateJson, 'State should match');
+      Assert.areEqual(
+        'state_abc',
+        r.directive().stepStateJson,
+        'State should match'
+      );
       Assert.areEqual(
         (Integer) expectedSeconds,
-        r.sleepDurationSeconds,
+        r.directive().sleepDurationSeconds,
         'Duration should match computed business hours difference'
       );
     }
@@ -96,7 +104,7 @@ private class StepResultBusinessSleepTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Start at Friday 16:00:00 (July 3, 2026) - No holidays in this window
       DateTime startTime = DateTime.newInstance(2026, 7, 3, 16, 0, 0);
-      StepResult.mockCurrentDateTime = startTime;
+      BusinessSleepCalculator.mockCurrentDateTime = startTime;
 
       // Use default active business hours dynamically with all fields queried
       BusinessHours defaultBh = [
@@ -128,7 +136,7 @@ private class StepResultBusinessSleepTest {
       DateTime alignedStart = BusinessHours.isWithin(defaultBh.Id, startTime)
         ? startTime
         : BusinessHours.nextStartDate(defaultBh.Id, startTime);
-      Long expectedMs = StepResult.getMillisecondsForDays(
+      Long expectedMs = BusinessHoursCalendar.getMillisecondsForDays(
         defaultBh,
         alignedStart,
         2
@@ -145,12 +153,12 @@ private class StepResultBusinessSleepTest {
 
       Assert.areEqual(
         StepResult.ActionType.SLEEP,
-        r.action,
+        r.directive().action,
         'Action should be SLEEP'
       );
       Assert.areEqual(
         (Integer) expectedSeconds,
-        r.sleepDurationSeconds,
+        r.directive().sleepDurationSeconds,
         'Duration should match computed business days difference'
       );
     }
@@ -173,7 +181,7 @@ private class StepResultBusinessSleepTest {
       BusinessHours standardBh = standardBhs[0];
 
       // Start at Friday 16:00:00 (June 26, 2026)
-      StepResult.mockCurrentDateTime = DateTime.newInstance(
+      BusinessSleepCalculator.mockCurrentDateTime = DateTime.newInstance(
         2026,
         6,
         26,
@@ -182,11 +190,11 @@ private class StepResultBusinessSleepTest {
         0
       );
 
-      DateTime testStart = StepResult.mockCurrentDateTime;
+      DateTime testStart = BusinessSleepCalculator.mockCurrentDateTime;
       DateTime alignedStart = BusinessHours.isWithin(standardBh.Id, testStart)
         ? testStart
         : BusinessHours.nextStartDate(standardBh.Id, testStart);
-      Long expectedMs = StepResult.getMillisecondsForDays(
+      Long expectedMs = BusinessHoursCalendar.getMillisecondsForDays(
         standardBh,
         alignedStart,
         2
@@ -203,12 +211,12 @@ private class StepResultBusinessSleepTest {
 
       Assert.areEqual(
         StepResult.ActionType.SLEEP,
-        r.action,
+        r.directive().action,
         'Action should be SLEEP'
       );
       Assert.areEqual(
         (Integer) expectedSeconds,
-        r.sleepDurationSeconds,
+        r.directive().sleepDurationSeconds,
         'Sleep duration seconds should match the dynamic standard BusinessHours calculation'
       );
     }
@@ -219,7 +227,7 @@ private class StepResultBusinessSleepTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Start at Friday 16:00:00 (June 26, 2026)
       DateTime testStart = DateTime.newInstance(2026, 6, 26, 16, 0, 0);
-      StepResult.mockCurrentDateTime = testStart;
+      BusinessSleepCalculator.mockCurrentDateTime = testStart;
 
       List<BusinessHours> defaultBhs = [
         SELECT Id, TimeZoneSidKey
@@ -238,7 +246,7 @@ private class StepResultBusinessSleepTest {
         ? testStart
         : BusinessHours.nextStartDate(defaultBh.Id, testStart);
       // Get expected business milliseconds:
-      Long expectedMs = StepResult.getMillisecondsForDays(
+      Long expectedMs = BusinessHoursCalendar.getMillisecondsForDays(
         defaultBh,
         alignedStart,
         2
@@ -259,12 +267,12 @@ private class StepResultBusinessSleepTest {
 
       Assert.areEqual(
         StepResult.ActionType.SLEEP,
-        r.action,
+        r.directive().action,
         'Action should be SLEEP'
       );
       Assert.areEqual(
         expectedSeconds,
-        r.sleepDurationSeconds,
+        r.directive().sleepDurationSeconds,
         'Sleep duration seconds should match the dynamic default BusinessHours calculation'
       );
     }
@@ -372,7 +380,11 @@ private class StepResultBusinessSleepTest {
 
       // 1. Sleep 1 business day starting on Monday morning (July 6, 2026) -> should equal 8 working hours
       DateTime mondayStart = DateTime.newInstance(2026, 7, 6, 9, 0, 0);
-      Long mondayMs = StepResult.getMillisecondsForDays(mockBh, mondayStart, 1);
+      Long mondayMs = BusinessHoursCalendar.getMillisecondsForDays(
+        mockBh,
+        mondayStart,
+        1
+      );
       Assert.areEqual(
         8L * 3600000L,
         mondayMs,
@@ -381,7 +393,11 @@ private class StepResultBusinessSleepTest {
 
       // 2. Sleep 1 business day starting on Friday morning (July 3, 2026) -> should equal 4 working hours
       DateTime fridayStart = DateTime.newInstance(2026, 7, 3, 9, 0, 0);
-      Long fridayMs = StepResult.getMillisecondsForDays(mockBh, fridayStart, 1);
+      Long fridayMs = BusinessHoursCalendar.getMillisecondsForDays(
+        mockBh,
+        fridayStart,
+        1
+      );
       Assert.areEqual(
         4L * 3600000L,
         fridayMs,
@@ -425,7 +441,7 @@ private class StepResultBusinessSleepTest {
 
       // Starting on Saturday (closed day) should align start to Monday morning
       DateTime saturdayDate = DateTime.newInstance(2026, 7, 4, 12, 0, 0); // Saturday
-      Long dayMs = StepResult.getMillisecondsForDays(
+      Long dayMs = BusinessHoursCalendar.getMillisecondsForDays(
         standardBh,
         saturdayDate,
         1
@@ -433,7 +449,7 @@ private class StepResultBusinessSleepTest {
 
       // Get expected Monday day length directly by starting on Monday morning
       DateTime mondayDate = DateTime.newInstance(2026, 7, 6, 9, 0, 0);
-      Long mondayLength = StepResult.getMillisecondsForDays(
+      Long mondayLength = BusinessHoursCalendar.getMillisecondsForDays(
         standardBh,
         mondayDate,
         1
@@ -491,10 +507,10 @@ private class StepResultBusinessSleepTest {
 
       // Sum of Friday's working ms + second day's working ms
       Long expectedMs =
-        StepResult.getWorkingMsForDay(standardBh, startFriday) +
-        StepResult.getWorkingMsForDay(standardBh, secondDay);
+        BusinessHoursCalendar.getWorkingMsForDay(standardBh, startFriday) +
+        BusinessHoursCalendar.getWorkingMsForDay(standardBh, secondDay);
 
-      Long actualMs = StepResult.getMillisecondsForDays(
+      Long actualMs = BusinessHoursCalendar.getMillisecondsForDays(
         standardBh,
         startFriday,
         2
@@ -516,7 +532,10 @@ private class StepResultBusinessSleepTest {
       String tz = 'Australia/Sydney';
 
       // Call getLocalMidnight
-      DateTime midnight = StepResult.getLocalMidnight(targetDate, tz);
+      DateTime midnight = BusinessHoursCalendar.getLocalMidnight(
+        targetDate,
+        tz
+      );
 
       // In Australia/Sydney, the offset at 00:00:00 Sunday Oct 4, 2026 is UTC+10.
       // So the GMT time of local midnight should be exactly Saturday Oct 3, 14:00:00 GMT.
@@ -559,7 +578,7 @@ private class StepResultBusinessSleepTest {
 
       // Walk 2 business days. If the bug is present, Sunday will be processed twice, returning 16 hours.
       // If correct, it walks Sunday (8h) + Monday (10h), returning 18 hours (64,800,000 ms).
-      Long actualMs = StepResult.getMillisecondsForDays(
+      Long actualMs = BusinessHoursCalendar.getMillisecondsForDays(
         mockBh,
         startDateTime,
         2
@@ -593,7 +612,7 @@ private class StepResultBusinessSleepTest {
       // 106 business days = 53 Mondays (53 * 8h) and 53 Tuesdays (53 * 10h)
       // 53 * 8 = 424h. 53 * 10 = 530h. Total = 954h = 3,434,400,000 ms.
       // If the 365 cap was active, it would stop at 105 days and estimate day 106 as 8.99h instead of 10h.
-      Long actualMs = StepResult.getMillisecondsForDays(
+      Long actualMs = BusinessHoursCalendar.getMillisecondsForDays(
         mockBh,
         startDateTime,
         106
@@ -626,7 +645,11 @@ private class StepResultBusinessSleepTest {
       // Since 4200 exceeds the 3650 calendar days limit, it should throw an IllegalArgumentException.
       Boolean threwException = false;
       try {
-        StepResult.getMillisecondsForDays(mockBh, startDateTime, 600);
+        BusinessHoursCalendar.getMillisecondsForDays(
+          mockBh,
+          startDateTime,
+          600
+        );
       } catch (IllegalArgumentException e) {
         Assert.isTrue(
           e.getMessage()

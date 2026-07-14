@@ -173,12 +173,12 @@ public class BulkCancelWorkflowTest {
 
       System.assertEquals(
         StepResult.ActionType.COMPLETE,
-        result.action,
+        result.directive().action,
         'Small selection should finish in a single transaction'
       );
 
       Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
-        result.outputJson
+        result.directive().outputJson
       );
       System.assertEquals(
         3,
@@ -232,7 +232,7 @@ public class BulkCancelWorkflowTest {
         );
 
         Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
-          r3.outputJson
+          r3.directive().outputJson
         );
         System.assertEquals(
           5,
@@ -293,7 +293,7 @@ public class BulkCancelWorkflowTest {
       Test.stopTest();
 
       Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
-        result.outputJson
+        result.directive().outputJson
       );
       System.assertEquals(
         2,
@@ -343,9 +343,12 @@ public class BulkCancelWorkflowTest {
         .execute(ctxFor(filter, null));
       Test.stopTest();
 
-      System.assertEquals(StepResult.ActionType.COMPLETE, result.action);
+      System.assertEquals(
+        StepResult.ActionType.COMPLETE,
+        result.directive().action
+      );
       Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
-        result.outputJson
+        result.directive().outputJson
       );
       System.assertEquals(0, (Integer) summary.get('cancelled'));
     }
@@ -425,7 +428,7 @@ public class BulkCancelWorkflowTest {
       );
       System.assertEquals(1, count, 'Should find 1 eligible');
 
-      Map<String, Object> result = WorkflowDashboardController.cancelMatchingInstances(
+      Map<String, Object> result = WorkflowDashboardCommandController.cancelMatchingInstances(
         'WorkflowEngineTest.HappyWorkflow',
         'Running',
         ''

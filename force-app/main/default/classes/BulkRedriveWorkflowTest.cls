@@ -110,11 +110,11 @@ public class BulkRedriveWorkflowTest {
 
       System.assertEquals(
         StepResult.ActionType.COMPLETE,
-        result.action,
+        result.directive().action,
         'Small selection should finish in a single transaction'
       );
       Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
-        result.outputJson
+        result.directive().outputJson
       );
       System.assertEquals(
         3,
@@ -175,7 +175,7 @@ public class BulkRedriveWorkflowTest {
       Test.stopTest();
 
       Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
-        result.outputJson
+        result.directive().outputJson
       );
       System.assertEquals(
         0,
@@ -220,7 +220,7 @@ public class BulkRedriveWorkflowTest {
       Test.stopTest();
 
       Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
-        result.outputJson
+        result.directive().outputJson
       );
       System.assertEquals(
         1,
@@ -265,10 +265,10 @@ public class BulkRedriveWorkflowTest {
       Test.stopTest();
 
       Map<String, Object> s1 = (Map<String, Object>) JSON.deserializeUntyped(
-        first.outputJson
+        first.directive().outputJson
       );
       Map<String, Object> s2 = (Map<String, Object>) JSON.deserializeUntyped(
-        second.outputJson
+        second.directive().outputJson
       );
       System.assertEquals(
         2,
@@ -308,7 +308,7 @@ public class BulkRedriveWorkflowTest {
         );
 
         Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
-          r3.outputJson
+          r3.directive().outputJson
         );
         System.assertEquals(
           5,
@@ -357,7 +357,7 @@ public class BulkRedriveWorkflowTest {
         Test.stopTest();
 
         Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
-          result.outputJson
+          result.directive().outputJson
         );
         System.assertEquals(
           3,
@@ -408,9 +408,12 @@ public class BulkRedriveWorkflowTest {
         .execute(ctxFor(filter, null));
       Test.stopTest();
 
-      System.assertEquals(StepResult.ActionType.COMPLETE, result.action);
+      System.assertEquals(
+        StepResult.ActionType.COMPLETE,
+        result.directive().action
+      );
       Map<String, Object> summary = (Map<String, Object>) JSON.deserializeUntyped(
-        result.outputJson
+        result.directive().outputJson
       );
       System.assertEquals(0, (Integer) summary.get('redriven'));
     }

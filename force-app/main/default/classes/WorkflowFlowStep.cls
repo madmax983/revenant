@@ -117,10 +117,8 @@ public inherited sharing class WorkflowFlowStep implements WorkflowStep {
         variables
       );
       String cacheKey = 'flow_output_' + flowName.toLowerCase().trim();
-      Map<String, Object> outputsMap = (Map<String, Object>) ctx.once(
-        cacheKey,
-        producer
-      );
+      Map<String, Object> outputsMap = (Map<String, Object>) ctx.captures()
+        .once(cacheKey, producer);
       return StepResult.complete(null, outputsMap);
     } catch (WorkflowEngine.WorkflowException ex) {
       throw ex;

@@ -284,7 +284,8 @@ public class WorkflowEngineTest {
      * @return A COMPLETE result marking the timed-out branch.
      */
     public StepResult execute(StepContext ctx) {
-      WorkflowEngineMocksATest.capturedIsTimeoutResume = ctx.isTimeoutResume();
+      WorkflowEngineMocksATest.capturedIsTimeoutResume = ctx.retry()
+        .isTimeoutResume();
       return StepResult.complete(null, 'timedout');
     }
   }

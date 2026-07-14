@@ -13,7 +13,7 @@
  *
  * 2. When the child reaches Completed the engine publishes a
  *    ChildCompleted:<childCorrelationKey> Platform Event targeting the parent.  The
- *    parent step reads the child's output with ctx.getSignal(...).payload — no
+ *    parent step reads the child's output with ctx.signals().getSignal(...).payload — no
  *    hand-rolled SOQL against Workflow_Signal__c.
  *
  * 3. Returning StepResult.complete() from the resuming step triggers engine-managed
@@ -70,7 +70,7 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
       currentStepName ==
       'ChildWorkflowCompositionExample.RequestCreditCheckStep'
     ) {
-      return stepResult.nextStepName;
+      return stepResult.directive().nextStepName;
     }
     return null;
   }
@@ -107,7 +107,8 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
      */
     public StepResult execute(StepContext ctx) {
       String childKey = 'CreditCheck_' + ctx.workflowInstanceId;
-      StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
+      StepContext.ChildOutcome outcome = ctx.signals()
+        .getChildOutcome(childKey);
 
       if (outcome.isPresent()) {
         if (outcome.isSuccess()) {

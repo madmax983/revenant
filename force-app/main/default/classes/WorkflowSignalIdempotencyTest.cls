@@ -51,7 +51,7 @@ public class WorkflowSignalIdempotencyTest {
      * @return A complete result once approved, or a suspend result otherwise.
      */
     public StepResult execute(StepContext ctx) {
-      if (ctx.getSignal('Approve').isPresent()) {
+      if (ctx.signals().getSignal('Approve').isPresent()) {
         return StepResult.complete(null, '{"approved":true}');
       }
       return StepResult.suspend();
@@ -104,7 +104,7 @@ public class WorkflowSignalIdempotencyTest {
      * @return A complete result once signalled, or a suspend result otherwise.
      */
     public StepResult execute(StepContext ctx) {
-      if (ctx.getSignal('Go').isPresent()) {
+      if (ctx.signals().getSignal('Go').isPresent()) {
         return StepResult.complete(null, null);
       }
       return StepResult.suspend();

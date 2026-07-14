@@ -136,7 +136,7 @@ public inherited sharing class IncrementalSyncWorkflowExample {
       if (Test.isRunningTest() || ctx.stepStateJson != null) {
         return StepResult.complete(null, null);
       }
-      return StepResult.sleep(sleepIntervalSeconds, 'sleeping');
+      return StepResult.sleep(sleepIntervalSeconds).withStepState('sleeping');
     }
   }
 

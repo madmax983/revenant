@@ -99,16 +99,12 @@ public inherited sharing class CaptureOnceWorkflowExample {
      */
     public StepResult execute(StepContext ctx) {
       // Capture a generated reference number — stable across all re-executions.
-      String refNumber = (String) ctx.once(
-        'refNumber',
-        new RefNumberProducer()
-      );
+      String refNumber = (String) ctx.captures()
+        .once('refNumber', new RefNumberProducer());
 
       // Capture the step's logical start time — stable across all re-executions.
-      String startedAt = (String) ctx.once(
-        'startedAt',
-        new StartedAtProducer()
-      );
+      String startedAt = (String) ctx.captures()
+        .once('startedAt', new StartedAtProducer());
 
       Integer retryCount = currentRetryCount(ctx);
       Boolean resumedFromYield = String.isNotBlank(ctx.stepStateJson);

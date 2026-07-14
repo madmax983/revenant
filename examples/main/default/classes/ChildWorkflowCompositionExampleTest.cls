@@ -284,7 +284,7 @@ public class ChildWorkflowCompositionExampleTest {
    *      Suspended→Running; one Workflow_Signal__c record inserted.
    *   4. parentHarness.drive() → deliverEvents() delivers the queued event from
    *      step 2, inserting a second Workflow_Signal__c → two Received signals.
-   *      The step reads one via ctx.getSignal(); COMPLETE triggers markSignalsConsumed
+   *      The step reads one via ctx.signals().getSignal(); COMPLETE triggers markSignalsConsumed
    *      which consumes ALL same-name Received signals → ApproveLoanStep fires once
    *      → parent Completed.
    *
@@ -717,7 +717,7 @@ public class ChildWorkflowCompositionExampleTest {
         currentStepName ==
         'ChildWorkflowCompositionExampleTest.LaunchCompensatingChildStep'
       ) {
-        return stepResult.nextStepName;
+        return stepResult.directive().nextStepName;
       }
       return null;
     }
@@ -736,7 +736,8 @@ public class ChildWorkflowCompositionExampleTest {
      */
     public StepResult execute(StepContext ctx) {
       String childKey = 'CompensateCheck_' + ctx.workflowInstanceId;
-      StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
+      StepContext.ChildOutcome outcome = ctx.signals()
+        .getChildOutcome(childKey);
 
       if (outcome.isPresent()) {
         return StepResult.complete(

@@ -99,8 +99,8 @@ public class StepResultFanOutTest {
       String key1 = 'Child1_' + ctx.workflowInstanceId;
       String key2 = 'Child2_' + ctx.workflowInstanceId;
 
-      StepContext.ChildOutcome outcome1 = ctx.getChildOutcome(key1);
-      StepContext.ChildOutcome outcome2 = ctx.getChildOutcome(key2);
+      StepContext.ChildOutcome outcome1 = ctx.signals().getChildOutcome(key1);
+      StepContext.ChildOutcome outcome2 = ctx.signals().getChildOutcome(key2);
 
       if (outcome1.isPresent() && outcome2.isPresent()) {
         Map<String, Object> res1 = (Map<String, Object>) JSON.deserializeUntyped(
@@ -247,7 +247,7 @@ public class StepResultFanOutTest {
      */
     public StepResult execute(StepContext ctx) {
       String key1 = 'ChildKey1_' + ctx.workflowInstanceId;
-      StepContext.ChildOutcome outcome1 = ctx.getChildOutcome(key1);
+      StepContext.ChildOutcome outcome1 = ctx.signals().getChildOutcome(key1);
       if (outcome1.isPresent()) {
         return StepResult.complete(null, null);
       }
@@ -273,7 +273,7 @@ public class StepResultFanOutTest {
      * @return A complete result if the signal is present, otherwise a suspend result.
      */
     public StepResult execute(StepContext ctx) {
-      if (ctx.getSignal('MyExternalSignal').isPresent()) {
+      if (ctx.signals().getSignal('MyExternalSignal').isPresent()) {
         return StepResult.complete(null, 'SignalReceived');
       }
       return StepResult.suspend();
@@ -317,11 +317,22 @@ public class StepResultFanOutTest {
 
       StepResult result = StepResult.startChildren(requests);
 
-      System.assertEquals(StepResult.ActionType.START_CHILDREN, result.action);
-      System.assertEquals(2, result.childRequests.size());
-      System.assertEquals('WorkflowA', result.childRequests[0].workflowName);
-      System.assertEquals('KeyA', result.childRequests[0].correlationKey);
-      System.assert(result.childRequests[0].inputJson.contains('"val"'));
+      System.assertEquals(
+        StepResult.ActionType.START_CHILDREN,
+        result.directive().action
+      );
+      System.assertEquals(2, result.directive().childRequests.size());
+      System.assertEquals(
+        'WorkflowA',
+        result.directive().childRequests[0].workflowName
+      );
+      System.assertEquals(
+        'KeyA',
+        result.directive().childRequests[0].correlationKey
+      );
+      System.assert(
+        result.directive().childRequests[0].inputJson.contains('"val"')
+      );
     }
   }
 
@@ -355,9 +366,8 @@ public class StepResultFanOutTest {
         .pendingSignals(signals)
         .build();
 
-      List<StepContext.ChildOutcome> outcomes = ctx.getChildOutcomes(
-        new List<String>{ 'KeyA', 'KeyB', 'KeyC' }
-      );
+      List<StepContext.ChildOutcome> outcomes = ctx.signals()
+        .getChildOutcomes(new List<String>{ 'KeyA', 'KeyB', 'KeyC' });
 
       System.assertEquals(3, outcomes.size());
 
@@ -447,7 +457,7 @@ public class StepResultFanOutTest {
       StepResult res = StepResult.startChild('WorkflowA', 'KeyA', inputJson);
       System.assertEquals(
         '{"val":123}',
-        res.childInputJson,
+        res.directive().childInputJson,
         'Should not double-serialize pre-serialized JSON string'
       );
 
@@ -458,7 +468,7 @@ public class StepResultFanOutTest {
       );
       System.assertEquals(
         '"Plain string"',
-        res2.childInputJson,
+        res2.directive().childInputJson,
         'Should serialize plain string'
       );
     }

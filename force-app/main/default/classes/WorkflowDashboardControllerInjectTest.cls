@@ -205,7 +205,7 @@ public class WorkflowDashboardControllerInjectTest {
       insert origExec;
 
       Test.startTest();
-      Id compensatingId = WorkflowDashboardController.compensateWorkflow(
+      Id compensatingId = WorkflowDashboardCommandController.compensateWorkflow(
         target.Id
       );
       Test.stopTest();
@@ -246,7 +246,7 @@ public class WorkflowDashboardControllerInjectTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Test.startTest();
-      WorkflowDashboardController.injectSignal(
+      WorkflowDashboardCommandController.injectSignal(
         inst.Id,
         'PaymentReceived',
         '{"amount": 100}'
@@ -297,7 +297,7 @@ public class WorkflowDashboardControllerInjectTest {
       insert inst;
 
       try {
-        WorkflowDashboardController.injectSignal(
+        WorkflowDashboardCommandController.injectSignal(
           inst.Id,
           'PaymentReceived',
           '{}'
@@ -324,7 +324,7 @@ public class WorkflowDashboardControllerInjectTest {
       insert inst;
 
       try {
-        WorkflowDashboardController.injectSignal(
+        WorkflowDashboardCommandController.injectSignal(
           inst.Id,
           'PaymentReceived',
           '{invalid}'
@@ -392,7 +392,7 @@ public class WorkflowDashboardControllerInjectTest {
 
       System.runAs(stdUser) {
         try {
-          WorkflowDashboardController.injectSignal(
+          WorkflowDashboardCommandController.injectSignal(
             inst.Id,
             'PaymentReceived',
             '{}'
@@ -426,7 +426,7 @@ public class WorkflowDashboardControllerInjectTest {
       WorkflowEngine.disableQueueableInTest = true;
 
       Test.startTest();
-      WorkflowDashboardController.injectSignal(
+      WorkflowDashboardCommandController.injectSignal(
         inst.Id,
         'PaymentReceived',
         '{}'
@@ -465,7 +465,11 @@ public class WorkflowDashboardControllerInjectTest {
   static void testInjectSignalNullInstanceRejection() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       try {
-        WorkflowDashboardController.injectSignal(null, 'PaymentReceived', '{}');
+        WorkflowDashboardCommandController.injectSignal(
+          null,
+          'PaymentReceived',
+          '{}'
+        );
         System.assert(false, 'Should throw exception on null instance ID');
       } catch (AuraHandledException e) {
         System.assert(
@@ -490,7 +494,7 @@ public class WorkflowDashboardControllerInjectTest {
       insert inst;
 
       try {
-        WorkflowDashboardController.injectSignal(inst.Id, ' ', '{}');
+        WorkflowDashboardCommandController.injectSignal(inst.Id, ' ', '{}');
         System.assert(false, 'Should throw exception on blank signal name');
       } catch (AuraHandledException e) {
         System.assert(
@@ -535,7 +539,7 @@ public class WorkflowDashboardControllerInjectTest {
 
       System.runAs(stdUser) {
         try {
-          WorkflowDashboardController.injectSignal(
+          WorkflowDashboardCommandController.injectSignal(
             inst.Id,
             'PaymentReceived',
             '{}'
@@ -622,7 +626,7 @@ public class WorkflowDashboardControllerInjectTest {
 
       System.runAs(stdUser) {
         Test.startTest();
-        WorkflowDashboardController.injectSignal(
+        WorkflowDashboardCommandController.injectSignal(
           inst.Id,
           'PaymentReceived',
           '{}'
@@ -658,7 +662,11 @@ public class WorkflowDashboardControllerInjectTest {
       String longSignalName = 'A'.repeat(300);
 
       try {
-        WorkflowDashboardController.injectSignal(inst.Id, longSignalName, '{}');
+        WorkflowDashboardCommandController.injectSignal(
+          inst.Id,
+          longSignalName,
+          '{}'
+        );
         System.assert(
           false,
           'Should have thrown AuraHandledException due to DmlException mapping'
@@ -687,7 +695,7 @@ public class WorkflowDashboardControllerInjectTest {
       String oversizedString = 'A'.repeat(250001);
 
       try {
-        WorkflowDashboardController.injectSignal(
+        WorkflowDashboardCommandController.injectSignal(
           inst.Id,
           'PaymentReceived',
           oversizedString
@@ -739,7 +747,7 @@ public class WorkflowDashboardControllerInjectTest {
 
       System.runAs(stdUser) {
         try {
-          WorkflowDashboardController.resumePastStepInstance(
+          WorkflowDashboardCommandController.resumePastStepInstance(
             inst.Id,
             'StepOne',
             '{}'
@@ -770,7 +778,7 @@ public class WorkflowDashboardControllerInjectTest {
     String payload
   ) {
     try {
-      WorkflowDashboardController.resumePastStepInstance(
+      WorkflowDashboardCommandController.resumePastStepInstance(
         instanceId,
         stepName,
         payload

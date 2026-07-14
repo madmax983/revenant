@@ -866,7 +866,10 @@ public class WorkflowEngineCore1Test {
 
       // Execute purge
       StepResult purgeResult = purgeStep.execute(purgeCtx);
-      System.assertEquals(StepResult.ActionType.COMPLETE, purgeResult.action);
+      System.assertEquals(
+        StepResult.ActionType.COMPLETE,
+        purgeResult.directive().action
+      );
 
       // Verify ContentDocument links and files are deleted
       List<ContentDocumentLink> remainingLinks = [

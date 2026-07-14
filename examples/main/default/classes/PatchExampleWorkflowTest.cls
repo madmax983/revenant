@@ -109,8 +109,16 @@ public class PatchExampleWorkflowTest {
   @IsTest
   static void testInFlightInstanceWithoutPreRecordedPatchDefaultsToFalse() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      StepContext.mockInstanceCreatedDate = DateTime.newInstance(2026, 1, 1);
-      StepContext.mockClassLastModified = DateTime.newInstance(2026, 1, 2);
+      StepExecutionIndex.mockInstanceCreatedDate = DateTime.newInstance(
+        2026,
+        1,
+        1
+      );
+      StepExecutionIndex.mockClassLastModified = DateTime.newInstance(
+        2026,
+        1,
+        2
+      );
       try {
         // 1. Setup an in-flight instance that completed BookHotel under the old code (no patch recorded).
         //    Because BookHotel is completed (instance is in-flight), the patch insert-flight must
@@ -128,8 +136,8 @@ public class PatchExampleWorkflowTest {
           'Should naturally fall back to Economy Sedan because instance was in-flight and did not book flight'
         );
       } finally {
-        StepContext.mockInstanceCreatedDate = null;
-        StepContext.mockClassLastModified = null;
+        StepExecutionIndex.mockInstanceCreatedDate = null;
+        StepExecutionIndex.mockClassLastModified = null;
       }
     }
   }
