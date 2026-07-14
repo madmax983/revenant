@@ -7,10 +7,10 @@ import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.ge
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
 import getCancelEligibleCount from "@salesforce/apex/WorkflowDashboardController.getCancelEligibleCount";
-import cancelMatchingInstances from "@salesforce/apex/WorkflowDashboardController.cancelMatchingInstances";
+import cancelMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandController.cancelMatchingInstances";
 import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardController.getRedriveEligibleCount";
-import redriveMatchingInstances from "@salesforce/apex/WorkflowDashboardController.redriveMatchingInstances";
-import injectSignal from "@salesforce/apex/WorkflowDashboardController.injectSignal";
+import redriveMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandController.redriveMatchingInstances";
+import injectSignal from "@salesforce/apex/WorkflowDashboardCommandController.injectSignal";
 
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
@@ -23,7 +23,7 @@ jest.mock(
   { virtual: true },
 );
 jest.mock(
-  "@salesforce/apex/WorkflowDashboardController.cancelMatchingInstances",
+  "@salesforce/apex/WorkflowDashboardCommandController.cancelMatchingInstances",
   () => ({ default: jest.fn(() => Promise.resolve({ started: false })) }),
   { virtual: true },
 );
@@ -33,12 +33,12 @@ jest.mock(
   { virtual: true },
 );
 jest.mock(
-  "@salesforce/apex/WorkflowDashboardController.redriveMatchingInstances",
+  "@salesforce/apex/WorkflowDashboardCommandController.redriveMatchingInstances",
   () => ({ default: jest.fn(() => Promise.resolve({ started: false })) }),
   { virtual: true },
 );
 jest.mock(
-  "@salesforce/apex/WorkflowDashboardController.injectSignal",
+  "@salesforce/apex/WorkflowDashboardCommandController.injectSignal",
   () => ({ default: jest.fn() }),
   { virtual: true },
 );
