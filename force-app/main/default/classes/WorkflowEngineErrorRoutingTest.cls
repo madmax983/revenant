@@ -906,7 +906,7 @@ public class WorkflowEngineErrorRoutingTest {
 
       // Query adoption: only inst1 is non-terminal AND has __patch:change-1 = false.
       // So the count should be exactly 1.
-      Integer count = WorkflowEngine.getPatchAdoptionCount('change-1');
+      Integer count = WorkflowPatchAdoption.getPatchAdoptionCount('change-1');
       System.assertEquals(1, count, 'Adoption count should be 1');
     }
   }
@@ -924,7 +924,7 @@ public class WorkflowEngineErrorRoutingTest {
 
       // 2. Save patch decision to ContentVersion (offloaded payload)
       String capturesJson = '{"__patch:change-offload":false}';
-      String marker = WorkflowEngine.savePayloadIfNeeded(
+      String marker = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst.Id,
         capturesJson,
         'CapturedValues'
@@ -939,7 +939,9 @@ public class WorkflowEngineErrorRoutingTest {
       );
 
       // 4. Query adoption: it should resolve the offloaded payload and count it as 1!
-      Integer count = WorkflowEngine.getPatchAdoptionCount('change-offload');
+      Integer count = WorkflowPatchAdoption.getPatchAdoptionCount(
+        'change-offload'
+      );
       System.assertEquals(
         1,
         count,
@@ -951,7 +953,7 @@ public class WorkflowEngineErrorRoutingTest {
   @IsTest
   static void testGetPatchAdoptionCountThrowsExceptionWhenCapped() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngine.adoptionQueryLimit = 1;
+      WorkflowPatchAdoption.adoptionQueryLimit = 1;
       try {
         Workflow_Instance__c inst1 = new Workflow_Instance__c(
           Workflow_Name__c = 'TestWorkflow',
@@ -981,7 +983,7 @@ public class WorkflowEngineErrorRoutingTest {
         };
 
         try {
-          WorkflowEngine.getPatchAdoptionCount('change-capped');
+          WorkflowPatchAdoption.getPatchAdoptionCount('change-capped');
           System.assert(false, 'Should throw exception when query is capped');
         } catch (WorkflowEngine.WorkflowException e) {
           System.assert(
@@ -989,7 +991,7 @@ public class WorkflowEngineErrorRoutingTest {
           );
         }
       } finally {
-        WorkflowEngine.adoptionQueryLimit = 45000;
+        WorkflowPatchAdoption.adoptionQueryLimit = 45000;
       }
     }
   }
@@ -1017,7 +1019,7 @@ public class WorkflowEngineErrorRoutingTest {
           instanceJson,
           Workflow_Instance__c.class
         );
-        WorkflowEngine.mockInstancesForAdoption = new List<Workflow_Instance__c>{
+        WorkflowPatchAdoption.mockInstancesForAdoption = new List<Workflow_Instance__c>{
           mockInst
         };
 
@@ -1031,7 +1033,7 @@ public class WorkflowEngineErrorRoutingTest {
 
         // Query adoption count for 'foo' (which this workflow has NOT used exactly!)
         // Since it only has 'foo-v2', 'foo' adoption count should be 0, not 1!
-        Integer count = WorkflowEngine.getPatchAdoptionCount(
+        Integer count = WorkflowPatchAdoption.getPatchAdoptionCount(
           'foo',
           introducedAt
         );
@@ -1042,7 +1044,7 @@ public class WorkflowEngineErrorRoutingTest {
         );
 
         // If we query for 'foo-v2', it should count it as 1!
-        Integer countV2 = WorkflowEngine.getPatchAdoptionCount(
+        Integer countV2 = WorkflowPatchAdoption.getPatchAdoptionCount(
           'foo-v2',
           introducedAt
         );
@@ -1052,7 +1054,7 @@ public class WorkflowEngineErrorRoutingTest {
           'Should count mockInst as legacy for foo-v2 since it matches exactly'
         );
       } finally {
-        WorkflowEngine.mockInstancesForAdoption = null;
+        WorkflowPatchAdoption.mockInstancesForAdoption = null;
       }
     }
   }

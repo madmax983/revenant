@@ -63,7 +63,7 @@ public class WorkflowEngineCausationTest {
       )[0];
 
       // Verify lineage walk: C -> B -> A
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         resultC.instanceId
       );
       System.assertNotEquals(null, lineage);
@@ -147,7 +147,7 @@ public class WorkflowEngineCausationTest {
       child.Causation_Id__c = null;
       update child;
 
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         childId
       );
       System.assertEquals(2, lineage.size());
@@ -215,7 +215,7 @@ public class WorkflowEngineCausationTest {
       update childInst;
 
       // Assert that getCausationLineage on child resolves to originalParentId (older) and NOT newerParentId (newer)
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         childId
       );
       System.assertEquals(2, lineage.size());
@@ -278,7 +278,7 @@ public class WorkflowEngineCausationTest {
       );
 
       // Verify lineage walk from Run 2 correctly resolves to Parent
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         run2.Id
       );
       System.assertEquals(2, lineage.size());
@@ -323,7 +323,7 @@ public class WorkflowEngineCausationTest {
       );
 
       // Get causation lineage on Child
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         childId
       );
       System.assertEquals(2, lineage.size());
@@ -381,7 +381,7 @@ public class WorkflowEngineCausationTest {
       Test.setCreatedDate(childId, DateTime.now());
 
       // Get causation lineage on Child. It should NOT resolve to itself, but correctly walk up to originalParentId.
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         childId
       );
       System.assertEquals(2, lineage.size(), 'Must walk up to parent');
@@ -429,7 +429,7 @@ public class WorkflowEngineCausationTest {
       // Get causation lineage on Child.
       // Even though lookalikeId is a valid ID syntax, it does not exist in the database,
       // so getCausationLineage should fall back to key-based query and resolve to parentId.
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         childId
       );
       System.assertEquals(
@@ -514,7 +514,7 @@ public class WorkflowEngineCausationTest {
       // Get causation lineage on successor (run2).
       // Because lineage lookup bounds key resolution by the earliest predecessor creation time (5 mins ago),
       // it should resolve to originalParentId (10 mins ago) and NOT newerParentId (now).
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         run2.Id
       );
       System.assertEquals(
@@ -560,7 +560,7 @@ public class WorkflowEngineCausationTest {
       // Run getCausationLineage on the last item.
       // It should not throw any exceptions (governor limits) and should complete successfully.
       Test.startTest();
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         chain[6].Id
       );
       Test.stopTest();
@@ -635,7 +635,7 @@ public class WorkflowEngineCausationTest {
       // Get causation lineage on the last run of the chain.
       // Because we bulk-query 5 levels at a time, we will successfully walk back all 8 levels to the first run (5 mins ago),
       // and correctly resolve to originalParentId (10 mins ago) instead of newerParentId (now).
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         chain[7].Id
       );
       System.assertEquals(
@@ -690,7 +690,7 @@ public class WorkflowEngineCausationTest {
 
       // 3. Resolve lineage and verify it correctly parses and matches to parentId,
       // and returns the clean causationId in the DTO.
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         childId
       );
       System.assertEquals(2, lineage.size());
@@ -735,7 +735,7 @@ public class WorkflowEngineCausationTest {
       );
 
       // 3. Resolve lineage and verify it correctly parses 'order#123' (preserving the '#' character) and resolves to parentId
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         childId
       );
       System.assertEquals(2, lineage.size());
@@ -772,7 +772,7 @@ public class WorkflowEngineCausationTest {
 
       // Resolve lineage. Since the child's causation timestamp is stamped with the actual database CreatedDate
       // after insert, the parent is correctly resolved even without any buffer.
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         childId
       );
       System.assertEquals(2, lineage.size());
@@ -820,7 +820,7 @@ public class WorkflowEngineCausationTest {
       Test.setCreatedDate(childId, DateTime.now());
 
       // Resolve lineage. It should trace back to the terminal successor (run2) and NOT the stale predecessor (run1)
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         childId
       );
       System.assertEquals(2, lineage.size());
@@ -865,7 +865,7 @@ public class WorkflowEngineCausationTest {
       );
 
       // 3. Resolve lineage and verify it correctly parses 'order#1234567890123' (preserving the '#' and 13 digits) and resolves to parentId
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         childId
       );
       System.assertEquals(2, lineage.size());
@@ -910,7 +910,7 @@ public class WorkflowEngineCausationTest {
       );
 
       // 3. Resolve lineage and verify it correctly parses 'order::ts::prod' (preserving the '::ts::prod' prefix) and resolves to parentId
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         childId
       );
       System.assertEquals(2, lineage.size());
@@ -955,7 +955,7 @@ public class WorkflowEngineCausationTest {
       );
 
       // 3. Resolve lineage and verify it correctly parses 'order::ts::1719859200000' (preserving the full key) and resolves to parentId
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         childId
       );
       System.assertEquals(2, lineage.size());

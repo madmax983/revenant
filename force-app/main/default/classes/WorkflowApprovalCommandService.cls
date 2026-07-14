@@ -92,7 +92,7 @@ public inherited sharing class WorkflowApprovalCommandService {
       ORDER BY CreatedDate DESC, Id DESC
       LIMIT 50
     ]) {
-      String resolved = WorkflowEngine.resolvePayload(se.Output__c);
+      String resolved = WorkflowPayloadOffload.resolvePayload(se.Output__c);
       if (
         String.isBlank(resolved) || !resolved.contains('waitingForApproval')
       ) {

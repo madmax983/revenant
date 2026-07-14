@@ -324,7 +324,7 @@ public class StepContextLogPatchTest {
 
       // Save the patch decision JSON to ContentVersion
       String capturesJson = '{"__patch:change-offloaded":true}';
-      String marker = WorkflowEngine.savePayloadIfNeeded(
+      String marker = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst.Id,
         capturesJson,
         'CapturedValues'

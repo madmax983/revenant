@@ -484,7 +484,7 @@ public class CleanupWorkflowTest {
       System.assert(!stepExecs.isEmpty());
 
       CleanupWorkflow.PurgeState midState = (CleanupWorkflow.PurgeState) JSON.deserialize(
-        WorkflowEngine.resolvePayload(stepExecs[0].Output__c),
+        WorkflowPayloadOffload.resolvePayload(stepExecs[0].Output__c),
         CleanupWorkflow.PurgeState.class
       );
       System.assertEquals(

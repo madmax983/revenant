@@ -176,7 +176,7 @@ public inherited sharing class WorkflowHarnessCore {
     WorkflowTestHarness.Result r = new WorkflowTestHarness.Result();
     r.instanceId = ctx.rootInstanceId;
     r.status = root.Status__c;
-    r.output = WorkflowEngine.resolvePayload(root.Output__c);
+    r.output = WorkflowPayloadOffload.resolvePayload(root.Output__c);
     r.hops = ctx.totalHops;
     r.isTerminal = TERMINAL_STATUSES.contains(root.Status__c);
     r.isSuspended = root.Status__c == 'Suspended';

@@ -37,7 +37,7 @@ public inherited sharing class StepExecutionParse {
       for (Integer j = i; j < i + batchSize && j < rawCaptures.size(); j++) {
         batchRaw.add(rawCaptures[j]);
       }
-      resolvedCaptures.addAll(WorkflowEngine.resolvePayloads(batchRaw));
+      resolvedCaptures.addAll(WorkflowPayloadOffload.resolvePayloads(batchRaw));
     }
     return resolvedCaptures;
   }

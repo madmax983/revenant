@@ -151,7 +151,7 @@ public inherited sharing class StepChildOutcomes {
     if (res.rawPayloads.isEmpty()) {
       return;
     }
-    List<String> resolvedPayloads = WorkflowEngine.resolvePayloads(
+    List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
       res.rawPayloads
     );
     for (Integer j = 0; j < resolvedPayloads.size(); j++) {

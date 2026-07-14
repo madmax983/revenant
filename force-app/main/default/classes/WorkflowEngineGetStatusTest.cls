@@ -681,7 +681,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
       // Offload via the engine's own helper so the marker format is identical
-      String marker = WorkflowEngine.savePayloadIfNeeded(
+      String marker = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst.Id,
         bigPayload,
         'Output-' + inst.Id
@@ -750,7 +750,7 @@ private class WorkflowEngineGetStatusTest {
         .output(null)
         .errorMessage(null)
         .build();
-      String marker = WorkflowEngine.savePayloadIfNeeded(
+      String marker = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst.Id,
         bigPayload,
         'Output-' + inst.Id
@@ -871,12 +871,12 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      inst1.Output__c = WorkflowEngine.savePayloadIfNeeded(
+      inst1.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst1.Id,
         big1,
         'Out-' + inst1.Id
       );
-      inst2.Output__c = WorkflowEngine.savePayloadIfNeeded(
+      inst2.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst2.Id,
         big2,
         'Out-' + inst2.Id
@@ -1022,7 +1022,7 @@ private class WorkflowEngineGetStatusTest {
         .output(null)
         .errorMessage(null)
         .build();
-      inst.Output__c = WorkflowEngine.savePayloadIfNeeded(
+      inst.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst.Id,
         big,
         'Out-' + inst.Id

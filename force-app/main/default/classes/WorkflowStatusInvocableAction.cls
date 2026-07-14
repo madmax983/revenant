@@ -302,7 +302,9 @@ public inherited sharing class WorkflowStatusInvocableAction {
           inst.Progress__c,
           dataByAttachment
         );
-        res.causationId = WorkflowEngine.cleanCausationId(inst.Causation_Id__c);
+        res.causationId = WorkflowCausationParser.cleanCausationId(
+          inst.Causation_Id__c
+        );
       }
       results.add(res);
     }

@@ -39,8 +39,6 @@ public inherited sharing class WorkflowEngine {
   public static Integer reclaimThresholdMinutes = null;
   @TestVisible
   public static Datetime mockNow = null;
-  @TestVisible
-  private static Integer predecessorQueriesRemaining = 15;
 
   // Base + jitter (seconds) before a concurrency-parked instance re-attempts
   // admission. Precise scheduling drives it promptly when slots free; under a large
@@ -61,7 +59,7 @@ public inherited sharing class WorkflowEngine {
 
   // Instances in these statuses are considered in-flight; a start that collides
   // with one of them always dedups to the existing instance.
-  private static final Set<String> ACTIVE_STATUSES = new Set<String>{
+  public static final Set<String> ACTIVE_STATUSES = new Set<String>{
     'Pending',
     'Running',
     'Suspended',
@@ -153,11 +151,6 @@ public inherited sharing class WorkflowEngine {
   // page (every row claimed by a sibling between query and lock) before giving
   // up, so a loser does not return empty while later Received rows remain.
   private static final Integer PARALLEL_CLAIM_PAGE_RETRIES = 3;
-
-  @TestVisible
-  private static Integer adoptionQueryLimit = 45000;
-  @TestVisible
-  private static List<Workflow_Instance__c> mockInstancesForAdoption;
 
   private static Map<String, Integer> stepTimeoutCache = new Map<String, Integer>();
 
@@ -956,9 +949,17 @@ public inherited sharing class WorkflowEngine {
     return remaining;
   }
 
-  // Builds a WorkflowStatus DTO from a queried instance, using the pre-fetched
-  // offloaded-output map so no additional SOQL is issued per row.
-  private static WorkflowStatus buildStatus(
+  /**
+   * @description Builds a WorkflowStatus DTO from a queried instance, using the
+   * pre-fetched offloaded-output map so no additional SOQL is issued per row.
+   * Exposed for {@link WorkflowCausationLineage}, which assembles lineage status
+   * DTOs through this method.
+   * @param inst the queried instance row to project
+   * @param resolvedOutputByDocId the pre-resolved offloaded-output map keyed by
+   *        ContentDocumentId
+   * @return the assembled status DTO
+   */
+  public static WorkflowStatus buildStatus(
     Workflow_Instance__c inst,
     Map<Id, String> resolvedOutputByDocId
   ) {
@@ -983,13 +984,20 @@ public inherited sharing class WorkflowEngine {
     statusDto.isTerminal = terminal;
     statusDto.errorMessage = inst.Error_Message__c;
     statusDto.output = output;
-    statusDto.causationId = cleanCausationId(inst.Causation_Id__c);
+    statusDto.causationId = WorkflowCausationParser.cleanCausationId(
+      inst.Causation_Id__c
+    );
     return statusDto;
   }
 
-  // Resolves all offload markers found in a collection of instances in one
-  // ContentVersion SOQL query. Returns a map from ContentDocumentId → resolved text.
-  private static Map<Id, String> bulkResolveOffloadedOutputs(
+  /**
+   * @description Resolves all offload markers found in a collection of instances
+   * in one ContentVersion SOQL query. Exposed for {@link WorkflowCausationLineage},
+   * which bulk-resolves ancestor outputs before assembling lineage status DTOs.
+   * @param instances the instances whose offloaded outputs to resolve
+   * @return a map from ContentDocumentId to resolved text (empty when none)
+   */
+  public static Map<Id, String> bulkResolveOffloadedOutputs(
     List<Workflow_Instance__c> instances
   ) {
     Set<Id> docIds = new Set<Id>();
@@ -1045,563 +1053,6 @@ public inherited sharing class WorkflowEngine {
   }
 
   // ─── End Read API ──────────────────────────────────────────────────────────
-
-  /**
-   * Bare key + optional parsed timestamp recovered from a `key:`-scoped
-   * causation id. `correlationKey` is the key stripped of any encoded
-   * timestamp suffix; `earliestCreatedDate` is populated when the id carried
-   * an inline timestamp (JSON `t`, `::ts::<millis>`, or legacy `#<millis>`),
-   * otherwise null so the caller falls back to `getEarliestPredecessorCreatedDate`.
-   */
-  private class CausationKeyParse {
-    private String correlationKey;
-    private DateTime earliestCreatedDate;
-
-    private CausationKeyParse(
-      String correlationKey,
-      DateTime earliestCreatedDate
-    ) {
-      this.correlationKey = correlationKey;
-      this.earliestCreatedDate = earliestCreatedDate;
-    }
-  }
-
-  /**
-   * Returns the historical causation lineage (parent/ancestor chain) of a workflow
-   * instance ID up to the root cause. Bounded to a maximum depth of 12 hops to safeguard
-   * against cyclic/governor limits. Performs zero DML.
-   * @param instanceId Id of the instance whose causation chain is walked
-   * @return status DTOs ordered from the given instance up to its root cause;
-   * empty when instanceId is null
-   */
-  public static List<WorkflowStatus> getCausationLineage(Id instanceId) {
-    List<WorkflowStatus> lineage = new List<WorkflowStatus>();
-    if (instanceId == null) {
-      return lineage;
-    }
-
-    predecessorQueriesRemaining = 15;
-    Id currentId = instanceId;
-    Set<Id> visitedIds = new Set<Id>();
-    Integer maxHops = 12;
-    List<Workflow_Instance__c> ancestors = new List<Workflow_Instance__c>();
-
-    for (Integer hop = 0; hop < maxHops; hop++) {
-      if (currentId == null || visitedIds.contains(currentId)) {
-        break;
-      }
-      visitedIds.add(currentId);
-
-      Workflow_Instance__c inst = queryLineageInstanceById(currentId);
-      if (inst == null) {
-        break;
-      }
-      ancestors.add(inst);
-
-      currentId = resolveNextAncestorId(inst, visitedIds);
-    }
-
-    Map<Id, String> resolvedOutputByDocId = bulkResolveOffloadedOutputs(
-      ancestors
-    );
-    for (Workflow_Instance__c inst : ancestors) {
-      lineage.add(buildStatus(inst, resolvedOutputByDocId));
-    }
-    return lineage;
-  }
-
-  /**
-   * @description Fetches the single Workflow_Instance__c row at `currentId`
-   * for lineage-walk assembly. Kept as a helper so the per-hop SOQL is not
-   * lexically inside `getCausationLineage`'s hop loop. The per-hop query is
-   * intentional and bounded: the caller walks at most 12 hops (maxHops) with a
-   * visited-id guard, so this helper is called at most 12 times per lineage
-   * request.
-   * @param currentId the ancestor id to fetch this hop
-   * @return the ancestor instance row, or null when nothing is found
-   */
-  private static Workflow_Instance__c queryLineageInstanceById(Id currentId) {
-    List<Workflow_Instance__c> records = [
-      SELECT
-        Id,
-        Workflow_Name__c,
-        Correlation_Key__c,
-        Status__c,
-        Error_Message__c,
-        Causation_Id__c,
-        Previous_Instance__c,
-        Parent_Instance__c,
-        Output__c,
-        CreatedDate
-      FROM Workflow_Instance__c
-      WHERE Id = :currentId
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    return records.isEmpty() ? null : records[0];
-  }
-
-  /**
-   * @description Parses a `key:`-prefixed causation id into a bare correlation
-   * key plus an optional inline timestamp. Recognizes three encodings in this
-   * priority order: current JSON form `key:{"k":..,"t":..}` -> interim
-   * `<k>::ts::<millis>` suffix (when not JSON) -> legacy `<k>#<millis>`
-   * suffix (fallback when neither of the above produced a timestamp). Any
-   * partial-parse exception is swallowed so callers fall through to
-   * `getEarliestPredecessorCreatedDate`; on JSON partial success (the parse
-   * setting `k` before failing on `t`), the correlation key remains
-   * overwritten, matching the pre-refactor behavior.
-   * @param cause a non-blank `key:`-prefixed causation id
-   * @return the recovered bare key and, when the id carried one, the parsed
-   *   inline timestamp; the timestamp is null when no encoded value is
-   *   present or recoverable
-   */
-  private static CausationKeyParse parseCausationTimestamp(String cause) {
-    CausationKeyParse first = cause.startsWith('key:{"')
-      ? parseJsonCausation(cause)
-      : parseTsSuffix(cause.substring(4));
-    if (first.earliestCreatedDate != null) {
-      return first;
-    }
-    // Backwards compatibility fallback for older '#' format. Applied against
-    // whatever the first pass produced for correlationKey (matches pre-refactor
-    // behavior, where the '#' pass ran on the possibly-JSON-mutated key).
-    return parseHashSuffix(first.correlationKey);
-  }
-
-  /**
-   * @description Parses the JSON `key:{"k":..,"t":..}` causation form. Returns
-   * the recovered bare key and inline timestamp on success; on any
-   * partial-parse failure, returns whatever fields the try block had already
-   * assigned (bare key from `data.get('k')` may be populated even when the
-   * timestamp is not), preserving the pre-refactor partial-success behavior.
-   * @param cause the causation id, guaranteed to start with `key:{"`
-   * @return a parse holder with the bare key (or the raw substring on total
-   *   failure) and the parsed timestamp when available
-   */
-  private static CausationKeyParse parseJsonCausation(String cause) {
-    String correlationKey = cause.substring(4);
-    DateTime earliestCreatedDate = null;
-    try {
-      String jsonStr = cause.substring(4);
-      Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
-        jsonStr
-      );
-      correlationKey = (String) data.get('k');
-      Long ms = (Long) data.get('t');
-      earliestCreatedDate = DateTime.newInstance(ms);
-    } catch (Exception ignored) {
-      // fallback: leave earliestCreatedDate unresolved and continue
-    }
-    return new CausationKeyParse(correlationKey, earliestCreatedDate);
-  }
-
-  /**
-   * @description Parses the interim `<k>::ts::<millis>` suffix. Trims the
-   * suffix from the correlation key when the numeric tail is 12-15 digits and
-   * parses as a Long; on any failure (no suffix, wrong length, non-numeric)
-   * returns the input key with a null timestamp so callers fall through.
-   * @param correlationKey the bare key (already stripped of the `key:` prefix)
-   * @return a parse holder with the possibly-trimmed key and, on success, the
-   *   parsed inline timestamp
-   */
-  private static CausationKeyParse parseTsSuffix(String correlationKey) {
-    Integer tsIndex = correlationKey.lastIndexOf('::ts::');
-    if (tsIndex == -1) {
-      return new CausationKeyParse(correlationKey, null);
-    }
-    String tsStr = correlationKey.substring(tsIndex + 6);
-    if (tsStr.length() < 12 || tsStr.length() > 15) {
-      return new CausationKeyParse(correlationKey, null);
-    }
-    try {
-      Long ms = Long.valueOf(tsStr);
-      return new CausationKeyParse(
-        correlationKey.substring(0, tsIndex),
-        DateTime.newInstance(ms)
-      );
-    } catch (Exception ignored) {
-      // fallback: leave earliestCreatedDate unresolved and continue
-    }
-    return new CausationKeyParse(correlationKey, null);
-  }
-
-  /**
-   * @description Parses the legacy `<k>#<millis>` suffix as the final
-   * fallback. Trims the suffix from the correlation key when the numeric tail
-   * is 12-15 digits and parses as a Long; on any failure (no suffix, wrong
-   * length, non-numeric) returns the input key with a null timestamp.
-   * @param correlationKey the possibly-JSON-normalized key from the first pass
-   * @return a parse holder with the possibly-trimmed key and, on success, the
-   *   parsed legacy inline timestamp
-   */
-  private static CausationKeyParse parseHashSuffix(String correlationKey) {
-    Integer hashIndex = correlationKey.lastIndexOf('#');
-    if (hashIndex == -1) {
-      return new CausationKeyParse(correlationKey, null);
-    }
-    String tsStr = correlationKey.substring(hashIndex + 1);
-    if (tsStr.length() < 12 || tsStr.length() > 15) {
-      return new CausationKeyParse(correlationKey, null);
-    }
-    try {
-      Long ms = Long.valueOf(tsStr);
-      return new CausationKeyParse(
-        correlationKey.substring(0, hashIndex),
-        DateTime.newInstance(ms)
-      );
-    } catch (Exception ignored) {
-      // fallback: leave earliestCreatedDate unresolved and continue
-    }
-    return new CausationKeyParse(correlationKey, null);
-  }
-
-  /**
-   * @description Resolves the next ancestor id for a lineage-walk hop by
-   * inspecting the instance's `Causation_Id__c` and, when it is not present,
-   * falling back to `Parent_Instance__c`. Handles three ancestor encodings in
-   * the same priority order as the pre-refactor loop body: (1) blank
-   * causation id -> Parent_Instance__c; (2) valid direct Id -> confirm the
-   * target row exists; (3) `key:`-scoped id -> resolve via correlation-key
-   * parent query bounded by `earliestCreatedDate` and the visited-id set. A
-   * valid direct-id whose target row does not exist resolves to null (the
-   * loop then breaks on the next iteration).
-   *
-   * Per-hop SOQL is intentional and bounded: the outer walk runs at most 12
-   * hops, so this helper issues at most two SOQL queries per call (direct
-   * lookup + optional `key:` parent query, plus whatever
-   * `getEarliestPredecessorCreatedDate` uses when no inline timestamp is
-   * present) and the total is capped by the hop count.
-   * @param inst the ancestor row from this hop
-   * @param visitedIds the ids already walked; used to short-circuit the
-   *   correlation-key parent query so the walk cannot revisit a previous hop
-   * @return the next currentId to walk, or null to signal end-of-lineage
-   *   (loop breaks on the next iteration)
-   */
-  private static Id resolveNextAncestorId(
-    Workflow_Instance__c inst,
-    Set<Id> visitedIds
-  ) {
-    String cause = inst.Causation_Id__c;
-    if (String.isBlank(cause)) {
-      return inst.Parent_Instance__c;
-    }
-
-    if (isValidId(cause)) {
-      List<Workflow_Instance__c> directRecords = [
-        SELECT Id
-        FROM Workflow_Instance__c
-        WHERE Id = :cause
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      // Valid direct id whose target row is missing resolves to null so the
-      // outer loop breaks on the next iteration (matches pre-refactor behavior,
-      // where resolvedId stayed null and the final `else` set currentId=null).
-      return directRecords.isEmpty() ? null : directRecords[0].Id;
-    }
-
-    if (cause.startsWith('key:')) {
-      CausationKeyParse parsed = parseCausationTimestamp(cause);
-      String correlationKey = parsed.correlationKey;
-      DateTime earliestCreatedDate = parsed.earliestCreatedDate;
-      if (earliestCreatedDate == null) {
-        earliestCreatedDate = getEarliestPredecessorCreatedDate(inst);
-      }
-
-      List<Workflow_Instance__c> parents = [
-        SELECT Id
-        FROM Workflow_Instance__c
-        WHERE
-          (Correlation_Key__c = :correlationKey
-          OR Active_Correlation_Key__c = :correlationKey
-          OR Root_Correlation_Key__c = :correlationKey)
-          AND CreatedDate <= :earliestCreatedDate
-          AND Id NOT IN :visitedIds
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC
-        LIMIT 1
-      ];
-      return parents.isEmpty() ? null : parents[0].Id;
-    }
-
-    return null;
-  }
-
-  private static Boolean isValidId(String val) {
-    if (String.isBlank(val)) {
-      return false;
-    }
-    try {
-      Id parsed = (Id) val;
-      return parsed.getSObjectType() == Workflow_Instance__c.SObjectType;
-    } catch (Exception ex) {
-      return false;
-    }
-  }
-
-  /**
-   * Recovers the bare key from the current JSON causation form (`key:{...}`).
-   * @param val a `key:`-scoped causation id
-   * @return the `key:<k>` display value, or null when val is not JSON-shaped or
-   *   cannot be parsed (so callers fall through to legacy trimming)
-   */
-  private static String parseKeyScopedJson(String val) {
-    if (!val.startsWith('key:{"')) {
-      return null;
-    }
-    try {
-      String jsonStr = val.substring(4);
-      Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
-        jsonStr
-      );
-      return 'key:' + (String) data.get('k');
-    } catch (Exception ignored) {
-      return null;
-    }
-  }
-
-  /**
-   * Trims a legacy numeric uniqueness suffix delimited by the given separator.
-   * @param val the raw value
-   * @param separator the delimiter preceding the numeric suffix
-   * @return the value with the suffix removed, or null when there is no valid
-   *   12-15 digit numeric suffix to strip
-   */
-  private static String stripNumericSuffix(String val, String separator) {
-    Integer idx = val.lastIndexOf(separator);
-    if (idx == -1) {
-      return null;
-    }
-    String suffix = val.substring(idx + separator.length());
-    if (suffix.length() < 12 || suffix.length() > 15) {
-      return null;
-    }
-    try {
-      Long.valueOf(suffix);
-      return val.substring(0, idx);
-    } catch (Exception ignored) {
-      return null;
-    }
-  }
-
-  /**
-   * @description Normalizes a stored causation id for display by stripping the
-   * uniqueness suffix from a `key:`-scoped value. Parses the current JSON form
-   * (`key:{...}`) to recover the bare key, and falls back to trimming legacy
-   * `::ts::<millis>` or `#<millis>` suffixes. Non-key values are returned unchanged.
-   * @param val the raw causation id to clean
-   * @return the display causation id, or the original value when nothing to strip
-   */
-  public static String cleanCausationId(String val) {
-    if (String.isBlank(val) || !val.startsWith('key:')) {
-      return val;
-    }
-    String fromJson = parseKeyScopedJson(val);
-    if (fromJson != null) {
-      return fromJson;
-    }
-    // Backwards compatibility fallback for older formats
-    String tsTrimmed = stripNumericSuffix(val, '::ts::');
-    if (tsTrimmed != null) {
-      return tsTrimmed;
-    }
-    String hashTrimmed = stripNumericSuffix(val, '#');
-    if (hashTrimmed != null) {
-      return hashTrimmed;
-    }
-    return val;
-  }
-
-  private static Boolean hasUnambiguousTimestampSuffix(String val) {
-    if (String.isBlank(val)) {
-      return false;
-    }
-    Integer tsIndex = val.lastIndexOf('::ts::');
-    if (tsIndex == -1 || tsIndex == val.length() - 6) {
-      return false;
-    }
-    String suffix = val.substring(tsIndex + 6);
-    if (suffix.length() < 12 || suffix.length() > 15) {
-      return false;
-    }
-    try {
-      Long.valueOf(suffix);
-      return true;
-    } catch (Exception ex) {
-      return false;
-    }
-  }
-
-  private static DateTime getEarliestPredecessorCreatedDate(
-    Workflow_Instance__c inst
-  ) {
-    return getEarliestPredecessorCreatedDate(inst, 100);
-  }
-
-  /**
-   * Mutable state for a predecessor-chain walk: the earliest CreatedDate seen so
-   * far, the next predecessor id to visit, the set of already-visited ids, the
-   * hop count and the hop ceiling.
-   */
-  private class PredecessorWalk {
-    DateTime earliest;
-    Id prevId;
-    Set<Id> visited;
-    Integer hopsCount;
-    Integer maxPredecessors;
-  }
-
-  /**
-   * Whether the walk may take another hop to a present predecessor node: the
-   * next id is set, unvisited, the node is present, and the hop ceiling is not
-   * yet reached.
-   * @param walk the walk state
-   * @param nodePresent whether the next predecessor node is populated
-   * @return true when the walk may advance to the node
-   */
-  private static Boolean canLookAhead(
-    PredecessorWalk walk,
-    Boolean nodePresent
-  ) {
-    return walk.prevId != null &&
-      !walk.visited.contains(walk.prevId) &&
-      nodePresent &&
-      walk.hopsCount < walk.maxPredecessors;
-  }
-
-  /**
-   * Walks up to four further predecessor levels in-memory from the queried row
-   * `p` (whose Previous_Instance__r chain was pre-fetched five deep), advancing
-   * the walk's earliest/prevId/hopsCount/visited state. Stops at the first level
-   * whose predecessor is absent, already visited, or beyond the hop ceiling.
-   * @param walk the walk state to advance
-   * @param p the queried row with its pre-fetched predecessor chain
-   */
-  private static void advanceInMemoryLookAhead(
-    PredecessorWalk walk,
-    Workflow_Instance__c p
-  ) {
-    if (!canLookAhead(walk, p.Previous_Instance__r != null)) {
-      return;
-    }
-    walk.visited.add(walk.prevId);
-    walk.earliest = p.Previous_Instance__r.CreatedDate;
-    walk.prevId = p.Previous_Instance__r.Previous_Instance__c;
-    walk.hopsCount++;
-
-    if (
-      !canLookAhead(walk, p.Previous_Instance__r.Previous_Instance__r != null)
-    ) {
-      return;
-    }
-    walk.visited.add(walk.prevId);
-    walk.earliest = p.Previous_Instance__r.Previous_Instance__r.CreatedDate;
-    walk.prevId = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c;
-    walk.hopsCount++;
-
-    if (
-      !canLookAhead(
-        walk,
-        p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c != null
-      )
-    ) {
-      return;
-    }
-    walk.visited.add(walk.prevId);
-    walk.earliest = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
-      .CreatedDate;
-    walk.prevId = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
-      .Previous_Instance__c;
-    walk.hopsCount++;
-
-    if (
-      !canLookAhead(
-        walk,
-        p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
-          .Previous_Instance__c != null
-      )
-    ) {
-      return;
-    }
-    walk.visited.add(walk.prevId);
-    walk.earliest = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
-      .Previous_Instance__r.CreatedDate;
-    walk.prevId = p.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r
-      .Previous_Instance__r.Previous_Instance__c;
-    walk.hopsCount++;
-  }
-
-  private static DateTime getEarliestPredecessorCreatedDate(
-    Workflow_Instance__c inst,
-    Integer maxPredecessors
-  ) {
-    PredecessorWalk walk = new PredecessorWalk();
-    walk.earliest = inst.CreatedDate;
-    walk.prevId = inst.Previous_Instance__c;
-    walk.visited = new Set<Id>{ inst.Id };
-    walk.hopsCount = 0;
-    walk.maxPredecessors = maxPredecessors;
-    while (
-      walk.prevId != null &&
-      !walk.visited.contains(walk.prevId) &&
-      walk.hopsCount < maxPredecessors &&
-      predecessorQueriesRemaining > 0
-    ) {
-      walk.visited.add(walk.prevId);
-      predecessorQueriesRemaining--;
-      Workflow_Instance__c p = queryPredecessorChain(walk.prevId);
-      if (p == null) {
-        break;
-      }
-
-      walk.earliest = p.CreatedDate;
-      walk.prevId = p.Previous_Instance__c;
-      walk.hopsCount++;
-
-      // Look ahead up to 4 more levels from p in-memory
-      advanceInMemoryLookAhead(walk, p);
-    }
-    return walk.earliest;
-  }
-
-  /**
-   * Fetches one predecessor instance (with 5 chain levels of
-   * {@code Previous_Instance__r} pre-fetched) for a single hop of the
-   * predecessor-chain walk in {@link getEarliestPredecessorCreatedDate}.
-   * <p><b>Intentional per-iteration SOQL.</b> This runs exactly one SOQL query
-   * per hop of a sequential predecessor-chain graph walk: the next predecessor
-   * id is only knowable after the current row is read, so the walk cannot be
-   * bulkified into a single query. It is governor-safe by <b>two independent
-   * bounds</b> enforced in the caller's {@code while} condition &mdash; the
-   * per-call {@code maxPredecessors} hop cap AND the transaction-wide
-   * {@code predecessorQueriesRemaining} query budget &mdash; and each query
-   * already look-ahead-fetches 5 chain levels to minimise the hop count.
-   * @param prevId the predecessor instance id to fetch
-   * @return the predecessor row, or null when no matching row exists
-   *         (signalling the caller to stop walking)
-   */
-  private static Workflow_Instance__c queryPredecessorChain(Id prevId) {
-    List<Workflow_Instance__c> prevs = [
-      SELECT
-        Id,
-        CreatedDate,
-        Previous_Instance__c,
-        Previous_Instance__r.CreatedDate,
-        Previous_Instance__r.Previous_Instance__c,
-        Previous_Instance__r.Previous_Instance__r.CreatedDate,
-        Previous_Instance__r.Previous_Instance__r.Previous_Instance__c,
-        Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.CreatedDate,
-        Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c,
-        Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.CreatedDate,
-        Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c
-      FROM Workflow_Instance__c
-      WHERE Id = :prevId
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    return prevs.isEmpty() ? null : prevs[0];
-  }
 
   /**
    * Starts a new durable workflow instance (get-or-start). If an instance with
@@ -1860,7 +1311,7 @@ public inherited sharing class WorkflowEngine {
     String correlationKey = req.correlationKey;
     Object input = req.input;
     Map<String, String> attributes = req.attributes;
-    validateCorrelationKey(correlationKey);
+    WorkflowPayloadOffload.validateCorrelationKey(correlationKey);
     validateAttributes(attributes);
 
     // Get-or-start: return an existing instance within the dedup scope (active,
@@ -1899,7 +1350,7 @@ public inherited sharing class WorkflowEngine {
       return raceWinner;
     }
 
-    instance.Input__c = savePayloadIfNeeded(
+    instance.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       (req.inputJson != null)
         ? req.inputJson
@@ -2331,7 +1782,9 @@ public inherited sharing class WorkflowEngine {
         parentIds.add(se.Workflow_Instance__c);
         rawOutputs.add(se.Output__c);
       }
-      List<String> resolved = resolvePayloads(rawOutputs);
+      List<String> resolved = WorkflowPayloadOffload.resolvePayloads(
+        rawOutputs
+      );
       for (Integer i = 0; i < parentIds.size(); i++) {
         scan.resolvedOutputsByParentId.put(parentIds[i], resolved[i]);
       }
@@ -3104,7 +2557,7 @@ public inherited sharing class WorkflowEngine {
       if (req == null) {
         continue;
       }
-      validateCorrelationKey(req.correlationKey);
+      WorkflowPayloadOffload.validateCorrelationKey(req.correlationKey);
       validateAttributes(req.attributes);
       if (String.isNotBlank(req.correlationKey)) {
         correlationKeys.add(req.correlationKey);
@@ -3413,7 +2866,7 @@ public inherited sharing class WorkflowEngine {
       String inputJson = (req.inputJson != null)
         ? req.inputJson
         : ((req.input != null) ? JSON.serialize(req.input) : null);
-      instance.Input__c = savePayloadIfNeeded(
+      instance.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         instance.Id,
         inputJson,
         'Input_' + instance.Id
@@ -4120,7 +3573,7 @@ public inherited sharing class WorkflowEngine {
     }
     Workflow_Step_Execution__c stepExec = activeSteps[0];
     stepExec.Status__c = 'Running';
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       payload,
       'Resume_' + stepExec.Id
@@ -4398,7 +3851,7 @@ public inherited sharing class WorkflowEngine {
     String payload
   ) {
     stepExec.Status__c = 'Running';
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       inst.Id,
       payload,
       'Resume_' + stepExec.Id
@@ -5200,11 +4653,16 @@ public inherited sharing class WorkflowEngine {
     // in Input__c of the fallback exec to durably signal the timeout-triggered
     // path. Strip it before passing inputJson to the context so the author step
     // never sees the engine-internal key.
-    String resolvedInput = resolvePayload(stepExec.Input__c);
+    String resolvedInput = WorkflowPayloadOffload.resolvePayload(
+      stepExec.Input__c
+    );
     Boolean isTimeoutResume =
       String.isNotBlank(resolvedInput) &&
       resolvedInput.contains('$timeoutResume') &&
-      'true'.equalsIgnoreCase(readJsonMapKey(resolvedInput, '$timeoutResume'));
+      'true'
+        .equalsIgnoreCase(
+          WorkflowPayloadOffload.readJsonMapKey(resolvedInput, '$timeoutResume')
+        );
     if (isTimeoutResume) {
       resolvedInput = stripJsonMapKey(resolvedInput, '$timeoutResume');
       // Persist the cleaned input back to the locked record so the engine marker
@@ -5222,9 +4680,11 @@ public inherited sharing class WorkflowEngine {
       .workflowName(instance.Workflow_Name__c)
       .stepName(ctx.activeStepName)
       .inputJson(resolvedInput)
-      .previousStepOutput(resolvePayload(prevOutput))
+      .previousStepOutput(WorkflowPayloadOffload.resolvePayload(prevOutput))
       .stepStateJson(resolveStepStateJson(stepExec))
-      .workflowInputJson(resolvePayload(instance.Input__c))
+      .workflowInputJson(
+        WorkflowPayloadOffload.resolvePayload(instance.Input__c)
+      )
       .workflowVersion(resolveWorkflowVersion(instance))
       .stepVisit(ctx.stepVisit)
       .signalSource(signalSrc)
@@ -5244,7 +4704,9 @@ public inherited sharing class WorkflowEngine {
   private static String resolveStepStateJson(
     Workflow_Step_Execution__c stepExec
   ) {
-    String resolvedState = resolvePayload(stepExec.Output__c);
+    String resolvedState = WorkflowPayloadOffload.resolvePayload(
+      stepExec.Output__c
+    );
     if (
       String.isNotBlank(resolvedState) && resolvedState.contains('$timeoutStep')
     ) {
@@ -5297,7 +4759,9 @@ public inherited sharing class WorkflowEngine {
     if (String.isBlank(stepExec.Captured_Values__c)) {
       return;
     }
-    String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
+    String resolvedCaptures = WorkflowPayloadOffload.resolvePayload(
+      stepExec.Captured_Values__c
+    );
     if (String.isBlank(resolvedCaptures)) {
       return;
     }
@@ -5569,7 +5033,9 @@ public inherited sharing class WorkflowEngine {
         rawPayloads.add(c.Payload__c);
       }
       // Resolve offloaded payloads in one bulk query rather than one per row.
-      List<String> resolvedPayloads = resolvePayloads(rawPayloads);
+      List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
+        rawPayloads
+      );
 
       List<StepContext.Signal> out = new List<StepContext.Signal>();
       for (Integer i = 0; i < rows.size(); i++) {
@@ -5762,7 +5228,9 @@ public inherited sharing class WorkflowEngine {
       // row), matching the read-only list path: a claimed page of offloaded
       // child-completion signals would otherwise run one ContentVersion query
       // each and could exhaust SOQL.
-      List<String> resolvedPayloads = resolvePayloads(rawPayloads);
+      List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
+        rawPayloads
+      );
       List<StepContext.Signal> result = new List<StepContext.Signal>();
       for (Integer i = 0; i < claimedRows.size(); i++) {
         // claimed = true: this branch now exclusively owns the row.
@@ -5817,7 +5285,7 @@ public inherited sharing class WorkflowEngine {
           return new StepContext.Signal(
               c.Id,
               c.Signal_Name__c,
-              resolvePayload(c.Payload__c)
+              WorkflowPayloadOffload.resolvePayload(c.Payload__c)
             )
             .withCreatedDate(c.CreatedDate);
         }
@@ -5880,7 +5348,7 @@ public inherited sharing class WorkflowEngine {
       return new StepContext.Signal(
           cand.Id,
           cand.Signal_Name__c,
-          resolvePayload(cand.Payload__c)
+          WorkflowPayloadOffload.resolvePayload(cand.Payload__c)
         )
         .withCreatedDate(cand.CreatedDate)
         .asClaimed();
@@ -5950,7 +5418,7 @@ public inherited sharing class WorkflowEngine {
     return new StepContext.Signal(
         records[0].Id,
         records[0].Signal_Name__c,
-        resolvePayload(records[0].Payload__c)
+        WorkflowPayloadOffload.resolvePayload(records[0].Payload__c)
       )
       .withCreatedDate(records[0].CreatedDate);
   }
@@ -6007,7 +5475,9 @@ public inherited sharing class WorkflowEngine {
       rawPayloads.add(sig.Payload__c);
     }
     // Resolve any offloaded payloads with a single bulk query (not one per row).
-    List<String> resolvedPayloads = resolvePayloads(rawPayloads);
+    List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
+      rawPayloads
+    );
 
     List<StepContext.Signal> signals = new List<StepContext.Signal>();
     for (Integer i = 0; i < records.size(); i++) {
@@ -6470,7 +5940,7 @@ public inherited sharing class WorkflowEngine {
     Workflow_Step_Execution__c stepExec = outcome.stepExec;
     if (context != null && context.progress().isProgressReported()) {
       String progJson = context.progress().getProgressJson();
-      freshInstance.Progress__c = savePayloadIfNeeded(
+      freshInstance.Progress__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         freshInstance.Id,
         progJson,
         'Progress_' +
@@ -6557,7 +6027,7 @@ public inherited sharing class WorkflowEngine {
     Workflow_Instance__c instance = outcome.instance;
     if (context.captures().hasNewCaptures()) {
       String capturedJson = context.captures().getCapturedValuesJson();
-      stepExec.Captured_Values__c = savePayloadIfNeeded(
+      stepExec.Captured_Values__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         instance.Id,
         capturedJson,
         'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -6629,7 +6099,7 @@ public inherited sharing class WorkflowEngine {
     Boolean isParallel = outcome.isParallel;
     // Step is complete. Store output.
     stepExec.Status__c = 'Completed';
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       result.directive().outputJson,
       'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -6780,7 +6250,7 @@ public inherited sharing class WorkflowEngine {
     String payloadLabel
   ) {
     instance.Status__c = 'Completed';
-    instance.Output__c = savePayloadIfNeeded(
+    instance.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       outputJson,
       payloadLabel
@@ -6996,7 +6466,9 @@ public inherited sharing class WorkflowEngine {
         continue;
       }
       Object outputVal = null;
-      String resolvedOutput = resolvePayload(pe.Output__c);
+      String resolvedOutput = WorkflowPayloadOffload.resolvePayload(
+        pe.Output__c
+      );
       if (String.isNotBlank(resolvedOutput)) {
         try {
           outputVal = JSON.deserializeUntyped(resolvedOutput);
@@ -7020,7 +6492,7 @@ public inherited sharing class WorkflowEngine {
     joinStepExec.Workflow_Instance__c = instance.Id;
     joinStepExec.Step_Name__c = nextStepName;
     joinStepExec.Status__c = 'Pending';
-    joinStepExec.Input__c = savePayloadIfNeeded(
+    joinStepExec.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       joinInputJson,
       'Input_' + nextStepName.replaceAll('[^a-zA-Z0-9]', '_')
@@ -7047,7 +6519,7 @@ public inherited sharing class WorkflowEngine {
       rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'Running';
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       result.directive().stepStateJson,
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -7094,7 +6566,7 @@ public inherited sharing class WorkflowEngine {
       instance.Sleep_Until__c = null;
     }
     stepExec.Output__c = String.isNotBlank(suspendStateJson)
-      ? savePayloadIfNeeded(
+      ? WorkflowPayloadOffload.savePayloadIfNeeded(
           instance.Id,
           suspendStateJson,
           'State_Suspend_' +
@@ -7123,7 +6595,7 @@ public inherited sharing class WorkflowEngine {
       rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'Pending';
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       result.directive().stepStateJson,
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -7165,7 +6637,7 @@ public inherited sharing class WorkflowEngine {
       'childWorkflowName' => result.directive().childWorkflowName,
       'childCorrelationKey' => result.directive().childCorrelationKey
     };
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       JSON.serialize(childInfo),
       'State_ChildInfo_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -7213,7 +6685,7 @@ public inherited sharing class WorkflowEngine {
     Map<String, Object> state = new Map<String, Object>{
       'childCorrelationKeys' => childKeys
     };
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       JSON.serialize(state),
       'State_ChildKeys_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -7256,7 +6728,7 @@ public inherited sharing class WorkflowEngine {
       // earlier timed wait or a manual resume (issue #35).
       instance.Sleep_Until__c = null;
     }
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       JSON.serialize(state),
       'State_Approval_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -7278,7 +6750,7 @@ public inherited sharing class WorkflowEngine {
     StepResult result = outcome.result;
     StepContext context = outcome.context;
     stepExec.Status__c = 'Completed';
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       result.directive().parallelInputJson != null
         ? result.directive().parallelInputJson
@@ -7308,7 +6780,7 @@ public inherited sharing class WorkflowEngine {
       pe.Workflow_Instance__c = instance.Id;
       pe.Step_Name__c = ps;
       pe.Status__c = 'Pending';
-      pe.Input__c = savePayloadIfNeeded(
+      pe.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         instance.Id,
         result.directive().parallelInputJson != null
           ? result.directive().parallelInputJson
@@ -7354,7 +6826,9 @@ public inherited sharing class WorkflowEngine {
   ) {
     Map<String, Object> captures = new Map<String, Object>();
     if (String.isNotBlank(stepExec.Captured_Values__c)) {
-      String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
+      String resolvedCaptures = WorkflowPayloadOffload.resolvePayload(
+        stepExec.Captured_Values__c
+      );
       if (String.isNotBlank(resolvedCaptures)) {
         try {
           captures = (Map<String, Object>) JSON.deserializeUntyped(
@@ -7366,7 +6840,7 @@ public inherited sharing class WorkflowEngine {
       }
     }
     captures.put('__maxAttempts', policy.maximumAttempts);
-    stepExec.Captured_Values__c = savePayloadIfNeeded(
+    stepExec.Captured_Values__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       JSON.serialize(captures),
       'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -7453,7 +6927,7 @@ public inherited sharing class WorkflowEngine {
       rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'ContinuedAsNew';
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       result.directive().continuation.nextInputJson,
       'ContinueInput_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -7599,7 +7073,7 @@ public inherited sharing class WorkflowEngine {
     String initialStep
   ) {
     // Set input and save payload
-    nextInstance.Input__c = savePayloadIfNeeded(
+    nextInstance.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       nextInstance.Id,
       result.directive().continuation.nextInputJson,
       'Input_' + nextInstance.Id
@@ -8281,7 +7755,7 @@ public inherited sharing class WorkflowEngine {
       '__errorMessage' => truncatedError,
       '__attemptCount' => req.attemptCount
     };
-    nextStepExec.Captured_Values__c = savePayloadIfNeeded(
+    nextStepExec.Captured_Values__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       JSON.serialize(errorCaptures),
       'Captures_' + errorStepName.replaceAll('[^a-zA-Z0-9]', '_')
@@ -8557,7 +8031,7 @@ public inherited sharing class WorkflowEngine {
     Id parentId = req.parentId;
     String correlationKey = req.correlationKey;
     String inputJson = req.inputJson;
-    validateCorrelationKey(correlationKey);
+    WorkflowPayloadOffload.validateCorrelationKey(correlationKey);
     if (
       String.isNotBlank(correlationKey) &&
       isChildStartIdempotent(correlationKey, parentId)
@@ -8575,7 +8049,7 @@ public inherited sharing class WorkflowEngine {
       return;
     }
 
-    instance.Input__c = savePayloadIfNeeded(
+    instance.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       inputJson,
       'Input_Child_' + instance.Id
@@ -8710,7 +8184,7 @@ public inherited sharing class WorkflowEngine {
   ) {
     Set<String> correlationKeys = new Set<String>();
     for (StepResult.ChildRequest req : requests) {
-      validateCorrelationKey(req.correlationKey);
+      WorkflowPayloadOffload.validateCorrelationKey(req.correlationKey);
       correlationKeys.add(req.correlationKey);
 
       if (String.isBlank(req.workflowName)) {
@@ -8888,7 +8362,7 @@ public inherited sharing class WorkflowEngine {
     for (Integer i = 0; i < plan.instances.size(); i++) {
       Workflow_Instance__c inst = plan.instances[i];
       StepResult.ChildRequest req = plan.requests[i];
-      inst.Input__c = savePayloadIfNeeded(
+      inst.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst.Id,
         req.inputJson,
         'Input_Child_' + inst.Id
@@ -9019,7 +8493,7 @@ public inherited sharing class WorkflowEngine {
           : null,
         'output' => child.Output__c
       };
-      payload = savePayloadIfNeeded(
+      payload = WorkflowPayloadOffload.savePayloadIfNeeded(
         parent.Id,
         JSON.serialize(outcomeData),
         'ChildFailedOutcome_' + child.Id
@@ -10650,257 +10124,6 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Returns the count of non-terminal workflow instances that have recorded
-   * a decision of 'false' for the given changeId.
-   *
-   * @param changeId The unique name of the patch.
-   * @return The number of active instances pinning the old branch.
-   */
-  public static Integer getPatchAdoptionCount(String changeId) {
-    return getPatchAdoptionCount(null, changeId, null);
-  }
-
-  /**
-   * Returns the count of non-terminal workflow instances that have recorded
-   * a decision of 'false' for the given changeId, using an optional introduction date
-   * to count legacy instances that have not yet reached the patch check.
-   *
-   * @param changeId The unique name of the patch.
-   * @param introducedAt Optional DateTime representing when the patch was introduced.
-   * @return The number of active instances pinning the old branch.
-   */
-  public static Integer getPatchAdoptionCount(
-    String changeId,
-    DateTime introducedAt
-  ) {
-    return getPatchAdoptionCount(null, changeId, introducedAt);
-  }
-
-  // Mutable accumulator threaded through the patch-adoption scan helpers so each
-  // helper stays within the parameter and complexity budgets.
-  private class AdoptionScan {
-    String key;
-    Set<String> targetWorkflows = new Set<String>();
-    Set<Id> instancesWithExplicitFalse = new Set<Id>();
-  }
-
-  /**
-   * Returns the count of non-terminal workflow instances that have recorded
-   * a decision of 'false' for the given changeId, scoped to a specific workflow name
-   * and using an optional introduction date.
-   *
-   * @param workflowName Optional name of the workflow to scope active scans to.
-   * @param changeId The unique name of the patch.
-   * @param introducedAt Optional DateTime representing when the patch was introduced.
-   * @return The number of active instances pinning the old branch.
-   */
-  public static Integer getPatchAdoptionCount(
-    String workflowName,
-    String changeId,
-    DateTime introducedAt
-  ) {
-    if (String.isBlank(changeId)) {
-      return 0;
-    }
-    Integer queryLimit = adoptionQueryLimit;
-
-    // 1. Query all active (non-terminal) workflow instances directly
-    List<Workflow_Instance__c> instances = queryAdoptionInstances(
-      workflowName,
-      queryLimit
-    );
-
-    if (instances.size() >= queryLimit) {
-      throw new WorkflowException(
-        'Active instances exceed query limit (' +
-          queryLimit +
-          ' rows). Adoption count cannot be computed reliably.'
-      );
-    }
-
-    AdoptionScan scan = new AdoptionScan();
-    scan.key = '__patch:' + changeId;
-    if (String.isNotBlank(workflowName)) {
-      scan.targetWorkflows.add(workflowName);
-    }
-
-    // 2. Query step executions in batches of 1,000 instances to stay under 50k SOQL row limits
-    scanInstancesForExplicitFalse(instances, scan);
-
-    // 3. Count instances pinning the legacy branch
-    return countPinnedInstances(instances, introducedAt, scan);
-  }
-
-  private static List<Workflow_Instance__c> queryAdoptionInstances(
-    String workflowName,
-    Integer queryLimit
-  ) {
-    if (Test.isRunningTest() && mockInstancesForAdoption != null) {
-      return mockInstancesForAdoption;
-    }
-    if (String.isNotBlank(workflowName)) {
-      return [
-        SELECT Id, Workflow_Name__c, CreatedDate
-        FROM Workflow_Instance__c
-        WHERE Status__c IN :ACTIVE_STATUSES AND Workflow_Name__c = :workflowName
-        WITH SYSTEM_MODE
-        LIMIT :queryLimit
-      ];
-    }
-    return [
-      SELECT Id, Workflow_Name__c, CreatedDate
-      FROM Workflow_Instance__c
-      WHERE Status__c IN :ACTIVE_STATUSES
-      WITH SYSTEM_MODE
-      LIMIT :queryLimit
-    ];
-  }
-
-  private static void scanInstancesForExplicitFalse(
-    List<Workflow_Instance__c> instances,
-    AdoptionScan scan
-  ) {
-    Integer instanceBatchSize = 1000;
-    for (Integer i = 0; i < instances.size(); i += instanceBatchSize) {
-      List<Workflow_Instance__c> batchInstances = sliceInstances(
-        instances,
-        i,
-        instanceBatchSize
-      );
-
-      List<Workflow_Step_Execution__c> execs = queryStepExecutionsForBatch(
-        batchInstances
-      );
-
-      List<String> resolvedCaptures = resolveCapturesInBatches(execs);
-      applyExecCaptures(execs, resolvedCaptures, scan);
-    }
-  }
-
-  /**
-   * Fetches the step-execution rows for one 1,000-instance chunk of the
-   * adoption scan in {@link scanInstancesForExplicitFalse}.
-   * <p><b>Intentional per-iteration SOQL.</b> This runs one SOQL query per
-   * 1,000-instance chunk. The chunking <i>is itself the governor-safety
-   * strategy</i>: capping each query at 1,000 parent instances keeps the
-   * number of {@code Workflow_Step_Execution__c} rows returned per query well
-   * under the 50k SOQL-row limit on large data volumes. De-chunking into a
-   * single query would <b>increase</b> governor risk (the opposite of the
-   * rule's intent), so the fixed <b>1,000-instance chunk size</b> must be
-   * preserved exactly. The query count is bounded by
-   * ceil(instances.size() / 1000).
-   * @param batchInstances one chunk of at most 1,000 instances whose step
-   *        executions to fetch
-   * @return the step-execution rows for the given chunk
-   */
-  private static List<Workflow_Step_Execution__c> queryStepExecutionsForBatch(
-    List<Workflow_Instance__c> batchInstances
-  ) {
-    return [
-      SELECT
-        Workflow_Instance__c,
-        Captured_Values__c,
-        Workflow_Instance__r.Workflow_Name__c
-      FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c IN :batchInstances
-      WITH SYSTEM_MODE
-    ];
-  }
-
-  private static List<Workflow_Instance__c> sliceInstances(
-    List<Workflow_Instance__c> instances,
-    Integer start,
-    Integer batchSize
-  ) {
-    List<Workflow_Instance__c> batch = new List<Workflow_Instance__c>();
-    for (
-      Integer j = start; j < start + batchSize && j < instances.size(); j++
-    ) {
-      batch.add(instances[j]);
-    }
-    return batch;
-  }
-
-  // Process offloaded payloads in small batches of 40 to stay under Apex Heap
-  // Limits (synchronous cap is 6 MB).
-  private static List<String> resolveCapturesInBatches(
-    List<Workflow_Step_Execution__c> execs
-  ) {
-    Integer offloadBatchSize = 40;
-    List<String> resolvedCaptures = new List<String>();
-    for (Integer k = 0; k < execs.size(); k += offloadBatchSize) {
-      List<String> batchRaw = new List<String>();
-      for (Integer m = k; m < k + offloadBatchSize && m < execs.size(); m++) {
-        batchRaw.add(execs[m].Captured_Values__c);
-      }
-      resolvedCaptures.addAll(resolvePayloads(batchRaw));
-    }
-    return resolvedCaptures;
-  }
-
-  private static void applyExecCaptures(
-    List<Workflow_Step_Execution__c> execs,
-    List<String> resolvedCaptures,
-    AdoptionScan scan
-  ) {
-    for (Integer k = 0; k < execs.size(); k++) {
-      applyExecCapture(execs[k], resolvedCaptures[k], scan);
-    }
-  }
-
-  private static void applyExecCapture(
-    Workflow_Step_Execution__c exec,
-    String capturesJson,
-    AdoptionScan scan
-  ) {
-    if (String.isBlank(capturesJson)) {
-      return;
-    }
-    if (!capturesJson.contains(scan.key)) {
-      return;
-    }
-    try {
-      Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
-        capturesJson
-      );
-      if (captures.containsKey(scan.key)) {
-        scan.targetWorkflows.add(exec.Workflow_Instance__r.Workflow_Name__c);
-        if (captures.get(scan.key) == false) {
-          scan.instancesWithExplicitFalse.add(exec.Workflow_Instance__c);
-        }
-      }
-    } catch (Exception ignored) {
-      // Ignore malformed JSON
-    }
-  }
-
-  private static Integer countPinnedInstances(
-    List<Workflow_Instance__c> instances,
-    DateTime introducedAt,
-    AdoptionScan scan
-  ) {
-    Set<Id> instancesWithFalse = new Set<Id>();
-    for (Workflow_Instance__c inst : instances) {
-      String wflow = inst.Workflow_Name__c;
-      if (!scan.targetWorkflows.contains(wflow)) {
-        continue;
-      }
-
-      if (introducedAt != null && inst.CreatedDate < introducedAt) {
-        // Active instance of a target workflow created before patch introduction
-        instancesWithFalse.add(inst.Id);
-        continue;
-      }
-
-      if (scan.instancesWithExplicitFalse.contains(inst.Id)) {
-        instancesWithFalse.add(inst.Id);
-      }
-    }
-
-    return instancesWithFalse.size();
-  }
-
-  /**
    * Builds the Error_Message for a stalled ("rollback incomplete") saga, preserving
    * the cancel-driven phase marker when applicable. The resume paths (resumeCompensation,
    * the watchdog sleep-resume, and runStep) infer whether to resume as 'Cancelling'
@@ -11139,7 +10362,7 @@ public inherited sharing class WorkflowEngine {
     skipExec.Retry_Count__c = 0;
     skipExec.Transient_Retry_Count__c = 0;
     skipExec.Input__c = run.latestExec.Input__c;
-    skipExec.Output__c = savePayloadIfNeeded(
+    skipExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       run.instanceId,
       run.suppliedOutputJson,
       'Output_' + run.stepName.replaceAll('[^a-zA-Z0-9]', '_')
@@ -11381,7 +10604,7 @@ public inherited sharing class WorkflowEngine {
     joinStepExec.Workflow_Instance__c = instance.Id;
     joinStepExec.Step_Name__c = nextStepName;
     joinStepExec.Status__c = 'Pending';
-    joinStepExec.Input__c = savePayloadIfNeeded(
+    joinStepExec.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       joinInputJson,
       'Input_' + nextStepName.replaceAll('[^a-zA-Z0-9]', '_')
@@ -11413,7 +10636,9 @@ public inherited sharing class WorkflowEngine {
     for (String ps : run.latestParallelMap.keySet()) {
       Workflow_Step_Execution__c pe = run.latestParallelMap.get(ps);
       Object outputVal = null;
-      String resolvedOutput = resolvePayload(pe.Output__c);
+      String resolvedOutput = WorkflowPayloadOffload.resolvePayload(
+        pe.Output__c
+      );
       if (String.isNotBlank(resolvedOutput)) {
         try {
           outputVal = JSON.deserializeUntyped(resolvedOutput);
@@ -11435,7 +10660,7 @@ public inherited sharing class WorkflowEngine {
     Workflow_Instance__c instance = run.instance;
     instance.Status__c = 'Completed';
     instance.Terminal_At__c = DateTime.now();
-    instance.Output__c = savePayloadIfNeeded(
+    instance.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       run.instanceId,
       outputJson,
       payloadName
@@ -12165,10 +11390,12 @@ public inherited sharing class WorkflowEngine {
       .instanceId(instance.Id)
       .workflowName(instance.Workflow_Name__c)
       .stepName(run.compensationStepLogName)
-      .inputJson(resolvePayload(stepExec.Input__c))
-      .previousStepOutput(resolvePayload(prevOutput))
-      .stepStateJson(resolvePayload(stepExec.Output__c))
-      .workflowInputJson(resolvePayload(instance.Input__c))
+      .inputJson(WorkflowPayloadOffload.resolvePayload(stepExec.Input__c))
+      .previousStepOutput(WorkflowPayloadOffload.resolvePayload(prevOutput))
+      .stepStateJson(WorkflowPayloadOffload.resolvePayload(stepExec.Output__c))
+      .workflowInputJson(
+        WorkflowPayloadOffload.resolvePayload(instance.Input__c)
+      )
       .workflowVersion(
         instance.Definition_Version__c != null
           ? (Integer) instance.Definition_Version__c
@@ -12201,7 +11428,9 @@ public inherited sharing class WorkflowEngine {
       maxAttempts = policy.maximumAttempts;
     }
     if (String.isNotBlank(stepExec.Captured_Values__c)) {
-      String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
+      String resolvedCaptures = WorkflowPayloadOffload.resolvePayload(
+        stepExec.Captured_Values__c
+      );
       if (String.isNotBlank(resolvedCaptures)) {
         try {
           capturesMap = (Map<String, Object>) JSON.deserializeUntyped(
@@ -12436,7 +11665,7 @@ public inherited sharing class WorkflowEngine {
     StepContext context = outcome.context;
     if (context != null && context.progress().isProgressReported()) {
       String progJson = context.progress().getProgressJson();
-      instance.Progress__c = savePayloadIfNeeded(
+      instance.Progress__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         instance.Id,
         progJson,
         'Progress_' +
@@ -12449,7 +11678,7 @@ public inherited sharing class WorkflowEngine {
     // Persist capture-once values produced during this compensation execution.
     if (context.captures().hasNewCaptures()) {
       String capturedJson = context.captures().getCapturedValuesJson();
-      stepExec.Captured_Values__c = savePayloadIfNeeded(
+      stepExec.Captured_Values__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         instance.Id,
         capturedJson,
         'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -12491,7 +11720,7 @@ public inherited sharing class WorkflowEngine {
     List<String> stack = outcome.stack;
     StepContext context = outcome.context;
     stepExec.Status__c = 'Compensated';
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       result.directive().outputJson,
       'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -12543,7 +11772,7 @@ public inherited sharing class WorkflowEngine {
     Workflow_Step_Execution__c stepExec = outcome.stepExec;
     StepResult result = outcome.result;
     stepExec.Status__c = 'Running';
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       result.directive().stepStateJson,
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -12565,7 +11794,7 @@ public inherited sharing class WorkflowEngine {
     // Note: timed-wait timeout is not supported in compensation steps and is not armed here.
     stepExec.Status__c = 'Pending';
     stepExec.Output__c = String.isNotBlank(result.directive().stepStateJson)
-      ? savePayloadIfNeeded(
+      ? WorkflowPayloadOffload.savePayloadIfNeeded(
           instance.Id,
           result.directive().stepStateJson,
           'State_Suspend_' +
@@ -12584,7 +11813,7 @@ public inherited sharing class WorkflowEngine {
     Workflow_Step_Execution__c stepExec = outcome.stepExec;
     StepResult result = outcome.result;
     stepExec.Status__c = 'Pending';
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       result.directive().stepStateJson,
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -12616,7 +11845,7 @@ public inherited sharing class WorkflowEngine {
       'approvalKey' => result.directive().approvalKey,
       'approvalRole' => result.directive().approvalRole
     };
-    stepExec.Output__c = savePayloadIfNeeded(
+    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       JSON.serialize(state),
       'State_Approval_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -13577,39 +12806,6 @@ public inherited sharing class WorkflowEngine {
     );
   }
 
-  private static void validateCorrelationKey(String correlationKey) {
-    if (String.isBlank(correlationKey)) {
-      throw new WorkflowException('Correlation key is required.');
-    }
-    if (correlationKey.length() > 200) {
-      throw new WorkflowException(
-        'Correlation key length cannot exceed 200 characters.'
-      );
-    }
-  }
-
-  // Returns the String value of a reserved $-key from a JSON-object string, or
-  // null for blank input, non-object JSON, a missing key, and parse failures.
-  private static String readJsonMapKey(String jsonText, String key) {
-    if (String.isBlank(jsonText)) {
-      return null;
-    }
-    try {
-      Object parsed = JSON.deserializeUntyped(jsonText);
-      if (!(parsed instanceof Map<String, Object>)) {
-        return null;
-      }
-      Object value = ((Map<String, Object>) parsed).get(key);
-      if (value == null) {
-        return null;
-      }
-      String strValue = String.valueOf(value);
-      return String.isBlank(strValue) ? null : strValue;
-    } catch (Exception e) {
-      return null;
-    }
-  }
-
   // Removes a reserved $-key from a JSON-object string, returning the cleaned
   // JSON (null when the map is empty after removal). Returns the original string
   // for blank/missing-key input, non-object JSON, and parse failures.
@@ -13646,170 +12842,10 @@ public inherited sharing class WorkflowEngine {
     if (!stepExec.Output__c.contains('$timeoutStep')) {
       return null;
     }
-    return readJsonMapKey(resolvePayload(stepExec.Output__c), '$timeoutStep');
-  }
-
-  /**
-   * @description Resolves a possibly-offloaded payload string: when the value is a
-   * `{"$attachmentId":...}` marker it fetches and returns the linked
-   * ContentVersion body, otherwise the value is returned unchanged. Falls back to
-   * the raw value if the offloaded document cannot be read.
-   * @param textValue the raw (possibly marker) payload string
-   * @return the resolved payload text, or the original value when not offloaded
-   */
-  public static String resolvePayload(String textValue) {
-    if (
-      String.isNotBlank(textValue) && textValue.startsWith('{"$attachmentId":')
-    ) {
-      try {
-        Map<String, Object> marker = (Map<String, Object>) JSON.deserializeUntyped(
-          textValue
-        );
-        Id attachmentId = (Id) marker.get('$attachmentId');
-        List<ContentVersion> cvs = [
-          SELECT VersionData
-          FROM ContentVersion
-          WHERE ContentDocumentId = :attachmentId AND IsLatest = TRUE
-          WITH SYSTEM_MODE
-        ];
-        if (!cvs.isEmpty()) {
-          return cvs[0].VersionData.toString();
-        }
-      } catch (Exception ignored) {
-        // Offload resolution is best-effort; fall back to the raw stored value.
-      }
-    }
-    return textValue;
-  }
-
-  /**
-   * Bulk variant of resolvePayload: resolves a list of payload strings, fetching
-   * every offloaded ContentVersion in ONE query rather than one per row. A list
-   * accessor (e.g. a parent reading a backlog of child-completion signals with
-   * large offloaded outputs) would otherwise issue a ContentVersion query per
-   * offloaded payload and hit the SOQL-query governor limit after ~100-200 rows,
-   * defeating the accessor's design of loading thousands in one call. Inline
-   * (non-marker) payloads and unresolved markers pass through unchanged, index
-   * for index with the input.
-   * @param rawValues the raw (possibly marker) payload strings to resolve
-   * @return the resolved payloads, index-aligned with rawValues
-   */
-  public static List<String> resolvePayloads(List<String> rawValues) {
-    Map<Integer, Id> markerDocByIndex = new Map<Integer, Id>();
-    Set<Id> docIds = collectOffloadMarkers(rawValues, markerDocByIndex);
-    Map<Id, String> resolvedByDoc = queryResolvedDocs(docIds);
-    List<String> out = new List<String>();
-    for (Integer i = 0; i < rawValues.size(); i++) {
-      Id docId = markerDocByIndex.get(i);
-      out.add(
-        (docId != null && resolvedByDoc.containsKey(docId))
-          ? resolvedByDoc.get(docId)
-          : rawValues[i]
-      );
-    }
-    return out;
-  }
-
-  /**
-   * Scans raw values for `{"$attachmentId":...}` offload markers, recording each
-   * marker's document id by index and collecting the distinct document ids.
-   * @param rawValues the raw payload values (inline or offload markers)
-   * @param markerDocByIndex out-param mapping each marker's index to its doc id
-   * @return the distinct offloaded ContentDocument ids to resolve
-   */
-  private static Set<Id> collectOffloadMarkers(
-    List<String> rawValues,
-    Map<Integer, Id> markerDocByIndex
-  ) {
-    Set<Id> docIds = new Set<Id>();
-    for (Integer i = 0; i < rawValues.size(); i++) {
-      String v = rawValues[i];
-      if (!(String.isNotBlank(v) && v.startsWith('{"$attachmentId":'))) {
-        continue;
-      }
-      try {
-        Map<String, Object> marker = (Map<String, Object>) JSON.deserializeUntyped(
-          v
-        );
-        Id docId = (Id) marker.get('$attachmentId');
-        markerDocByIndex.put(i, docId);
-        docIds.add(docId);
-      } catch (Exception ignored) {
-        // Not a valid offload marker; leave this entry to pass through as-is.
-      }
-    }
-    return docIds;
-  }
-
-  /**
-   * Bulk-resolves the latest ContentVersion text for the given document ids.
-   * @param docIds the offloaded ContentDocument ids to resolve
-   * @return a map of document id to its resolved payload text (empty when none)
-   */
-  private static Map<Id, String> queryResolvedDocs(Set<Id> docIds) {
-    Map<Id, String> resolvedByDoc = new Map<Id, String>();
-    if (docIds.isEmpty()) {
-      return resolvedByDoc;
-    }
-    for (ContentVersion cv : [
-      SELECT ContentDocumentId, VersionData
-      FROM ContentVersion
-      WHERE ContentDocumentId IN :docIds AND IsLatest = TRUE
-      WITH SYSTEM_MODE
-    ]) {
-      resolvedByDoc.put(cv.ContentDocumentId, cv.VersionData.toString());
-    }
-    return resolvedByDoc;
-  }
-
-  /**
-   * @description Offloads an oversized payload to a ContentVersion so it fits
-   * within field limits: when the text exceeds the inline threshold it is stored
-   * as a file and a `{"$attachmentId":...}` marker is returned; otherwise the
-   * value is returned unchanged for inline storage.
-   * @param instanceId Id of the owning instance (links the stored document)
-   * @param textValue the payload text to store
-   * @param title title/filename for the offloaded ContentVersion
-   * @return an offload marker string when stored as a file, else the original text
-   */
-  public static String savePayloadIfNeeded(
-    Id instanceId,
-    String textValue,
-    String title
-  ) {
-    if (String.isNotBlank(textValue) && textValue.length() > 100000) {
-      ContentVersion cv = new ContentVersion();
-      cv.Title = title;
-      cv.PathOnClient = title + '.json';
-      cv.VersionData = Blob.valueOf(textValue);
-      Database.insert(cv, true, AccessLevel.SYSTEM_MODE);
-
-      Id docId = [
-        SELECT ContentDocumentId
-        FROM ContentVersion
-        WHERE Id = :cv.Id
-        WITH SYSTEM_MODE
-      ]
-      .ContentDocumentId;
-
-      ContentDocumentLink cdl = new ContentDocumentLink();
-      cdl.ContentDocumentId = docId;
-      cdl.LinkedEntityId = instanceId;
-      cdl.ShareType = 'V';
-      cdl.Visibility = 'InternalUsers';
-      try {
-        Database.insert(cdl, true, AccessLevel.SYSTEM_MODE);
-      } catch (DmlException ignored) {
-        // Default visibility rejected; retry the link with AllUsers visibility.
-        cdl.Visibility = 'AllUsers';
-        Database.insert(cdl, true, AccessLevel.SYSTEM_MODE);
-      }
-
-      return JSON.serialize(
-        new Map<String, String>{ '$attachmentId' => docId }
-      );
-    }
-    return textValue;
+    return WorkflowPayloadOffload.readJsonMapKey(
+      WorkflowPayloadOffload.resolvePayload(stepExec.Output__c),
+      '$timeoutStep'
+    );
   }
 
   // Mutable accumulator for the timed-out-steps section (§1). Bundled so the

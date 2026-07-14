@@ -1399,12 +1399,12 @@ public class StepContextSignalEngineBranchTest {
       // as a ContentVersion marker rather than inline.
       String big1 = 'a'.repeat(100001);
       String big2 = 'b'.repeat(100001);
-      String marker1 = WorkflowEngine.savePayloadIfNeeded(
+      String marker1 = WorkflowPayloadOffload.savePayloadIfNeeded(
         instanceId,
         big1,
         'Big1'
       );
-      String marker2 = WorkflowEngine.savePayloadIfNeeded(
+      String marker2 = WorkflowPayloadOffload.savePayloadIfNeeded(
         instanceId,
         big2,
         'Big2'
