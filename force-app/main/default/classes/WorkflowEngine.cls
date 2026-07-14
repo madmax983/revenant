@@ -9573,6 +9573,48 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Refreshes the cached status of an instance immediately after an in-batch
+   * unkeyed {@code cancelInstance()} in {@link signal}, and records it in
+   * {@code cancelledInstanceIds} when the cancel drove it to a terminal
+   * (non-wakeable) state so later sibling signals in the same batch skip it.
+   * <p><b>Intentional per-iteration SOQL — order-dependent, MUST stay in the
+   * loop.</b> This runs one targeted SOQL query per unkeyed cancel because its
+   * result is read by <i>later iterations of the same request loop</i> (via
+   * {@code cancelledInstanceIds} and the refreshed cache): hoisting it out of
+   * the loop would break the in-batch cancel&rarr;sibling ordering and could
+   * resurrect a Cancelled workflow (waking a stale Suspended SObject back to
+   * Running). It therefore cannot be bulkified without changing behavior.
+   * <p><b>Bound / governor profile.</b> This is the legacy at-least-once
+   * <i>unkeyed</i> cancel path, which is inherently per-instance:
+   * {@code cancelInstance()} already spends per-instance SOQL/DML for every
+   * unkeyed cancel, so this targeted single-row refresh adds no new scaling
+   * dimension — its query count equals the number of unkeyed cancels in the
+   * batch, the same order as the unavoidable {@code cancelInstance()} calls.
+   * Callers with large cancel batches use the <i>keyed</i> cancel path, which
+   * is bulk-claimed and refreshed in a single query in the pre-pass above.
+   * @param inst the just-cancelled instance whose cached status to refresh
+   * @param instById the by-id/by-15-char instance cache to update in place
+   * @param cancelledInstanceIds accumulates ids driven terminal by this batch
+   */
+  private static void refreshAfterUnkeyedCancel(
+    Workflow_Instance__c inst,
+    Map<String, Workflow_Instance__c> instById,
+    Set<Id> cancelledInstanceIds
+  ) {
+    for (Workflow_Instance__c refreshed : [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+      WITH SYSTEM_MODE
+    ]) {
+      refreshCachedStatus(instById, refreshed);
+      if (!isWakeableStatus(refreshed.Status__c)) {
+        cancelledInstanceIds.add(inst.Id);
+      }
+    }
+  }
+
+  /**
    * Sends external signals to multiple workflow instances in bulk.
    * @param requests the signal requests to deliver
    */
@@ -9848,23 +9890,7 @@ public inherited sharing class WorkflowEngine {
             continue; // keyed cancel handled in the bulk-claim pre-pass above
           }
           cancelInstance(inst.Id, parseRunCompensations(req.payload));
-          // Refresh the cached status so later sibling signals see the post-cancel
-          // state: a terminal (no-compensation) cancel must skip them (otherwise
-          // the stale SObject is woken back to Running), while a compensating
-          // cancel stays signalable and is left for the wake logic. cancel()
-          // already spends per-instance SOQL, so this targeted refresh keeps the
-          // unkeyed path's cost in the same class.
-          for (Workflow_Instance__c refreshed : [
-            SELECT Id, Status__c
-            FROM Workflow_Instance__c
-            WHERE Id = :inst.Id
-            WITH SYSTEM_MODE
-          ]) {
-            refreshCachedStatus(instById, refreshed);
-            if (!isWakeableStatus(refreshed.Status__c)) {
-              cancelledInstanceIds.add(inst.Id);
-            }
-          }
+          refreshAfterUnkeyedCancel(inst, instById, cancelledInstanceIds);
           continue;
         }
 
