@@ -55,11 +55,12 @@ public inherited sharing class SagaWorkflowExample {
      * @return A COMPLETE result carrying the charge id and amount.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.log(
-        StepContext.Level.INFO,
-        'Charging credit card',
-        new Map<String, Object>{ 'amount' => 150 }
-      );
+      ctx.logger()
+        .log(
+          StepContext.Level.INFO,
+          'Charging credit card',
+          new Map<String, Object>{ 'amount' => 150 }
+        );
       return StepResult.complete(
         null,
         new Map<String, Object>{ 'chargeId' => 'ch_12345', 'amount' => 150 }
@@ -87,11 +88,12 @@ public inherited sharing class SagaWorkflowExample {
         }
       }
 
-      ctx.log(
-        StepContext.Level.WARN,
-        'Refunding credit card charge',
-        new Map<String, Object>{ 'chargeId' => chargeId }
-      );
+      ctx.logger()
+        .log(
+          StepContext.Level.WARN,
+          'Refunding credit card charge',
+          new Map<String, Object>{ 'chargeId' => chargeId }
+        );
       // Mock refund logic
       return StepResult.complete(
         null,
@@ -113,7 +115,7 @@ public inherited sharing class SagaWorkflowExample {
      * @return A COMPLETE result carrying the provisioned service id.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.log(StepContext.Level.INFO, 'Provisioning service...');
+      ctx.logger().log(StepContext.Level.INFO, 'Provisioning service...');
       return StepResult.complete(
         null,
         new Map<String, Object>{ 'serviceId' => 'srv_98765' }
@@ -126,7 +128,7 @@ public inherited sharing class SagaWorkflowExample {
      * @return A COMPLETE result confirming the service was deprovisioned.
      */
     public StepResult compensate(StepContext ctx) {
-      ctx.log(StepContext.Level.INFO, 'Deprovisioning service...');
+      ctx.logger().log(StepContext.Level.INFO, 'Deprovisioning service...');
       // Mock deprovision logic
       return StepResult.complete(
         null,
@@ -146,7 +148,7 @@ public inherited sharing class SagaWorkflowExample {
      * @return A COMPLETE result confirming the email was sent.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.log(StepContext.Level.INFO, 'Sending welcome email...');
+      ctx.logger().log(StepContext.Level.INFO, 'Sending welcome email...');
       return StepResult.complete(
         null,
         new Map<String, Object>{ 'status' => 'Sent' }

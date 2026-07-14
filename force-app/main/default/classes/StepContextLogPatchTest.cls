@@ -14,15 +14,15 @@ public class StepContextLogPatchTest {
         .stepName('TestStep')
         .build();
 
-      ctx.log(StepContext.Level.INFO, 'Info message');
+      ctx.logger().log(StepContext.Level.INFO, 'Info message');
       Map<String, Object> context = new Map<String, Object>{
         'foo' => 'bar',
         'count' => 42
       };
-      ctx.log(StepContext.Level.WARN, 'Warning message', context);
-      ctx.log(StepContext.Level.ERROR, 'Error message');
+      ctx.logger().log(StepContext.Level.WARN, 'Warning message', context);
+      ctx.logger().log(StepContext.Level.ERROR, 'Error message');
 
-      List<StepContext.Breadcrumb> crumbs = ctx.getBreadcrumbs();
+      List<StepContext.Breadcrumb> crumbs = ctx.logger().getBreadcrumbs();
       System.assertEquals(
         3,
         crumbs.size(),
@@ -66,8 +66,8 @@ public class StepContextLogPatchTest {
         .build();
 
       String message4000 = 'a'.repeat(4000);
-      ctx.log(StepContext.Level.INFO, message4000);
-      List<StepContext.Breadcrumb> crumbs = ctx.getBreadcrumbs();
+      ctx.logger().log(StepContext.Level.INFO, message4000);
+      List<StepContext.Breadcrumb> crumbs = ctx.logger().getBreadcrumbs();
       System.assertEquals(1, crumbs.size());
       System.assertEquals(
         4000,
@@ -82,8 +82,8 @@ public class StepContextLogPatchTest {
         .stepName('S')
         .build();
       String message4001 = 'b'.repeat(4001);
-      ctx.log(StepContext.Level.INFO, message4001);
-      crumbs = ctx.getBreadcrumbs();
+      ctx.logger().log(StepContext.Level.INFO, message4001);
+      crumbs = ctx.logger().getBreadcrumbs();
       System.assertEquals(1, crumbs.size());
       System.assertEquals(
         4000,
@@ -104,8 +104,8 @@ public class StepContextLogPatchTest {
       Map<String, Object> context = new Map<String, Object>{ 'k' => 'v' };
       // base message + ' | Context: {"k":"v"}' has length: 3980 + 21 = 4001
       String msg3980 = 'c'.repeat(3980);
-      ctx.log(StepContext.Level.INFO, msg3980, context);
-      crumbs = ctx.getBreadcrumbs();
+      ctx.logger().log(StepContext.Level.INFO, msg3980, context);
+      crumbs = ctx.logger().getBreadcrumbs();
       System.assertEquals(1, crumbs.size());
       String expectedBase = msg3980 + ' | Context: {"k":"v"}';
       System.assertEquals(
@@ -126,9 +126,9 @@ public class StepContextLogPatchTest {
         .build();
 
       for (Integer i = 0; i < 100; i++) {
-        ctx.log(StepContext.Level.INFO, 'Entry ' + i);
+        ctx.logger().log(StepContext.Level.INFO, 'Entry ' + i);
       }
-      List<StepContext.Breadcrumb> crumbs = ctx.getBreadcrumbs();
+      List<StepContext.Breadcrumb> crumbs = ctx.logger().getBreadcrumbs();
       System.assertEquals(
         100,
         crumbs.size(),
@@ -136,8 +136,8 @@ public class StepContextLogPatchTest {
       );
 
       // 101st log triggers single warning and discards the log
-      ctx.log(StepContext.Level.INFO, 'Entry 100');
-      crumbs = ctx.getBreadcrumbs();
+      ctx.logger().log(StepContext.Level.INFO, 'Entry 100');
+      crumbs = ctx.logger().getBreadcrumbs();
       System.assertEquals(
         101,
         crumbs.size(),
@@ -150,8 +150,8 @@ public class StepContextLogPatchTest {
       );
 
       // 102nd log is discarded, count remains 101, no second warning
-      ctx.log(StepContext.Level.INFO, 'Entry 101');
-      crumbs = ctx.getBreadcrumbs();
+      ctx.logger().log(StepContext.Level.INFO, 'Entry 101');
+      crumbs = ctx.logger().getBreadcrumbs();
       System.assertEquals(
         101,
         crumbs.size(),
@@ -170,15 +170,16 @@ public class StepContextLogPatchTest {
         .stepName('TestStep')
         .build();
 
-      ctx.log(StepContext.Level.INFO, null);
-      ctx.log(StepContext.Level.WARN, '');
-      ctx.log(
-        StepContext.Level.ERROR,
-        null,
-        new Map<String, Object>{ 'x' => 1 }
-      );
+      ctx.logger().log(StepContext.Level.INFO, null);
+      ctx.logger().log(StepContext.Level.WARN, '');
+      ctx.logger()
+        .log(
+          StepContext.Level.ERROR,
+          null,
+          new Map<String, Object>{ 'x' => 1 }
+        );
 
-      List<StepContext.Breadcrumb> crumbs = ctx.getBreadcrumbs();
+      List<StepContext.Breadcrumb> crumbs = ctx.logger().getBreadcrumbs();
       System.assertEquals(3, crumbs.size());
 
       System.assertEquals(null, crumbs[0].message);
@@ -200,9 +201,9 @@ public class StepContextLogPatchTest {
       // Test circular reference catch
       Map<String, Object> circularMap = new Map<String, Object>();
       circularMap.put('self', circularMap);
-      ctx.log(StepContext.Level.INFO, 'circular', circularMap);
+      ctx.logger().log(StepContext.Level.INFO, 'circular', circularMap);
 
-      List<StepContext.Breadcrumb> crumbs = ctx.getBreadcrumbs();
+      List<StepContext.Breadcrumb> crumbs = ctx.logger().getBreadcrumbs();
       System.assertEquals(1, crumbs.size());
       System.assert(
         crumbs[0].message.contains('[TRUNCATED] JSON serialization failed'),
@@ -218,8 +219,8 @@ public class StepContextLogPatchTest {
       Map<String, Object> oversizedMap = new Map<String, Object>{
         'payload' => 'x'.repeat(4001)
       };
-      ctx.log(StepContext.Level.INFO, 'oversized', oversizedMap);
-      crumbs = ctx.getBreadcrumbs();
+      ctx.logger().log(StepContext.Level.INFO, 'oversized', oversizedMap);
+      crumbs = ctx.logger().getBreadcrumbs();
       System.assertEquals(1, crumbs.size());
       System.assert(
         crumbs[0]
@@ -240,8 +241,8 @@ public class StepContextLogPatchTest {
         .workflowName('W')
         .stepName('S')
         .build();
-      ctx.log(null, 'null level message');
-      List<StepContext.Breadcrumb> crumbs = ctx.getBreadcrumbs();
+      ctx.logger().log(null, 'null level message');
+      List<StepContext.Breadcrumb> crumbs = ctx.logger().getBreadcrumbs();
       System.assertEquals(1, crumbs.size());
       System.assertEquals(
         StepContext.Level.INFO,
@@ -262,7 +263,7 @@ public class StepContextLogPatchTest {
         .build();
 
       // First time decision is reached in a brand new instance
-      Boolean isPatched = ctx.patched('change-1');
+      Boolean isPatched = ctx.captures().patched('change-1');
       System.assertEquals(
         true,
         isPatched,
@@ -270,11 +271,11 @@ public class StepContextLogPatchTest {
       );
       System.assertEquals(
         true,
-        ctx.hasNewCaptures(),
+        ctx.captures().hasNewCaptures(),
         'Decision should be newly captured'
       );
 
-      String capturedJson = ctx.getCapturedValuesJson();
+      String capturedJson = ctx.captures().getCapturedValuesJson();
       System.assertNotEquals(null, capturedJson);
       System.assert(
         capturedJson.contains('"__patch:change-1":true'),
@@ -296,7 +297,7 @@ public class StepContextLogPatchTest {
         .build();
 
       // Decision is replayed
-      Boolean isPatched = ctx.patched('change-1');
+      Boolean isPatched = ctx.captures().patched('change-1');
       System.assertEquals(
         true,
         isPatched,
@@ -304,7 +305,7 @@ public class StepContextLogPatchTest {
       );
       System.assertEquals(
         false,
-        ctx.hasNewCaptures(),
+        ctx.captures().hasNewCaptures(),
         'Replayed decision should not be marked as new capture'
       );
     }
@@ -344,7 +345,7 @@ public class StepContextLogPatchTest {
         .build();
 
       // The offloaded patch decision should be resolved and read successfully as true
-      Boolean isPatched = ctx.patched('change-offloaded');
+      Boolean isPatched = ctx.captures().patched('change-offloaded');
       System.assertEquals(
         true,
         isPatched,
@@ -379,7 +380,7 @@ public class StepContextLogPatchTest {
         .build();
 
       // The step has already completed in the past, so the patch decision should be false (not flipped retroactively)
-      Boolean isPatched = ctx.patched('change-1');
+      Boolean isPatched = ctx.captures().patched('change-1');
       System.assertEquals(
         false,
         isPatched,
@@ -387,11 +388,11 @@ public class StepContextLogPatchTest {
       );
       System.assertEquals(
         true,
-        ctx.hasNewCaptures(),
+        ctx.captures().hasNewCaptures(),
         'Should capture decision as false'
       );
 
-      String capturedJson = ctx.getCapturedValuesJson();
+      String capturedJson = ctx.captures().getCapturedValuesJson();
       System.assert(
         capturedJson.contains('"__patch:change-1":false'),
         'Recorded decision should be false'
@@ -402,8 +403,16 @@ public class StepContextLogPatchTest {
   @IsTest
   static void testPatchedDownstreamFirstExecutionLegacy() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      StepContext.mockInstanceCreatedDate = DateTime.newInstance(2026, 1, 1);
-      StepContext.mockClassLastModified = DateTime.newInstance(2026, 1, 2);
+      StepExecutionIndex.mockInstanceCreatedDate = DateTime.newInstance(
+        2026,
+        1,
+        1
+      );
+      StepExecutionIndex.mockClassLastModified = DateTime.newInstance(
+        2026,
+        1,
+        2
+      );
       try {
         // 1. Insert a workflow instance and a completed predecessor step
         Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -430,15 +439,15 @@ public class StepContextLogPatchTest {
 
         // DownstreamStep is running for the first time. Since instanceCreatedDate < classLastModified,
         // it must default to false (legacy).
-        Boolean isPatched = ctx.patched('change-1');
+        Boolean isPatched = ctx.captures().patched('change-1');
         System.assertEquals(
           false,
           isPatched,
           'Downstream step running for first time on legacy instance must default to false'
         );
       } finally {
-        StepContext.mockInstanceCreatedDate = null;
-        StepContext.mockClassLastModified = null;
+        StepExecutionIndex.mockInstanceCreatedDate = null;
+        StepExecutionIndex.mockClassLastModified = null;
       }
     }
   }
@@ -446,8 +455,16 @@ public class StepContextLogPatchTest {
   @IsTest
   static void testPatchedDownstreamFirstExecutionNewInstance() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      StepContext.mockInstanceCreatedDate = DateTime.newInstance(2026, 1, 3);
-      StepContext.mockClassLastModified = DateTime.newInstance(2026, 1, 2);
+      StepExecutionIndex.mockInstanceCreatedDate = DateTime.newInstance(
+        2026,
+        1,
+        3
+      );
+      StepExecutionIndex.mockClassLastModified = DateTime.newInstance(
+        2026,
+        1,
+        2
+      );
       try {
         Workflow_Instance__c inst = new Workflow_Instance__c(
           Workflow_Name__c = 'TestWorkflow',
@@ -471,15 +488,15 @@ public class StepContextLogPatchTest {
           .build();
 
         // Since instanceCreatedDate >= classLastModified, it is a brand-new instance, so it must default to true!
-        Boolean isPatched = ctx.patched('change-1');
+        Boolean isPatched = ctx.captures().patched('change-1');
         System.assertEquals(
           true,
           isPatched,
           'Downstream step running for first time on brand-new instance must default to true'
         );
       } finally {
-        StepContext.mockInstanceCreatedDate = null;
-        StepContext.mockClassLastModified = null;
+        StepExecutionIndex.mockInstanceCreatedDate = null;
+        StepExecutionIndex.mockClassLastModified = null;
       }
     }
   }
@@ -488,14 +505,22 @@ public class StepContextLogPatchTest {
   static void testPatchedWithIntroducedAtDate() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Class was last modified on Day 3 (e.g. 2026-01-03) due to unrelated changes
-      StepContext.mockClassLastModified = DateTime.newInstance(2026, 1, 3);
+      StepExecutionIndex.mockClassLastModified = DateTime.newInstance(
+        2026,
+        1,
+        3
+      );
 
       // Patch was introduced on Day 2 (e.g. 2026-01-02)
       DateTime introducedAt = DateTime.newInstance(2026, 1, 2);
 
       try {
         // Instance A was created on Day 1 (2026-01-01), before patch was introduced
-        StepContext.mockInstanceCreatedDate = DateTime.newInstance(2026, 1, 1);
+        StepExecutionIndex.mockInstanceCreatedDate = DateTime.newInstance(
+          2026,
+          1,
+          1
+        );
         Workflow_Instance__c instA = new Workflow_Instance__c(
           Workflow_Name__c = 'TestWorkflow',
           Status__c = 'Running',
@@ -510,10 +535,13 @@ public class StepContextLogPatchTest {
           .build();
 
         // Since instanceCreatedDate < introducedAt, it must default to false (legacy)!
-        System.assertEquals(false, ctxA.patched('change-date', introducedAt));
+        System.assertEquals(
+          false,
+          ctxA.captures().patched('change-date', introducedAt)
+        );
 
         // Instance B was created on Day 2.5 (2026-01-02 12:00:00), after patch was introduced but before Day 3 redeploy
-        StepContext.mockInstanceCreatedDate = DateTime.newInstance(
+        StepExecutionIndex.mockInstanceCreatedDate = DateTime.newInstance(
           2026,
           1,
           2,
@@ -535,10 +563,13 @@ public class StepContextLogPatchTest {
           .build();
 
         // Since instanceCreatedDate >= introducedAt, it must default to true, even though instanceCreatedDate < classLastModified!
-        System.assertEquals(true, ctxB.patched('change-date', introducedAt));
+        System.assertEquals(
+          true,
+          ctxB.captures().patched('change-date', introducedAt)
+        );
       } finally {
-        StepContext.mockInstanceCreatedDate = null;
-        StepContext.mockClassLastModified = null;
+        StepExecutionIndex.mockInstanceCreatedDate = null;
+        StepExecutionIndex.mockClassLastModified = null;
       }
     }
   }
@@ -557,7 +588,7 @@ public class StepContextLogPatchTest {
         .capturedValuesJson('{"__patch:change-1":true}')
         .build();
       try {
-        ctxTrue.deprecated('change-1');
+        ctxTrue.captures().deprecated('change-1');
         // Pass
       } catch (Exception e) {
         System.assert(false, 'Should not throw exception when patch is active');
@@ -572,7 +603,7 @@ public class StepContextLogPatchTest {
         .capturedValuesJson('{"__patch:change-1":false}')
         .build();
       try {
-        ctxFalse.deprecated('change-1');
+        ctxFalse.captures().deprecated('change-1');
         System.assert(
           false,
           'Should throw exception when patch is deprecated and inactive'
@@ -609,9 +640,9 @@ public class StepContextLogPatchTest {
       // Call patched. It will call loadExecutions(getCallingClassName())
       // which resolves the calling class to 'StepContextTest'.
       // Since 'StepContextTest' is a real class in the org, it will query its LastModifiedDate.
-      ctx.patched('calling-class-change');
+      ctx.captures().patched('calling-class-change');
 
-      System.assertNotEquals(null, ctx.getCapturedValuesJson());
+      System.assertNotEquals(null, ctx.captures().getCapturedValuesJson());
     }
   }
 }

@@ -43,9 +43,9 @@ public inherited sharing class PatchExampleWorkflow {
      */
     public String getNextStep(String currentStepName, StepResult result) {
       if (currentStepName == 'PatchExampleWorkflow.BookHotel') {
-        if (result.outputJson != null) {
+        if (result.directive().outputJson != null) {
           Map<String, Object> output = (Map<String, Object>) JSON.deserializeUntyped(
-            result.outputJson
+            result.directive().outputJson
           );
           Boolean insertFlight =
             output.get('insertFlight') != null &&
@@ -77,13 +77,13 @@ public inherited sharing class PatchExampleWorkflow {
     public StepResult execute(StepContext ctx) {
       // Determine if we should insert the flight step.
       // Brand new instances get true; in-flight instances past this point get false.
-      Boolean insertFlight = ctx.patched('insert-flight');
+      Boolean insertFlight = ctx.captures().patched('insert-flight');
 
       // We can also demonstrate deprecated: if some retired patch is queried, it throws.
       if (
         ctx.inputJson != null && ctx.inputJson.contains('triggerRetiredError')
       ) {
-        ctx.deprecated('retired-patch'); // Should throw since 'retired-patch' defaults to false/deprecated if not recorded
+        ctx.captures().deprecated('retired-patch'); // Should throw since 'retired-patch' defaults to false/deprecated if not recorded
       }
 
       return StepResult.complete(
@@ -152,7 +152,7 @@ public inherited sharing class PatchExampleWorkflow {
      * @return A completed StepResult carrying carBooked and the chosen carType.
      */
     public StepResult execute(StepContext ctx) {
-      Boolean hasFlight = ctx.patched('insert-flight');
+      Boolean hasFlight = ctx.captures().patched('insert-flight');
       String carType = hasFlight ? 'Luxury SUV' : 'Economy Sedan';
 
       return StepResult.complete(

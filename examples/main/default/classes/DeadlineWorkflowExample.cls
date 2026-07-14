@@ -50,7 +50,7 @@ public class DeadlineWorkflowExample implements WorkflowDefinition, ExecutionTim
      */
     public StepResult execute(StepContext ctx) {
       // Suspend waiting for a signal that will never arrive
-      return StepResult.suspend('NeverArrivingSignal');
+      return StepResult.suspend().withStepState('NeverArrivingSignal');
     }
   }
 }

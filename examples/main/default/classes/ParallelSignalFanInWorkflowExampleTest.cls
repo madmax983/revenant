@@ -1,7 +1,7 @@
 /**
  * Issue #38 reference scenario: a parallel (scatter-gather) branch that needs to
- * inspect MANY DISTINCT signal names should call ctx.getSignals() ONCE and filter
- * in memory, rather than issuing a per-name ctx.getSignal(name) / ctx.hasSignal(name)
+ * inspect MANY DISTINCT signal names should call ctx.signals().getSignals() ONCE and filter
+ * in memory, rather than issuing a per-name ctx.signals().getSignal(name) / ctx.signals().hasSignal(name)
  * lookup for each name.
  *
  * Inside a parallel branch each read atomically CLAIMS the signals it sees

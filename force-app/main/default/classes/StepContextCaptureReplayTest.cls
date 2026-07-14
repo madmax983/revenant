@@ -51,7 +51,7 @@ public class StepContextCaptureReplayTest {
       StepContextTestData.StringProducer p = new StepContextTestData.StringProducer(
         'hello'
       );
-      Object result = ctx.once('myKey', p);
+      Object result = ctx.captures().once('myKey', p);
       System.assertEquals(
         'hello',
         result,
@@ -77,8 +77,8 @@ public class StepContextCaptureReplayTest {
       StepContextTestData.StringProducer p = new StepContextTestData.StringProducer(
         'stable'
       );
-      ctx.once('k', p);
-      Object second = ctx.once('k', p);
+      ctx.captures().once('k', p);
+      Object second = ctx.captures().once('k', p);
       System.assertEquals(
         'stable',
         second,
@@ -107,8 +107,8 @@ public class StepContextCaptureReplayTest {
       StepContextTestData.StringProducer pB = new StepContextTestData.StringProducer(
         'beta'
       );
-      Object a = ctx.once('keyA', pA);
-      Object b = ctx.once('keyB', pB);
+      Object a = ctx.captures().once('keyA', pA);
+      Object b = ctx.captures().once('keyB', pB);
       System.assertEquals('alpha', a);
       System.assertEquals('beta', b);
       System.assertEquals(1, pA.callCount);
@@ -133,7 +133,7 @@ public class StepContextCaptureReplayTest {
       StepContextTestData.StringProducer p = new StepContextTestData.StringProducer(
         'SHOULD-NOT-BE-CALLED'
       );
-      Object result = ctx.once('refNumber', p);
+      Object result = ctx.captures().once('refNumber', p);
       System.assertEquals(
         'REF-001',
         result,
@@ -156,9 +156,9 @@ public class StepContextCaptureReplayTest {
         .workflowName('WF')
         .stepName('StepA')
         .build();
-      ctx.once('k1', new StepContextTestData.StringProducer('v1'));
-      ctx.once('k2', new StepContextTestData.StringProducer('v2'));
-      String capturedJson = ctx.getCapturedValuesJson();
+      ctx.captures().once('k1', new StepContextTestData.StringProducer('v1'));
+      ctx.captures().once('k2', new StepContextTestData.StringProducer('v2'));
+      String capturedJson = ctx.captures().getCapturedValuesJson();
       Map<String, Object> parsed = (Map<String, Object>) JSON.deserializeUntyped(
         capturedJson
       );
@@ -178,7 +178,7 @@ public class StepContextCaptureReplayTest {
         .build();
       System.assertEquals(
         null,
-        ctx.getCapturedValuesJson(),
+        ctx.captures().getCapturedValuesJson(),
         'getCapturedValuesJson() must return null when nothing was captured'
       );
     }
@@ -195,8 +195,8 @@ public class StepContextCaptureReplayTest {
         .workflowName('WF')
         .stepName('StepA')
         .build();
-      ctx.once('num', new StepContextTestData.StringProducer('42'));
-      String captured = ctx.getCapturedValuesJson();
+      ctx.captures().once('num', new StepContextTestData.StringProducer('42'));
+      String captured = ctx.captures().getCapturedValuesJson();
       // Rehydrate into a new context
       StepContext ctx2 = new StepContext.Builder()
         .instanceId(instanceId)
@@ -207,7 +207,7 @@ public class StepContextCaptureReplayTest {
       StepContextTestData.StringProducer p2 = new StepContextTestData.StringProducer(
         'different'
       );
-      Object v = ctx2.once('num', p2);
+      Object v = ctx2.captures().once('num', p2);
       System.assertEquals(
         '42',
         v,
@@ -233,7 +233,7 @@ public class StepContextCaptureReplayTest {
       System.assertEquals(1, ctx.attempt, 'Default attempt should be 1');
       System.assertEquals(
         1,
-        ctx.maxAttempts,
+        ctx.retry().maxAttempts,
         'Default maxAttempts should be 1'
       );
       System.assert(
@@ -255,7 +255,7 @@ public class StepContextCaptureReplayTest {
         .maxAttempts(5)
         .build();
       System.assertEquals(2, ctx.attempt);
-      System.assertEquals(5, ctx.maxAttempts);
+      System.assertEquals(5, ctx.retry().maxAttempts);
       System.assert(!ctx.isFinalAttempt());
     }
   }
@@ -277,13 +277,14 @@ public class StepContextCaptureReplayTest {
         .capturedValuesJson(priorJson)
         .build();
       System.assertEquals(1, ctx.attempt);
-      System.assertEquals(3, ctx.maxAttempts);
+      System.assertEquals(3, ctx.retry().maxAttempts);
       System.assert(!ctx.isFinalAttempt());
       // Verify that '__maxAttempts' was stripped from the in-memory captured values map (so a once() check executes the producer)
       System.assertEquals(
         5,
         Integer.valueOf(
-          ctx.once('__maxAttempts', new StepContextTestData.ObjectProducer(5))
+          ctx.captures()
+            .once('__maxAttempts', new StepContextTestData.ObjectProducer(5))
         ),
         'Should strip __maxAttempts from in-memory captured values'
       );
@@ -308,14 +309,15 @@ public class StepContextCaptureReplayTest {
         .capturedValuesJson(priorJson)
         .maxAttempts(3) // attempt defaults to 1
         .build();
-      System.assertEquals(3, ctx.maxAttempts);
+      System.assertEquals(3, ctx.retry().maxAttempts);
 
       // Simulate step execution yielding and capturing a new value
-      ctx.once('newValue', new StepContextTestData.ObjectProducer('val'));
-      System.assert(ctx.hasNewCaptures());
+      ctx.captures()
+        .once('newValue', new StepContextTestData.ObjectProducer('val'));
+      System.assert(ctx.captures().hasNewCaptures());
 
       // Get serialized JSON to write back to db
-      String outputJson = ctx.getCapturedValuesJson();
+      String outputJson = ctx.captures().getCapturedValuesJson();
       System.assert(outputJson.contains('newValue'));
       System.assert(outputJson.contains('REF-001'));
       System.assert(outputJson.contains('__maxAttempts')); // MUST contain max attempts!
@@ -346,7 +348,7 @@ public class StepContextCaptureReplayTest {
         .build();
       System.assertEquals(
         3,
-        ctx.maxAttempts,
+        ctx.retry().maxAttempts,
         'Should parse double/decimal attempts safely'
       );
 
@@ -359,7 +361,7 @@ public class StepContextCaptureReplayTest {
         .build();
       System.assertEquals(
         1,
-        ctx2.maxAttempts,
+        ctx2.retry().maxAttempts,
         'Should fallback to default 1 on malformed JSON'
       );
     }
@@ -375,13 +377,13 @@ public class StepContextCaptureReplayTest {
         .stepName('TestStep')
         .build();
 
-      System.assertEquals(false, ctx.isProgressReported());
-      System.assertEquals(null, ctx.getProgressJson());
+      System.assertEquals(false, ctx.progress().isProgressReported());
+      System.assertEquals(null, ctx.progress().getProgressJson());
 
-      ctx.reportProgress(42.5, 'Processing batch 3');
-      System.assertEquals(true, ctx.isProgressReported());
+      ctx.progress().reportProgress(42.5, 'Processing batch 3');
+      System.assertEquals(true, ctx.progress().isProgressReported());
       Map<String, Object> progress = (Map<String, Object>) JSON.deserializeUntyped(
-        ctx.getProgressJson()
+        ctx.progress().getProgressJson()
       );
       System.assertEquals(42.5, (Decimal) progress.get('percentComplete'));
       System.assertEquals(
@@ -389,16 +391,17 @@ public class StepContextCaptureReplayTest {
         (String) progress.get('message')
       );
 
-      ctx.reportProgress(new Map<String, Object>{ 'custom' => 'data' });
-      System.assertEquals(true, ctx.isProgressReported());
+      ctx.progress()
+        .reportProgress(new Map<String, Object>{ 'custom' => 'data' });
+      System.assertEquals(true, ctx.progress().isProgressReported());
       Map<String, Object> customProgress = (Map<String, Object>) JSON.deserializeUntyped(
-        ctx.getProgressJson()
+        ctx.progress().getProgressJson()
       );
       System.assertEquals('data', (String) customProgress.get('custom'));
 
-      ctx.reportProgress(null);
-      System.assertEquals(true, ctx.isProgressReported());
-      System.assertEquals(null, ctx.getProgressJson());
+      ctx.progress().reportProgress(null);
+      System.assertEquals(true, ctx.progress().isProgressReported());
+      System.assertEquals(null, ctx.progress().getProgressJson());
     }
   }
 
@@ -430,7 +433,7 @@ public class StepContextCaptureReplayTest {
         .build();
 
       // Call getSignal first to populate cache with empty result (no signals present yet in the context cache)
-      System.assertEquals(false, ctx.getSignal('Go').isPresent());
+      System.assertEquals(false, ctx.signals().getSignal('Go').isPresent());
 
       Test.startTest();
       WorkflowEngine.redeliverMatchingSignalsForInstance(
@@ -456,7 +459,7 @@ public class StepContextCaptureReplayTest {
       System.assertEquals(inst.Id, reloadedSig.Workflow_Instance__c);
 
       // Cache should be cleared and the new signal should be returned
-      StepContext.Signal fetched = ctx.getSignal('Go');
+      StepContext.Signal fetched = ctx.signals().getSignal('Go');
       System.assertEquals(true, fetched.isPresent());
       System.assertEquals('{"val":42}', fetched.payload);
     }
@@ -582,7 +585,7 @@ public class StepContextCaptureReplayTest {
         new Map<String, StepContext.Signal>()
       );
 
-      StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+      StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');
       System.assertEquals(false, outcome.isPresent());
       System.assertEquals(false, outcome.isSuccess());
       System.assertEquals(null, outcome.status);
@@ -599,7 +602,7 @@ public class StepContextCaptureReplayTest {
         '{"score":700}'
       );
 
-      StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+      StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');
       System.assertEquals(true, outcome.isPresent());
       System.assertEquals(true, outcome.isSuccess());
       System.assertEquals('Completed', outcome.status);
@@ -620,7 +623,7 @@ public class StepContextCaptureReplayTest {
       };
       StepContext ctx = childOutcomeContext(sigs);
 
-      StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+      StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');
       System.assertEquals(true, outcome.isPresent());
       System.assertEquals(false, outcome.isSuccess());
       System.assertEquals('Failed', outcome.status);
@@ -641,7 +644,7 @@ public class StepContextCaptureReplayTest {
       };
       StepContext ctx = childOutcomeContext(sigs);
 
-      StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+      StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');
       System.assertEquals(true, outcome.isPresent());
       System.assertEquals(false, outcome.isSuccess());
       System.assertEquals('Failed', outcome.status);
@@ -658,11 +661,11 @@ public class StepContextCaptureReplayTest {
         '{"score":700}'
       );
 
-      StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+      StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');
       System.assertEquals(true, outcome.isPresent());
       System.assertEquals(true, outcome.isSuccess());
 
-      Set<String> consumedNames = ctx.getConsumedSignalNames();
+      Set<String> consumedNames = ctx.signals().getConsumedSignalNames();
       System.assert(
         consumedNames.contains('ChildCompleted:CC_1'),
         'Must consume ChildCompleted signal name'
@@ -686,11 +689,11 @@ public class StepContextCaptureReplayTest {
       };
       StepContext ctx = childOutcomeContext(sigs);
 
-      StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+      StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');
       System.assertEquals(true, outcome.isPresent());
       System.assertEquals(false, outcome.isSuccess());
 
-      Set<String> consumedNames = ctx.getConsumedSignalNames();
+      Set<String> consumedNames = ctx.signals().getConsumedSignalNames();
       System.assert(
         consumedNames.contains('ChildCompleted:CC_1'),
         'Must consume ChildCompleted signal name unconditionally'
@@ -709,10 +712,10 @@ public class StepContextCaptureReplayTest {
         new Map<String, StepContext.Signal>()
       );
 
-      StepContext.ChildOutcome outcome = ctx.getChildOutcome('CC_1');
+      StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');
       System.assertEquals(false, outcome.isPresent());
 
-      Set<String> consumedNames = ctx.getConsumedSignalNames();
+      Set<String> consumedNames = ctx.signals().getConsumedSignalNames();
       System.assert(
         !consumedNames.contains('ChildCompleted:CC_1'),
         'Must not consume ChildCompleted signal name when absent'

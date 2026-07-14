@@ -296,7 +296,7 @@ public class WorkflowEngineMocksATest {
      * @return A retry StepResult with a 5-second delay.
      */
     public StepResult execute(StepContext ctx) {
-      return StepResult.retry(5);
+      return StepResult.retry(new RetryPolicy(5, (Double) 1.0, 5));
     }
   }
 
@@ -560,7 +560,7 @@ public class WorkflowEngineMocksATest {
      * @return A suspend result while waiting, otherwise a completed result.
      */
     public StepResult execute(StepContext ctx) {
-      if (!ctx.hasSignal('Go')) {
+      if (!ctx.signals().hasSignal('Go')) {
         return StepResult.suspend();
       }
       return StepResult.complete(null, 'done');
@@ -795,7 +795,7 @@ public class WorkflowEngineMocksATest {
       WorkflowEngineMocksATest.observedAttemptStates.add(
         new Map<String, Object>{
           'attempt' => ctx.attempt,
-          'maxAttempts' => ctx.maxAttempts,
+          'maxAttempts' => ctx.retry().maxAttempts,
           'isFinalAttempt' => ctx.isFinalAttempt()
         }
       );
@@ -898,7 +898,7 @@ public class WorkflowEngineMocksATest {
      * @return The next step name carried by the result.
      */
     public String getNextStep(String currentStepName, StepResult stepResult) {
-      return stepResult.nextStepName;
+      return stepResult.directive().nextStepName;
     }
   }
 
@@ -933,7 +933,7 @@ public class WorkflowEngineMocksATest {
      */
     public String getNextStep(String currentStepName, StepResult sr) {
       if (currentStepName == 'WorkflowEngineMocksBTest.ProgressStep1') {
-        if (sr.action == StepResult.ActionType.YIELD) {
+        if (sr.directive().action == StepResult.ActionType.YIELD) {
           return 'WorkflowEngineMocksBTest.ProgressStep1';
         }
         return 'WorkflowEngineMocksATest.ProgressStep2';
@@ -955,9 +955,13 @@ public class WorkflowEngineMocksATest {
      * result.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.reportProgress(
-        new Map<String, Object>{ 'stage' => 'Step 2 final', 'percent' => 90.0 }
-      );
+      ctx.progress()
+        .reportProgress(
+          new Map<String, Object>{
+            'stage' => 'Step 2 final',
+            'percent' => 90.0
+          }
+        );
       String inputStr = ctx.workflowInputJson;
       if (String.isBlank(inputStr) || !inputStr.contains('isSuccessor')) {
         return StepResult.continueAsNew(
@@ -965,7 +969,7 @@ public class WorkflowEngineMocksATest {
           'key_successor'
         );
       }
-      ctx.reportProgress(100.0, 'Workflow Complete');
+      ctx.progress().reportProgress(100.0, 'Workflow Complete');
       return StepResult.complete(null, 'Done');
     }
   }
@@ -1274,10 +1278,11 @@ public class WorkflowEngineMocksATest {
      * result.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.log(
-        StepContext.Level.INFO,
-        'Attempt ' + WorkflowEngineMocksBTest.retryBreadcrumbAttempt
-      );
+      ctx.logger()
+        .log(
+          StepContext.Level.INFO,
+          'Attempt ' + WorkflowEngineMocksBTest.retryBreadcrumbAttempt
+        );
       if (WorkflowEngineMocksBTest.retryBreadcrumbAttempt < 3) {
         WorkflowEngineMocksBTest.retryBreadcrumbAttempt++;
         RetryPolicy policy = new RetryPolicy(1, (Double) 1.0, 5);
@@ -1303,15 +1308,15 @@ public class WorkflowEngineMocksATest {
       WorkflowEngineMocksBTest.routedStepsRun.add('NormalHandlerStep');
       WorkflowEngineMocksBTest.routedStepContextData.put(
         'failedStepName',
-        ctx.failedStepName
+        ctx.retry().failedStepName
       );
       WorkflowEngineMocksBTest.routedStepContextData.put(
         'errorMessage',
-        ctx.errorMessage
+        ctx.retry().errorMessage
       );
       WorkflowEngineMocksBTest.routedStepContextData.put(
         'attemptCount',
-        ctx.attemptCount
+        ctx.retry().attemptCount
       );
       return StepResult.complete(null, 'HandlerComplete');
     }
@@ -1664,21 +1669,22 @@ public class WorkflowEngineMocksATest {
     public StepResult execute(StepContext ctx) {
       if (!WorkflowEngineMocksBTest.yieldingHandlerFirstRunDone) {
         WorkflowEngineMocksBTest.yieldingHandlerFirstRunDone = true;
-        ctx.once('hasYielded', new WorkflowEngineMocksATest.YieldedProducer());
-        return StepResult.sleep(10, 'YieldingHandlerStep');
+        ctx.captures()
+          .once('hasYielded', new WorkflowEngineMocksATest.YieldedProducer());
+        return StepResult.sleep(10).withStepState('YieldingHandlerStep');
       }
       WorkflowEngineMocksBTest.routedStepsRun.add('YieldingHandlerStep');
       WorkflowEngineMocksBTest.routedStepContextData.put(
         'failedStepName',
-        ctx.failedStepName
+        ctx.retry().failedStepName
       );
       WorkflowEngineMocksBTest.routedStepContextData.put(
         'errorMessage',
-        ctx.errorMessage
+        ctx.retry().errorMessage
       );
       WorkflowEngineMocksBTest.routedStepContextData.put(
         'attemptCount',
-        ctx.attemptCount
+        ctx.retry().attemptCount
       );
       return StepResult.complete(null, 'HandlerDone');
     }

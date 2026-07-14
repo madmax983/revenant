@@ -426,7 +426,8 @@ public class WorkflowTestHarnessTest {
      */
     public StepResult execute(StepContext ctx) {
       String childKey = 'ChildKey';
-      StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
+      StepContext.ChildOutcome outcome = ctx.signals()
+        .getChildOutcome(childKey);
       if (outcome.isPresent()) {
         if (outcome.isSuccess()) {
           return StepResult.complete(null, null);
@@ -520,7 +521,8 @@ public class WorkflowTestHarnessTest {
      */
     public StepResult execute(StepContext ctx) {
       String childKey = 'ChildKey';
-      StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
+      StepContext.ChildOutcome outcome = ctx.signals()
+        .getChildOutcome(childKey);
       if (outcome.isPresent()) {
         if (outcome.isSuccess()) {
           return StepResult.complete(null, null);
@@ -827,7 +829,7 @@ public class WorkflowTestHarnessTest {
       if (ctx.stepStateJson != null) {
         return StepResult.complete(null, 'ResumedSuccessfully');
       }
-      return StepResult.sleep(60, 'resumed_state');
+      return StepResult.sleep(60).withStepState('resumed_state');
     }
   }
 
@@ -872,7 +874,7 @@ public class WorkflowTestHarnessTest {
      */
     public StepResult execute(StepContext ctx) {
       if (ctx.attempt < 3) {
-        return StepResult.retry(5);
+        return StepResult.retry(new RetryPolicy(5, (Double) 1.0, 5));
       }
       return StepResult.complete(null, 'RetryComplete');
     }
@@ -943,7 +945,7 @@ public class WorkflowTestHarnessTest {
       if (ctx.stepStateJson != null) {
         return StepResult.complete(null, 'ResumedA');
       }
-      return StepResult.sleep(10, 'slept_state_a');
+      return StepResult.sleep(10).withStepState('slept_state_a');
     }
   }
 
@@ -957,7 +959,11 @@ public class WorkflowTestHarnessTest {
      * @return COMPLETE when signaled, or SUSPEND while awaiting the signal.
      */
     public StepResult execute(StepContext ctx) {
-      if (ctx.getSignal('WorkflowTestHarnessTest.ParallelSleepB').isPresent()) {
+      if (
+        ctx.signals()
+          .getSignal('WorkflowTestHarnessTest.ParallelSleepB')
+          .isPresent()
+      ) {
         return StepResult.complete(null, 'done_b');
       }
       return StepResult.suspend();

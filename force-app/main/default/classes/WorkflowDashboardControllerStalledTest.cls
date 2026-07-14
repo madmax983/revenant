@@ -67,7 +67,7 @@ public class WorkflowDashboardControllerStalledTest {
 
       WorkflowEngine.disableQueueableInTest = false;
       Test.startTest();
-      Map<String, Object> outcome = WorkflowDashboardController.redriveMatchingInstances(
+      Map<String, Object> outcome = WorkflowDashboardCommandController.redriveMatchingInstances(
         'WorkflowEngineTest.HappyWorkflow',
         'Failed',
         ''
@@ -122,7 +122,7 @@ public class WorkflowDashboardControllerStalledTest {
       );
 
       Test.startTest();
-      Map<String, Object> outcome = WorkflowDashboardController.redriveMatchingInstances(
+      Map<String, Object> outcome = WorkflowDashboardCommandController.redriveMatchingInstances(
         'WorkflowEngineTest.HappyWorkflow',
         'Failed',
         ''
@@ -190,7 +190,7 @@ public class WorkflowDashboardControllerStalledTest {
           countThrew = true;
         }
         try {
-          WorkflowDashboardController.cancelMatchingInstancesWithCompensations(
+          WorkflowDashboardCommandController.cancelMatchingInstancesWithCompensations(
             '',
             'Running',
             ''

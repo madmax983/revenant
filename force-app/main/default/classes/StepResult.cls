@@ -1,7 +1,10 @@
 /**
- * @description Immutable directive a WorkflowStep returns to tell the engine what to do next — complete, yield, suspend, retry, sleep, split, start children, wait for approval, continue-as-new, or fail — built through the static factory methods on this class.
+ * @description Immutable directive a WorkflowStep returns to tell the engine what to do next — complete, yield, suspend, retry, sleep, split, start children, wait for approval, continue-as-new, or fail — built through the static factory methods on this class. The engine reads the resulting transition data through the grouped value object returned by directive(); step authors keep constructing results through the ergonomic factories and fluent chaining and never touch directive() (it is read-only).
  */
 public inherited sharing class StepResult {
+  /** @description The grouped, engine-facing transition data this result carries. */
+  private StepDirective directiveData = new StepDirective();
+
   /**
    * @description Enumerates the kinds of transitions a step can request from the engine.
    */
@@ -19,89 +22,102 @@ public inherited sharing class StepResult {
     START_CHILDREN
   }
 
-  /** @description The kind of transition this result requests. */
-  public ActionType action { get; set; }
-  /** @description The name of the next step to run, when applicable. */
-  public String nextStepName { get; set; }
-  /** @description The step's serialized output payload, or null. */
-  public String outputJson { get; set; }
-  /** @description Opaque durable step state persisted across a yield/suspend/sleep. */
-  public String stepStateJson { get; set; }
-  /** @description Fixed delay in seconds before a legacy fixed-interval retry. */
-  public Integer retryAfterSeconds { get; set; }
-  /** @description The retry policy governing backoff and attempt limits. */
-  public RetryPolicy retryPolicy { get; set; }
-  /** @description Duration in seconds the engine should sleep before resuming. */
-  public Integer sleepDurationSeconds { get; set; }
-  /** @description Name of the child workflow to start, for START_CHILD. */
-  public String childWorkflowName { get; set; }
-  /** @description Correlation key for the child workflow to start. */
-  public String childCorrelationKey { get; set; }
-  /** @description Serialized input passed to the child workflow. */
-  public String childInputJson { get; set; }
-  /** @description Approval signal key the step waits on, for WAIT_FOR_APPROVAL. */
-  public String approvalKey { get; set; }
-  /** @description Role authorized to satisfy the pending approval. */
-  public String approvalRole { get; set; }
-  /** @description Step names to run in parallel, for SPLIT. */
-  public List<String> parallelStepNames { get; set; }
-  /** @description Serialized input shared by the parallel branches. */
-  public String parallelInputJson { get; set; }
-  /** @description Serialized input seeding the continued-as-new instance. */
-  public String nextInputJson { get; set; }
-  /** @description Custom correlation key for the continued-as-new instance. */
-  public String newCorrelationKey { get; set; }
-  /** @description Child workflows to start together, for START_CHILDREN. */
-  public List<ChildRequest> childRequests { get; set; }
+  /**
+   * @description Grouped, engine-facing read model of a step transition. Every datum the engine inspects to enact a StepResult lives here — scalars directly, and the retry/timeout/continue-as-new fields behind small grouped sub-objects so this type stays within the public-member limit. The enclosing StepResult exposes exactly one accessor, directive(), so this whole surface stays off StepResult's own public member count. Populated only by StepResult's own factory and fluent methods — authors never construct or mutate it directly.
+   */
+  public class StepDirective {
+    /** @description Retry backoff/attempt data, for RETRY. Never null. */
+    public RetryDirective retry = new RetryDirective();
+    /** @description Durable-wait timeout data (issue #35). Never null. */
+    public TimeoutDirective timeout = new TimeoutDirective();
+    /** @description Continue-as-new seeding data, for CONTINUE_AS_NEW. Never null. */
+    public ContinueDirective continuation = new ContinueDirective();
+
+    /** @description The kind of transition this result requests. */
+    public ActionType action { get; set; }
+    /** @description The name of the next step to run, when applicable. */
+    public String nextStepName { get; set; }
+    /** @description The step's serialized output payload, or null. */
+    public String outputJson { get; set; }
+    /** @description Opaque durable step state persisted across a yield/suspend/sleep. */
+    public String stepStateJson { get; set; }
+    /** @description Duration in seconds the engine should sleep before resuming. */
+    public Integer sleepDurationSeconds { get; set; }
+    /** @description Name of the child workflow to start, for START_CHILD. */
+    public String childWorkflowName { get; set; }
+    /** @description Correlation key for the child workflow to start. */
+    public String childCorrelationKey { get; set; }
+    /** @description Serialized input passed to the child workflow. */
+    public String childInputJson { get; set; }
+    /** @description Approval signal key the step waits on, for WAIT_FOR_APPROVAL. */
+    public String approvalKey { get; set; }
+    /** @description Role authorized to satisfy the pending approval. */
+    public String approvalRole { get; set; }
+    /** @description Step names to run in parallel, for SPLIT. */
+    public List<String> parallelStepNames { get; set; }
+    /** @description Serialized input shared by the parallel branches. */
+    public String parallelInputJson { get; set; }
+    /** @description Child workflows to start together, for START_CHILDREN. */
+    public List<ChildRequest> childRequests { get; set; }
+
+    /**
+     * @description Author-owned Platform Event records the engine publishes
+     * effectively-once, coupled to this step's COMPLETE (or SPLIT) transition
+     * commit (issue #64). Merged by the engine with anything the step buffered
+     * via StepContext.emit(). Null when the step buffers its events through
+     * StepContext.emit() instead. The emitted __e should use
+     * publishBehavior=PublishAfterCommit so a rolled-back/retried/yielded
+     * transition publishes nothing.
+     */
+    public List<SObject> outboundEvents { get; set; }
+
+    // Explicit terminal failure (issue #37). Populated by the fail() factories: a
+    // deliberate, non-retryable business failure the author returns instead of
+    // throwing. failureReason is the operator-readable message; failureDataJson is
+    // optional structured data serialized for downstream compensation/alerting.
+    /** @description Operator-readable reason for a deliberate terminal failure. */
+    public String failureReason { get; set; }
+    /** @description Optional serialized structured data accompanying the failure. */
+    public String failureDataJson { get; set; }
+  }
 
   /**
-   * Author-owned Platform Event records the engine publishes effectively-once,
-   * coupled to this step's COMPLETE (or SPLIT) transition commit (issue #64).
-   * Populated by the complete(next, output, events) overload, or merged with
-   * anything the step buffered via StepContext.emit(). Null when the step emits
-   * no events. The emitted __e should use publishBehavior=PublishAfterCommit so
-   * a rolled-back/retried/yielded transition publishes nothing.
+   * @description Grouped retry data on a StepDirective. policy governs backoff and attempt limits; afterSeconds carries a legacy fixed-interval delay (retained for the engine read contract).
    */
-  public List<SObject> outboundEvents { get; set; }
+  public class RetryDirective {
+    /** @description The retry policy governing backoff and attempt limits. */
+    public RetryPolicy policy { get; set; }
+    /** @description Fixed delay in seconds for a legacy fixed-interval retry. */
+    public Integer afterSeconds { get; set; }
+  }
 
-  // Durable wait timeout (issue #35). When set, the engine arms Sleep_Until__c
-  // and routes to timeoutStep if the deadline elapses before a signal/approval.
-  /** @description Deadline in seconds for a durable wait before routing to timeoutStep. */
-  public Integer timeoutSeconds { get; set; }
-  /** @description Step to route to when the durable wait deadline elapses. */
-  public String timeoutStep { get; set; }
+  /**
+   * @description Grouped durable-wait timeout data on a StepDirective. When seconds is set, the engine arms Sleep_Until__c and routes to step if the deadline elapses before a signal/approval.
+   */
+  public class TimeoutDirective {
+    /** @description Deadline in seconds for a durable wait before routing to step. */
+    public Integer seconds { get; set; }
+    /** @description Step to route to when the durable wait deadline elapses. */
+    public String step { get; set; }
+  }
 
-  // Explicit terminal failure (issue #37). Populated by the fail() factories: a
-  // deliberate, non-retryable business failure the author returns instead of
-  // throwing. failureReason is the operator-readable message; failureDataJson is
-  // optional structured data serialized for downstream compensation/alerting.
-  /** @description Operator-readable reason for a deliberate terminal failure. */
-  public String failureReason { get; set; }
-  /** @description Optional serialized structured data accompanying the failure. */
-  public String failureDataJson { get; set; }
+  /**
+   * @description Grouped continue-as-new data on a StepDirective. nextInputJson seeds the continued instance; newCorrelationKey optionally assigns it a custom correlation key.
+   */
+  public class ContinueDirective {
+    /** @description Serialized input seeding the continued-as-new instance. */
+    public String nextInputJson { get; set; }
+    /** @description Custom correlation key for the continued-as-new instance. */
+    public String newCorrelationKey { get; set; }
+  }
 
-  @TestVisible
-  private static DateTime mockCurrentDateTime = null;
-
-  private static final Long MILLISECONDS_IN_SECOND = 1000L;
-  private static final Long MILLISECONDS_IN_MINUTE = 60000L;
-  private static final Long MILLISECONDS_IN_HOUR = 3600000L;
-  private static final Long MILLISECONDS_IN_DAY = 86400000L;
-
-  private static final Integer MAX_INTEGER = 2147483647;
-  private static final Long MAX_LONG = 9223372036854775807L;
-
-  // Lower-cased unit spellings that route a business sleep through the
-  // BusinessHours calendar-day scan (all others are fixed-length multiples).
-  private static final Set<String> BUSINESS_DAY_UNITS = new Set<String>{
-    'days',
-    'business days',
-    'day',
-    'business day'
-  };
-
-  private static final Map<String, BusinessHours> BUSINESS_HOURS_BY_NAME = new Map<String, BusinessHours>();
-  private static final Map<Id, Long> MS_PER_BUSINESS_DAY_BY_BH_ID = new Map<Id, Long>();
+  /**
+   * @description Returns the grouped, read-only transition data the engine inspects to enact this result (e.g. result.directive().action, result.directive().outputJson, result.directive().retry.policy, result.directive().timeout.step). Step authors do not call this — they build results through the static factories and fluent methods.
+   * @return The StepDirective carrying this result's transition data.
+   */
+  public StepDirective directive() {
+    return this.directiveData;
+  }
 
   /**
    * @description Completes the step, optionally routing to a named next step and carrying a serialized output payload.
@@ -111,26 +127,11 @@ public inherited sharing class StepResult {
    */
   public static StepResult complete(String nextStepName, Object output) {
     StepResult r = new StepResult();
-    r.action = ActionType.COMPLETE;
-    r.nextStepName = nextStepName;
-    r.outputJson = (output != null) ? JSON.serialize(output) : null;
-    return r;
-  }
-
-  /**
-   * @description Completes the step and hands the engine one or more domain Platform Events to publish effectively-once when this COMPLETE transition commits (issue #64). Retries, yields, suspends, re-drives, and at-least-once resumes that re-run execute() before that commit publish nothing; a step already durably Completed never re-emits. Authors choose their own __e type; delivery to subscribers stays at-least-once, so subscribers must remain idempotent.
-   * @param nextStepName The name of the next step to run, or null.
-   * @param output The step output to serialize, or null for no output.
-   * @param events The outbound Platform Events to publish on commit.
-   * @return A COMPLETE result carrying the output and buffered outbound events.
-   */
-  public static StepResult complete(
-    String nextStepName,
-    Object output,
-    List<SObject> events
-  ) {
-    StepResult r = complete(nextStepName, output);
-    r.outboundEvents = events;
+    r.directiveData.action = ActionType.COMPLETE;
+    r.directiveData.nextStepName = nextStepName;
+    r.directiveData.outputJson = (output != null)
+      ? JSON.serialize(output)
+      : null;
     return r;
   }
 
@@ -141,30 +142,18 @@ public inherited sharing class StepResult {
    */
   public static StepResult yield(String stepStateJson) {
     StepResult r = new StepResult();
-    r.action = ActionType.YIELD;
-    r.stepStateJson = stepStateJson;
+    r.directiveData.action = ActionType.YIELD;
+    r.directiveData.stepStateJson = stepStateJson;
     return r;
   }
 
   /**
-   * @description Suspends the step indefinitely to await an external signal or approval.
+   * @description Suspends the step indefinitely to await an external signal or approval. To persist durable state while suspended, chain withStepState(json).
    * @return A SUSPEND result with no persisted state or timeout.
    */
   public static StepResult suspend() {
     StepResult r = new StepResult();
-    r.action = ActionType.SUSPEND;
-    return r;
-  }
-
-  /**
-   * @description Suspends the step to await an external signal, persisting durable state.
-   * @param stepStateJson Opaque durable state to persist while suspended.
-   * @return A SUSPEND result carrying the persisted step state.
-   */
-  public static StepResult suspend(String stepStateJson) {
-    StepResult r = new StepResult();
-    r.action = ActionType.SUSPEND;
-    r.stepStateJson = stepStateJson;
+    r.directiveData.action = ActionType.SUSPEND;
     return r;
   }
 
@@ -175,397 +164,48 @@ public inherited sharing class StepResult {
    * @return A SUSPEND result armed with the timeout and timeout step.
    */
   public static StepResult suspend(Integer timeoutSeconds, String timeoutStep) {
-    if (String.isBlank(timeoutStep)) {
-      throw new IllegalArgumentException(
-        'StepResult.suspend: timeoutStep must not be blank'
-      );
-    }
-    if (timeoutSeconds == null || timeoutSeconds <= 0) {
-      throw new IllegalArgumentException(
-        'StepResult.suspend: timeoutSeconds must be a positive integer'
-      );
-    }
+    StepResultValidator.requirePositiveTimeout(
+      timeoutSeconds,
+      timeoutStep,
+      'StepResult.suspend'
+    );
     StepResult r = new StepResult();
-    r.action = ActionType.SUSPEND;
-    r.timeoutSeconds = timeoutSeconds;
-    r.timeoutStep = timeoutStep;
+    r.directiveData.action = ActionType.SUSPEND;
+    r.directiveData.timeout.seconds = timeoutSeconds;
+    r.directiveData.timeout.step = timeoutStep;
     return r;
   }
 
   /**
-   * @description Requests a retry of the step governed by the given retry policy's backoff and attempt limits.
+   * @description Requests a retry of the step governed by the given retry policy's backoff and attempt limits. For a legacy fixed delay, pass new RetryPolicy(seconds, 1.0, 5).
    * @param policy The non-null retry policy controlling delay and max attempts.
    * @return A RETRY result carrying the retry policy.
    */
   public static StepResult retry(RetryPolicy policy) {
-    if (policy == null) {
-      throw new IllegalArgumentException(
-        'StepResult.retry: policy must not be null'
-      );
-    }
+    StepResultValidator.requireNonNull(
+      policy,
+      'StepResult.retry: policy must not be null'
+    );
     StepResult r = new StepResult();
-    r.action = ActionType.RETRY;
-    r.retryPolicy = policy;
+    r.directiveData.action = ActionType.RETRY;
+    r.directiveData.retry.policy = policy;
     return r;
   }
 
   /**
-   * @description Requests a retry after a fixed delay, wrapping it in a backwards-compatible fixed-interval retry policy.
-   * @param retryAfterSeconds The fixed delay in seconds before the retry.
-   * @return A RETRY result carrying a fixed-interval retry policy.
-   */
-  public static StepResult retry(Integer retryAfterSeconds) {
-    StepResult r = new StepResult();
-    r.action = ActionType.RETRY;
-    r.retryAfterSeconds = retryAfterSeconds;
-    r.retryPolicy = new RetryPolicy(retryAfterSeconds, (Double) 1.0, 5); // Backwards compatible fixed interval retry
-    return r;
-  }
-
-  /**
-   * @description Sleeps durably for the given number of seconds before the engine resumes the step.
+   * @description Sleeps durably for the given number of seconds before the engine resumes the step. To persist durable state across the wait, chain withStepState(json).
    * @param seconds The non-negative number of seconds to sleep.
    * @return A SLEEP result carrying the sleep duration.
    */
   public static StepResult sleep(Integer seconds) {
-    if (seconds == null || seconds < 0) {
-      throw new IllegalArgumentException(
-        'StepResult.sleep: seconds must be a non-negative integer'
-      );
-    }
-    StepResult r = new StepResult();
-    r.action = ActionType.SLEEP;
-    r.sleepDurationSeconds = seconds;
-    return r;
-  }
-
-  /**
-   * @description Sleeps durably for the given number of seconds while persisting durable step state across the wait.
-   * @param seconds The non-negative number of seconds to sleep.
-   * @param stepStateJson Opaque durable state to persist while sleeping.
-   * @return A SLEEP result carrying the sleep duration and persisted state.
-   */
-  public static StepResult sleep(Integer seconds, String stepStateJson) {
-    if (seconds == null || seconds < 0) {
-      throw new IllegalArgumentException(
-        'StepResult.sleep: seconds must be a non-negative integer'
-      );
-    }
-    StepResult r = new StepResult();
-    r.action = ActionType.SLEEP;
-    r.sleepDurationSeconds = seconds;
-    r.stepStateJson = stepStateJson;
-    return r;
-  }
-
-  private static DateTime getCurrentDateTime() {
-    return mockCurrentDateTime != null ? mockCurrentDateTime : DateTime.now();
-  }
-
-  private static BusinessHours getBusinessHours(String name) {
-    if (String.isBlank(name)) {
-      return null;
-    }
-    String trimmedName = name.trim();
-    String cacheKey = trimmedName.toLowerCase();
-    if (BUSINESS_HOURS_BY_NAME.containsKey(cacheKey)) {
-      return BUSINESS_HOURS_BY_NAME.get(cacheKey);
-    }
-
-    Boolean queryDefault = (cacheKey == 'default');
-    List<BusinessHours> matchingBusinessHours;
-    if (queryDefault) {
-      matchingBusinessHours = [
-        SELECT
-          Id,
-          Name,
-          TimeZoneSidKey,
-          IsActive,
-          IsDefault,
-          MondayStartTime,
-          MondayEndTime,
-          TuesdayStartTime,
-          TuesdayEndTime,
-          WednesdayStartTime,
-          WednesdayEndTime,
-          ThursdayStartTime,
-          ThursdayEndTime,
-          FridayStartTime,
-          FridayEndTime,
-          SaturdayStartTime,
-          SaturdayEndTime,
-          SundayStartTime,
-          SundayEndTime
-        FROM BusinessHours
-        WHERE IsActive = TRUE AND IsDefault = TRUE
-        WITH USER_MODE
-        LIMIT 1
-      ];
-    } else {
-      matchingBusinessHours = [
-        SELECT
-          Id,
-          Name,
-          TimeZoneSidKey,
-          IsActive,
-          IsDefault,
-          MondayStartTime,
-          MondayEndTime,
-          TuesdayStartTime,
-          TuesdayEndTime,
-          WednesdayStartTime,
-          WednesdayEndTime,
-          ThursdayStartTime,
-          ThursdayEndTime,
-          FridayStartTime,
-          FridayEndTime,
-          SaturdayStartTime,
-          SaturdayEndTime,
-          SundayStartTime,
-          SundayEndTime
-        FROM BusinessHours
-        WHERE IsActive = TRUE AND Name = :trimmedName
-        WITH USER_MODE
-        LIMIT 1
-      ];
-    }
-
-    if (matchingBusinessHours.isEmpty()) {
-      throw new IllegalArgumentException(
-        'Unknown Business Hours name: ' + name
-      );
-    }
-
-    BUSINESS_HOURS_BY_NAME.put(cacheKey, matchingBusinessHours[0]);
-    if (matchingBusinessHours[0].Name != null) {
-      BUSINESS_HOURS_BY_NAME.put(
-        matchingBusinessHours[0].Name.toLowerCase(),
-        matchingBusinessHours[0]
-      );
-    }
-    return matchingBusinessHours[0];
-  }
-
-  @TestVisible
-  private static Long getMillisecondsInBusinessDay(
-    BusinessHours selectedBusinessHours
-  ) {
-    if (MS_PER_BUSINESS_DAY_BY_BH_ID.containsKey(selectedBusinessHours.Id)) {
-      return MS_PER_BUSINESS_DAY_BY_BH_ID.get(selectedBusinessHours.Id);
-    }
-
-    List<Time> starts = new List<Time>{
-      selectedBusinessHours.SundayStartTime,
-      selectedBusinessHours.MondayStartTime,
-      selectedBusinessHours.TuesdayStartTime,
-      selectedBusinessHours.WednesdayStartTime,
-      selectedBusinessHours.ThursdayStartTime,
-      selectedBusinessHours.FridayStartTime,
-      selectedBusinessHours.SaturdayStartTime
-    };
-    List<Time> ends = new List<Time>{
-      selectedBusinessHours.SundayEndTime,
-      selectedBusinessHours.MondayEndTime,
-      selectedBusinessHours.TuesdayEndTime,
-      selectedBusinessHours.WednesdayEndTime,
-      selectedBusinessHours.ThursdayEndTime,
-      selectedBusinessHours.FridayEndTime,
-      selectedBusinessHours.SaturdayEndTime
-    };
-
-    Long totalMs = 0;
-    Integer activeDays = 0;
-    for (Integer i = 0; i < 7; i++) {
-      Time startTime = starts[i];
-      Time endTime = ends[i];
-      if (startTime != null && endTime != null) {
-        activeDays++;
-        if (startTime == endTime) {
-          totalMs += MILLISECONDS_IN_DAY;
-        } else {
-          Long startMs = getMillisecondsSinceMidnight(startTime);
-          Long endMs = getMillisecondsSinceMidnight(endTime);
-          totalMs += (endMs - startMs);
-        }
-      }
-    }
-    Long result = MILLISECONDS_IN_DAY;
-    if (activeDays > 0) {
-      result = totalMs / activeDays;
-    }
-    MS_PER_BUSINESS_DAY_BY_BH_ID.put(selectedBusinessHours.Id, result);
-    return result;
-  }
-
-  /**
-   * @description The calendar's time zone key, defaulting to GMT when unset.
-   * @param bh The BusinessHours calendar to read the time zone from.
-   * @return The calendar's time zone key, or 'GMT' when blank.
-   */
-  private static String timeZoneKeyOf(BusinessHours bh) {
-    return String.isNotBlank(bh.TimeZoneSidKey) ? bh.TimeZoneSidKey : 'GMT';
-  }
-
-  /**
-   * @description The instant the calendar-day scan should begin: the given start when the calendar has no Id (mock) or start is already within business hours, otherwise the next business-hours start after it.
-   * @param bh The BusinessHours calendar defining working windows.
-   * @param start The candidate start instant for the scan.
-   * @return The adjusted instant at which the calendar-day scan should begin.
-   */
-  private static DateTime businessScanStart(BusinessHours bh, DateTime start) {
-    if (bh.Id == null) {
-      return start;
-    }
-    return BusinessHours.isWithin(bh.Id, start)
-      ? start
-      : BusinessHours.nextStartDate(bh.Id, start);
-  }
-
-  @TestVisible
-  private static Long getMillisecondsForDays(
-    BusinessHours selectedBusinessHours,
-    DateTime start,
-    Integer days
-  ) {
-    if (days == null || days <= 0) {
-      return 0L;
-    }
-    String tz = timeZoneKeyOf(selectedBusinessHours);
-    DateTime current = businessScanStart(selectedBusinessHours, start);
-    Date currentDate = Date.valueOf(current.format('yyyy-MM-dd', tz));
-    Long totalMs = 0;
-    Integer daysAdded = 0;
-    Integer maxDays = Math.min(3650, days * 7 + 366);
-
-    for (Integer i = 0; i < maxDays && daysAdded < days; i++) {
-      DateTime currentInstant = getLocalMidnight(currentDate, tz).addHours(12);
-      Long workingMs = getWorkingMsForDay(
-        selectedBusinessHours,
-        currentInstant
-      );
-      if (workingMs > 0) {
-        totalMs += workingMs;
-        daysAdded++;
-      }
-      currentDate = currentDate.addDays(1);
-    }
-
-    if (daysAdded == 0) {
-      return (Long) days * MILLISECONDS_IN_DAY;
-    }
-    if (daysAdded < days) {
-      throw new IllegalArgumentException(
-        'StepResult.sleep: requested business duration exceeds the maximum calendar scan limit (3650 days)'
-      );
-    }
-    return totalMs;
-  }
-
-  @TestVisible
-  private static DateTime getLocalMidnight(Date d, String tz) {
-    DateTime gmtMidnight = DateTime.newInstanceGmt(
-      d.year(),
-      d.month(),
-      d.day(),
-      0,
-      0,
-      0
+    StepResultValidator.requireNonNegativeSeconds(
+      seconds,
+      'StepResult.sleep: seconds must be a non-negative integer'
     );
-    if (String.isBlank(tz)) {
-      return gmtMidnight;
-    }
-    Timezone timezoneObj = Timezone.getTimeZone(tz);
-    Integer offsetMs1 = timezoneObj.getOffset(gmtMidnight);
-    DateTime candidate = gmtMidnight.addSeconds(-offsetMs1 / 1000);
-    Integer offsetMs2 = timezoneObj.getOffset(candidate);
-    if (offsetMs1 != offsetMs2) {
-      candidate = gmtMidnight.addSeconds(-offsetMs2 / 1000);
-    }
-    return candidate;
-  }
-
-  private static Integer getDayOfWeek(DateTime dt, String tz) {
-    String dateStr = dt.format('yyyy-MM-dd', tz);
-    Date localDate = Date.valueOf(dateStr);
-    Date refDate = Date.newInstance(1900, 1, 7); // A Sunday
-    Integer daysBetween = refDate.daysBetween(localDate);
-    Integer dayOfWeekNum = Math.mod(daysBetween, 7);
-    if (dayOfWeekNum < 0) {
-      dayOfWeekNum += 7;
-    }
-    return dayOfWeekNum; // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-  }
-
-  @TestVisible
-  private static Long getWorkingMsForDay(
-    BusinessHours selectedBusinessHours,
-    DateTime dt
-  ) {
-    if (selectedBusinessHours.Id != null) {
-      String tz = String.isNotBlank(selectedBusinessHours.TimeZoneSidKey)
-        ? selectedBusinessHours.TimeZoneSidKey
-        : 'GMT';
-      Date localDate = Date.valueOf(dt.format('yyyy-MM-dd', tz));
-      DateTime dayStart = getLocalMidnight(localDate, tz);
-      DateTime dayEnd = getLocalMidnight(localDate.addDays(1), tz);
-      return BusinessHours.diff(selectedBusinessHours.Id, dayStart, dayEnd);
-    }
-
-    // Fallback for mock BusinessHours with null ID in unit tests
-    String tz = String.isNotBlank(selectedBusinessHours.TimeZoneSidKey)
-      ? selectedBusinessHours.TimeZoneSidKey
-      : 'GMT';
-    Integer dayOfWeek = getDayOfWeek(dt, tz);
-    Time startTime;
-    Time endTime;
-    switch on dayOfWeek {
-      when 0 {
-        startTime = selectedBusinessHours.SundayStartTime;
-        endTime = selectedBusinessHours.SundayEndTime;
-      }
-      when 1 {
-        startTime = selectedBusinessHours.MondayStartTime;
-        endTime = selectedBusinessHours.MondayEndTime;
-      }
-      when 2 {
-        startTime = selectedBusinessHours.TuesdayStartTime;
-        endTime = selectedBusinessHours.TuesdayEndTime;
-      }
-      when 3 {
-        startTime = selectedBusinessHours.WednesdayStartTime;
-        endTime = selectedBusinessHours.WednesdayEndTime;
-      }
-      when 4 {
-        startTime = selectedBusinessHours.ThursdayStartTime;
-        endTime = selectedBusinessHours.ThursdayEndTime;
-      }
-      when 5 {
-        startTime = selectedBusinessHours.FridayStartTime;
-        endTime = selectedBusinessHours.FridayEndTime;
-      }
-      when 6 {
-        startTime = selectedBusinessHours.SaturdayStartTime;
-        endTime = selectedBusinessHours.SaturdayEndTime;
-      }
-    }
-    if (startTime == null || endTime == null) {
-      return 0L;
-    }
-    if (startTime == endTime) {
-      return MILLISECONDS_IN_DAY;
-    }
-    return getMillisecondsSinceMidnight(endTime) -
-      getMillisecondsSinceMidnight(startTime);
-  }
-
-  private static Long getMillisecondsSinceMidnight(Time t) {
-    if (t == null) {
-      return 0;
-    }
-    return t.hour() * MILLISECONDS_IN_HOUR +
-      t.minute() * MILLISECONDS_IN_MINUTE +
-      t.second() * MILLISECONDS_IN_SECOND +
-      t.millisecond();
+    StepResult r = new StepResult();
+    r.directiveData.action = ActionType.SLEEP;
+    r.directiveData.sleepDurationSeconds = seconds;
+    return r;
   }
 
   /**
@@ -580,11 +220,9 @@ public inherited sharing class StepResult {
     String unit,
     String businessHoursName
   ) {
-    validateBusinessSleepArgs(amount, unit, businessHoursName);
-
     StepResult result = new StepResult();
-    result.action = ActionType.SLEEP;
-    result.sleepDurationSeconds = businessSleepSeconds(
+    result.directiveData.action = ActionType.SLEEP;
+    result.directiveData.sleepDurationSeconds = BusinessSleepCalculator.computeSeconds(
       amount,
       unit,
       businessHoursName
@@ -598,110 +236,8 @@ public inherited sharing class StepResult {
    * @return This StepResult, for fluent chaining.
    */
   public StepResult withStepState(String stepStateJson) {
-    this.stepStateJson = stepStateJson;
+    this.directiveData.stepStateJson = stepStateJson;
     return this;
-  }
-
-  private static void validateBusinessSleepArgs(
-    Integer amount,
-    String unit,
-    String businessHoursName
-  ) {
-    if (amount == null || amount < 0) {
-      throw new IllegalArgumentException(
-        'StepResult.sleep: amount must be a non-negative integer'
-      );
-    }
-    if (String.isBlank(unit)) {
-      throw new IllegalArgumentException(
-        'StepResult.sleep: unit must not be blank'
-      );
-    }
-    if (String.isBlank(businessHoursName)) {
-      throw new IllegalArgumentException(
-        'StepResult.sleep: businessHoursName must not be blank'
-      );
-    }
-  }
-
-  /**
-   * @description Resolves the named BusinessHours calendar, converts amount/unit to a millisecond interval, and returns the clamped whole-second wait until the business-hours-adjusted wake time.
-   * @param amount The quantity of the unit to sleep.
-   * @param unit The unit of time to convert.
-   * @param businessHoursName The name of the BusinessHours calendar to resolve.
-   * @return The clamped whole-second wait until the adjusted wake time.
-   */
-  private static Integer businessSleepSeconds(
-    Integer amount,
-    String unit,
-    String businessHoursName
-  ) {
-    BusinessHours selectedBusinessHours = getBusinessHours(businessHoursName);
-    DateTime now = getCurrentDateTime();
-
-    String unitLower = unit.toLowerCase().trim();
-    Long intervalMs = isBusinessDaysUnit(unitLower)
-      ? getMillisecondsForDays(selectedBusinessHours, now, amount)
-      : nonDayUnitMillis(unitLower, amount, unit);
-
-    // Safety check against overflow in intervalMs
-    if (intervalMs < 0) {
-      intervalMs = MAX_LONG; // Cap at max value if it wrapped
-    }
-
-    DateTime wakeTime = BusinessHours.add(
-      selectedBusinessHours.Id,
-      now,
-      intervalMs
-    );
-    return clampedSleepSeconds(now, wakeTime);
-  }
-
-  private static Boolean isBusinessDaysUnit(String unitLower) {
-    return BUSINESS_DAY_UNITS.contains(unitLower);
-  }
-
-  /**
-   * @description Converts a non-day unit (hours/minutes/seconds and their variants) to milliseconds, throwing for an unsupported unit.
-   * @param unitLower The lower-cased, trimmed unit spelling to convert.
-   * @param amount The quantity of the unit.
-   * @param unit The original unit spelling, used in the error message.
-   * @return The interval in milliseconds for the given amount and unit.
-   */
-  private static Long nonDayUnitMillis(
-    String unitLower,
-    Integer amount,
-    String unit
-  ) {
-    Long intervalMs;
-    switch on unitLower {
-      when 'hours', 'business hours', 'hour', 'business hour' {
-        intervalMs = (Long) amount * MILLISECONDS_IN_HOUR;
-      }
-      when 'minutes', 'business minutes', 'minute', 'business minute' {
-        intervalMs = (Long) amount * MILLISECONDS_IN_MINUTE;
-      }
-      when 'seconds', 'business seconds', 'second', 'business second' {
-        intervalMs = (Long) amount * MILLISECONDS_IN_SECOND;
-      }
-      when else {
-        throw new IllegalArgumentException(
-          'StepResult.sleep: unsupported unit: ' + unit
-        );
-      }
-    }
-    return intervalMs;
-  }
-
-  private static Integer clampedSleepSeconds(DateTime now, DateTime wakeTime) {
-    Long diffMs = wakeTime.getTime() - now.getTime();
-    if (diffMs < 0) {
-      diffMs = 0L;
-    }
-    Long sleepSecondsLong = diffMs / 1000L;
-    return sleepSecondsLong > MAX_INTEGER
-      ? MAX_INTEGER
-      : (Integer) sleepSecondsLong;
   }
 
   /**
@@ -716,16 +252,15 @@ public inherited sharing class StepResult {
     String childCorrelationKey,
     Object input
   ) {
-    if (String.isBlank(childWorkflowName)) {
-      throw new IllegalArgumentException(
-        'StepResult.startChild: childWorkflowName must not be blank'
-      );
-    }
+    StepResultValidator.requireNonBlank(
+      childWorkflowName,
+      'StepResult.startChild: childWorkflowName must not be blank'
+    );
     StepResult r = new StepResult();
-    r.action = ActionType.START_CHILD;
-    r.childWorkflowName = childWorkflowName;
-    r.childCorrelationKey = childCorrelationKey;
-    r.childInputJson = serializeInputIfNeeded(input);
+    r.directiveData.action = ActionType.START_CHILD;
+    r.directiveData.childWorkflowName = childWorkflowName;
+    r.directiveData.childCorrelationKey = childCorrelationKey;
+    r.directiveData.childInputJson = StepResultJson.serialize(input);
     return r;
   }
 
@@ -751,14 +286,13 @@ public inherited sharing class StepResult {
       String correlationKey,
       Object input
     ) {
-      if (String.isBlank(workflowName)) {
-        throw new IllegalArgumentException(
-          'ChildRequest: workflowName must not be blank'
-        );
-      }
+      StepResultValidator.requireNonBlank(
+        workflowName,
+        'ChildRequest: workflowName must not be blank'
+      );
       this.workflowName = workflowName;
       this.correlationKey = correlationKey;
-      this.inputJson = serializeInputIfNeeded(input);
+      this.inputJson = StepResultJson.serialize(input);
     }
   }
 
@@ -768,21 +302,10 @@ public inherited sharing class StepResult {
    * @return A START_CHILDREN result carrying the child requests.
    */
   public static StepResult startChildren(List<ChildRequest> children) {
-    if (children == null || children.isEmpty()) {
-      throw new IllegalArgumentException(
-        'StepResult.startChildren: children list must not be null or empty'
-      );
-    }
-    for (ChildRequest child : children) {
-      if (child == null) {
-        throw new IllegalArgumentException(
-          'StepResult.startChildren: children list must not contain null values'
-        );
-      }
-    }
+    StepResultValidator.requireValidChildren(children);
     StepResult r = new StepResult();
-    r.action = ActionType.START_CHILDREN;
-    r.childRequests = children;
+    r.directiveData.action = ActionType.START_CHILDREN;
+    r.directiveData.childRequests = children;
     return r;
   }
 
@@ -793,15 +316,14 @@ public inherited sharing class StepResult {
    * @return A WAIT_FOR_APPROVAL result carrying the approval key and role.
    */
   public static StepResult waitForApproval(String key, String role) {
-    if (String.isBlank(key)) {
-      throw new IllegalArgumentException(
-        'StepResult.waitForApproval: key must not be blank'
-      );
-    }
+    StepResultValidator.requireNonBlank(
+      key,
+      'StepResult.waitForApproval: key must not be blank'
+    );
     StepResult r = new StepResult();
-    r.action = ActionType.WAIT_FOR_APPROVAL;
-    r.approvalKey = key;
-    r.approvalRole = role;
+    r.directiveData.action = ActionType.WAIT_FOR_APPROVAL;
+    r.directiveData.approvalKey = key;
+    r.directiveData.approvalRole = role;
     return r;
   }
 
@@ -815,18 +337,13 @@ public inherited sharing class StepResult {
     Integer timeoutSeconds,
     String timeoutStep
   ) {
-    if (String.isBlank(timeoutStep)) {
-      throw new IllegalArgumentException(
-        'StepResult.waitForApproval: timeoutStep must not be blank'
-      );
-    }
-    if (timeoutSeconds == null || timeoutSeconds <= 0) {
-      throw new IllegalArgumentException(
-        'StepResult.waitForApproval: timeoutSeconds must be a positive integer'
-      );
-    }
-    this.timeoutSeconds = timeoutSeconds;
-    this.timeoutStep = timeoutStep;
+    StepResultValidator.requirePositiveTimeout(
+      timeoutSeconds,
+      timeoutStep,
+      'StepResult.waitForApproval'
+    );
+    this.directiveData.timeout.seconds = timeoutSeconds;
+    this.directiveData.timeout.step = timeoutStep;
     return this;
   }
 
@@ -836,21 +353,10 @@ public inherited sharing class StepResult {
    * @return A SPLIT result carrying the parallel step names.
    */
   public static StepResult split(List<String> stepNames) {
-    if (stepNames == null || stepNames.isEmpty()) {
-      throw new IllegalArgumentException(
-        'StepResult.split: stepNames list must not be null or empty'
-      );
-    }
-    for (String stepName : stepNames) {
-      if (String.isBlank(stepName)) {
-        throw new IllegalArgumentException(
-          'StepResult.split: stepNames list must not contain null or blank values'
-        );
-      }
-    }
+    StepResultValidator.requireValidStepNames(stepNames);
     StepResult r = new StepResult();
-    r.action = ActionType.SPLIT;
-    r.parallelStepNames = stepNames;
+    r.directiveData.action = ActionType.SPLIT;
+    r.directiveData.parallelStepNames = stepNames;
     return r;
   }
 
@@ -861,22 +367,11 @@ public inherited sharing class StepResult {
    * @return A SPLIT result carrying the parallel step names and shared input.
    */
   public static StepResult split(List<String> stepNames, Object input) {
-    if (stepNames == null || stepNames.isEmpty()) {
-      throw new IllegalArgumentException(
-        'StepResult.split: stepNames list must not be null or empty'
-      );
-    }
-    for (String stepName : stepNames) {
-      if (String.isBlank(stepName)) {
-        throw new IllegalArgumentException(
-          'StepResult.split: stepNames list must not contain null or blank values'
-        );
-      }
-    }
+    StepResultValidator.requireValidStepNames(stepNames);
     StepResult r = new StepResult();
-    r.action = ActionType.SPLIT;
-    r.parallelStepNames = stepNames;
-    r.parallelInputJson = serializeInputIfNeeded(input);
+    r.directiveData.action = ActionType.SPLIT;
+    r.directiveData.parallelStepNames = stepNames;
+    r.directiveData.parallelInputJson = StepResultJson.serialize(input);
     return r;
   }
 
@@ -887,9 +382,11 @@ public inherited sharing class StepResult {
    */
   public static StepResult continueAsNew(Object nextInput) {
     StepResult r = new StepResult();
-    r.action = ActionType.CONTINUE_AS_NEW;
-    r.nextInputJson = serializeInputIfNeeded(nextInput);
-    r.newCorrelationKey = null;
+    r.directiveData.action = ActionType.CONTINUE_AS_NEW;
+    r.directiveData.continuation.nextInputJson = StepResultJson.serialize(
+      nextInput
+    );
+    r.directiveData.continuation.newCorrelationKey = null;
     return r;
   }
 
@@ -901,9 +398,11 @@ public inherited sharing class StepResult {
    */
   public static StepResult continueAsNew(Object nextInput, String customKey) {
     StepResult r = new StepResult();
-    r.action = ActionType.CONTINUE_AS_NEW;
-    r.nextInputJson = serializeInputIfNeeded(nextInput);
-    r.newCorrelationKey = customKey;
+    r.directiveData.action = ActionType.CONTINUE_AS_NEW;
+    r.directiveData.continuation.nextInputJson = StepResultJson.serialize(
+      nextInput
+    );
+    r.directiveData.continuation.newCorrelationKey = customKey;
     return r;
   }
 
@@ -923,56 +422,16 @@ public inherited sharing class StepResult {
    * @return A FAIL result carrying the reason and serialized failure data.
    */
   public static StepResult fail(String reason, Object failureData) {
-    if (String.isBlank(reason)) {
-      throw new IllegalArgumentException(
-        'StepResult.fail: reason must not be blank'
-      );
-    }
+    StepResultValidator.requireNonBlank(
+      reason,
+      'StepResult.fail: reason must not be blank'
+    );
     StepResult r = new StepResult();
-    r.action = ActionType.FAIL;
-    r.failureReason = reason;
-    r.failureDataJson = (failureData != null)
+    r.directiveData.action = ActionType.FAIL;
+    r.directiveData.failureReason = reason;
+    r.directiveData.failureDataJson = (failureData != null)
       ? JSON.serialize(failureData)
       : null;
     return r;
-  }
-
-  private static String serializeInputIfNeeded(Object input) {
-    if (input == null) {
-      return null;
-    }
-    if (input instanceof String) {
-      String strInput = (String) input;
-      String trimmed = strInput.trim();
-      if (isJsonLike(trimmed)) {
-        try {
-          JSON.deserializeUntyped(trimmed);
-          return strInput;
-        } catch (Exception ignored) {
-        }
-      }
-      return JSON.serialize(strInput);
-    }
-    return JSON.serialize(input);
-  }
-
-  private static Boolean isJsonLike(String trimmed) {
-    return hasJsonDelimiters(trimmed) ||
-      trimmed == 'true' ||
-      trimmed == 'false' ||
-      trimmed == 'null' ||
-      // Match standard integer or float patterns in JSON
-      Pattern.matches('^-?\\d+(\\.\\d+)?([eE][+-]?\\d+)?$', trimmed);
-  }
-
-  /**
-   * @description True when the trimmed value is wrapped in matching JSON object, array, or string delimiters.
-   * @param trimmed The trimmed candidate string to inspect.
-   * @return True if the value has matching JSON delimiters, otherwise false.
-   */
-  private static Boolean hasJsonDelimiters(String trimmed) {
-    return (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-      (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
-      (trimmed.startsWith('"') && trimmed.endsWith('"'));
   }
 }

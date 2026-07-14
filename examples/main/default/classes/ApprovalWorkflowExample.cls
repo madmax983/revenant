@@ -56,9 +56,9 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
       return 'ApprovalWorkflowExample.RequestApprovalStep';
     }
     if (currentStepName == 'ApprovalWorkflowExample.RequestApprovalStep') {
-      if (result.outputJson != null) {
+      if (result.directive().outputJson != null) {
         Map<String, Object> decision = (Map<String, Object>) JSON.deserializeUntyped(
-          result.outputJson
+          result.directive().outputJson
         );
         Boolean approved =
           decision.get('approved') != null &&
@@ -161,7 +161,7 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
      * @return A waitForApproval StepResult when undecided, else a completed result with the decision payload.
      */
     public StepResult execute(StepContext ctx) {
-      StepContext.Signal decision = ctx.getSignal(DECISION_SIGNAL);
+      StepContext.Signal decision = ctx.signals().getSignal(DECISION_SIGNAL);
 
       if (!decision.isPresent()) {
         // The second argument is an optional Custom Permission API name that the

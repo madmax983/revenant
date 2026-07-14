@@ -53,7 +53,8 @@ public inherited sharing class ChildWorkflowFanOutExample implements WorkflowDef
       List<String> childKeys = buildChildKeys(items, ctx);
 
       // Check if outcomes are already present (resume path)
-      List<StepContext.ChildOutcome> outcomes = ctx.getChildOutcomes(childKeys);
+      List<StepContext.ChildOutcome> outcomes = ctx.signals()
+        .getChildOutcomes(childKeys);
       if (allOutcomesPresent(outcomes)) {
         return aggregateOutcomes(outcomes);
       }

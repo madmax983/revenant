@@ -28,7 +28,7 @@ private class StepResultValidationTest {
       }
 
       try {
-        StepResult.sleep((Integer) null, 'state');
+        StepResult.sleep((Integer) null).withStepState('state');
         Assert.fail(
           'Should have thrown IllegalArgumentException for null seconds in overload'
         );
@@ -262,7 +262,7 @@ private class StepResultValidationTest {
       StepResult r1 = StepResult.startChild('ChildWF', 'key', 'true');
       Assert.areEqual(
         'true',
-        r1.childInputJson,
+        r1.directive().childInputJson,
         'Should preserve boolean scalar JSON string'
       );
 
@@ -270,7 +270,7 @@ private class StepResultValidationTest {
       StepResult r2 = StepResult.startChild('ChildWF', 'key', '123.45');
       Assert.areEqual(
         '123.45',
-        r2.childInputJson,
+        r2.directive().childInputJson,
         'Should preserve number scalar JSON string'
       );
 
@@ -278,7 +278,7 @@ private class StepResultValidationTest {
       StepResult r3 = StepResult.startChild('ChildWF', 'key', 'null');
       Assert.areEqual(
         'null',
-        r3.childInputJson,
+        r3.directive().childInputJson,
         'Should preserve null scalar JSON string'
       );
 
@@ -286,7 +286,7 @@ private class StepResultValidationTest {
       StepResult r4 = StepResult.startChild('ChildWF', 'key', '"hello"');
       Assert.areEqual(
         '"hello"',
-        r4.childInputJson,
+        r4.directive().childInputJson,
         'Should preserve quoted string scalar JSON string'
       );
 
@@ -294,7 +294,7 @@ private class StepResultValidationTest {
       StepResult r5 = StepResult.startChild('ChildWF', 'key', '{"foo":"bar"}');
       Assert.areEqual(
         '{"foo":"bar"}',
-        r5.childInputJson,
+        r5.directive().childInputJson,
         'Should preserve object JSON string'
       );
 
@@ -302,7 +302,7 @@ private class StepResultValidationTest {
       StepResult r6 = StepResult.startChild('ChildWF', 'key', '[1, 2, 3]');
       Assert.areEqual(
         '[1, 2, 3]',
-        r6.childInputJson,
+        r6.directive().childInputJson,
         'Should preserve array JSON string'
       );
 
@@ -310,7 +310,7 @@ private class StepResultValidationTest {
       StepResult r7 = StepResult.startChild('ChildWF', 'key', 'plain string');
       Assert.areEqual(
         '"plain string"',
-        r7.childInputJson,
+        r7.directive().childInputJson,
         'Plain string should be serialized'
       );
     }

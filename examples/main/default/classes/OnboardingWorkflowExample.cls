@@ -72,7 +72,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
      * @return A complete result carrying the parsed order map.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.reportProgress(10.0, 'Validating order details');
+      ctx.progress().reportProgress(10.0, 'Validating order details');
       if (String.isBlank(ctx.inputJson)) {
         throw new WorkflowEngine.WorkflowException('Input payload is required');
       }
@@ -121,7 +121,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
      * @return A complete result carrying the provisioned sandbox org Id and status.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.reportProgress(30.0, 'Creating client sandbox');
+      ctx.progress().reportProgress(30.0, 'Creating client sandbox');
 
       String sandboxOrgId =
         '00D' + String.valueOf(Math.abs(Crypto.getRandomInteger())).left(15);
@@ -143,7 +143,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
      * @return A complete result carrying the billing account Id and status.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.reportProgress(50.0, 'Configuring billing accounts');
+      ctx.progress().reportProgress(50.0, 'Configuring billing accounts');
 
       String billingAccountId =
         'cust_billing_' +
@@ -187,7 +187,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
      * @return A wait-for-approval result, or a complete result once approved or below threshold.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.reportProgress(70.0, 'Verifying manager approvals');
+      ctx.progress().reportProgress(70.0, 'Verifying manager approvals');
       Map<String, Object> instanceInput = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.workflowInputJson
       );
@@ -217,7 +217,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
         // consumption only fires on a successful COMPLETE, so a step that throws
         // on rejection consumes the signal itself here. See
         // ApprovalSignalWorkflowExample for the engine-managed (non-throwing)
-        // approve/reject pattern using ctx.getSignal(...).
+        // approve/reject pattern using ctx.signals().getSignal(...).
         Workflow_Signal__c sig = signals[0];
         sig.Status__c = 'Consumed';
         update as user sig;
@@ -291,7 +291,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
      * @return A complete result carrying the onboarding completion status and date.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.reportProgress(100.0, 'Finished onboarding checklist');
+      ctx.progress().reportProgress(100.0, 'Finished onboarding checklist');
       Map<String, Object> onboardingResults = new Map<String, Object>{
         'status' => 'Completed',
         'completedDate' => Datetime.now()
@@ -353,7 +353,7 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
       if (ctx.stepStateJson != null) {
         return StepResult.complete(null, ctx.inputJson);
       }
-      return StepResult.sleep(5, 'slept');
+      return StepResult.sleep(5).withStepState('slept');
     }
   }
 

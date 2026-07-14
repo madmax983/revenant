@@ -10,7 +10,7 @@
  *
  * Contrast: calling EventBus.publish() directly inside execute() would re-fire
  * on every at-least-once re-execution, double-triggering the refund. With
- * ctx.emit() the engine publishes once, anchored on the append-only Completed
+ * ctx.events().emit() the engine publishes once, anchored on the append-only Completed
  * record. (StepResult.complete(next, output, events) is the equivalent form when
  * you already have the events in hand at the return site.)
  *
@@ -105,7 +105,7 @@ public inherited sharing class OrderChoreographyWorkflowExample {
    * publishes exactly once, on the final COMPLETE commit.
    *
    * (A real shipping step would just do its work and return
-   * StepResult.complete(null, output) after ctx.emit(...) — the yield/retry here
+   * StepResult.complete(null, output) after ctx.events().emit(...) — the yield/retry here
    * exists only to force re-execution for the test.)
    */
   public inherited sharing class ShipOrderStep implements WorkflowStep {
@@ -123,13 +123,14 @@ public inherited sharing class OrderChoreographyWorkflowExample {
       String orderId = (String) input.get('orderId');
       // Buffered every execution; published only when this step's COMPLETE
       // transition commits.
-      ctx.emit(
-        new Order_Shipped__e(
-          Order_Id__c = orderId,
-          Correlation_Key__c = orderId,
-          Trace_Id__c = ctx.workflowInstanceId
-        )
-      );
+      ctx.events()
+        .emit(
+          new Order_Shipped__e(
+            Order_Id__c = orderId,
+            Correlation_Key__c = orderId,
+            Trace_Id__c = ctx.workflowInstanceId
+          )
+        );
 
       Integer retryCount = currentRetryCount(ctx);
 

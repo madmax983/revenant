@@ -104,7 +104,8 @@ public inherited sharing class CursorFanoutWorkflowExample {
      * @return A completion result carrying totalRecords, serializedCursor, chunkSize.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.reportProgress(10.0, 'Cursor opened; calculating partitions');
+      ctx.progress()
+        .reportProgress(10.0, 'Cursor opened; calculating partitions');
       // Construct query (using Accounts for demonstration)
       String query = 'SELECT Id, Name FROM Account ORDER BY Name';
 
@@ -174,7 +175,7 @@ public inherited sharing class CursorFanoutWorkflowExample {
     }
 
     private StepResult fanOutChunks(StepContext ctx) {
-      ctx.reportProgress(40.0, 'Fanning out parallel child chunks');
+      ctx.progress().reportProgress(40.0, 'Fanning out parallel child chunks');
       if (String.isBlank(ctx.previousStepOutput)) {
         return StepResult.complete(
           null,
@@ -240,7 +241,8 @@ public inherited sharing class CursorFanoutWorkflowExample {
       StepContext ctx,
       List<Workflow_Instance__c> childInstances
     ) {
-      ctx.reportProgress(80.0, 'All chunks completed; aggregating outputs');
+      ctx.progress()
+        .reportProgress(80.0, 'All chunks completed; aggregating outputs');
 
       List<Object> aggregatedOutputs = new List<Object>();
       Integer totalProcessed = 0;
@@ -315,10 +317,11 @@ public inherited sharing class CursorFanoutWorkflowExample {
         names.add(((Account) record).Name);
       }
 
-      ctx.reportProgress(
-        100.0,
-        'Chunk offset ' + offset + ' processed successfully'
-      );
+      ctx.progress()
+        .reportProgress(
+          100.0,
+          'Chunk offset ' + offset + ' processed successfully'
+        );
 
       Map<String, Object> chunkResult = new Map<String, Object>{
         'offset' => offset,
@@ -341,10 +344,11 @@ public inherited sharing class CursorFanoutWorkflowExample {
      * @return A completion result with the verification summary.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.reportProgress(
-        100.0,
-        'Verification complete; fanned-out records validated'
-      );
+      ctx.progress()
+        .reportProgress(
+          100.0,
+          'Verification complete; fanned-out records validated'
+        );
       Map<String, Object> fanout = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.previousStepOutput
       );

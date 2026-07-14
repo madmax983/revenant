@@ -96,7 +96,7 @@ public with sharing class ReActLoopWorkflowExample {
     public String getNextStep(String currentStep, StepResult result) {
       if (currentStep == 'ReActLoopWorkflowExample.ReasonStep') {
         Map<String, Object> out = (Map<String, Object>) JSON.deserializeUntyped(
-          result.outputJson
+          result.directive().outputJson
         );
         Boolean done = (Boolean) out.get('done');
         return done

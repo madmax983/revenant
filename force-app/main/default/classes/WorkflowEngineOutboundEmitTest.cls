@@ -53,7 +53,7 @@ public class WorkflowEngineOutboundEmitTest {
   }
 
   /**
-   * Calls ctx.emit() on EVERY execution but only reaches COMPLETE on the third,
+   * Calls ctx.events().emit() on EVERY execution but only reaches COMPLETE on the third,
    * driven through a yield and a retry first (the same >=3-re-execution shape
    * used by CaptureOnceWorkflowExample). If emit published per execution this
    * would publish three times; effectively-once publishes exactly one.
@@ -67,12 +67,13 @@ public class WorkflowEngineOutboundEmitTest {
      */
     public StepResult execute(StepContext ctx) {
       // Buffered on every execution; published only when COMPLETE commits.
-      ctx.emit(
-        new Workflow_Lifecycle__e(
-          Workflow_Instance_Id__c = ctx.workflowInstanceId,
-          Status__c = 'Completed'
-        )
-      );
+      ctx.events()
+        .emit(
+          new Workflow_Lifecycle__e(
+            Workflow_Instance_Id__c = ctx.workflowInstanceId,
+            Status__c = 'Completed'
+          )
+        );
 
       Integer retryCount = currentRetryCount(ctx);
       Boolean resumedFromYield = String.isNotBlank(ctx.stepStateJson);
@@ -155,7 +156,10 @@ public class WorkflowEngineOutboundEmitTest {
           Status__c = 'Completed'
         )
       };
-      return StepResult.complete(null, 'done', events);
+      for (SObject evt : events) {
+        ctx.events().emit(evt);
+      }
+      return StepResult.complete(null, 'done');
     }
   }
 
@@ -210,12 +214,13 @@ public class WorkflowEngineOutboundEmitTest {
      * @return A split result naming the two branch steps.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.emit(
-        new Workflow_Lifecycle__e(
-          Workflow_Instance_Id__c = ctx.workflowInstanceId,
-          Status__c = 'Completed'
-        )
-      );
+      ctx.events()
+        .emit(
+          new Workflow_Lifecycle__e(
+            Workflow_Instance_Id__c = ctx.workflowInstanceId,
+            Status__c = 'Completed'
+          )
+        );
       return StepResult.split(
         new List<String>{
           'WorkflowEngineOutboundEmitTest.BranchAStep',
@@ -320,7 +325,10 @@ public class WorkflowEngineOutboundEmitTest {
         ),
         null
       };
-      return StepResult.complete(null, 'done', events);
+      for (SObject evt : events) {
+        ctx.events().emit(evt);
+      }
+      return StepResult.complete(null, 'done');
     }
   }
 
@@ -388,12 +396,13 @@ public class WorkflowEngineOutboundEmitTest {
      */
     public StepResult compensate(StepContext ctx) {
       // Emit on rollback — must publish, coupled to the Compensated commit.
-      ctx.emit(
-        new Workflow_Lifecycle__e(
-          Workflow_Instance_Id__c = ctx.workflowInstanceId,
-          Status__c = 'Compensated'
-        )
-      );
+      ctx.events()
+        .emit(
+          new Workflow_Lifecycle__e(
+            Workflow_Instance_Id__c = ctx.workflowInstanceId,
+            Status__c = 'Compensated'
+          )
+        );
       return StepResult.complete(
         null,
         new Map<String, Object>{ 'refunded' => true }
@@ -503,8 +512,7 @@ public class WorkflowEngineOutboundEmitTest {
       System.assertEquals(
         1,
         WorkflowOutboundEventPublisher.publishedEvents.size(),
-        'Events handed to StepResult.complete(next, output, events) publish ' +
-        'once on COMPLETE'
+        'Events buffered via ctx.events().emit(...) publish once on COMPLETE'
       );
     }
   }

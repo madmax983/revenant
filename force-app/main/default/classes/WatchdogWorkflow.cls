@@ -70,7 +70,7 @@ public inherited sharing class WatchdogWorkflow implements WorkflowDefinition {
         return StepResult.complete(null, 'Sleep completed');
       }
       Integer delaySeconds = WorkflowEngine.watchdogDelayMinutes * 60;
-      return StepResult.sleep(delaySeconds, 'slept');
+      return StepResult.sleep(delaySeconds).withStepState('slept');
     }
   }
 

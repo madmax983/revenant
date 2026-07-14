@@ -36,17 +36,17 @@ public class BulkWorkflowTestHelpers {
     StepResult r1 = step.execute(contexts.build(null));
     System.assertEquals(
       StepResult.ActionType.YIELD,
-      r1.action,
+      r1.directive().action,
       'A selection larger than one chunk must yield to a fresh transaction'
     );
-    StepResult r2 = step.execute(contexts.build(r1.stepStateJson));
-    System.assertEquals(StepResult.ActionType.YIELD, r2.action);
-    StepResult r3 = step.execute(contexts.build(r2.stepStateJson));
+    StepResult r2 = step.execute(contexts.build(r1.directive().stepStateJson));
+    System.assertEquals(StepResult.ActionType.YIELD, r2.directive().action);
+    StepResult r3 = step.execute(contexts.build(r2.directive().stepStateJson));
     Test.stopTest();
 
     System.assertEquals(
       StepResult.ActionType.COMPLETE,
-      r3.action,
+      r3.directive().action,
       'Final chunk completes the bulk operation'
     );
     return r3;

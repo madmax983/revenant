@@ -65,7 +65,7 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
       }
 
       // Read all pending events that woke us
-      List<StepContext.Signal> signals = ctx.getSignals(EVENT_SIGNAL);
+      List<StepContext.Signal> signals = ctx.signals().getSignals(EVENT_SIGNAL);
       for (StepContext.Signal sig : signals) {
         if (sig.isPresent()) {
           accumulatedMap.put(
@@ -82,7 +82,7 @@ public inherited sharing class EventAggregationWorkflowExample implements Workfl
       }
 
       // Otherwise, save state and suspend waiting for more events
-      return StepResult.suspend(JSON.serialize(accumulatedMap));
+      return StepResult.suspend().withStepState(JSON.serialize(accumulatedMap));
     }
 
     /**

@@ -50,8 +50,8 @@ public inherited sharing class ApprovalSignalWorkflowExample implements Workflow
   public String getNextStep(String currentStepName, StepResult stepResult) {
     // The approval step decides the branch by setting the next step name on its
     // result; the terminal approve/reject steps end the workflow.
-    if (String.isNotBlank(stepResult.nextStepName)) {
-      return stepResult.nextStepName;
+    if (String.isNotBlank(stepResult.directive().nextStepName)) {
+      return stepResult.directive().nextStepName;
     }
     return null;
   }
@@ -71,7 +71,7 @@ public inherited sharing class ApprovalSignalWorkflowExample implements Workflow
      */
     public StepResult execute(StepContext ctx) {
       // One accessor: read the decision that woke us, if any.
-      StepContext.Signal decision = ctx.getSignal(DECISION_SIGNAL);
+      StepContext.Signal decision = ctx.signals().getSignal(DECISION_SIGNAL);
 
       if (!decision.isPresent()) {
         // First run (or resumed by a timer): nothing decided yet -> suspend.

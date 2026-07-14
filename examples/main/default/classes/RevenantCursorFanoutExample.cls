@@ -100,7 +100,8 @@ public inherited sharing class RevenantCursorFanoutExample {
      * @return The step execution result.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.reportProgress(10.0, 'Cursor opened; calculating partitions');
+      ctx.progress()
+        .reportProgress(10.0, 'Cursor opened; calculating partitions');
       // Construct query (using Accounts for demonstration)
       String query = 'SELECT Id, Name FROM Account ORDER BY Name, Id';
 
@@ -176,7 +177,7 @@ public inherited sharing class RevenantCursorFanoutExample {
      * @return The step result.
      */
     private StepResult spawnChunks(StepContext ctx) {
-      ctx.reportProgress(40.0, 'Fanning out parallel child chunks');
+      ctx.progress().reportProgress(40.0, 'Fanning out parallel child chunks');
       if (String.isBlank(ctx.previousStepOutput)) {
         return StepResult.complete(
           null,
@@ -280,7 +281,8 @@ public inherited sharing class RevenantCursorFanoutExample {
         return StepResult.suspend();
       }
 
-      ctx.reportProgress(80.0, 'All chunks completed; aggregating outputs');
+      ctx.progress()
+        .reportProgress(80.0, 'All chunks completed; aggregating outputs');
 
       // Aggregate outputs
       List<Object> aggregatedOutputs = new List<Object>();
@@ -339,10 +341,11 @@ public inherited sharing class RevenantCursorFanoutExample {
         accountNames.add(acc.Name);
       }
 
-      ctx.reportProgress(
-        100.0,
-        'Chunk offset ' + offset + ' processed successfully'
-      );
+      ctx.progress()
+        .reportProgress(
+          100.0,
+          'Chunk offset ' + offset + ' processed successfully'
+        );
 
       Map<String, Object> result = new Map<String, Object>{
         'offset' => offset,
@@ -385,10 +388,11 @@ public inherited sharing class RevenantCursorFanoutExample {
      * @return The step execution result.
      */
     public StepResult execute(StepContext ctx) {
-      ctx.reportProgress(
-        100.0,
-        'Verification complete; fanned-out records validated'
-      );
+      ctx.progress()
+        .reportProgress(
+          100.0,
+          'Verification complete; fanned-out records validated'
+        );
       Map<String, Object> fanoutResult = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.previousStepOutput
       );

@@ -54,12 +54,12 @@ public class StepContextTestBuilderTest {
       System.assertEquals(1, ctx.attempt, 'Should default attempt to 1');
       System.assertEquals(
         1,
-        ctx.maxAttempts,
+        ctx.retry().maxAttempts,
         'Should default maxAttempts to 1'
       );
       System.assertEquals(
         false,
-        ctx.isTimeoutResume(),
+        ctx.retry().isTimeoutResume(),
         'Should default timeoutResume to false'
       );
     }
@@ -101,9 +101,9 @@ public class StepContextTestBuilderTest {
       System.assertEquals('{"w":4}', ctx.workflowInputJson);
       System.assertEquals(3, ctx.workflowVersion);
       System.assertEquals(past, ctx.previousRunAt);
-      System.assertEquals(true, ctx.isTimeoutResume());
+      System.assertEquals(true, ctx.retry().isTimeoutResume());
       System.assertEquals(3, ctx.attempt);
-      System.assertEquals(5, ctx.maxAttempts);
+      System.assertEquals(5, ctx.retry().maxAttempts);
     }
   }
 
@@ -156,7 +156,7 @@ public class StepContextTestBuilderTest {
         )
         .build();
 
-      List<StepContext.Signal> signals = ctx.getSignals();
+      List<StepContext.Signal> signals = ctx.signals().getSignals();
       System.assertEquals(2, signals.size(), 'Should have seeded 2 signals');
       System.assertEquals('Approve:Order', signals[0].name);
       System.assertEquals('{"approved":true}', signals[0].payload);
@@ -176,7 +176,7 @@ public class StepContextTestBuilderTest {
         'Signal IDs should be distinct'
       );
 
-      StepContext.Signal latest = ctx.getSignal('Approve:Order');
+      StepContext.Signal latest = ctx.signals().getSignal('Approve:Order');
       System.assertNotEquals(null, latest);
       System.assertEquals(
         '{"approved":false}',
@@ -198,7 +198,7 @@ public class StepContextTestBuilderTest {
         .addSignal(customSig)
         .build();
 
-      List<StepContext.Signal> signals = ctx.getSignals();
+      List<StepContext.Signal> signals = ctx.signals().getSignals();
       System.assertEquals(1, signals.size());
       System.assertEquals('Custom', signals[0].name);
       System.assertEquals('{"data":123}', signals[0].payload);
@@ -215,14 +215,15 @@ public class StepContextTestBuilderTest {
         .once('timestamp', nowTime)
         .build();
 
-      Object refResult = ctx.once('refNum', new ThrowingProducer());
+      Object refResult = ctx.captures().once('refNum', new ThrowingProducer());
       System.assertEquals(
         'TX-999',
         (String) refResult,
         'Should return seeded capture value and not invoke producer'
       );
 
-      Object timeResult = ctx.once('timestamp', new ThrowingProducer());
+      Object timeResult = ctx.captures()
+        .once('timestamp', new ThrowingProducer());
       System.assert(
         timeResult instanceof String,
         'Datetime capture should have been normalized to String'
@@ -278,18 +279,19 @@ public class StepContextTestBuilderTest {
       // Verify both have value1
       System.assertEquals(
         'value1',
-        (String) ctx1.once('key1', new ThrowingProducer())
+        (String) ctx1.captures().once('key1', new ThrowingProducer())
       );
       System.assertEquals(
         'value1',
-        (String) ctx2.once('key1', new ThrowingProducer())
+        (String) ctx2.captures().once('key1', new ThrowingProducer())
       );
 
       // Call once() on ctx1 with a new key.
-      ctx1.once('key2', new StringProducer('value2'));
+      ctx1.captures().once('key2', new StringProducer('value2'));
 
       // Verify ctx2 does NOT have key2 (asserting they don't share the map reference)
-      Object ctx2Result = ctx2.once('key2', new StringProducer('newValue'));
+      Object ctx2Result = ctx2.captures()
+        .once('key2', new StringProducer('newValue'));
       System.assertEquals(
         'newValue',
         (String) ctx2Result,
@@ -322,7 +324,7 @@ public class StepContextTestBuilderTest {
         .build();
 
       // The builder's mock source should order by arrival when returning the latest signal
-      StepContext.Signal latest = ctx.getSignal('MySignal');
+      StepContext.Signal latest = ctx.signals().getSignal('MySignal');
       System.assertEquals(
         '{"status":"newer"}',
         latest.payload,
@@ -354,7 +356,7 @@ public class StepContextTestBuilderTest {
         .build();
 
       // Call named getSignals('MySignal') first, bypassing loadAll()
-      List<StepContext.Signal> signals = ctx.getSignals('MySignal');
+      List<StepContext.Signal> signals = ctx.signals().getSignals('MySignal');
       System.assertEquals(2, signals.size());
       System.assertEquals(
         '{"status":"older"}',
