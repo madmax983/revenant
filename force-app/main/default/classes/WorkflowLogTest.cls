@@ -5,7 +5,12 @@ private class WorkflowLogTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       WorkflowLog.error('UnitTest', 'boom');
-      WorkflowLog.error('UnitTest', 'boom again', (Id) null, null, null);
+      WorkflowLog.error(
+        new WorkflowLog.ErrorEntry('UnitTest', 'boom again')
+          .withInstanceId((Id) null)
+          .withCorrelationKey(null)
+          .withWorkflowName(null)
+      );
       Test.stopTest();
 
       List<Workflow_Log__c> logs = [

@@ -77,14 +77,6 @@ public inherited sharing class WorkflowDebouncer {
     }
   }
 
-  private class SweepContext {
-    List<Debounce_State__c> dueStates;
-    List<WorkflowEngine.StartRequest> startRequests;
-    Datetime now;
-    List<Debounce_State__c> toDelete = new List<Debounce_State__c>();
-    List<Debounce_State__c> toUpdate = new List<Debounce_State__c>();
-  }
-
   /**
    * @description Bulk-registers debounced start requests, upserting a durable
    * debounce state per key and advancing its rolling fire time (capped by max wait).
@@ -98,7 +90,7 @@ public inherited sharing class WorkflowDebouncer {
     Datetime now = currentTime();
 
     Set<String> debounceKeys = new Set<String>();
-    List<DebounceRequest> validRequests = collectValidRequests(
+    List<DebounceRequest> validRequests = WorkflowDebounceValidator.collectValidRequests(
       requests,
       debounceKeys
     );
@@ -118,65 +110,6 @@ public inherited sharing class WorkflowDebouncer {
 
     if (!statesToUpsert.isEmpty()) {
       upsert as system statesToUpsert.values() Debounce_Key__c;
-    }
-  }
-
-  private static List<DebounceRequest> collectValidRequests(
-    List<DebounceRequest> requests,
-    Set<String> debounceKeys
-  ) {
-    List<DebounceRequest> validRequests = new List<DebounceRequest>();
-    for (DebounceRequest req : requests) {
-      if (req == null) {
-        continue;
-      }
-      validateRequestIdentity(req);
-      validateRequestTiming(req);
-      validateRequestPayloadSize(req);
-      validateAttributesJson(req.attributesJson);
-
-      debounceKeys.add(
-        generateDebounceKey(req.workflowName, req.correlationKey)
-      );
-      validRequests.add(req);
-    }
-    return validRequests;
-  }
-
-  private static void validateRequestIdentity(DebounceRequest req) {
-    if (String.isBlank(req.workflowName)) {
-      throw new WorkflowEngine.WorkflowException('Workflow name is required.');
-    }
-    if (String.isBlank(req.correlationKey)) {
-      throw new WorkflowEngine.WorkflowException(
-        'Correlation key is required.'
-      );
-    }
-    if (req.correlationKey.length() > 200) {
-      throw new WorkflowEngine.WorkflowException(
-        'Correlation key length cannot exceed 200 characters.'
-      );
-    }
-  }
-
-  private static void validateRequestTiming(DebounceRequest req) {
-    if (req.debounceSeconds == null || req.debounceSeconds < 0) {
-      throw new WorkflowEngine.WorkflowException(
-        'Debounce seconds must be non-negative.'
-      );
-    }
-    if (req.maxWaitSeconds != null && req.maxWaitSeconds < 0) {
-      throw new WorkflowEngine.WorkflowException(
-        'Max wait seconds must be non-negative.'
-      );
-    }
-  }
-
-  private static void validateRequestPayloadSize(DebounceRequest req) {
-    if (String.isNotBlank(req.inputJson) && req.inputJson.length() > 131072) {
-      throw new WorkflowEngine.WorkflowException(
-        'Input JSON payload exceeds maximum size limit of 131,072 characters.'
-      );
     }
   }
 
@@ -268,143 +201,12 @@ public inherited sharing class WorkflowDebouncer {
   }
 
   /**
-   * Sweeps and fires due debounce states, deleting them after starting.
+   * @description Sweeps and fires due debounce states, deleting them after
+   * starting. Thin delegator retained for scheduler callers; the sweep
+   * machinery lives in WorkflowDebounceSweeper.
    */
   public static void sweep() {
-    Datetime now = currentTime();
-
-    List<Debounce_State__c> dueStates = loadDueStates(now);
-    if (dueStates.isEmpty()) {
-      return;
-    }
-
-    SweepContext ctx = new SweepContext();
-    ctx.dueStates = dueStates;
-    ctx.startRequests = buildStartRequests(dueStates);
-    ctx.now = now;
-
-    fireDueStates(ctx);
-  }
-
-  private static List<Debounce_State__c> loadDueStates(Datetime now) {
-    return [
-      SELECT
-        Id,
-        Workflow_Name__c,
-        Correlation_Key__c,
-        Input_Json__c,
-        Attributes_Json__c,
-        Causation_Id__c,
-        Fire_At__c,
-        Retry_Count__c,
-        Error_Message__c
-      FROM Debounce_State__c
-      WHERE Fire_At__c <= :now AND (Retry_Count__c = NULL OR Retry_Count__c < 3)
-      WITH SYSTEM_MODE
-      ORDER BY Fire_At__c ASC, Id ASC
-      LIMIT 100
-    ];
-  }
-
-  private static List<WorkflowEngine.StartRequest> buildStartRequests(
-    List<Debounce_State__c> dueStates
-  ) {
-    List<WorkflowEngine.StartRequest> startRequests = new List<WorkflowEngine.StartRequest>();
-    for (Debounce_State__c state : dueStates) {
-      Map<String, String> attributes = WorkflowInvocableInputParser.parseAttributesJsonLenient(
-        state.Attributes_Json__c
-      );
-
-      // Pass null to input since we set inputJson directly, saving CPU deserialization cycles.
-      WorkflowEngine.StartRequest req = new WorkflowEngine.StartRequest(
-          state.Workflow_Name__c,
-          state.Correlation_Key__c,
-          null
-        )
-        .withAttributes(attributes);
-      req.inputJson = state.Input_Json__c;
-      req.causationId = state.Causation_Id__c;
-      startRequests.add(req);
-    }
-    return startRequests;
-  }
-
-  private static void fireDueStates(SweepContext ctx) {
-    Savepoint sp = Database.setSavepoint();
-    try {
-      WorkflowEngine.startOrGet(ctx.startRequests);
-      ctx.toDelete.addAll(ctx.dueStates);
-    } catch (Exception ex) {
-      Database.rollback(sp);
-      // Fallback: start them individually
-      fireIndividually(ctx);
-    } finally {
-      if (!ctx.toDelete.isEmpty()) {
-        delete as system ctx.toDelete;
-      }
-      if (!ctx.toUpdate.isEmpty()) {
-        update as system ctx.toUpdate;
-      }
-    }
-  }
-
-  private static void fireIndividually(SweepContext ctx) {
-    for (Integer i = 0; i < ctx.startRequests.size(); i++) {
-      // Halt if approaching SOQL or DML limits to prevent uncatchable governor exceptions
-      if (Limits.getQueries() >= 90 || Limits.getDmlStatements() >= 135) {
-        break;
-      }
-      Debounce_State__c state = ctx.dueStates[i];
-      if (startIndividual(ctx.startRequests[i], state, ctx.now)) {
-        ctx.toDelete.add(state);
-      } else {
-        ctx.toUpdate.add(state);
-      }
-    }
-  }
-
-  private static Boolean startIndividual(
-    WorkflowEngine.StartRequest req,
-    Debounce_State__c state,
-    Datetime now
-  ) {
-    Savepoint individualSp = Database.setSavepoint();
-    try {
-      WorkflowEngine.startOrGet(new List<WorkflowEngine.StartRequest>{ req });
-      return true;
-    } catch (Exception innerEx) {
-      Database.rollback(individualSp);
-      recordRetry(state, innerEx, now);
-      return false;
-    }
-  }
-
-  private static void recordRetry(
-    Debounce_State__c state,
-    Exception innerEx,
-    Datetime now
-  ) {
-    Integer currentRetries = state.Retry_Count__c == null
-      ? 0
-      : (Integer) state.Retry_Count__c;
-    currentRetries++;
-    state.Retry_Count__c = currentRetries;
-
-    String errMsg = innerEx.getMessage();
-    if (innerEx.getStackTraceString() != null) {
-      errMsg += '\n' + innerEx.getStackTraceString();
-    }
-    if (errMsg.length() > 32768) {
-      errMsg = errMsg.substring(0, 32768);
-    }
-    state.Error_Message__c = errMsg;
-
-    if (currentRetries >= 3) {
-      state.Fire_At__c = now.addYears(100); // Quarantine
-    } else {
-      // Exponential backoff retry in 1 or 2 minutes
-      state.Fire_At__c = now.addSeconds(currentRetries * 60);
-    }
+    WorkflowDebounceSweeper.sweep(currentTime());
   }
 
   private static Datetime currentTime() {

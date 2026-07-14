@@ -19,24 +19,6 @@ public inherited sharing class WorkflowStatusInvocableAction {
     'Cancelled'
   };
 
-  // Statuses representing a workflow that is still live (not finished and not a
-  // ContinuedAsNew hand-off). Used to prefer the current run when a non-unique
-  // correlation key maps to several instances.
-  private static final Set<String> ACTIVE_STATUSES = new Set<String>{
-    'Pending',
-    'Running',
-    'Suspended',
-    'Compensating',
-    'Cancelling'
-  };
-
-  // Upper bound on ContinuedAsNew links walked forward, bounding SOQL usage so a
-  // pathological/cyclic chain cannot exhaust query governor limits.
-  @TestVisible
-  private static Integer maxChainDepth = 50;
-
-  private static final String OFFLOAD_MARKER_PREFIX = '{"$attachmentId":';
-
   /**
    * @description Invocable request identifying the workflow instance to read, by either its
    * record Id or its correlation key.
@@ -128,12 +110,6 @@ public inherited sharing class WorkflowStatusInvocableAction {
     Set<String> lookupKeys = new Set<String>();
   }
 
-  // Direct-match index from the bulk query: by Id and by (preferred) correlation key.
-  private class MatchIndex {
-    Map<Id, Workflow_Instance__c> byId = new Map<Id, Workflow_Instance__c>();
-    Map<String, Workflow_Instance__c> byKey = new Map<String, Workflow_Instance__c>();
-  }
-
   @InvocableMethod(
     label='Get Workflow Status'
     category='Revenant Workflows'
@@ -155,17 +131,19 @@ public inherited sharing class WorkflowStatusInvocableAction {
     LookupBuckets buckets = bucketRequests(requests);
 
     // 2. One bulk query for all direct matches, in any status (terminal included).
-    MatchIndex index = loadDirectMatches(buckets);
+    WorkflowStatusChainResolver.MatchIndex index = loadDirectMatches(buckets);
 
     // 3. Resolve a starting instance per request, then forward-walk ContinuedAsNew.
-    List<Workflow_Instance__c> resolved = resolveStartingInstances(
-      requests,
-      buckets,
+    List<Workflow_Instance__c> resolved = WorkflowStatusChainResolver.resolveStartingInstances(
+      buckets.reqIds,
+      buckets.reqKeys,
       index
     );
 
     // 4. Bulk-resolve offloaded output/progress payloads.
-    Map<Id, String> dataByAttachment = loadOffloadedPayloads(resolved);
+    Map<Id, String> dataByAttachment = WorkflowStatusPayloadRehydrator.loadOffloadedPayloads(
+      resolved
+    );
 
     // 5. Assemble correspondingly-ordered results.
     return assembleResults(resolved, dataByAttachment);
@@ -240,8 +218,10 @@ public inherited sharing class WorkflowStatusInvocableAction {
    * @param buckets The lookup buckets supplying the de-duplicated Id and key sets to query.
    * @return A match index of instances keyed by Id and by correlation key.
    */
-  private static MatchIndex loadDirectMatches(LookupBuckets buckets) {
-    MatchIndex index = new MatchIndex();
+  private static WorkflowStatusChainResolver.MatchIndex loadDirectMatches(
+    LookupBuckets buckets
+  ) {
+    WorkflowStatusChainResolver.MatchIndex index = new WorkflowStatusChainResolver.MatchIndex();
     if (buckets.lookupIds.isEmpty() && buckets.lookupKeys.isEmpty()) {
       return index;
     }
@@ -285,225 +265,12 @@ public inherited sharing class WorkflowStatusInvocableAction {
       return;
     }
     Workflow_Instance__c existing = byKey.get(inst.Correlation_Key__c);
-    if (existing == null || isPreferredCandidate(inst, existing)) {
+    if (
+      existing == null ||
+      WorkflowStatusChainResolver.isPreferredCandidate(inst, existing)
+    ) {
       byKey.put(inst.Correlation_Key__c, inst);
     }
-  }
-
-  /**
-   * Resolves a starting instance per request (Id matches are precise handles; key
-   * matches are walked forward through ContinuedAsNew) and returns the per-request
-   * list after the chain walk, correspondingly ordered.
-   *
-   * @param requests The status requests, used only for their count and order.
-   * @param buckets The lookup buckets holding the per-request parsed Ids and keys.
-   * @param index The direct-match index to resolve each request against.
-   * @return The per-request resolved instances (null where unmatched), after the chain walk.
-   */
-  private static List<Workflow_Instance__c> resolveStartingInstances(
-    List<StatusRequest> requests,
-    LookupBuckets buckets,
-    MatchIndex index
-  ) {
-    List<Workflow_Instance__c> resolved = new List<Workflow_Instance__c>();
-    List<Boolean> walkChain = new List<Boolean>();
-    for (Integer i = 0; i < requests.size(); i++) {
-      Workflow_Instance__c match = null;
-      Boolean byKey = false;
-      if (buckets.reqIds[i] != null) {
-        match = index.byId.get(buckets.reqIds[i]);
-      }
-      if (match == null && buckets.reqKeys[i] != null) {
-        match = index.byKey.get(buckets.reqKeys[i]);
-        byKey = (match != null);
-      }
-      resolved.add(match);
-      walkChain.add(byKey);
-    }
-    walkContinuedAsNewChains(resolved, walkChain);
-    return resolved;
-  }
-
-  /**
-   * Forward-walks ContinuedAsNew chains for key-resolved requests whose start instance
-   * is still a predecessor. Same-key chains are already resolved to the live generation
-   * by the active/latest preference; this walk covers chains whose successor took a
-   * different key (e.g. the default `_runN` scheme). Bulk-safe: one SOQL per chain
-   * generation, never per row. Bounded by maxChainDepth because SOQL limits make an
-   * unbounded link-by-link walk impossible; if a (typically perpetual, different-key)
-   * chain exceeds the bound we stop on the furthest generation reached, which is still
-   * a ContinuedAsNew row and is therefore reported as non-terminal / non-success --
-   * never as a false completed outcome.
-   *
-   * @param resolved The per-request resolved instances, advanced in place to successors.
-   * @param walkChain Per-request flags marking which requests should be forward-walked.
-   */
-  private static void walkContinuedAsNewChains(
-    List<Workflow_Instance__c> resolved,
-    List<Boolean> walkChain
-  ) {
-    for (Integer depth = 0; depth < maxChainDepth; depth++) {
-      if (!advanceChainGeneration(resolved, walkChain)) {
-        break;
-      }
-    }
-  }
-
-  /**
-   * Advances every still-predecessor request by one ContinuedAsNew generation using a
-   * single query. Returns false when there is nothing left to advance (no predecessors
-   * remain, or no successor was found), signalling the walk to stop.
-   *
-   * @param resolved The per-request resolved instances, advanced in place to successors.
-   * @param walkChain Per-request flags marking which requests should be forward-walked.
-   * @return True if any request advanced a generation, false when nothing remains to advance.
-   */
-  private static Boolean advanceChainGeneration(
-    List<Workflow_Instance__c> resolved,
-    List<Boolean> walkChain
-  ) {
-    Set<Id> predecessorIds = collectPredecessors(resolved, walkChain);
-    if (predecessorIds.isEmpty()) {
-      return false;
-    }
-    Map<Id, Workflow_Instance__c> successorByPrev = querySuccessors(
-      predecessorIds
-    );
-    return applySuccessors(resolved, walkChain, successorByPrev);
-  }
-
-  /**
-   * @description Collects the Ids of requests still sitting on a ContinuedAsNew predecessor.
-   * @param resolved The per-request resolved instances to inspect.
-   * @param walkChain Per-request flags marking which requests should be forward-walked.
-   * @return The set of predecessor instance Ids to advance in the next generation.
-   */
-  private static Set<Id> collectPredecessors(
-    List<Workflow_Instance__c> resolved,
-    List<Boolean> walkChain
-  ) {
-    Set<Id> predecessorIds = new Set<Id>();
-    for (Integer i = 0; i < resolved.size(); i++) {
-      Workflow_Instance__c cur = resolved[i];
-      if (walkChain[i] && cur != null && cur.Status__c == 'ContinuedAsNew') {
-        predecessorIds.add(cur.Id);
-      }
-    }
-    return predecessorIds;
-  }
-
-  /**
-   * @description Runs one bulk query mapping each predecessor Id to its ContinuedAsNew successor.
-   * @param predecessorIds The predecessor instance Ids whose successors are being sought.
-   * @return A map from each predecessor Id to its successor instance.
-   */
-  private static Map<Id, Workflow_Instance__c> querySuccessors(
-    Set<Id> predecessorIds
-  ) {
-    Map<Id, Workflow_Instance__c> successorByPrev = new Map<Id, Workflow_Instance__c>();
-    for (Workflow_Instance__c succ : [
-      SELECT
-        Id,
-        Status__c,
-        Output__c,
-        Error_Message__c,
-        Correlation_Key__c,
-        Previous_Instance__c,
-        Progress__c,
-        Causation_Id__c
-      FROM Workflow_Instance__c
-      WHERE Previous_Instance__c IN :predecessorIds
-      WITH SYSTEM_MODE
-    ]) {
-      successorByPrev.put(succ.Previous_Instance__c, succ);
-    }
-    return successorByPrev;
-  }
-
-  /**
-   * Replaces each still-predecessor request with its successor where one exists.
-   * Returns true if any request advanced.
-   *
-   * @param resolved The per-request resolved instances, updated in place to successors.
-   * @param walkChain Per-request flags marking which requests should be forward-walked.
-   * @param successorByPrev The predecessor-to-successor map from the current generation query.
-   * @return True if any request was advanced to a successor, otherwise false.
-   */
-  private static Boolean applySuccessors(
-    List<Workflow_Instance__c> resolved,
-    List<Boolean> walkChain,
-    Map<Id, Workflow_Instance__c> successorByPrev
-  ) {
-    Boolean advanced = false;
-    for (Integer i = 0; i < resolved.size(); i++) {
-      Workflow_Instance__c cur = resolved[i];
-      if (walkChain[i] && cur != null && cur.Status__c == 'ContinuedAsNew') {
-        Workflow_Instance__c succ = successorByPrev.get(cur.Id);
-        if (succ != null) {
-          resolved[i] = succ;
-          advanced = true;
-        }
-      }
-    }
-    return advanced;
-  }
-
-  /**
-   * Bulk-resolves offloaded output/progress payloads in a single ContentVersion query.
-   * Honoring the contract that outputJson is the full rehydrated payload means large
-   * (>100k) offloaded outputs are materialized in full, so a Flow batch that
-   * simultaneously polls many instances whose outputs are all offloaded can approach
-   * the Apex heap limit. We do not truncate (that would break the identical-to-Apex-
-   * caller guarantee); callers polling many very large outputs at once should use
-   * smaller Flow batch sizes.
-   *
-   * @param resolved The resolved instances whose offloaded output/progress payloads to load.
-   * @return A map from each offload attachment (ContentDocument) Id to its payload text.
-   */
-  private static Map<Id, String> loadOffloadedPayloads(
-    List<Workflow_Instance__c> resolved
-  ) {
-    Set<Id> attachmentIds = collectAttachmentIds(resolved);
-    Map<Id, String> dataByAttachment = new Map<Id, String>();
-    if (attachmentIds.isEmpty()) {
-      return dataByAttachment;
-    }
-    for (ContentVersion cv : [
-      SELECT ContentDocumentId, VersionData
-      FROM ContentVersion
-      WHERE ContentDocumentId IN :attachmentIds AND IsLatest = TRUE
-      WITH SYSTEM_MODE
-    ]) {
-      if (cv.VersionData != null) {
-        dataByAttachment.put(cv.ContentDocumentId, cv.VersionData.toString());
-      }
-    }
-    return dataByAttachment;
-  }
-
-  /**
-   * @description Gathers the offload attachment Ids referenced by any resolved instance's
-   * output or progress fields.
-   * @param resolved The resolved instances to scan for offload markers.
-   * @return The set of referenced offload attachment (ContentDocument) Ids.
-   */
-  private static Set<Id> collectAttachmentIds(
-    List<Workflow_Instance__c> resolved
-  ) {
-    Set<Id> attachmentIds = new Set<Id>();
-    for (Workflow_Instance__c inst : resolved) {
-      if (inst != null) {
-        Id attachmentId = getAttachmentId(inst.Output__c);
-        if (attachmentId != null) {
-          attachmentIds.add(attachmentId);
-        }
-        Id progressAttachmentId = getAttachmentId(inst.Progress__c);
-        if (progressAttachmentId != null) {
-          attachmentIds.add(progressAttachmentId);
-        }
-      }
-    }
-    return attachmentIds;
   }
 
   /**
@@ -527,61 +294,18 @@ public inherited sharing class WorkflowStatusInvocableAction {
         res.isTerminal = TERMINAL_STATUSES.contains(inst.Status__c);
         res.isSuccess = (inst.Status__c == 'Completed');
         res.errorMessage = inst.Error_Message__c;
-        res.outputJson = rehydrate(inst.Output__c, dataByAttachment);
-        res.progressJson = rehydrate(inst.Progress__c, dataByAttachment);
+        res.outputJson = WorkflowStatusPayloadRehydrator.rehydrate(
+          inst.Output__c,
+          dataByAttachment
+        );
+        res.progressJson = WorkflowStatusPayloadRehydrator.rehydrate(
+          inst.Progress__c,
+          dataByAttachment
+        );
         res.causationId = WorkflowEngine.cleanCausationId(inst.Causation_Id__c);
       }
       results.add(res);
     }
     return results;
-  }
-
-  /**
-   * Chooses the better of two instances sharing a correlation key: a live (active)
-   * run wins over a finished/handed-off one; among equals, the most recently
-   * created wins. This keeps getStatus reporting the current run when a key has
-   * been reused across terminal runs or ContinuedAsNew generations.
-   *
-   * @param candidate The newly-seen instance sharing the correlation key.
-   * @param existing The instance already indexed for that correlation key.
-   * @return True when the candidate should replace the existing entry.
-   */
-  private static Boolean isPreferredCandidate(
-    Workflow_Instance__c candidate,
-    Workflow_Instance__c existing
-  ) {
-    Boolean candidateActive = ACTIVE_STATUSES.contains(candidate.Status__c);
-    Boolean existingActive = ACTIVE_STATUSES.contains(existing.Status__c);
-    if (candidateActive != existingActive) {
-      return candidateActive;
-    }
-    return candidate.CreatedDate > existing.CreatedDate;
-  }
-
-  private static Id getAttachmentId(String textValue) {
-    if (
-      String.isNotBlank(textValue) &&
-      textValue.startsWith(OFFLOAD_MARKER_PREFIX)
-    ) {
-      try {
-        Map<String, Object> marker = (Map<String, Object>) JSON.deserializeUntyped(
-          textValue
-        );
-        return (Id) marker.get('$attachmentId');
-      } catch (Exception ignored) {
-      }
-    }
-    return null;
-  }
-
-  private static String rehydrate(
-    String textValue,
-    Map<Id, String> dataByAttachment
-  ) {
-    Id attachmentId = getAttachmentId(textValue);
-    if (attachmentId != null && dataByAttachment.containsKey(attachmentId)) {
-      return dataByAttachment.get(attachmentId);
-    }
-    return textValue;
   }
 }
