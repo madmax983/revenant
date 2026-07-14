@@ -9614,42 +9614,124 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  // ---- signal(List<SignalRequest>) decomposition holders ----
+
+  /** Partitions the batch's request key/id strings into instance ids and keys. */
+  private class SignalTargets {
+    Set<Id> ids = new Set<Id>();
+    Set<String> keys = new Set<String>();
+  }
+
+  /** The by-id (and 15-char) and by-normalized-key caches of the FOR UPDATE-locked instances. */
+  private class SignalInstanceMaps {
+    Map<String, Workflow_Instance__c> instById = new Map<String, Workflow_Instance__c>();
+    Map<String, Workflow_Instance__c> instByKey = new Map<String, Workflow_Instance__c>();
+  }
+
+  /** Parallel lists describing the keyed-cancel claims to insert then act on. */
+  private class CancelClaimBatch {
+    List<Workflow_Signal__c> claims = new List<Workflow_Signal__c>();
+    List<Id> instIds = new List<Id>();
+    List<Boolean> runComp = new List<Boolean>();
+
+    Boolean isEmpty() {
+      return claims.isEmpty();
+    }
+  }
+
+  /** Accumulated state of the forward-signal partition pass. */
+  private class ForwardSignalPartition {
+    List<Workflow_Signal__c> unkeyedSignals = new List<Workflow_Signal__c>();
+    Set<String> seenCompositeKeys = new Set<String>();
+    List<Workflow_Signal__c> keyedSignals = new List<Workflow_Signal__c>();
+    List<Id> keyedSignalInstIds = new List<Id>();
+    Map<Id, Workflow_Instance__c> activeInstById = new Map<Id, Workflow_Instance__c>();
+    Set<Id> instancesWithUnkeyedSignal = new Set<Id>();
+    Map<Id, Set<String>> signalsByInstanceId = new Map<Id, Set<String>>();
+    Set<Id> instancesWithFreshKeyedSignal = new Set<Id>();
+    // Instances driven terminal by an in-batch cancel; siblings are skipped.
+    Set<Id> cancelledInstanceIds = new Set<Id>();
+  }
+
+  /** The instances to flip to Running and the set to wake/enqueue this call. */
+  private class WakeSelection {
+    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+    List<Workflow_Instance__c> activeInstances = new List<Workflow_Instance__c>();
+  }
+
   /**
-   * Sends external signals to multiple workflow instances in bulk.
+   * Sends external signals to multiple workflow instances in bulk. Orchestrates
+   * the six phases (in order, preserving the original all-or-none and in-batch
+   * cancel-before-sibling semantics): classify targets, lock/load instances,
+   * capture unmatched requests, run the keyed-cancel pre-pass, partition the
+   * forward signals, insert the rows, then wake and enqueue.
    * @param requests the signal requests to deliver
    */
   public static void signal(List<SignalRequest> requests) {
     if (requests == null || requests.isEmpty()) {
       return;
     }
+    SignalTargets targets = classifyRequestTargets(requests);
+    SignalInstanceMaps maps = loadSignalableInstances(
+      targets.ids,
+      targets.keys
+    );
+    captureUnmatchedRequests(requests, maps);
+    Set<Id> cancelledInstanceIds = processKeyedCancels(requests, maps);
+    ForwardSignalPartition partition = partitionForwardSignals(
+      requests,
+      maps,
+      cancelledInstanceIds
+    );
+    System.Savepoint sp = insertSignalRows(partition);
+    wakeAndEnqueueInstances(partition, sp);
+  }
 
+  /**
+   * Partitions the batch's request identifiers into workflow-instance ids
+   * (18/15-char key-prefixed) and correlation keys for the load query.
+   * @param requests the signal requests to classify
+   * @return the collected ids and keys
+   */
+  private static SignalTargets classifyRequestTargets(
+    List<SignalRequest> requests
+  ) {
     String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
         SObjectDescribeOptions.DEFERRED
       )
       .getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
-    Set<Id> ids = new Set<Id>();
-    Set<String> keys = new Set<String>();
-
+    SignalTargets targets = new SignalTargets();
     for (SignalRequest req : requests) {
-      if (req == null) {
+      if (req == null || String.isBlank(req.keyOrId)) {
         continue;
       }
-      if (String.isNotBlank(req.keyOrId)) {
-        if (
-          idPattern.matcher(req.keyOrId).matches() &&
-          req.keyOrId.startsWith(wflowPrefix)
-        ) {
-          ids.add((Id) req.keyOrId);
-        } else {
-          keys.add(req.keyOrId);
-        }
+      if (
+        idPattern.matcher(req.keyOrId).matches() &&
+        req.keyOrId.startsWith(wflowPrefix)
+      ) {
+        targets.ids.add((Id) req.keyOrId);
+      } else {
+        targets.keys.add(req.keyOrId);
       }
     }
+    return targets;
+  }
 
-    // Include CompensationFailed so a Cancel signal can reach a stalled rollback; the
-    // per-request guard below still rejects non-cancel signals to a stalled instance,
-    // preserving the active-only semantics for everything except cancellation.
+  /**
+   * Loads and FOR UPDATE-locks every signalable instance addressed by the batch
+   * and builds the by-id/by-key caches. Includes CompensationFailed so a Cancel
+   * signal can reach a stalled rollback; the per-request guards downstream still
+   * reject non-cancel signals to a stalled instance, preserving active-only
+   * semantics for everything except cancellation.
+   * @param ids the workflow-instance ids to lock
+   * @param keys the correlation keys to lock
+   * @return the by-id (and 15-char) and by-normalized-key instance caches
+   */
+  private static SignalInstanceMaps loadSignalableInstances(
+    Set<Id> ids,
+    Set<String> keys
+  ) {
     List<Workflow_Instance__c> instances = [
       SELECT
         Id,
@@ -9677,93 +9759,156 @@ public inherited sharing class WorkflowEngine {
       FOR UPDATE
     ];
 
-    Map<String, Workflow_Instance__c> instById = new Map<String, Workflow_Instance__c>();
-    Map<String, Workflow_Instance__c> instByKey = new Map<String, Workflow_Instance__c>();
+    SignalInstanceMaps maps = new SignalInstanceMaps();
     for (Workflow_Instance__c inst : instances) {
-      instById.put(inst.Id, inst);
+      maps.instById.put(inst.Id, inst);
       String idStr = String.valueOf(inst.Id);
       if (idStr.length() == 18) {
-        instById.put(idStr.substring(0, 15), inst);
+        maps.instById.put(idStr.substring(0, 15), inst);
       }
       if (String.isNotBlank(inst.Correlation_Key__c)) {
         // Key by the normalized (lower-cased) correlation key: SOQL matched the
         // instance case-insensitively, so a request addressed as 'order-1' must
         // resolve the instance stored as 'Order-1' rather than miss the map and
         // be treated as unmatched (which would skip a keyed cancel entirely).
-        instByKey.put(normalizeKey(inst.Correlation_Key__c), inst);
+        maps.instByKey.put(normalizeKey(inst.Correlation_Key__c), inst);
       }
     }
+    return maps;
+  }
 
-    // Separate requests into: matched (active instance found), unmatched
-    // non-cancel (capture as Unrouted), and unmatched cancel. An unkeyed cancel
-    // throws (capturing a cancel for future replay against an unknown future
-    // instance is unsafe); a *keyed* cancel is an idempotent no-op (the first
-    // delivery already drove the instance terminal, or there is nothing to
-    // cancel), so it is swallowed rather than faulting the publisher.
+  /**
+   * Resolves the locked instance a request addresses, by id first then by
+   * normalized correlation key.
+   * @param req the request whose target to resolve
+   * @param maps the by-id/by-key instance caches
+   * @return the matched instance, or null when none was loaded/locked
+   */
+  private static Workflow_Instance__c resolveInstance(
+    SignalRequest req,
+    SignalInstanceMaps maps
+  ) {
+    Workflow_Instance__c inst = maps.instById.get(req.keyOrId);
+    if (inst == null) {
+      inst = maps.instByKey.get(normalizeKey(req.keyOrId));
+    }
+    return inst;
+  }
+
+  /**
+   * Separates requests with no active match: non-cancel misses are captured as
+   * Unrouted for replay; an unkeyed cancel miss throws (capturing a cancel for
+   * an unknown future instance is unsafe); a keyed cancel miss is an idempotent
+   * no-op. Throws before any keyed-cancel work, exactly as the original loop.
+   * @param requests the signal requests to screen
+   * @param maps the by-id/by-key instance caches
+   */
+  private static void captureUnmatchedRequests(
+    List<SignalRequest> requests,
+    SignalInstanceMaps maps
+  ) {
     List<SignalRequest> unmatchedToCapture = new List<SignalRequest>();
     for (SignalRequest req : requests) {
       if (req == null) {
         continue;
       }
-      Workflow_Instance__c inst = instById.get(req.keyOrId);
-      if (inst == null) {
-        inst = instByKey.get(normalizeKey(req.keyOrId));
-      }
-      Boolean isCancel =
-        String.isNotBlank(req.signalName) &&
-        (req.signalName.equalsIgnoreCase('Cancel') ||
-        req.signalName.equalsIgnoreCase('CancelWorkflow'));
-      Boolean unmatched =
-        inst == null || (inst.Status__c == 'CompensationFailed' && !isCancel);
-      if (unmatched) {
-        if (isCancel) {
-          if (String.isNotBlank(req.idempotencyKey)) {
-            continue; // keyed cancel, no active match: idempotent no-op
-          }
-          throw new WorkflowException(
-            'No active workflow found with key or ID: ' + req.keyOrId
-          );
-        }
-        unmatchedToCapture.add(req);
-      }
+      collectUnmatchedRequest(req, maps, unmatchedToCapture);
     }
     captureUnroutedSignals(unmatchedToCapture);
+  }
 
-    // Keyed cancels: claim in bulk, then cancel. One savepoint plus one bulk
-    // marker insert guards the whole keyed-cancel sub-batch — rather than a
-    // savepoint and a marker insert per row, which would burn ~2 DML statements
-    // each and abort large batches against the 150-statement limit. In-batch
-    // duplicates collapse via seenCancelKeys; cross-transaction duplicates lose
-    // the unique-constraint race (DUPLICATE_VALUE) and are skipped. A failed
-    // cancel() rolls the batch's claims back so the same keys can be retried.
-    List<Workflow_Signal__c> cancelClaims = new List<Workflow_Signal__c>();
-    List<Id> cancelClaimInstIds = new List<Id>();
-    List<Boolean> cancelClaimRunComp = new List<Boolean>();
-    Set<String> seenCancelKeys = new Set<String>();
-    // Instances driven to a terminal (no-compensation) Cancelled state by a
-    // cancel in this batch. The forward-signal loop below must skip any sibling
-    // signal for these — otherwise it would act on the stale pre-cancel status
-    // and, for a Suspended instance, write that SObject back as Running,
-    // resurrecting a workflow the cancel just drove to Cancelled. A cancel that
-    // starts compensations leaves the instance Cancelling (still signalable), so
-    // it is NOT added here; its cached status is refreshed instead.
+  /**
+   * Classifies a single request against the loaded instances and either records
+   * it for Unrouted capture, no-ops it (keyed cancel miss), or throws (unkeyed
+   * cancel miss). Guard-clause flattened; behavior matches the original nested
+   * branches exactly.
+   * @param req the request to classify
+   * @param maps the by-id/by-key instance caches
+   * @param unmatchedToCapture accumulator for non-cancel misses (mutated)
+   */
+  private static void collectUnmatchedRequest(
+    SignalRequest req,
+    SignalInstanceMaps maps,
+    List<SignalRequest> unmatchedToCapture
+  ) {
+    Workflow_Instance__c inst = resolveInstance(req, maps);
+    Boolean isCancel = isCancelSignalName(req.signalName);
+    Boolean unmatched =
+      inst == null || (inst.Status__c == 'CompensationFailed' && !isCancel);
+    if (!unmatched) {
+      return;
+    }
+    if (!isCancel) {
+      unmatchedToCapture.add(req);
+      return;
+    }
+    if (String.isNotBlank(req.idempotencyKey)) {
+      return; // keyed cancel, no active match: idempotent no-op
+    }
+    throw new WorkflowException(
+      'No active workflow found with key or ID: ' + req.keyOrId
+    );
+  }
+
+  /**
+   * Keyed-cancel pre-pass: claims the keyed cancels in bulk (one savepoint plus
+   * one bulk marker insert guards the whole sub-batch, rather than ~2 DML
+   * statements per row which would abort large batches against the 150-statement
+   * limit), cancels the freshly-claimed instances, then refreshes their cached
+   * statuses. A failed cancel rolls the batch's claims back so the keys retry.
+   * @param requests the signal requests to scan for keyed cancels
+   * @param maps the by-id/by-key instance caches (statuses refreshed in place)
+   * @return the ids driven to a terminal (non-wakeable) state by this pre-pass
+   */
+  private static Set<Id> processKeyedCancels(
+    List<SignalRequest> requests,
+    SignalInstanceMaps maps
+  ) {
     Set<Id> cancelledInstanceIds = new Set<Id>();
+    CancelClaimBatch batch = collectCancelClaims(requests, maps);
+    if (batch.isEmpty()) {
+      return cancelledInstanceIds;
+    }
+    Savepoint cancelSp = Database.setSavepoint();
+    Database.SaveResult[] claimResults = Database.insert(
+      batch.claims,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    List<Integer> freshClaims = collectFreshClaimIndices(
+      claimResults,
+      cancelSp
+    );
+    Set<Id> attemptedCancelIds = runKeyedCancels(batch, freshClaims, cancelSp);
+    refreshAfterKeyedCancels(attemptedCancelIds, maps, cancelledInstanceIds);
+    return cancelledInstanceIds;
+  }
+
+  /**
+   * Builds the keyed-cancel claim rows from the batch. In-batch duplicates
+   * collapse via a seen-key set; cross-transaction duplicates lose the
+   * unique-constraint race later and are skipped.
+   * @param requests the signal requests to scan
+   * @param maps the by-id/by-key instance caches
+   * @return the parallel claim/instance/run-compensations lists to act on
+   */
+  private static CancelClaimBatch collectCancelClaims(
+    List<SignalRequest> requests,
+    SignalInstanceMaps maps
+  ) {
+    CancelClaimBatch batch = new CancelClaimBatch();
+    Set<String> seenCancelKeys = new Set<String>();
     for (SignalRequest req : requests) {
       if (req == null) {
         continue;
       }
       if (
         String.isBlank(req.idempotencyKey) ||
-        String.isBlank(req.signalName) ||
-        !(req.signalName.equalsIgnoreCase('Cancel') ||
-        req.signalName.equalsIgnoreCase('CancelWorkflow'))
+        !isCancelSignalName(req.signalName)
       ) {
         continue;
       }
-      Workflow_Instance__c inst = instById.get(req.keyOrId);
-      if (inst == null) {
-        inst = instByKey.get(normalizeKey(req.keyOrId));
-      }
+      Workflow_Instance__c inst = resolveInstance(req, maps);
       if (inst == null) {
         continue; // unmatched keyed cancel already no-op'd above
       }
@@ -9772,7 +9917,7 @@ public inherited sharing class WorkflowEngine {
         continue; // in-batch duplicate keyed cancel
       }
       seenCancelKeys.add(claimKey);
-      cancelClaims.add(
+      batch.claims.add(
         new Workflow_Signal__c(
           Workflow_Instance__c = inst.Id,
           Signal_Name__c = req.signalName,
@@ -9780,323 +9925,435 @@ public inherited sharing class WorkflowEngine {
           Signal_Key__c = claimKey
         )
       );
-      cancelClaimInstIds.add(inst.Id);
-      cancelClaimRunComp.add(parseRunCompensations(req.payload));
+      batch.instIds.add(inst.Id);
+      batch.runComp.add(parseRunCompensations(req.payload));
     }
-    if (!cancelClaims.isEmpty()) {
-      Savepoint cancelSp = Database.setSavepoint();
-      Database.SaveResult[] claimResults = Database.insert(
-        cancelClaims,
-        false,
-        AccessLevel.SYSTEM_MODE
-      );
-      List<Integer> freshClaims = new List<Integer>();
-      String claimError = null;
-      for (Integer i = 0; i < claimResults.size(); i++) {
-        Database.SaveResult sr = claimResults[i];
-        if (sr.isSuccess()) {
-          freshClaims.add(i);
-        } else {
-          Boolean isDup = false;
-          for (Database.Error err : sr.getErrors()) {
-            if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
-              isDup = true;
-              break;
-            }
-          }
-          if (!isDup && claimError == null) {
-            claimError = sr.getErrors()[0].getMessage();
-          }
-        }
+    return batch;
+  }
+
+  /**
+   * Collects the indices of the freshly-claimed (won-the-race) cancel rows.
+   * Concurrent-duplicate losers are skipped; on any genuine (non-duplicate)
+   * insert error the batch is rolled back and a WorkflowException is thrown.
+   * @param claimResults the save results of the bulk claim insert
+   * @param cancelSp the savepoint to roll back on a genuine failure
+   * @return the indices (into the CancelClaimBatch) of the fresh claims
+   */
+  private static List<Integer> collectFreshClaimIndices(
+    Database.SaveResult[] claimResults,
+    Savepoint cancelSp
+  ) {
+    List<Integer> freshClaims = new List<Integer>();
+    String claimError = null;
+    for (Integer i = 0; i < claimResults.size(); i++) {
+      Database.SaveResult sr = claimResults[i];
+      if (sr.isSuccess()) {
+        freshClaims.add(i);
+        continue;
       }
-      if (claimError != null) {
-        Database.rollback(cancelSp);
-        throw new WorkflowException('Failed to claim cancel: ' + claimError);
+      if (isDuplicateError(sr)) {
+        continue;
       }
-      Set<Id> attemptedCancelIds = new Set<Id>();
-      try {
-        for (Integer i : freshClaims) {
-          cancelInstance(cancelClaimInstIds[i], cancelClaimRunComp[i]);
-          attemptedCancelIds.add(cancelClaimInstIds[i]);
-        }
-      } catch (Exception e) {
-        Database.rollback(cancelSp);
-        throw e;
-      }
-      // Refresh post-cancel statuses in one query for the whole sub-batch. A
-      // no-compensation cancel is terminal (Cancelled) and its sibling signals
-      // must be skipped; a compensating cancel leaves the instance Cancelling
-      // (still signalable), so refresh the cached SObject so the forward loop
-      // wakes it as a compensating instance rather than resurrecting it.
-      if (!attemptedCancelIds.isEmpty()) {
-        for (Workflow_Instance__c refreshed : [
-          SELECT Id, Status__c
-          FROM Workflow_Instance__c
-          WHERE Id IN :attemptedCancelIds
-          WITH SYSTEM_MODE
-        ]) {
-          refreshCachedStatus(instById, refreshed);
-          if (!isWakeableStatus(refreshed.Status__c)) {
-            cancelledInstanceIds.add(refreshed.Id);
-          }
-        }
+      if (claimError == null) {
+        claimError = sr.getErrors()[0].getMessage();
       }
     }
+    if (claimError != null) {
+      Database.rollback(cancelSp);
+      throw new WorkflowException('Failed to claim cancel: ' + claimError);
+    }
+    return freshClaims;
+  }
 
-    // Separate into unkeyed (at-least-once, unchanged) and keyed (dedup by unique constraint).
-    // For keyed signals, in-batch dedup prevents multiple rows for the same (instance, key)
-    // within a single bulk call; the unique constraint handles concurrent transactions.
-    List<Workflow_Signal__c> unkeyedSignals = new List<Workflow_Signal__c>();
-    Set<String> seenCompositeKeys = new Set<String>();
-    List<Workflow_Signal__c> keyedSignals = new List<Workflow_Signal__c>();
-    List<Id> keyedSignalInstIds = new List<Id>(); // parallel: instance for each keyed signal
-    Map<Id, Workflow_Instance__c> activeInstById = new Map<Id, Workflow_Instance__c>();
-    Set<Id> instancesWithUnkeyedSignal = new Set<Id>();
-    Map<Id, Set<String>> signalsByInstanceId = new Map<Id, Set<String>>();
+  /**
+   * Cancels each freshly-claimed instance in claim order. On any failure the
+   * whole sub-batch's claims are rolled back and the error rethrown so the keys
+   * can be retried.
+   * @param batch the claim batch supplying instance ids and run-compensation flags
+   * @param freshClaims the indices of the claims that won the race
+   * @param cancelSp the savepoint to roll back on failure
+   * @return the ids of the instances a cancel was attempted on
+   */
+  private static Set<Id> runKeyedCancels(
+    CancelClaimBatch batch,
+    List<Integer> freshClaims,
+    Savepoint cancelSp
+  ) {
+    Set<Id> attemptedCancelIds = new Set<Id>();
+    try {
+      for (Integer i : freshClaims) {
+        cancelInstance(batch.instIds[i], batch.runComp[i]);
+        attemptedCancelIds.add(batch.instIds[i]);
+      }
+    } catch (Exception e) {
+      Database.rollback(cancelSp);
+      throw e;
+    }
+    return attemptedCancelIds;
+  }
 
+  /**
+   * Refreshes the post-cancel statuses of the keyed-cancel sub-batch in one
+   * query. A no-compensation cancel is terminal (Cancelled) and its sibling
+   * signals must be skipped; a compensating cancel leaves the instance
+   * Cancelling (still signalable), so the cached SObject is refreshed so the
+   * forward loop wakes it rather than resurrecting it.
+   * @param attemptedCancelIds the ids a cancel was attempted on
+   * @param maps the by-id/by-key instance caches (statuses refreshed in place)
+   * @param cancelledInstanceIds accumulates ids driven terminal (mutated)
+   */
+  private static void refreshAfterKeyedCancels(
+    Set<Id> attemptedCancelIds,
+    SignalInstanceMaps maps,
+    Set<Id> cancelledInstanceIds
+  ) {
+    if (attemptedCancelIds.isEmpty()) {
+      return;
+    }
+    for (Workflow_Instance__c refreshed : [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :attemptedCancelIds
+      WITH SYSTEM_MODE
+    ]) {
+      refreshCachedStatus(maps.instById, refreshed);
+      if (!isWakeableStatus(refreshed.Status__c)) {
+        cancelledInstanceIds.add(refreshed.Id);
+      }
+    }
+  }
+
+  /**
+   * Partitions the forward (non-keyed-cancel) signals into the unkeyed and
+   * keyed rows to insert, records which instances are wakeable, and runs any
+   * in-batch unkeyed cancels in request order so their result is visible to
+   * later siblings in the same batch.
+   * @param requests the signal requests to partition
+   * @param maps the by-id/by-key instance caches
+   * @param cancelledInstanceIds ids already driven terminal by the keyed pre-pass
+   * @return the accumulated forward-signal partition
+   */
+  private static ForwardSignalPartition partitionForwardSignals(
+    List<SignalRequest> requests,
+    SignalInstanceMaps maps,
+    Set<Id> cancelledInstanceIds
+  ) {
+    ForwardSignalPartition part = new ForwardSignalPartition();
+    part.cancelledInstanceIds = cancelledInstanceIds;
     for (SignalRequest req : requests) {
       if (req == null) {
         continue;
       }
-      Workflow_Instance__c inst = instById.get(req.keyOrId);
-      if (inst == null) {
-        inst = instByKey.get(normalizeKey(req.keyOrId));
-      }
-      if (inst != null) {
-        if (!signalsByInstanceId.containsKey(inst.Id)) {
-          signalsByInstanceId.put(inst.Id, new Set<String>());
-        }
-        signalsByInstanceId.get(inst.Id).add(req.signalName);
-      }
+      partitionOneForwardSignal(req, maps, part);
+    }
+    return part;
+  }
 
-      // A cancel earlier in this batch already drove this instance terminal; the
-      // cached SObject is stale, so skip every sibling signal for it rather than
-      // acting on the pre-cancel status and resurrecting a Cancelled workflow.
-      if (inst != null && cancelledInstanceIds.contains(inst.Id)) {
+  /**
+   * Handles one forward request: records the signal name for join-readiness,
+   * skips siblings of an instance a prior in-batch cancel drove terminal, runs
+   * an in-batch unkeyed cancel (refreshing status for later siblings), or stages
+   * the signal row. Guard-clause flattened; matches the original nesting exactly.
+   * @param req the request to handle
+   * @param maps the by-id/by-key instance caches
+   * @param part the partition accumulator (mutated)
+   */
+  private static void partitionOneForwardSignal(
+    SignalRequest req,
+    SignalInstanceMaps maps,
+    ForwardSignalPartition part
+  ) {
+    Workflow_Instance__c inst = resolveInstance(req, maps);
+    if (inst != null) {
+      if (!part.signalsByInstanceId.containsKey(inst.Id)) {
+        part.signalsByInstanceId.put(inst.Id, new Set<String>());
+      }
+      part.signalsByInstanceId.get(inst.Id).add(req.signalName);
+    }
+    if (inst == null) {
+      return;
+    }
+    // A cancel earlier in this batch already drove this instance terminal; the
+    // cached SObject is stale, so skip every sibling signal for it rather than
+    // acting on the pre-cancel status and resurrecting a Cancelled workflow.
+    if (part.cancelledInstanceIds.contains(inst.Id)) {
+      return;
+    }
+    Boolean isCancel =
+      req.signalName.equalsIgnoreCase('Cancel') ||
+      req.signalName.equalsIgnoreCase('CancelWorkflow');
+    if (inst.Status__c == 'CompensationFailed' && !isCancel) {
+      return;
+    }
+    if (isCancel) {
+      if (String.isNotBlank(req.idempotencyKey)) {
+        return; // keyed cancel handled in the bulk-claim pre-pass above
+      }
+      cancelInstance(inst.Id, parseRunCompensations(req.payload));
+      refreshAfterUnkeyedCancel(inst, maps.instById, part.cancelledInstanceIds);
+      return;
+    }
+    addForwardSignalRow(req, inst, part);
+  }
+
+  /**
+   * Stages a forward signal row (Received). Unkeyed signals keep at-least-once
+   * behavior; keyed signals dedup in-batch on the per-instance composite key
+   * (the unique constraint handles concurrent transactions). Wakeable instances
+   * are recorded for the wake phase.
+   * @param req the request supplying the signal name/payload/idempotency key
+   * @param inst the resolved target instance
+   * @param part the partition accumulator (mutated)
+   */
+  private static void addForwardSignalRow(
+    SignalRequest req,
+    Workflow_Instance__c inst,
+    ForwardSignalPartition part
+  ) {
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Workflow_Instance__c = inst.Id,
+      Signal_Name__c = req.signalName,
+      Payload__c = req.payload,
+      Status__c = 'Received'
+    );
+
+    Boolean isWakeable =
+      inst.Status__c == 'Suspended' ||
+      inst.Status__c == 'Running' ||
+      inst.Status__c == 'Compensating' ||
+      inst.Status__c == 'Cancelling';
+
+    if (String.isBlank(req.idempotencyKey)) {
+      // Unkeyed signal: at-least-once behavior unchanged.
+      part.unkeyedSignals.add(sig);
+      if (isWakeable) {
+        part.activeInstById.put(inst.Id, inst);
+        part.instancesWithUnkeyedSignal.add(inst.Id);
+      }
+      return;
+    }
+
+    // Keyed signal: compute per-instance hash for unique-constraint dedup.
+    // In-batch dedup skips later duplicates with the same composite key.
+    String compositeKey = deriveSignalDedupKey(inst.Id, req.idempotencyKey);
+    if (part.seenCompositeKeys.contains(compositeKey)) {
+      return; // in-batch duplicate — skip entirely (no row, no wake-up)
+    }
+    part.seenCompositeKeys.add(compositeKey);
+    sig.Signal_Key__c = compositeKey;
+    part.keyedSignals.add(sig);
+    part.keyedSignalInstIds.add(inst.Id);
+    if (isWakeable) {
+      part.activeInstById.put(inst.Id, inst);
+    }
+  }
+
+  /**
+   * Inserts the staged signal rows under one savepoint so the bulk call is
+   * all-or-none: unkeyed rows use a plain insert; keyed rows use allOrNone=false
+   * so a concurrent-duplicate loser is a no-op while a genuine error rolls back
+   * and surfaces. The savepoint is shared with the wake phase, so it is returned
+   * for that phase's rollback.
+   * @param part the partition holding the rows to insert (fresh-keyed set mutated)
+   * @return the savepoint, or null when there were no rows to insert
+   */
+  private static System.Savepoint insertSignalRows(
+    ForwardSignalPartition part
+  ) {
+    if (part.unkeyedSignals.isEmpty() && part.keyedSignals.isEmpty()) {
+      return null;
+    }
+    System.Savepoint sp = Database.setSavepoint();
+
+    // Insert unkeyed signals (plain insert, unchanged at-least-once behavior).
+    if (!part.unkeyedSignals.isEmpty()) {
+      Database.insert(part.unkeyedSignals, true, AccessLevel.SYSTEM_MODE);
+    }
+
+    if (!part.keyedSignals.isEmpty()) {
+      insertKeyedSignals(part, sp);
+    }
+    return sp;
+  }
+
+  /**
+   * Inserts the keyed signal rows with allOrNone=false, recording the instances
+   * whose insert won the race; swallows per-row DUPLICATE_VALUE (another
+   * transaction won) but rolls back and rethrows on a genuine non-duplicate
+   * error. Guard-clause flattened.
+   * @param part the partition holding the keyed rows (fresh-keyed set mutated)
+   * @param sp the savepoint to roll back on a genuine failure
+   */
+  private static void insertKeyedSignals(
+    ForwardSignalPartition part,
+    System.Savepoint sp
+  ) {
+    Database.SaveResult[] srs = Database.insert(
+      part.keyedSignals,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    String genuineError = null;
+    for (Integer i = 0; i < srs.size(); i++) {
+      Database.SaveResult sr = srs[i];
+      if (sr.isSuccess()) {
+        part.instancesWithFreshKeyedSignal.add(part.keyedSignalInstIds[i]);
         continue;
       }
-
-      if (
-        inst != null &&
-        !(inst.Status__c == 'CompensationFailed' &&
-        !(req.signalName.equalsIgnoreCase('Cancel') ||
-        req.signalName.equalsIgnoreCase('CancelWorkflow')))
-      ) {
-        if (
-          req.signalName.equalsIgnoreCase('Cancel') ||
-          req.signalName.equalsIgnoreCase('CancelWorkflow')
-        ) {
-          if (String.isNotBlank(req.idempotencyKey)) {
-            continue; // keyed cancel handled in the bulk-claim pre-pass above
-          }
-          cancelInstance(inst.Id, parseRunCompensations(req.payload));
-          refreshAfterUnkeyedCancel(inst, instById, cancelledInstanceIds);
-          continue;
-        }
-
-        Workflow_Signal__c sig = new Workflow_Signal__c(
-          Workflow_Instance__c = inst.Id,
-          Signal_Name__c = req.signalName,
-          Payload__c = req.payload,
-          Status__c = 'Received'
-        );
-
-        Boolean isWakeable =
-          inst.Status__c == 'Suspended' ||
-          inst.Status__c == 'Running' ||
-          inst.Status__c == 'Compensating' ||
-          inst.Status__c == 'Cancelling';
-
-        if (String.isNotBlank(req.idempotencyKey)) {
-          // Keyed signal: compute per-instance hash for unique-constraint dedup.
-          // In-batch dedup skips later duplicates with the same composite key.
-          String compositeKey = deriveSignalDedupKey(
-            inst.Id,
-            req.idempotencyKey
-          );
-          if (!seenCompositeKeys.contains(compositeKey)) {
-            seenCompositeKeys.add(compositeKey);
-            sig.Signal_Key__c = compositeKey;
-            keyedSignals.add(sig);
-            keyedSignalInstIds.add(inst.Id);
-            if (isWakeable) {
-              activeInstById.put(inst.Id, inst);
-            }
-          }
-          // else: in-batch duplicate — skip entirely (no row, no wake-up)
-        } else {
-          // Unkeyed signal: at-least-once behavior unchanged.
-          unkeyedSignals.add(sig);
-          if (isWakeable) {
-            activeInstById.put(inst.Id, inst);
-            instancesWithUnkeyedSignal.add(inst.Id);
-          }
-        }
+      if (isDuplicateError(sr)) {
+        continue;
+      }
+      if (genuineError == null) {
+        genuineError = sr.getErrors()[0].getMessage();
       }
     }
-
-    // Insert signals. A savepoint restores all-or-none semantics on a genuine
-    // (non-duplicate) row failure: keyed inserts use allOrNone=false so a
-    // concurrent-duplicate loser is swallowed as a no-op, but a real error
-    // (e.g. an overlong Signal_Name__c from a direct Apex/Flow caller) must not
-    // leave the already-inserted unkeyed rows and sibling keyed rows committed
-    // when the method throws — a caller that catches the exception would
-    // otherwise be left with a stranded Received signal and a consumed
-    // idempotency key, so retrying the same batch would silently no-op.
-    Set<Id> instancesWithFreshKeyedSignal = new Set<Id>();
-    System.Savepoint sp = null;
-    if (!unkeyedSignals.isEmpty() || !keyedSignals.isEmpty()) {
-      sp = Database.setSavepoint();
-
-      // Insert unkeyed signals (plain insert, unchanged at-least-once behavior).
-      if (!unkeyedSignals.isEmpty()) {
-        Database.insert(unkeyedSignals, true, AccessLevel.SYSTEM_MODE);
-      }
-
-      // Insert keyed signals with allOrNone=false; swallow per-row
-      // DUPLICATE_VALUE (another transaction won the race) — that delivery is
-      // still a success no-op. Genuine non-duplicate errors roll back and surface.
-      if (!keyedSignals.isEmpty()) {
-        Database.SaveResult[] srs = Database.insert(
-          keyedSignals,
-          false,
-          AccessLevel.SYSTEM_MODE
-        );
-        String genuineError = null;
-        for (Integer i = 0; i < srs.size(); i++) {
-          Database.SaveResult sr = srs[i];
-          if (sr.isSuccess()) {
-            instancesWithFreshKeyedSignal.add(keyedSignalInstIds[i]);
-          } else {
-            Boolean isDup = false;
-            for (Database.Error err : sr.getErrors()) {
-              if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
-                isDup = true;
-                break;
-              }
-            }
-            if (!isDup && genuineError == null) {
-              genuineError = sr.getErrors()[0].getMessage();
-            }
-          }
-        }
-        if (genuineError != null) {
-          Database.rollback(sp);
-          throw new WorkflowException(
-            'Failed to insert signal: ' + genuineError
-          );
-        }
-      }
+    if (genuineError != null) {
+      Database.rollback(sp);
+      throw new WorkflowException('Failed to insert signal: ' + genuineError);
     }
+  }
 
-    // The signal inserts and the wake-up share the savepoint above so the bulk
-    // call is all-or-none: the status flip (update), enqueueOrchestrators, and
-    // enqueueResumeBulk can still throw after the rows are committed (e.g. a
-    // validation rule on a Suspended instance or an EventBus publish failure),
-    // so on any such failure we roll the inserted rows back before rethrowing.
-    // Otherwise a caller that catches the exception would be left with stranded
-    // Received rows and consumed idempotency keys, so retrying the same batch
-    // would silently no-op and never wake the still-Suspended instances.
+  /**
+   * Wakes and enqueues the instances that received a fresh signal, sharing the
+   * insert savepoint so the whole bulk call is all-or-none: the status flip,
+   * enqueueOrchestrators, and enqueueResumeBulk can still throw after the rows
+   * are committed, so on any failure the inserted rows are rolled back and the
+   * enqueue guards cleared before rethrowing.
+   * @param part the forward-signal partition
+   * @param sp the shared insert savepoint (null when nothing was inserted)
+   */
+  private static void wakeAndEnqueueInstances(
+    ForwardSignalPartition part,
+    System.Savepoint sp
+  ) {
     try {
       // JOIN-READINESS BARRIER PRE-COMPUTATION
       Set<Id> gatedNonReadyParents = getGatedNonReadyParents(
-        activeInstById.values(),
-        signalsByInstanceId
+        part.activeInstById.values(),
+        part.signalsByInstanceId
       );
-
-      // Only wake an instance if it received at least one fresh signal this call:
-      // unkeyed signals always qualify; keyed signals only if the insert won the race.
-      List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
-      List<Workflow_Instance__c> activeInstances = new List<Workflow_Instance__c>();
-      // Deduplicate: only process each active instance once.
-      Set<Id> processedActiveIds = new Set<Id>();
-      for (Workflow_Instance__c inst : activeInstById.values()) {
-        if (processedActiveIds.contains(inst.Id)) {
-          continue;
-        }
-        Boolean freshSignalLanded =
-          instancesWithUnkeyedSignal.contains(inst.Id) ||
-          instancesWithFreshKeyedSignal.contains(inst.Id);
-        if (!freshSignalLanded) {
-          continue;
-        }
-        processedActiveIds.add(inst.Id);
-        // If the workflow is suspended or running, resume/orchestrate it. A
-        // Compensating/Cancelling instance is mid-rollback: a compensation step
-        // may depend on this signal, so wake it too rather than rejecting it. The
-        // compensation status is left untouched (only Suspended flips to Running);
-        // runStep re-detects the rollback from the trailing '_Compensate' step.
-        // A Paused instance keeps its status — the held signal (Received) is
-        // observed when resume re-drives the wait step; do not wake it here.
-        if (inst.Status__c == 'Suspended') {
-          // A concurrency-parked row has not won a slot. Waking it to Running would
-          // leave a Running instance holding no slot (violating the no-running-without-
-          // slot invariant) and hide it from the parked count. Like Paused, leave it
-          // alone: the signal is already captured (Received) and is observed once
-          // admission drives the step. Skip the wake and the enqueue entirely.
-          if (
-            inst.Concurrency_Parked__c == true &&
-            inst.Concurrency_Slot_Held__c != true
-          ) {
-            continue;
-          }
-          if (gatedNonReadyParents.contains(inst.Id)) {
-            continue;
-          }
-          inst.Status__c = 'Running';
-          // Disarm the wait deadline (issue #35): a signal-wake ends the current
-          // wait, so any armed Sleep_Until__c (timed-wait timeout, or a plain
-          // sleeper's deadline) must be cleared or the watchdog would later
-          // re-select this instance and mis-route/double-wake it. The resumed
-          // step re-arms its own deadline if it suspends or sleeps again.
-          inst.Sleep_Until__c = null;
-          instancesToUpdate.add(inst);
-        }
-        if (!gatedNonReadyParents.contains(inst.Id)) {
-          activeInstances.add(inst);
-        }
+      WakeSelection sel = selectInstancesToWake(part, gatedNonReadyParents);
+      if (!sel.instancesToUpdate.isEmpty()) {
+        Database.update(sel.instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
       }
-
-      if (!instancesToUpdate.isEmpty()) {
-        Database.update(instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
-      }
-
-      List<Id> instanceIdsToEnqueue = new List<Id>();
-      List<Workflow_Instance__c> parallelInstances = new List<Workflow_Instance__c>();
-      for (Workflow_Instance__c inst : activeInstances) {
-        // A Compensating/Cancelling instance rolls back serially off the LIFO stack,
-        // so it needs exactly one compensation wake -- never per-branch fan-out, even
-        // if Current_Step__c still holds a stale comma-separated parallel branch list
-        // from the forward phase. Otherwise one compensation signal would publish a
-        // RUN_STEP per stale branch and pile up duplicate rollback workers.
-        Boolean isCompensatingInst =
-          inst.Status__c == 'Compensating' ||
-          inst.Status__c == 'Cancelling';
-        // Parallel (forward) instances must wake each branch by name; collect them
-        // for a single bulk resume rather than a per-instance query each (which would
-        // exhaust the SOQL limit when many parallel workflows are signaled at once).
-        if (
-          !isCompensatingInst &&
-          String.isNotBlank(inst.Current_Step__c) &&
-          inst.Current_Step__c.contains(',')
-        ) {
-          parallelInstances.add(inst);
-          continue;
-        }
-        if (!enqueuedInstanceIds.contains(inst.Id)) {
-          enqueuedInstanceIds.add(inst.Id);
-          instanceIdsToEnqueue.add(inst.Id);
-        }
-      }
-      enqueueOrchestrators(instanceIdsToEnqueue);
-      enqueueResumeBulk(parallelInstances);
+      dispatchWakeEnqueues(sel.activeInstances);
     } catch (Exception e) {
       if (sp != null) {
         Database.rollback(sp);
       }
-      clearEnqueueGuards(activeInstById.keySet());
+      clearEnqueueGuards(part.activeInstById.keySet());
       throw e;
     }
+  }
+
+  /**
+   * Selects, once per instance, those that received at least one fresh signal
+   * this call (unkeyed always qualifies; keyed only if the insert won the race)
+   * and applies the per-instance wake decision.
+   * @param part the forward-signal partition
+   * @param gatedNonReadyParents parents still gated behind a non-ready join
+   * @return the instances to flip to Running plus the instances to enqueue
+   */
+  private static WakeSelection selectInstancesToWake(
+    ForwardSignalPartition part,
+    Set<Id> gatedNonReadyParents
+  ) {
+    WakeSelection sel = new WakeSelection();
+    // Deduplicate: only process each active instance once.
+    Set<Id> processedActiveIds = new Set<Id>();
+    for (Workflow_Instance__c inst : part.activeInstById.values()) {
+      if (processedActiveIds.contains(inst.Id)) {
+        continue;
+      }
+      Boolean freshSignalLanded =
+        part.instancesWithUnkeyedSignal.contains(inst.Id) ||
+        part.instancesWithFreshKeyedSignal.contains(inst.Id);
+      if (!freshSignalLanded) {
+        continue;
+      }
+      processedActiveIds.add(inst.Id);
+      applyWakeDecision(inst, gatedNonReadyParents, sel);
+    }
+    return sel;
+  }
+
+  /**
+   * Applies the wake decision for one fresh-signalled instance. A Suspended
+   * instance resumes to Running (its wait deadline disarmed) unless it is
+   * concurrency-parked without a slot or gated behind a non-ready join, in which
+   * case it is left alone and not enqueued. Compensating/Cancelling and Running
+   * instances are enqueued (unless gated) without a status flip; a Paused
+   * instance keeps its status and observes the held signal on resume.
+   * @param inst the instance to decide on (status/Sleep_Until mutated on wake)
+   * @param gatedNonReadyParents parents still gated behind a non-ready join
+   * @param sel the wake selection to append to (mutated)
+   */
+  private static void applyWakeDecision(
+    Workflow_Instance__c inst,
+    Set<Id> gatedNonReadyParents,
+    WakeSelection sel
+  ) {
+    if (inst.Status__c == 'Suspended') {
+      // A concurrency-parked row has not won a slot. Waking it to Running would
+      // leave a Running instance holding no slot (violating the no-running-without-
+      // slot invariant) and hide it from the parked count. Like Paused, leave it
+      // alone: the signal is already captured (Received) and is observed once
+      // admission drives the step. Skip the wake and the enqueue entirely.
+      if (
+        inst.Concurrency_Parked__c == true &&
+        inst.Concurrency_Slot_Held__c != true
+      ) {
+        return;
+      }
+      if (gatedNonReadyParents.contains(inst.Id)) {
+        return;
+      }
+      inst.Status__c = 'Running';
+      // Disarm the wait deadline (issue #35): a signal-wake ends the current
+      // wait, so any armed Sleep_Until__c (timed-wait timeout, or a plain
+      // sleeper's deadline) must be cleared or the watchdog would later
+      // re-select this instance and mis-route/double-wake it. The resumed
+      // step re-arms its own deadline if it suspends or sleeps again.
+      inst.Sleep_Until__c = null;
+      sel.instancesToUpdate.add(inst);
+    }
+    if (!gatedNonReadyParents.contains(inst.Id)) {
+      sel.activeInstances.add(inst);
+    }
+  }
+
+  /**
+   * Enqueues the woken instances: a Compensating/Cancelling instance rolls back
+   * serially and gets exactly one compensation wake (never per-branch fan-out
+   * off a stale parallel step list); a forward parallel instance is collected
+   * for a single bulk resume (one step-execution query for all, not one per
+   * instance); everything else is enqueued once via the orchestrator.
+   * @param activeInstances the instances to enqueue this call
+   */
+  private static void dispatchWakeEnqueues(
+    List<Workflow_Instance__c> activeInstances
+  ) {
+    List<Id> instanceIdsToEnqueue = new List<Id>();
+    List<Workflow_Instance__c> parallelInstances = new List<Workflow_Instance__c>();
+    for (Workflow_Instance__c inst : activeInstances) {
+      Boolean isCompensatingInst =
+        inst.Status__c == 'Compensating' ||
+        inst.Status__c == 'Cancelling';
+      if (
+        !isCompensatingInst &&
+        String.isNotBlank(inst.Current_Step__c) &&
+        inst.Current_Step__c.contains(',')
+      ) {
+        parallelInstances.add(inst);
+        continue;
+      }
+      if (!enqueuedInstanceIds.contains(inst.Id)) {
+        enqueuedInstanceIds.add(inst.Id);
+        instanceIdsToEnqueue.add(inst.Id);
+      }
+    }
+    enqueueOrchestrators(instanceIdsToEnqueue);
+    enqueueResumeBulk(parallelInstances);
   }
 
   /**
