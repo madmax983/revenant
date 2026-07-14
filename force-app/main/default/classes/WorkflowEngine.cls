@@ -5797,18 +5797,9 @@ public inherited sharing class WorkflowEngine {
       for (
         Integer attempt = 0; attempt <= PARALLEL_CLAIM_PAGE_RETRIES; attempt++
       ) {
-        // Fetch recent candidates newest-first.
-        List<Workflow_Signal__c> candidates = [
-          SELECT Id, Signal_Name__c, Payload__c, CreatedDate
-          FROM Workflow_Signal__c
-          WHERE
-            Workflow_Instance__c = :instanceId
-            AND Status__c = 'Received'
-            AND Signal_Name__c = :signalName
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate DESC, Id DESC
-          LIMIT 10
-        ];
+        List<Workflow_Signal__c> candidates = queryLatestSignalCandidates(
+          signalName
+        );
         if (candidates.isEmpty()) {
           return null; // no matching Received rows remain
         }
@@ -5832,29 +5823,10 @@ public inherited sharing class WorkflowEngine {
         // the newest row, fall back to the next-newest still-Received row instead
         // of reporting absence while a matching signal is still available.
         for (Workflow_Signal__c cand : candidates) {
-          Id targetId = cand.Id;
-          List<Workflow_Signal__c> locked = [
-            SELECT Id
-            FROM Workflow_Signal__c
-            WHERE Id = :targetId AND Status__c = 'Received'
-            WITH SYSTEM_MODE
-            FOR UPDATE
-          ];
-          if (locked.isEmpty()) {
-            continue; // lost the race on this row; try the next-newest
+          StepContext.Signal claimed = tryClaimOneLatestSignal(cand);
+          if (claimed != null) {
+            return claimed;
           }
-          locked[0].Status__c = 'Processing';
-          Database.update(locked[0], true, AccessLevel.SYSTEM_MODE);
-          claimBudget -= 1;
-          claimStatementBudget -= 1;
-          // claimed = true: this branch now exclusively owns the row.
-          return new StepContext.Signal(
-              cand.Id,
-              cand.Signal_Name__c,
-              resolvePayload(cand.Payload__c)
-            )
-            .withCreatedDate(cand.CreatedDate)
-            .asClaimed();
         }
         // Every candidate in this page was claimed by a sibling between query and
         // lock; those rows are now Processing and drop out of the next query, so
@@ -5864,6 +5836,79 @@ public inherited sharing class WorkflowEngine {
       // visible matches). Mark capped so consume skips same-name cleanup.
       capped = true;
       return null;
+    }
+
+    /**
+     * @description Fetches the newest-first candidate page of Received signals
+     * of the given name for this instance, limited to 10 rows. Kept as a
+     * helper so the per-attempt SOQL is not lexically inside
+     * `getLatestSignal`'s retry loop. The per-attempt query is intentional and
+     * bounded: the caller retries at most `PARALLEL_CLAIM_PAGE_RETRIES + 1`
+     * times and returns immediately on the first successful claim.
+     * @param signalName the signal name to page (assumed non-blank; caller
+     *   short-circuits on blank)
+     * @return up to 10 candidate rows in newest-first order
+     */
+    private List<Workflow_Signal__c> queryLatestSignalCandidates(
+      String signalName
+    ) {
+      return [
+        SELECT Id, Signal_Name__c, Payload__c, CreatedDate
+        FROM Workflow_Signal__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Status__c = 'Received'
+          AND Signal_Name__c = :signalName
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC, Id DESC
+        LIMIT 10
+      ];
+    }
+
+    /**
+     * @description Attempts to atomically claim a single candidate signal
+     * (Received to Processing) by FOR UPDATE-locking its id and, if it
+     * survives, marking it Processing and issuing a single-row DML update.
+     * The FOR UPDATE query and the follow-on update run inside this one
+     * helper call so they stay in the same transaction context and remain
+     * atomic. Debits the caller's claim row and statement budgets by one on
+     * success.
+     *
+     * The per-candidate SOQL FOR UPDATE + DML update is intentional and
+     * bounded: the caller iterates a page of at most 10 candidates and
+     * returns immediately on the first successful claim, so this helper is
+     * called at most 10 times per retry attempt.
+     * @param cand the candidate row this branch attempts to claim
+     * @return the claimed `StepContext.Signal` on success, or null when a
+     *   sibling won the race so the caller should fall back to the next
+     *   candidate
+     */
+    private StepContext.Signal tryClaimOneLatestSignal(
+      Workflow_Signal__c cand
+    ) {
+      Id targetId = cand.Id;
+      List<Workflow_Signal__c> locked = [
+        SELECT Id
+        FROM Workflow_Signal__c
+        WHERE Id = :targetId AND Status__c = 'Received'
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ];
+      if (locked.isEmpty()) {
+        return null; // lost the race on this row; try the next-newest
+      }
+      locked[0].Status__c = 'Processing';
+      Database.update(locked[0], true, AccessLevel.SYSTEM_MODE);
+      claimBudget -= 1;
+      claimStatementBudget -= 1;
+      // claimed = true: this branch now exclusively owns the row.
+      return new StepContext.Signal(
+          cand.Id,
+          cand.Signal_Name__c,
+          resolvePayload(cand.Payload__c)
+        )
+        .withCreatedDate(cand.CreatedDate)
+        .asClaimed();
     }
   }
 
