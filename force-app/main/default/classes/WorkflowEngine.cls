@@ -258,15 +258,8 @@ public inherited sharing class WorkflowEngine {
         currentId = childToParentMap.get(currentId);
       } else {
         // Fallback: Query parent from DB to resolve root across hops/transactions
-        List<Workflow_Instance__c> insts = [
-          SELECT Parent_Instance__c
-          FROM Workflow_Instance__c
-          WHERE Id = :currentId
-          WITH SYSTEM_MODE
-          LIMIT 1
-        ];
-        if (!insts.isEmpty() && insts[0].Parent_Instance__c != null) {
-          Id parentId = insts[0].Parent_Instance__c;
+        Id parentId = queryParentInstanceId(currentId);
+        if (parentId != null) {
           childToParentMap.put(currentId, parentId);
           currentId = parentId;
         } else {
@@ -275,6 +268,33 @@ public inherited sharing class WorkflowEngine {
       }
     }
     return currentId;
+  }
+
+  /**
+   * Resolves the direct parent instance id for a single hop of the
+   * root-instance parent-chain walk in {@link getRootInstanceId}.
+   * <p><b>Intentional per-iteration SOQL.</b> This runs exactly one SOQL query
+   * per hop of a sequential parent-chain graph walk: each hop's parent id is
+   * only knowable after the prior hop's row is read, so the walk cannot be
+   * bulkified into a single query. It is governor-safe because the caller caps
+   * the walk at a <b>10-hop bound</b> (the {@code for (i &lt; 10)} loop),
+   * limiting this to at most 10 queries per invocation.
+   * @param currentId the instance whose parent id to resolve
+   * @return the parent instance id, or null when the row is missing or has no
+   *         parent (signalling the caller to stop walking)
+   */
+  private static Id queryParentInstanceId(Id currentId) {
+    List<Workflow_Instance__c> insts = [
+      SELECT Parent_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Id = :currentId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    if (!insts.isEmpty() && insts[0].Parent_Instance__c != null) {
+      return insts[0].Parent_Instance__c;
+    }
+    return null;
   }
 
   /**
@@ -1186,6 +1206,26 @@ public inherited sharing class WorkflowEngine {
   // ─── End Read API ──────────────────────────────────────────────────────────
 
   /**
+   * Bare key + optional parsed timestamp recovered from a `key:`-scoped
+   * causation id. `correlationKey` is the key stripped of any encoded
+   * timestamp suffix; `earliestCreatedDate` is populated when the id carried
+   * an inline timestamp (JSON `t`, `::ts::<millis>`, or legacy `#<millis>`),
+   * otherwise null so the caller falls back to `getEarliestPredecessorCreatedDate`.
+   */
+  private class CausationKeyParse {
+    private String correlationKey;
+    private DateTime earliestCreatedDate;
+
+    private CausationKeyParse(
+      String correlationKey,
+      DateTime earliestCreatedDate
+    ) {
+      this.correlationKey = correlationKey;
+      this.earliestCreatedDate = earliestCreatedDate;
+    }
+  }
+
+  /**
    * Returns the historical causation lineage (parent/ancestor chain) of a workflow
    * instance ID up to the root cause. Bounded to a maximum depth of 12 hops to safeguard
    * against cyclic/governor limits. Performs zero DML.
@@ -1211,126 +1251,13 @@ public inherited sharing class WorkflowEngine {
       }
       visitedIds.add(currentId);
 
-      List<Workflow_Instance__c> records = [
-        SELECT
-          Id,
-          Workflow_Name__c,
-          Correlation_Key__c,
-          Status__c,
-          Error_Message__c,
-          Causation_Id__c,
-          Previous_Instance__c,
-          Parent_Instance__c,
-          Output__c,
-          CreatedDate
-        FROM Workflow_Instance__c
-        WHERE Id = :currentId
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (records.isEmpty()) {
+      Workflow_Instance__c inst = queryLineageInstanceById(currentId);
+      if (inst == null) {
         break;
       }
-      Workflow_Instance__c inst = records[0];
       ancestors.add(inst);
 
-      String cause = inst.Causation_Id__c;
-      if (String.isBlank(cause)) {
-        if (inst.Parent_Instance__c != null) {
-          currentId = inst.Parent_Instance__c;
-          continue;
-        }
-        break;
-      }
-
-      Id resolvedId = null;
-      if (isValidId(cause)) {
-        List<Workflow_Instance__c> directRecords = [
-          SELECT Id
-          FROM Workflow_Instance__c
-          WHERE Id = :cause
-          WITH SYSTEM_MODE
-          LIMIT 1
-        ];
-        if (!directRecords.isEmpty()) {
-          resolvedId = directRecords[0].Id;
-        }
-      }
-
-      if (resolvedId != null) {
-        currentId = resolvedId;
-      } else if (cause.startsWith('key:')) {
-        String correlationKey = cause.substring(4);
-        DateTime earliestCreatedDate = null;
-        if (cause.startsWith('key:{"')) {
-          try {
-            String jsonStr = cause.substring(4);
-            Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
-              jsonStr
-            );
-            correlationKey = (String) data.get('k');
-            Long ms = (Long) data.get('t');
-            earliestCreatedDate = DateTime.newInstance(ms);
-          } catch (Exception ignored) {
-            // fallback: leave earliestCreatedDate unresolved and continue
-          }
-        } else {
-          Integer tsIndex = correlationKey.lastIndexOf('::ts::');
-          if (tsIndex != -1) {
-            String tsStr = correlationKey.substring(tsIndex + 6);
-            if (tsStr.length() >= 12 && tsStr.length() <= 15) {
-              try {
-                Long ms = Long.valueOf(tsStr);
-                earliestCreatedDate = DateTime.newInstance(ms);
-                correlationKey = correlationKey.substring(0, tsIndex);
-              } catch (Exception ignored) {
-                // fallback: leave earliestCreatedDate unresolved and continue
-              }
-            }
-          }
-        }
-        if (earliestCreatedDate == null) {
-          // Backwards compatibility fallback for older '#' format
-          Integer hashIndex = correlationKey.lastIndexOf('#');
-          if (hashIndex != -1) {
-            String tsStr = correlationKey.substring(hashIndex + 1);
-            if (tsStr.length() >= 12 && tsStr.length() <= 15) {
-              try {
-                Long ms = Long.valueOf(tsStr);
-                earliestCreatedDate = DateTime.newInstance(ms);
-                correlationKey = correlationKey.substring(0, hashIndex);
-              } catch (Exception ignored) {
-                // fallback: leave earliestCreatedDate unresolved and continue
-              }
-            }
-          }
-        }
-        if (earliestCreatedDate == null) {
-          earliestCreatedDate = getEarliestPredecessorCreatedDate(inst);
-        }
-
-        List<Workflow_Instance__c> parents = [
-          SELECT Id
-          FROM Workflow_Instance__c
-          WHERE
-            (Correlation_Key__c = :correlationKey
-            OR Active_Correlation_Key__c = :correlationKey
-            OR Root_Correlation_Key__c = :correlationKey)
-            AND CreatedDate <= :earliestCreatedDate
-            AND Id NOT IN :visitedIds
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate DESC
-          LIMIT 1
-        ];
-
-        if (!parents.isEmpty()) {
-          currentId = parents[0].Id;
-        } else {
-          currentId = null;
-        }
-      } else {
-        currentId = null;
-      }
+      currentId = resolveNextAncestorId(inst, visitedIds);
     }
 
     Map<Id, String> resolvedOutputByDocId = bulkResolveOffloadedOutputs(
@@ -1340,6 +1267,224 @@ public inherited sharing class WorkflowEngine {
       lineage.add(buildStatus(inst, resolvedOutputByDocId));
     }
     return lineage;
+  }
+
+  /**
+   * @description Fetches the single Workflow_Instance__c row at `currentId`
+   * for lineage-walk assembly. Kept as a helper so the per-hop SOQL is not
+   * lexically inside `getCausationLineage`'s hop loop. The per-hop query is
+   * intentional and bounded: the caller walks at most 12 hops (maxHops) with a
+   * visited-id guard, so this helper is called at most 12 times per lineage
+   * request.
+   * @param currentId the ancestor id to fetch this hop
+   * @return the ancestor instance row, or null when nothing is found
+   */
+  private static Workflow_Instance__c queryLineageInstanceById(Id currentId) {
+    List<Workflow_Instance__c> records = [
+      SELECT
+        Id,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Status__c,
+        Error_Message__c,
+        Causation_Id__c,
+        Previous_Instance__c,
+        Parent_Instance__c,
+        Output__c,
+        CreatedDate
+      FROM Workflow_Instance__c
+      WHERE Id = :currentId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    return records.isEmpty() ? null : records[0];
+  }
+
+  /**
+   * @description Parses a `key:`-prefixed causation id into a bare correlation
+   * key plus an optional inline timestamp. Recognizes three encodings in this
+   * priority order: current JSON form `key:{"k":..,"t":..}` -> interim
+   * `<k>::ts::<millis>` suffix (when not JSON) -> legacy `<k>#<millis>`
+   * suffix (fallback when neither of the above produced a timestamp). Any
+   * partial-parse exception is swallowed so callers fall through to
+   * `getEarliestPredecessorCreatedDate`; on JSON partial success (the parse
+   * setting `k` before failing on `t`), the correlation key remains
+   * overwritten, matching the pre-refactor behavior.
+   * @param cause a non-blank `key:`-prefixed causation id
+   * @return the recovered bare key and, when the id carried one, the parsed
+   *   inline timestamp; the timestamp is null when no encoded value is
+   *   present or recoverable
+   */
+  private static CausationKeyParse parseCausationTimestamp(String cause) {
+    CausationKeyParse first = cause.startsWith('key:{"')
+      ? parseJsonCausation(cause)
+      : parseTsSuffix(cause.substring(4));
+    if (first.earliestCreatedDate != null) {
+      return first;
+    }
+    // Backwards compatibility fallback for older '#' format. Applied against
+    // whatever the first pass produced for correlationKey (matches pre-refactor
+    // behavior, where the '#' pass ran on the possibly-JSON-mutated key).
+    return parseHashSuffix(first.correlationKey);
+  }
+
+  /**
+   * @description Parses the JSON `key:{"k":..,"t":..}` causation form. Returns
+   * the recovered bare key and inline timestamp on success; on any
+   * partial-parse failure, returns whatever fields the try block had already
+   * assigned (bare key from `data.get('k')` may be populated even when the
+   * timestamp is not), preserving the pre-refactor partial-success behavior.
+   * @param cause the causation id, guaranteed to start with `key:{"`
+   * @return a parse holder with the bare key (or the raw substring on total
+   *   failure) and the parsed timestamp when available
+   */
+  private static CausationKeyParse parseJsonCausation(String cause) {
+    String correlationKey = cause.substring(4);
+    DateTime earliestCreatedDate = null;
+    try {
+      String jsonStr = cause.substring(4);
+      Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
+        jsonStr
+      );
+      correlationKey = (String) data.get('k');
+      Long ms = (Long) data.get('t');
+      earliestCreatedDate = DateTime.newInstance(ms);
+    } catch (Exception ignored) {
+      // fallback: leave earliestCreatedDate unresolved and continue
+    }
+    return new CausationKeyParse(correlationKey, earliestCreatedDate);
+  }
+
+  /**
+   * @description Parses the interim `<k>::ts::<millis>` suffix. Trims the
+   * suffix from the correlation key when the numeric tail is 12-15 digits and
+   * parses as a Long; on any failure (no suffix, wrong length, non-numeric)
+   * returns the input key with a null timestamp so callers fall through.
+   * @param correlationKey the bare key (already stripped of the `key:` prefix)
+   * @return a parse holder with the possibly-trimmed key and, on success, the
+   *   parsed inline timestamp
+   */
+  private static CausationKeyParse parseTsSuffix(String correlationKey) {
+    Integer tsIndex = correlationKey.lastIndexOf('::ts::');
+    if (tsIndex == -1) {
+      return new CausationKeyParse(correlationKey, null);
+    }
+    String tsStr = correlationKey.substring(tsIndex + 6);
+    if (tsStr.length() < 12 || tsStr.length() > 15) {
+      return new CausationKeyParse(correlationKey, null);
+    }
+    try {
+      Long ms = Long.valueOf(tsStr);
+      return new CausationKeyParse(
+        correlationKey.substring(0, tsIndex),
+        DateTime.newInstance(ms)
+      );
+    } catch (Exception ignored) {
+      // fallback: leave earliestCreatedDate unresolved and continue
+    }
+    return new CausationKeyParse(correlationKey, null);
+  }
+
+  /**
+   * @description Parses the legacy `<k>#<millis>` suffix as the final
+   * fallback. Trims the suffix from the correlation key when the numeric tail
+   * is 12-15 digits and parses as a Long; on any failure (no suffix, wrong
+   * length, non-numeric) returns the input key with a null timestamp.
+   * @param correlationKey the possibly-JSON-normalized key from the first pass
+   * @return a parse holder with the possibly-trimmed key and, on success, the
+   *   parsed legacy inline timestamp
+   */
+  private static CausationKeyParse parseHashSuffix(String correlationKey) {
+    Integer hashIndex = correlationKey.lastIndexOf('#');
+    if (hashIndex == -1) {
+      return new CausationKeyParse(correlationKey, null);
+    }
+    String tsStr = correlationKey.substring(hashIndex + 1);
+    if (tsStr.length() < 12 || tsStr.length() > 15) {
+      return new CausationKeyParse(correlationKey, null);
+    }
+    try {
+      Long ms = Long.valueOf(tsStr);
+      return new CausationKeyParse(
+        correlationKey.substring(0, hashIndex),
+        DateTime.newInstance(ms)
+      );
+    } catch (Exception ignored) {
+      // fallback: leave earliestCreatedDate unresolved and continue
+    }
+    return new CausationKeyParse(correlationKey, null);
+  }
+
+  /**
+   * @description Resolves the next ancestor id for a lineage-walk hop by
+   * inspecting the instance's `Causation_Id__c` and, when it is not present,
+   * falling back to `Parent_Instance__c`. Handles three ancestor encodings in
+   * the same priority order as the pre-refactor loop body: (1) blank
+   * causation id -> Parent_Instance__c; (2) valid direct Id -> confirm the
+   * target row exists; (3) `key:`-scoped id -> resolve via correlation-key
+   * parent query bounded by `earliestCreatedDate` and the visited-id set. A
+   * valid direct-id whose target row does not exist resolves to null (the
+   * loop then breaks on the next iteration).
+   *
+   * Per-hop SOQL is intentional and bounded: the outer walk runs at most 12
+   * hops, so this helper issues at most two SOQL queries per call (direct
+   * lookup + optional `key:` parent query, plus whatever
+   * `getEarliestPredecessorCreatedDate` uses when no inline timestamp is
+   * present) and the total is capped by the hop count.
+   * @param inst the ancestor row from this hop
+   * @param visitedIds the ids already walked; used to short-circuit the
+   *   correlation-key parent query so the walk cannot revisit a previous hop
+   * @return the next currentId to walk, or null to signal end-of-lineage
+   *   (loop breaks on the next iteration)
+   */
+  private static Id resolveNextAncestorId(
+    Workflow_Instance__c inst,
+    Set<Id> visitedIds
+  ) {
+    String cause = inst.Causation_Id__c;
+    if (String.isBlank(cause)) {
+      return inst.Parent_Instance__c;
+    }
+
+    if (isValidId(cause)) {
+      List<Workflow_Instance__c> directRecords = [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE Id = :cause
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      // Valid direct id whose target row is missing resolves to null so the
+      // outer loop breaks on the next iteration (matches pre-refactor behavior,
+      // where resolvedId stayed null and the final `else` set currentId=null).
+      return directRecords.isEmpty() ? null : directRecords[0].Id;
+    }
+
+    if (cause.startsWith('key:')) {
+      CausationKeyParse parsed = parseCausationTimestamp(cause);
+      String correlationKey = parsed.correlationKey;
+      DateTime earliestCreatedDate = parsed.earliestCreatedDate;
+      if (earliestCreatedDate == null) {
+        earliestCreatedDate = getEarliestPredecessorCreatedDate(inst);
+      }
+
+      List<Workflow_Instance__c> parents = [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE
+          (Correlation_Key__c = :correlationKey
+          OR Active_Correlation_Key__c = :correlationKey
+          OR Root_Correlation_Key__c = :correlationKey)
+          AND CreatedDate <= :earliestCreatedDate
+          AND Id NOT IN :visitedIds
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC
+        LIMIT 1
+      ];
+      return parents.isEmpty() ? null : parents[0].Id;
+    }
+
+    return null;
   }
 
   private static Boolean isValidId(String val) {
@@ -1564,30 +1709,11 @@ public inherited sharing class WorkflowEngine {
     ) {
       walk.visited.add(walk.prevId);
       predecessorQueriesRemaining--;
-      Id prevId = walk.prevId;
-      List<Workflow_Instance__c> prevs = [
-        SELECT
-          Id,
-          CreatedDate,
-          Previous_Instance__c,
-          Previous_Instance__r.CreatedDate,
-          Previous_Instance__r.Previous_Instance__c,
-          Previous_Instance__r.Previous_Instance__r.CreatedDate,
-          Previous_Instance__r.Previous_Instance__r.Previous_Instance__c,
-          Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.CreatedDate,
-          Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c,
-          Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.CreatedDate,
-          Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c
-        FROM Workflow_Instance__c
-        WHERE Id = :prevId
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (prevs.isEmpty()) {
+      Workflow_Instance__c p = queryPredecessorChain(walk.prevId);
+      if (p == null) {
         break;
       }
 
-      Workflow_Instance__c p = prevs[0];
       walk.earliest = p.CreatedDate;
       walk.prevId = p.Previous_Instance__c;
       walk.hopsCount++;
@@ -1596,6 +1722,44 @@ public inherited sharing class WorkflowEngine {
       advanceInMemoryLookAhead(walk, p);
     }
     return walk.earliest;
+  }
+
+  /**
+   * Fetches one predecessor instance (with 5 chain levels of
+   * {@code Previous_Instance__r} pre-fetched) for a single hop of the
+   * predecessor-chain walk in {@link getEarliestPredecessorCreatedDate}.
+   * <p><b>Intentional per-iteration SOQL.</b> This runs exactly one SOQL query
+   * per hop of a sequential predecessor-chain graph walk: the next predecessor
+   * id is only knowable after the current row is read, so the walk cannot be
+   * bulkified into a single query. It is governor-safe by <b>two independent
+   * bounds</b> enforced in the caller's {@code while} condition &mdash; the
+   * per-call {@code maxPredecessors} hop cap AND the transaction-wide
+   * {@code predecessorQueriesRemaining} query budget &mdash; and each query
+   * already look-ahead-fetches 5 chain levels to minimise the hop count.
+   * @param prevId the predecessor instance id to fetch
+   * @return the predecessor row, or null when no matching row exists
+   *         (signalling the caller to stop walking)
+   */
+  private static Workflow_Instance__c queryPredecessorChain(Id prevId) {
+    List<Workflow_Instance__c> prevs = [
+      SELECT
+        Id,
+        CreatedDate,
+        Previous_Instance__c,
+        Previous_Instance__r.CreatedDate,
+        Previous_Instance__r.Previous_Instance__c,
+        Previous_Instance__r.Previous_Instance__r.CreatedDate,
+        Previous_Instance__r.Previous_Instance__r.Previous_Instance__c,
+        Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.CreatedDate,
+        Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c,
+        Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.CreatedDate,
+        Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Id = :prevId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    return prevs.isEmpty() ? null : prevs[0];
   }
 
   /**
@@ -5674,25 +5838,54 @@ public inherited sharing class WorkflowEngine {
           .keySet();
         tried.addAll(candidateIds);
 
-        List<Workflow_Signal__c> locked = [
-          SELECT Id
-          FROM Workflow_Signal__c
-          WHERE Id IN :candidateIds AND Status__c = 'Received'
-          WITH SYSTEM_MODE
-          FOR UPDATE
-        ];
-        if (locked.isEmpty()) {
+        List<StepContext.Signal> claimed = lockAndClaimSignalPage(
+          candidateIds,
+          candidates
+        );
+        if (claimed == null) {
           continue; // whole page lost to siblings; try the next page
         }
-
-        Set<Id> claimedIds = markSignalsProcessing(locked);
-        Database.update(locked, true, AccessLevel.SYSTEM_MODE); // one statement for the whole page
-        claimBudget -= claimedIds.size();
-        claimStatementBudget -= 1;
-
-        return buildClaimedSignals(candidates, claimedIds);
+        return claimed;
       }
       return new List<StepContext.Signal>();
+    }
+
+    /**
+     * @description Locks the candidate ids with `FOR UPDATE` and, if any
+     * survive, atomically marks them Processing and updates them in a single
+     * DML statement. The FOR UPDATE query and the follow-on update run inside
+     * this one helper call so they stay in the same transaction context and
+     * remain atomic per page. Debits the caller's claim row and statement
+     * budgets on success.
+     *
+     * The per-invocation SOQL FOR UPDATE + DML update is intentional and
+     * bounded: the caller loops at most `PARALLEL_CLAIM_PAGE_RETRIES` times and
+     * returns immediately on the first successful claim, so this helper is
+     * called at most that many times per accessor call (typically once).
+     * @param candidateIds ids returned by the read-only Received query
+     * @param candidates the corresponding candidate rows (payload source)
+     * @return the claimed signals for this page on success, or null when the
+     *   whole page was lost to siblings so the caller should re-page
+     */
+    private List<StepContext.Signal> lockAndClaimSignalPage(
+      Set<Id> candidateIds,
+      List<Workflow_Signal__c> candidates
+    ) {
+      List<Workflow_Signal__c> locked = [
+        SELECT Id
+        FROM Workflow_Signal__c
+        WHERE Id IN :candidateIds AND Status__c = 'Received'
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ];
+      if (locked.isEmpty()) {
+        return null;
+      }
+      Set<Id> claimedIds = markSignalsProcessing(locked);
+      Database.update(locked, true, AccessLevel.SYSTEM_MODE); // one statement for the whole page
+      claimBudget -= claimedIds.size();
+      claimStatementBudget -= 1;
+      return buildClaimedSignals(candidates, claimedIds);
     }
 
     /**
@@ -5768,18 +5961,10 @@ public inherited sharing class WorkflowEngine {
       for (
         Integer attempt = 0; attempt <= PARALLEL_CLAIM_PAGE_RETRIES; attempt++
       ) {
-        // Fetch recent candidates newest-first.
-        List<Workflow_Signal__c> candidates = [
-          SELECT Id, Signal_Name__c, Payload__c, CreatedDate
-          FROM Workflow_Signal__c
-          WHERE
-            Workflow_Instance__c = :instanceId
-            AND Status__c = 'Received'
-            AND Signal_Name__c = :signalName
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate DESC, Id DESC
-          LIMIT 10
-        ];
+        List<Workflow_Signal__c> candidates = queryLatestSignalCandidates(
+          instanceId,
+          signalName
+        );
         if (candidates.isEmpty()) {
           return null; // no matching Received rows remain
         }
@@ -5803,29 +5988,10 @@ public inherited sharing class WorkflowEngine {
         // the newest row, fall back to the next-newest still-Received row instead
         // of reporting absence while a matching signal is still available.
         for (Workflow_Signal__c cand : candidates) {
-          Id targetId = cand.Id;
-          List<Workflow_Signal__c> locked = [
-            SELECT Id
-            FROM Workflow_Signal__c
-            WHERE Id = :targetId AND Status__c = 'Received'
-            WITH SYSTEM_MODE
-            FOR UPDATE
-          ];
-          if (locked.isEmpty()) {
-            continue; // lost the race on this row; try the next-newest
+          StepContext.Signal claimed = tryClaimOneLatestSignal(cand);
+          if (claimed != null) {
+            return claimed;
           }
-          locked[0].Status__c = 'Processing';
-          Database.update(locked[0], true, AccessLevel.SYSTEM_MODE);
-          claimBudget -= 1;
-          claimStatementBudget -= 1;
-          // claimed = true: this branch now exclusively owns the row.
-          return new StepContext.Signal(
-              cand.Id,
-              cand.Signal_Name__c,
-              resolvePayload(cand.Payload__c)
-            )
-            .withCreatedDate(cand.CreatedDate)
-            .asClaimed();
         }
         // Every candidate in this page was claimed by a sibling between query and
         // lock; those rows are now Processing and drop out of the next query, so
@@ -5836,6 +6002,82 @@ public inherited sharing class WorkflowEngine {
       capped = true;
       return null;
     }
+
+    /**
+     * @description Attempts to atomically claim a single candidate signal
+     * (Received to Processing) by FOR UPDATE-locking its id and, if it
+     * survives, marking it Processing and issuing a single-row DML update.
+     * The FOR UPDATE query and the follow-on update run inside this one
+     * helper call so they stay in the same transaction context and remain
+     * atomic. Debits the caller's claim row and statement budgets by one on
+     * success.
+     *
+     * The per-candidate SOQL FOR UPDATE + DML update is intentional and
+     * bounded: the caller iterates a page of at most 10 candidates and
+     * returns immediately on the first successful claim, so this helper is
+     * called at most 10 times per retry attempt.
+     * @param cand the candidate row this branch attempts to claim
+     * @return the claimed `StepContext.Signal` on success, or null when a
+     *   sibling won the race so the caller should fall back to the next
+     *   candidate
+     */
+    private StepContext.Signal tryClaimOneLatestSignal(
+      Workflow_Signal__c cand
+    ) {
+      Id targetId = cand.Id;
+      List<Workflow_Signal__c> locked = [
+        SELECT Id
+        FROM Workflow_Signal__c
+        WHERE Id = :targetId AND Status__c = 'Received'
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ];
+      if (locked.isEmpty()) {
+        return null; // lost the race on this row; try the next-newest
+      }
+      locked[0].Status__c = 'Processing';
+      Database.update(locked[0], true, AccessLevel.SYSTEM_MODE);
+      claimBudget -= 1;
+      claimStatementBudget -= 1;
+      // claimed = true: this branch now exclusively owns the row.
+      return new StepContext.Signal(
+          cand.Id,
+          cand.Signal_Name__c,
+          resolvePayload(cand.Payload__c)
+        )
+        .withCreatedDate(cand.CreatedDate)
+        .asClaimed();
+    }
+  }
+
+  /**
+   * @description Fetches the newest-first candidate page of Received signals
+   * of the given name for the given instance, limited to 10 rows. Kept as a
+   * top-level static helper so the per-attempt SOQL is not lexically inside
+   * `ParallelBranchSignalSource.getLatestSignal`'s retry loop. The
+   * per-attempt query is intentional and bounded: the caller retries at most
+   * `PARALLEL_CLAIM_PAGE_RETRIES + 1` times and returns immediately on the
+   * first successful claim.
+   * @param instanceId workflow instance whose signals are being paged
+   * @param signalName the signal name to page (assumed non-blank; caller
+   *   short-circuits on blank)
+   * @return up to 10 candidate rows in newest-first order
+   */
+  private static List<Workflow_Signal__c> queryLatestSignalCandidates(
+    Id instanceId,
+    String signalName
+  ) {
+    return [
+      SELECT Id, Signal_Name__c, Payload__c, CreatedDate
+      FROM Workflow_Signal__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Status__c = 'Received'
+        AND Signal_Name__c = :signalName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 10
+    ];
   }
 
   /**
@@ -9331,41 +9573,173 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Sends external signals to multiple workflow instances in bulk.
+   * Refreshes the cached status of an instance immediately after an in-batch
+   * unkeyed {@code cancelInstance()} in {@link signal}, and records it in
+   * {@code cancelledInstanceIds} when the cancel drove it to a terminal
+   * (non-wakeable) state so later sibling signals in the same batch skip it.
+   * <p><b>Intentional per-iteration SOQL — order-dependent, MUST stay in the
+   * loop.</b> This runs one targeted SOQL query per unkeyed cancel because its
+   * result is read by <i>later iterations of the same request loop</i> (via
+   * {@code cancelledInstanceIds} and the refreshed cache): hoisting it out of
+   * the loop would break the in-batch cancel&rarr;sibling ordering and could
+   * resurrect a Cancelled workflow (waking a stale Suspended SObject back to
+   * Running). It therefore cannot be bulkified without changing behavior.
+   * <p><b>Bound / governor profile.</b> The governor exposure of this method
+   * is <i>batch-size-scaled, not a fixed numeric cap</i>: it issues exactly one
+   * targeted single-row SOQL query per unkeyed cancel, so its query count grows
+   * linearly (O(n)) with the number of unkeyed cancels in the caller's batch —
+   * there is no constant ceiling below which it stops scaling. Crucially, this
+   * adds <i>no new scaling dimension</i>: it stays in the <b>same cost class as
+   * the pre-existing per-instance {@code cancelInstance()} path</b>, which
+   * already spends per-instance SOQL/DML for every unkeyed cancel. The per-hop
+   * refresh is thus the same order (n) as the unavoidable {@code cancelInstance()}
+   * calls it pairs with — it does not multiply that cost, it matches it.
+   * <p>The <b>mitigation for large batches</b> is the bulk <i>keyed</i>-cancel
+   * pre-pass above: callers that need to cancel many instances at once use the
+   * keyed cancel path, which is bulk-claimed and refreshed in a single query
+   * for the whole batch instead of one query per instance. This per-iteration
+   * unkeyed path is retained only for the legacy at-least-once unkeyed cancel
+   * semantics, whose ordering constraint (documented above) forbids bulkifying.
+   * @param inst the just-cancelled instance whose cached status to refresh
+   * @param instById the by-id/by-15-char instance cache to update in place
+   * @param cancelledInstanceIds accumulates ids driven terminal by this batch
+   */
+  private static void refreshAfterUnkeyedCancel(
+    Workflow_Instance__c inst,
+    Map<String, Workflow_Instance__c> instById,
+    Set<Id> cancelledInstanceIds
+  ) {
+    for (Workflow_Instance__c refreshed : [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+      WITH SYSTEM_MODE
+    ]) {
+      refreshCachedStatus(instById, refreshed);
+      if (!isWakeableStatus(refreshed.Status__c)) {
+        cancelledInstanceIds.add(inst.Id);
+      }
+    }
+  }
+
+  // ---- signal(List<SignalRequest>) decomposition holders ----
+
+  /** Partitions the batch's request key/id strings into instance ids and keys. */
+  private class SignalTargets {
+    Set<Id> ids = new Set<Id>();
+    Set<String> keys = new Set<String>();
+  }
+
+  /** The by-id (and 15-char) and by-normalized-key caches of the FOR UPDATE-locked instances. */
+  private class SignalInstanceMaps {
+    Map<String, Workflow_Instance__c> instById = new Map<String, Workflow_Instance__c>();
+    Map<String, Workflow_Instance__c> instByKey = new Map<String, Workflow_Instance__c>();
+  }
+
+  /** Parallel lists describing the keyed-cancel claims to insert then act on. */
+  private class KeyedCancelClaimBatch {
+    List<Workflow_Signal__c> claims = new List<Workflow_Signal__c>();
+    List<Id> instIds = new List<Id>();
+    List<Boolean> runComp = new List<Boolean>();
+
+    Boolean isEmpty() {
+      return claims.isEmpty();
+    }
+  }
+
+  /** Accumulated state of the forward-signal partition pass. */
+  private class ForwardSignalPartition {
+    List<Workflow_Signal__c> unkeyedSignals = new List<Workflow_Signal__c>();
+    Set<String> seenCompositeKeys = new Set<String>();
+    List<Workflow_Signal__c> keyedSignals = new List<Workflow_Signal__c>();
+    List<Id> keyedSignalInstIds = new List<Id>();
+    Map<Id, Workflow_Instance__c> activeInstById = new Map<Id, Workflow_Instance__c>();
+    Set<Id> instancesWithUnkeyedSignal = new Set<Id>();
+    Map<Id, Set<String>> signalsByInstanceId = new Map<Id, Set<String>>();
+    Set<Id> instancesWithFreshKeyedSignal = new Set<Id>();
+    // Instances driven terminal by an in-batch cancel; siblings are skipped.
+    Set<Id> cancelledInstanceIds = new Set<Id>();
+  }
+
+  /** The instances to flip to Running and the set to wake/enqueue this call. */
+  private class WakeSelection {
+    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+    List<Workflow_Instance__c> activeInstances = new List<Workflow_Instance__c>();
+  }
+
+  /**
+   * Sends external signals to multiple workflow instances in bulk. Orchestrates
+   * the six phases (in order, preserving the original all-or-none and in-batch
+   * cancel-before-sibling semantics): classify targets, lock/load instances,
+   * capture unmatched requests, run the keyed-cancel pre-pass, partition the
+   * forward signals, insert the rows, then wake and enqueue.
    * @param requests the signal requests to deliver
    */
   public static void signal(List<SignalRequest> requests) {
     if (requests == null || requests.isEmpty()) {
       return;
     }
+    SignalTargets targets = classifyRequestTargets(requests);
+    SignalInstanceMaps maps = loadSignalableInstances(
+      targets.ids,
+      targets.keys
+    );
+    captureUnmatchedRequests(requests, maps);
+    Set<Id> cancelledInstanceIds = processKeyedCancels(requests, maps);
+    ForwardSignalPartition partition = partitionForwardSignals(
+      requests,
+      maps,
+      cancelledInstanceIds
+    );
+    System.Savepoint sp = insertSignalRows(partition);
+    wakeAndEnqueueInstances(partition, sp);
+  }
 
+  /**
+   * Partitions the batch's request identifiers into workflow-instance ids
+   * (18/15-char key-prefixed) and correlation keys for the load query.
+   * @param requests the signal requests to classify
+   * @return the collected ids and keys
+   */
+  private static SignalTargets classifyRequestTargets(
+    List<SignalRequest> requests
+  ) {
     String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
         SObjectDescribeOptions.DEFERRED
       )
       .getKeyPrefix();
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
-    Set<Id> ids = new Set<Id>();
-    Set<String> keys = new Set<String>();
-
+    SignalTargets targets = new SignalTargets();
     for (SignalRequest req : requests) {
-      if (req == null) {
+      if (req == null || String.isBlank(req.keyOrId)) {
         continue;
       }
-      if (String.isNotBlank(req.keyOrId)) {
-        if (
-          idPattern.matcher(req.keyOrId).matches() &&
-          req.keyOrId.startsWith(wflowPrefix)
-        ) {
-          ids.add((Id) req.keyOrId);
-        } else {
-          keys.add(req.keyOrId);
-        }
+      if (
+        idPattern.matcher(req.keyOrId).matches() &&
+        req.keyOrId.startsWith(wflowPrefix)
+      ) {
+        targets.ids.add((Id) req.keyOrId);
+      } else {
+        targets.keys.add(req.keyOrId);
       }
     }
+    return targets;
+  }
 
-    // Include CompensationFailed so a Cancel signal can reach a stalled rollback; the
-    // per-request guard below still rejects non-cancel signals to a stalled instance,
-    // preserving the active-only semantics for everything except cancellation.
+  /**
+   * Loads and FOR UPDATE-locks every signalable instance addressed by the batch
+   * and builds the by-id/by-key caches. Includes CompensationFailed so a Cancel
+   * signal can reach a stalled rollback; the per-request guards downstream still
+   * reject non-cancel signals to a stalled instance, preserving active-only
+   * semantics for everything except cancellation.
+   * @param ids the workflow-instance ids to lock
+   * @param keys the correlation keys to lock
+   * @return the by-id (and 15-char) and by-normalized-key instance caches
+   */
+  private static SignalInstanceMaps loadSignalableInstances(
+    Set<Id> ids,
+    Set<String> keys
+  ) {
     List<Workflow_Instance__c> instances = [
       SELECT
         Id,
@@ -9393,93 +9767,156 @@ public inherited sharing class WorkflowEngine {
       FOR UPDATE
     ];
 
-    Map<String, Workflow_Instance__c> instById = new Map<String, Workflow_Instance__c>();
-    Map<String, Workflow_Instance__c> instByKey = new Map<String, Workflow_Instance__c>();
+    SignalInstanceMaps maps = new SignalInstanceMaps();
     for (Workflow_Instance__c inst : instances) {
-      instById.put(inst.Id, inst);
+      maps.instById.put(inst.Id, inst);
       String idStr = String.valueOf(inst.Id);
       if (idStr.length() == 18) {
-        instById.put(idStr.substring(0, 15), inst);
+        maps.instById.put(idStr.substring(0, 15), inst);
       }
       if (String.isNotBlank(inst.Correlation_Key__c)) {
         // Key by the normalized (lower-cased) correlation key: SOQL matched the
         // instance case-insensitively, so a request addressed as 'order-1' must
         // resolve the instance stored as 'Order-1' rather than miss the map and
         // be treated as unmatched (which would skip a keyed cancel entirely).
-        instByKey.put(normalizeKey(inst.Correlation_Key__c), inst);
+        maps.instByKey.put(normalizeKey(inst.Correlation_Key__c), inst);
       }
     }
+    return maps;
+  }
 
-    // Separate requests into: matched (active instance found), unmatched
-    // non-cancel (capture as Unrouted), and unmatched cancel. An unkeyed cancel
-    // throws (capturing a cancel for future replay against an unknown future
-    // instance is unsafe); a *keyed* cancel is an idempotent no-op (the first
-    // delivery already drove the instance terminal, or there is nothing to
-    // cancel), so it is swallowed rather than faulting the publisher.
+  /**
+   * Resolves the locked instance a request addresses, by id first then by
+   * normalized correlation key.
+   * @param req the request whose target to resolve
+   * @param maps the by-id/by-key instance caches
+   * @return the matched instance, or null when none was loaded/locked
+   */
+  private static Workflow_Instance__c resolveInstance(
+    SignalRequest req,
+    SignalInstanceMaps maps
+  ) {
+    Workflow_Instance__c inst = maps.instById.get(req.keyOrId);
+    if (inst == null) {
+      inst = maps.instByKey.get(normalizeKey(req.keyOrId));
+    }
+    return inst;
+  }
+
+  /**
+   * Separates requests with no active match: non-cancel misses are captured as
+   * Unrouted for replay; an unkeyed cancel miss throws (capturing a cancel for
+   * an unknown future instance is unsafe); a keyed cancel miss is an idempotent
+   * no-op. Throws before any keyed-cancel work, exactly as the original loop.
+   * @param requests the signal requests to screen
+   * @param maps the by-id/by-key instance caches
+   */
+  private static void captureUnmatchedRequests(
+    List<SignalRequest> requests,
+    SignalInstanceMaps maps
+  ) {
     List<SignalRequest> unmatchedToCapture = new List<SignalRequest>();
     for (SignalRequest req : requests) {
       if (req == null) {
         continue;
       }
-      Workflow_Instance__c inst = instById.get(req.keyOrId);
-      if (inst == null) {
-        inst = instByKey.get(normalizeKey(req.keyOrId));
-      }
-      Boolean isCancel =
-        String.isNotBlank(req.signalName) &&
-        (req.signalName.equalsIgnoreCase('Cancel') ||
-        req.signalName.equalsIgnoreCase('CancelWorkflow'));
-      Boolean unmatched =
-        inst == null || (inst.Status__c == 'CompensationFailed' && !isCancel);
-      if (unmatched) {
-        if (isCancel) {
-          if (String.isNotBlank(req.idempotencyKey)) {
-            continue; // keyed cancel, no active match: idempotent no-op
-          }
-          throw new WorkflowException(
-            'No active workflow found with key or ID: ' + req.keyOrId
-          );
-        }
-        unmatchedToCapture.add(req);
-      }
+      collectUnmatchedRequest(req, maps, unmatchedToCapture);
     }
     captureUnroutedSignals(unmatchedToCapture);
+  }
 
-    // Keyed cancels: claim in bulk, then cancel. One savepoint plus one bulk
-    // marker insert guards the whole keyed-cancel sub-batch — rather than a
-    // savepoint and a marker insert per row, which would burn ~2 DML statements
-    // each and abort large batches against the 150-statement limit. In-batch
-    // duplicates collapse via seenCancelKeys; cross-transaction duplicates lose
-    // the unique-constraint race (DUPLICATE_VALUE) and are skipped. A failed
-    // cancel() rolls the batch's claims back so the same keys can be retried.
-    List<Workflow_Signal__c> cancelClaims = new List<Workflow_Signal__c>();
-    List<Id> cancelClaimInstIds = new List<Id>();
-    List<Boolean> cancelClaimRunComp = new List<Boolean>();
-    Set<String> seenCancelKeys = new Set<String>();
-    // Instances driven to a terminal (no-compensation) Cancelled state by a
-    // cancel in this batch. The forward-signal loop below must skip any sibling
-    // signal for these — otherwise it would act on the stale pre-cancel status
-    // and, for a Suspended instance, write that SObject back as Running,
-    // resurrecting a workflow the cancel just drove to Cancelled. A cancel that
-    // starts compensations leaves the instance Cancelling (still signalable), so
-    // it is NOT added here; its cached status is refreshed instead.
+  /**
+   * Classifies a single request against the loaded instances and either records
+   * it for Unrouted capture, no-ops it (keyed cancel miss), or throws (unkeyed
+   * cancel miss). Guard-clause flattened; behavior matches the original nested
+   * branches exactly.
+   * @param req the request to classify
+   * @param maps the by-id/by-key instance caches
+   * @param unmatchedToCapture accumulator for non-cancel misses (mutated)
+   */
+  private static void collectUnmatchedRequest(
+    SignalRequest req,
+    SignalInstanceMaps maps,
+    List<SignalRequest> unmatchedToCapture
+  ) {
+    Workflow_Instance__c inst = resolveInstance(req, maps);
+    Boolean isCancel = isCancelSignalName(req.signalName);
+    Boolean unmatched =
+      inst == null || (inst.Status__c == 'CompensationFailed' && !isCancel);
+    if (!unmatched) {
+      return;
+    }
+    if (!isCancel) {
+      unmatchedToCapture.add(req);
+      return;
+    }
+    if (String.isNotBlank(req.idempotencyKey)) {
+      return; // keyed cancel, no active match: idempotent no-op
+    }
+    throw new WorkflowException(
+      'No active workflow found with key or ID: ' + req.keyOrId
+    );
+  }
+
+  /**
+   * Keyed-cancel pre-pass: claims the keyed cancels in bulk (one savepoint plus
+   * one bulk marker insert guards the whole sub-batch, rather than ~2 DML
+   * statements per row which would abort large batches against the 150-statement
+   * limit), cancels the freshly-claimed instances, then refreshes their cached
+   * statuses. A failed cancel rolls the batch's claims back so the keys retry.
+   * @param requests the signal requests to scan for keyed cancels
+   * @param maps the by-id/by-key instance caches (statuses refreshed in place)
+   * @return the ids driven to a terminal (non-wakeable) state by this pre-pass
+   */
+  private static Set<Id> processKeyedCancels(
+    List<SignalRequest> requests,
+    SignalInstanceMaps maps
+  ) {
     Set<Id> cancelledInstanceIds = new Set<Id>();
+    KeyedCancelClaimBatch batch = collectCancelClaims(requests, maps);
+    if (batch.isEmpty()) {
+      return cancelledInstanceIds;
+    }
+    Savepoint cancelSp = Database.setSavepoint();
+    Database.SaveResult[] claimResults = Database.insert(
+      batch.claims,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    List<Integer> freshClaims = collectFreshClaimIndices(
+      claimResults,
+      cancelSp
+    );
+    Set<Id> attemptedCancelIds = runKeyedCancels(batch, freshClaims, cancelSp);
+    refreshAfterKeyedCancels(attemptedCancelIds, maps, cancelledInstanceIds);
+    return cancelledInstanceIds;
+  }
+
+  /**
+   * Builds the keyed-cancel claim rows from the batch. In-batch duplicates
+   * collapse via a seen-key set; cross-transaction duplicates lose the
+   * unique-constraint race later and are skipped.
+   * @param requests the signal requests to scan
+   * @param maps the by-id/by-key instance caches
+   * @return the parallel claim/instance/run-compensations lists to act on
+   */
+  private static KeyedCancelClaimBatch collectCancelClaims(
+    List<SignalRequest> requests,
+    SignalInstanceMaps maps
+  ) {
+    KeyedCancelClaimBatch batch = new KeyedCancelClaimBatch();
+    Set<String> seenCancelKeys = new Set<String>();
     for (SignalRequest req : requests) {
       if (req == null) {
         continue;
       }
       if (
         String.isBlank(req.idempotencyKey) ||
-        String.isBlank(req.signalName) ||
-        !(req.signalName.equalsIgnoreCase('Cancel') ||
-        req.signalName.equalsIgnoreCase('CancelWorkflow'))
+        !isCancelSignalName(req.signalName)
       ) {
         continue;
       }
-      Workflow_Instance__c inst = instById.get(req.keyOrId);
-      if (inst == null) {
-        inst = instByKey.get(normalizeKey(req.keyOrId));
-      }
+      Workflow_Instance__c inst = resolveInstance(req, maps);
       if (inst == null) {
         continue; // unmatched keyed cancel already no-op'd above
       }
@@ -9488,7 +9925,7 @@ public inherited sharing class WorkflowEngine {
         continue; // in-batch duplicate keyed cancel
       }
       seenCancelKeys.add(claimKey);
-      cancelClaims.add(
+      batch.claims.add(
         new Workflow_Signal__c(
           Workflow_Instance__c = inst.Id,
           Signal_Name__c = req.signalName,
@@ -9496,339 +9933,435 @@ public inherited sharing class WorkflowEngine {
           Signal_Key__c = claimKey
         )
       );
-      cancelClaimInstIds.add(inst.Id);
-      cancelClaimRunComp.add(parseRunCompensations(req.payload));
+      batch.instIds.add(inst.Id);
+      batch.runComp.add(parseRunCompensations(req.payload));
     }
-    if (!cancelClaims.isEmpty()) {
-      Savepoint cancelSp = Database.setSavepoint();
-      Database.SaveResult[] claimResults = Database.insert(
-        cancelClaims,
-        false,
-        AccessLevel.SYSTEM_MODE
-      );
-      List<Integer> freshClaims = new List<Integer>();
-      String claimError = null;
-      for (Integer i = 0; i < claimResults.size(); i++) {
-        Database.SaveResult sr = claimResults[i];
-        if (sr.isSuccess()) {
-          freshClaims.add(i);
-        } else {
-          Boolean isDup = false;
-          for (Database.Error err : sr.getErrors()) {
-            if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
-              isDup = true;
-              break;
-            }
-          }
-          if (!isDup && claimError == null) {
-            claimError = sr.getErrors()[0].getMessage();
-          }
-        }
+    return batch;
+  }
+
+  /**
+   * Collects the indices of the freshly-claimed (won-the-race) cancel rows.
+   * Concurrent-duplicate losers are skipped; on any genuine (non-duplicate)
+   * insert error the batch is rolled back and a WorkflowException is thrown.
+   * @param claimResults the save results of the bulk claim insert
+   * @param cancelSp the savepoint to roll back on a genuine failure
+   * @return the indices (into the KeyedCancelClaimBatch) of the fresh claims
+   */
+  private static List<Integer> collectFreshClaimIndices(
+    Database.SaveResult[] claimResults,
+    Savepoint cancelSp
+  ) {
+    List<Integer> freshClaims = new List<Integer>();
+    String claimError = null;
+    for (Integer i = 0; i < claimResults.size(); i++) {
+      Database.SaveResult sr = claimResults[i];
+      if (sr.isSuccess()) {
+        freshClaims.add(i);
+        continue;
       }
-      if (claimError != null) {
-        Database.rollback(cancelSp);
-        throw new WorkflowException('Failed to claim cancel: ' + claimError);
+      if (isDuplicateError(sr)) {
+        continue;
       }
-      Set<Id> attemptedCancelIds = new Set<Id>();
-      try {
-        for (Integer i : freshClaims) {
-          cancelInstance(cancelClaimInstIds[i], cancelClaimRunComp[i]);
-          attemptedCancelIds.add(cancelClaimInstIds[i]);
-        }
-      } catch (Exception e) {
-        Database.rollback(cancelSp);
-        throw e;
-      }
-      // Refresh post-cancel statuses in one query for the whole sub-batch. A
-      // no-compensation cancel is terminal (Cancelled) and its sibling signals
-      // must be skipped; a compensating cancel leaves the instance Cancelling
-      // (still signalable), so refresh the cached SObject so the forward loop
-      // wakes it as a compensating instance rather than resurrecting it.
-      if (!attemptedCancelIds.isEmpty()) {
-        for (Workflow_Instance__c refreshed : [
-          SELECT Id, Status__c
-          FROM Workflow_Instance__c
-          WHERE Id IN :attemptedCancelIds
-          WITH SYSTEM_MODE
-        ]) {
-          refreshCachedStatus(instById, refreshed);
-          if (!isWakeableStatus(refreshed.Status__c)) {
-            cancelledInstanceIds.add(refreshed.Id);
-          }
-        }
+      if (claimError == null) {
+        claimError = sr.getErrors()[0].getMessage();
       }
     }
+    if (claimError != null) {
+      Database.rollback(cancelSp);
+      throw new WorkflowException('Failed to claim cancel: ' + claimError);
+    }
+    return freshClaims;
+  }
 
-    // Separate into unkeyed (at-least-once, unchanged) and keyed (dedup by unique constraint).
-    // For keyed signals, in-batch dedup prevents multiple rows for the same (instance, key)
-    // within a single bulk call; the unique constraint handles concurrent transactions.
-    List<Workflow_Signal__c> unkeyedSignals = new List<Workflow_Signal__c>();
-    Set<String> seenCompositeKeys = new Set<String>();
-    List<Workflow_Signal__c> keyedSignals = new List<Workflow_Signal__c>();
-    List<Id> keyedSignalInstIds = new List<Id>(); // parallel: instance for each keyed signal
-    Map<Id, Workflow_Instance__c> activeInstById = new Map<Id, Workflow_Instance__c>();
-    Set<Id> instancesWithUnkeyedSignal = new Set<Id>();
-    Map<Id, Set<String>> signalsByInstanceId = new Map<Id, Set<String>>();
+  /**
+   * Cancels each freshly-claimed instance in claim order. On any failure the
+   * whole sub-batch's claims are rolled back and the error rethrown so the keys
+   * can be retried.
+   * @param batch the claim batch supplying instance ids and run-compensation flags
+   * @param freshClaims the indices of the claims that won the race
+   * @param cancelSp the savepoint to roll back on failure
+   * @return the ids of the instances a cancel was attempted on
+   */
+  private static Set<Id> runKeyedCancels(
+    KeyedCancelClaimBatch batch,
+    List<Integer> freshClaims,
+    Savepoint cancelSp
+  ) {
+    Set<Id> attemptedCancelIds = new Set<Id>();
+    try {
+      for (Integer i : freshClaims) {
+        cancelInstance(batch.instIds[i], batch.runComp[i]);
+        attemptedCancelIds.add(batch.instIds[i]);
+      }
+    } catch (Exception e) {
+      Database.rollback(cancelSp);
+      throw e;
+    }
+    return attemptedCancelIds;
+  }
 
+  /**
+   * Refreshes the post-cancel statuses of the keyed-cancel sub-batch in one
+   * query. A no-compensation cancel is terminal (Cancelled) and its sibling
+   * signals must be skipped; a compensating cancel leaves the instance
+   * Cancelling (still signalable), so the cached SObject is refreshed so the
+   * forward loop wakes it rather than resurrecting it.
+   * @param attemptedCancelIds the ids a cancel was attempted on
+   * @param maps the by-id/by-key instance caches (statuses refreshed in place)
+   * @param cancelledInstanceIds accumulates ids driven terminal (mutated)
+   */
+  private static void refreshAfterKeyedCancels(
+    Set<Id> attemptedCancelIds,
+    SignalInstanceMaps maps,
+    Set<Id> cancelledInstanceIds
+  ) {
+    if (attemptedCancelIds.isEmpty()) {
+      return;
+    }
+    for (Workflow_Instance__c refreshed : [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :attemptedCancelIds
+      WITH SYSTEM_MODE
+    ]) {
+      refreshCachedStatus(maps.instById, refreshed);
+      if (!isWakeableStatus(refreshed.Status__c)) {
+        cancelledInstanceIds.add(refreshed.Id);
+      }
+    }
+  }
+
+  /**
+   * Partitions the forward (non-keyed-cancel) signals into the unkeyed and
+   * keyed rows to insert, records which instances are wakeable, and runs any
+   * in-batch unkeyed cancels in request order so their result is visible to
+   * later siblings in the same batch.
+   * @param requests the signal requests to partition
+   * @param maps the by-id/by-key instance caches
+   * @param cancelledInstanceIds ids already driven terminal by the keyed pre-pass
+   * @return the accumulated forward-signal partition
+   */
+  private static ForwardSignalPartition partitionForwardSignals(
+    List<SignalRequest> requests,
+    SignalInstanceMaps maps,
+    Set<Id> cancelledInstanceIds
+  ) {
+    ForwardSignalPartition part = new ForwardSignalPartition();
+    part.cancelledInstanceIds = cancelledInstanceIds;
     for (SignalRequest req : requests) {
       if (req == null) {
         continue;
       }
-      Workflow_Instance__c inst = instById.get(req.keyOrId);
-      if (inst == null) {
-        inst = instByKey.get(normalizeKey(req.keyOrId));
-      }
-      if (inst != null) {
-        if (!signalsByInstanceId.containsKey(inst.Id)) {
-          signalsByInstanceId.put(inst.Id, new Set<String>());
-        }
-        signalsByInstanceId.get(inst.Id).add(req.signalName);
-      }
+      partitionOneForwardSignal(req, maps, part);
+    }
+    return part;
+  }
 
-      // A cancel earlier in this batch already drove this instance terminal; the
-      // cached SObject is stale, so skip every sibling signal for it rather than
-      // acting on the pre-cancel status and resurrecting a Cancelled workflow.
-      if (inst != null && cancelledInstanceIds.contains(inst.Id)) {
+  /**
+   * Handles one forward request: records the signal name for join-readiness,
+   * skips siblings of an instance a prior in-batch cancel drove terminal, runs
+   * an in-batch unkeyed cancel (refreshing status for later siblings), or stages
+   * the signal row. Guard-clause flattened; matches the original nesting exactly.
+   * @param req the request to handle
+   * @param maps the by-id/by-key instance caches
+   * @param part the partition accumulator (mutated)
+   */
+  private static void partitionOneForwardSignal(
+    SignalRequest req,
+    SignalInstanceMaps maps,
+    ForwardSignalPartition part
+  ) {
+    Workflow_Instance__c inst = resolveInstance(req, maps);
+    if (inst != null) {
+      if (!part.signalsByInstanceId.containsKey(inst.Id)) {
+        part.signalsByInstanceId.put(inst.Id, new Set<String>());
+      }
+      part.signalsByInstanceId.get(inst.Id).add(req.signalName);
+    }
+    if (inst == null) {
+      return;
+    }
+    // A cancel earlier in this batch already drove this instance terminal; the
+    // cached SObject is stale, so skip every sibling signal for it rather than
+    // acting on the pre-cancel status and resurrecting a Cancelled workflow.
+    if (part.cancelledInstanceIds.contains(inst.Id)) {
+      return;
+    }
+    Boolean isCancel =
+      req.signalName.equalsIgnoreCase('Cancel') ||
+      req.signalName.equalsIgnoreCase('CancelWorkflow');
+    if (inst.Status__c == 'CompensationFailed' && !isCancel) {
+      return;
+    }
+    if (isCancel) {
+      if (String.isNotBlank(req.idempotencyKey)) {
+        return; // keyed cancel handled in the bulk-claim pre-pass above
+      }
+      cancelInstance(inst.Id, parseRunCompensations(req.payload));
+      refreshAfterUnkeyedCancel(inst, maps.instById, part.cancelledInstanceIds);
+      return;
+    }
+    addForwardSignalRow(req, inst, part);
+  }
+
+  /**
+   * Stages a forward signal row (Received). Unkeyed signals keep at-least-once
+   * behavior; keyed signals dedup in-batch on the per-instance composite key
+   * (the unique constraint handles concurrent transactions). Wakeable instances
+   * are recorded for the wake phase.
+   * @param req the request supplying the signal name/payload/idempotency key
+   * @param inst the resolved target instance
+   * @param part the partition accumulator (mutated)
+   */
+  private static void addForwardSignalRow(
+    SignalRequest req,
+    Workflow_Instance__c inst,
+    ForwardSignalPartition part
+  ) {
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Workflow_Instance__c = inst.Id,
+      Signal_Name__c = req.signalName,
+      Payload__c = req.payload,
+      Status__c = 'Received'
+    );
+
+    Boolean isWakeable =
+      inst.Status__c == 'Suspended' ||
+      inst.Status__c == 'Running' ||
+      inst.Status__c == 'Compensating' ||
+      inst.Status__c == 'Cancelling';
+
+    if (String.isBlank(req.idempotencyKey)) {
+      // Unkeyed signal: at-least-once behavior unchanged.
+      part.unkeyedSignals.add(sig);
+      if (isWakeable) {
+        part.activeInstById.put(inst.Id, inst);
+        part.instancesWithUnkeyedSignal.add(inst.Id);
+      }
+      return;
+    }
+
+    // Keyed signal: compute per-instance hash for unique-constraint dedup.
+    // In-batch dedup skips later duplicates with the same composite key.
+    String compositeKey = deriveSignalDedupKey(inst.Id, req.idempotencyKey);
+    if (part.seenCompositeKeys.contains(compositeKey)) {
+      return; // in-batch duplicate — skip entirely (no row, no wake-up)
+    }
+    part.seenCompositeKeys.add(compositeKey);
+    sig.Signal_Key__c = compositeKey;
+    part.keyedSignals.add(sig);
+    part.keyedSignalInstIds.add(inst.Id);
+    if (isWakeable) {
+      part.activeInstById.put(inst.Id, inst);
+    }
+  }
+
+  /**
+   * Inserts the staged signal rows under one savepoint so the bulk call is
+   * all-or-none: unkeyed rows use a plain insert; keyed rows use allOrNone=false
+   * so a concurrent-duplicate loser is a no-op while a genuine error rolls back
+   * and surfaces. The savepoint is shared with the wake phase, so it is returned
+   * for that phase's rollback.
+   * @param part the partition holding the rows to insert (fresh-keyed set mutated)
+   * @return the savepoint, or null when there were no rows to insert
+   */
+  private static System.Savepoint insertSignalRows(
+    ForwardSignalPartition part
+  ) {
+    if (part.unkeyedSignals.isEmpty() && part.keyedSignals.isEmpty()) {
+      return null;
+    }
+    System.Savepoint sp = Database.setSavepoint();
+
+    // Insert unkeyed signals (plain insert, unchanged at-least-once behavior).
+    if (!part.unkeyedSignals.isEmpty()) {
+      Database.insert(part.unkeyedSignals, true, AccessLevel.SYSTEM_MODE);
+    }
+
+    if (!part.keyedSignals.isEmpty()) {
+      insertKeyedSignals(part, sp);
+    }
+    return sp;
+  }
+
+  /**
+   * Inserts the keyed signal rows with allOrNone=false, recording the instances
+   * whose insert won the race; swallows per-row DUPLICATE_VALUE (another
+   * transaction won) but rolls back and rethrows on a genuine non-duplicate
+   * error. Guard-clause flattened.
+   * @param part the partition holding the keyed rows (fresh-keyed set mutated)
+   * @param sp the savepoint to roll back on a genuine failure
+   */
+  private static void insertKeyedSignals(
+    ForwardSignalPartition part,
+    System.Savepoint sp
+  ) {
+    Database.SaveResult[] srs = Database.insert(
+      part.keyedSignals,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    String genuineError = null;
+    for (Integer i = 0; i < srs.size(); i++) {
+      Database.SaveResult sr = srs[i];
+      if (sr.isSuccess()) {
+        part.instancesWithFreshKeyedSignal.add(part.keyedSignalInstIds[i]);
         continue;
       }
-
-      if (
-        inst != null &&
-        !(inst.Status__c == 'CompensationFailed' &&
-        !(req.signalName.equalsIgnoreCase('Cancel') ||
-        req.signalName.equalsIgnoreCase('CancelWorkflow')))
-      ) {
-        if (
-          req.signalName.equalsIgnoreCase('Cancel') ||
-          req.signalName.equalsIgnoreCase('CancelWorkflow')
-        ) {
-          if (String.isNotBlank(req.idempotencyKey)) {
-            continue; // keyed cancel handled in the bulk-claim pre-pass above
-          }
-          cancelInstance(inst.Id, parseRunCompensations(req.payload));
-          // Refresh the cached status so later sibling signals see the post-cancel
-          // state: a terminal (no-compensation) cancel must skip them (otherwise
-          // the stale SObject is woken back to Running), while a compensating
-          // cancel stays signalable and is left for the wake logic. cancel()
-          // already spends per-instance SOQL, so this targeted refresh keeps the
-          // unkeyed path's cost in the same class.
-          for (Workflow_Instance__c refreshed : [
-            SELECT Id, Status__c
-            FROM Workflow_Instance__c
-            WHERE Id = :inst.Id
-            WITH SYSTEM_MODE
-          ]) {
-            refreshCachedStatus(instById, refreshed);
-            if (!isWakeableStatus(refreshed.Status__c)) {
-              cancelledInstanceIds.add(inst.Id);
-            }
-          }
-          continue;
-        }
-
-        Workflow_Signal__c sig = new Workflow_Signal__c(
-          Workflow_Instance__c = inst.Id,
-          Signal_Name__c = req.signalName,
-          Payload__c = req.payload,
-          Status__c = 'Received'
-        );
-
-        Boolean isWakeable =
-          inst.Status__c == 'Suspended' ||
-          inst.Status__c == 'Running' ||
-          inst.Status__c == 'Compensating' ||
-          inst.Status__c == 'Cancelling';
-
-        if (String.isNotBlank(req.idempotencyKey)) {
-          // Keyed signal: compute per-instance hash for unique-constraint dedup.
-          // In-batch dedup skips later duplicates with the same composite key.
-          String compositeKey = deriveSignalDedupKey(
-            inst.Id,
-            req.idempotencyKey
-          );
-          if (!seenCompositeKeys.contains(compositeKey)) {
-            seenCompositeKeys.add(compositeKey);
-            sig.Signal_Key__c = compositeKey;
-            keyedSignals.add(sig);
-            keyedSignalInstIds.add(inst.Id);
-            if (isWakeable) {
-              activeInstById.put(inst.Id, inst);
-            }
-          }
-          // else: in-batch duplicate — skip entirely (no row, no wake-up)
-        } else {
-          // Unkeyed signal: at-least-once behavior unchanged.
-          unkeyedSignals.add(sig);
-          if (isWakeable) {
-            activeInstById.put(inst.Id, inst);
-            instancesWithUnkeyedSignal.add(inst.Id);
-          }
-        }
+      if (isDuplicateError(sr)) {
+        continue;
+      }
+      if (genuineError == null) {
+        genuineError = sr.getErrors()[0].getMessage();
       }
     }
-
-    // Insert signals. A savepoint restores all-or-none semantics on a genuine
-    // (non-duplicate) row failure: keyed inserts use allOrNone=false so a
-    // concurrent-duplicate loser is swallowed as a no-op, but a real error
-    // (e.g. an overlong Signal_Name__c from a direct Apex/Flow caller) must not
-    // leave the already-inserted unkeyed rows and sibling keyed rows committed
-    // when the method throws — a caller that catches the exception would
-    // otherwise be left with a stranded Received signal and a consumed
-    // idempotency key, so retrying the same batch would silently no-op.
-    Set<Id> instancesWithFreshKeyedSignal = new Set<Id>();
-    System.Savepoint sp = null;
-    if (!unkeyedSignals.isEmpty() || !keyedSignals.isEmpty()) {
-      sp = Database.setSavepoint();
-
-      // Insert unkeyed signals (plain insert, unchanged at-least-once behavior).
-      if (!unkeyedSignals.isEmpty()) {
-        Database.insert(unkeyedSignals, true, AccessLevel.SYSTEM_MODE);
-      }
-
-      // Insert keyed signals with allOrNone=false; swallow per-row
-      // DUPLICATE_VALUE (another transaction won the race) — that delivery is
-      // still a success no-op. Genuine non-duplicate errors roll back and surface.
-      if (!keyedSignals.isEmpty()) {
-        Database.SaveResult[] srs = Database.insert(
-          keyedSignals,
-          false,
-          AccessLevel.SYSTEM_MODE
-        );
-        String genuineError = null;
-        for (Integer i = 0; i < srs.size(); i++) {
-          Database.SaveResult sr = srs[i];
-          if (sr.isSuccess()) {
-            instancesWithFreshKeyedSignal.add(keyedSignalInstIds[i]);
-          } else {
-            Boolean isDup = false;
-            for (Database.Error err : sr.getErrors()) {
-              if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
-                isDup = true;
-                break;
-              }
-            }
-            if (!isDup && genuineError == null) {
-              genuineError = sr.getErrors()[0].getMessage();
-            }
-          }
-        }
-        if (genuineError != null) {
-          Database.rollback(sp);
-          throw new WorkflowException(
-            'Failed to insert signal: ' + genuineError
-          );
-        }
-      }
+    if (genuineError != null) {
+      Database.rollback(sp);
+      throw new WorkflowException('Failed to insert signal: ' + genuineError);
     }
+  }
 
-    // The signal inserts and the wake-up share the savepoint above so the bulk
-    // call is all-or-none: the status flip (update), enqueueOrchestrators, and
-    // enqueueResumeBulk can still throw after the rows are committed (e.g. a
-    // validation rule on a Suspended instance or an EventBus publish failure),
-    // so on any such failure we roll the inserted rows back before rethrowing.
-    // Otherwise a caller that catches the exception would be left with stranded
-    // Received rows and consumed idempotency keys, so retrying the same batch
-    // would silently no-op and never wake the still-Suspended instances.
+  /**
+   * Wakes and enqueues the instances that received a fresh signal, sharing the
+   * insert savepoint so the whole bulk call is all-or-none: the status flip,
+   * enqueueOrchestrators, and enqueueResumeBulk can still throw after the rows
+   * are committed, so on any failure the inserted rows are rolled back and the
+   * enqueue guards cleared before rethrowing.
+   * @param part the forward-signal partition
+   * @param sp the shared insert savepoint (null when nothing was inserted)
+   */
+  private static void wakeAndEnqueueInstances(
+    ForwardSignalPartition part,
+    System.Savepoint sp
+  ) {
     try {
       // JOIN-READINESS BARRIER PRE-COMPUTATION
       Set<Id> gatedNonReadyParents = getGatedNonReadyParents(
-        activeInstById.values(),
-        signalsByInstanceId
+        part.activeInstById.values(),
+        part.signalsByInstanceId
       );
-
-      // Only wake an instance if it received at least one fresh signal this call:
-      // unkeyed signals always qualify; keyed signals only if the insert won the race.
-      List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
-      List<Workflow_Instance__c> activeInstances = new List<Workflow_Instance__c>();
-      // Deduplicate: only process each active instance once.
-      Set<Id> processedActiveIds = new Set<Id>();
-      for (Workflow_Instance__c inst : activeInstById.values()) {
-        if (processedActiveIds.contains(inst.Id)) {
-          continue;
-        }
-        Boolean freshSignalLanded =
-          instancesWithUnkeyedSignal.contains(inst.Id) ||
-          instancesWithFreshKeyedSignal.contains(inst.Id);
-        if (!freshSignalLanded) {
-          continue;
-        }
-        processedActiveIds.add(inst.Id);
-        // If the workflow is suspended or running, resume/orchestrate it. A
-        // Compensating/Cancelling instance is mid-rollback: a compensation step
-        // may depend on this signal, so wake it too rather than rejecting it. The
-        // compensation status is left untouched (only Suspended flips to Running);
-        // runStep re-detects the rollback from the trailing '_Compensate' step.
-        // A Paused instance keeps its status — the held signal (Received) is
-        // observed when resume re-drives the wait step; do not wake it here.
-        if (inst.Status__c == 'Suspended') {
-          // A concurrency-parked row has not won a slot. Waking it to Running would
-          // leave a Running instance holding no slot (violating the no-running-without-
-          // slot invariant) and hide it from the parked count. Like Paused, leave it
-          // alone: the signal is already captured (Received) and is observed once
-          // admission drives the step. Skip the wake and the enqueue entirely.
-          if (
-            inst.Concurrency_Parked__c == true &&
-            inst.Concurrency_Slot_Held__c != true
-          ) {
-            continue;
-          }
-          if (gatedNonReadyParents.contains(inst.Id)) {
-            continue;
-          }
-          inst.Status__c = 'Running';
-          // Disarm the wait deadline (issue #35): a signal-wake ends the current
-          // wait, so any armed Sleep_Until__c (timed-wait timeout, or a plain
-          // sleeper's deadline) must be cleared or the watchdog would later
-          // re-select this instance and mis-route/double-wake it. The resumed
-          // step re-arms its own deadline if it suspends or sleeps again.
-          inst.Sleep_Until__c = null;
-          instancesToUpdate.add(inst);
-        }
-        if (!gatedNonReadyParents.contains(inst.Id)) {
-          activeInstances.add(inst);
-        }
+      WakeSelection sel = selectInstancesToWake(part, gatedNonReadyParents);
+      if (!sel.instancesToUpdate.isEmpty()) {
+        Database.update(sel.instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
       }
-
-      if (!instancesToUpdate.isEmpty()) {
-        Database.update(instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
-      }
-
-      List<Id> instanceIdsToEnqueue = new List<Id>();
-      List<Workflow_Instance__c> parallelInstances = new List<Workflow_Instance__c>();
-      for (Workflow_Instance__c inst : activeInstances) {
-        // A Compensating/Cancelling instance rolls back serially off the LIFO stack,
-        // so it needs exactly one compensation wake -- never per-branch fan-out, even
-        // if Current_Step__c still holds a stale comma-separated parallel branch list
-        // from the forward phase. Otherwise one compensation signal would publish a
-        // RUN_STEP per stale branch and pile up duplicate rollback workers.
-        Boolean isCompensatingInst =
-          inst.Status__c == 'Compensating' ||
-          inst.Status__c == 'Cancelling';
-        // Parallel (forward) instances must wake each branch by name; collect them
-        // for a single bulk resume rather than a per-instance query each (which would
-        // exhaust the SOQL limit when many parallel workflows are signaled at once).
-        if (
-          !isCompensatingInst &&
-          String.isNotBlank(inst.Current_Step__c) &&
-          inst.Current_Step__c.contains(',')
-        ) {
-          parallelInstances.add(inst);
-          continue;
-        }
-        if (!enqueuedInstanceIds.contains(inst.Id)) {
-          enqueuedInstanceIds.add(inst.Id);
-          instanceIdsToEnqueue.add(inst.Id);
-        }
-      }
-      enqueueOrchestrators(instanceIdsToEnqueue);
-      enqueueResumeBulk(parallelInstances);
+      dispatchWakeEnqueues(sel.activeInstances);
     } catch (Exception e) {
       if (sp != null) {
         Database.rollback(sp);
       }
-      clearEnqueueGuards(activeInstById.keySet());
+      clearEnqueueGuards(part.activeInstById.keySet());
       throw e;
     }
+  }
+
+  /**
+   * Selects, once per instance, those that received at least one fresh signal
+   * this call (unkeyed always qualifies; keyed only if the insert won the race)
+   * and applies the per-instance wake decision.
+   * @param part the forward-signal partition
+   * @param gatedNonReadyParents parents still gated behind a non-ready join
+   * @return the instances to flip to Running plus the instances to enqueue
+   */
+  private static WakeSelection selectInstancesToWake(
+    ForwardSignalPartition part,
+    Set<Id> gatedNonReadyParents
+  ) {
+    WakeSelection sel = new WakeSelection();
+    // Deduplicate: only process each active instance once.
+    Set<Id> processedActiveIds = new Set<Id>();
+    for (Workflow_Instance__c inst : part.activeInstById.values()) {
+      if (processedActiveIds.contains(inst.Id)) {
+        continue;
+      }
+      Boolean freshSignalLanded =
+        part.instancesWithUnkeyedSignal.contains(inst.Id) ||
+        part.instancesWithFreshKeyedSignal.contains(inst.Id);
+      if (!freshSignalLanded) {
+        continue;
+      }
+      processedActiveIds.add(inst.Id);
+      applyWakeDecision(inst, gatedNonReadyParents, sel);
+    }
+    return sel;
+  }
+
+  /**
+   * Applies the wake decision for one fresh-signalled instance. A Suspended
+   * instance resumes to Running (its wait deadline disarmed) unless it is
+   * concurrency-parked without a slot or gated behind a non-ready join, in which
+   * case it is left alone and not enqueued. Compensating/Cancelling and Running
+   * instances are enqueued (unless gated) without a status flip; a Paused
+   * instance keeps its status and observes the held signal on resume.
+   * @param inst the instance to decide on (status/Sleep_Until mutated on wake)
+   * @param gatedNonReadyParents parents still gated behind a non-ready join
+   * @param sel the wake selection to append to (mutated)
+   */
+  private static void applyWakeDecision(
+    Workflow_Instance__c inst,
+    Set<Id> gatedNonReadyParents,
+    WakeSelection sel
+  ) {
+    if (inst.Status__c == 'Suspended') {
+      // A concurrency-parked row has not won a slot. Waking it to Running would
+      // leave a Running instance holding no slot (violating the no-running-without-
+      // slot invariant) and hide it from the parked count. Like Paused, leave it
+      // alone: the signal is already captured (Received) and is observed once
+      // admission drives the step. Skip the wake and the enqueue entirely.
+      if (
+        inst.Concurrency_Parked__c == true &&
+        inst.Concurrency_Slot_Held__c != true
+      ) {
+        return;
+      }
+      if (gatedNonReadyParents.contains(inst.Id)) {
+        return;
+      }
+      inst.Status__c = 'Running';
+      // Disarm the wait deadline (issue #35): a signal-wake ends the current
+      // wait, so any armed Sleep_Until__c (timed-wait timeout, or a plain
+      // sleeper's deadline) must be cleared or the watchdog would later
+      // re-select this instance and mis-route/double-wake it. The resumed
+      // step re-arms its own deadline if it suspends or sleeps again.
+      inst.Sleep_Until__c = null;
+      sel.instancesToUpdate.add(inst);
+    }
+    if (!gatedNonReadyParents.contains(inst.Id)) {
+      sel.activeInstances.add(inst);
+    }
+  }
+
+  /**
+   * Enqueues the woken instances: a Compensating/Cancelling instance rolls back
+   * serially and gets exactly one compensation wake (never per-branch fan-out
+   * off a stale parallel step list); a forward parallel instance is collected
+   * for a single bulk resume (one step-execution query for all, not one per
+   * instance); everything else is enqueued once via the orchestrator.
+   * @param activeInstances the instances to enqueue this call
+   */
+  private static void dispatchWakeEnqueues(
+    List<Workflow_Instance__c> activeInstances
+  ) {
+    List<Id> instanceIdsToEnqueue = new List<Id>();
+    List<Workflow_Instance__c> parallelInstances = new List<Workflow_Instance__c>();
+    for (Workflow_Instance__c inst : activeInstances) {
+      Boolean isCompensatingInst =
+        inst.Status__c == 'Compensating' ||
+        inst.Status__c == 'Cancelling';
+      if (
+        !isCompensatingInst &&
+        String.isNotBlank(inst.Current_Step__c) &&
+        inst.Current_Step__c.contains(',')
+      ) {
+        parallelInstances.add(inst);
+        continue;
+      }
+      if (!enqueuedInstanceIds.contains(inst.Id)) {
+        enqueuedInstanceIds.add(inst.Id);
+        instanceIdsToEnqueue.add(inst.Id);
+      }
+    }
+    enqueueOrchestrators(instanceIdsToEnqueue);
+    enqueueResumeBulk(parallelInstances);
   }
 
   /**
@@ -9844,10 +10377,36 @@ public inherited sharing class WorkflowEngine {
     if (parallelInstances == null || parallelInstances.isEmpty()) {
       return;
     }
-    // Map each instance to its branch step names, and collect all branch names
-    // for a single step-execution lookup.
-    Map<Id, List<String>> branchesByInstance = new Map<Id, List<String>>();
     Set<String> allBranchNames = new Set<String>();
+    Map<Id, List<String>> branchesByInstance = mapBranchesByInstance(
+      parallelInstances,
+      allBranchNames
+    );
+    Map<String, String> latestStatusByKey = loadLatestBranchStatuses(
+      branchesByInstance.keySet(),
+      allBranchNames
+    );
+    List<Workflow_Event__e> branchEvents = buildBranchRunEvents(
+      branchesByInstance,
+      latestStatusByKey
+    );
+    publishBranchEvents(branchEvents);
+  }
+
+  /**
+   * Maps each parallel instance to its trimmed branch step names and collects
+   * every branch name across the batch for a single step-execution lookup.
+   * @param parallelInstances the parallel instances whose Current_Step__c
+   *        comma lists to split into branch names
+   * @param allBranchNames output accumulator populated with every branch name
+   *        seen across the batch (mutated in place)
+   * @return a map of instance id to its ordered list of branch step names
+   */
+  private static Map<Id, List<String>> mapBranchesByInstance(
+    List<Workflow_Instance__c> parallelInstances,
+    Set<String> allBranchNames
+  ) {
+    Map<Id, List<String>> branchesByInstance = new Map<Id, List<String>>();
     for (Workflow_Instance__c inst : parallelInstances) {
       List<String> branches = new List<String>();
       for (String b : inst.Current_Step__c.split(',')) {
@@ -9856,14 +10415,27 @@ public inherited sharing class WorkflowEngine {
       }
       branchesByInstance.put(inst.Id, branches);
     }
+    return branchesByInstance;
+  }
 
-    // One query: latest execution per (instance, branch step name).
+  /**
+   * Loads the latest step-execution status per (instance, branch step name)
+   * across the whole batch in a single query. Newest-first ordering means the
+   * first row seen for a key is the latest, so earlier map entries win.
+   * @param instanceIds the parallel instance ids to load branch statuses for
+   * @param allBranchNames the branch step names to restrict the query to
+   * @return a map of "instanceId::stepName" to the latest execution status
+   */
+  private static Map<String, String> loadLatestBranchStatuses(
+    Set<Id> instanceIds,
+    Set<String> allBranchNames
+  ) {
     Map<String, String> latestStatusByKey = new Map<String, String>();
     for (Workflow_Step_Execution__c se : [
       SELECT Workflow_Instance__c, Step_Name__c, Status__c
       FROM Workflow_Step_Execution__c
       WHERE
-        Workflow_Instance__c IN :branchesByInstance.keySet()
+        Workflow_Instance__c IN :instanceIds
         AND Step_Name__c IN :allBranchNames
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
@@ -9873,10 +10445,24 @@ public inherited sharing class WorkflowEngine {
         latestStatusByKey.put(key, se.Status__c);
       }
     }
+    return latestStatusByKey;
+  }
 
-    // Collect all branch RUN_STEP events and publish them in ONE EventBus call,
-    // so signaling many parallel instances cannot exceed the publish/DML
-    // statement limit (one publish per branch).
+  /**
+   * Builds the RUN_STEP events for every incomplete, not-yet-enqueued branch,
+   * so they can be published in ONE EventBus call (one publish per branch would
+   * risk the publish/DML statement limit when many parallel instances wake at
+   * once). Skips branches already Completed/OperatorSkipped and branches
+   * already enqueued this transaction; under test it directly enqueues the
+   * branch job via {@link enqueueTestBranchJob} instead of emitting an event.
+   * @param branchesByInstance instance id to its branch step names
+   * @param latestStatusByKey "instanceId::stepName" to latest branch status
+   * @return the RUN_STEP events to publish (empty under test)
+   */
+  private static List<Workflow_Event__e> buildBranchRunEvents(
+    Map<Id, List<String>> branchesByInstance,
+    Map<String, String> latestStatusByKey
+  ) {
     List<Workflow_Event__e> branchEvents = new List<Workflow_Event__e>();
     for (Id instId : branchesByInstance.keySet()) {
       for (String b : branchesByInstance.get(instId)) {
@@ -9890,9 +10476,7 @@ public inherited sharing class WorkflowEngine {
         }
         enqueuedBranchKeys.add(key);
         if (Test.isRunningTest()) {
-          if (!disableQueueableInTest) {
-            System.enqueueJob(new WorkflowOrchestrator(instId, b));
-          }
+          enqueueTestBranchJob(instId, b);
         } else {
           branchEvents.add(
             new Workflow_Event__e(
@@ -9904,22 +10488,51 @@ public inherited sharing class WorkflowEngine {
         }
       }
     }
+    return branchEvents;
+  }
 
-    if (!branchEvents.isEmpty()) {
-      WorkflowWatchdog.bootstrap();
-      List<Database.SaveResult> srs = EventBus.publish(branchEvents);
-      for (Database.SaveResult sr : srs) {
-        if (!sr.isSuccess()) {
-          List<String> errMsgs = new List<String>();
-          for (Database.Error err : sr.getErrors()) {
-            errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
-          }
-          throw new WorkflowException(
-            'Failed to publish resumed branch event: ' +
-            String.join(errMsgs, ', ')
-          );
+  /**
+   * Publishes the collected branch RUN_STEP events in one EventBus call and
+   * bootstraps the watchdog. Throws WorkflowException on any per-event publish
+   * failure. No-op when there are no events (e.g. under test).
+   * @param branchEvents the RUN_STEP events to publish
+   */
+  private static void publishBranchEvents(
+    List<Workflow_Event__e> branchEvents
+  ) {
+    if (branchEvents.isEmpty()) {
+      return;
+    }
+    WorkflowWatchdog.bootstrap();
+    List<Database.SaveResult> srs = EventBus.publish(branchEvents);
+    for (Database.SaveResult sr : srs) {
+      if (!sr.isSuccess()) {
+        List<String> errMsgs = new List<String>();
+        for (Database.Error err : sr.getErrors()) {
+          errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
         }
+        throw new WorkflowException(
+          'Failed to publish resumed branch event: ' +
+          String.join(errMsgs, ', ')
+        );
       }
+    }
+  }
+
+  /**
+   * @description Direct-enqueues one branch orchestrator job for the test-only
+   * branch of `enqueueResumeBulk`. Kept as a helper so the per-branch
+   * `System.enqueueJob` is not lexically inside `enqueueResumeBulk`'s nested
+   * loop. Production still batches every branch into a single
+   * `EventBus.publish`; this helper is only invoked when `Test.isRunningTest()`
+   * is true. Honors `disableQueueableInTest` so tests that suppress queueable
+   * dispatch remain suppressed.
+   * @param instId the parent workflow instance whose branch is being driven
+   * @param branchName the branch step name to enqueue
+   */
+  private static void enqueueTestBranchJob(Id instId, String branchName) {
+    if (!disableQueueableInTest) {
+      System.enqueueJob(new WorkflowOrchestrator(instId, branchName));
     }
   }
 
@@ -10104,8 +10717,8 @@ public inherited sharing class WorkflowEngine {
 
   // Parallel forward execution retry: enqueue only incomplete branches. Reuse the
   // already-loaded step map (reset steps are now 'Pending' in memory) instead of
-  // re-querying once per branch. The per-branch enqueue is intentionally in-loop
-  // (OperationWithLimitsInLoop deferred to PR #3).
+  // re-querying once per branch. The per-branch enqueue is delegated to
+  // enqueueParallelBranchRetryOne so it is not lexically inside this loop.
   private static void enqueueParallelBranchRetries(
     Id instanceId,
     List<String> targetStepNames,
@@ -10122,14 +10735,29 @@ public inherited sharing class WorkflowEngine {
       if (!incomplete) {
         continue;
       }
-      if (!Test.isRunningTest()) {
-        enqueueOrchestrator(instanceId, targetStepName);
-        continue;
-      }
-      if (!disableQueueableInTest) {
-        // In-loop enqueue is intentional (OperationWithLimitsInLoop deferred to PR #3).
-        System.enqueueJob(new WorkflowOrchestrator(instanceId, targetStepName));
-      }
+      enqueueParallelBranchRetryOne(instanceId, targetStepName);
+    }
+  }
+
+  /**
+   * @description Enqueues a single parallel-branch retry, direct-enqueue under
+   * test and via the standard `enqueueOrchestrator` path otherwise. Kept as a
+   * helper so the test-only per-branch `System.enqueueJob` is not lexically
+   * inside `enqueueParallelBranchRetries`'s loop. Test-only enqueue continues
+   * to honor `disableQueueableInTest`.
+   * @param instanceId the parent workflow instance to resume
+   * @param targetStepName the target branch step name to drive
+   */
+  private static void enqueueParallelBranchRetryOne(
+    Id instanceId,
+    String targetStepName
+  ) {
+    if (!Test.isRunningTest()) {
+      enqueueOrchestrator(instanceId, targetStepName);
+      return;
+    }
+    if (!disableQueueableInTest) {
+      System.enqueueJob(new WorkflowOrchestrator(instanceId, targetStepName));
     }
   }
 
@@ -10240,8 +10868,6 @@ public inherited sharing class WorkflowEngine {
     ];
   }
 
-  // Batch step-execution query stays in-loop (OperationWithLimitsInLoop deferred
-  // to PR #3): one SOQL per 1,000-instance batch to stay under the 50k row cap.
   private static void scanInstancesForExplicitFalse(
     List<Workflow_Instance__c> instances,
     AdoptionScan scan
@@ -10254,19 +10880,43 @@ public inherited sharing class WorkflowEngine {
         instanceBatchSize
       );
 
-      List<Workflow_Step_Execution__c> execs = [
-        SELECT
-          Workflow_Instance__c,
-          Captured_Values__c,
-          Workflow_Instance__r.Workflow_Name__c
-        FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c IN :batchInstances
-        WITH SYSTEM_MODE
-      ];
+      List<Workflow_Step_Execution__c> execs = queryStepExecutionsForBatch(
+        batchInstances
+      );
 
       List<String> resolvedCaptures = resolveCapturesInBatches(execs);
       applyExecCaptures(execs, resolvedCaptures, scan);
     }
+  }
+
+  /**
+   * Fetches the step-execution rows for one 1,000-instance chunk of the
+   * adoption scan in {@link scanInstancesForExplicitFalse}.
+   * <p><b>Intentional per-iteration SOQL.</b> This runs one SOQL query per
+   * 1,000-instance chunk. The chunking <i>is itself the governor-safety
+   * strategy</i>: capping each query at 1,000 parent instances keeps the
+   * number of {@code Workflow_Step_Execution__c} rows returned per query well
+   * under the 50k SOQL-row limit on large data volumes. De-chunking into a
+   * single query would <b>increase</b> governor risk (the opposite of the
+   * rule's intent), so the fixed <b>1,000-instance chunk size</b> must be
+   * preserved exactly. The query count is bounded by
+   * ceil(instances.size() / 1000).
+   * @param batchInstances one chunk of at most 1,000 instances whose step
+   *        executions to fetch
+   * @return the step-execution rows for the given chunk
+   */
+  private static List<Workflow_Step_Execution__c> queryStepExecutionsForBatch(
+    List<Workflow_Instance__c> batchInstances
+  ) {
+    return [
+      SELECT
+        Workflow_Instance__c,
+        Captured_Values__c,
+        Workflow_Instance__r.Workflow_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :batchInstances
+      WITH SYSTEM_MODE
+    ];
   }
 
   private static List<Workflow_Instance__c> sliceInstances(
@@ -10938,13 +11588,29 @@ public inherited sharing class WorkflowEngine {
     }
 
     for (String ps : stepsToEnqueue) {
-      if (Test.isRunningTest()) {
-        if (!disableQueueableInTest) {
-          System.enqueueJob(new WorkflowOrchestrator(run.instanceId, ps));
-        }
-      } else {
-        enqueueOrchestrator(run.instanceId, ps);
+      enqueueParallelResumeStep(run.instanceId, ps);
+    }
+  }
+
+  /**
+   * @description Enqueues a single parallel-resume step, direct-enqueue under
+   * test and via the standard `enqueueOrchestrator` path otherwise. Kept as a
+   * helper so the test-only per-step `System.enqueueJob` is not lexically
+   * inside the caller's loop. Test-only enqueue continues to honor
+   * `disableQueueableInTest`.
+   * @param instanceId the parent workflow instance to resume
+   * @param stepName the parallel-sibling step name to drive
+   */
+  private static void enqueueParallelResumeStep(
+    Id instanceId,
+    String stepName
+  ) {
+    if (Test.isRunningTest()) {
+      if (!disableQueueableInTest) {
+        System.enqueueJob(new WorkflowOrchestrator(instanceId, stepName));
       }
+    } else {
+      enqueueOrchestrator(instanceId, stepName);
     }
   }
 
@@ -12624,21 +13290,7 @@ public inherited sharing class WorkflowEngine {
     Set<Id> seen = new Set<Id>{ rootId };
     List<Id> frontier = new List<Id>{ rootId };
     while (!frontier.isEmpty()) {
-      List<Workflow_Instance__c> children = [
-        SELECT Id
-        FROM Workflow_Instance__c
-        WHERE
-          Parent_Instance__c IN :frontier
-          AND Status__c IN (
-            'Pending',
-            'Running',
-            'Suspended',
-            'Cancelling',
-            'CompensationFailed',
-            'Paused'
-          )
-        WITH SYSTEM_MODE
-      ];
+      List<Workflow_Instance__c> children = queryActiveChildren(frontier);
       List<Id> nextFrontier = new List<Id>();
       for (Workflow_Instance__c child : children) {
         if (!seen.contains(child.Id)) {
@@ -12650,6 +13302,41 @@ public inherited sharing class WorkflowEngine {
       frontier = nextFrontier;
     }
     return ordered;
+  }
+
+  /**
+   * Fetches the active child instances of one BFS frontier level for
+   * {@link collectInstanceAndActiveDescendants}.
+   * <p><b>Intentional per-iteration SOQL.</b> This runs one SOQL query per
+   * tree level of a breadth-first descendant traversal: the ids of level N+1
+   * are only knowable after level N's children are read, so the traversal
+   * cannot collapse into a single query. It is already optimal &mdash; one
+   * <i>set-based</i> query per level (over the entire frontier at once), not
+   * one query per node &mdash; and is governor-safe because the query count is
+   * bounded by the <b>finite depth of the instance parent/child tree</b>, not
+   * by the number of instances.
+   * @param frontier the current BFS level's instance ids to fetch children of
+   * @return the active (non-terminal) child instances whose parent is in the
+   *         frontier
+   */
+  private static List<Workflow_Instance__c> queryActiveChildren(
+    List<Id> frontier
+  ) {
+    return [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE
+        Parent_Instance__c IN :frontier
+        AND Status__c IN (
+          'Pending',
+          'Running',
+          'Suspended',
+          'Cancelling',
+          'CompensationFailed',
+          'Paused'
+        )
+      WITH SYSTEM_MODE
+    ];
   }
 
   /**
@@ -12950,13 +13637,26 @@ public inherited sharing class WorkflowEngine {
       instanceIds.add(req.instanceId);
     }
     for (Id instId : instanceIds) {
-      try {
-        if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
-          System.enqueueJob(new WorkflowOrchestrator(instId));
-        }
-      } catch (Exception ignored) {
-        // Best-effort enqueue; the watchdog re-drives any instance left un-enqueued.
+      tryEnqueueTestOrchestratorForInstance(instId);
+    }
+  }
+
+  /**
+   * @description Best-effort direct enqueue of a single-instance orchestrator
+   * job for test paths that fan out one job per distinct instance. Honors the
+   * per-transaction queueable limit and swallows enqueue failures so the
+   * caller's loop continues; the watchdog re-drives any instance left
+   * un-enqueued. Kept as a helper so the caller's per-instance
+   * `System.enqueueJob` is not lexically inside the loop.
+   * @param instId the workflow instance to enqueue
+   */
+  private static void tryEnqueueTestOrchestratorForInstance(Id instId) {
+    try {
+      if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+        System.enqueueJob(new WorkflowOrchestrator(instId));
       }
+    } catch (Exception ignored) {
+      // Best-effort enqueue; the watchdog re-drives any instance left un-enqueued.
     }
   }
 
@@ -14817,26 +15517,42 @@ public inherited sharing class WorkflowEngine {
   ) {
     List<Workflow_Event__e> branchEvents = new List<Workflow_Event__e>();
     for (Workflow_Step_Execution__c branch : retryBranches) {
-      if (!Test.isRunningTest()) {
-        branchEvents.add(
-          new Workflow_Event__e(
-            Workflow_Instance_Id__c = branch.Workflow_Instance__c,
-            Event_Type__c = 'RUN_STEP',
-            Payload__c = branch.Step_Name__c
-          )
-        );
-        continue;
-      }
-      if (!disableQueueableInTest) {
-        System.enqueueJob(
-          new WorkflowOrchestrator(
-            branch.Workflow_Instance__c,
-            branch.Step_Name__c
-          )
-        );
+      Workflow_Event__e evt = dispatchTransientRetryBranchOne(branch);
+      if (evt != null) {
+        branchEvents.add(evt);
       }
     }
     return branchEvents;
+  }
+
+  /**
+   * @description Dispatches a single transient-retry branch, choosing between
+   * the production platform-event path and the test direct-enqueue path. Under
+   * test the per-branch `System.enqueueJob` runs inside this helper so it is
+   * not lexically inside the caller's loop; production still collects a
+   * RUN_STEP event for a single bulk `EventBus.publish`.
+   * @param branch the retry-marked step row to dispatch
+   * @return the RUN_STEP event to publish (production), or null under test
+   */
+  private static Workflow_Event__e dispatchTransientRetryBranchOne(
+    Workflow_Step_Execution__c branch
+  ) {
+    if (!Test.isRunningTest()) {
+      return new Workflow_Event__e(
+        Workflow_Instance_Id__c = branch.Workflow_Instance__c,
+        Event_Type__c = 'RUN_STEP',
+        Payload__c = branch.Step_Name__c
+      );
+    }
+    if (!disableQueueableInTest) {
+      System.enqueueJob(
+        new WorkflowOrchestrator(
+          branch.Workflow_Instance__c,
+          branch.Step_Name__c
+        )
+      );
+    }
+    return null;
   }
 
   private static void reDriveTransientRetryBranches(
