@@ -9584,14 +9584,22 @@ public inherited sharing class WorkflowEngine {
    * the loop would break the in-batch cancel&rarr;sibling ordering and could
    * resurrect a Cancelled workflow (waking a stale Suspended SObject back to
    * Running). It therefore cannot be bulkified without changing behavior.
-   * <p><b>Bound / governor profile.</b> This is the legacy at-least-once
-   * <i>unkeyed</i> cancel path, which is inherently per-instance:
-   * {@code cancelInstance()} already spends per-instance SOQL/DML for every
-   * unkeyed cancel, so this targeted single-row refresh adds no new scaling
-   * dimension — its query count equals the number of unkeyed cancels in the
-   * batch, the same order as the unavoidable {@code cancelInstance()} calls.
-   * Callers with large cancel batches use the <i>keyed</i> cancel path, which
-   * is bulk-claimed and refreshed in a single query in the pre-pass above.
+   * <p><b>Bound / governor profile.</b> The governor exposure of this method
+   * is <i>batch-size-scaled, not a fixed numeric cap</i>: it issues exactly one
+   * targeted single-row SOQL query per unkeyed cancel, so its query count grows
+   * linearly (O(n)) with the number of unkeyed cancels in the caller's batch —
+   * there is no constant ceiling below which it stops scaling. Crucially, this
+   * adds <i>no new scaling dimension</i>: it stays in the <b>same cost class as
+   * the pre-existing per-instance {@code cancelInstance()} path</b>, which
+   * already spends per-instance SOQL/DML for every unkeyed cancel. The per-hop
+   * refresh is thus the same order (n) as the unavoidable {@code cancelInstance()}
+   * calls it pairs with — it does not multiply that cost, it matches it.
+   * <p>The <b>mitigation for large batches</b> is the bulk <i>keyed</i>-cancel
+   * pre-pass above: callers that need to cancel many instances at once use the
+   * keyed cancel path, which is bulk-claimed and refreshed in a single query
+   * for the whole batch instead of one query per instance. This per-iteration
+   * unkeyed path is retained only for the legacy at-least-once unkeyed cancel
+   * semantics, whose ordering constraint (documented above) forbids bulkifying.
    * @param inst the just-cancelled instance whose cached status to refresh
    * @param instById the by-id/by-15-char instance cache to update in place
    * @param cancelledInstanceIds accumulates ids driven terminal by this batch
