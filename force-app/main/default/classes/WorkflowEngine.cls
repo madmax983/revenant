@@ -1186,6 +1186,26 @@ public inherited sharing class WorkflowEngine {
   // ─── End Read API ──────────────────────────────────────────────────────────
 
   /**
+   * Bare key + optional parsed timestamp recovered from a `key:`-scoped
+   * causation id. `correlationKey` is the key stripped of any encoded
+   * timestamp suffix; `earliestCreatedDate` is populated when the id carried
+   * an inline timestamp (JSON `t`, `::ts::<millis>`, or legacy `#<millis>`),
+   * otherwise null so the caller falls back to `getEarliestPredecessorCreatedDate`.
+   */
+  private class CausationKeyParse {
+    private String correlationKey;
+    private DateTime earliestCreatedDate;
+
+    private CausationKeyParse(
+      String correlationKey,
+      DateTime earliestCreatedDate
+    ) {
+      this.correlationKey = correlationKey;
+      this.earliestCreatedDate = earliestCreatedDate;
+    }
+  }
+
+  /**
    * Returns the historical causation lineage (parent/ancestor chain) of a workflow
    * instance ID up to the root cause. Bounded to a maximum depth of 12 hops to safeguard
    * against cyclic/governor limits. Performs zero DML.
@@ -1211,126 +1231,13 @@ public inherited sharing class WorkflowEngine {
       }
       visitedIds.add(currentId);
 
-      List<Workflow_Instance__c> records = [
-        SELECT
-          Id,
-          Workflow_Name__c,
-          Correlation_Key__c,
-          Status__c,
-          Error_Message__c,
-          Causation_Id__c,
-          Previous_Instance__c,
-          Parent_Instance__c,
-          Output__c,
-          CreatedDate
-        FROM Workflow_Instance__c
-        WHERE Id = :currentId
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (records.isEmpty()) {
+      Workflow_Instance__c inst = queryLineageInstanceById(currentId);
+      if (inst == null) {
         break;
       }
-      Workflow_Instance__c inst = records[0];
       ancestors.add(inst);
 
-      String cause = inst.Causation_Id__c;
-      if (String.isBlank(cause)) {
-        if (inst.Parent_Instance__c != null) {
-          currentId = inst.Parent_Instance__c;
-          continue;
-        }
-        break;
-      }
-
-      Id resolvedId = null;
-      if (isValidId(cause)) {
-        List<Workflow_Instance__c> directRecords = [
-          SELECT Id
-          FROM Workflow_Instance__c
-          WHERE Id = :cause
-          WITH SYSTEM_MODE
-          LIMIT 1
-        ];
-        if (!directRecords.isEmpty()) {
-          resolvedId = directRecords[0].Id;
-        }
-      }
-
-      if (resolvedId != null) {
-        currentId = resolvedId;
-      } else if (cause.startsWith('key:')) {
-        String correlationKey = cause.substring(4);
-        DateTime earliestCreatedDate = null;
-        if (cause.startsWith('key:{"')) {
-          try {
-            String jsonStr = cause.substring(4);
-            Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
-              jsonStr
-            );
-            correlationKey = (String) data.get('k');
-            Long ms = (Long) data.get('t');
-            earliestCreatedDate = DateTime.newInstance(ms);
-          } catch (Exception ignored) {
-            // fallback: leave earliestCreatedDate unresolved and continue
-          }
-        } else {
-          Integer tsIndex = correlationKey.lastIndexOf('::ts::');
-          if (tsIndex != -1) {
-            String tsStr = correlationKey.substring(tsIndex + 6);
-            if (tsStr.length() >= 12 && tsStr.length() <= 15) {
-              try {
-                Long ms = Long.valueOf(tsStr);
-                earliestCreatedDate = DateTime.newInstance(ms);
-                correlationKey = correlationKey.substring(0, tsIndex);
-              } catch (Exception ignored) {
-                // fallback: leave earliestCreatedDate unresolved and continue
-              }
-            }
-          }
-        }
-        if (earliestCreatedDate == null) {
-          // Backwards compatibility fallback for older '#' format
-          Integer hashIndex = correlationKey.lastIndexOf('#');
-          if (hashIndex != -1) {
-            String tsStr = correlationKey.substring(hashIndex + 1);
-            if (tsStr.length() >= 12 && tsStr.length() <= 15) {
-              try {
-                Long ms = Long.valueOf(tsStr);
-                earliestCreatedDate = DateTime.newInstance(ms);
-                correlationKey = correlationKey.substring(0, hashIndex);
-              } catch (Exception ignored) {
-                // fallback: leave earliestCreatedDate unresolved and continue
-              }
-            }
-          }
-        }
-        if (earliestCreatedDate == null) {
-          earliestCreatedDate = getEarliestPredecessorCreatedDate(inst);
-        }
-
-        List<Workflow_Instance__c> parents = [
-          SELECT Id
-          FROM Workflow_Instance__c
-          WHERE
-            (Correlation_Key__c = :correlationKey
-            OR Active_Correlation_Key__c = :correlationKey
-            OR Root_Correlation_Key__c = :correlationKey)
-            AND CreatedDate <= :earliestCreatedDate
-            AND Id NOT IN :visitedIds
-          WITH SYSTEM_MODE
-          ORDER BY CreatedDate DESC
-          LIMIT 1
-        ];
-
-        if (!parents.isEmpty()) {
-          currentId = parents[0].Id;
-        } else {
-          currentId = null;
-        }
-      } else {
-        currentId = null;
-      }
+      currentId = resolveNextAncestorId(inst, visitedIds);
     }
 
     Map<Id, String> resolvedOutputByDocId = bulkResolveOffloadedOutputs(
@@ -1340,6 +1247,224 @@ public inherited sharing class WorkflowEngine {
       lineage.add(buildStatus(inst, resolvedOutputByDocId));
     }
     return lineage;
+  }
+
+  /**
+   * @description Fetches the single Workflow_Instance__c row at `currentId`
+   * for lineage-walk assembly. Kept as a helper so the per-hop SOQL is not
+   * lexically inside `getCausationLineage`'s hop loop. The per-hop query is
+   * intentional and bounded: the caller walks at most 12 hops (maxHops) with a
+   * visited-id guard, so this helper is called at most 12 times per lineage
+   * request.
+   * @param currentId the ancestor id to fetch this hop
+   * @return the ancestor instance row, or null when nothing is found
+   */
+  private static Workflow_Instance__c queryLineageInstanceById(Id currentId) {
+    List<Workflow_Instance__c> records = [
+      SELECT
+        Id,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Status__c,
+        Error_Message__c,
+        Causation_Id__c,
+        Previous_Instance__c,
+        Parent_Instance__c,
+        Output__c,
+        CreatedDate
+      FROM Workflow_Instance__c
+      WHERE Id = :currentId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    return records.isEmpty() ? null : records[0];
+  }
+
+  /**
+   * @description Parses a `key:`-prefixed causation id into a bare correlation
+   * key plus an optional inline timestamp. Recognizes three encodings in this
+   * priority order: current JSON form `key:{"k":..,"t":..}` -> interim
+   * `<k>::ts::<millis>` suffix (when not JSON) -> legacy `<k>#<millis>`
+   * suffix (fallback when neither of the above produced a timestamp). Any
+   * partial-parse exception is swallowed so callers fall through to
+   * `getEarliestPredecessorCreatedDate`; on JSON partial success (the parse
+   * setting `k` before failing on `t`), the correlation key remains
+   * overwritten, matching the pre-refactor behavior.
+   * @param cause a non-blank `key:`-prefixed causation id
+   * @return the recovered bare key and, when the id carried one, the parsed
+   *   inline timestamp; the timestamp is null when no encoded value is
+   *   present or recoverable
+   */
+  private static CausationKeyParse parseCausationTimestamp(String cause) {
+    CausationKeyParse first = cause.startsWith('key:{"')
+      ? parseJsonCausation(cause)
+      : parseTsSuffix(cause.substring(4));
+    if (first.earliestCreatedDate != null) {
+      return first;
+    }
+    // Backwards compatibility fallback for older '#' format. Applied against
+    // whatever the first pass produced for correlationKey (matches pre-refactor
+    // behavior, where the '#' pass ran on the possibly-JSON-mutated key).
+    return parseHashSuffix(first.correlationKey);
+  }
+
+  /**
+   * @description Parses the JSON `key:{"k":..,"t":..}` causation form. Returns
+   * the recovered bare key and inline timestamp on success; on any
+   * partial-parse failure, returns whatever fields the try block had already
+   * assigned (bare key from `data.get('k')` may be populated even when the
+   * timestamp is not), preserving the pre-refactor partial-success behavior.
+   * @param cause the causation id, guaranteed to start with `key:{"`
+   * @return a parse holder with the bare key (or the raw substring on total
+   *   failure) and the parsed timestamp when available
+   */
+  private static CausationKeyParse parseJsonCausation(String cause) {
+    String correlationKey = cause.substring(4);
+    DateTime earliestCreatedDate = null;
+    try {
+      String jsonStr = cause.substring(4);
+      Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
+        jsonStr
+      );
+      correlationKey = (String) data.get('k');
+      Long ms = (Long) data.get('t');
+      earliestCreatedDate = DateTime.newInstance(ms);
+    } catch (Exception ignored) {
+      // fallback: leave earliestCreatedDate unresolved and continue
+    }
+    return new CausationKeyParse(correlationKey, earliestCreatedDate);
+  }
+
+  /**
+   * @description Parses the interim `<k>::ts::<millis>` suffix. Trims the
+   * suffix from the correlation key when the numeric tail is 12-15 digits and
+   * parses as a Long; on any failure (no suffix, wrong length, non-numeric)
+   * returns the input key with a null timestamp so callers fall through.
+   * @param correlationKey the bare key (already stripped of the `key:` prefix)
+   * @return a parse holder with the possibly-trimmed key and, on success, the
+   *   parsed inline timestamp
+   */
+  private static CausationKeyParse parseTsSuffix(String correlationKey) {
+    Integer tsIndex = correlationKey.lastIndexOf('::ts::');
+    if (tsIndex == -1) {
+      return new CausationKeyParse(correlationKey, null);
+    }
+    String tsStr = correlationKey.substring(tsIndex + 6);
+    if (tsStr.length() < 12 || tsStr.length() > 15) {
+      return new CausationKeyParse(correlationKey, null);
+    }
+    try {
+      Long ms = Long.valueOf(tsStr);
+      return new CausationKeyParse(
+        correlationKey.substring(0, tsIndex),
+        DateTime.newInstance(ms)
+      );
+    } catch (Exception ignored) {
+      // fallback: leave earliestCreatedDate unresolved and continue
+    }
+    return new CausationKeyParse(correlationKey, null);
+  }
+
+  /**
+   * @description Parses the legacy `<k>#<millis>` suffix as the final
+   * fallback. Trims the suffix from the correlation key when the numeric tail
+   * is 12-15 digits and parses as a Long; on any failure (no suffix, wrong
+   * length, non-numeric) returns the input key with a null timestamp.
+   * @param correlationKey the possibly-JSON-normalized key from the first pass
+   * @return a parse holder with the possibly-trimmed key and, on success, the
+   *   parsed legacy inline timestamp
+   */
+  private static CausationKeyParse parseHashSuffix(String correlationKey) {
+    Integer hashIndex = correlationKey.lastIndexOf('#');
+    if (hashIndex == -1) {
+      return new CausationKeyParse(correlationKey, null);
+    }
+    String tsStr = correlationKey.substring(hashIndex + 1);
+    if (tsStr.length() < 12 || tsStr.length() > 15) {
+      return new CausationKeyParse(correlationKey, null);
+    }
+    try {
+      Long ms = Long.valueOf(tsStr);
+      return new CausationKeyParse(
+        correlationKey.substring(0, hashIndex),
+        DateTime.newInstance(ms)
+      );
+    } catch (Exception ignored) {
+      // fallback: leave earliestCreatedDate unresolved and continue
+    }
+    return new CausationKeyParse(correlationKey, null);
+  }
+
+  /**
+   * @description Resolves the next ancestor id for a lineage-walk hop by
+   * inspecting the instance's `Causation_Id__c` and, when it is not present,
+   * falling back to `Parent_Instance__c`. Handles three ancestor encodings in
+   * the same priority order as the pre-refactor loop body: (1) blank
+   * causation id -> Parent_Instance__c; (2) valid direct Id -> confirm the
+   * target row exists; (3) `key:`-scoped id -> resolve via correlation-key
+   * parent query bounded by `earliestCreatedDate` and the visited-id set. A
+   * valid direct-id whose target row does not exist resolves to null (the
+   * loop then breaks on the next iteration).
+   *
+   * Per-hop SOQL is intentional and bounded: the outer walk runs at most 12
+   * hops, so this helper issues at most two SOQL queries per call (direct
+   * lookup + optional `key:` parent query, plus whatever
+   * `getEarliestPredecessorCreatedDate` uses when no inline timestamp is
+   * present) and the total is capped by the hop count.
+   * @param inst the ancestor row from this hop
+   * @param visitedIds the ids already walked; used to short-circuit the
+   *   correlation-key parent query so the walk cannot revisit a previous hop
+   * @return the next currentId to walk, or null to signal end-of-lineage
+   *   (loop breaks on the next iteration)
+   */
+  private static Id resolveNextAncestorId(
+    Workflow_Instance__c inst,
+    Set<Id> visitedIds
+  ) {
+    String cause = inst.Causation_Id__c;
+    if (String.isBlank(cause)) {
+      return inst.Parent_Instance__c;
+    }
+
+    if (isValidId(cause)) {
+      List<Workflow_Instance__c> directRecords = [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE Id = :cause
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      // Valid direct id whose target row is missing resolves to null so the
+      // outer loop breaks on the next iteration (matches pre-refactor behavior,
+      // where resolvedId stayed null and the final `else` set currentId=null).
+      return directRecords.isEmpty() ? null : directRecords[0].Id;
+    }
+
+    if (cause.startsWith('key:')) {
+      CausationKeyParse parsed = parseCausationTimestamp(cause);
+      String correlationKey = parsed.correlationKey;
+      DateTime earliestCreatedDate = parsed.earliestCreatedDate;
+      if (earliestCreatedDate == null) {
+        earliestCreatedDate = getEarliestPredecessorCreatedDate(inst);
+      }
+
+      List<Workflow_Instance__c> parents = [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE
+          (Correlation_Key__c = :correlationKey
+          OR Active_Correlation_Key__c = :correlationKey
+          OR Root_Correlation_Key__c = :correlationKey)
+          AND CreatedDate <= :earliestCreatedDate
+          AND Id NOT IN :visitedIds
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC
+        LIMIT 1
+      ];
+      return parents.isEmpty() ? null : parents[0].Id;
+    }
+
+    return null;
   }
 
   private static Boolean isValidId(String val) {
@@ -11059,7 +11184,10 @@ public inherited sharing class WorkflowEngine {
    * @param instanceId the parent workflow instance to resume
    * @param stepName the parallel-sibling step name to drive
    */
-  private static void enqueueParallelResumeStep(Id instanceId, String stepName) {
+  private static void enqueueParallelResumeStep(
+    Id instanceId,
+    String stepName
+  ) {
     if (Test.isRunningTest()) {
       if (!disableQueueableInTest) {
         System.enqueueJob(new WorkflowOrchestrator(instanceId, stepName));
