@@ -9890,9 +9890,7 @@ public inherited sharing class WorkflowEngine {
         }
         enqueuedBranchKeys.add(key);
         if (Test.isRunningTest()) {
-          if (!disableQueueableInTest) {
-            System.enqueueJob(new WorkflowOrchestrator(instId, b));
-          }
+          enqueueTestBranchJob(instId, b);
         } else {
           branchEvents.add(
             new Workflow_Event__e(
@@ -9920,6 +9918,23 @@ public inherited sharing class WorkflowEngine {
           );
         }
       }
+    }
+  }
+
+  /**
+   * @description Direct-enqueues one branch orchestrator job for the test-only
+   * branch of `enqueueResumeBulk`. Kept as a helper so the per-branch
+   * `System.enqueueJob` is not lexically inside `enqueueResumeBulk`'s nested
+   * loop. Production still batches every branch into a single
+   * `EventBus.publish`; this helper is only invoked when `Test.isRunningTest()`
+   * is true. Honors `disableQueueableInTest` so tests that suppress queueable
+   * dispatch remain suppressed.
+   * @param instId the parent workflow instance whose branch is being driven
+   * @param branchName the branch step name to enqueue
+   */
+  private static void enqueueTestBranchJob(Id instId, String branchName) {
+    if (!disableQueueableInTest) {
+      System.enqueueJob(new WorkflowOrchestrator(instId, branchName));
     }
   }
 
