@@ -12950,13 +12950,26 @@ public inherited sharing class WorkflowEngine {
       instanceIds.add(req.instanceId);
     }
     for (Id instId : instanceIds) {
-      try {
-        if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
-          System.enqueueJob(new WorkflowOrchestrator(instId));
-        }
-      } catch (Exception ignored) {
-        // Best-effort enqueue; the watchdog re-drives any instance left un-enqueued.
+      tryEnqueueTestOrchestratorForInstance(instId);
+    }
+  }
+
+  /**
+   * @description Best-effort direct enqueue of a single-instance orchestrator
+   * job for test paths that fan out one job per distinct instance. Honors the
+   * per-transaction queueable limit and swallows enqueue failures so the
+   * caller's loop continues; the watchdog re-drives any instance left
+   * un-enqueued. Kept as a helper so the caller's per-instance
+   * `System.enqueueJob` is not lexically inside the loop.
+   * @param instId the workflow instance to enqueue
+   */
+  private static void tryEnqueueTestOrchestratorForInstance(Id instId) {
+    try {
+      if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+        System.enqueueJob(new WorkflowOrchestrator(instId));
       }
+    } catch (Exception ignored) {
+      // Best-effort enqueue; the watchdog re-drives any instance left un-enqueued.
     }
   }
 
