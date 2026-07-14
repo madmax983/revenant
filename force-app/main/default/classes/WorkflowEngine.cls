@@ -258,15 +258,8 @@ public inherited sharing class WorkflowEngine {
         currentId = childToParentMap.get(currentId);
       } else {
         // Fallback: Query parent from DB to resolve root across hops/transactions
-        List<Workflow_Instance__c> insts = [
-          SELECT Parent_Instance__c
-          FROM Workflow_Instance__c
-          WHERE Id = :currentId
-          WITH SYSTEM_MODE
-          LIMIT 1
-        ];
-        if (!insts.isEmpty() && insts[0].Parent_Instance__c != null) {
-          Id parentId = insts[0].Parent_Instance__c;
+        Id parentId = queryParentInstanceId(currentId);
+        if (parentId != null) {
           childToParentMap.put(currentId, parentId);
           currentId = parentId;
         } else {
@@ -275,6 +268,33 @@ public inherited sharing class WorkflowEngine {
       }
     }
     return currentId;
+  }
+
+  /**
+   * Resolves the direct parent instance id for a single hop of the
+   * root-instance parent-chain walk in {@link getRootInstanceId}.
+   * <p><b>Intentional per-iteration SOQL.</b> This runs exactly one SOQL query
+   * per hop of a sequential parent-chain graph walk: each hop's parent id is
+   * only knowable after the prior hop's row is read, so the walk cannot be
+   * bulkified into a single query. It is governor-safe because the caller caps
+   * the walk at a <b>10-hop bound</b> (the {@code for (i &lt; 10)} loop),
+   * limiting this to at most 10 queries per invocation.
+   * @param currentId the instance whose parent id to resolve
+   * @return the parent instance id, or null when the row is missing or has no
+   *         parent (signalling the caller to stop walking)
+   */
+  private static Id queryParentInstanceId(Id currentId) {
+    List<Workflow_Instance__c> insts = [
+      SELECT Parent_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Id = :currentId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    if (!insts.isEmpty() && insts[0].Parent_Instance__c != null) {
+      return insts[0].Parent_Instance__c;
+    }
+    return null;
   }
 
   /**
