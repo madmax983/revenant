@@ -10104,8 +10104,8 @@ public inherited sharing class WorkflowEngine {
 
   // Parallel forward execution retry: enqueue only incomplete branches. Reuse the
   // already-loaded step map (reset steps are now 'Pending' in memory) instead of
-  // re-querying once per branch. The per-branch enqueue is intentionally in-loop
-  // (OperationWithLimitsInLoop deferred to PR #3).
+  // re-querying once per branch. The per-branch enqueue is delegated to
+  // enqueueParallelBranchRetryOne so it is not lexically inside this loop.
   private static void enqueueParallelBranchRetries(
     Id instanceId,
     List<String> targetStepNames,
@@ -10122,14 +10122,29 @@ public inherited sharing class WorkflowEngine {
       if (!incomplete) {
         continue;
       }
-      if (!Test.isRunningTest()) {
-        enqueueOrchestrator(instanceId, targetStepName);
-        continue;
-      }
-      if (!disableQueueableInTest) {
-        // In-loop enqueue is intentional (OperationWithLimitsInLoop deferred to PR #3).
-        System.enqueueJob(new WorkflowOrchestrator(instanceId, targetStepName));
-      }
+      enqueueParallelBranchRetryOne(instanceId, targetStepName);
+    }
+  }
+
+  /**
+   * @description Enqueues a single parallel-branch retry, direct-enqueue under
+   * test and via the standard `enqueueOrchestrator` path otherwise. Kept as a
+   * helper so the test-only per-branch `System.enqueueJob` is not lexically
+   * inside `enqueueParallelBranchRetries`'s loop. Test-only enqueue continues
+   * to honor `disableQueueableInTest`.
+   * @param instanceId the parent workflow instance to resume
+   * @param targetStepName the target branch step name to drive
+   */
+  private static void enqueueParallelBranchRetryOne(
+    Id instanceId,
+    String targetStepName
+  ) {
+    if (!Test.isRunningTest()) {
+      enqueueOrchestrator(instanceId, targetStepName);
+      return;
+    }
+    if (!disableQueueableInTest) {
+      System.enqueueJob(new WorkflowOrchestrator(instanceId, targetStepName));
     }
   }
 
