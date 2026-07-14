@@ -384,14 +384,14 @@ public inherited sharing class WorkflowPauseGate {
       String detail = (ex == null) ? 'unknown error' : ex.getMessage();
       // WorkflowLog.error swallows its own DML failures, so this stays best-effort.
       WorkflowLog.error(
-        'WorkflowPauseGate.ResumeChunkQueueable',
-        'Parked-instance resume drain failed for scope "' +
-          workflowName +
-          '": ' +
-          detail,
-        null,
-        null,
-        workflowName
+        new WorkflowLog.ErrorEntry(
+            'WorkflowPauseGate.ResumeChunkQueueable',
+            'Parked-instance resume drain failed for scope "' +
+              workflowName +
+              '": ' +
+              detail
+          )
+          .withWorkflowName(workflowName)
       );
     }
   }
