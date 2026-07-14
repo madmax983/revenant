@@ -3,20 +3,6 @@
  * instances and their engine-owned ContentDocuments in bounded, resumable batches.
  */
 public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
-  // Title prefixes that mark a ContentDocument as engine-owned and therefore safe to
-  // purge. User-uploaded files (no matching prefix) are never deleted. Declared on the
-  // top-level class because Apex forbids static members on inner classes; the inner
-  // PurgeOldInstancesStep references it by simple name.
-  private static final Set<String> ALLOWED_PREFIXES = new Set<String>{
-    'Input_',
-    'Output_',
-    'State_',
-    'Resume_',
-    'ContinueInput_',
-    'Captures_',
-    'VerificationPayload'
-  };
-
   /**
    * @description Returns the ordered list of step names that make up this workflow.
    * @return A single-element list naming the purge step.
@@ -57,22 +43,6 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
     public Integer batchSize = 200;
   }
 
-  // Accumulated set of instances/documents selected for deletion this transaction.
-  private class PurgeChunk {
-    public List<Workflow_Instance__c> instancesToPurge = new List<Workflow_Instance__c>();
-    public Set<Id> instanceIdsToPurge = new Set<Id>();
-    public Set<Id> finalDocIdsToDelete = new Set<Id>();
-  }
-
-  // The document lookups needed to decide, per candidate instance, which files are
-  // engine-owned and unshared and therefore safe to delete.
-  private class DocIndex {
-    public Map<Id, List<Id>> instanceToDocIds = new Map<Id, List<Id>>();
-    public Set<Id> allDocIds = new Set<Id>();
-    public Map<Id, ContentDocument> docMap = new Map<Id, ContentDocument>();
-    public Map<Id, List<ContentDocumentLink>> docToLinksMap = new Map<Id, List<ContentDocumentLink>>();
-  }
-
   // inherited sharing: the step runs in the engine's (caller's) context. Every SOQL
   // uses WITH SYSTEM_MODE and every DML uses `as system`, so record access is already
   // elevated deliberately where the purge needs it; the explicit keyword just satisfies
@@ -107,17 +77,12 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
         return StepResult.complete(null, state);
       }
 
-      // 1-3. Map documents to candidate instances, select those documents, and query
-      //    all their links so we can verify a file is not shared elsewhere before
-      //    deleting it (prevents data loss).
-      DocIndex docIndex = buildDocIndex(candidateInstances);
-
-      // 4. Build chunk of instances to process in this transaction, bounding file
-      //    deletes to 100 max.
-      PurgeChunk chunk = buildPurgeChunk(candidateInstances, docIndex);
-
-      // 5. Delete qualified documents
-      deleteQualifiedDocs(chunk.finalDocIdsToDelete);
+      // 1-5. Index the candidate instances' documents, select the bounded chunk of
+      //    instances to purge, and delete their engine-owned unshared documents. The
+      //    returned chunk carries the instances (and ids) still to be deleted.
+      CleanupDocumentPurger.PurgeChunk chunk = CleanupDocumentPurger.purgeInstanceDocuments(
+        candidateInstances
+      );
 
       // 6. Delete associated signal records before deleting instances.
       applyInstanceDeletion(chunk, state);
@@ -222,183 +187,11 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
       ];
     }
 
-    // ── Document mapping ─────────────────────────────────────────────────────────
-    // Maps candidate instances to their documents, then loads those documents and every
-    // link on them so sharing can be checked before deletion.
-    private DocIndex buildDocIndex(
-      List<Workflow_Instance__c> candidateInstances
-    ) {
-      DocIndex idx = new DocIndex();
-
-      Set<Id> candidateInstanceIds = new Set<Id>();
-      for (Workflow_Instance__c inst : candidateInstances) {
-        candidateInstanceIds.add(inst.Id);
-      }
-
-      for (ContentDocumentLink link : [
-        SELECT ContentDocumentId, LinkedEntityId
-        FROM ContentDocumentLink
-        WHERE LinkedEntityId IN :candidateInstanceIds
-        WITH SYSTEM_MODE
-      ]) {
-        if (!idx.instanceToDocIds.containsKey(link.LinkedEntityId)) {
-          idx.instanceToDocIds.put(link.LinkedEntityId, new List<Id>());
-        }
-        idx.instanceToDocIds.get(link.LinkedEntityId)
-          .add(link.ContentDocumentId);
-        idx.allDocIds.add(link.ContentDocumentId);
-      }
-
-      loadDocs(idx);
-      loadDocLinks(idx);
-      return idx;
-    }
-
-    private void loadDocs(DocIndex idx) {
-      if (idx.allDocIds.isEmpty()) {
-        return;
-      }
-      for (ContentDocument doc : [
-        SELECT Id, Title
-        FROM ContentDocument
-        WHERE Id IN :idx.allDocIds
-        WITH SYSTEM_MODE
-      ]) {
-        idx.docMap.put(doc.Id, doc);
-      }
-    }
-
-    private void loadDocLinks(DocIndex idx) {
-      if (idx.allDocIds.isEmpty()) {
-        return;
-      }
-      for (ContentDocumentLink cdl : [
-        SELECT ContentDocumentId, LinkedEntityId
-        FROM ContentDocumentLink
-        WHERE ContentDocumentId IN :idx.allDocIds
-        WITH SYSTEM_MODE
-      ]) {
-        if (!idx.docToLinksMap.containsKey(cdl.ContentDocumentId)) {
-          idx.docToLinksMap.put(
-            cdl.ContentDocumentId,
-            new List<ContentDocumentLink>()
-          );
-        }
-        idx.docToLinksMap.get(cdl.ContentDocumentId).add(cdl);
-      }
-    }
-
-    // ── Purge-chunk selection ────────────────────────────────────────────────────
-    private PurgeChunk buildPurgeChunk(
-      List<Workflow_Instance__c> candidateInstances,
-      DocIndex idx
-    ) {
-      PurgeChunk chunk = new PurgeChunk();
-
-      for (Workflow_Instance__c inst : candidateInstances) {
-        List<Id> docIds = idx.instanceToDocIds.get(inst.Id);
-        Integer docCount = (docIds != null) ? docIds.size() : 0;
-
-        // Bounded processing: if processing this instance would exceed our soft
-        // transaction cap of 100 deleted documents, defer it to the next yield chunk.
-        // The first instance is allowed to exceed this soft cap to guarantee forward
-        // progress.
-        if (
-          !chunk.instancesToPurge.isEmpty() &&
-          (chunk.finalDocIdsToDelete.size() + docCount) > 100
-        ) {
-          break;
-        }
-
-        chunk.instancesToPurge.add(inst);
-        chunk.instanceIdsToPurge.add(inst.Id);
-
-        collectDeletableDocs(docIds, idx, chunk);
-      }
-
-      return chunk;
-    }
-
-    private void collectDeletableDocs(
-      List<Id> docIds,
-      DocIndex idx,
-      PurgeChunk chunk
-    ) {
-      if (docIds == null) {
-        return;
-      }
-      for (Id docId : docIds) {
-        ContentDocument doc = idx.docMap.get(docId);
-        if (doc == null) {
-          continue;
-        }
-        // A. Title/Prefix Check — never delete user files
-        if (!isEngineOwned(doc)) {
-          continue;
-        }
-        // B. Shared Link Check — skip files still shared outside this purge batch
-        if (
-          !isSharedElsewhere(docId, idx.docToLinksMap, chunk.instanceIdsToPurge)
-        ) {
-          chunk.finalDocIdsToDelete.add(docId);
-        }
-      }
-    }
-
-    private Boolean isEngineOwned(ContentDocument doc) {
-      for (String prefix : ALLOWED_PREFIXES) {
-        if (doc.Title != null && doc.Title.startsWith(prefix)) {
-          return true;
-        }
-      }
-      return false;
-    }
-
-    private Boolean isSharedElsewhere(
-      Id docId,
-      Map<Id, List<ContentDocumentLink>> docToLinksMap,
-      Set<Id> instanceIdsToPurge
-    ) {
-      List<ContentDocumentLink> cdls = docToLinksMap.get(docId);
-      if (cdls == null) {
-        return false;
-      }
-      for (ContentDocumentLink cdl : cdls) {
-        Id linkedId = cdl.LinkedEntityId;
-        String sObjType = linkedId.getSObjectType()
-          .getDescribe(SObjectDescribeOptions.DEFERRED)
-          .getName();
-        // Ignore the default User link created on file upload
-        if (sObjType == 'User') {
-          continue;
-        }
-        // Shared if linked to any record other than a Workflow_Instance__c that is
-        // also being deleted in this batch.
-        if (
-          sObjType != 'Workflow_Instance__c' ||
-          !instanceIdsToPurge.contains(linkedId)
-        ) {
-          return true;
-        }
-      }
-      return false;
-    }
-
     // ── Deletion ─────────────────────────────────────────────────────────────────
-    private void deleteQualifiedDocs(Set<Id> finalDocIdsToDelete) {
-      if (finalDocIdsToDelete.isEmpty()) {
-        return;
-      }
-      List<ContentDocument> docsToDelete = [
-        SELECT Id
-        FROM ContentDocument
-        WHERE Id IN :finalDocIdsToDelete
-        WITH SYSTEM_MODE
-      ];
-      delete as system docsToDelete;
-    }
-
-    private void applyInstanceDeletion(PurgeChunk chunk, PurgeState state) {
+    private void applyInstanceDeletion(
+      CleanupDocumentPurger.PurgeChunk chunk,
+      PurgeState state
+    ) {
       if (chunk.instancesToPurge.isEmpty()) {
         return;
       }
