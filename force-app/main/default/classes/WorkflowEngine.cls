@@ -9629,7 +9629,7 @@ public inherited sharing class WorkflowEngine {
   }
 
   /** Parallel lists describing the keyed-cancel claims to insert then act on. */
-  private class CancelClaimBatch {
+  private class KeyedCancelClaimBatch {
     List<Workflow_Signal__c> claims = new List<Workflow_Signal__c>();
     List<Id> instIds = new List<Id>();
     List<Boolean> runComp = new List<Boolean>();
@@ -9865,7 +9865,7 @@ public inherited sharing class WorkflowEngine {
     SignalInstanceMaps maps
   ) {
     Set<Id> cancelledInstanceIds = new Set<Id>();
-    CancelClaimBatch batch = collectCancelClaims(requests, maps);
+    KeyedCancelClaimBatch batch = collectCancelClaims(requests, maps);
     if (batch.isEmpty()) {
       return cancelledInstanceIds;
     }
@@ -9892,11 +9892,11 @@ public inherited sharing class WorkflowEngine {
    * @param maps the by-id/by-key instance caches
    * @return the parallel claim/instance/run-compensations lists to act on
    */
-  private static CancelClaimBatch collectCancelClaims(
+  private static KeyedCancelClaimBatch collectCancelClaims(
     List<SignalRequest> requests,
     SignalInstanceMaps maps
   ) {
-    CancelClaimBatch batch = new CancelClaimBatch();
+    KeyedCancelClaimBatch batch = new KeyedCancelClaimBatch();
     Set<String> seenCancelKeys = new Set<String>();
     for (SignalRequest req : requests) {
       if (req == null) {
@@ -9937,7 +9937,7 @@ public inherited sharing class WorkflowEngine {
    * insert error the batch is rolled back and a WorkflowException is thrown.
    * @param claimResults the save results of the bulk claim insert
    * @param cancelSp the savepoint to roll back on a genuine failure
-   * @return the indices (into the CancelClaimBatch) of the fresh claims
+   * @return the indices (into the KeyedCancelClaimBatch) of the fresh claims
    */
   private static List<Integer> collectFreshClaimIndices(
     Database.SaveResult[] claimResults,
@@ -9975,7 +9975,7 @@ public inherited sharing class WorkflowEngine {
    * @return the ids of the instances a cancel was attempted on
    */
   private static Set<Id> runKeyedCancels(
-    CancelClaimBatch batch,
+    KeyedCancelClaimBatch batch,
     List<Integer> freshClaims,
     Savepoint cancelSp
   ) {
