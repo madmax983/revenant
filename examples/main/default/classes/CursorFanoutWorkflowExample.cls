@@ -213,10 +213,12 @@ public inherited sharing class CursorFanoutWorkflowExample {
           '_' +
           ctx.workflowInstanceId;
         WorkflowEngine.start(
-          'CursorFanoutWorkflowExample.ProcessCursorChunkWorkflow',
-          childKey,
-          childInput,
-          ctx.workflowInstanceId
+          new WorkflowEngine.StartRequest(
+              'CursorFanoutWorkflowExample.ProcessCursorChunkWorkflow',
+              childKey,
+              childInput
+            )
+            .withParent(ctx.workflowInstanceId)
         );
       }
 

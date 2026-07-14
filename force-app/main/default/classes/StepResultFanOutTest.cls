@@ -508,12 +508,12 @@ public class StepResultFanOutTest {
       // Under our case-insensitive check, this call should resolve to a no-op (idempotent re-suspend)
       // rather than throwing a duplicate key exception or trying to insert a new row.
       try {
-        WorkflowEngine.startChildWorkflow(
-          parentId,
-          'StepResultFanOutTest.SimpleChildWorkflow',
-          'Child1_' + parentId,
-          '{}'
-        );
+        WorkflowEngine.ChildWorkflowStartRequest childReq = new WorkflowEngine.ChildWorkflowStartRequest();
+        childReq.parentId = parentId;
+        childReq.workflowName = 'StepResultFanOutTest.SimpleChildWorkflow';
+        childReq.correlationKey = 'Child1_' + parentId;
+        childReq.inputJson = '{}';
+        WorkflowEngine.startChildWorkflow(childReq);
         System.assert(
           true,
           'Should have resolved idempotently without throwing a duplicate exception'

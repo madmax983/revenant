@@ -96,20 +96,20 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
     );
 
     WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
-      req.workflowName,
-      req.correlationKey,
-      input,
-      attributes
-    );
+        req.workflowName,
+        req.correlationKey,
+        input
+      )
+      .withAttributes(attributes);
     startReq.inputJson = req.inputJson;
     startReq.causationId = req.causationId;
 
     return new WorkflowEngine.SignalOrStartRequest(
-      startReq,
-      req.signalName,
-      req.payloadJson,
-      req.idempotencyKey
-    );
+        startReq,
+        req.signalName,
+        req.payloadJson
+      )
+      .withIdempotencyKey(req.idempotencyKey);
   }
 
   private static List<SignalOrStartResult> toResults(

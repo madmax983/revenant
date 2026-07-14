@@ -250,7 +250,11 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
       }
       Savepoint sp = Database.setSavepoint();
       try {
-        WorkflowEngine.cancel(instId, runCompensations);
+        if (runCompensations) {
+          WorkflowEngine.cancelWithCompensations(instId);
+        } else {
+          WorkflowEngine.cancel(instId);
+        }
         return CancelOutcome.CANCELLED;
       } catch (Exception ex) {
         Database.rollback(sp);

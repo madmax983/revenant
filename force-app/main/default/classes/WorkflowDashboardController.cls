@@ -1909,7 +1909,11 @@ public inherited sharing class WorkflowDashboardController {
   public static void cancelWorkflow(CancelRequest req) {
     checkAuthorization();
     try {
-      WorkflowEngine.cancel(req.instanceId, req.runCompensations);
+      if (req.runCompensations) {
+        WorkflowEngine.cancelWithCompensations(req.instanceId);
+      } else {
+        WorkflowEngine.cancel(req.instanceId);
+      }
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
     }

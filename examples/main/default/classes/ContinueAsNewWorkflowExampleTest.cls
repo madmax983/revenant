@@ -8,10 +8,12 @@ public class ContinueAsNewWorkflowExampleTest {
       // it cannot be driven further.
       Test.startTest();
       Id run1Id = WorkflowEngine.start(
-        'ContinueAsNewWorkflowExample.PollerWorkflow',
-        'PollerKey',
-        0,
-        new Map<String, String>{ 'poller_type' => 'daily' }
+        new WorkflowEngine.StartRequest(
+            'ContinueAsNewWorkflowExample.PollerWorkflow',
+            'PollerKey',
+            0
+          )
+          .withAttributes(new Map<String, String>{ 'poller_type' => 'daily' })
       );
       WorkflowTestHarness.Result run1Result = new WorkflowTestHarness(run1Id)
         .drive();

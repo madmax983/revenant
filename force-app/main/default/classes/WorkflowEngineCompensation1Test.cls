@@ -652,7 +652,7 @@ public class WorkflowEngineCompensation1Test {
         inst.Current_Step__c
       );
 
-      WorkflowEngine.cancel(instanceId, false);
+      WorkflowEngine.cancel(instanceId);
 
       inst = [
         SELECT Status__c, Current_Step__c, Error_Message__c
@@ -706,7 +706,7 @@ public class WorkflowEngineCompensation1Test {
 
       Test.startTest();
       // Cancel with compensations
-      WorkflowEngine.cancel(instanceId, true);
+      WorkflowEngine.cancelWithCompensations(instanceId);
 
       // Assert status is now Cancelling
       inst = [
@@ -751,7 +751,7 @@ public class WorkflowEngineCompensation1Test {
       System.assertEquals('Suspended', inst.Status__c);
 
       // Cancel sleeping workflow
-      WorkflowEngine.cancel(instanceId, false);
+      WorkflowEngine.cancel(instanceId);
 
       inst = [
         SELECT Status__c
@@ -785,7 +785,7 @@ public class WorkflowEngineCompensation1Test {
 
       Test.startTest();
       // Cancel parent, should recursively cancel child
-      WorkflowEngine.cancel(parentId, false);
+      WorkflowEngine.cancel(parentId);
       Test.stopTest();
 
       Workflow_Instance__c parent = [

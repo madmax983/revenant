@@ -14,10 +14,12 @@ public class EventAggregationWorkflowExampleTest {
       // 1. Deliver first event (starts workflow and records signal)
       Test.startTest();
       WorkflowEngine.StartResult res1 = WorkflowEngine.signalOrStart(
-        startReq,
-        EventAggregationWorkflowExample.EVENT_SIGNAL,
-        '"Item-A"',
-        'Idemp-E1'
+        new WorkflowEngine.SignalOrStartRequest(
+            startReq,
+            EventAggregationWorkflowExample.EVENT_SIGNAL,
+            '"Item-A"'
+          )
+          .withIdempotencyKey('Idemp-E1')
       );
 
       // Verify first event started a new instance
@@ -41,10 +43,12 @@ public class EventAggregationWorkflowExampleTest {
 
       // 2. Deliver second event
       WorkflowEngine.StartResult res2 = WorkflowEngine.signalOrStart(
-        startReq,
-        EventAggregationWorkflowExample.EVENT_SIGNAL,
-        '"Item-B"',
-        'Idemp-E2'
+        new WorkflowEngine.SignalOrStartRequest(
+            startReq,
+            EventAggregationWorkflowExample.EVENT_SIGNAL,
+            '"Item-B"'
+          )
+          .withIdempotencyKey('Idemp-E2')
       );
 
       // Verify it resolved to the existing instance
@@ -64,10 +68,12 @@ public class EventAggregationWorkflowExampleTest {
 
       // 3. Deliver third event
       WorkflowEngine.signalOrStart(
-        startReq,
-        EventAggregationWorkflowExample.EVENT_SIGNAL,
-        '"Item-C"',
-        'Idemp-E3'
+        new WorkflowEngine.SignalOrStartRequest(
+            startReq,
+            EventAggregationWorkflowExample.EVENT_SIGNAL,
+            '"Item-C"'
+          )
+          .withIdempotencyKey('Idemp-E3')
       );
 
       // Run the step to process the third event

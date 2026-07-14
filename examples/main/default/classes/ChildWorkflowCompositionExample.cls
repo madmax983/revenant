@@ -21,7 +21,7 @@
  *    Consumed at the COMPLETE transition.  A redelivered at-least-once duplicate
  *    therefore cannot double-advance the parent.
  *
- * 4. WorkflowEngine.cancel(parentId, false) cancels the parent and all of its
+ * 4. WorkflowEngine.cancel(parentId) cancels the parent and all of its
  *    active descendants (root-first traversal over Parent_Instance__c), so
  *    explicitly cancelling a parent reaps its in-flight children.  Note this is
  *    cancellation only: a parent that FAILS is not cascaded — failWorkflowInstance

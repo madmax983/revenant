@@ -47,10 +47,11 @@ public inherited sharing class CaseDebounceTriggerHandler {
         };
 
         // Collect bulk debounce request: debounce for 5 seconds
-        WorkflowDebouncer.DebounceRequest debounceReq = new WorkflowDebouncer.DebounceRequest();
-        debounceReq.workflowName = 'CaseDebounceWorkflowExample';
-        debounceReq.correlationKey = 'Case_Debounce_' + c.Id;
-        debounceReq.inputJson = JSON.serialize(input);
+        WorkflowDebouncer.DebounceRequest debounceReq = new WorkflowDebouncer.DebounceRequest(
+          'CaseDebounceWorkflowExample',
+          'Case_Debounce_' + c.Id,
+          JSON.serialize(input)
+        );
         debounceReq.debounceSeconds = 5;
         debounceReq.maxWaitSeconds = null;
         debounceRequests.add(debounceReq);

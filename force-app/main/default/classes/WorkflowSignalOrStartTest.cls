@@ -65,10 +65,12 @@ public class WorkflowSignalOrStartTest {
 
       Test.startTest();
       WorkflowEngine.StartResult result = WorkflowEngine.signalOrStart(
-        startReq,
-        'Approve:MySignal',
-        '"SignalPayload"',
-        'Idemp-1'
+        new WorkflowEngine.SignalOrStartRequest(
+            startReq,
+            'Approve:MySignal',
+            '"SignalPayload"'
+          )
+          .withIdempotencyKey('Idemp-1')
       );
       Test.stopTest();
 
@@ -119,10 +121,12 @@ public class WorkflowSignalOrStartTest {
       WorkflowEngine.disableQueueableInTest = false;
       Test.startTest();
       WorkflowEngine.StartResult result = WorkflowEngine.signalOrStart(
-        startReq,
-        'Approve:MySignal',
-        '"SignalPayload"',
-        'Idemp-2'
+        new WorkflowEngine.SignalOrStartRequest(
+            startReq,
+            'Approve:MySignal',
+            '"SignalPayload"'
+          )
+          .withIdempotencyKey('Idemp-2')
       );
 
       System.assertEquals(instanceId, result.instanceId);
@@ -171,18 +175,22 @@ public class WorkflowSignalOrStartTest {
       Test.startTest();
       // First delivery
       WorkflowEngine.StartResult result1 = WorkflowEngine.signalOrStart(
-        startReq,
-        'Approve:MySignal',
-        '"SignalPayload"',
-        'Idemp-3'
+        new WorkflowEngine.SignalOrStartRequest(
+            startReq,
+            'Approve:MySignal',
+            '"SignalPayload"'
+          )
+          .withIdempotencyKey('Idemp-3')
       );
 
       // Second delivery (redelivery of same key + signal + idemp key)
       WorkflowEngine.StartResult result2 = WorkflowEngine.signalOrStart(
-        startReq,
-        'Approve:MySignal',
-        '"SignalPayload"',
-        'Idemp-3'
+        new WorkflowEngine.SignalOrStartRequest(
+            startReq,
+            'Approve:MySignal',
+            '"SignalPayload"'
+          )
+          .withIdempotencyKey('Idemp-3')
       );
       Test.stopTest();
 
@@ -232,10 +240,12 @@ public class WorkflowSignalOrStartTest {
       Test.startTest();
       // Within dedup window: should return existing terminal instance and swallow signal
       WorkflowEngine.StartResult result = WorkflowEngine.signalOrStart(
-        startReq,
-        'Approve:MySignal',
-        '"NewSignalPayload"',
-        'Idemp-4'
+        new WorkflowEngine.SignalOrStartRequest(
+            startReq,
+            'Approve:MySignal',
+            '"NewSignalPayload"'
+          )
+          .withIdempotencyKey('Idemp-4')
       );
       Test.stopTest();
 
@@ -277,11 +287,11 @@ public class WorkflowSignalOrStartTest {
       );
       requests.add(
         new WorkflowEngine.SignalOrStartRequest(
-          startNew,
-          'Approve:MySignal',
-          '"PayloadNew"',
-          'Idemp-Bulk-1'
-        )
+            startNew,
+            'Approve:MySignal',
+            '"PayloadNew"'
+          )
+          .withIdempotencyKey('Idemp-Bulk-1')
       );
 
       // Request 2: Existing active instance
@@ -292,21 +302,21 @@ public class WorkflowSignalOrStartTest {
       );
       requests.add(
         new WorkflowEngine.SignalOrStartRequest(
-          startActive,
-          'Approve:MySignal',
-          '"PayloadActive"',
-          'Idemp-Bulk-2'
-        )
+            startActive,
+            'Approve:MySignal',
+            '"PayloadActive"'
+          )
+          .withIdempotencyKey('Idemp-Bulk-2')
       );
 
       // Request 3: Duplicate of Request 1 in same batch (in-batch duplicate)
       requests.add(
         new WorkflowEngine.SignalOrStartRequest(
-          startNew,
-          'Approve:MySignal',
-          '"PayloadNew"',
-          'Idemp-Bulk-1'
-        )
+            startNew,
+            'Approve:MySignal',
+            '"PayloadNew"'
+          )
+          .withIdempotencyKey('Idemp-Bulk-1')
       );
 
       WorkflowEngine.disableQueueableInTest = false;
@@ -442,10 +452,12 @@ public class WorkflowSignalOrStartTest {
 
       Test.startTest();
       WorkflowEngine.StartResult result = WorkflowEngine.signalOrStart(
-        startReq,
-        'Cancel',
-        'false', // runCompensations = false
-        'Idemp-Cancel-Key'
+        new WorkflowEngine.SignalOrStartRequest(
+            startReq,
+            'Cancel',
+            'false' // runCompensations = false
+          )
+          .withIdempotencyKey('Idemp-Cancel-Key')
       );
       Test.stopTest();
 
@@ -499,10 +511,12 @@ public class WorkflowSignalOrStartTest {
 
       Test.startTest();
       WorkflowEngine.StartResult result = WorkflowEngine.signalOrStart(
-        startReq,
-        'Approve:MySignal',
-        '"SignalPayload"',
-        'Idemp-CompFailed-1'
+        new WorkflowEngine.SignalOrStartRequest(
+            startReq,
+            'Approve:MySignal',
+            '"SignalPayload"'
+          )
+          .withIdempotencyKey('Idemp-CompFailed-1')
       );
       Test.stopTest();
 
@@ -548,10 +562,12 @@ public class WorkflowSignalOrStartTest {
 
       Test.startTest();
       WorkflowEngine.StartResult result = WorkflowEngine.signalOrStart(
-        startReq,
-        'Approve:MySignal',
-        '"SignalPayload"',
-        'Idemp-ContNew-1'
+        new WorkflowEngine.SignalOrStartRequest(
+            startReq,
+            'Approve:MySignal',
+            '"SignalPayload"'
+          )
+          .withIdempotencyKey('Idemp-ContNew-1')
       );
       Test.stopTest();
 
@@ -623,10 +639,12 @@ public class WorkflowSignalOrStartTest {
       // 4. Send child completed signal for Child 2 (terminal, but Child 1 is still Pending)
       Test.startTest();
       WorkflowEngine.signalOrStart(
-        startReq,
-        'ChildCompleted:ChildKey2',
-        '{}',
-        'Idemp-Child2'
+        new WorkflowEngine.SignalOrStartRequest(
+            startReq,
+            'ChildCompleted:ChildKey2',
+            '{}'
+          )
+          .withIdempotencyKey('Idemp-Child2')
       );
 
       // Verify parent is still Suspended (gated)
@@ -643,10 +661,12 @@ public class WorkflowSignalOrStartTest {
 
       // Send child completed signal for Child 1 (all children are now terminal/ready)
       WorkflowEngine.signalOrStart(
-        startReq,
-        'ChildCompleted:ChildKey1',
-        '{}',
-        'Idemp-Child1'
+        new WorkflowEngine.SignalOrStartRequest(
+            startReq,
+            'ChildCompleted:ChildKey1',
+            '{}'
+          )
+          .withIdempotencyKey('Idemp-Child1')
       );
       Test.stopTest();
 

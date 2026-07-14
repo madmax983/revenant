@@ -109,10 +109,11 @@ public inherited sharing class WorkflowStartInvocableAction {
     WorkflowInvocableInputParser.parseInputJson(req.inputJson);
     WorkflowDebouncer.validateAttributesJson(req.attributesJson);
 
-    WorkflowDebouncer.DebounceRequest debounceReq = new WorkflowDebouncer.DebounceRequest();
-    debounceReq.workflowName = req.workflowName;
-    debounceReq.correlationKey = req.correlationKey;
-    debounceReq.inputJson = req.inputJson;
+    WorkflowDebouncer.DebounceRequest debounceReq = new WorkflowDebouncer.DebounceRequest(
+      req.workflowName,
+      req.correlationKey,
+      req.inputJson
+    );
     debounceReq.debounceSeconds = req.debounceSeconds;
     debounceReq.maxWaitSeconds = req.maxWaitSeconds;
     debounceReq.attributesJson = req.attributesJson;
@@ -127,11 +128,11 @@ public inherited sharing class WorkflowStartInvocableAction {
     );
 
     WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
-      req.workflowName,
-      req.correlationKey,
-      input,
-      attributes
-    );
+        req.workflowName,
+        req.correlationKey,
+        input
+      )
+      .withAttributes(attributes);
     startReq.inputJson = req.inputJson;
     startReq.causationId = req.causationId;
     return startReq;

@@ -18,6 +18,63 @@ public inherited sharing class WorkflowDebouncer {
     public Integer maxWaitSeconds;
     public String attributesJson;
     public String causationId;
+
+    /**
+     * @description Builds a minimal debounce request. Set the debounce window and
+     * any optional caps/attributes with the fluent setters.
+     * @param workflowName developer name of the workflow definition to start
+     * @param correlationKey dedup/correlation key coalescing the debounced starts
+     * @param inputJson serialized start input applied when the timer fires
+     */
+    public DebounceRequest(
+      String workflowName,
+      String correlationKey,
+      String inputJson
+    ) {
+      this.workflowName = workflowName;
+      this.correlationKey = correlationKey;
+      this.inputJson = inputJson;
+    }
+
+    /**
+     * @description Fluent setter for the trailing-edge quiet period.
+     * @param debounceSecondsArg trailing-edge quiet period before the start fires
+     * @return this request, for call chaining
+     */
+    public DebounceRequest withDebounce(Integer debounceSecondsArg) {
+      this.debounceSeconds = debounceSecondsArg;
+      return this;
+    }
+
+    /**
+     * @description Fluent setter for the maximum-wait cap.
+     * @param maxWaitSecondsArg ceiling on total wait before the start is forced
+     * @return this request, for call chaining
+     */
+    public DebounceRequest withMaxWait(Integer maxWaitSecondsArg) {
+      this.maxWaitSeconds = maxWaitSecondsArg;
+      return this;
+    }
+
+    /**
+     * @description Fluent setter for the serialized searchable attributes.
+     * @param attributesJsonArg serialized searchable attributes to stamp
+     * @return this request, for call chaining
+     */
+    public DebounceRequest withAttributesJson(String attributesJsonArg) {
+      this.attributesJson = attributesJsonArg;
+      return this;
+    }
+
+    /**
+     * @description Fluent setter for the causation id.
+     * @param causationIdArg causation id linking the start to its trigger
+     * @return this request, for call chaining
+     */
+    public DebounceRequest withCausationId(String causationIdArg) {
+      this.causationId = causationIdArg;
+      return this;
+    }
   }
 
   private class SweepContext {
@@ -260,11 +317,11 @@ public inherited sharing class WorkflowDebouncer {
 
       // Pass null to input since we set inputJson directly, saving CPU deserialization cycles.
       WorkflowEngine.StartRequest req = new WorkflowEngine.StartRequest(
-        state.Workflow_Name__c,
-        state.Correlation_Key__c,
-        null,
-        attributes
-      );
+          state.Workflow_Name__c,
+          state.Correlation_Key__c,
+          null
+        )
+        .withAttributes(attributes);
       req.inputJson = state.Input_Json__c;
       req.causationId = state.Causation_Id__c;
       startRequests.add(req);

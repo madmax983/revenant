@@ -62,12 +62,12 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
     // Check if the workflow instance is still active and waiting on this step
     // (pre-start check)
     if (isExpectedStep(instance)) {
-      WorkflowEngine.failWorkflowInstance(
-        this.instanceId,
-        this.stepName,
-        'Step execution timed out before starting.',
-        WorkflowEngine.CAT_TIMEOUT
-      );
+      WorkflowEngine.FailInstanceRequest failReq = new WorkflowEngine.FailInstanceRequest();
+      failReq.instanceId = this.instanceId;
+      failReq.stepName = this.stepName;
+      failReq.errorMessage = 'Step execution timed out before starting.';
+      failReq.failureCategory = WorkflowEngine.CAT_TIMEOUT;
+      WorkflowEngine.failWorkflowInstance(failReq);
     }
   }
 
@@ -202,12 +202,12 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
     stepExec.Error_Details__c = errorMsg;
     update as system stepExec;
 
-    WorkflowEngine.failWorkflowInstance(
-      this.instanceId,
-      this.stepName,
-      errorMsg,
-      WorkflowEngine.CAT_TIMEOUT
-    );
+    WorkflowEngine.FailInstanceRequest failReq = new WorkflowEngine.FailInstanceRequest();
+    failReq.instanceId = this.instanceId;
+    failReq.stepName = this.stepName;
+    failReq.errorMessage = errorMsg;
+    failReq.failureCategory = WorkflowEngine.CAT_TIMEOUT;
+    WorkflowEngine.failWorkflowInstance(failReq);
     return true;
   }
 

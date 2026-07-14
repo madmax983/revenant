@@ -366,12 +366,12 @@ private class WorkflowTypeResolverTest {
       // extracts 'rev_pkg' as the parentNamespace prefix, and passes it as contextNamespace to WorkflowTypeResolver.resolve.
       // Then resolver Step 4 (local fallback) resolves the outer/inner class name successfully!
       Test.startTest();
-      WorkflowEngine.startChildWorkflow(
-        parentInstance.Id,
-        'WorkflowEngineTest.HappyWorkflow',
-        'child_corr_key',
-        '{}'
-      );
+      WorkflowEngine.ChildWorkflowStartRequest childReq = new WorkflowEngine.ChildWorkflowStartRequest();
+      childReq.parentId = parentInstance.Id;
+      childReq.workflowName = 'WorkflowEngineTest.HappyWorkflow';
+      childReq.correlationKey = 'child_corr_key';
+      childReq.inputJson = '{}';
+      WorkflowEngine.startChildWorkflow(childReq);
       Test.stopTest();
 
       // Verify child instance was created

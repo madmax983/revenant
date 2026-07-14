@@ -124,10 +124,12 @@ public class WorkflowEngineCausationTest {
 
       // Start Child under Parent
       Id childId = WorkflowEngine.start(
-        'WorkflowEngineTest.HappyWorkflow',
-        'ChildKey',
-        null,
-        parentId
+        new WorkflowEngine.StartRequest(
+            'WorkflowEngineTest.HappyWorkflow',
+            'ChildKey',
+            null
+          )
+          .withParent(parentId)
       );
 
       Workflow_Instance__c child = [
@@ -240,11 +242,11 @@ public class WorkflowEngineCausationTest {
 
       // Start Child under Parent with blank causationId (so it has only Parent_Instance__c)
       WorkflowEngine.StartRequest childReq = new WorkflowEngine.StartRequest(
-        'WorkflowEngineMocksBTest.DaemonWorkflow',
-        'ChildDaemonKey',
-        0,
-        parentId
-      );
+          'WorkflowEngineMocksBTest.DaemonWorkflow',
+          'ChildDaemonKey',
+          0
+        )
+        .withParent(parentId);
       Id childId = WorkflowEngine.startOrGet(
           new List<WorkflowEngine.StartRequest>{ childReq }
         )[0]
@@ -312,10 +314,12 @@ public class WorkflowEngineCausationTest {
 
       // Start Child under Parent
       Id childId = WorkflowEngine.start(
-        'WorkflowEngineTest.HappyWorkflow',
-        'ChildKey',
-        null,
-        parentId
+        new WorkflowEngine.StartRequest(
+            'WorkflowEngineTest.HappyWorkflow',
+            'ChildKey',
+            null
+          )
+          .withParent(parentId)
       );
 
       // Get causation lineage on Child
