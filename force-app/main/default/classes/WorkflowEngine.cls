@@ -1709,30 +1709,11 @@ public inherited sharing class WorkflowEngine {
     ) {
       walk.visited.add(walk.prevId);
       predecessorQueriesRemaining--;
-      Id prevId = walk.prevId;
-      List<Workflow_Instance__c> prevs = [
-        SELECT
-          Id,
-          CreatedDate,
-          Previous_Instance__c,
-          Previous_Instance__r.CreatedDate,
-          Previous_Instance__r.Previous_Instance__c,
-          Previous_Instance__r.Previous_Instance__r.CreatedDate,
-          Previous_Instance__r.Previous_Instance__r.Previous_Instance__c,
-          Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.CreatedDate,
-          Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c,
-          Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.CreatedDate,
-          Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c
-        FROM Workflow_Instance__c
-        WHERE Id = :prevId
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (prevs.isEmpty()) {
+      Workflow_Instance__c p = queryPredecessorChain(walk.prevId);
+      if (p == null) {
         break;
       }
 
-      Workflow_Instance__c p = prevs[0];
       walk.earliest = p.CreatedDate;
       walk.prevId = p.Previous_Instance__c;
       walk.hopsCount++;
@@ -1741,6 +1722,44 @@ public inherited sharing class WorkflowEngine {
       advanceInMemoryLookAhead(walk, p);
     }
     return walk.earliest;
+  }
+
+  /**
+   * Fetches one predecessor instance (with 5 chain levels of
+   * {@code Previous_Instance__r} pre-fetched) for a single hop of the
+   * predecessor-chain walk in {@link getEarliestPredecessorCreatedDate}.
+   * <p><b>Intentional per-iteration SOQL.</b> This runs exactly one SOQL query
+   * per hop of a sequential predecessor-chain graph walk: the next predecessor
+   * id is only knowable after the current row is read, so the walk cannot be
+   * bulkified into a single query. It is governor-safe by <b>two independent
+   * bounds</b> enforced in the caller's {@code while} condition &mdash; the
+   * per-call {@code maxPredecessors} hop cap AND the transaction-wide
+   * {@code predecessorQueriesRemaining} query budget &mdash; and each query
+   * already look-ahead-fetches 5 chain levels to minimise the hop count.
+   * @param prevId the predecessor instance id to fetch
+   * @return the predecessor row, or null when no matching row exists
+   *         (signalling the caller to stop walking)
+   */
+  private static Workflow_Instance__c queryPredecessorChain(Id prevId) {
+    List<Workflow_Instance__c> prevs = [
+      SELECT
+        Id,
+        CreatedDate,
+        Previous_Instance__c,
+        Previous_Instance__r.CreatedDate,
+        Previous_Instance__r.Previous_Instance__c,
+        Previous_Instance__r.Previous_Instance__r.CreatedDate,
+        Previous_Instance__r.Previous_Instance__r.Previous_Instance__c,
+        Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.CreatedDate,
+        Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c,
+        Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.CreatedDate,
+        Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__r.Previous_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Id = :prevId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    return prevs.isEmpty() ? null : prevs[0];
   }
 
   /**
@@ -12893,21 +12912,7 @@ public inherited sharing class WorkflowEngine {
     Set<Id> seen = new Set<Id>{ rootId };
     List<Id> frontier = new List<Id>{ rootId };
     while (!frontier.isEmpty()) {
-      List<Workflow_Instance__c> children = [
-        SELECT Id
-        FROM Workflow_Instance__c
-        WHERE
-          Parent_Instance__c IN :frontier
-          AND Status__c IN (
-            'Pending',
-            'Running',
-            'Suspended',
-            'Cancelling',
-            'CompensationFailed',
-            'Paused'
-          )
-        WITH SYSTEM_MODE
-      ];
+      List<Workflow_Instance__c> children = queryActiveChildren(frontier);
       List<Id> nextFrontier = new List<Id>();
       for (Workflow_Instance__c child : children) {
         if (!seen.contains(child.Id)) {
@@ -12919,6 +12924,41 @@ public inherited sharing class WorkflowEngine {
       frontier = nextFrontier;
     }
     return ordered;
+  }
+
+  /**
+   * Fetches the active child instances of one BFS frontier level for
+   * {@link collectInstanceAndActiveDescendants}.
+   * <p><b>Intentional per-iteration SOQL.</b> This runs one SOQL query per
+   * tree level of a breadth-first descendant traversal: the ids of level N+1
+   * are only knowable after level N's children are read, so the traversal
+   * cannot collapse into a single query. It is already optimal &mdash; one
+   * <i>set-based</i> query per level (over the entire frontier at once), not
+   * one query per node &mdash; and is governor-safe because the query count is
+   * bounded by the <b>finite depth of the instance parent/child tree</b>, not
+   * by the number of instances.
+   * @param frontier the current BFS level's instance ids to fetch children of
+   * @return the active (non-terminal) child instances whose parent is in the
+   *         frontier
+   */
+  private static List<Workflow_Instance__c> queryActiveChildren(
+    List<Id> frontier
+  ) {
+    return [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE
+        Parent_Instance__c IN :frontier
+        AND Status__c IN (
+          'Pending',
+          'Running',
+          'Suspended',
+          'Cancelling',
+          'CompensationFailed',
+          'Paused'
+        )
+      WITH SYSTEM_MODE
+    ];
   }
 
   /**
