@@ -5674,25 +5674,54 @@ public inherited sharing class WorkflowEngine {
           .keySet();
         tried.addAll(candidateIds);
 
-        List<Workflow_Signal__c> locked = [
-          SELECT Id
-          FROM Workflow_Signal__c
-          WHERE Id IN :candidateIds AND Status__c = 'Received'
-          WITH SYSTEM_MODE
-          FOR UPDATE
-        ];
-        if (locked.isEmpty()) {
+        List<StepContext.Signal> claimed = lockAndClaimSignalPage(
+          candidateIds,
+          candidates
+        );
+        if (claimed == null) {
           continue; // whole page lost to siblings; try the next page
         }
-
-        Set<Id> claimedIds = markSignalsProcessing(locked);
-        Database.update(locked, true, AccessLevel.SYSTEM_MODE); // one statement for the whole page
-        claimBudget -= claimedIds.size();
-        claimStatementBudget -= 1;
-
-        return buildClaimedSignals(candidates, claimedIds);
+        return claimed;
       }
       return new List<StepContext.Signal>();
+    }
+
+    /**
+     * @description Locks the candidate ids with `FOR UPDATE` and, if any
+     * survive, atomically marks them Processing and updates them in a single
+     * DML statement. The FOR UPDATE query and the follow-on update run inside
+     * this one helper call so they stay in the same transaction context and
+     * remain atomic per page. Debits the caller's claim row and statement
+     * budgets on success.
+     *
+     * The per-invocation SOQL FOR UPDATE + DML update is intentional and
+     * bounded: the caller loops at most `PARALLEL_CLAIM_PAGE_RETRIES` times and
+     * returns immediately on the first successful claim, so this helper is
+     * called at most that many times per accessor call (typically once).
+     * @param candidateIds ids returned by the read-only Received query
+     * @param candidates the corresponding candidate rows (payload source)
+     * @return the claimed signals for this page on success, or null when the
+     *   whole page was lost to siblings so the caller should re-page
+     */
+    private List<StepContext.Signal> lockAndClaimSignalPage(
+      Set<Id> candidateIds,
+      List<Workflow_Signal__c> candidates
+    ) {
+      List<Workflow_Signal__c> locked = [
+        SELECT Id
+        FROM Workflow_Signal__c
+        WHERE Id IN :candidateIds AND Status__c = 'Received'
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ];
+      if (locked.isEmpty()) {
+        return null;
+      }
+      Set<Id> claimedIds = markSignalsProcessing(locked);
+      Database.update(locked, true, AccessLevel.SYSTEM_MODE); // one statement for the whole page
+      claimBudget -= claimedIds.size();
+      claimStatementBudget -= 1;
+      return buildClaimedSignals(candidates, claimedIds);
     }
 
     /**
