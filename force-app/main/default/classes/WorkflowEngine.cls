@@ -114,12 +114,6 @@ public inherited sharing class WorkflowEngine {
   @TestVisible
   private static Set<String> enqueuedBranchKeys = new Set<String>();
 
-  @TestVisible
-  private static Map<String, FaultConfig> injectedFaults = new Map<String, FaultConfig>();
-
-  @TestVisible
-  private static Map<Id, Id> childToParentMap = new Map<Id, Id>();
-
   // Terminal statuses for the read API. ContinuedAsNew is deliberately excluded
   // (it is a hand-off, not an outcome) and CompensationFailed is excluded
   // (it is non-terminal — the rollback can still be resumed/retried).
@@ -139,13 +133,6 @@ public inherited sharing class WorkflowEngine {
   // exhaustion without inserting thousands of rows.
   @TestVisible
   private static Integer serialSignalRowCap = 8000;
-
-  @TestVisible
-  private static Integer breadcrumbDmlStatementReserve = 10;
-  @TestVisible
-  private static Integer breadcrumbDmlRowReserve = 20;
-  @TestVisible
-  private static Integer breadcrumbSoqlReserve = 5;
 
   // Caps how many signals a single parallel-branch accessor call claims at read
   // time. A claim writes Processing now and the matching COMPLETE writes
@@ -224,152 +211,6 @@ public inherited sharing class WorkflowEngine {
    * exceptions.
    */
   public class WorkflowException extends Exception {
-  }
-
-  @TestVisible
-  private class FaultConfig {
-    public String message;
-    public Integer remainingFailures;
-    /**
-     * @description Builds a fault-injection entry for a keyed step.
-     * @param message failure message thrown when the fault fires
-     * @param remainingFailures number of times the fault should still fire, or
-     * null to fail on every execution
-     */
-    public FaultConfig(String message, Integer remainingFailures) {
-      this.message = message;
-      this.remainingFailures = remainingFailures;
-    }
-  }
-
-  private static void registerChildParent(Id childId, Id parentId) {
-    if (childId != null && parentId != null) {
-      childToParentMap.put(childId, parentId);
-    }
-  }
-
-  private static Id getRootInstanceId(Id instanceId) {
-    if (instanceId == null) {
-      return null;
-    }
-    Id currentId = instanceId;
-    for (Integer i = 0; i < 10; i++) {
-      if (childToParentMap.containsKey(currentId)) {
-        currentId = childToParentMap.get(currentId);
-      } else {
-        // Fallback: Query parent from DB to resolve root across hops/transactions
-        Id parentId = queryParentInstanceId(currentId);
-        if (parentId != null) {
-          childToParentMap.put(currentId, parentId);
-          currentId = parentId;
-        } else {
-          break;
-        }
-      }
-    }
-    return currentId;
-  }
-
-  /**
-   * Resolves the direct parent instance id for a single hop of the
-   * root-instance parent-chain walk in {@link getRootInstanceId}.
-   * <p><b>Intentional per-iteration SOQL.</b> This runs exactly one SOQL query
-   * per hop of a sequential parent-chain graph walk: each hop's parent id is
-   * only knowable after the prior hop's row is read, so the walk cannot be
-   * bulkified into a single query. It is governor-safe because the caller caps
-   * the walk at a <b>10-hop bound</b> (the {@code for (i &lt; 10)} loop),
-   * limiting this to at most 10 queries per invocation.
-   * @param currentId the instance whose parent id to resolve
-   * @return the parent instance id, or null when the row is missing or has no
-   *         parent (signalling the caller to stop walking)
-   */
-  private static Id queryParentInstanceId(Id currentId) {
-    List<Workflow_Instance__c> insts = [
-      SELECT Parent_Instance__c
-      FROM Workflow_Instance__c
-      WHERE Id = :currentId
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    if (!insts.isEmpty() && insts[0].Parent_Instance__c != null) {
-      return insts[0].Parent_Instance__c;
-    }
-    return null;
-  }
-
-  /**
-   * Consumes one injected-fault occurrence for the key and reports whether this
-   * invocation should fail. A null remainingFailures fails every time; a
-   * positive count is decremented (and the fault removed when it reaches zero);
-   * a zero/negative count does not fail.
-   * @param config the fault configuration (mutated when it has a finite count)
-   * @param key the injected-fault map key, removed when the count is exhausted
-   * @return true when this invocation should inject the fault
-   */
-  private static Boolean consumeFaultShouldFail(
-    FaultConfig config,
-    String key
-  ) {
-    if (config.remainingFailures == null) {
-      return true;
-    }
-    if (config.remainingFailures > 0) {
-      config.remainingFailures--;
-      if (config.remainingFailures == 0) {
-        injectedFaults.remove(key);
-      }
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * Builds the injected-fault outcome: a retry when the step is RetryConfigurable
-   * with a policy, otherwise a thrown WorkflowException carrying the fault
-   * message.
-   * @param stepInstance the step being executed
-   * @param config the fault configuration supplying the failure message
-   * @return a retry StepResult when a retry policy applies
-   */
-  private static StepResult faultResult(
-    WorkflowStep stepInstance,
-    FaultConfig config
-  ) {
-    if (stepInstance instanceof RetryConfigurable) {
-      RetryPolicy policy = ((RetryConfigurable) stepInstance).getRetryPolicy();
-      if (policy != null) {
-        return StepResult.retry(policy);
-      }
-    }
-    throw new WorkflowException(config.message);
-  }
-
-  private static StepResult checkAndInjectFault(
-    Id instanceId,
-    String stepName,
-    WorkflowStep stepInstance
-  ) {
-    if (
-      !(Test.isRunningTest() &&
-      injectedFaults != null &&
-      !injectedFaults.isEmpty() &&
-      String.isNotBlank(stepName))
-    ) {
-      return null;
-    }
-    Id rootId = getRootInstanceId(instanceId);
-    String key =
-      (rootId != null ? String.valueOf(rootId) : '') +
-      ':' +
-      stepName.toLowerCase();
-    FaultConfig config = injectedFaults.get(key);
-    if (config == null) {
-      return null;
-    }
-    if (!consumeFaultShouldFail(config, key)) {
-      return null;
-    }
-    return faultResult(stepInstance, config);
   }
 
   /**
@@ -5519,12 +5360,8 @@ public inherited sharing class WorkflowEngine {
 
     StepResult result;
     try {
-      if (
-        Test.isRunningTest() &&
-        injectedFaults != null &&
-        !injectedFaults.isEmpty()
-      ) {
-        result = checkAndInjectFault(
+      if (Test.isRunningTest() && WorkflowFaultInjection.hasArmedFaults()) {
+        result = WorkflowFaultInjection.checkAndInjectFault(
           ctx.instanceId,
           ctx.activeStepName,
           stepInstance
@@ -6422,7 +6259,14 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
-  private static void saveStepExec(Workflow_Step_Execution__c stepExec) {
+  /**
+   * @description Persists a step execution (insert when transient, otherwise
+   * update) in system mode after populating its telemetry, for the non-crash
+   * case. Public so the extracted breadcrumb persistence can flush a transient
+   * step execution before correlating its logs.
+   * @param stepExec the step execution to persist
+   */
+  public static void saveStepExec(Workflow_Step_Execution__c stepExec) {
     saveStepExec(stepExec, false);
   }
 
@@ -6523,17 +6367,17 @@ public inherited sharing class WorkflowEngine {
    * persistStepBreadcrumbs) so each takes a single parameter instead of a long
    * positional list. Populated field-by-field to avoid a wide constructor.
    */
-  private class StepOutcomeContext {
-    private Workflow_Instance__c instance;
-    private Workflow_Step_Execution__c stepExec;
-    private StepResult result;
+  public class StepOutcomeContext {
+    public Workflow_Instance__c instance;
+    public Workflow_Step_Execution__c stepExec;
+    public StepResult result;
     private List<String> stack;
-    private StepContext context;
+    public StepContext context;
     private Boolean isParallel;
   }
 
   private static void handleStepResult(StepOutcomeContext outcome) {
-    persistStepBreadcrumbs(outcome);
+    WorkflowBreadcrumbs.persistStepBreadcrumbs(outcome);
     // Re-query to avoid overwriting a timeout or finalizer crash status and race conditions
     Workflow_Instance__c freshInstance = [
       SELECT
@@ -8666,7 +8510,7 @@ public inherited sharing class WorkflowEngine {
     try {
       Database.insert(instance, true, AccessLevel.SYSTEM_MODE);
       if (Test.isRunningTest() && parentId != null) {
-        registerChildParent(instance.Id, parentId);
+        WorkflowFaultInjection.registerChildParent(instance.Id, parentId);
       }
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
@@ -8975,7 +8819,7 @@ public inherited sharing class WorkflowEngine {
       Database.insert(instancesToInsert, true, AccessLevel.SYSTEM_MODE);
       if (Test.isRunningTest()) {
         for (Workflow_Instance__c inst : instancesToInsert) {
-          registerChildParent(inst.Id, parentId);
+          WorkflowFaultInjection.registerChildParent(inst.Id, parentId);
         }
       }
       return true;
@@ -12463,7 +12307,7 @@ public inherited sharing class WorkflowEngine {
       crashOutcome.instance = instance;
       crashOutcome.stepExec = stepExec;
       crashOutcome.context = context;
-      persistStepBreadcrumbs(crashOutcome);
+      WorkflowBreadcrumbs.persistStepBreadcrumbs(crashOutcome);
       stepExec.Status__c = 'Failed';
       stepExec.Error_Details__c =
         ex.getMessage() +
@@ -12493,28 +12337,24 @@ public inherited sharing class WorkflowEngine {
     CompensationRun run,
     CompensatableStep compensatableStepInstance
   ) {
-    if (
-      !(Test.isRunningTest() &&
-      injectedFaults != null &&
-      !injectedFaults.isEmpty())
-    ) {
+    if (!(Test.isRunningTest() && WorkflowFaultInjection.hasArmedFaults())) {
       return null;
     }
     Workflow_Instance__c instance = run.instance;
     String compensationStepLogName = run.compensationStepLogName;
-    Id rootId = getRootInstanceId(instance.Id);
+    Id rootId = WorkflowFaultInjection.getRootInstanceId(instance.Id);
     String compKey =
       (rootId != null ? String.valueOf(rootId) : '') +
       ':' +
       compensationStepLogName.toLowerCase();
-    if (injectedFaults.containsKey(compKey)) {
-      return checkAndInjectFault(
+    if (WorkflowFaultInjection.hasFaultForKey(compKey)) {
+      return WorkflowFaultInjection.checkAndInjectFault(
         instance.Id,
         compensationStepLogName,
         compensatableStepInstance
       );
     }
-    return checkAndInjectFault(
+    return WorkflowFaultInjection.checkAndInjectFault(
       instance.Id,
       run.activeStepName,
       compensatableStepInstance
@@ -12522,7 +12362,7 @@ public inherited sharing class WorkflowEngine {
   }
 
   private static void handleCompensationStepResult(StepOutcomeContext outcome) {
-    persistStepBreadcrumbs(outcome);
+    WorkflowBreadcrumbs.persistStepBreadcrumbs(outcome);
     Workflow_Instance__c instance = loadFreshCompensationInstance(
       outcome.instance
     );
@@ -15191,7 +15031,7 @@ public inherited sharing class WorkflowEngine {
       );
 
       if (!confirmedOrphans.isEmpty()) {
-        reclaimOrphanedInstances(confirmedOrphans);
+        WorkflowReclaim.reclaimOrphanedInstances(confirmedOrphans);
       }
     } catch (Exception ignored) {
       // Best-effort sweep; a failure here must not abort the watchdog heartbeat.
@@ -16628,574 +16468,5 @@ public inherited sharing class WorkflowEngine {
       }
     }
     return clean;
-  }
-
-  private static void persistStepBreadcrumbs(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepContext context = outcome.context;
-    if (context == null || stepExec == null || instance == null) {
-      return;
-    }
-    List<StepContext.Breadcrumb> crumbs = context.logger().getBreadcrumbs();
-    if (crumbs == null || crumbs.isEmpty()) {
-      return;
-    }
-
-    // Keep breadcrumbs from exhausting checkpoint SOQL (best-effort observability log drop)
-    if (
-      Limits.getQueries() + breadcrumbSoqlReserve > Limits.getLimitQueries()
-    ) {
-      // SOQL budget exhausted; drop best-effort breadcrumbs rather than risk the checkpoint.
-      return;
-    }
-
-    Integer dynamicRowReserve = computeBreadcrumbRowReserve(outcome);
-
-    // Keep breadcrumbs from exhausting checkpoint DML (best-effort observability log drop)
-    if (breadcrumbDmlBudgetExceeded(crumbs.size(), dynamicRowReserve)) {
-      // DML budget exhausted; drop best-effort breadcrumbs rather than risk the checkpoint.
-      return;
-    }
-
-    if (stepExec.Id == null) {
-      saveStepExec(stepExec);
-    }
-
-    insertBreadcrumbLogs(outcome, crumbs);
-  }
-
-  private static Boolean breadcrumbDmlBudgetExceeded(
-    Integer crumbCount,
-    Integer dynamicRowReserve
-  ) {
-    return Limits.getDmlStatements() + 1 + breadcrumbDmlStatementReserve >
-      Limits.getLimitDmlStatements() ||
-      Limits.getDmlRows() + crumbCount + breadcrumbDmlRowReserve +
-      dynamicRowReserve > Limits.getLimitDmlRows();
-  }
-
-  // Best-effort estimate of the extra DML rows the checkpoint may insert, used
-  // to decide whether breadcrumb logs fit within the remaining DML budget.
-  private static Integer computeBreadcrumbRowReserve(
-    StepOutcomeContext outcome
-  ) {
-    StepResult result = outcome.result;
-    if (result == null) {
-      return 0;
-    }
-    Integer dynamicRowReserve = 0;
-    dynamicRowReserve += reserveForChildRequests(
-      result.directive().childRequests
-    );
-    dynamicRowReserve += reserveForParallelSteps(result, outcome.stepExec);
-    if (result.directive().outboundEvents != null) {
-      dynamicRowReserve += result.directive().outboundEvents.size();
-    }
-    dynamicRowReserve += computeSignalCleanupRowReserve(outcome);
-    return dynamicRowReserve;
-  }
-
-  private static Integer reserveForChildRequests(
-    List<StepResult.ChildRequest> childRequests
-  ) {
-    Integer reserve = 0;
-    if (childRequests == null) {
-      return reserve;
-    }
-    for (StepResult.ChildRequest req : childRequests) {
-      reserve += 3;
-      if (String.isNotBlank(req.inputJson) && req.inputJson.length() > 100000) {
-        reserve += 2; // ContentVersion + ContentDocumentLink
-      }
-    }
-    return reserve;
-  }
-
-  private static Integer reserveForParallelSteps(
-    StepResult result,
-    Workflow_Step_Execution__c stepExec
-  ) {
-    Integer reserve = 0;
-    if (result.directive().parallelStepNames == null) {
-      return reserve;
-    }
-    for (String ps : result.directive().parallelStepNames) {
-      reserve += 1;
-      String inputPayload = result.directive().parallelInputJson != null
-        ? result.directive().parallelInputJson
-        : stepExec.Output__c;
-      if (String.isNotBlank(inputPayload) && inputPayload.length() > 100000) {
-        reserve += 2; // ContentVersion + ContentDocumentLink
-      }
-    }
-    return reserve;
-  }
-
-  // Reserve for the signal-cleanup DML the checkpoint performs when the step
-  // consumes signals (COMPLETE / SPLIT / FAIL). Only reached with a non-null
-  // result (guarded by the caller).
-  private static Integer computeSignalCleanupRowReserve(
-    StepOutcomeContext outcome
-  ) {
-    StepResult result = outcome.result;
-    StepContext context = outcome.context;
-    Workflow_Instance__c instance = outcome.instance;
-    Boolean willConsumeSignals = (result.directive().action ==
-    StepResult.ActionType.COMPLETE ||
-    result.directive().action == StepResult.ActionType.SPLIT ||
-    result.directive().action == StepResult.ActionType.FAIL);
-    if (!willConsumeSignals) {
-      return 0;
-    }
-    Set<String> matchedNames = context.signals().getConsumedSignalNames();
-    if (matchedNames == null || matchedNames.isEmpty()) {
-      return 0;
-    }
-    Boolean isParallel =
-      String.isNotBlank(instance.Current_Step__c) &&
-      instance.Current_Step__c.contains(',');
-    Boolean runDuplicateCleanup =
-      !isParallel && !context.signals().signalReadWasCapped();
-    if (runDuplicateCleanup) {
-      return reserveForDuplicateCleanup(instance, context, matchedNames);
-    }
-    return reserveForConsumedSignals(context);
-  }
-
-  private static Integer reserveForDuplicateCleanup(
-    Workflow_Instance__c instance,
-    StepContext context,
-    Set<String> matchedNames
-  ) {
-    Integer reserve = [
-      SELECT COUNT()
-      FROM Workflow_Signal__c
-      WHERE
-        Workflow_Instance__c = :instance.Id
-        AND Status__c = 'Received'
-        AND Signal_Name__c IN :matchedNames
-      WITH SYSTEM_MODE
-    ];
-    Set<Id> claimedIds = context.signals().getClaimedSignalIds();
-    if (claimedIds != null && !claimedIds.isEmpty()) {
-      reserve += [
-        SELECT COUNT()
-        FROM Workflow_Signal__c
-        WHERE Id IN :claimedIds AND Status__c = 'Processing'
-        WITH SYSTEM_MODE
-      ];
-    }
-    return reserve;
-  }
-
-  private static Integer reserveForConsumedSignals(StepContext context) {
-    Set<Id> consumedIds = context.signals().getConsumedSignalIds();
-    Set<Id> claimedIds = context.signals().getClaimedSignalIds();
-    Set<Id> allIds = new Set<Id>();
-    if (consumedIds != null) {
-      allIds.addAll(consumedIds);
-    }
-    if (claimedIds != null) {
-      allIds.addAll(claimedIds);
-    }
-    if (allIds.isEmpty()) {
-      return 0;
-    }
-    return [
-      SELECT COUNT()
-      FROM Workflow_Signal__c
-      WHERE Id IN :allIds AND Status__c IN ('Received', 'Processing')
-      WITH SYSTEM_MODE
-    ];
-  }
-
-  private static void insertBreadcrumbLogs(
-    StepOutcomeContext outcome,
-    List<StepContext.Breadcrumb> crumbs
-  ) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    List<Workflow_Log__c> logsToInsert = new List<Workflow_Log__c>();
-    for (StepContext.Breadcrumb b : crumbs) {
-      logsToInsert.add(
-        new Workflow_Log__c(
-          Workflow_Instance__c = instance.Id,
-          Workflow_Name__c = instance.Workflow_Name__c,
-          Correlation_Key__c = stepExec.Id,
-          Log_Type__c = StepContext.LOG_TYPE_BREADCRUMB,
-          Level__c = (b.level != null) ? b.level.name() : 'INFO',
-          Message__c = b.message,
-          Fire_Time__c = b.timestamp
-        )
-      );
-    }
-    Database.insert(logsToInsert, true, AccessLevel.SYSTEM_MODE);
-  }
-
-  // Mutable accumulator threaded through the reclaim phase helpers so each
-  // helper stays within the parameter and complexity budgets.
-  private class ReclaimState {
-    Set<Id> instanceIds = new Set<Id>();
-    Set<String> allTargetStepNames = new Set<String>();
-    Map<Id, List<String>> targetStepsByInstanceId = new Map<Id, List<String>>();
-    Map<Id, Boolean> hasCompensationsByInstanceId = new Map<Id, Boolean>();
-    Map<String, Workflow_Step_Execution__c> latestStepByName = new Map<String, Workflow_Step_Execution__c>();
-    Set<Id> failedInstanceIds = new Set<Id>();
-    Set<Id> succeededInstanceIds = new Set<Id>();
-  }
-
-  private static void reclaimOrphanedInstances(
-    List<Workflow_Instance__c> orphanedInstances
-  ) {
-    ReclaimState state = new ReclaimState();
-    buildReclaimPlan(orphanedInstances, state);
-    lockLatestReclaimSteps(state);
-    Map<Id, Workflow_Step_Execution__c> stepsToResetMap = collectReclaimStepsToReset(
-      orphanedInstances,
-      state
-    );
-    resetReclaimSteps(stepsToResetMap, state);
-    clearReclaimAsyncJobIds(orphanedInstances, state);
-    writeReclaimAuditLogs(orphanedInstances, state);
-    enqueueReclaimOrchestrators(orphanedInstances, state);
-  }
-
-  // Derive, per orphaned instance, the target step names to reset and whether
-  // the instance carries pending compensations, populating the shared state.
-  private static void buildReclaimPlan(
-    List<Workflow_Instance__c> orphanedInstances,
-    ReclaimState state
-  ) {
-    Map<String, String> initialStepByWorkflowName = new Map<String, String>();
-    for (Workflow_Instance__c inst : orphanedInstances) {
-      planReclaimForInstance(inst, state, initialStepByWorkflowName);
-    }
-  }
-
-  // Compute the target steps / compensation flag for a single orphaned instance.
-  private static void planReclaimForInstance(
-    Workflow_Instance__c inst,
-    ReclaimState state,
-    Map<String, String> initialStepByWorkflowName
-  ) {
-    state.instanceIds.add(inst.Id);
-    Boolean isCompensatingOrCancelling = (inst.Status__c == 'Compensating' ||
-    inst.Status__c == 'Cancelling');
-    List<String> stack = new List<String>();
-    if (
-      isCompensatingOrCancelling &&
-      String.isNotBlank(inst.Compensation_Stack__c)
-    ) {
-      stack = parseReclaimCompensationStack(inst);
-    }
-    Boolean hasCompensations = (stack != null && !stack.isEmpty());
-    state.hasCompensationsByInstanceId.put(inst.Id, hasCompensations);
-
-    List<String> targetStepNames = computeReclaimTargetSteps(
-      inst,
-      stack,
-      hasCompensations
-    );
-
-    if (String.isBlank(inst.Current_Step__c) && !hasCompensations) {
-      String initialStep = resolveReclaimInitialStep(
-        inst.Workflow_Name__c,
-        initialStepByWorkflowName
-      );
-      if (initialStep != null) {
-        inst.Current_Step__c = initialStep;
-        targetStepNames.add(initialStep);
-      }
-    }
-
-    state.targetStepsByInstanceId.put(inst.Id, targetStepNames);
-    state.allTargetStepNames.addAll(targetStepNames);
-  }
-
-  // Derive the target step names for reclaim from the instance status, its
-  // compensation stack, and any comma-separated parallel current steps.
-  private static List<String> computeReclaimTargetSteps(
-    Workflow_Instance__c inst,
-    List<String> stack,
-    Boolean hasCompensations
-  ) {
-    Boolean isCompensatingOrCancelling = (inst.Status__c == 'Compensating' ||
-    inst.Status__c == 'Cancelling');
-    List<String> targetStepNames = new List<String>();
-    if (isCompensatingOrCancelling && hasCompensations) {
-      targetStepNames.add(stack[stack.size() - 1] + '_Compensate');
-    } else if (String.isNotBlank(inst.Current_Step__c)) {
-      if (inst.Current_Step__c.contains(',')) {
-        for (String pStep : inst.Current_Step__c.split(',')) {
-          targetStepNames.add(pStep.trim());
-        }
-      } else {
-        targetStepNames.add(inst.Current_Step__c);
-      }
-    }
-    return targetStepNames;
-  }
-
-  // Deserialize the compensation stack; malformed JSON yields an empty stack.
-  private static List<String> parseReclaimCompensationStack(
-    Workflow_Instance__c inst
-  ) {
-    try {
-      return (List<String>) JSON.deserialize(
-        inst.Compensation_Stack__c,
-        List<String>.class
-      );
-    } catch (Exception ignored) {
-      // Malformed Compensation_Stack__c; treat as having no compensations.
-      return new List<String>();
-    }
-  }
-
-  // Resolve (and memoize) a workflow's initial step name for reclaim routing.
-  private static String resolveReclaimInitialStep(
-    String wflowName,
-    Map<String, String> initialStepByWorkflowName
-  ) {
-    if (initialStepByWorkflowName.containsKey(wflowName)) {
-      return initialStepByWorkflowName.get(wflowName);
-    }
-    String initialStep = null;
-    Type wflowType = WorkflowTypeResolver.resolve(
-      wflowName,
-      WorkflowTypeResolver.extractNamespace(wflowName)
-    );
-    if (wflowType != null) {
-      try {
-        Object defObj = wflowType.newInstance();
-        if (defObj instanceof WorkflowDefinition) {
-          initialStep = ((WorkflowDefinition) defObj).getInitialStep();
-        }
-      } catch (Exception ignored) {
-        // Workflow type not instantiable here; leave initialStep null.
-      }
-    }
-    initialStepByWorkflowName.put(wflowName, initialStep);
-    return initialStep;
-  }
-
-  // Query the latest step executions for the target steps and lock them
-  // FOR UPDATE, storing the resolved map on the shared state.
-  private static void lockLatestReclaimSteps(ReclaimState state) {
-    if (state.allTargetStepNames.isEmpty()) {
-      return;
-    }
-    Set<Id> instanceIds = state.instanceIds;
-    Set<String> allTargetStepNames = state.allTargetStepNames;
-    // Query step executions to reset: first identify latest step execution IDs
-    for (Workflow_Step_Execution__c se : [
-      SELECT
-        Id,
-        Workflow_Instance__c,
-        Step_Name__c,
-        Status__c,
-        Retry_Count__c,
-        Error_Details__c,
-        Timeout_At__c,
-        CPU_Time_Ms__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c IN :instanceIds
-        AND Step_Name__c IN :allTargetStepNames
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-    ]) {
-      String key = se.Workflow_Instance__c + ':' + se.Step_Name__c;
-      if (!state.latestStepByName.containsKey(key)) {
-        state.latestStepByName.put(key, se);
-      }
-    }
-
-    // Then lock those specific records using FOR UPDATE
-    Set<Id> stepIdsToLock = new Set<Id>();
-    for (Workflow_Step_Execution__c se : state.latestStepByName.values()) {
-      stepIdsToLock.add(se.Id);
-    }
-    if (!stepIdsToLock.isEmpty()) {
-      for (Workflow_Step_Execution__c se : [
-        SELECT
-          Id,
-          Workflow_Instance__c,
-          Step_Name__c,
-          Status__c,
-          Retry_Count__c,
-          Error_Details__c,
-          Timeout_At__c,
-          CPU_Time_Ms__c
-        FROM Workflow_Step_Execution__c
-        WHERE Id IN :stepIdsToLock
-        WITH SYSTEM_MODE
-        FOR UPDATE
-      ]) {
-        String key = se.Workflow_Instance__c + ':' + se.Step_Name__c;
-        state.latestStepByName.put(key, se);
-      }
-    }
-  }
-
-  // Build the map of step executions whose status must be reset to Pending.
-  private static Map<Id, Workflow_Step_Execution__c> collectReclaimStepsToReset(
-    List<Workflow_Instance__c> orphanedInstances,
-    ReclaimState state
-  ) {
-    Map<Id, Workflow_Step_Execution__c> stepsToResetMap = new Map<Id, Workflow_Step_Execution__c>();
-    for (Workflow_Instance__c inst : orphanedInstances) {
-      List<String> targetStepNames = state.targetStepsByInstanceId.get(inst.Id);
-      for (String targetStepName : targetStepNames) {
-        String key = inst.Id + ':' + targetStepName;
-        Workflow_Step_Execution__c stepExec = state.latestStepByName.get(key);
-        if (
-          stepExec != null &&
-          stepExec.Status__c != 'Completed' &&
-          stepExec.Status__c != 'OperatorSkipped'
-        ) {
-          stepExec.Status__c = 'Pending';
-          stepExec.Retry_Count__c = 0;
-          stepExec.Error_Details__c = null;
-          stepExec.Timeout_At__c = null;
-          stepExec.CPU_Time_Ms__c = null;
-          stepsToResetMap.put(stepExec.Id, stepExec);
-        }
-      }
-    }
-    return stepsToResetMap;
-  }
-
-  // Persist the step-execution resets, recording instances whose reset failed.
-  private static void resetReclaimSteps(
-    Map<Id, Workflow_Step_Execution__c> stepsToResetMap,
-    ReclaimState state
-  ) {
-    if (stepsToResetMap.isEmpty()) {
-      return;
-    }
-    List<Workflow_Step_Execution__c> stepsList = stepsToResetMap.values();
-    Database.SaveResult[] stepSRs = Database.update(
-      stepsList,
-      false,
-      AccessLevel.SYSTEM_MODE
-    );
-    for (Integer i = 0; i < stepSRs.size(); i++) {
-      if (!stepSRs[i].isSuccess()) {
-        state.failedInstanceIds.add(stepsList[i].Workflow_Instance__c);
-      }
-    }
-  }
-
-  // Clear the async job id on reclaimable instances, tracking which persisted.
-  private static void clearReclaimAsyncJobIds(
-    List<Workflow_Instance__c> orphanedInstances,
-    ReclaimState state
-  ) {
-    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
-    for (Workflow_Instance__c inst : orphanedInstances) {
-      if (!state.failedInstanceIds.contains(inst.Id)) {
-        inst.Async_Job_Id__c = null;
-        instancesToUpdate.add(inst);
-      }
-    }
-    if (instancesToUpdate.isEmpty()) {
-      return;
-    }
-    Database.SaveResult[] instSRs = Database.update(
-      instancesToUpdate,
-      false,
-      AccessLevel.SYSTEM_MODE
-    );
-    for (Integer i = 0; i < instSRs.size(); i++) {
-      if (instSRs[i].isSuccess()) {
-        state.succeededInstanceIds.add(instancesToUpdate[i].Id);
-      }
-    }
-  }
-
-  // Emit operator-intervention audit logs for successfully reclaimed instances.
-  private static void writeReclaimAuditLogs(
-    List<Workflow_Instance__c> orphanedInstances,
-    ReclaimState state
-  ) {
-    List<Workflow_Log__c> auditLogs = new List<Workflow_Log__c>();
-    for (Workflow_Instance__c inst : orphanedInstances) {
-      if (!state.succeededInstanceIds.contains(inst.Id)) {
-        continue;
-      }
-      String stepDetail = String.isNotBlank(inst.Current_Step__c)
-        ? inst.Current_Step__c
-        : '(initial step)';
-      auditLogs.add(
-        new Workflow_Log__c(
-          Workflow_Instance__c = inst.Id,
-          Workflow_Name__c = inst.Workflow_Name__c,
-          Correlation_Key__c = inst.Correlation_Key__c,
-          Log_Type__c = 'OperatorIntervention',
-          Message__c = 'Auto-reclaimed orphaned instance from step: ' +
-            stepDetail,
-          Outcome__c = 'Success',
-          Level__c = 'INFO',
-          Fire_Time__c = DateTime.now()
-        )
-      );
-    }
-    if (!auditLogs.isEmpty()) {
-      Database.insert(auditLogs, false, AccessLevel.SYSTEM_MODE);
-    }
-  }
-
-  // Re-enqueue orchestrators for reclaimed instances in a bulk fashion.
-  private static void enqueueReclaimOrchestrators(
-    List<Workflow_Instance__c> orphanedInstances,
-    ReclaimState state
-  ) {
-    List<OrchestratorRequest> requests = new List<OrchestratorRequest>();
-    for (Workflow_Instance__c inst : orphanedInstances) {
-      if (!state.succeededInstanceIds.contains(inst.Id)) {
-        continue;
-      }
-      requests.addAll(buildReclaimOrchestratorRequests(inst, state));
-    }
-
-    if (!requests.isEmpty()) {
-      try {
-        enqueueOrchestrators(requests);
-      } catch (Exception ignored) {
-        // Best-effort re-enqueue; the next watchdog heartbeat re-drives on failure.
-      }
-    }
-  }
-
-  // Build the orchestrator re-drive requests for a single reclaimed instance.
-  private static List<OrchestratorRequest> buildReclaimOrchestratorRequests(
-    Workflow_Instance__c inst,
-    ReclaimState state
-  ) {
-    List<OrchestratorRequest> requests = new List<OrchestratorRequest>();
-    List<String> targetStepNames = state.targetStepsByInstanceId.get(inst.Id);
-    Boolean hasCompensations = state.hasCompensationsByInstanceId.get(inst.Id);
-
-    if (
-      hasCompensations ||
-      String.isBlank(inst.Current_Step__c) ||
-      !inst.Current_Step__c.contains(',')
-    ) {
-      requests.add(new OrchestratorRequest(inst.Id, null));
-    } else {
-      for (String targetStepName : targetStepNames) {
-        String key = inst.Id + ':' + targetStepName;
-        Workflow_Step_Execution__c stepExec = state.latestStepByName.get(key);
-        if (
-          stepExec == null ||
-          (stepExec.Status__c != 'Completed' &&
-          stepExec.Status__c != 'OperatorSkipped')
-        ) {
-          requests.add(new OrchestratorRequest(inst.Id, targetStepName));
-        }
-      }
-    }
-    return requests;
   }
 }

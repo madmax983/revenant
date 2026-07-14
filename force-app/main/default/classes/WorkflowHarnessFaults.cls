@@ -1,6 +1,6 @@
 /**
  * Test-only fault injection for the WorkflowTestHarness. Registers per-step fault
- * configurations (permanent, once, or N-times) in WorkflowEngine.injectedFaults,
+ * configurations (permanent, once, or N-times) in WorkflowFaultInjection.injectedFaults,
  * keyed by root instance + step, and clears the ones this run owns. Instance-bound
  * to a WorkflowHarnessContext so the registration helpers stay concise.
  */
@@ -24,7 +24,10 @@ public inherited sharing class WorkflowHarnessFaults {
    * @param message The failure message the injected fault raises.
    */
   public void registerFault(String stepName, String message) {
-    requireAndPut(stepName, new WorkflowEngine.FaultConfig(message, null));
+    requireAndPut(
+      stepName,
+      new WorkflowFaultInjection.FaultConfig(message, null)
+    );
   }
 
   /**
@@ -34,7 +37,7 @@ public inherited sharing class WorkflowHarnessFaults {
    * @param message The failure message the injected fault raises.
    */
   public void registerFaultOnce(String stepName, String message) {
-    requireAndPut(stepName, new WorkflowEngine.FaultConfig(message, 1));
+    requireAndPut(stepName, new WorkflowFaultInjection.FaultConfig(message, 1));
   }
 
   /**
@@ -56,9 +59,9 @@ public inherited sharing class WorkflowHarnessFaults {
       );
     }
     ensureFaultMap();
-    WorkflowEngine.injectedFaults.put(
+    WorkflowFaultInjection.injectedFaults.put(
       faultKey(stepName),
-      new WorkflowEngine.FaultConfig(message, failCount)
+      new WorkflowFaultInjection.FaultConfig(message, failCount)
     );
   }
 
@@ -67,25 +70,28 @@ public inherited sharing class WorkflowHarnessFaults {
    * prefixed with this context's root instance id, leaving other runs' faults intact.
    */
   public void removeFaults() {
-    if (WorkflowEngine.injectedFaults == null) {
+    if (WorkflowFaultInjection.injectedFaults == null) {
       return;
     }
     String prefix = ctx.rootInstanceId + ':';
     List<String> keysToRemove = new List<String>();
-    for (String key : WorkflowEngine.injectedFaults.keySet()) {
+    for (String key : WorkflowFaultInjection.injectedFaults.keySet()) {
       if (key.startsWith(prefix)) {
         keysToRemove.add(key);
       }
     }
     for (String key : keysToRemove) {
-      WorkflowEngine.injectedFaults.remove(key);
+      WorkflowFaultInjection.injectedFaults.remove(key);
     }
   }
 
-  private void requireAndPut(String stepName, WorkflowEngine.FaultConfig cfg) {
+  private void requireAndPut(
+    String stepName,
+    WorkflowFaultInjection.FaultConfig cfg
+  ) {
     WorkflowHarnessContext.requireStep(stepName);
     ensureFaultMap();
-    WorkflowEngine.injectedFaults.put(faultKey(stepName), cfg);
+    WorkflowFaultInjection.injectedFaults.put(faultKey(stepName), cfg);
   }
 
   private String faultKey(String stepName) {
@@ -93,8 +99,8 @@ public inherited sharing class WorkflowHarnessFaults {
   }
 
   private void ensureFaultMap() {
-    if (WorkflowEngine.injectedFaults == null) {
-      WorkflowEngine.injectedFaults = new Map<String, WorkflowEngine.FaultConfig>();
+    if (WorkflowFaultInjection.injectedFaults == null) {
+      WorkflowFaultInjection.injectedFaults = new Map<String, WorkflowFaultInjection.FaultConfig>();
     }
   }
 }
