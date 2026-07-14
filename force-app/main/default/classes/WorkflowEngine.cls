@@ -10938,13 +10938,26 @@ public inherited sharing class WorkflowEngine {
     }
 
     for (String ps : stepsToEnqueue) {
-      if (Test.isRunningTest()) {
-        if (!disableQueueableInTest) {
-          System.enqueueJob(new WorkflowOrchestrator(run.instanceId, ps));
-        }
-      } else {
-        enqueueOrchestrator(run.instanceId, ps);
+      enqueueParallelResumeStep(run.instanceId, ps);
+    }
+  }
+
+  /**
+   * @description Enqueues a single parallel-resume step, direct-enqueue under
+   * test and via the standard `enqueueOrchestrator` path otherwise. Kept as a
+   * helper so the test-only per-step `System.enqueueJob` is not lexically
+   * inside the caller's loop. Test-only enqueue continues to honor
+   * `disableQueueableInTest`.
+   * @param instanceId the parent workflow instance to resume
+   * @param stepName the parallel-sibling step name to drive
+   */
+  private static void enqueueParallelResumeStep(Id instanceId, String stepName) {
+    if (Test.isRunningTest()) {
+      if (!disableQueueableInTest) {
+        System.enqueueJob(new WorkflowOrchestrator(instanceId, stepName));
       }
+    } else {
+      enqueueOrchestrator(instanceId, stepName);
     }
   }
 
