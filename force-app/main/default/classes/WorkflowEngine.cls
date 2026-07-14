@@ -10512,8 +10512,6 @@ public inherited sharing class WorkflowEngine {
     ];
   }
 
-  // Batch step-execution query stays in-loop (OperationWithLimitsInLoop deferred
-  // to PR #3): one SOQL per 1,000-instance batch to stay under the 50k row cap.
   private static void scanInstancesForExplicitFalse(
     List<Workflow_Instance__c> instances,
     AdoptionScan scan
@@ -10526,19 +10524,43 @@ public inherited sharing class WorkflowEngine {
         instanceBatchSize
       );
 
-      List<Workflow_Step_Execution__c> execs = [
-        SELECT
-          Workflow_Instance__c,
-          Captured_Values__c,
-          Workflow_Instance__r.Workflow_Name__c
-        FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c IN :batchInstances
-        WITH SYSTEM_MODE
-      ];
+      List<Workflow_Step_Execution__c> execs = queryStepExecutionsForBatch(
+        batchInstances
+      );
 
       List<String> resolvedCaptures = resolveCapturesInBatches(execs);
       applyExecCaptures(execs, resolvedCaptures, scan);
     }
+  }
+
+  /**
+   * Fetches the step-execution rows for one 1,000-instance chunk of the
+   * adoption scan in {@link scanInstancesForExplicitFalse}.
+   * <p><b>Intentional per-iteration SOQL.</b> This runs one SOQL query per
+   * 1,000-instance chunk. The chunking <i>is itself the governor-safety
+   * strategy</i>: capping each query at 1,000 parent instances keeps the
+   * number of {@code Workflow_Step_Execution__c} rows returned per query well
+   * under the 50k SOQL-row limit on large data volumes. De-chunking into a
+   * single query would <b>increase</b> governor risk (the opposite of the
+   * rule's intent), so the fixed <b>1,000-instance chunk size</b> must be
+   * preserved exactly. The query count is bounded by
+   * ceil(instances.size() / 1000).
+   * @param batchInstances one chunk of at most 1,000 instances whose step
+   *        executions to fetch
+   * @return the step-execution rows for the given chunk
+   */
+  private static List<Workflow_Step_Execution__c> queryStepExecutionsForBatch(
+    List<Workflow_Instance__c> batchInstances
+  ) {
+    return [
+      SELECT
+        Workflow_Instance__c,
+        Captured_Values__c,
+        Workflow_Instance__r.Workflow_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :batchInstances
+      WITH SYSTEM_MODE
+    ];
   }
 
   private static List<Workflow_Instance__c> sliceInstances(
