@@ -107,7 +107,7 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
         'ThrottledService'
       );
       if (!result.isAllowed) {
-        return StepResult.sleep(result.directive().sleepDurationSeconds);
+        return StepResult.sleep(result.sleepDurationSeconds);
       }
       return StepResult.complete(
         'ThrottledCalloutWorkflowExample.ThrottledCalloutStep',

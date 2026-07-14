@@ -96,8 +96,7 @@ public inherited sharing class BusinessHoursCalendar {
    * @param days The number of whole business days to accumulate.
    * @return The total working milliseconds across the requested business days.
    */
-  @TestVisible
-  private static Long getMillisecondsForDays(
+  public static Long getMillisecondsForDays(
     BusinessHours selectedBusinessHours,
     DateTime start,
     Integer days
