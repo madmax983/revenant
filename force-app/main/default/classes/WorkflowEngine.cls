@@ -7498,22 +7498,16 @@ public inherited sharing class WorkflowEngine {
     publishOutboundEvents(result, context);
   }
 
-  // RETRY: apply backoff, or fail the instance when retries are exhausted.
-  private static void handleRetryOutcome(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-    StepContext context = outcome.context;
-    Boolean isParallel = outcome.isParallel;
-    // Step requested retry
-    if (isParallel) {
-      rollbackClaimedSignals(context);
-    }
-    stepExec.Retry_Count__c += 1;
-
-    // Get and sanitize retry policy
-    RetryPolicy policy = sanitizePolicy(result.directive().retry.policy);
-
+  // Shared retry persistence: merge the sanitized policy's maximumAttempts into
+  // the step's captured values and re-offload them. Extracted from the forward
+  // (handleRetryOutcome) and compensation (handleCompensationRetry) retry paths,
+  // which persisted identical captures state before diverging on the
+  // retries-exhausted branch. Behavior is byte-identical to the inlined blocks.
+  private static void persistRetryMaxAttempts(
+    Workflow_Instance__c instance,
+    Workflow_Step_Execution__c stepExec,
+    RetryPolicy policy
+  ) {
     Map<String, Object> captures = new Map<String, Object>();
     if (String.isNotBlank(stepExec.Captured_Values__c)) {
       String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
@@ -7533,6 +7527,57 @@ public inherited sharing class WorkflowEngine {
       JSON.serialize(captures),
       'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
+  }
+
+  // Shared exponential-backoff reschedule: mark the step Retrying, compute the
+  // capped backoff delay, suspend the instance and arm the retry job. Extracted
+  // from the not-yet-exhausted branch of handleRetryOutcome and
+  // handleCompensationRetry, which scheduled the next attempt identically.
+  // Behavior is byte-identical to the inlined else-branches.
+  private static void scheduleExponentialRetry(
+    Workflow_Instance__c instance,
+    Workflow_Step_Execution__c stepExec,
+    RetryPolicy policy
+  ) {
+    stepExec.Status__c = 'Retrying';
+    stepExec.Output__c = null;
+    saveStepExec(stepExec);
+
+    // Calculate exponential backoff
+    Double backoff = Math.pow(
+      (Double) policy.backoffCoefficient,
+      (Double) (stepExec.Retry_Count__c - 1)
+    );
+    Integer delay = (Integer) (policy.initialIntervalSeconds * backoff);
+    delay = Math.min(delay, 86400);
+
+    instance.Status__c = 'Suspended';
+    instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
+    instance.Async_Job_Id__c = scheduleRetry(
+      instance.Id,
+      stepExec.Step_Name__c,
+      delay
+    );
+    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+  }
+
+  // RETRY: apply backoff, or fail the instance when retries are exhausted.
+  private static void handleRetryOutcome(StepOutcomeContext outcome) {
+    Workflow_Instance__c instance = outcome.instance;
+    Workflow_Step_Execution__c stepExec = outcome.stepExec;
+    StepResult result = outcome.result;
+    StepContext context = outcome.context;
+    Boolean isParallel = outcome.isParallel;
+    // Step requested retry
+    if (isParallel) {
+      rollbackClaimedSignals(context);
+    }
+    stepExec.Retry_Count__c += 1;
+
+    // Get and sanitize retry policy
+    RetryPolicy policy = sanitizePolicy(result.directive().retry.policy);
+
+    persistRetryMaxAttempts(instance, stepExec, policy);
 
     if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
       stepExec.Status__c = 'Failed';
@@ -7549,26 +7594,7 @@ public inherited sharing class WorkflowEngine {
       maxRetriesReq.failureCategory = CAT_RETRIES_EXHAUSTED;
       failWorkflowInstance(maxRetriesReq);
     } else {
-      stepExec.Status__c = 'Retrying';
-      stepExec.Output__c = null;
-      saveStepExec(stepExec);
-
-      // Calculate exponential backoff
-      Double backoff = Math.pow(
-        (Double) policy.backoffCoefficient,
-        (Double) (stepExec.Retry_Count__c - 1)
-      );
-      Integer delay = (Integer) (policy.initialIntervalSeconds * backoff);
-      delay = Math.min(delay, 86400);
-
-      instance.Status__c = 'Suspended';
-      instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
-      instance.Async_Job_Id__c = scheduleRetry(
-        instance.Id,
-        stepExec.Step_Name__c,
-        delay
-      );
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+      scheduleExponentialRetry(instance, stepExec, policy);
     }
   }
 
@@ -12770,25 +12796,7 @@ public inherited sharing class WorkflowEngine {
     // Get and sanitize retry policy
     RetryPolicy policy = sanitizePolicy(result.directive().retry.policy);
 
-    Map<String, Object> captures = new Map<String, Object>();
-    if (String.isNotBlank(stepExec.Captured_Values__c)) {
-      String resolvedCaptures = resolvePayload(stepExec.Captured_Values__c);
-      if (String.isNotBlank(resolvedCaptures)) {
-        try {
-          captures = (Map<String, Object>) JSON.deserializeUntyped(
-            resolvedCaptures
-          );
-        } catch (Exception ignored) {
-          // Malformed captures; proceed with an empty captures map.
-        }
-      }
-    }
-    captures.put('__maxAttempts', policy.maximumAttempts);
-    stepExec.Captured_Values__c = savePayloadIfNeeded(
-      instance.Id,
-      JSON.serialize(captures),
-      'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-    );
+    persistRetryMaxAttempts(instance, stepExec, policy);
 
     if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
       stepExec.Status__c = 'Failed';
@@ -12808,24 +12816,7 @@ public inherited sharing class WorkflowEngine {
           ' failed after max retries.'
       );
     } else {
-      stepExec.Status__c = 'Retrying';
-      stepExec.Output__c = null;
-      saveStepExec(stepExec);
-
-      Double backoff = Math.pow(
-        (Double) policy.backoffCoefficient,
-        (Double) (stepExec.Retry_Count__c - 1)
-      );
-      Integer delay = (Integer) (policy.initialIntervalSeconds * backoff);
-      delay = Math.min(delay, 86400);
-      instance.Status__c = 'Suspended';
-      instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
-      instance.Async_Job_Id__c = scheduleRetry(
-        instance.Id,
-        stepExec.Step_Name__c,
-        delay
-      );
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+      scheduleExponentialRetry(instance, stepExec, policy);
     }
   }
 
