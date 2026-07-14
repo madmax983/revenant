@@ -5798,6 +5798,7 @@ public inherited sharing class WorkflowEngine {
         Integer attempt = 0; attempt <= PARALLEL_CLAIM_PAGE_RETRIES; attempt++
       ) {
         List<Workflow_Signal__c> candidates = queryLatestSignalCandidates(
+          instanceId,
           signalName
         );
         if (candidates.isEmpty()) {
@@ -5836,33 +5837,6 @@ public inherited sharing class WorkflowEngine {
       // visible matches). Mark capped so consume skips same-name cleanup.
       capped = true;
       return null;
-    }
-
-    /**
-     * @description Fetches the newest-first candidate page of Received signals
-     * of the given name for this instance, limited to 10 rows. Kept as a
-     * helper so the per-attempt SOQL is not lexically inside
-     * `getLatestSignal`'s retry loop. The per-attempt query is intentional and
-     * bounded: the caller retries at most `PARALLEL_CLAIM_PAGE_RETRIES + 1`
-     * times and returns immediately on the first successful claim.
-     * @param signalName the signal name to page (assumed non-blank; caller
-     *   short-circuits on blank)
-     * @return up to 10 candidate rows in newest-first order
-     */
-    private List<Workflow_Signal__c> queryLatestSignalCandidates(
-      String signalName
-    ) {
-      return [
-        SELECT Id, Signal_Name__c, Payload__c, CreatedDate
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Status__c = 'Received'
-          AND Signal_Name__c = :signalName
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC, Id DESC
-        LIMIT 10
-      ];
     }
 
     /**
@@ -5910,6 +5884,36 @@ public inherited sharing class WorkflowEngine {
         .withCreatedDate(cand.CreatedDate)
         .asClaimed();
     }
+  }
+
+  /**
+   * @description Fetches the newest-first candidate page of Received signals
+   * of the given name for the given instance, limited to 10 rows. Kept as a
+   * top-level static helper so the per-attempt SOQL is not lexically inside
+   * `ParallelBranchSignalSource.getLatestSignal`'s retry loop. The
+   * per-attempt query is intentional and bounded: the caller retries at most
+   * `PARALLEL_CLAIM_PAGE_RETRIES + 1` times and returns immediately on the
+   * first successful claim.
+   * @param instanceId workflow instance whose signals are being paged
+   * @param signalName the signal name to page (assumed non-blank; caller
+   *   short-circuits on blank)
+   * @return up to 10 candidate rows in newest-first order
+   */
+  private static List<Workflow_Signal__c> queryLatestSignalCandidates(
+    Id instanceId,
+    String signalName
+  ) {
+    return [
+      SELECT Id, Signal_Name__c, Payload__c, CreatedDate
+      FROM Workflow_Signal__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Status__c = 'Received'
+        AND Signal_Name__c = :signalName
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 10
+    ];
   }
 
   /**
