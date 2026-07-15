@@ -47,16 +47,6 @@ public inherited sharing class WorkflowEngine {
   private static Integer concurrencyAdmissionRetrySeconds = 30;
   private static final Integer CONCURRENCY_ADMISSION_RETRY_JITTER_SECONDS = 15;
 
-  // Bounds for re-driving a step after a TRANSIENT row-lock error (UNABLE_TO_LOCK_ROW)
-  // — e.g. a fan-in where many child-completion signals lock the shared parent row at
-  // once. These are CONSECUTIVE retries (reset on the next successful drive), so the
-  // cap need only outlast a contention burst, not the whole fan-in.
-  @TestVisible
-  private static Integer maxTransientLockRetries = 12;
-  private static final Integer TRANSIENT_LOCK_BASE_DELAY_SECONDS = 5;
-  private static final Integer TRANSIENT_LOCK_MAX_DELAY_SECONDS = 60;
-  private static final Integer TRANSIENT_LOCK_JITTER_SECONDS = 5;
-
   // Instances in these statuses are considered in-flight; a start that collides
   // with one of them always dedups to the existing instance.
   public static final Set<String> ACTIVE_STATUSES = new Set<String>{
@@ -828,7 +818,7 @@ public inherited sharing class WorkflowEngine {
    * @param key the raw correlation key
    * @return the lower-cased key, or null when the input is null
    */
-  private static String normalizeKey(String key) {
+  public static String normalizeKey(String key) {
     return key == null ? null : key.toLowerCase();
   }
 
@@ -4980,6 +4970,17 @@ public inherited sharing class WorkflowEngine {
     saveStepExec(stepExec, false);
   }
 
+  /**
+   * @description Persists a step execution recorded by the crash handler, marking
+   * its telemetry as a crash outcome. Public entry so the extracted
+   * `WorkflowCrashHandler` can flush a crashed step execution without exposing the
+   * internal Boolean crash flag.
+   * @param stepExec the crashed step execution to persist
+   */
+  public static void saveStepExecAsCrash(Workflow_Step_Execution__c stepExec) {
+    saveStepExec(stepExec, true);
+  }
+
   private static void saveStepExec(
     Workflow_Step_Execution__c stepExec,
     Boolean isCrash
@@ -5500,7 +5501,7 @@ public inherited sharing class WorkflowEngine {
 
     // Parent notification publishes the load-bearing Workflow_Event__e, so it
     // runs BEFORE the best-effort lifecycle publish (first claim on DML budget).
-    notifyParentCompletion(instance);
+    WorkflowParentNotifier.notifyParentCompletion(instance);
 
     // Fire-and-forget outbound lifecycle event on terminal transition.
     WorkflowLifecyclePublisher.publish(instance);
@@ -5891,12 +5892,12 @@ public inherited sharing class WorkflowEngine {
       instance.Correlation_Key__c
     );
 
-    ChildWorkflowStartRequest childReq = new ChildWorkflowStartRequest();
+    WorkflowChildService.ChildWorkflowStartRequest childReq = new WorkflowChildService.ChildWorkflowStartRequest();
     childReq.parentId = instance.Id;
     childReq.workflowName = result.directive().childWorkflowName;
     childReq.correlationKey = result.directive().childCorrelationKey;
     childReq.inputJson = result.directive().childInputJson;
-    startChildWorkflow(childReq);
+    WorkflowChildService.startChildWorkflow(childReq);
   }
 
   // START_CHILDREN: suspend and start multiple child workflows.
@@ -5939,7 +5940,10 @@ public inherited sharing class WorkflowEngine {
       instance.Correlation_Key__c
     );
 
-    startChildWorkflows(instance.Id, result.directive().childRequests);
+    WorkflowChildBulkService.startChildWorkflows(
+      instance.Id,
+      result.directive().childRequests
+    );
   }
 
   // WAIT_FOR_APPROVAL: suspend awaiting an approval signal.
@@ -6416,7 +6420,7 @@ public inherited sharing class WorkflowEngine {
    * @param ex the exception that caused the crash
    */
   public static void handleCrash(Id instanceId, Exception ex) {
-    handleCrash(instanceId, null, ex);
+    WorkflowCrashHandler.processCrash(instanceId, null, ex);
   }
 
   /**
@@ -6429,366 +6433,7 @@ public inherited sharing class WorkflowEngine {
    * @param ex the exception that caused the crash
    */
   public static void handleCrash(Id instanceId, String stepName, Exception ex) {
-    // Run as separate DML transaction to ensure it's written even if parent rolled back
-    List<Workflow_Instance__c> instances = [
-      SELECT Id, Status__c, Current_Step__c, Compensation_Stack__c, Input__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-      WITH SYSTEM_MODE
-      LIMIT 1
-      FOR UPDATE
-    ];
-
-    if (instances.isEmpty()) {
-      return;
-    }
-
-    Workflow_Instance__c instance = instances[0];
-
-    Boolean midRollback = isMidRollback(instance);
-    String targetStepName = resolveCrashStepName(
-      instance,
-      stepName,
-      midRollback
-    );
-
-    // Transient row-lock contention (UNABLE_TO_LOCK_ROW) is retryable, not a crash:
-    // it arises when many transactions touch the same row at once — e.g. a fan-in
-    // where every child-completion signal locks the shared parent row — and clears on
-    // its own once the competing transactions commit. Re-drive the step after a short
-    // backoff instead of failing/compensating the whole workflow. Bounded by the
-    // step's consecutive Transient_Retry_Count__c so a genuinely stuck row still fails.
-    if (
-      isTransientLockError(ex) &&
-      String.isNotBlank(targetStepName) &&
-      scheduleTransientLockRetry(instance, targetStepName)
-    ) {
-      return;
-    }
-
-    recordCrashedStep(instance, targetStepName, ex);
-
-    // Use fail helper
-    String errorMsg =
-      'Transaction crashed: ' +
-      (ex != null ? ex.getMessage() : 'Unknown governor limit');
-    FailInstanceRequest stepExceptionReq = new FailInstanceRequest();
-    stepExceptionReq.instanceId = instanceId;
-    stepExceptionReq.stepName = targetStepName;
-    stepExceptionReq.errorMessage = errorMsg;
-    stepExceptionReq.failureCategory = CAT_STEP_EXCEPTION;
-    failWorkflowInstance(stepExceptionReq);
-  }
-
-  // The instance is mid-rollback when its status is Compensating/Cancelling, OR
-  // when it is Suspended and its most recent step execution is a '_Compensate'
-  // attempt (a sleeping/approval-gated compensation whose in-transaction status
-  // flip was rolled back by the crash). Detected the same way runStep() does so
-  // the crash is recorded against the '_Compensate' step, not the stale forward
-  // step.
-  private static Boolean isMidRollback(Workflow_Instance__c instance) {
-    Boolean midRollback =
-      instance.Status__c == 'Compensating' ||
-      instance.Status__c == 'Cancelling';
-    if (!midRollback && instance.Status__c == 'Suspended') {
-      List<Workflow_Step_Execution__c> latestSteps = [
-        SELECT Step_Name__c
-        FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c = :instance.Id
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC, Id DESC
-        LIMIT 1
-      ];
-      midRollback =
-        !latestSteps.isEmpty() &&
-        latestSteps[0].Step_Name__c != null &&
-        latestSteps[0].Step_Name__c.endsWith('_Compensate');
-    }
-    return midRollback;
-  }
-
-  // Resolve the step the crash is recorded against. An explicit stepName always
-  // wins; otherwise a mid-rollback crash targets the top-of-stack '_Compensate'
-  // step, and a forward crash targets the stale Current_Step__c.
-  private static String resolveCrashStepName(
-    Workflow_Instance__c instance,
-    String stepName,
-    Boolean midRollback
-  ) {
-    if (String.isNotBlank(stepName)) {
-      return stepName;
-    }
-    if (midRollback && String.isNotBlank(instance.Compensation_Stack__c)) {
-      List<String> stack = (List<String>) JSON.deserialize(
-        instance.Compensation_Stack__c,
-        List<String>.class
-      );
-      return stack.isEmpty()
-        ? instance.Current_Step__c
-        : stack[stack.size() - 1] + '_Compensate';
-    }
-    return instance.Current_Step__c;
-  }
-
-  private static String crashErrorDetails(Exception ex) {
-    return ex != null
-      ? ex.getMessage() + '\n' + ex.getStackTraceString()
-      : 'Unknown governor limit / crash';
-  }
-
-  // Mark the crashing step's execution log Failed (updating the latest log if it
-  // exists, otherwise inserting a fresh Failed log seeded with the right undo
-  // context).
-  private static void recordCrashedStep(
-    Workflow_Instance__c instance,
-    String targetStepName,
-    Exception ex
-  ) {
-    if (String.isBlank(targetStepName)) {
-      return;
-    }
-    List<Workflow_Step_Execution__c> stepExecs = [
-      SELECT Id
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instance.Id
-        AND Step_Name__c = :targetStepName
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
-    ];
-    if (!stepExecs.isEmpty()) {
-      Workflow_Step_Execution__c stepExec = stepExecs[0];
-      stepExec.Status__c = 'Failed';
-      stepExec.Error_Details__c = crashErrorDetails(ex);
-      saveStepExec(stepExec, true);
-      return;
-    }
-    // Construct and insert the step execution log with failed status
-    Workflow_Step_Execution__c stepExec = buildCrashedStepExec(
-      instance,
-      targetStepName,
-      ex
-    );
-    saveStepExec(stepExec, true);
-  }
-
-  private static Workflow_Step_Execution__c buildCrashedStepExec(
-    Workflow_Instance__c instance,
-    String targetStepName,
-    Exception ex
-  ) {
-    Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
-    stepExec.Workflow_Instance__c = instance.Id;
-    stepExec.Step_Name__c = targetStepName;
-    stepExec.Status__c = 'Failed';
-    stepExec.Error_Details__c = crashErrorDetails(ex);
-
-    if (targetStepName.endsWith('_Compensate')) {
-      seedCompensationCrashInput(stepExec, instance.Id, targetStepName);
-    } else {
-      seedForwardCrashInput(stepExec, instance);
-    }
-    return stepExec;
-  }
-
-  // Crash row for a compensation step: seed from THIS step's own forward
-  // execution (input/output), matching how compensation logs are seeded
-  // everywhere else. Using the latest completed step overall would be wrong once
-  // earlier compensations have popped — that row belongs to an already-reversed
-  // step, giving the wrong undo context on resume.
-  private static void seedCompensationCrashInput(
-    Workflow_Step_Execution__c stepExec,
-    Id instanceId,
-    String targetStepName
-  ) {
-    String forwardStepName = targetStepName.removeEnd('_Compensate');
-    List<Workflow_Step_Execution__c> forwardExecs = [
-      SELECT Input__c, Output__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Step_Name__c = :forwardStepName
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
-    ];
-    if (!forwardExecs.isEmpty()) {
-      stepExec.Input__c = forwardExecs[0].Input__c;
-      stepExec.Output__c = forwardExecs[0].Output__c;
-    }
-  }
-
-  // Forward step crash: feed the previous step's output as input.
-  private static void seedForwardCrashInput(
-    Workflow_Step_Execution__c stepExec,
-    Workflow_Instance__c instance
-  ) {
-    List<Workflow_Step_Execution__c> completedSteps = [
-      SELECT Output__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instance.Id
-        AND Status__c IN ('Completed', 'OperatorSkipped')
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
-    ];
-    stepExec.Input__c = !completedSteps.isEmpty()
-      ? completedSteps[0].Output__c
-      : instance.Input__c;
-  }
-
-  /**
-   * True when the exception is a transient row-lock contention error
-   * (UNABLE_TO_LOCK_ROW / "record currently unavailable") rather than a genuine
-   * crash. These resolve on their own once the competing transaction commits, so
-   * the crash handler re-drives the step instead of failing the workflow.
-   * @param ex the exception to classify
-   * @return true when the exception is a transient row-lock contention error
-   */
-  @TestVisible
-  private static Boolean isTransientLockError(Exception ex) {
-    if (ex == null) {
-      return false;
-    }
-    if (ex instanceof DmlException) {
-      try {
-        DmlException de = (DmlException) ex;
-        for (Integer i = 0; i < de.getNumDml(); i++) {
-          if (de.getDmlType(i) == StatusCode.UNABLE_TO_LOCK_ROW) {
-            return true;
-          }
-        }
-      } catch (Exception ignored) {
-        // Safeguard against programmatically constructed DmlExceptions in tests
-      }
-    }
-    String msg = ex.getMessage();
-    if (String.isBlank(msg)) {
-      return false;
-    }
-    String lower = msg.toLowerCase();
-    return lower.contains('unable_to_lock_row') ||
-      lower.contains('unable to lock row') ||
-      lower.contains('unable to obtain exclusive access') ||
-      lower.contains('record currently unavailable') ||
-      lower.contains('currently being modified by another');
-  }
-
-  /**
-   * Re-drives a step after a transient row-lock error, bounded by the step's
-   * CONSECUTIVE Transient_Retry_Count__c (reset to 0 on the next successful drive in
-   * handleStepResult). Returns true when a retry was scheduled — the caller then
-   * skips the fail path; returns false when the budget is spent or there is no step
-   * row to retry against, so the caller fails the workflow as usual. Mirrors the
-   * RETRY action's suspend + scheduleRetry handoff so the watchdog/sleep plumbing
-   * re-drives even when dynamic scheduling is off.
-   * @param instance the instance whose step is re-driven
-   * @param stepName name of the step to retry against
-   * @return true when a retry was scheduled; false when the budget is spent or
-   * there is no step row to retry
-   */
-  /**
-   * Determines whether an instance is already terminal for transient-retry gating.
-   * @param instance the instance whose status is checked
-   * @return true when the instance is in a terminal state that must not be
-   *   resurrected by a transient-lock retry (excludes CompensationFailed, which is
-   *   recoverable via operator resume)
-   */
-  private static Boolean isInstanceTerminalForRetry(
-    Workflow_Instance__c instance
-  ) {
-    return instance.Status__c == 'Completed' ||
-      instance.Status__c == 'Failed' ||
-      instance.Status__c == 'Compensated' ||
-      instance.Status__c == 'Cancelled' ||
-      instance.Status__c == 'ContinuedAsNew';
-  }
-
-  private static Boolean scheduleTransientLockRetry(
-    Workflow_Instance__c instance,
-    String stepName
-  ) {
-    // Never resurrect an already-terminal instance: a stray late crash must fall
-    // through to the (idempotent) fail path, not flip a finished run back to Suspended.
-    if (isInstanceTerminalForRetry(instance)) {
-      return false;
-    }
-
-    List<Workflow_Step_Execution__c> stepExecs = [
-      SELECT Id, Status__c, Transient_Retry_Count__c
-      FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instance.Id AND Step_Name__c = :stepName
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
-    ];
-    if (stepExecs.isEmpty()) {
-      return false;
-    }
-    Workflow_Step_Execution__c stepExec = stepExecs[0];
-    Integer attempts = (stepExec.Transient_Retry_Count__c == null)
-      ? 0
-      : (Integer) stepExec.Transient_Retry_Count__c;
-    if (attempts >= maxTransientLockRetries) {
-      return false; // budget spent -> caller fails the workflow
-    }
-
-    // The crash rolled back any in-flight status change, so keep the step
-    // re-runnable and record the consecutive transient attempt without touching the
-    // business Retry_Count__c budget.
-    stepExec.Transient_Retry_Count__c = attempts + 1;
-    if (stepExec.Status__c == 'Failed') {
-      stepExec.Status__c = 'Pending';
-    }
-    // Clear the step's watchdog deadline for the duration of the backoff. The crash
-    // left the row Running/Pending carrying its pre-crash Timeout_At__c; once the
-    // sleep flips the parent back to Running, a now-stale (already-past) deadline
-    // would let the watchdog timeout batch fail the step before the retry worker
-    // re-drives it. runStep re-stamps a fresh deadline before execute() on the
-    // re-drive, mirroring how the RETRY action parks its step out of the timeout batch.
-    stepExec.Timeout_At__c = null;
-    Database.update(stepExec, true, AccessLevel.SYSTEM_MODE);
-
-    // Exponential backoff (capped) with jitter so the contention wave drains before
-    // the re-drive and a fan-in of re-drives does not re-synchronize into a new storm.
-    Double exponent = Math.min(attempts, 4); // widen Integer -> Double for Math.pow
-    Integer delay =
-      TRANSIENT_LOCK_BASE_DELAY_SECONDS * (Integer) Math.pow(2, exponent);
-    delay = Math.min(delay, TRANSIENT_LOCK_MAX_DELAY_SECONDS);
-    delay += (Integer) Math.floor(
-      Math.random() * TRANSIENT_LOCK_JITTER_SECONDS
-    );
-
-    String jobId = WorkflowRetrySleepScheduler.scheduleRetry(
-      instance.Id,
-      stepName,
-      delay
-    );
-    instance.Status__c = 'Suspended';
-    instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
-    instance.Async_Job_Id__c = jobId;
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-    if (jobId == null) {
-      // No delayed job was created (dynamic scheduling off, or async limit), so this
-      // retry relies entirely on the watchdog heartbeat to re-drive after the backoff.
-      // Ensure the watchdog singleton is alive — the removed immediate re-drive used to
-      // restart a dead watchdog via enqueueOrchestrator's bootstrap() call.
-      WorkflowWatchdog.bootstrap();
-    }
-
-    // No immediate re-drive when jobId is null. The branch target is durably persisted
-    // as its Pending step row carrying Transient_Retry_Count__c > 0 (set above), and
-    // the watchdog sleep-resume re-drives exactly those branches BY NAME once
-    // Sleep_Until__c is due (see processWatchdogHeartbeat). Enqueuing the branch
-    // immediately here would bypass the backoff just written and, under a sustained
-    // UNABLE_TO_LOCK_ROW fan-in, burn through maxTransientLockRetries before the
-    // contending transactions clear — failing the very workflow the backoff exists to
-    // wait out. A single-step instance is still resolved by the watchdog's blank-name
-    // resume; only the parallel branch needed a name-carrying path, now the watchdog's.
-    return true;
+    WorkflowCrashHandler.processCrash(instanceId, stepName, ex);
   }
 
   /**
@@ -6822,7 +6467,7 @@ public inherited sharing class WorkflowEngine {
     req.stepName = stepName;
     req.errorMessage = errorMessage;
     req.failureCategory = CAT_UNKNOWN;
-    failWorkflowInstance(req);
+    WorkflowFailureService.failInstance(req);
   }
 
   /**
@@ -6832,277 +6477,17 @@ public inherited sharing class WorkflowEngine {
    * @param req the fail request (instanceId, stepName, errorMessage, failureCategory)
    */
   public static void failWorkflowInstance(FailInstanceRequest req) {
-    Id instanceId = req.instanceId;
-    String stepName = req.stepName;
-    String failureCategory = req.failureCategory;
-    List<Workflow_Instance__c> instances = [
-      SELECT
-        Id,
-        Name,
-        Status__c,
-        Current_Step__c,
-        Error_Message__c,
-        Compensation_Stack__c,
-        Workflow_Name__c,
-        Correlation_Key__c,
-        Root_Correlation_Key__c,
-        Failure_Category__c,
-        Concurrency_Parked__c,
-        Concurrency_Slot_Held__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-      WITH SYSTEM_MODE
-      LIMIT 1
-      FOR UPDATE
-    ];
-    if (instances.isEmpty()) {
-      return;
-    }
-    Workflow_Instance__c instance = instances[0];
-
-    // Determine attempt count
-    Integer attemptCount = 1;
-    List<Workflow_Step_Execution__c> stepExecs = [
-      SELECT Retry_Count__c
-      FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = :stepName
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
-    ];
-    if (!stepExecs.isEmpty() && stepExecs[0].Retry_Count__c != null) {
-      attemptCount = (Integer) stepExecs[0].Retry_Count__c;
-      if (failureCategory != CAT_RETRIES_EXHAUSTED) {
-        attemptCount += 1;
-      }
-    }
-
-    req.instance = instance;
-    req.attemptCount = attemptCount;
-    failResolvedInstance(req);
+    WorkflowFailureService.failInstance(req);
   }
 
   /**
-   * @description Record-level fail transition: routes the instance to Failed, or
-   * to Compensating when a compensable saga has completed steps to unwind, records
-   * the error/category/attempt count, and publishes lifecycle/alert side effects.
-   * @param req the fail request with a pre-queried instance record and attempt count
+   * @description Shared enqueue path used by the fail/error-routing branches: in
+   * tests, enqueue only when queueables are enabled; otherwise delegate to the
+   * standard orchestrator enqueue. Public so the extracted `WorkflowFailureService`
+   * can drive the orchestrator through the same test-aware path.
+   * @param instanceId Id of the instance whose orchestrator is enqueued
    */
-  private static void failResolvedInstance(FailInstanceRequest req) {
-    Workflow_Instance__c instance = req.instance;
-    Boolean isCompFailure = isCompensationContext(instance, req.stepName);
-
-    if (tryErrorRouting(req, isCompFailure)) {
-      return;
-    }
-
-    // Check if there are compensations to run
-    if (!hasPendingCompensations(instance)) {
-      failInstanceTerminally(req);
-      return;
-    }
-
-    if (isCompensationContext(instance, req.stepName)) {
-      failCompensationTerminally(req);
-      return;
-    }
-
-    beginCompensation(req);
-  }
-
-  private static Boolean isCompensationContext(
-    Workflow_Instance__c instance,
-    String stepName
-  ) {
-    return instance.Status__c == 'Compensating' ||
-      instance.Status__c == 'Cancelling' ||
-      (String.isNotBlank(stepName) && stepName.endsWith('_Compensate'));
-  }
-
-  private static Boolean hasPendingCompensations(
-    Workflow_Instance__c instance
-  ) {
-    if (String.isBlank(instance.Compensation_Stack__c)) {
-      return false;
-    }
-    List<String> stack = (List<String>) JSON.deserialize(
-      instance.Compensation_Stack__c,
-      List<String>.class
-    );
-    return !stack.isEmpty();
-  }
-
-  // Best-effort error routing: if the workflow defines an error step, cancel
-  // siblings, insert the error step, and re-run. Returns true when routing
-  // consumed the failure (caller returns), false to fall through to the
-  // compensation/terminal-fail path. Never lets a routing failure mask the
-  // original error.
-  private static Boolean tryErrorRouting(
-    FailInstanceRequest req,
-    Boolean isCompFailure
-  ) {
-    if (isCompFailure) {
-      return false;
-    }
-    Workflow_Instance__c instance = req.instance;
-    try {
-      Type wfType = WorkflowTypeResolver.resolve(
-        instance.Workflow_Name__c,
-        WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
-      );
-      if (wfType == null) {
-        return false;
-      }
-      WorkflowDefinition def = (WorkflowDefinition) wfType.newInstance();
-      if (!(def instanceof ErrorRoutingWorkflow)) {
-        return false;
-      }
-      String truncatedError = req.errorMessage != null
-        ? req.errorMessage.left(20000)
-        : null;
-      StepError err = new StepError(
-        req.stepName,
-        truncatedError,
-        req.attemptCount
-      );
-      String errorStepName = ((ErrorRoutingWorkflow) def)
-        .getErrorStep(req.stepName, err);
-      if (String.isBlank(errorStepName)) {
-        return false;
-      }
-      routeToErrorStep(req, errorStepName, truncatedError);
-      return true;
-    } catch (Exception ignored) {
-      // Error-routing is best-effort; a routing failure must not mask the original error.
-      return false;
-    }
-  }
-
-  private static void routeToErrorStep(
-    FailInstanceRequest req,
-    String errorStepName,
-    String truncatedError
-  ) {
-    Workflow_Instance__c instance = req.instance;
-    cancelSiblingStepsForErrorRouting(instance, req.stepName);
-
-    WorkflowOrchestratorEnqueue.abortScheduledJobs(instance.Id);
-
-    Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
-    nextStepExec.Workflow_Instance__c = instance.Id;
-    nextStepExec.Step_Name__c = errorStepName;
-    nextStepExec.Status__c = 'Pending';
-    nextStepExec.Retry_Count__c = 0;
-
-    Map<String, Object> errorCaptures = new Map<String, Object>{
-      '__failedStepName' => req.stepName,
-      '__errorMessage' => truncatedError,
-      '__attemptCount' => req.attemptCount
-    };
-    nextStepExec.Captured_Values__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      instance.Id,
-      JSON.serialize(errorCaptures),
-      'Captures_' + errorStepName.replaceAll('[^a-zA-Z0-9]', '_')
-    );
-    Database.insert(nextStepExec, true, AccessLevel.SYSTEM_MODE);
-
-    instance.Current_Step__c = errorStepName;
-    instance.Status__c = 'Running';
-    instance.Sleep_Until__c = null;
-    instance.Async_Job_Id__c = null;
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance);
-    enqueueOrchestratorForInstance(instance.Id);
-  }
-
-  private static void cancelSiblingStepsForErrorRouting(
-    Workflow_Instance__c instance,
-    String stepName
-  ) {
-    if (
-      String.isBlank(instance.Current_Step__c) ||
-      !instance.Current_Step__c.contains(',')
-    ) {
-      return;
-    }
-    List<String> activeSteps = instance.Current_Step__c.split(',');
-    List<Workflow_Step_Execution__c> siblingExecs = [
-      SELECT Id, Status__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instance.Id
-        AND Step_Name__c IN :activeSteps
-        AND Step_Name__c != :stepName
-        AND Status__c IN ('Pending', 'Retrying')
-      WITH SYSTEM_MODE
-      FOR UPDATE
-    ];
-    for (Workflow_Step_Execution__c sibling : siblingExecs) {
-      sibling.Status__c = 'Cancelled';
-    }
-    if (!siblingExecs.isEmpty()) {
-      Database.update(siblingExecs, true, AccessLevel.SYSTEM_MODE);
-    }
-  }
-
-  private static void failInstanceTerminally(FailInstanceRequest req) {
-    Workflow_Instance__c instance = req.instance;
-    instance.Status__c = 'Failed';
-    instance.Failure_Category__c = req.failureCategory;
-    instance.Error_Message__c = ('Failed at step ' +
-      req.stepName +
-      ': ' +
-      req.errorMessage)
-      .left(255);
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    notifyParentCompletion(instance);
-    WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
-    WorkflowLifecyclePublisher.publish(instance);
-  }
-
-  private static void failCompensationTerminally(FailInstanceRequest req) {
-    Workflow_Instance__c instance = req.instance;
-    Boolean wasCancelling =
-      instance.Status__c == 'Cancelling' ||
-      (instance.Error_Message__c != null &&
-      instance.Error_Message__c.contains('Cancelled by user'));
-    instance.Status__c = 'CompensationFailed';
-    instance.Failure_Category__c = CAT_COMPENSATION_FAILED;
-    instance.Error_Message__c = buildRollbackIncompleteMessage(
-        wasCancelling,
-        'Rollback incomplete at compensation step ' +
-          req.stepName +
-          ': ' +
-          req.errorMessage
-      )
-      .left(255);
-    instance.Sleep_Until__c = null;
-    instance.Async_Job_Id__c = null;
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    notifyParentCompletion(instance);
-    WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
-    WorkflowLifecyclePublisher.publish(instance);
-  }
-
-  private static void beginCompensation(FailInstanceRequest req) {
-    Workflow_Instance__c instance = req.instance;
-    instance.Status__c = 'Compensating';
-    instance.Error_Message__c = ('Failed at step ' +
-      req.stepName +
-      ': ' +
-      req.errorMessage)
-      .left(255);
-    preCreateFirstCompensationStep(instance);
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-    enqueueOrchestratorForInstance(instance.Id);
-  }
-
-  // Shared enqueue path used by the fail/error-routing branches: in tests,
-  // enqueue only when queueables are enabled; otherwise delegate to the
-  // standard orchestrator enqueue.
-  private static void enqueueOrchestratorForInstance(Id instanceId) {
+  public static void enqueueOrchestratorForInstance(Id instanceId) {
     if (Test.isRunningTest()) {
       if (!disableQueueableInTest) {
         System.enqueueJob(new WorkflowOrchestrator(instanceId));
@@ -7110,738 +6495,6 @@ public inherited sharing class WorkflowEngine {
     } else {
       WorkflowOrchestratorEnqueue.enqueueOrchestrator(instanceId, null);
     }
-  }
-
-  /**
-   * @description Request DTO for starting a single child workflow. Populated
-   * field-by-field to avoid a wide constructor.
-   */
-  @TestVisible
-  private class ChildWorkflowStartRequest {
-    public Id parentId;
-    public String workflowName;
-    public String correlationKey;
-    public String inputJson;
-  }
-
-  /**
-   * Resolves the correlation-key preconditions for starting a child workflow.
-   * Returns true when an idempotent re-suspend applies (an active instance under
-   * the same parent, or a terminal sibling under the same parent already exists),
-   * and throws when the key collides with an active instance under a different
-   * parent.
-   * @param correlationKey the child's correlation key (assumed not blank)
-   * @param parentId the requesting parent instance id
-   * @return true when the start should resolve idempotently without creating one
-   */
-  private static Boolean isChildStartIdempotent(
-    String correlationKey,
-    Id parentId
-  ) {
-    // 1. Check for active globally unique key
-    List<Workflow_Instance__c> existingActive = [
-      SELECT Id, Parent_Instance__c, Status__c
-      FROM Workflow_Instance__c
-      WHERE Active_Correlation_Key__c = :correlationKey
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    if (!existingActive.isEmpty()) {
-      if (existingActive[0].Parent_Instance__c == parentId) {
-        return true; // Idempotent re-suspend
-      }
-      throw new WorkflowException(
-        'An active workflow already exists with correlation key: ' +
-        correlationKey
-      );
-    }
-
-    // 2. Check for sibling terminal key under same parent
-    List<Workflow_Instance__c> existingSibling = [
-      SELECT Id, Parent_Instance__c, Status__c
-      FROM Workflow_Instance__c
-      WHERE
-        Correlation_Key__c = :correlationKey
-        AND Parent_Instance__c = :parentId
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    return !existingSibling.isEmpty(); // non-empty => idempotent re-suspend
-  }
-
-  /**
-   * Builds (in memory) the child Workflow_Instance__c from the start request and
-   * its resolved definition, populating status, correlation/parent linkage,
-   * definition version and initial step. Throws when the workflow name cannot be
-   * resolved or the class does not implement WorkflowDefinition.
-   * @param req the child start request
-   * @param parentNamespace the parent's namespace used to resolve the type
-   * @return the unsaved child instance
-   */
-  private static Workflow_Instance__c buildChildInstance(
-    ChildWorkflowStartRequest req,
-    String parentNamespace
-  ) {
-    Type wflowType = WorkflowTypeResolver.resolve(
-      req.workflowName,
-      parentNamespace
-    );
-    if (wflowType == null) {
-      throw new WorkflowException(
-        'Workflow definition not found for name: ' + req.workflowName
-      );
-    }
-    Workflow_Instance__c instance = new Workflow_Instance__c();
-    instance.Workflow_Name__c = String.valueOf(wflowType);
-    instance.Status__c = 'Pending';
-    instance.Correlation_Key__c = req.correlationKey;
-    instance.Parent_Instance__c = req.parentId;
-    instance.Causation_Id__c = req.parentId;
-    Object defObj = wflowType.newInstance();
-    if (!(defObj instanceof WorkflowDefinition)) {
-      throw new WorkflowException(
-        'Class ' + req.workflowName + ' must implement WorkflowDefinition'
-      );
-    }
-
-    if (defObj instanceof VersionedWorkflow) {
-      instance.Definition_Version__c = ((VersionedWorkflow) defObj)
-        .getLatestVersion();
-    } else {
-      instance.Definition_Version__c = 1;
-    }
-    instance.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
-    return instance;
-  }
-
-  /**
-   * Inserts the child instance, handling the DUPLICATE_VALUE concurrency
-   * backstop: when a sibling wins the insert race under the same parent the
-   * start resolves idempotently, otherwise a collision throws.
-   * @param instance the unsaved child instance
-   * @return true when a concurrent sibling won the race and the start should
-   * resolve idempotently without proceeding
-   */
-  private static Boolean insertChildInstance(Workflow_Instance__c instance) {
-    Id parentId = instance.Parent_Instance__c;
-    String correlationKey = instance.Correlation_Key__c;
-    try {
-      Database.insert(instance, true, AccessLevel.SYSTEM_MODE);
-      if (Test.isRunningTest() && parentId != null) {
-        WorkflowFaultInjection.registerChildParent(instance.Id, parentId);
-      }
-    } catch (DmlException ex) {
-      if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
-        // Concurrency backstop: check if the sibling that won the insert race belongs to the same parent.
-        List<Workflow_Instance__c> sibling = [
-          SELECT Id, Parent_Instance__c
-          FROM Workflow_Instance__c
-          WHERE Active_Correlation_Key__c = :correlationKey
-          WITH SYSTEM_MODE
-          LIMIT 1
-        ];
-        if (!sibling.isEmpty() && sibling[0].Parent_Instance__c == parentId) {
-          return true; // Sibling won the insert race, and it belongs to this parent; resolve idempotently.
-        }
-        throw new WorkflowException(
-          'An active workflow already exists with correlation key: ' +
-          correlationKey
-        );
-      }
-      throw ex;
-    }
-    return false;
-  }
-
-  /**
-   * Inserts the child's initial Pending step execution, mirroring the instance's
-   * initial step and input.
-   * @param instance the persisted child instance
-   */
-  private static void insertInitialChildStep(Workflow_Instance__c instance) {
-    if (String.isNotBlank(instance.Current_Step__c)) {
-      Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
-      stepExec.Workflow_Instance__c = instance.Id;
-      stepExec.Step_Name__c = instance.Current_Step__c;
-      stepExec.Status__c = 'Pending';
-      stepExec.Input__c = instance.Input__c;
-      stepExec.Retry_Count__c = 0;
-      Database.insert(stepExec, true, AccessLevel.SYSTEM_MODE);
-    }
-  }
-
-  @TestVisible
-  private static void startChildWorkflow(ChildWorkflowStartRequest req) {
-    Id parentId = req.parentId;
-    String correlationKey = req.correlationKey;
-    String inputJson = req.inputJson;
-    WorkflowPayloadOffload.validateCorrelationKey(correlationKey);
-    if (
-      String.isNotBlank(correlationKey) &&
-      isChildStartIdempotent(correlationKey, parentId)
-    ) {
-      return;
-    }
-
-    if (String.isBlank(req.workflowName)) {
-      throw new WorkflowException('Workflow name is required.');
-    }
-    String parentNamespace = resolveParentNamespace(parentId);
-    Workflow_Instance__c instance = buildChildInstance(req, parentNamespace);
-
-    if (insertChildInstance(instance)) {
-      return;
-    }
-
-    instance.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      instance.Id,
-      inputJson,
-      'Input_Child_' + instance.Id
-    );
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-    insertInitialChildStep(instance);
-
-    finalizeChildStart(instance);
-  }
-
-  /**
-   * Finalizes a freshly-persisted child instance: applies the operator pause
-   * gate, schedules (or defers) the initial-step watchdog, and enqueues the
-   * orchestrator when not running under test.
-   * @param instance the persisted child instance to finalize
-   */
-  private static void finalizeChildStart(Workflow_Instance__c instance) {
-    // Operator pause gate — park the child at start if its definition is paused, so a
-    // running parent cannot bypass the pause by spawning children. The initial Pending
-    // step (above) gives resume a concrete step to drive; skip timeout scheduling and
-    // the enqueue. The child's correlation reservation still holds (the trigger keeps
-    // Active_Correlation_Key__c set for Paused).
-    if (
-      WorkflowPauseGate.anyPaused() &&
-      WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c)
-    ) {
-      instance.Status__c = 'Paused';
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-      return;
-    }
-
-    // Schedule the watchdog for the child's initial step before executing it, matching
-    // the start() overloads. Without this a TimeoutConfigurable first step of a child
-    // workflow would never get a scheduled timeout job. A concurrency-bounded child
-    // defers this until its first RUN_STEP wins an admission slot (mirrors doStart):
-    // a parked sibling could take the freed slot before this child reaches the gate,
-    // so an armed timeout could fail it while it is only waiting for capacity.
-    if (!ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
-      WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
-    } else {
-      // Durable awaiting-admission marker (see doStart): the pre-start watchdog keys
-      // its null-deadline skip off this, not the live CMDT, so a ceiling added later
-      // cannot silence a genuine unbounded pre-start watchdog. Cleared on admission.
-      instance.Concurrency_Parked__c = true;
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    }
-
-    if (!Test.isRunningTest()) {
-      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, null);
-    }
-  }
-
-  /**
-   * Parallel arrays pairing each freshly built child instance with the
-   * originating ChildRequest, so payload resolution can re-associate them
-   * positionally after the bulk insert assigns Ids.
-   */
-  private class ChildStartPlan {
-    List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
-    List<StepResult.ChildRequest> requests = new List<StepResult.ChildRequest>();
-  }
-
-  private static void startChildWorkflows(
-    Id parentId,
-    List<StepResult.ChildRequest> requests
-  ) {
-    if (requests == null || requests.isEmpty()) {
-      return;
-    }
-
-    String parentNamespace = resolveParentNamespace(parentId);
-    Set<String> correlationKeys = validateChildRequests(
-      requests,
-      parentNamespace
-    );
-    Map<String, Workflow_Instance__c> existingByCorrKey = findExistingChildren(
-      parentId,
-      correlationKeys
-    );
-
-    ChildStartPlan plan = new ChildStartPlan();
-    for (StepResult.ChildRequest req : requests) {
-      if (
-        String.isNotBlank(req.correlationKey) &&
-        existingByCorrKey.containsKey(normalizeKey(req.correlationKey))
-      ) {
-        continue;
-      }
-      plan.instances.add(buildChildInstance(req, parentId, parentNamespace));
-      plan.requests.add(req);
-    }
-
-    if (plan.instances.isEmpty()) {
-      return;
-    }
-
-    if (!insertChildInstances(plan.instances, parentId)) {
-      return;
-    }
-
-    List<Workflow_Instance__c> instancesToUpdate = applyChildInputPayloads(
-      plan
-    );
-    insertChildInitialSteps(instancesToUpdate);
-    scheduleOrPauseChildren(instancesToUpdate);
-    enqueueChildOrchestrators(instancesToUpdate);
-  }
-
-  private static String resolveParentNamespace(Id parentId) {
-    if (parentId == null) {
-      return '';
-    }
-    List<Workflow_Instance__c> parentInsts = [
-      SELECT Workflow_Name__c
-      FROM Workflow_Instance__c
-      WHERE Id = :parentId
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    if (parentInsts.isEmpty()) {
-      return '';
-    }
-    return WorkflowTypeResolver.extractNamespace(
-      parentInsts[0].Workflow_Name__c
-    );
-  }
-
-  private static Set<String> validateChildRequests(
-    List<StepResult.ChildRequest> requests,
-    String parentNamespace
-  ) {
-    Set<String> correlationKeys = new Set<String>();
-    for (StepResult.ChildRequest req : requests) {
-      WorkflowPayloadOffload.validateCorrelationKey(req.correlationKey);
-      correlationKeys.add(req.correlationKey);
-
-      if (String.isBlank(req.workflowName)) {
-        throw new WorkflowException('Workflow name is required.');
-      }
-      Type wflowType = WorkflowTypeResolver.resolve(
-        req.workflowName,
-        parentNamespace
-      );
-      if (wflowType == null) {
-        throw new WorkflowException(
-          'Workflow definition not found for name: ' + req.workflowName
-        );
-      }
-      Object defObj = wflowType.newInstance();
-      if (!(defObj instanceof WorkflowDefinition)) {
-        throw new WorkflowException(
-          'Class ' + req.workflowName + ' must implement WorkflowDefinition'
-        );
-      }
-    }
-    return correlationKeys;
-  }
-
-  private static Map<String, Workflow_Instance__c> findExistingChildren(
-    Id parentId,
-    Set<String> correlationKeys
-  ) {
-    Map<String, Workflow_Instance__c> existingByCorrKey = new Map<String, Workflow_Instance__c>();
-    if (correlationKeys.isEmpty()) {
-      return existingByCorrKey;
-    }
-
-    List<Workflow_Instance__c> existingActive = [
-      SELECT Id, Parent_Instance__c, Status__c, Active_Correlation_Key__c
-      FROM Workflow_Instance__c
-      WHERE Active_Correlation_Key__c IN :correlationKeys
-      WITH SYSTEM_MODE
-    ];
-    for (Workflow_Instance__c existing : existingActive) {
-      if (existing.Parent_Instance__c == parentId) {
-        existingByCorrKey.put(
-          normalizeKey(existing.Active_Correlation_Key__c),
-          existing
-        );
-      } else {
-        throw new WorkflowException(
-          'An active workflow already exists with correlation key: ' +
-          existing.Active_Correlation_Key__c
-        );
-      }
-    }
-
-    List<Workflow_Instance__c> existingSiblings = [
-      SELECT Id, Parent_Instance__c, Status__c, Correlation_Key__c
-      FROM Workflow_Instance__c
-      WHERE
-        Correlation_Key__c IN :correlationKeys
-        AND Parent_Instance__c = :parentId
-      WITH SYSTEM_MODE
-    ];
-    for (Workflow_Instance__c existing : existingSiblings) {
-      existingByCorrKey.put(
-        normalizeKey(existing.Correlation_Key__c),
-        existing
-      );
-    }
-    return existingByCorrKey;
-  }
-
-  private static Workflow_Instance__c buildChildInstance(
-    StepResult.ChildRequest req,
-    Id parentId,
-    String parentNamespace
-  ) {
-    Type wflowType = WorkflowTypeResolver.resolve(
-      req.workflowName,
-      parentNamespace
-    );
-    Workflow_Instance__c instance = new Workflow_Instance__c();
-    // wflowType is guaranteed non-null by the validation loop above
-    instance.Workflow_Name__c = String.valueOf(wflowType);
-    instance.Status__c = 'Pending';
-    instance.Correlation_Key__c = req.correlationKey;
-    instance.Parent_Instance__c = parentId;
-    instance.Causation_Id__c = parentId;
-    Object defObj = wflowType.newInstance();
-    if (defObj instanceof VersionedWorkflow) {
-      instance.Definition_Version__c = ((VersionedWorkflow) defObj)
-        .getLatestVersion();
-    } else {
-      instance.Definition_Version__c = 1;
-    }
-    instance.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
-    return instance;
-  }
-
-  // Inserts the child instances, returning true when processing should
-  // continue and false when a DUPLICATE_VALUE race was reconciled against
-  // existing siblings (the original early return).
-  private static Boolean insertChildInstances(
-    List<Workflow_Instance__c> instancesToInsert,
-    Id parentId
-  ) {
-    try {
-      Database.insert(instancesToInsert, true, AccessLevel.SYSTEM_MODE);
-      if (Test.isRunningTest()) {
-        for (Workflow_Instance__c inst : instancesToInsert) {
-          WorkflowFaultInjection.registerChildParent(inst.Id, parentId);
-        }
-      }
-      return true;
-    } catch (DmlException ex) {
-      if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
-        reconcileDuplicateChildren(instancesToInsert, parentId);
-        return false;
-      }
-      throw ex;
-    }
-  }
-
-  private static Set<String> collectChildCorrelationKeys(
-    List<Workflow_Instance__c> instances
-  ) {
-    Set<String> corrKeys = new Set<String>();
-    for (Workflow_Instance__c inst : instances) {
-      if (String.isNotBlank(inst.Correlation_Key__c)) {
-        corrKeys.add(normalizeKey(inst.Correlation_Key__c));
-      }
-    }
-    return corrKeys;
-  }
-
-  // Re-verifies that each duplicate-keyed child already exists as a sibling of
-  // this parent; throws only for a correlation-key collision with a foreign
-  // instance. Mirrors the original in-catch reconciliation exactly.
-  private static void reconcileDuplicateChildren(
-    List<Workflow_Instance__c> instancesToInsert,
-    Id parentId
-  ) {
-    Set<String> corrKeys = collectChildCorrelationKeys(instancesToInsert);
-    Map<String, Workflow_Instance__c> siblingsMap = new Map<String, Workflow_Instance__c>();
-    if (!corrKeys.isEmpty()) {
-      for (Workflow_Instance__c sibling : [
-        SELECT Id, Parent_Instance__c, Active_Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE Active_Correlation_Key__c IN :corrKeys
-        WITH SYSTEM_MODE
-      ]) {
-        siblingsMap.put(
-          normalizeKey(sibling.Active_Correlation_Key__c),
-          sibling
-        );
-      }
-    }
-    for (Workflow_Instance__c inst : instancesToInsert) {
-      if (String.isNotBlank(inst.Correlation_Key__c)) {
-        Workflow_Instance__c sibling = siblingsMap.get(
-          normalizeKey(inst.Correlation_Key__c)
-        );
-        if (sibling == null || sibling.Parent_Instance__c != parentId) {
-          throw new WorkflowException(
-            'An active workflow already exists with correlation key: ' +
-            inst.Correlation_Key__c
-          );
-        }
-      }
-    }
-  }
-
-  private static List<Workflow_Instance__c> applyChildInputPayloads(
-    ChildStartPlan plan
-  ) {
-    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
-    for (Integer i = 0; i < plan.instances.size(); i++) {
-      Workflow_Instance__c inst = plan.instances[i];
-      StepResult.ChildRequest req = plan.requests[i];
-      inst.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-        inst.Id,
-        req.inputJson,
-        'Input_Child_' + inst.Id
-      );
-      instancesToUpdate.add(inst);
-    }
-    Database.update(instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
-    return instancesToUpdate;
-  }
-
-  private static void insertChildInitialSteps(
-    List<Workflow_Instance__c> instancesToUpdate
-  ) {
-    List<Workflow_Step_Execution__c> stepExecsToInsert = new List<Workflow_Step_Execution__c>();
-    for (Workflow_Instance__c inst : instancesToUpdate) {
-      if (String.isNotBlank(inst.Current_Step__c)) {
-        Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c();
-        stepExec.Workflow_Instance__c = inst.Id;
-        stepExec.Step_Name__c = inst.Current_Step__c;
-        stepExec.Status__c = 'Pending';
-        stepExec.Input__c = inst.Input__c;
-        stepExec.Retry_Count__c = 0;
-        stepExecsToInsert.add(stepExec);
-      }
-    }
-    if (!stepExecsToInsert.isEmpty()) {
-      Database.insert(stepExecsToInsert, true, AccessLevel.SYSTEM_MODE);
-    }
-  }
-
-  private static void scheduleOrPauseChildren(
-    List<Workflow_Instance__c> instancesToUpdate
-  ) {
-    List<Workflow_Instance__c> instancesToSchedule = new List<Workflow_Instance__c>();
-    List<Workflow_Instance__c> instancesToPause = new List<Workflow_Instance__c>();
-    Boolean checkPause = WorkflowPauseGate.anyPaused();
-
-    for (Workflow_Instance__c inst : instancesToUpdate) {
-      if (
-        checkPause &&
-        WorkflowPauseGate.isDefinitionPaused(inst.Workflow_Name__c)
-      ) {
-        inst.Status__c = 'Paused';
-        instancesToPause.add(inst);
-      } else {
-        if (!ConcurrencyGate.isConfigured(inst.Workflow_Name__c)) {
-          instancesToSchedule.add(inst);
-        } else {
-          inst.Concurrency_Parked__c = true;
-          instancesToPause.add(inst);
-        }
-      }
-    }
-
-    if (!instancesToPause.isEmpty()) {
-      Database.update(instancesToPause, true, AccessLevel.SYSTEM_MODE);
-    }
-
-    if (!instancesToSchedule.isEmpty()) {
-      WorkflowTimeoutArming.scheduleTimeoutJobsForInstances(
-        instancesToSchedule
-      );
-    }
-  }
-
-  private static void enqueueChildOrchestrators(
-    List<Workflow_Instance__c> instancesToUpdate
-  ) {
-    if (Test.isRunningTest()) {
-      return;
-    }
-    List<Id> instanceIdsToEnqueue = new List<Id>();
-    for (Workflow_Instance__c inst : instancesToUpdate) {
-      if (inst.Status__c != 'Paused') {
-        instanceIdsToEnqueue.add(inst.Id);
-      }
-    }
-    if (!instanceIdsToEnqueue.isEmpty()) {
-      WorkflowOrchestratorEnqueue.enqueueOrchestrators(instanceIdsToEnqueue);
-    }
-  }
-
-  @TestVisible
-  private static void notifyParentCompletion(
-    Workflow_Instance__c childInstance
-  ) {
-    notifyParentCompletion(new List<Workflow_Instance__c>{ childInstance });
-  }
-
-  /**
-   * Determines whether a parent instance is in a terminal or inactive state and
-   * should therefore not receive a child-completion signal.
-   * @param parent the parent workflow instance
-   * @return true when the parent status is terminal/inactive
-   */
-  private static Boolean isParentInTerminalState(Workflow_Instance__c parent) {
-    return parent.Status__c == 'Completed' ||
-      parent.Status__c == 'Failed' ||
-      parent.Status__c == 'Compensated' ||
-      parent.Status__c == 'Cancelled' ||
-      parent.Status__c == 'ContinuedAsNew' ||
-      parent.Status__c == 'CompensationFailed';
-  }
-
-  /**
-   * Builds the child-completion platform event delivered to a parent instance.
-   * @param child the completed/failed child instance
-   * @param parent the parent instance to notify
-   * @return the Workflow_Event__e carrying the child outcome signal
-   */
-  private static Workflow_Event__e buildChildCompletionEvent(
-    Workflow_Instance__c child,
-    Workflow_Instance__c parent
-  ) {
-    String targetKey = String.isNotBlank(parent.Correlation_Key__c)
-      ? parent.Correlation_Key__c
-      : parent.Id;
-
-    String signalName;
-    String payload;
-    if (child.Status__c == 'Completed') {
-      signalName = 'ChildCompleted';
-      payload = child.Output__c;
-    } else {
-      signalName = 'ChildFailed';
-      Map<String, Object> outcomeData = new Map<String, Object>{
-        'status' => child.Status__c,
-        'errorMessage' => child.Error_Message__c != null
-          ? child.Error_Message__c.left(10000)
-          : null,
-        'output' => child.Output__c
-      };
-      payload = WorkflowPayloadOffload.savePayloadIfNeeded(
-        parent.Id,
-        JSON.serialize(outcomeData),
-        'ChildFailedOutcome_' + child.Id
-      );
-    }
-
-    signalName += String.isNotBlank(child.Correlation_Key__c)
-      ? ':' + child.Correlation_Key__c
-      : ':' + child.Id;
-
-    return new Workflow_Event__e(
-      Workflow_Instance_Id__c = targetKey,
-      Event_Type__c = 'SIGNAL:' + signalName,
-      Payload__c = payload
-    );
-  }
-
-  /**
-   * Publishes child-completion events and raises on any publish failure.
-   * @param events platform events to publish (may be empty)
-   */
-  private static void publishChildCompletionEvents(
-    List<Workflow_Event__e> events
-  ) {
-    if (events.isEmpty()) {
-      return;
-    }
-    List<Database.SaveResult> srs = EventBus.publish(events);
-    for (Database.SaveResult sr : srs) {
-      if (sr.isSuccess()) {
-        continue;
-      }
-      List<String> errMsgs = new List<String>();
-      for (Database.Error err : sr.getErrors()) {
-        errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
-      }
-      throw new WorkflowException(
-        'Failed to publish child completion event: ' +
-        String.join(errMsgs, ', ')
-      );
-    }
-  }
-
-  @TestVisible
-  private static void notifyParentCompletion(
-    List<Workflow_Instance__c> childInstances
-  ) {
-    if (childInstances == null || childInstances.isEmpty()) {
-      return;
-    }
-
-    // Query child instances to ensure all fields are loaded (avoids SObjectException)
-    List<Workflow_Instance__c> freshChildren = [
-      SELECT
-        Parent_Instance__c,
-        Correlation_Key__c,
-        Status__c,
-        Error_Message__c,
-        Output__c
-      FROM Workflow_Instance__c
-      WHERE Id IN :childInstances
-      WITH SYSTEM_MODE
-    ];
-
-    List<Workflow_Instance__c> childrenWithParents = new List<Workflow_Instance__c>();
-    Set<Id> parentIds = new Set<Id>();
-    for (Workflow_Instance__c child : freshChildren) {
-      if (child.Parent_Instance__c != null) {
-        childrenWithParents.add(child);
-        parentIds.add(child.Parent_Instance__c);
-      }
-    }
-
-    if (childrenWithParents.isEmpty()) {
-      return;
-    }
-
-    Map<Id, Workflow_Instance__c> parents = new Map<Id, Workflow_Instance__c>(
-      [
-        SELECT Correlation_Key__c, Status__c
-        FROM Workflow_Instance__c
-        WHERE Id IN :parentIds
-        WITH SYSTEM_MODE
-      ]
-    );
-
-    List<Workflow_Event__e> events = new List<Workflow_Event__e>();
-    for (Workflow_Instance__c child : childrenWithParents) {
-      Workflow_Instance__c parent = parents.get(child.Parent_Instance__c);
-      if (parent == null) {
-        continue;
-      }
-
-      // Skip if the parent is already terminal or inactive (avoids inserting stale Unrouted signals)
-      if (isParentInTerminalState(parent)) {
-        continue;
-      }
-
-      events.add(buildChildCompletionEvent(child, parent));
-    }
-
-    publishChildCompletionEvents(events);
   }
 
   /**
@@ -9919,7 +8572,7 @@ public inherited sharing class WorkflowEngine {
     instance.Failure_Category__c = null;
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
-    notifyParentCompletion(instance);
+    WorkflowParentNotifier.notifyParentCompletion(instance);
     WorkflowLifecyclePublisher.publish(instance);
   }
 
@@ -10355,7 +9008,7 @@ public inherited sharing class WorkflowEngine {
       : 'Compensated';
     instance.Current_Step__c = null;
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    notifyParentCompletion(instance);
+    WorkflowParentNotifier.notifyParentCompletion(instance);
     // Fire-and-forget outbound lifecycle event on terminal transition.
     WorkflowLifecyclePublisher.publish(instance);
   }
@@ -10958,7 +9611,7 @@ public inherited sharing class WorkflowEngine {
     instance.Sleep_Until__c = null;
     instance.Async_Job_Id__c = null;
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    notifyParentCompletion(instance);
+    WorkflowParentNotifier.notifyParentCompletion(instance);
     WorkflowAlertManager.sendAlert(instance, instance.Error_Message__c);
     WorkflowLifecyclePublisher.publish(instance);
   }
@@ -11004,7 +9657,7 @@ public inherited sharing class WorkflowEngine {
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     if (stack.isEmpty()) {
-      notifyParentCompletion(instance);
+      WorkflowParentNotifier.notifyParentCompletion(instance);
     } else {
       WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
     }
@@ -11189,7 +9842,14 @@ public inherited sharing class WorkflowEngine {
     );
   }
 
-  private static void preCreateFirstCompensationStep(
+  /**
+   * @description Pre-creates the first pending compensation step for an instance
+   * entering compensation, so the orchestrator has a concrete step to drive. Public
+   * so the extracted `WorkflowFailureService` can open compensation through the same
+   * resident helper. No-op when the compensation stack is empty.
+   * @param instance the instance beginning compensation
+   */
+  public static void preCreateFirstCompensationStep(
     Workflow_Instance__c instance
   ) {
     if (String.isBlank(instance.Compensation_Stack__c)) {
@@ -11609,7 +10269,7 @@ public inherited sharing class WorkflowEngine {
         terminallyCancelled.add(cancelled);
       }
     }
-    notifyParentCompletion(terminallyCancelled);
+    WorkflowParentNotifier.notifyParentCompletion(terminallyCancelled);
     WorkflowLifecyclePublisher.publish(terminallyCancelled);
   }
 
@@ -12236,7 +10896,7 @@ public inherited sharing class WorkflowEngine {
         terminalUpdated.add(inst);
       }
     }
-    notifyParentCompletion(terminalUpdated);
+    WorkflowParentNotifier.notifyParentCompletion(terminalUpdated);
   }
 
   // Enqueue orchestrators for the given instances unless nothing is pending or
@@ -12384,7 +11044,7 @@ public inherited sharing class WorkflowEngine {
     timeoutFailReq.errorMessage = errorMsg;
     timeoutFailReq.failureCategory = CAT_TIMEOUT;
     timeoutFailReq.attemptCount = attemptCount;
-    failResolvedInstance(timeoutFailReq);
+    WorkflowFailureService.failResolvedInstance(timeoutFailReq);
   }
 
   // Transition the (not-yet-transitioned) parent instance for a timed-out step:

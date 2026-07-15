@@ -549,7 +549,7 @@ public class ChildWorkflowCompositionExampleTest {
       childInst.Output__c = largeError;
       update as system childInst;
 
-      WorkflowEngine.notifyParentCompletion(childInst);
+      WorkflowParentNotifier.notifyParentCompletion(childInst);
 
       WorkflowTestHarness.Result result = harness.drive();
 
