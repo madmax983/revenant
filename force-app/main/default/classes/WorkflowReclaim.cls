@@ -269,7 +269,7 @@ public inherited sharing class WorkflowReclaim {
 
     if (!requests.isEmpty()) {
       try {
-        WorkflowEngine.enqueueOrchestrators(requests);
+        WorkflowOrchestratorEnqueue.enqueueOrchestrators(requests);
       } catch (Exception ignored) {
         // Best-effort re-enqueue; the next watchdog heartbeat re-drives on failure.
       }

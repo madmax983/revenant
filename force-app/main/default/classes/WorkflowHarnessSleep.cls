@@ -211,7 +211,7 @@ public inherited sharing class WorkflowHarnessSleep {
       }
       return WorkflowHarnessCron.anyStartsWith(
         sleepJobNames,
-        WorkflowEngine.getSleepJobPrefix(instanceId, stepName)
+        WorkflowStepTimeoutConfig.getSleepJobPrefix(instanceId, stepName)
       );
     }
   }

@@ -70,7 +70,7 @@ public inherited sharing class WorkflowPauseResumeDrainer {
 
     // Re-arm step timeouts BEFORE enqueueing the resumed workers, so a delayed worker
     // (or a step that defers its pre-exec DML) still has an enforced watchdog deadline.
-    WorkflowEngine.reArmTimeoutsForResume(toUpdate);
+    WorkflowTimeoutReArm.reArmTimeoutsForResume(toUpdate);
 
     enqueueResumedWorkers(serialIds, parallelInsts);
 
@@ -155,7 +155,7 @@ public inherited sharing class WorkflowPauseResumeDrainer {
       !serialIds.isEmpty() &&
       !(Test.isRunningTest() && WorkflowEngine.disableQueueableInTest)
     ) {
-      WorkflowEngine.enqueueOrchestrators(serialIds);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrators(serialIds);
     }
     if (!parallelInsts.isEmpty()) {
       enqueueResumeBulkParallel(parallelInsts);

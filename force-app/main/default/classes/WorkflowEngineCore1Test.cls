@@ -417,7 +417,7 @@ public class WorkflowEngineCore1Test {
         'Child must have parent Id as Causation_Id__c'
       );
 
-      WorkflowEngine.WorkflowStatus status = WorkflowEngine.getStatus(
+      WorkflowEngine.WorkflowStatus status = WorkflowStatusRead.getStatus(
         childInst.Id
       );
       System.assertEquals(

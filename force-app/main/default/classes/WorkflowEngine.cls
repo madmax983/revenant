@@ -84,9 +84,9 @@ public inherited sharing class WorkflowEngine {
   // Upper bound on rows read by a single dedup lookup, so a hot correlation key
   // with many historical terminal runs cannot exhaust the SOQL row governor.
   // Single-key lookups (the common start path) read only the top row.
-  // @TestVisible (non-final) so tests can shrink it to exercise the cap cheaply.
-  @TestVisible
-  private static Integer dedupLookupRowCap = 10000;
+  // Public (non-final) so tests can shrink it to exercise the cap cheaply and so
+  // the extracted status-read winner resolver can honor the same governor cap.
+  public static Integer dedupLookupRowCap = 10000;
 
   // Search Attributes configuration limits
   public static final Integer MAX_ATTRIBUTES_PER_INSTANCE = 10;
@@ -111,16 +111,6 @@ public inherited sharing class WorkflowEngine {
   // wake each branch by name without the instance-level dedup blocking siblings.
   @TestVisible
   private static Set<String> enqueuedBranchKeys = new Set<String>();
-
-  // Terminal statuses for the read API. ContinuedAsNew is deliberately excluded
-  // (it is a hand-off, not an outcome) and CompensationFailed is excluded
-  // (it is non-terminal — the rollback can still be resumed/retried).
-  private static final Set<String> TERMINAL_GETSTATUS_STATUSES = new Set<String>{
-    'Completed',
-    'Failed',
-    'Compensated',
-    'Cancelled'
-  };
 
   // Caps how many signals a serial step may observe in one execution. Serial
   // steps never claim (no read-side DML), so the only DML is the COMPLETE
@@ -151,8 +141,6 @@ public inherited sharing class WorkflowEngine {
   // page (every row claimed by a sibling between query and lock) before giving
   // up, so a loser does not return empty while later Received rows remain.
   private static final Integer PARALLEL_CLAIM_PAGE_RETRIES = 3;
-
-  private static Map<String, Integer> stepTimeoutCache = new Map<String, Integer>();
 
   static {
     try {
@@ -240,8 +228,9 @@ public inherited sharing class WorkflowEngine {
   // ─── Read API ──────────────────────────────────────────────────────────────
 
   /**
-   * Stable read-only DTO returned by WorkflowEngine.getStatus. All fields are
-   * read-only to callers; the engine populates them via the private constructor.
+   * Stable read-only DTO returned by the workflow read API. All fields are
+   * read-only to callers (private setters); the engine's read layer populates
+   * them once via the all-arguments constructor.
    */
   public class WorkflowStatus {
     /** @description Salesforce Id of the workflow instance. */
@@ -264,792 +253,29 @@ public inherited sharing class WorkflowEngine {
     /** @description Causation Id linking this run to the event that caused it. */
     public String causationId { get; private set; }
 
-    private WorkflowStatus() {
-      this.isTerminal = false;
-    }
-  }
-
-  /**
-   * Returns the current status and rehydrated output for a workflow instance by Id,
-   * or null if no instance with that Id exists.
-   * Costs at most 2 SOQL queries and zero DML.
-   * @param instanceId Id of the workflow instance to read
-   * @return the instance status DTO, or null when no such instance exists
-   */
-  public static WorkflowStatus getStatus(Id instanceId) {
-    List<WorkflowStatus> results = getStatus(new List<Id>{ instanceId });
-    return results[0];
-  }
-
-  /**
-   * Returns the current status and rehydrated output for a workflow instance by
-   * correlation key (prefers a live/active run, and follows a continue-as-new chain
-   * via its shared root key), or null if no matching instance exists. Blank/null key
-   * returns null. Costs a small constant number of SOQL queries and zero DML.
-   * @param correlationKey correlation key to resolve
-   * @return the status DTO for the resolved instance, or null when none matches
-   */
-  public static WorkflowStatus getStatus(String correlationKey) {
-    List<WorkflowStatus> results = getStatus(
-      new List<String>{ correlationKey }
-    );
-    return results[0];
-  }
-
-  /**
-   * Bulk variant — accepts a list of instance Ids and returns a correspondingly
-   * ordered list of WorkflowStatus DTOs (null where an Id was not found).
-   * Costs at most 2 SOQL queries total regardless of list size, and zero DML.
-   * @param instanceIds instance Ids to read
-   * @return status DTOs positionally aligned with instanceIds (null per missing Id)
-   */
-  public static List<WorkflowStatus> getStatus(List<Id> instanceIds) {
-    List<WorkflowStatus> out = new List<WorkflowStatus>();
-    if (instanceIds == null || instanceIds.isEmpty()) {
-      return out;
-    }
-
-    Set<Id> lookupIds = new Set<Id>(instanceIds);
-    Map<Id, Workflow_Instance__c> instById = new Map<Id, Workflow_Instance__c>();
-    for (Workflow_Instance__c inst : [
-      SELECT
-        Id,
-        Workflow_Name__c,
-        Correlation_Key__c,
-        Status__c,
-        Error_Message__c,
-        Output__c,
-        Causation_Id__c
-      FROM Workflow_Instance__c
-      WHERE Id IN :lookupIds
-      WITH SYSTEM_MODE
-    ]) {
-      instById.put(inst.Id, inst);
-    }
-
-    // Bulk-resolve all offloaded outputs in a single ContentVersion query.
-    Map<Id, String> resolvedOutputByDocId = bulkResolveOffloadedOutputs(
-      instById.values()
-    );
-
-    for (Id reqId : instanceIds) {
-      Workflow_Instance__c inst = instById.get(reqId);
-      out.add(inst == null ? null : buildStatus(inst, resolvedOutputByDocId));
-    }
-    return out;
-  }
-
-  /**
-   * Normalizes the non-blank correlation keys for consistent in-memory bucketing.
-   * Correlation key fields are case-insensitive in SOQL but Apex Set/Map lookups
-   * are case-sensitive, so all bucketing is done on the normalized (lower-cased)
-   * key to keep in-memory matching consistent with what the query returns.
-   * @param correlationKeys the requested correlation keys
-   * @return the set of normalized non-blank keys
-   */
-  private static Set<String> normalizeStatusKeys(List<String> correlationKeys) {
-    Set<String> normalizedKeys = new Set<String>();
-    for (String k : correlationKeys) {
-      if (String.isNotBlank(k)) {
-        normalizedKeys.add(normalizeKey(k));
-      }
-    }
-    return normalizedKeys;
-  }
-
-  /**
-   * Fetches the winner instances' DTO fields (including Output__c) by id.
-   * @param winnerIds the resolved winning instance ids
-   * @return a map of instance id to its loaded record (empty when no winners)
-   */
-  private static Map<Id, Workflow_Instance__c> queryWinnerInstances(
-    Set<Id> winnerIds
-  ) {
-    Map<Id, Workflow_Instance__c> instById = new Map<Id, Workflow_Instance__c>();
-    if (winnerIds.isEmpty()) {
-      return instById;
-    }
-    for (Workflow_Instance__c inst : [
-      SELECT
-        Id,
-        Workflow_Name__c,
-        Correlation_Key__c,
-        Status__c,
-        Error_Message__c,
-        Output__c,
-        Causation_Id__c
-      FROM Workflow_Instance__c
-      WHERE Id IN :winnerIds
-      WITH SYSTEM_MODE
-    ]) {
-      instById.put(inst.Id, inst);
-    }
-    return instById;
-  }
-
-  /**
-   * Bulk variant — accepts a list of correlation keys and returns a correspondingly
-   * ordered list of WorkflowStatus DTOs (null where no instance was found or the
-   * key entry is blank). A live/active run is preferred over a terminal one when a
-   * key maps to several rows; a ContinuedAsNew hand-off always loses to a real
-   * generation of its chain. Lookup follows a continue-as-new chain via the shared
-   * Root_Correlation_Key__c, so polling the original key — or any intermediate
-   * successor key — resolves to the live/final generation.
-   *
-   * Winners are resolved from metadata only (Output__c is fetched solely for the
-   * winners), per key (no single hot key can crowd out others or exhaust the heap).
-   * Costs a small constant number of SOQL queries regardless of list size, and zero
-   * DML. (The Id-based overloads remain bounded at <= 2 SOQL.)
-   * @param correlationKeys correlation keys to resolve
-   * @return status DTOs positionally aligned with correlationKeys (null per blank
-   * or unmatched key)
-   */
-  public static List<WorkflowStatus> getStatus(List<String> correlationKeys) {
-    List<WorkflowStatus> out = new List<WorkflowStatus>();
-    if (correlationKeys == null || correlationKeys.isEmpty()) {
-      return out;
-    }
-
-    Set<String> normalizedKeys = normalizeStatusKeys(correlationKeys);
-
-    // Resolve the winning instance Id per requested key using metadata only (no
-    // Output__c), so a hot key's many candidate rows can never load enough inline
-    // payloads to exhaust the heap. Resolution is per-key bounded (no single key can
-    // crowd out others) and follows ContinuedAsNew chains via the shared root key.
-    Map<String, Id> winnerIdByKey = resolveWinnerIdByKey(normalizedKeys);
-
-    // Fetch Output__c (and the remaining DTO fields) only for the winners, then
-    // rehydrate any offloaded outputs in one ContentVersion query — the same bounded
-    // tail used by the Id-based overload.
-    Map<Id, Workflow_Instance__c> instById = queryWinnerInstances(
-      new Set<Id>(winnerIdByKey.values())
-    );
-
-    Map<Id, String> resolvedOutputByDocId = bulkResolveOffloadedOutputs(
-      instById.values()
-    );
-
-    for (String k : correlationKeys) {
-      if (String.isBlank(k)) {
-        out.add(null);
-        continue;
-      }
-      Id winnerId = winnerIdByKey.get(normalizeKey(k));
-      Workflow_Instance__c inst = winnerId == null
-        ? null
-        : instById.get(winnerId);
-      out.add(inst == null ? null : buildStatus(inst, resolvedOutputByDocId));
-    }
-    return out;
-  }
-
-  // Returns true if candidate should replace existing for the same correlation key.
-  // A ContinuedAsNew row is a superseded hand-off, so any non-hand-off generation of
-  // the chain wins over it (independent of timestamps); otherwise an active run beats
-  // a terminal one, and among equals the more recently created wins.
-  private static Boolean isPreferredForGetStatus(
-    Workflow_Instance__c candidate,
-    Workflow_Instance__c existing
-  ) {
-    Boolean candidateHandoff = candidate.Status__c == 'ContinuedAsNew';
-    Boolean existingHandoff = existing.Status__c == 'ContinuedAsNew';
-    if (candidateHandoff != existingHandoff) {
-      return !candidateHandoff;
-    }
-    Boolean candidateActive = ACTIVE_STATUSES.contains(candidate.Status__c);
-    Boolean existingActive = ACTIVE_STATUSES.contains(existing.Status__c);
-    if (candidateActive != existingActive) {
-      return candidateActive;
-    }
-    return candidate.CreatedDate > existing.CreatedDate;
-  }
-
-  /**
-   * Resolves the single winning Workflow_Instance__c Id for each requested
-   * (normalized) correlation key, keyed by that normalized key. Loads only metadata
-   * (never Output__c). Follows ContinuedAsNew chains via the shared
-   * Root_Correlation_Key__c — which a before-insert trigger defaults to the
-   * instance's own correlation key, so every row carries its chain root — letting a
-   * lookup by the original key, or any intermediate successor key, resolve to the
-   * live/final generation. Bounded per key so no single hot key (a correlation key
-   * reused across many terminal runs) can crowd out other requested keys or exceed
-   * the SOQL row governor.
-   * @param normalizedKeys normalized (lower-cased) correlation keys to resolve
-   * @return map of normalized key to the winning instance Id (keys with no match
-   * are absent)
-   */
-  private static Map<String, Id> resolveWinnerIdByKey(
-    Set<String> normalizedKeys
-  ) {
-    if (normalizedKeys == null || normalizedKeys.isEmpty()) {
-      return new Map<String, Id>();
-    }
-    return normalizedKeys.size() == 1
-      ? resolveSingleKeyWinner(new List<String>(normalizedKeys)[0])
-      : resolveBulkKeyWinners(normalizedKeys);
-  }
-
-  /**
-   * Fast path for a single requested key. One metadata query picks the winner; a
-   * second runs only when that winner is a ContinuedAsNew hand-off reached via a
-   * non-root key (i.e. the requested key is an intermediate generation), in which
-   * case the live/final successor lives under the shared root key.
-   * @param key the single normalized correlation key to resolve
-   * @return a one-entry map of the key to its winning instance Id, or empty when
-   * no instance matches
-   */
-  private static Map<String, Id> resolveSingleKeyWinner(String key) {
-    Map<String, Id> winnerByKey = new Map<String, Id>();
-    Set<String> single = new Set<String>{ key };
-    Workflow_Instance__c winner = pickWinner(
-      [
-        SELECT
-          Id,
-          Status__c,
-          CreatedDate,
-          Active_Correlation_Key__c,
-          Correlation_Key__c,
-          Root_Correlation_Key__c
-        FROM Workflow_Instance__c
-        WHERE
-          Active_Correlation_Key__c IN :single
-          OR Correlation_Key__c IN :single
-          OR Root_Correlation_Key__c IN :single
-        WITH SYSTEM_MODE
-        ORDER BY
-          Active_Correlation_Key__c NULLS LAST,
-          Terminal_At__c DESC NULLS FIRST,
-          CreatedDate DESC
-        LIMIT :dedupLookupRowCap
-      ]
-    );
-    if (winner == null) {
-      return winnerByKey;
-    }
-
-    // Follow the chain forward via its shared root. (Same root-reuse limitation as
-    // resolveWinnersByRoot: if the root key was reused for an independent live run,
-    // this can resolve to that run — see README.)
-    String rootKey = String.isNotBlank(winner.Root_Correlation_Key__c)
-      ? normalizeKey(winner.Root_Correlation_Key__c)
-      : null;
-    if (
-      winner.Status__c == 'ContinuedAsNew' &&
-      rootKey != null &&
-      rootKey != key
-    ) {
-      Set<String> roots = new Set<String>{ rootKey };
-      Workflow_Instance__c chainWinner = pickWinner(
-        [
-          SELECT
-            Id,
-            Status__c,
-            CreatedDate,
-            Active_Correlation_Key__c,
-            Correlation_Key__c,
-            Root_Correlation_Key__c
-          FROM Workflow_Instance__c
-          WHERE Root_Correlation_Key__c IN :roots
-          WITH SYSTEM_MODE
-          ORDER BY
-            Active_Correlation_Key__c NULLS LAST,
-            Terminal_At__c DESC NULLS FIRST,
-            CreatedDate DESC
-          LIMIT :dedupLookupRowCap
-        ]
+    /**
+     * @description Builds a fully-populated status DTO from a queried instance
+     * and its pre-resolved (rehydrated) terminal output. Used by the extracted
+     * read layer ({@link WorkflowStatusRead}); fields remain read-only to callers
+     * after construction. Terminality and the cleaned causation Id are derived
+     * here so the read layer never touches the private setters.
+     * @param inst the queried workflow instance row to project
+     * @param output the rehydrated terminal output, or null when in-flight
+     */
+    public WorkflowStatus(Workflow_Instance__c inst, String output) {
+      this.instanceId = inst.Id;
+      this.definitionName = inst.Workflow_Name__c;
+      this.correlationKey = inst.Correlation_Key__c;
+      this.status = inst.Status__c;
+      this.isTerminal = WorkflowStatusRead.TERMINAL_GETSTATUS_STATUSES.contains(
+        inst.Status__c
       );
-      if (chainWinner != null && isPreferredForGetStatus(chainWinner, winner)) {
-        winner = chainWinner;
-      }
-    }
-
-    winnerByKey.put(key, winner.Id);
-    return winnerByKey;
-  }
-
-  /**
-   * Bulk path. Each requested key is resolved by its OWN correlation/active key
-   * (never by root), mirroring the start-path findExistingByKey machinery: an active
-   * run if any, else the most-recent row by correlation key (an aggregate, so a hot
-   * key reused across many terminal runs collapses to one group and cannot crowd out
-   * other keys). Matching on the key itself — not on Root_Correlation_Key__c — means
-   * a rootless legacy row is still found, and independent runs that merely share a
-   * chain root are never conflated. The chain is then followed via the shared root
-   * only for keys whose direct winner is a ContinuedAsNew hand-off, exactly as the
-   * single-key fast path does, so bulk and single resolution stay consistent.
-   * @param keys normalized correlation keys to resolve
-   * @return map of each resolved key to its winning instance Id
-   */
-  private static Map<String, Id> resolveBulkKeyWinners(Set<String> keys) {
-    Map<String, Workflow_Instance__c> bestByKey = new Map<String, Workflow_Instance__c>();
-
-    // 1a) Active runs — the unique active-key index bounds this to ~one per key.
-    for (Workflow_Instance__c inst : [
-      SELECT
-        Id,
-        Status__c,
-        CreatedDate,
-        Active_Correlation_Key__c,
-        Correlation_Key__c,
-        Root_Correlation_Key__c
-      FROM Workflow_Instance__c
-      WHERE
-        (Active_Correlation_Key__c IN :keys
-        OR Correlation_Key__c IN :keys)
-        AND Status__c IN :ACTIVE_STATUSES
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC
-    ]) {
-      bucketByOwnKey(inst, keys, bestByKey);
-    }
-
-    // 1b) Keys with no active run → most-recent row by correlation key.
-    resolveRemainingKeyWinners(keys, bestByKey);
-
-    // 2) For keys whose direct winner is a ContinuedAsNew hand-off, follow the
-    //    chain to its live/final successor via the shared root key.
-    expandContinuedAsNewWinners(bestByKey);
-
-    Map<String, Id> winnerByKey = new Map<String, Id>();
-    for (String reqKey : bestByKey.keySet()) {
-      winnerByKey.put(reqKey, bestByKey.get(reqKey).Id);
-    }
-    return winnerByKey;
-  }
-
-  /**
-   * Resolves winners for keys with no active run (phase 1b): the most-recent row
-   * by correlation key of any status (so a ContinuedAsNew hand-off is detected
-   * for the chain expansion). An aggregate yields one MAX(CreatedDate) per key
-   * (a hot key collapses to one group), then a bounded fetch resolves the Id(s)
-   * at those timestamps. Mutates bestByKey in place.
-   * @param keys the full requested key set (for own-key bucketing)
-   * @param bestByKey the accumulating best-instance-per-key map to extend
-   */
-  private static void resolveRemainingKeyWinners(
-    Set<String> keys,
-    Map<String, Workflow_Instance__c> bestByKey
-  ) {
-    Set<String> remaining = unresolved(keys, bestByKey);
-    if (remaining.isEmpty()) {
-      return;
-    }
-    Map<String, Datetime> maxByKey = new Map<String, Datetime>();
-    Set<Datetime> maxTimes = new Set<Datetime>();
-    for (AggregateResult ar : [
-      SELECT Correlation_Key__c ck, MAX(CreatedDate) mc
-      FROM Workflow_Instance__c
-      WHERE Correlation_Key__c IN :remaining
-      WITH SYSTEM_MODE
-      GROUP BY Correlation_Key__c
-    ]) {
-      Datetime mc = (Datetime) ar.get('mc');
-      if (mc == null) {
-        continue;
-      }
-      // Guard the put: a case-insensitive GROUP BY can yield separate groups for
-      // case variants that normalize to the same key, so keep the latest.
-      String nk = normalizeKey((String) ar.get('ck'));
-      Datetime existing = maxByKey.get(nk);
-      if (existing == null || mc > existing) {
-        maxByKey.put(nk, mc);
-      }
-      maxTimes.add(mc);
-    }
-    if (maxTimes.isEmpty()) {
-      return;
-    }
-    for (Workflow_Instance__c inst : [
-      SELECT
-        Id,
-        Status__c,
-        CreatedDate,
-        Active_Correlation_Key__c,
-        Correlation_Key__c,
-        Root_Correlation_Key__c
-      FROM Workflow_Instance__c
-      WHERE Correlation_Key__c IN :remaining AND CreatedDate IN :maxTimes
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC
-      LIMIT :dedupLookupRowCap
-    ]) {
-      if (
-        inst.CreatedDate == maxByKey.get(normalizeKey(inst.Correlation_Key__c))
-      ) {
-        bucketByOwnKey(inst, keys, bestByKey);
-      }
-    }
-  }
-
-  /**
-   * Follows ContinuedAsNew hand-offs to their live/final successor (phase 2).
-   * For each key whose direct winner is a ContinuedAsNew row, the chain root is
-   * resolved (falling back to the predecessor's own key when its root is blank)
-   * and, when a preferred successor is found, it replaces the winner. Mutates
-   * bestByKey in place.
-   * @param bestByKey the best-instance-per-key map to expand
-   */
-  private static void expandContinuedAsNewWinners(
-    Map<String, Workflow_Instance__c> bestByKey
-  ) {
-    Map<String, String> rootByKey = new Map<String, String>();
-    Set<String> expandRoots = new Set<String>();
-    for (String reqKey : bestByKey.keySet()) {
-      Workflow_Instance__c w = bestByKey.get(reqKey);
-      if (w.Status__c == 'ContinuedAsNew') {
-        // A continueAsNew successor inherits the predecessor's root, falling back to
-        // the predecessor's own correlation key when the predecessor predates the
-        // root default (blank root). Mirror that fallback so a rootless legacy
-        // hand-off still expands to its successor (here reqKey == predecessor key).
-        String root = String.isNotBlank(w.Root_Correlation_Key__c)
-          ? normalizeKey(w.Root_Correlation_Key__c)
-          : reqKey;
-        rootByKey.put(reqKey, root);
-        expandRoots.add(root);
-      }
-    }
-    if (expandRoots.isEmpty()) {
-      return;
-    }
-    Map<String, Workflow_Instance__c> winnerByRoot = resolveWinnersByRoot(
-      expandRoots
-    );
-    for (String reqKey : rootByKey.keySet()) {
-      Workflow_Instance__c cand = winnerByRoot.get(rootByKey.get(reqKey));
-      if (
-        cand != null && isPreferredForGetStatus(cand, bestByKey.get(reqKey))
-      ) {
-        bestByKey.put(reqKey, cand);
-      }
-    }
-  }
-
-  /**
-   * Resolves the winning instance per chain root: an active run if any, else the
-   * most-recent non-hand-off terminal generation, else the most-recent row of any
-   * status. Used to follow a ContinuedAsNew chain forward from a hand-off winner.
-   * Per-root bounded so a reused root cannot exhaust the SOQL row governor.
-   *
-   * Known limitation (by design — see README): the root key is shared by every
-   * generation of a chain AND by any independent run that reuses the same
-   * correlation key, so following a hand-off by root cannot distinguish the chain's
-   * own successor from an unrelated run reusing that key. If a correlation key is
-   * reused for a separate run while a continue-as-new chain on that key is still
-   * live, polling an intermediate hand-off key may resolve to the reused run.
-   * Precisely disambiguating would require walking Previous_Instance__c, which is
-   * deliberately out of scope to keep this path's bounded, constant-SOQL guarantee.
-   * @param roots normalized chain-root correlation keys to resolve
-   * @return map of each root key to its winning instance record
-   */
-  /**
-   * Phase 1: buckets the active run per chain (bounded to ~one per chain by the
-   * unique active-key index) into the winner map.
-   * @param roots the chain-root keys to resolve
-   * @param winnerByRoot the accumulating winner map
-   */
-  private static void addActiveWinners(
-    Set<String> roots,
-    Map<String, Workflow_Instance__c> winnerByRoot
-  ) {
-    for (Workflow_Instance__c inst : [
-      SELECT
-        Id,
-        Status__c,
-        CreatedDate,
-        Active_Correlation_Key__c,
-        Correlation_Key__c,
-        Root_Correlation_Key__c
-      FROM Workflow_Instance__c
-      WHERE Root_Correlation_Key__c IN :roots AND Status__c IN :ACTIVE_STATUSES
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC
-    ]) {
-      putBestByRoot(
-        winnerByRoot,
-        normalizeKey(inst.Root_Correlation_Key__c),
-        inst
+      this.errorMessage = inst.Error_Message__c;
+      this.output = output;
+      this.causationId = WorkflowCausationParser.cleanCausationId(
+        inst.Causation_Id__c
       );
     }
-  }
-
-  /**
-   * Phase 2: for roots with no active run, buckets the most-recent non-hand-off
-   * terminal generation into the winner map.
-   * @param remainingRoots roots left unresolved after the active phase
-   * @param winnerByRoot the accumulating winner map
-   */
-  private static void addTerminalGenerationWinners(
-    Set<String> remainingRoots,
-    Map<String, Workflow_Instance__c> winnerByRoot
-  ) {
-    if (remainingRoots.isEmpty()) {
-      return;
-    }
-    Map<String, Datetime> maxByRoot = new Map<String, Datetime>();
-    Set<Datetime> maxTimes = new Set<Datetime>();
-    for (AggregateResult ar : [
-      SELECT Root_Correlation_Key__c root, MAX(CreatedDate) mc
-      FROM Workflow_Instance__c
-      WHERE
-        Root_Correlation_Key__c IN :remainingRoots
-        AND Status__c IN :TERMINAL_GETSTATUS_STATUSES
-      WITH SYSTEM_MODE
-      GROUP BY Root_Correlation_Key__c
-    ]) {
-      Datetime mc = (Datetime) ar.get('mc');
-      if (mc == null) {
-        continue;
-      }
-      String nr = normalizeKey((String) ar.get('root'));
-      Datetime existing = maxByRoot.get(nr);
-      if (existing == null || mc > existing) {
-        maxByRoot.put(nr, mc);
-      }
-      maxTimes.add(mc);
-    }
-    if (maxTimes.isEmpty()) {
-      return;
-    }
-    for (Workflow_Instance__c inst : [
-      SELECT
-        Id,
-        Status__c,
-        CreatedDate,
-        Active_Correlation_Key__c,
-        Correlation_Key__c,
-        Root_Correlation_Key__c
-      FROM Workflow_Instance__c
-      WHERE
-        Root_Correlation_Key__c IN :remainingRoots
-        AND Status__c IN :TERMINAL_GETSTATUS_STATUSES
-        AND CreatedDate IN :maxTimes
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC
-      LIMIT :dedupLookupRowCap
-    ]) {
-      String r = normalizeKey(inst.Root_Correlation_Key__c);
-      if (inst.CreatedDate == maxByRoot.get(r)) {
-        putBestByRoot(winnerByRoot, r, inst);
-      }
-    }
-  }
-
-  /**
-   * Phase 3: fallback for an all-hand-off chain — keeps the most-recent matched
-   * row so the caller still sees the latest generation rather than null.
-   * @param stuckRoots roots still unresolved after the terminal phase
-   * @param winnerByRoot the accumulating winner map
-   */
-  private static void addHandoffFallbackWinners(
-    Set<String> stuckRoots,
-    Map<String, Workflow_Instance__c> winnerByRoot
-  ) {
-    if (stuckRoots.isEmpty()) {
-      return;
-    }
-    for (Workflow_Instance__c inst : [
-      SELECT
-        Id,
-        Status__c,
-        CreatedDate,
-        Active_Correlation_Key__c,
-        Correlation_Key__c,
-        Root_Correlation_Key__c
-      FROM Workflow_Instance__c
-      WHERE Root_Correlation_Key__c IN :stuckRoots
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC
-      LIMIT :dedupLookupRowCap
-    ]) {
-      putBestByRoot(
-        winnerByRoot,
-        normalizeKey(inst.Root_Correlation_Key__c),
-        inst
-      );
-    }
-  }
-
-  private static Map<String, Workflow_Instance__c> resolveWinnersByRoot(
-    Set<String> roots
-  ) {
-    Map<String, Workflow_Instance__c> winnerByRoot = new Map<String, Workflow_Instance__c>();
-    addActiveWinners(roots, winnerByRoot);
-    addTerminalGenerationWinners(unresolved(roots, winnerByRoot), winnerByRoot);
-    addHandoffFallbackWinners(unresolved(roots, winnerByRoot), winnerByRoot);
-    return winnerByRoot;
-  }
-
-  // Buckets a candidate under each requested key it carries via its own correlation
-  // or active key (not its root), keeping the best per key via the getStatus
-  // preference. Matching on the instance's own key avoids conflating independent
-  // runs that share a chain root and still resolves rootless legacy rows.
-  private static void bucketByOwnKey(
-    Workflow_Instance__c inst,
-    Set<String> keys,
-    Map<String, Workflow_Instance__c> bestByKey
-  ) {
-    Set<String> own = new Set<String>();
-    if (String.isNotBlank(inst.Correlation_Key__c)) {
-      own.add(normalizeKey(inst.Correlation_Key__c));
-    }
-    if (String.isNotBlank(inst.Active_Correlation_Key__c)) {
-      own.add(normalizeKey(inst.Active_Correlation_Key__c));
-    }
-    for (String k : own) {
-      if (!keys.contains(k)) {
-        continue;
-      }
-      Workflow_Instance__c existing = bestByKey.get(k);
-      if (existing == null || isPreferredForGetStatus(inst, existing)) {
-        bestByKey.put(k, inst);
-      }
-    }
-  }
-
-  // Picks the single best instance from a candidate list via the getStatus
-  // preference (non-hand-off > active > most-recently created).
-  private static Workflow_Instance__c pickWinner(
-    List<Workflow_Instance__c> candidates
-  ) {
-    Workflow_Instance__c winner = null;
-    for (Workflow_Instance__c inst : candidates) {
-      if (winner == null || isPreferredForGetStatus(inst, winner)) {
-        winner = inst;
-      }
-    }
-    return winner;
-  }
-
-  // Keeps the best candidate per chain root using the getStatus preference.
-  private static void putBestByRoot(
-    Map<String, Workflow_Instance__c> winnerByRoot,
-    String root,
-    Workflow_Instance__c inst
-  ) {
-    if (root == null) {
-      return;
-    }
-    Workflow_Instance__c existing = winnerByRoot.get(root);
-    if (existing == null || isPreferredForGetStatus(inst, existing)) {
-      winnerByRoot.put(root, inst);
-    }
-  }
-
-  // Members of allKeys not yet resolved to a winner in the given map.
-  private static Set<String> unresolved(
-    Set<String> allKeys,
-    Map<String, Workflow_Instance__c> resolved
-  ) {
-    Set<String> remaining = new Set<String>();
-    for (String k : allKeys) {
-      if (!resolved.containsKey(k)) {
-        remaining.add(k);
-      }
-    }
-    return remaining;
-  }
-
-  /**
-   * @description Builds a WorkflowStatus DTO from a queried instance, using the
-   * pre-fetched offloaded-output map so no additional SOQL is issued per row.
-   * Exposed for {@link WorkflowCausationLineage}, which assembles lineage status
-   * DTOs through this method.
-   * @param inst the queried instance row to project
-   * @param resolvedOutputByDocId the pre-resolved offloaded-output map keyed by
-   *        ContentDocumentId
-   * @return the assembled status DTO
-   */
-  public static WorkflowStatus buildStatus(
-    Workflow_Instance__c inst,
-    Map<Id, String> resolvedOutputByDocId
-  ) {
-    Boolean terminal = TERMINAL_GETSTATUS_STATUSES.contains(inst.Status__c);
-    String output = null;
-    if (terminal) {
-      output = rehydrateFromMap(inst.Output__c, resolvedOutputByDocId);
-      // A terminal instance has definitively produced its output, so surface an
-      // empty result as '' rather than null. (Salesforce coerces an empty text
-      // field to null on insert.) This keeps output == null meaning exactly "not
-      // terminal yet", so callers can distinguish "completed with no output" from
-      // "still running" by output alone, per the documented contract.
-      if (output == null) {
-        output = '';
-      }
-    }
-    WorkflowStatus statusDto = new WorkflowStatus();
-    statusDto.instanceId = inst.Id;
-    statusDto.definitionName = inst.Workflow_Name__c;
-    statusDto.correlationKey = inst.Correlation_Key__c;
-    statusDto.status = inst.Status__c;
-    statusDto.isTerminal = terminal;
-    statusDto.errorMessage = inst.Error_Message__c;
-    statusDto.output = output;
-    statusDto.causationId = WorkflowCausationParser.cleanCausationId(
-      inst.Causation_Id__c
-    );
-    return statusDto;
-  }
-
-  /**
-   * @description Resolves all offload markers found in a collection of instances
-   * in one ContentVersion SOQL query. Exposed for {@link WorkflowCausationLineage},
-   * which bulk-resolves ancestor outputs before assembling lineage status DTOs.
-   * @param instances the instances whose offloaded outputs to resolve
-   * @return a map from ContentDocumentId to resolved text (empty when none)
-   */
-  public static Map<Id, String> bulkResolveOffloadedOutputs(
-    List<Workflow_Instance__c> instances
-  ) {
-    Set<Id> docIds = new Set<Id>();
-    for (Workflow_Instance__c inst : instances) {
-      Id docId = getOffloadDocId(inst.Output__c);
-      if (docId != null) {
-        docIds.add(docId);
-      }
-    }
-    Map<Id, String> resolved = new Map<Id, String>();
-    if (!docIds.isEmpty()) {
-      for (ContentVersion cv : [
-        SELECT ContentDocumentId, VersionData
-        FROM ContentVersion
-        WHERE ContentDocumentId IN :docIds AND IsLatest = TRUE
-        WITH SYSTEM_MODE
-      ]) {
-        if (cv.VersionData != null) {
-          resolved.put(cv.ContentDocumentId, cv.VersionData.toString());
-        }
-      }
-    }
-    return resolved;
-  }
-
-  // Extracts the ContentDocumentId from an offload marker, or null if not a marker.
-  private static Id getOffloadDocId(String textValue) {
-    if (
-      String.isNotBlank(textValue) && textValue.startsWith('{"$attachmentId":')
-    ) {
-      try {
-        Map<String, Object> marker = (Map<String, Object>) JSON.deserializeUntyped(
-          textValue
-        );
-        return (Id) marker.get('$attachmentId');
-      } catch (Exception ignored) {
-        // Not a valid offload marker; treat as a non-offloaded value.
-      }
-    }
-    return null;
-  }
-
-  // Rehydrates a single output string using the pre-fetched resolved map.
-  private static String rehydrateFromMap(
-    String textValue,
-    Map<Id, String> resolvedOutputByDocId
-  ) {
-    Id docId = getOffloadDocId(textValue);
-    if (docId != null && resolvedOutputByDocId.containsKey(docId)) {
-      return resolvedOutputByDocId.get(docId);
-    }
-    return textValue;
   }
 
   // ─── End Read API ──────────────────────────────────────────────────────────
@@ -1293,7 +519,7 @@ public inherited sharing class WorkflowEngine {
     // then skipped because the parent is not runnable) or, for a still-Pending
     // bounded start, fail it before admission. Resume/admission re-establishes it.
     if (!parkAtStart && !deferTimeoutForConcurrency) {
-      Integer timeout = getStepTimeoutSeconds(
+      Integer timeout = WorkflowStepTimeoutConfig.getStepTimeoutSeconds(
         instance.Current_Step__c,
         WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
       );
@@ -1424,11 +650,13 @@ public inherited sharing class WorkflowEngine {
     // Schedule watchdog for the initial step before executing it — unless this is a
     // bounded workflow, where the admission gate arms the timeout once a slot is won.
     if (!deferTimeoutForConcurrency) {
-      scheduleTimeoutJobForInstance(instance.Id);
+      WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
     }
 
     // Enqueue the first step execution
-    enqueueOrchestrators(new List<Id>{ instance.Id });
+    WorkflowOrchestratorEnqueue.enqueueOrchestrators(
+      new List<Id>{ instance.Id }
+    );
     return new StartResult(instance.Id).markNew();
   }
 
@@ -2944,7 +2172,7 @@ public inherited sharing class WorkflowEngine {
         !run.parkedIds.contains(instance.Id) &&
         !run.deferTimeoutIds.contains(instance.Id)
       ) {
-        Integer timeout = getStepTimeoutSeconds(
+        Integer timeout = WorkflowStepTimeoutConfig.getStepTimeoutSeconds(
           instance.Current_Step__c,
           WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
         );
@@ -2974,10 +2202,12 @@ public inherited sharing class WorkflowEngine {
       }
     }
     if (!instancesToSchedule.isEmpty()) {
-      scheduleTimeoutJobsForInstances(instancesToSchedule);
+      WorkflowTimeoutArming.scheduleTimeoutJobsForInstances(
+        instancesToSchedule
+      );
     }
     if (!instanceIds.isEmpty()) {
-      enqueueOrchestrators(instanceIds);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrators(instanceIds);
     }
   }
 
@@ -3083,8 +2313,9 @@ public inherited sharing class WorkflowEngine {
     if (isNew || existingInst == null) {
       return false;
     }
-    return TERMINAL_GETSTATUS_STATUSES.contains(existingInst.Status__c) ||
-      existingInst.Status__c == 'ContinuedAsNew';
+    return WorkflowStatusRead.TERMINAL_GETSTATUS_STATUSES.contains(
+        existingInst.Status__c
+      ) || existingInst.Status__c == 'ContinuedAsNew';
   }
 
   // True when a signal to an existing instance must be swallowed: the instance
@@ -3538,7 +2769,7 @@ public inherited sharing class WorkflowEngine {
     }
 
     if (!instanceIdsToEnqueue.isEmpty()) {
-      enqueueOrchestrators(instanceIdsToEnqueue);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrators(instanceIdsToEnqueue);
     }
     if (!parallelInstances.isEmpty()) {
       enqueueResumeBulk(parallelInstances);
@@ -3578,7 +2809,7 @@ public inherited sharing class WorkflowEngine {
       payload,
       'Resume_' + stepExec.Id
     );
-    Integer timeout = getStepTimeoutSeconds(
+    Integer timeout = WorkflowStepTimeoutConfig.getStepTimeoutSeconds(
       instance.Current_Step__c,
       WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
     );
@@ -3620,12 +2851,12 @@ public inherited sharing class WorkflowEngine {
     // If there is an active step, we can store the resume payload in its step execution record
     applyResumePayloadToActiveStep(instance, payload);
 
-    scheduleTimeoutJobForInstance(instance.Id);
+    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
 
     if (Test.isRunningTest()) {
       System.enqueueJob(new WorkflowOrchestrator(instance.Id));
     } else {
-      enqueueOrchestrator(instance.Id, null);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, null);
     }
   }
 
@@ -3660,12 +2891,12 @@ public inherited sharing class WorkflowEngine {
     // If there is an active step, we can store the resume payload in its step execution record
     applyResumePayloadToActiveStep(instance, payload);
 
-    scheduleTimeoutJobForInstance(instance.Id);
+    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
 
     if (Test.isRunningTest()) {
       System.enqueueJob(new WorkflowOrchestrator(instance.Id));
     } else {
-      enqueueOrchestrator(instance.Id, null);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, null);
     }
   }
 
@@ -3856,7 +3087,7 @@ public inherited sharing class WorkflowEngine {
       payload,
       'Resume_' + stepExec.Id
     );
-    Integer timeout = getStepTimeoutSeconds(
+    Integer timeout = WorkflowStepTimeoutConfig.getStepTimeoutSeconds(
       inst.Current_Step__c,
       WorkflowTypeResolver.extractNamespace(inst.Workflow_Name__c)
     );
@@ -3956,13 +3187,15 @@ public inherited sharing class WorkflowEngine {
       Database.update(updates.stepsToUpdate, true, AccessLevel.SYSTEM_MODE);
     }
 
-    scheduleTimeoutJobsForInstances(updates.instancesToUpdate);
+    WorkflowTimeoutArming.scheduleTimeoutJobsForInstances(
+      updates.instancesToUpdate
+    );
 
     List<Id> instanceIds = new List<Id>();
     for (Workflow_Instance__c inst : updates.instancesToUpdate) {
       instanceIds.add(inst.Id);
     }
-    enqueueOrchestrators(instanceIds);
+    WorkflowOrchestratorEnqueue.enqueueOrchestrators(instanceIds);
   }
 
   /**
@@ -4201,7 +3434,9 @@ public inherited sharing class WorkflowEngine {
       // the watchdog already being armed) would run with no pre-start timeout net.
       // reArmTimeoutsForResume re-arms here because the workflow is now unbounded
       // (isConfigured is false), so it is not treated as a deferred admission.
-      reArmTimeoutsForResume(new List<Workflow_Instance__c>{ instance });
+      WorkflowTimeoutReArm.reArmTimeoutsForResume(
+        new List<Workflow_Instance__c>{ instance }
+      );
       // Re-drive in a fresh transaction instead of executing the step now: the
       // marker-clear DML above is uncommitted, and a CalloutStep cannot run while
       // uncommitted DML is pending (Salesforce forbids it) — the same reason the
@@ -4296,7 +3531,9 @@ public inherited sharing class WorkflowEngine {
     instance.Sleep_Until__c = null;
     instance.Async_Job_Id__c = null;
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    reArmTimeoutsForResume(new List<Workflow_Instance__c>{ instance });
+    WorkflowTimeoutReArm.reArmTimeoutsForResume(
+      new List<Workflow_Instance__c>{ instance }
+    );
     if (!(Test.isRunningTest() && disableQueueableInTest)) {
       enqueueResume(instance.Id);
     }
@@ -4838,7 +4075,10 @@ public inherited sharing class WorkflowEngine {
       if (timeoutSeconds != null && timeoutSeconds > 0) {
         stepExec.Timeout_At__c = null;
         saveStepExec(stepExec);
-        cancelTimeoutJob(ctx.instanceId, ctx.activeStepName);
+        WorkflowTimeoutScheduler.cancelTimeoutJob(
+          ctx.instanceId,
+          ctx.activeStepName
+        );
       }
     }
     return result;
@@ -6200,8 +5440,8 @@ public inherited sharing class WorkflowEngine {
     // committed above) so the per-advance watchdog scheduling does not re-query the
     // instance on every step — that re-read is what exhausts the SOQL limit on a
     // long synchronous drive.
-    scheduleTimeoutJobForInstance(instance);
-    enqueueOrchestrator(instance.Id, null);
+    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance);
+    WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, null);
   }
 
   // Resolve the workflow definition class for an instance, throwing when it
@@ -6503,8 +5743,8 @@ public inherited sharing class WorkflowEngine {
     instance.Current_Step__c = nextStepName;
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
-    scheduleTimeoutJobForInstance(instance.Id);
-    enqueueOrchestrator(instance.Id, null);
+    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
+    WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, null);
   }
 
   // YIELD: save state to Output and re-run in a new transaction.
@@ -6528,8 +5768,8 @@ public inherited sharing class WorkflowEngine {
 
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
-    scheduleTimeoutJobForInstance(instance.Id);
-    enqueueOrchestrator(instance.Id, null);
+    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
+    WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, null);
   }
 
   // SUSPEND: save state and suspend awaiting an external signal.
@@ -6605,7 +5845,7 @@ public inherited sharing class WorkflowEngine {
     instance.Status__c = 'Suspended';
     instance.Sleep_Until__c = DateTime.now()
       .addSeconds(result.directive().sleepDurationSeconds);
-    instance.Async_Job_Id__c = scheduleSleepResume(
+    instance.Async_Job_Id__c = WorkflowRetrySleepScheduler.scheduleSleepResume(
       instance.Id,
       stepExec.Step_Name__c,
       result.directive().sleepDurationSeconds
@@ -6788,7 +6028,7 @@ public inherited sharing class WorkflowEngine {
         'Input_Parallel_' + ps.replaceAll('[^a-zA-Z0-9]', '_')
       );
       pe.Retry_Count__c = 0;
-      Integer timeout = getStepTimeoutSeconds(
+      Integer timeout = WorkflowStepTimeoutConfig.getStepTimeoutSeconds(
         ps,
         WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
       );
@@ -6799,9 +6039,9 @@ public inherited sharing class WorkflowEngine {
     }
     Database.insert(parallelExecs, true, AccessLevel.SYSTEM_MODE);
 
-    scheduleTimeoutJobForInstance(instance.Id);
+    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
     for (String ps : result.directive().parallelStepNames) {
-      enqueueOrchestrator(instance.Id, ps);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, ps);
     }
 
     // Effectively-once outbound emit (issue #64): publish AFTER the SPLIT's
@@ -6871,7 +6111,7 @@ public inherited sharing class WorkflowEngine {
 
     instance.Status__c = 'Suspended';
     instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
-    instance.Async_Job_Id__c = scheduleRetry(
+    instance.Async_Job_Id__c = WorkflowRetrySleepScheduler.scheduleRetry(
       instance.Id,
       stepExec.Step_Name__c,
       delay
@@ -7101,7 +6341,7 @@ public inherited sharing class WorkflowEngine {
       nextStepExec.Status__c = 'Pending';
       nextStepExec.Input__c = nextInstance.Input__c;
       nextStepExec.Retry_Count__c = 0;
-      Integer timeout = getStepTimeoutSeconds(
+      Integer timeout = WorkflowStepTimeoutConfig.getStepTimeoutSeconds(
         initialStep,
         WorkflowTypeResolver.extractNamespace(nextInstance.Workflow_Name__c)
       );
@@ -7113,14 +6353,14 @@ public inherited sharing class WorkflowEngine {
 
     // Enqueue the successor run
     if (!deferTimeoutForConcurrency) {
-      scheduleTimeoutJobForInstance(nextInstance.Id);
+      WorkflowTimeoutArming.scheduleTimeoutJobForInstance(nextInstance.Id);
     }
     if (Test.isRunningTest()) {
       if (!disableQueueableInTest) {
         System.enqueueJob(new WorkflowOrchestrator(nextInstance.Id));
       }
     } else {
-      enqueueOrchestrator(nextInstance.Id, null);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(nextInstance.Id, null);
     }
   }
 
@@ -7521,7 +6761,11 @@ public inherited sharing class WorkflowEngine {
       Math.random() * TRANSIENT_LOCK_JITTER_SECONDS
     );
 
-    String jobId = scheduleRetry(instance.Id, stepName, delay);
+    String jobId = WorkflowRetrySleepScheduler.scheduleRetry(
+      instance.Id,
+      stepName,
+      delay
+    );
     instance.Status__c = 'Suspended';
     instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
     instance.Async_Job_Id__c = jobId;
@@ -7742,7 +6986,7 @@ public inherited sharing class WorkflowEngine {
     Workflow_Instance__c instance = req.instance;
     cancelSiblingStepsForErrorRouting(instance, req.stepName);
 
-    abortScheduledJobs(instance.Id);
+    WorkflowOrchestratorEnqueue.abortScheduledJobs(instance.Id);
 
     Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
     nextStepExec.Workflow_Instance__c = instance.Id;
@@ -7768,7 +7012,7 @@ public inherited sharing class WorkflowEngine {
     instance.Async_Job_Id__c = null;
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
-    scheduleTimeoutJobForInstance(instance);
+    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance);
     enqueueOrchestratorForInstance(instance.Id);
   }
 
@@ -7864,7 +7108,7 @@ public inherited sharing class WorkflowEngine {
         System.enqueueJob(new WorkflowOrchestrator(instanceId));
       }
     } else {
-      enqueueOrchestrator(instanceId, null);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instanceId, null);
     }
   }
 
@@ -8089,7 +7333,7 @@ public inherited sharing class WorkflowEngine {
     // a parked sibling could take the freed slot before this child reaches the gate,
     // so an armed timeout could fail it while it is only waiting for capacity.
     if (!ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
-      scheduleTimeoutJobForInstance(instance.Id);
+      WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
     } else {
       // Durable awaiting-admission marker (see doStart): the pre-start watchdog keys
       // its null-deadline skip off this, not the live CMDT, so a ceiling added later
@@ -8099,7 +7343,7 @@ public inherited sharing class WorkflowEngine {
     }
 
     if (!Test.isRunningTest()) {
-      enqueueOrchestrator(instance.Id, null);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, null);
     }
   }
 
@@ -8422,7 +7666,9 @@ public inherited sharing class WorkflowEngine {
     }
 
     if (!instancesToSchedule.isEmpty()) {
-      scheduleTimeoutJobsForInstances(instancesToSchedule);
+      WorkflowTimeoutArming.scheduleTimeoutJobsForInstances(
+        instancesToSchedule
+      );
     }
   }
 
@@ -8439,7 +7685,7 @@ public inherited sharing class WorkflowEngine {
       }
     }
     if (!instanceIdsToEnqueue.isEmpty()) {
-      enqueueOrchestrators(instanceIdsToEnqueue);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrators(instanceIdsToEnqueue);
     }
   }
 
@@ -8926,11 +8172,11 @@ public inherited sharing class WorkflowEngine {
       if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
         System.enqueueJob(new WorkflowOrchestrator(instanceId));
       } else {
-        enqueueOrchestrator(instanceId, null);
+        WorkflowOrchestratorEnqueue.enqueueOrchestrator(instanceId, null);
       }
     } catch (Exception ignored) {
       // Queueable enqueue failed; fall back to the Platform Event path.
-      enqueueOrchestrator(instanceId, null);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instanceId, null);
     }
   }
 
@@ -9722,7 +8968,7 @@ public inherited sharing class WorkflowEngine {
         instanceIdsToEnqueue.add(inst.Id);
       }
     }
-    enqueueOrchestrators(instanceIdsToEnqueue);
+    WorkflowOrchestratorEnqueue.enqueueOrchestrators(instanceIdsToEnqueue);
     enqueueResumeBulk(parallelInstances);
   }
 
@@ -10115,7 +9361,10 @@ public inherited sharing class WorkflowEngine {
     String targetStepName
   ) {
     if (!Test.isRunningTest()) {
-      enqueueOrchestrator(instanceId, targetStepName);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(
+        instanceId,
+        targetStepName
+      );
       return;
     }
     if (!disableQueueableInTest) {
@@ -10490,7 +9739,7 @@ public inherited sharing class WorkflowEngine {
     Database.insert(nextStepExec, true, AccessLevel.SYSTEM_MODE);
 
     if (!deferTimeoutForConcurrency) {
-      scheduleTimeoutJobForInstance(instance.Id);
+      WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
     }
     enqueueSkipOrchestrator(instance.Id);
   }
@@ -10625,7 +9874,7 @@ public inherited sharing class WorkflowEngine {
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     if (!deferTimeoutForConcurrency) {
-      scheduleTimeoutJobForInstance(instance.Id);
+      WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
     }
     enqueueSkipOrchestrator(instance.Id);
   }
@@ -10679,7 +9928,7 @@ public inherited sharing class WorkflowEngine {
     if (Test.isRunningTest() && disableQueueableInTest) {
       System.enqueueJob(new WorkflowOrchestrator(instanceId));
     } else {
-      enqueueOrchestrator(instanceId, null);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instanceId, null);
     }
   }
 
@@ -10723,7 +9972,7 @@ public inherited sharing class WorkflowEngine {
         System.enqueueJob(new WorkflowOrchestrator(instanceId, stepName));
       }
     } else {
-      enqueueOrchestrator(instanceId, stepName);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instanceId, stepName);
     }
   }
 
@@ -10768,7 +10017,7 @@ public inherited sharing class WorkflowEngine {
         stepsToEnqueue.add(ps);
       } else if (pe.Status__c == 'Pending' && pe.CPU_Time_Ms__c == null) {
         // Initial/undriven pending branch: enqueue it directly after re-arming/clearing timeout
-        Integer timeout = getStepTimeoutSeconds(
+        Integer timeout = WorkflowStepTimeoutConfig.getStepTimeoutSeconds(
           ps,
           WorkflowTypeResolver.extractNamespace(run.instance.Workflow_Name__c)
         );
@@ -10866,13 +10115,13 @@ public inherited sharing class WorkflowEngine {
     // rather than treating the prior Failed record as a terminal "already done".
     appendCompensationRetryStep(instance, stack);
 
-    scheduleTimeoutJobForInstance(instance.Id);
+    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
     if (Test.isRunningTest()) {
       if (!disableQueueableInTest) {
         System.enqueueJob(new WorkflowOrchestrator(instance.Id));
       }
     } else {
-      enqueueOrchestrator(instance.Id, null);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, null);
     }
   }
 
@@ -11277,7 +10526,7 @@ public inherited sharing class WorkflowEngine {
 
     if (!stack.isEmpty()) {
       preCreateFirstCompensationStep(instance);
-      scheduleTimeoutJobForInstance(instance.Id);
+      WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
     }
 
     enqueueCompensationOrchestrator(instance.Id);
@@ -11290,7 +10539,7 @@ public inherited sharing class WorkflowEngine {
         System.enqueueJob(new WorkflowOrchestrator(instanceId));
       }
     } else {
-      enqueueOrchestrator(instanceId, null);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instanceId, null);
     }
   }
 
@@ -11349,7 +10598,7 @@ public inherited sharing class WorkflowEngine {
       Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
       if (!stack.isEmpty()) {
-        scheduleTimeoutJobForInstance(instance.Id);
+        WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
       }
 
       enqueueCompensationOrchestrator(instance.Id);
@@ -11553,7 +10802,10 @@ public inherited sharing class WorkflowEngine {
       if (timeoutSeconds != null && timeoutSeconds > 0) {
         stepExec.Timeout_At__c = null;
         saveStepExec(stepExec);
-        cancelTimeoutJob(instance.Id, compensationStepLogName);
+        WorkflowTimeoutScheduler.cancelTimeoutJob(
+          instance.Id,
+          compensationStepLogName
+        );
       }
     }
     run.result = result;
@@ -11754,7 +11006,7 @@ public inherited sharing class WorkflowEngine {
     if (stack.isEmpty()) {
       notifyParentCompletion(instance);
     } else {
-      scheduleTimeoutJobForInstance(instance.Id);
+      WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
     }
 
     enqueueOrchestratorForInstance(instance.Id);
@@ -11781,8 +11033,8 @@ public inherited sharing class WorkflowEngine {
 
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
-    scheduleTimeoutJobForInstance(instance.Id);
-    enqueueOrchestrator(instance.Id, null);
+    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
+    WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, null);
   }
 
   private static void handleCompensationSuspend(
@@ -11823,7 +11075,7 @@ public inherited sharing class WorkflowEngine {
     if (result.directive().sleepDurationSeconds != null) {
       instance.Sleep_Until__c = DateTime.now()
         .addSeconds(result.directive().sleepDurationSeconds);
-      instance.Async_Job_Id__c = scheduleSleepResume(
+      instance.Async_Job_Id__c = WorkflowRetrySleepScheduler.scheduleSleepResume(
         instance.Id,
         stepExec.Step_Name__c,
         result.directive().sleepDurationSeconds
@@ -12295,9 +11547,12 @@ public inherited sharing class WorkflowEngine {
   private static void enqueueCompensatingOrchestrator(
     Id compensatingInstanceId
   ) {
-    scheduleTimeoutJobForInstance(compensatingInstanceId);
+    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(compensatingInstanceId);
     if (!Test.isRunningTest()) {
-      enqueueOrchestrator(compensatingInstanceId, null);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(
+        compensatingInstanceId,
+        null
+      );
       return;
     }
     if (!disableQueueableInTest) {
@@ -12444,7 +11699,7 @@ public inherited sharing class WorkflowEngine {
         System.enqueueJob(new WorkflowOrchestrator(instanceId));
       }
     } else {
-      enqueueOrchestrator(instanceId, null);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instanceId, null);
     }
   }
 
@@ -12504,7 +11759,7 @@ public inherited sharing class WorkflowEngine {
       // Append a fresh attempt for the stalled top-of-stack step (the prior Failed
       // attempt is preserved) so the existing compensation loop re-runs it.
       appendCompensationRetryStep(instance, remaining);
-      scheduleTimeoutJobForInstance(instance.Id);
+      WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestratorTestAware(instance.Id);
       // Not terminal yet — the orchestrator emits the lifecycle event when the
       // compensation stack drains to Cancelled.
@@ -12591,7 +11846,7 @@ public inherited sharing class WorkflowEngine {
     List<Workflow_Step_Execution__c> stepExecs = lockActiveStepExecs(instance);
 
     // Abort all scheduled jobs for this instance (sleeps, retries, timeouts)
-    abortScheduledJobs(instanceId);
+    WorkflowOrchestratorEnqueue.abortScheduledJobs(instanceId);
 
     // Disarm any armed timed-wait timeout so the watchdog cannot mis-route a
     // cancelled (or compensating) instance to a fallback step (issue #35). Every
@@ -12638,45 +11893,6 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Aborts all Scheduled Apex cron jobs associated with the workflow instance.
-   * @param instanceId Id of the instance whose scheduled jobs are aborted
-   */
-  public static void abortScheduledJobs(Id instanceId) {
-    abortScheduledJobs(new Set<Id>{ instanceId });
-  }
-
-  /**
-   * @description Bulk-aborts the sleep, retry and timeout cron jobs scheduled for
-   * the given instances, matching them by their name prefixes. Abort failures are
-   * logged and skipped so one stuck job never blocks the rest.
-   * @param instanceIds Ids of the instances whose scheduled jobs are aborted
-   */
-  public static void abortScheduledJobs(Set<Id> instanceIds) {
-    if (instanceIds == null || instanceIds.isEmpty()) {
-      return;
-    }
-    List<String> nameLikeFilters = new List<String>();
-    for (Id instanceId : instanceIds) {
-      nameLikeFilters.add('WorkflowSleep_' + instanceId + '_%');
-      nameLikeFilters.add('WorkflowRetry_' + instanceId + '_%');
-      nameLikeFilters.add('Timeout_' + instanceId + '_%');
-    }
-    List<CronTrigger> triggers = [
-      SELECT Id
-      FROM CronTrigger
-      WHERE CronJobDetail.Name LIKE :nameLikeFilters
-      WITH SYSTEM_MODE
-    ];
-    for (CronTrigger triggerJob : triggers) {
-      try {
-        System.abortJob(triggerJob.Id);
-      } catch (Exception ignored) {
-        // Job may already have completed or been aborted; nothing further to do.
-      }
-    }
-  }
-
-  /**
    * @description Request DTO pairing an instance Id with the step name to drive,
    * used to enqueue orchestrator RUN_STEP work in bulk.
    */
@@ -12692,118 +11908,6 @@ public inherited sharing class WorkflowEngine {
       this.instanceId = instanceId;
       this.stepName = stepName;
     }
-  }
-
-  /**
-   * @description Enqueues orchestrator RUN_STEP work for a batch of requests. In a
-   * test context it enqueues Queueables directly (deduped per instance, honoring
-   * the queueable governor); otherwise it publishes one Workflow_Event__e per
-   * request so the platform event trigger drives the steps asynchronously.
-   * @param requests the orchestrator requests to enqueue
-   */
-  /**
-   * Under test, enqueues one orchestrator job per distinct instance directly
-   * (best-effort, honoring the queueable limit) rather than via platform events.
-   * @param requests the orchestrator requests to dispatch
-   */
-  private static void enqueueOrchestratorsInTest(
-    List<OrchestratorRequest> requests
-  ) {
-    if (disableQueueableInTest) {
-      return;
-    }
-    Set<Id> instanceIds = new Set<Id>();
-    for (OrchestratorRequest req : requests) {
-      instanceIds.add(req.instanceId);
-    }
-    for (Id instId : instanceIds) {
-      tryEnqueueTestOrchestratorForInstance(instId);
-    }
-  }
-
-  /**
-   * @description Best-effort direct enqueue of a single-instance orchestrator
-   * job for test paths that fan out one job per distinct instance. Honors the
-   * per-transaction queueable limit and swallows enqueue failures so the
-   * caller's loop continues; the watchdog re-drives any instance left
-   * un-enqueued. Kept as a helper so the caller's per-instance
-   * `System.enqueueJob` is not lexically inside the loop.
-   * @param instId the workflow instance to enqueue
-   */
-  private static void tryEnqueueTestOrchestratorForInstance(Id instId) {
-    try {
-      if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
-        System.enqueueJob(new WorkflowOrchestrator(instId));
-      }
-    } catch (Exception ignored) {
-      // Best-effort enqueue; the watchdog re-drives any instance left un-enqueued.
-    }
-  }
-
-  /**
-   * Builds the RUN_STEP platform events for a batch of orchestrator requests.
-   * @param requests the orchestrator requests
-   * @return the events to publish
-   */
-  private static List<Workflow_Event__e> buildOrchestratorEvents(
-    List<OrchestratorRequest> requests
-  ) {
-    List<Workflow_Event__e> events = new List<Workflow_Event__e>();
-    for (OrchestratorRequest req : requests) {
-      events.add(
-        new Workflow_Event__e(
-          Workflow_Instance_Id__c = req.instanceId,
-          Event_Type__c = 'RUN_STEP',
-          Payload__c = req.stepName
-        )
-      );
-    }
-    return events;
-  }
-
-  /**
-   * @description Enqueues orchestrator work for a batch of requests, dispatching
-   * directly under test and via RUN_STEP platform events otherwise.
-   * @param requests the orchestrator requests to enqueue
-   */
-  public static void enqueueOrchestrators(List<OrchestratorRequest> requests) {
-    WorkflowWatchdog.bootstrap();
-    if (Test.isRunningTest()) {
-      enqueueOrchestratorsInTest(requests);
-      return;
-    }
-    List<Workflow_Event__e> events = buildOrchestratorEvents(requests);
-    if (!events.isEmpty()) {
-      List<Database.SaveResult> srs = EventBus.publish(events);
-      throwOnPublishErrors(srs, 'Failed to publish orchestrator event: ');
-    }
-  }
-
-  /**
-   * @description Convenience overload that enqueues orchestrator work for a list
-   * of instance Ids, driving each instance's current step (null step name).
-   * @param instanceIds Ids of the instances to orchestrate
-   */
-  public static void enqueueOrchestrators(List<Id> instanceIds) {
-    List<OrchestratorRequest> requests = new List<OrchestratorRequest>();
-    for (Id instId : instanceIds) {
-      requests.add(new OrchestratorRequest(instId, null));
-    }
-    enqueueOrchestrators(requests);
-  }
-
-  /**
-   * @description Convenience overload that enqueues orchestrator work for a single
-   * instance and step.
-   * @param instanceId Id of the instance to orchestrate
-   * @param stepName name of the step to run, or null for the current step
-   */
-  public static void enqueueOrchestrator(Id instanceId, String stepName) {
-    enqueueOrchestrators(
-      new List<OrchestratorRequest>{
-        new OrchestratorRequest(instanceId, stepName)
-      }
-    );
   }
 
   // Removes a reserved $-key from a JSON-object string, returning the cleaned
@@ -13144,7 +12248,7 @@ public inherited sharing class WorkflowEngine {
     if (Test.isRunningTest() && disableQueueableInTest) {
       return;
     }
-    enqueueOrchestrators(ids);
+    WorkflowOrchestratorEnqueue.enqueueOrchestrators(ids);
   }
 
   private static void finalizeTimedOutStep(
@@ -13524,7 +12628,7 @@ public inherited sharing class WorkflowEngine {
     for (Workflow_Instance__c inst : expiredInstances) {
       expiredInstanceIds.add(inst.Id);
     }
-    abortScheduledJobs(expiredInstanceIds);
+    WorkflowOrchestratorEnqueue.abortScheduledJobs(expiredInstanceIds);
 
     for (Workflow_Instance__c inst : expiredInstances) {
       applyDeadlineExpiry(inst, batch, watchdogTerminalInstances);
@@ -13682,7 +12786,7 @@ public inherited sharing class WorkflowEngine {
     // suite asserting only the Suspended -> Running wake transition is not
     // carried to completion by a worker draining at Test.stopTest().
     if (!(Test.isRunningTest() && disableQueueableInTest)) {
-      enqueueOrchestrators(b.instanceIds);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrators(b.instanceIds);
     }
     // For a resumed parallel instance the blank-stepName orchestrator above is a
     // no-op (runStep ignores it for a comma-separated Current_Step__c), so
@@ -13695,7 +12799,7 @@ public inherited sharing class WorkflowEngine {
     // honors the test opt-out internally (like the bulk signal path) so the
     // query/re-arm still run under it.
     if (!b.parallelResumeIds.isEmpty()) {
-      reDriveTransientRetryBranches(
+      WorkflowTimeoutReArm.reDriveTransientRetryBranches(
         [
           SELECT
             Id,
@@ -13968,7 +13072,7 @@ public inherited sharing class WorkflowEngine {
         return;
       }
       Set<String> orphanPausedDefs = WorkflowPauseGate.pausedNames();
-      reDriveTransientRetryBranches(
+      WorkflowTimeoutReArm.reDriveTransientRetryBranches(
         [
           SELECT
             Id,
@@ -14199,38 +13303,6 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
-  private static Integer getStepTimeoutSeconds(
-    String stepName,
-    String contextNamespace
-  ) {
-    if (String.isBlank(stepName)) {
-      return null;
-    }
-    String cacheKey = (stepName +
-      (String.isNotBlank(contextNamespace) ? ('|' + contextNamespace) : ''))
-      .toLowerCase();
-    if (stepTimeoutCache.containsKey(cacheKey)) {
-      return stepTimeoutCache.get(cacheKey);
-    }
-    String className = stepName.endsWith('_Compensate')
-      ? stepName.substring(0, stepName.lastIndexOf('_Compensate'))
-      : stepName;
-    Integer timeout = null;
-    try {
-      Type stepType = WorkflowTypeResolver.resolve(className, contextNamespace);
-      if (stepType != null) {
-        Object stepObj = stepType.newInstance();
-        if (stepObj instanceof TimeoutConfigurable) {
-          timeout = ((TimeoutConfigurable) stepObj).getTimeoutSeconds();
-        }
-      }
-    } catch (Exception ignored) {
-      // Step type may not be instantiable here; leave timeout unset.
-    }
-    stepTimeoutCache.put(cacheKey, timeout);
-    return timeout;
-  }
-
   private static String resolveContinueAsNewKey(
     String currentKey,
     String customKey
@@ -14250,605 +13322,6 @@ public inherited sharing class WorkflowEngine {
       return base + '_run' + nextNum;
     }
     return currentKey + '_run2';
-  }
-
-  /**
-   * @description Schedules the dynamic timeout jobs for a batch of instances,
-   * arming the deadline of each instance's active step (or, for a compensating
-   * saga, its current compensation step) so the watchdog can enforce timeouts.
-   * @param instances the instances whose active steps' timeout jobs are scheduled
-   */
-  public static void scheduleTimeoutJobsForInstances(
-    List<Workflow_Instance__c> instances
-  ) {
-    for (Workflow_Instance__c instance : instances) {
-      armTimeoutJobsForInstance(instance);
-    }
-  }
-
-  /**
-   * Arms the timeout job(s) for a single instance's active work — the current
-   * compensation step for a compensating saga, otherwise the active step(s).
-   * @param instance the instance whose timeout jobs are armed
-   */
-  private static void armTimeoutJobsForInstance(Workflow_Instance__c instance) {
-    if (
-      instance.Status__c == 'Compensating' ||
-      instance.Status__c == 'Cancelling'
-    ) {
-      armCompensationTimeoutJob(instance);
-      return;
-    }
-    if (String.isBlank(instance.Current_Step__c)) {
-      return;
-    }
-    armActiveStepTimeoutJobs(instance);
-  }
-
-  /**
-   * Arms the timeout job for the top of a compensating saga's compensation stack.
-   * @param instance the compensating/cancelling instance
-   */
-  private static void armCompensationTimeoutJob(Workflow_Instance__c instance) {
-    if (String.isBlank(instance.Compensation_Stack__c)) {
-      return;
-    }
-    List<String> stack = (List<String>) JSON.deserialize(
-      instance.Compensation_Stack__c,
-      List<String>.class
-    );
-    if (stack.isEmpty()) {
-      return;
-    }
-    scheduleTimeoutJobIfNeeded(
-      instance.Id,
-      stack[stack.size() - 1] + '_Compensate',
-      instance.Workflow_Name__c
-    );
-  }
-
-  /**
-   * Arms timeout jobs for an instance's active step(s), fanning out over the
-   * comma-separated parallel steps when present.
-   * @param instance the running instance whose active step(s) are armed
-   */
-  private static void armActiveStepTimeoutJobs(Workflow_Instance__c instance) {
-    if (!instance.Current_Step__c.contains(',')) {
-      scheduleTimeoutJobIfNeeded(
-        instance.Id,
-        instance.Current_Step__c,
-        instance.Workflow_Name__c
-      );
-      return;
-    }
-    for (String pStep : instance.Current_Step__c.split(',')) {
-      scheduleTimeoutJobIfNeeded(
-        instance.Id,
-        pStep.trim(),
-        instance.Workflow_Name__c
-      );
-    }
-  }
-
-  /**
-   * Re-drives a set of parallel-branch steps that are parked for a transient row-lock
-   * retry, BY NAME (the blank-stepName watchdog orchestrator is ignored for a
-   * comma-separated Current_Step__c). Shared by the watchdog sleep-resume (Suspended
-   * parents) and the orphaned-retry sweep (Running parents whose sibling flipped them
-   * out of Suspended). Re-arms ONLY these retry-marked rows' watchdog deadlines (so a
-   * sibling's overdue deadline is not masked) and bulk-publishes a single EventBus
-   * call (so a heartbeat waking many sleepers cannot exhaust the DML-statement limit),
-   * throwing on any failed publish so the wake-up rolls back and retries intact.
-   * @param retryBranches the transient-retry-marked parallel branch step executions
-   * to re-drive by name
-   */
-  /**
-   * Raises a WorkflowException if any platform-event publish result failed.
-   * @param srs the save results returned by EventBus.publish
-   * @param errorPrefix message prefix identifying the failing publish site
-   */
-  private static void throwOnPublishErrors(
-    List<Database.SaveResult> srs,
-    String errorPrefix
-  ) {
-    for (Database.SaveResult sr : srs) {
-      if (sr.isSuccess()) {
-        continue;
-      }
-      List<String> errMsgs = new List<String>();
-      for (Database.Error err : sr.getErrors()) {
-        errMsgs.add(err.getStatusCode() + ': ' + err.getMessage());
-      }
-      throw new WorkflowException(errorPrefix + String.join(errMsgs, ', '));
-    }
-  }
-
-  /**
-   * Builds the fresh Timeout_At__c re-arm updates for transient-retry branches
-   * that have a positive step timeout configured.
-   * @param retryBranches the retry-marked step rows
-   * @return the step updates to apply (may be empty)
-   */
-  private static List<Workflow_Step_Execution__c> buildTransientRetryReArm(
-    List<Workflow_Step_Execution__c> retryBranches
-  ) {
-    List<Workflow_Step_Execution__c> toReArm = new List<Workflow_Step_Execution__c>();
-    for (Workflow_Step_Execution__c branch : retryBranches) {
-      Integer timeout = getStepTimeoutSeconds(
-        branch.Step_Name__c,
-        WorkflowTypeResolver.extractNamespace(
-          branch.Workflow_Instance__r.Workflow_Name__c
-        )
-      );
-      if (timeout == null || timeout <= 0) {
-        continue;
-      }
-      toReArm.add(
-        new Workflow_Step_Execution__c(
-          Id = branch.Id,
-          Timeout_At__c = DateTime.now().addSeconds(timeout)
-        )
-      );
-    }
-    return toReArm;
-  }
-
-  /**
-   * Dispatches each transient-retry branch: enqueues the orchestrator directly
-   * under test, otherwise collects a RUN_STEP event for bulk publish.
-   * @param retryBranches the retry-marked step rows
-   * @return the RUN_STEP events to publish (empty under test)
-   */
-  private static List<Workflow_Event__e> dispatchTransientRetryBranches(
-    List<Workflow_Step_Execution__c> retryBranches
-  ) {
-    List<Workflow_Event__e> branchEvents = new List<Workflow_Event__e>();
-    for (Workflow_Step_Execution__c branch : retryBranches) {
-      Workflow_Event__e evt = dispatchTransientRetryBranchOne(branch);
-      if (evt != null) {
-        branchEvents.add(evt);
-      }
-    }
-    return branchEvents;
-  }
-
-  /**
-   * @description Dispatches a single transient-retry branch, choosing between
-   * the production platform-event path and the test direct-enqueue path. Under
-   * test the per-branch `System.enqueueJob` runs inside this helper so it is
-   * not lexically inside the caller's loop; production still collects a
-   * RUN_STEP event for a single bulk `EventBus.publish`.
-   * @param branch the retry-marked step row to dispatch
-   * @return the RUN_STEP event to publish (production), or null under test
-   */
-  private static Workflow_Event__e dispatchTransientRetryBranchOne(
-    Workflow_Step_Execution__c branch
-  ) {
-    if (!Test.isRunningTest()) {
-      return new Workflow_Event__e(
-        Workflow_Instance_Id__c = branch.Workflow_Instance__c,
-        Event_Type__c = 'RUN_STEP',
-        Payload__c = branch.Step_Name__c
-      );
-    }
-    if (!disableQueueableInTest) {
-      System.enqueueJob(
-        new WorkflowOrchestrator(
-          branch.Workflow_Instance__c,
-          branch.Step_Name__c
-        )
-      );
-    }
-    return null;
-  }
-
-  private static void reDriveTransientRetryBranches(
-    List<Workflow_Step_Execution__c> retryBranches
-  ) {
-    if (retryBranches == null || retryBranches.isEmpty()) {
-      return;
-    }
-    // Re-arm only the retry-marked rows whose deadline scheduleTransientLockRetry
-    // cleared for backoff (their instance is necessarily past admission, so no
-    // concurrency-defer check is needed) — never every active step on the instance.
-    List<Workflow_Step_Execution__c> toReArm = buildTransientRetryReArm(
-      retryBranches
-    );
-    if (!toReArm.isEmpty()) {
-      Database.update(toReArm, true, AccessLevel.SYSTEM_MODE);
-    }
-
-    List<Workflow_Event__e> branchEvents = dispatchTransientRetryBranches(
-      retryBranches
-    );
-    if (!branchEvents.isEmpty()) {
-      WorkflowWatchdog.bootstrap();
-      List<Database.SaveResult> srs = EventBus.publish(branchEvents);
-      throwOnPublishErrors(
-        srs,
-        'Failed to publish transient-retry branch event: '
-      );
-    }
-  }
-
-  /**
-   * Re-establishes step timeouts for instances being resumed from a Paused park.
-   * Parking clears/omits the watchdog deadline so parked rows do not pollute the
-   * timeout batch; on resume we re-stamp a fresh Timeout_At__c on each instance's
-   * current Pending/Running step(s) (the watchdog safety net) and schedule the
-   * dynamic timeout jobs, mirroring how start() arms a fresh step. Must run before
-   * the resumed workers are enqueued so a delayed worker still has an enforced
-   * deadline.
-   * @param instances the instances being resumed from a Paused park to re-arm
-   */
-  public static void reArmTimeoutsForResume(
-    List<Workflow_Instance__c> instances
-  ) {
-    if (instances == null || instances.isEmpty()) {
-      return;
-    }
-    Set<Id> instanceIds = new Set<Id>();
-    for (Workflow_Instance__c inst : instances) {
-      instanceIds.add(inst.Id);
-    }
-
-    Set<Id> deferIds = collectConcurrencyDeferIds(instanceIds);
-
-    List<Workflow_Step_Execution__c> steps = [
-      SELECT
-        Id,
-        Workflow_Instance__c,
-        Step_Name__c,
-        Workflow_Instance__r.Workflow_Name__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c IN :instanceIds
-        AND Status__c IN ('Pending', 'Running')
-      WITH SYSTEM_MODE
-    ];
-    reArmStepDeadlines(steps, deferIds);
-    scheduleActiveStepTimeoutJobs(steps, deferIds);
-  }
-
-  /**
-   * Re-queries the authoritative slot flag and collects the ids of concurrency-
-   * bounded instances that have not yet won an admission slot. Their initial step
-   * deadline must NOT be re-armed here (the admission gate re-arms it once a slot
-   * is won); an in-memory caller value cannot skew this decision.
-   * @param instanceIds the candidate instance ids being resumed
-   * @return the ids whose deadline re-arm must be deferred to the admission gate
-   */
-  private static Set<Id> collectConcurrencyDeferIds(Set<Id> instanceIds) {
-    Set<Id> deferIds = new Set<Id>();
-    for (Workflow_Instance__c inst : [
-      SELECT Id, Workflow_Name__c, Concurrency_Slot_Held__c
-      FROM Workflow_Instance__c
-      WHERE Id IN :instanceIds
-      WITH SYSTEM_MODE
-    ]) {
-      if (
-        !inst.Concurrency_Slot_Held__c &&
-        ConcurrencyGate.isConfigured(inst.Workflow_Name__c)
-      ) {
-        deferIds.add(inst.Id);
-      }
-    }
-    return deferIds;
-  }
-
-  /**
-   * Re-stamps a fresh watchdog deadline on each non-deferred active step that has
-   * a positive configured timeout, then persists them in a single update.
-   * @param steps the queried Pending/Running step rows
-   * @param deferIds instance ids whose steps must not be re-armed
-   */
-  private static void reArmStepDeadlines(
-    List<Workflow_Step_Execution__c> steps,
-    Set<Id> deferIds
-  ) {
-    List<Workflow_Step_Execution__c> toUpdate = new List<Workflow_Step_Execution__c>();
-    for (Workflow_Step_Execution__c step : steps) {
-      if (deferIds.contains(step.Workflow_Instance__c)) {
-        continue;
-      }
-      Integer timeout = getStepTimeoutSeconds(
-        step.Step_Name__c,
-        WorkflowTypeResolver.extractNamespace(
-          step.Workflow_Instance__r.Workflow_Name__c
-        )
-      );
-      if (timeout == null || timeout <= 0) {
-        continue;
-      }
-      step.Timeout_At__c = DateTime.now().addSeconds(timeout);
-      toUpdate.add(step);
-    }
-    if (!toUpdate.isEmpty()) {
-      Database.update(toUpdate, true, AccessLevel.SYSTEM_MODE);
-    }
-  }
-
-  /**
-   * Schedules the dynamic timeout jobs for the genuinely active (non-deferred)
-   * step rows only. A parallel instance keeps every branch name in Current_Step__c
-   * until the join, so a completed branch lingers there; driving off the queried
-   * Pending/Running rows (instead of parsing Current_Step__c) avoids scheduling a
-   * timeout for a completed branch that would later find no active step row and
-   * wrongly fail the whole instance "before starting".
-   * @param steps the queried Pending/Running step rows
-   * @param deferIds instance ids whose steps must not be scheduled
-   */
-  private static void scheduleActiveStepTimeoutJobs(
-    List<Workflow_Step_Execution__c> steps,
-    Set<Id> deferIds
-  ) {
-    for (Workflow_Step_Execution__c step : steps) {
-      if (deferIds.contains(step.Workflow_Instance__c)) {
-        continue;
-      }
-      scheduleTimeoutJobIfNeeded(
-        step.Workflow_Instance__c,
-        step.Step_Name__c,
-        step.Workflow_Instance__r.Workflow_Name__c
-      );
-    }
-  }
-
-  /**
-   * @description Schedules the timeout job for a single instance by Id, querying
-   * the fields needed to arm the deadline before delegating to the record overload.
-   * @param instanceId Id of the instance whose timeout job is scheduled
-   */
-  public static void scheduleTimeoutJobForInstance(Id instanceId) {
-    List<Workflow_Instance__c> instances = [
-      SELECT
-        Workflow_Name__c,
-        Status__c,
-        Current_Step__c,
-        Compensation_Stack__c,
-        Concurrency_Parked__c,
-        Concurrency_Slot_Held__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    if (instances.isEmpty()) {
-      return;
-    }
-    scheduleTimeoutJobForInstance(instances[0]);
-  }
-
-  // Overload for callers that already hold the instance with the fields this needs
-  // (Status__c, Current_Step__c, Compensation_Stack__c, and the two concurrency
-  // flags). Skipping the re-query matters on the per-step drive: handleStepResult
-  // schedules the next step's watchdog on every advance, so re-reading the instance
-  // each time can exhaust the 100-SOQL limit on a long synchronous drive (e.g. the
-  // test harness driving many steps in one transaction).
-  /**
-   * @description Schedules the timeout job for an already-loaded instance record,
-   * avoiding a re-query on the hot per-step drive. Skips a concurrency-parked
-   * instance that has not yet won a slot (its step has no deadline yet).
-   * @param instance the instance record carrying the fields needed to arm the timeout
-   */
-  public static void scheduleTimeoutJobForInstance(
-    Workflow_Instance__c instance
-  ) {
-    if (instance == null) {
-      return;
-    }
-    // A concurrency-parked instance that has not won a slot has a null step deadline;
-    // scheduling a timeout job now would only wake and return, while occupying one of
-    // the org's scarce scheduled-job slots — a large parked backlog could crowd out
-    // real sleep/admission/timeout jobs. Admission re-arms the timeout once a slot is
-    // won (the generic WorkflowSleepJob admission-retry path routes through here).
-    if (instance.Concurrency_Parked__c && !instance.Concurrency_Slot_Held__c) {
-      return;
-    }
-    scheduleTimeoutJobsForInstances(new List<Workflow_Instance__c>{ instance });
-  }
-
-  /**
-   * @description Schedules a dynamic timeout job for a step when one is configured,
-   * resolving the workflow namespace from the instance.
-   * @param instanceId Id of the instance owning the step
-   * @param stepName name of the step to arm a timeout for
-   */
-  public static void scheduleTimeoutJobIfNeeded(
-    Id instanceId,
-    String stepName
-  ) {
-    scheduleTimeoutJobIfNeeded(instanceId, stepName, null);
-  }
-
-  /**
-   * @description Schedules a dynamic timeout job for a step when a positive timeout
-   * is configured and dynamic scheduling is enabled. The workflow name, when
-   * supplied, avoids a namespace-resolving query.
-   * @param instanceId Id of the instance owning the step
-   * @param stepName name of the step to arm a timeout for
-   * @param workflowName developer name of the workflow, or null to resolve it
-   */
-  public static void scheduleTimeoutJobIfNeeded(
-    Id instanceId,
-    String stepName,
-    String workflowName
-  ) {
-    if (String.isBlank(stepName) || !useDynamicScheduling) {
-      return;
-    }
-    try {
-      String ns = resolveNamespaceForStep(instanceId, workflowName);
-      Integer timeoutSeconds = getStepTimeoutSeconds(stepName, ns);
-      if (timeoutSeconds == null || timeoutSeconds <= 0) {
-        return;
-      }
-      if (tryEnqueueTimeoutJob(instanceId, stepName, timeoutSeconds)) {
-        return;
-      }
-      scheduleTimeoutCronJob(instanceId, stepName, timeoutSeconds);
-    } catch (AsyncException ignored) {
-      // Scheduling limit reached; the watchdog heartbeat enforces the timeout instead.
-    } catch (Exception ignored) {
-      // Timeout scheduling is best-effort; the watchdog heartbeat is the backstop.
-    }
-  }
-
-  /**
-   * Resolves the namespace for timeout scheduling, using the supplied workflow
-   * name when present to avoid a query, otherwise looking it up by instance.
-   * @param instanceId the instance owning the step
-   * @param workflowName the workflow developer name, or null to resolve it
-   * @return the resolved namespace, or null when it cannot be determined
-   */
-  private static String resolveNamespaceForStep(
-    Id instanceId,
-    String workflowName
-  ) {
-    if (String.isNotBlank(workflowName)) {
-      return WorkflowTypeResolver.extractNamespace(workflowName);
-    }
-    List<Workflow_Instance__c> insts = [
-      SELECT Workflow_Name__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    if (insts.isEmpty()) {
-      return null;
-    }
-    return WorkflowTypeResolver.extractNamespace(insts[0].Workflow_Name__c);
-  }
-
-  /**
-   * Fast path: enqueues a minute-granular queueable timeout job when the timeout
-   * qualifies (outside test, 60-600s, whole minutes) and queueable budget remains.
-   * @param instanceId the instance owning the step
-   * @param stepName the step to arm a timeout for
-   * @param timeoutSeconds the configured positive timeout in seconds
-   * @return true when a queueable job was enqueued (caller is done), else false
-   */
-  private static Boolean tryEnqueueTimeoutJob(
-    Id instanceId,
-    String stepName,
-    Integer timeoutSeconds
-  ) {
-    if (
-      Test.isRunningTest() ||
-      timeoutSeconds < 60 ||
-      timeoutSeconds > 600 ||
-      Math.mod(timeoutSeconds, 60) != 0
-    ) {
-      return false;
-    }
-    if (Limits.getQueueableJobs() >= Limits.getLimitQueueableJobs()) {
-      return false;
-    }
-    System.enqueueJob(
-      new WorkflowTimeoutJob.QueueableTimeoutJob(instanceId, stepName),
-      timeoutSeconds / 60
-    );
-    return true;
-  }
-
-  /**
-   * Schedules a cron-based timeout job, first clearing any stale deterministically
-   * -named job so a re-schedule is registered rather than silently dropped.
-   * @param instanceId the instance owning the step
-   * @param stepName the step to arm a timeout for
-   * @param timeoutSeconds the configured positive timeout in seconds
-   */
-  private static void scheduleTimeoutCronJob(
-    Id instanceId,
-    String stepName,
-    Integer timeoutSeconds
-  ) {
-    WorkflowTimeoutJob job = new WorkflowTimeoutJob(instanceId, stepName);
-    Datetime runTime = Datetime.now()
-      .addSeconds(Test.isRunningTest() ? timeoutSeconds + 60 : timeoutSeconds);
-    String cronStr =
-      runTime.second() +
-      ' ' +
-      runTime.minute() +
-      ' ' +
-      runTime.hour() +
-      ' ' +
-      runTime.day() +
-      ' ' +
-      runTime.month() +
-      ' ? ' +
-      runTime.year();
-    String cleanStepName = stepName.replaceAll('[^a-zA-Z0-9]', '_');
-    String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
-    // The job name is deterministic, so a re-schedule (e.g. retry, or a yielded step
-    // that re-enters before its prior timeout job fires) collides with the existing
-    // scheduled job and System.schedule() throws. Clear any stale job with this name
-    // first so the new timeout is actually registered instead of silently dropped.
-    cancelTimeoutJob(instanceId, stepName);
-    System.schedule(jobName, cronStr, job);
-  }
-
-  /**
-   * Determines whether a delay can be scheduled as a minute-granular queueable job.
-   * @param delaySeconds the configured delay in seconds
-   * @return true when the delay qualifies for a minute-granular queueable job
-   *   (outside test, 60-600s, whole minutes) and queueable budget remains
-   */
-  private static Boolean qualifiesForMinuteQueueable(Integer delaySeconds) {
-    return !Test.isRunningTest() &&
-      delaySeconds >= 60 &&
-      delaySeconds <= 600 &&
-      Math.mod(delaySeconds, 60) == 0 &&
-      Limits.getQueueableJobs() < Limits.getLimitQueueableJobs();
-  }
-
-  private static String scheduleRetry(
-    Id instanceId,
-    String stepName,
-    Integer delaySeconds
-  ) {
-    if (!useDynamicScheduling) {
-      return null;
-    }
-    try {
-      if (qualifiesForMinuteQueueable(delaySeconds)) {
-        return String.valueOf(
-          System.enqueueJob(
-            new WorkflowRetryJob.QueueableRetryJob(instanceId, stepName),
-            delaySeconds / 60
-          )
-        );
-      }
-      WorkflowRetryJob job = new WorkflowRetryJob(instanceId, stepName);
-      Datetime runTime = Datetime.now()
-        .addSeconds(Test.isRunningTest() ? delaySeconds + 60 : delaySeconds);
-      String cronStr =
-        runTime.second() +
-        ' ' +
-        runTime.minute() +
-        ' ' +
-        runTime.hour() +
-        ' ' +
-        runTime.day() +
-        ' ' +
-        runTime.month() +
-        ' ? ' +
-        runTime.year();
-      return String.valueOf(
-        System.schedule(
-          'WorkflowRetry_' + instanceId + '_' + runTime.getTime(),
-          cronStr,
-          job
-        )
-      );
-    } catch (AsyncException ignored) {
-      // Scheduling limit reached; the watchdog heartbeat re-drives the retry instead.
-      return null;
-    } catch (Exception ignored) {
-      // Retry scheduling is best-effort; the watchdog heartbeat is the backstop.
-      return null;
-    }
   }
 
   /**
@@ -14895,98 +13368,12 @@ public inherited sharing class WorkflowEngine {
     instance.Concurrency_Parked__c = true;
     instance.Concurrency_Slot_Held__c = false;
     instance.Sleep_Until__c = DateTime.now().addSeconds(retrySeconds);
-    instance.Async_Job_Id__c = scheduleSleepResume(
+    instance.Async_Job_Id__c = WorkflowRetrySleepScheduler.scheduleSleepResume(
       instance.Id,
       resolvedStep,
       retrySeconds
     );
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-  }
-
-  private static String scheduleSleepResume(
-    Id instanceId,
-    String stepName,
-    Integer delaySeconds
-  ) {
-    if (!useDynamicScheduling) {
-      return null;
-    }
-    try {
-      if (qualifiesForMinuteQueueable(delaySeconds)) {
-        return String.valueOf(
-          System.enqueueJob(
-            new WorkflowSleepJob.QueueableSleepJob(instanceId, stepName),
-            delaySeconds / 60
-          )
-        );
-      }
-      WorkflowSleepJob job = new WorkflowSleepJob(instanceId, stepName);
-      Datetime runTime = Datetime.now()
-        .addSeconds(Test.isRunningTest() ? delaySeconds + 60 : delaySeconds);
-      String cronStr =
-        runTime.second() +
-        ' ' +
-        runTime.minute() +
-        ' ' +
-        runTime.hour() +
-        ' ' +
-        runTime.day() +
-        ' ' +
-        runTime.month() +
-        ' ? ' +
-        runTime.year();
-      String jobName =
-        getSleepJobPrefix(instanceId, stepName) +
-        '_' +
-        runTime.getTime();
-      return String.valueOf(System.schedule(jobName, cronStr, job));
-    } catch (AsyncException ignored) {
-      // Scheduling limit reached; the watchdog heartbeat resumes the sleep instead.
-      return null;
-    } catch (Exception ignored) {
-      // Sleep scheduling is best-effort; the watchdog heartbeat is the backstop.
-      return null;
-    }
-  }
-
-  /**
-   * @description Builds the deterministic cron job name prefix for an instance and
-   * step's sleep job, so the job can be located or aborted without storing its Id.
-   * @param instanceId Id of the instance the sleep job belongs to
-   * @param stepName name of the sleeping step
-   * @return the sleep job name prefix
-   */
-  public static String getSleepJobPrefix(Id instanceId, String stepName) {
-    String cleanStepName = String.isNotBlank(stepName)
-      ? stepName.replaceAll('[^a-zA-Z0-9]', '_')
-      : '';
-    if (cleanStepName.length() > 25) {
-      cleanStepName =
-        cleanStepName.substring(0, 15) +
-        '_' +
-        Math.abs(cleanStepName.hashCode());
-    }
-    return 'WorkflowSleep_' +
-      instanceId +
-      (String.isNotBlank(cleanStepName) ? '_' + cleanStepName : '');
-  }
-
-  private static void cancelTimeoutJob(Id instanceId, String stepName) {
-    String cleanStepName = stepName.replaceAll('[^a-zA-Z0-9]', '_');
-    String jobName = 'Timeout_' + instanceId + '_' + cleanStepName;
-    List<CronTrigger> triggers = [
-      SELECT Id
-      FROM CronTrigger
-      WHERE CronJobDetail.Name = :jobName
-      WITH SYSTEM_MODE
-    ];
-    for (CronTrigger triggerJob : triggers) {
-      try {
-        System.abortJob(triggerJob.Id);
-      } catch (Exception ignored) {
-        // Job may already have fired or been removed; nothing further to do.
-      }
-    }
   }
 
   // ── Unrouted-signal capture & re-delivery ──────────────────────────────────

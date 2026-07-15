@@ -31,7 +31,7 @@ public class WorkflowEngineCausationTest {
       );
 
       // Test getStatus read API
-      WorkflowEngine.WorkflowStatus statusA = WorkflowEngine.getStatus(
+      WorkflowEngine.WorkflowStatus statusA = WorkflowStatusRead.getStatus(
         resultA.instanceId
       );
       System.assertEquals(

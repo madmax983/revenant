@@ -55,11 +55,13 @@ public inherited sharing class WorkflowCausationLineage {
       currentId = resolveNextAncestorId(inst, visitedIds);
     }
 
-    Map<Id, String> resolvedOutputByDocId = WorkflowEngine.bulkResolveOffloadedOutputs(
+    Map<Id, String> resolvedOutputByDocId = WorkflowStatusProjection.bulkResolveOffloadedOutputs(
       ancestors
     );
     for (Workflow_Instance__c inst : ancestors) {
-      lineage.add(WorkflowEngine.buildStatus(inst, resolvedOutputByDocId));
+      lineage.add(
+        WorkflowStatusProjection.buildStatus(inst, resolvedOutputByDocId)
+      );
     }
     return lineage;
   }

@@ -798,7 +798,7 @@ public class WorkflowConcurrencyTest {
       };
 
       Test.startTest();
-      WorkflowEngine.reArmTimeoutsForResume(
+      WorkflowTimeoutReArm.reArmTimeoutsForResume(
         new List<Workflow_Instance__c>{ unadmitted, admitted }
       );
       Test.stopTest();
