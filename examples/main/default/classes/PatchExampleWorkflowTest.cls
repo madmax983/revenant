@@ -40,7 +40,7 @@ public class PatchExampleWorkflowTest {
       // 3. Verify no adoption count since it adopted the patch (insert-flight = true)
       System.assertEquals(
         0,
-        WorkflowEngine.getPatchAdoptionCount('insert-flight')
+        WorkflowPatchAdoption.getPatchAdoptionCount('insert-flight')
       );
     }
   }
@@ -81,7 +81,7 @@ public class PatchExampleWorkflowTest {
       // 2. Since BookHotel recorded false, getPatchAdoptionCount should be 1
       System.assertEquals(
         1,
-        WorkflowEngine.getPatchAdoptionCount('insert-flight'),
+        WorkflowPatchAdoption.getPatchAdoptionCount('insert-flight'),
         'Active instance should count as 1 adoption'
       );
 
@@ -100,7 +100,7 @@ public class PatchExampleWorkflowTest {
       // 4. Once completed (terminal status), the adoption count should drop to 0
       System.assertEquals(
         0,
-        WorkflowEngine.getPatchAdoptionCount('insert-flight'),
+        WorkflowPatchAdoption.getPatchAdoptionCount('insert-flight'),
         'Adoption count should drop to 0 once completed'
       );
     }
@@ -260,13 +260,13 @@ public class PatchExampleWorkflowTest {
           instanceJson,
           Workflow_Instance__c.class
         );
-        WorkflowEngine.mockInstancesForAdoption = new List<Workflow_Instance__c>{
+        WorkflowPatchAdoption.mockInstancesForAdoption = new List<Workflow_Instance__c>{
           mockInst
         };
 
         // Since its CreatedDate < introducedAt, it will evaluate to false when it reaches it.
         // So getPatchAdoptionCount with introducedAt should count it as 1!
-        Integer count = WorkflowEngine.getPatchAdoptionCount(
+        Integer count = WorkflowPatchAdoption.getPatchAdoptionCount(
           'PatchExampleWorkflow.PatchSagaWorkflow',
           'insert-flight',
           introducedAt
@@ -274,7 +274,7 @@ public class PatchExampleWorkflowTest {
         System.assertEquals(1, count, 'Should count unreached legacy instance');
 
         // Without introducedAt, it doesn't know the introduction date, so it returns 0 (no decision recorded yet)
-        Integer countNoDate = WorkflowEngine.getPatchAdoptionCount(
+        Integer countNoDate = WorkflowPatchAdoption.getPatchAdoptionCount(
           'insert-flight'
         );
         System.assertEquals(
@@ -283,7 +283,7 @@ public class PatchExampleWorkflowTest {
           'Should return 0 without introduction date if not reached'
         );
       } finally {
-        WorkflowEngine.mockInstancesForAdoption = null;
+        WorkflowPatchAdoption.mockInstancesForAdoption = null;
       }
     }
   }

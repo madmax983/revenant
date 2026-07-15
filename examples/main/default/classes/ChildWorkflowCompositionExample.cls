@@ -114,7 +114,7 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
         if (outcome.isSuccess()) {
           // Resume: the child completed.  Its serialised output is the signal payload.
           // For large child outputs the payload may be a blob reference; resolve it.
-          String childOutputJson = WorkflowEngine.resolvePayload(
+          String childOutputJson = WorkflowPayloadOffload.resolvePayload(
             outcome.output
           );
           Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(

@@ -27,7 +27,7 @@ public class ChildWorkflowFanOutExampleTest {
         WHERE Id = :parentId
       ];
       Map<String, Object> output = (Map<String, Object>) JSON.deserializeUntyped(
-        WorkflowEngine.resolvePayload(parentInst.Output__c)
+        WorkflowPayloadOffload.resolvePayload(parentInst.Output__c)
       );
       // Expected totalScore = (15*2) + (25*2) + (5*2) = 30 + 50 + 10 = 90
       System.assertEquals(90, ((Decimal) output.get('totalScore')).intValue());
@@ -62,7 +62,7 @@ public class ChildWorkflowFanOutExampleTest {
         WHERE Id = :parentId
       ];
       Map<String, Object> output = (Map<String, Object>) JSON.deserializeUntyped(
-        WorkflowEngine.resolvePayload(parentInst.Output__c)
+        WorkflowPayloadOffload.resolvePayload(parentInst.Output__c)
       );
       // Expected totalScore = (15*2) + (25*2) = 30 + 50 = 80
       System.assertEquals(80, ((Decimal) output.get('totalScore')).intValue());
