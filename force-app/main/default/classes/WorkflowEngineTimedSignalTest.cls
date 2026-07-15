@@ -817,7 +817,7 @@ public class WorkflowEngineTimedSignalTest {
       );
 
       // Manual resume (not via signal) must disarm the timer
-      WorkflowEngine.resumeInstance(instanceId, '{}');
+      WorkflowResumeService.resumeInstance(instanceId, '{}');
 
       inst = [
         SELECT Status__c, Sleep_Until__c

@@ -218,7 +218,7 @@ private class WorkflowTypeResolverTest {
 
       // 3. Resume/signal the suspended workflow.
       // We simulate a resume by delivering step state to the paused step.
-      WorkflowEngine.resume(
+      WorkflowResumeService.resume(
         instanceId,
         'WorkflowEngineTest.SuspendingStep',
         'resume_payload'
