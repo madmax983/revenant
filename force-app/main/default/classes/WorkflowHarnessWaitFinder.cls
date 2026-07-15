@@ -155,7 +155,7 @@ public inherited sharing class WorkflowHarnessWaitFinder {
       }
       return hasWakeSignal(
         inst,
-        WorkflowEngine.getSleepJobPrefix(inst.Id, stepName)
+        WorkflowStepTimeoutConfig.getSleepJobPrefix(inst.Id, stepName)
       );
     }
 

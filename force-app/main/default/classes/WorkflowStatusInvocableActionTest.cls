@@ -137,7 +137,7 @@ public class WorkflowStatusInvocableActionTest {
 
       // Offload a >100k payload exactly as the engine does, so Output__c holds a pointer.
       String bigPayload = '"' + 'X'.repeat(110000) + '"';
-      inst.Output__c = WorkflowEngine.savePayloadIfNeeded(
+      inst.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst.Id,
         bigPayload,
         'Output_Big'
@@ -166,7 +166,7 @@ public class WorkflowStatusInvocableActionTest {
       );
       // Parity with what an Apex caller sees via the engine.
       System.assertEquals(
-        WorkflowEngine.resolvePayload(inst.Output__c),
+        WorkflowPayloadOffload.resolvePayload(inst.Output__c),
         res.outputJson,
         'Action output must match the engine rehydration path'
       );
@@ -548,7 +548,7 @@ public class WorkflowStatusInvocableActionTest {
         '{"percent":95.0,"details":"' +
         'P'.repeat(110000) +
         '"}';
-      inst2.Progress__c = WorkflowEngine.savePayloadIfNeeded(
+      inst2.Progress__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst2.Id,
         bigProgress,
         'Progress_Big'

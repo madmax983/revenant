@@ -79,7 +79,9 @@ public inherited sharing class WorkflowInstanceCommandService {
         inst.Sleep_Until__c = null;
         inst.Async_Job_Id__c = null;
         update as system inst;
-        WorkflowEngine.enqueueOrchestrators(new List<Id>{ inst.Id });
+        WorkflowOrchestratorEnqueue.enqueueOrchestrators(
+          new List<Id>{ inst.Id }
+        );
       }
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());

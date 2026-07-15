@@ -191,7 +191,7 @@ public class WorkflowEngineCore2Test {
       System.assertEquals(
         '{"status":"success"}',
         (String) JSON.deserialize(
-          WorkflowEngine.resolvePayload(inst.Output__c),
+          WorkflowPayloadOffload.resolvePayload(inst.Output__c),
           String.class
         )
       );
@@ -518,7 +518,7 @@ public class WorkflowEngineCore2Test {
 
       // Save a large payload which offloads to ContentVersion
       String largeStr = 'x'.repeat(110000);
-      String marker = WorkflowEngine.savePayloadIfNeeded(
+      String marker = WorkflowPayloadOffload.savePayloadIfNeeded(
         instanceId,
         largeStr,
         'TestPayload'

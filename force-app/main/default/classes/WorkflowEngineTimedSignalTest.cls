@@ -1108,7 +1108,7 @@ public class WorkflowEngineTimedSignalTest {
       );
 
       // Verify lineage walk from the compensating run successfully reaches the parent
-      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowEngine.getCausationLineage(
+      List<WorkflowEngine.WorkflowStatus> lineage = WorkflowCausationLineage.getCausationLineage(
         compensatingId
       );
       System.assertEquals(2, lineage.size());

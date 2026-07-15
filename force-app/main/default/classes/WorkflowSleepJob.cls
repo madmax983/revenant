@@ -50,11 +50,14 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
         );
       }
     } else {
-      WorkflowEngine.enqueueOrchestrator(this.instanceId, this.stepName);
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(
+        this.instanceId,
+        this.stepName
+      );
     }
 
     // Schedule watchdog for the step we just resumed
-    WorkflowEngine.scheduleTimeoutJobForInstance(this.instanceId);
+    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(this.instanceId);
 
     // Clean up this scheduled execution from the schedule queue
     if (ctx != null && ctx.getTriggerId() != null) {
@@ -158,11 +161,14 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
           );
         }
       } else {
-        WorkflowEngine.enqueueOrchestrator(this.instanceId, this.stepName);
+        WorkflowOrchestratorEnqueue.enqueueOrchestrator(
+          this.instanceId,
+          this.stepName
+        );
       }
 
       // Schedule watchdog for the step we just resumed
-      WorkflowEngine.scheduleTimeoutJobForInstance(this.instanceId);
+      WorkflowTimeoutArming.scheduleTimeoutJobForInstance(this.instanceId);
     }
   }
 

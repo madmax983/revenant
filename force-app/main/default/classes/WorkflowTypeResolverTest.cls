@@ -329,12 +329,12 @@ private class WorkflowTypeResolverTest {
       // Schedule timeout for same step name under different workflow names/namespaces
       // This exercises getStepTimeoutSeconds cache lookup key isolation.
       Test.startTest();
-      WorkflowEngine.scheduleTimeoutJobIfNeeded(
+      WorkflowTimeoutScheduler.scheduleTimeoutJobIfNeeded(
         null,
         'WorkflowEngineTest.TimeoutStep',
         'ns1.MyWorkflow'
       );
-      WorkflowEngine.scheduleTimeoutJobIfNeeded(
+      WorkflowTimeoutScheduler.scheduleTimeoutJobIfNeeded(
         null,
         'WorkflowEngineTest.TimeoutStep',
         'ns2.MyWorkflow'

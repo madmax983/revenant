@@ -93,7 +93,9 @@ public inherited sharing class WorkflowWatchdog implements Schedulable {
           inst.Status__c = 'Running';
           inst.Sleep_Until__c = null;
           update as system inst;
-          WorkflowEngine.enqueueOrchestrators(new List<Id>{ inst.Id });
+          WorkflowOrchestratorEnqueue.enqueueOrchestrators(
+            new List<Id>{ inst.Id }
+          );
         }
       }
     } catch (Exception ex) {

@@ -483,7 +483,7 @@ public class WorkflowPauseGateApiTest {
 
       Test.startTest();
       // Exercise the re-arm path directly so only its scheduling/re-stamp runs.
-      WorkflowEngine.reArmTimeoutsForResume(
+      WorkflowTimeoutReArm.reArmTimeoutsForResume(
         new List<Workflow_Instance__c>{ inst }
       );
 

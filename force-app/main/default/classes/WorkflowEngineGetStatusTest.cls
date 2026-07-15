@@ -72,7 +72,7 @@ private class WorkflowEngineGetStatusTest {
         .build();
 
       Test.startTest();
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(inst.Id);
       Test.stopTest();
 
       System.assertNotEquals(null, ws, 'Should return a DTO for a known Id');
@@ -99,7 +99,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(inst.Id);
 
       System.assertNotEquals(null, ws);
       System.assertEquals('Running', ws.status);
@@ -122,7 +122,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(inst.Id);
 
       System.assertEquals(false, ws.isTerminal);
       System.assertEquals(null, ws.output);
@@ -139,7 +139,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage('NullPointerException on line 42')
         .build();
 
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(inst.Id);
 
       System.assertEquals('Failed', ws.status);
       System.assertEquals(true, ws.isTerminal);
@@ -157,7 +157,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(inst.Id);
 
       System.assertEquals(true, ws.isTerminal);
     }
@@ -173,7 +173,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(inst.Id);
 
       System.assertEquals(true, ws.isTerminal);
     }
@@ -189,7 +189,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(inst.Id);
 
       System.assertEquals(
         false,
@@ -203,7 +203,7 @@ private class WorkflowEngineGetStatusTest {
   static void testGetStatusByIdNotFoundReturnsNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Use a well-formed but non-existent Id (same key prefix as Workflow_Instance__c)
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(
         (Id) (Workflow_Instance__c.SObjectType.getDescribe(
             SObjectDescribeOptions.DEFERRED
           )
@@ -225,7 +225,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(inst.Id);
 
       System.assertEquals(true, ws.isTerminal);
       System.assertEquals(
@@ -248,7 +248,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(
         'key-by-string-active'
       );
 
@@ -268,7 +268,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(
         'key-by-string-done'
       );
 
@@ -295,7 +295,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(
         'key-prefer-active'
       );
 
@@ -310,7 +310,7 @@ private class WorkflowEngineGetStatusTest {
   @IsTest
   static void testGetStatusByKeyNotFoundReturnsNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(
         'key-does-not-exist-xyz123'
       );
 
@@ -321,8 +321,8 @@ private class WorkflowEngineGetStatusTest {
   @IsTest
   static void testGetStatusByKeyBlankReturnsNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      System.assertEquals(null, WorkflowEngine.getStatus(''));
-      System.assertEquals(null, WorkflowEngine.getStatus((String) null));
+      System.assertEquals(null, WorkflowStatusRead.getStatus(''));
+      System.assertEquals(null, WorkflowStatusRead.getStatus((String) null));
     }
   }
 
@@ -338,7 +338,9 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus('order-123');
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(
+        'order-123'
+      );
 
       System.assertNotEquals(
         null,
@@ -373,7 +375,9 @@ private class WorkflowEngineGetStatusTest {
       );
       insert as system successor;
 
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus('PollerKey');
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(
+        'PollerKey'
+      );
 
       System.assertNotEquals(null, ws);
       System.assertEquals(
@@ -416,7 +420,9 @@ private class WorkflowEngineGetStatusTest {
 
       // Polling the *intermediate* successor key must follow the chain to the final
       // generation, not return the stale ContinuedAsNew predecessor it names directly.
-      WorkflowEngine.WorkflowStatus mid = WorkflowEngine.getStatus('A_run2');
+      WorkflowEngine.WorkflowStatus mid = WorkflowStatusRead.getStatus(
+        'A_run2'
+      );
       System.assertNotEquals(
         null,
         mid,
@@ -431,7 +437,7 @@ private class WorkflowEngineGetStatusTest {
       System.assertEquals('{"gen":3}', mid.output);
 
       // Polling the original root key resolves the same final generation.
-      WorkflowEngine.WorkflowStatus rootWs = WorkflowEngine.getStatus('A');
+      WorkflowEngine.WorkflowStatus rootWs = WorkflowStatusRead.getStatus('A');
       System.assertNotEquals(null, rootWs);
       System.assertEquals(gen3.Id, rootWs.instanceId);
       System.assertEquals('{"gen":3}', rootWs.output);
@@ -489,7 +495,7 @@ private class WorkflowEngineGetStatusTest {
         Test.setCreatedDate(hotRuns[i].Id, hotCreatedDates[i]);
       }
 
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<String>{ 'hot-key', 'cold-key' }
       );
 
@@ -529,7 +535,7 @@ private class WorkflowEngineGetStatusTest {
       );
       insert as system successor;
 
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<String>{ 'BulkRoot', 'unrelated-key' }
       );
 
@@ -566,7 +572,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<String>{ 'legacy-rootless', 'other-key' }
       );
 
@@ -613,7 +619,7 @@ private class WorkflowEngineGetStatusTest {
 
       // Two keys force the bulk path (a single-element list takes the single-key
       // fast path), which is where root-keyed conflation would occur.
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<String>{ 'K_run2', 'no-such-key' }
       );
 
@@ -652,7 +658,7 @@ private class WorkflowEngineGetStatusTest {
       );
       insert as system successor;
 
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<String>{ 'legacy-chain', 'no-such-key' }
       );
 
@@ -681,7 +687,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
       // Offload via the engine's own helper so the marker format is identical
-      String marker = WorkflowEngine.savePayloadIfNeeded(
+      String marker = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst.Id,
         bigPayload,
         'Output-' + inst.Id
@@ -696,7 +702,7 @@ private class WorkflowEngineGetStatusTest {
       );
 
       Test.startTest();
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(inst.Id);
       Test.stopTest();
 
       System.assertNotEquals(null, ws);
@@ -727,7 +733,7 @@ private class WorkflowEngineGetStatusTest {
 
       Integer queriesBefore = Limits.getQueries();
       Integer dmlBefore = Limits.getDmlStatements();
-      WorkflowEngine.getStatus(inst.Id);
+      WorkflowStatusRead.getStatus(inst.Id);
       Integer queriesUsed = Limits.getQueries() - queriesBefore;
       Integer dmlUsed = Limits.getDmlStatements() - dmlBefore;
 
@@ -750,7 +756,7 @@ private class WorkflowEngineGetStatusTest {
         .output(null)
         .errorMessage(null)
         .build();
-      String marker = WorkflowEngine.savePayloadIfNeeded(
+      String marker = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst.Id,
         bigPayload,
         'Output-' + inst.Id
@@ -760,7 +766,7 @@ private class WorkflowEngineGetStatusTest {
 
       Integer queriesBefore = Limits.getQueries();
       Integer dmlBefore = Limits.getDmlStatements();
-      WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(inst.Id);
+      WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(inst.Id);
       Integer queriesUsed = Limits.getQueries() - queriesBefore;
       Integer dmlUsed = Limits.getDmlStatements() - dmlBefore;
 
@@ -798,7 +804,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage('err')
         .build();
 
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<Id>{ completed.Id, running.Id, failed.Id }
       );
 
@@ -828,7 +834,7 @@ private class WorkflowEngineGetStatusTest {
         )
         .getKeyPrefix() + '000000000099');
 
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<Id>{ inst.Id, unknownId }
       );
 
@@ -845,7 +851,7 @@ private class WorkflowEngineGetStatusTest {
   @IsTest
   static void testBulkGetStatusByIdsEmptyList() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<Id>()
       );
       System.assertEquals(0, results.size());
@@ -871,12 +877,12 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      inst1.Output__c = WorkflowEngine.savePayloadIfNeeded(
+      inst1.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst1.Id,
         big1,
         'Out-' + inst1.Id
       );
-      inst2.Output__c = WorkflowEngine.savePayloadIfNeeded(
+      inst2.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst2.Id,
         big2,
         'Out-' + inst2.Id
@@ -884,7 +890,7 @@ private class WorkflowEngineGetStatusTest {
       update as system new List<Workflow_Instance__c>{ inst1, inst2 };
 
       Integer queriesBefore = Limits.getQueries();
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<Id>{ inst1.Id, inst2.Id }
       );
       Integer queriesUsed = Limits.getQueries() - queriesBefore;
@@ -917,7 +923,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<String>{ 'key-bulk-str-done', 'key-bulk-str-run' }
       );
 
@@ -945,7 +951,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<String>{ 'key-bulk-prefer' }
       );
 
@@ -967,7 +973,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<String>{ 'key-bulk-str-known2', 'key-not-exist-xyz987' }
       );
 
@@ -991,7 +997,7 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<String>{ 'key-bulk-str-blank', '', null }
       );
 
@@ -1005,7 +1011,7 @@ private class WorkflowEngineGetStatusTest {
   @IsTest
   static void testBulkGetStatusByKeysEmptyList() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<String>()
       );
       System.assertEquals(0, results.size());
@@ -1022,7 +1028,7 @@ private class WorkflowEngineGetStatusTest {
         .output(null)
         .errorMessage(null)
         .build();
-      inst.Output__c = WorkflowEngine.savePayloadIfNeeded(
+      inst.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst.Id,
         big,
         'Out-' + inst.Id
@@ -1031,7 +1037,7 @@ private class WorkflowEngineGetStatusTest {
 
       Integer queriesBefore = Limits.getQueries();
       Integer dmlBefore = Limits.getDmlStatements();
-      List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(
+      List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(
         new List<String>{ 'key-bulk-str-gov' }
       );
       Integer queriesUsed = Limits.getQueries() - queriesBefore;
@@ -1062,8 +1068,10 @@ private class WorkflowEngineGetStatusTest {
         .errorMessage(null)
         .build();
 
-      WorkflowEngine.WorkflowStatus single = WorkflowEngine.getStatus(inst.Id);
-      List<WorkflowEngine.WorkflowStatus> bulkResults = WorkflowEngine.getStatus(
+      WorkflowEngine.WorkflowStatus single = WorkflowStatusRead.getStatus(
+        inst.Id
+      );
+      List<WorkflowEngine.WorkflowStatus> bulkResults = WorkflowStatusRead.getStatus(
         new List<Id>{ inst.Id }
       );
 
