@@ -53,7 +53,7 @@ public inherited sharing class WorkflowSignalCommandService {
    */
   public static Map<String, Object> redeliver(Id signalId) {
     WorkflowDashboardSupport.checkAuthorization();
-    Boolean matched = WorkflowEngine.redeliverCapturedSignal(signalId);
+    Boolean matched = WorkflowUnroutedSignals.redeliverCapturedSignal(signalId);
     return new Map<String, Object>{ 'matched' => matched };
   }
 

@@ -820,7 +820,7 @@ public class WorkflowSignalIdempotencyTest {
 
       // 3. Redeliver the captured signal: it reparents and rewrites its dedup key
       //    from the correlation-scoped hash to the instance-scoped routed hash.
-      WorkflowEngine.redeliverCapturedSignal(captured.Id);
+      WorkflowUnroutedSignals.redeliverCapturedSignal(captured.Id);
 
       // 4. A routed duplicate of the same idempotency key must be deduped.
       WorkflowEngine.signal(

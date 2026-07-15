@@ -1399,7 +1399,7 @@ public class WorkflowPauseTest {
       insert sig;
 
       Test.startTest();
-      Boolean matched = WorkflowEngine.redeliverCapturedSignal(sig.Id);
+      Boolean matched = WorkflowUnroutedSignals.redeliverCapturedSignal(sig.Id);
       Test.stopTest();
 
       System.assertEquals(

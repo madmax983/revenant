@@ -484,7 +484,7 @@ public class WorkflowEngineCore1Test {
       WorkflowEngineMocksATest.shouldSucceedOnFailingStep = true;
 
       Test.startTest();
-      WorkflowEngine.retryWorkflow(instanceId);
+      WorkflowRetryService.retryWorkflow(instanceId);
       // This will run the Orchestrator synchronously in Test context
       Test.stopTest();
 

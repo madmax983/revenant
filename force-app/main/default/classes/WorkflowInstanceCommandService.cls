@@ -51,7 +51,7 @@ public inherited sharing class WorkflowInstanceCommandService {
   public static void retryInstance(Id instanceId) {
     WorkflowDashboardSupport.checkAuthorization();
     try {
-      WorkflowEngine.retryWorkflow(instanceId);
+      WorkflowRetryService.retryWorkflow(instanceId);
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
     }
@@ -130,7 +130,11 @@ public inherited sharing class WorkflowInstanceCommandService {
       throw ex;
     }
     try {
-      WorkflowEngine.resumePastStep(instanceId, stepName, suppliedOutputJson);
+      WorkflowOperatorSkip.resumePastStep(
+        instanceId,
+        stepName,
+        suppliedOutputJson
+      );
     } catch (Exception ex) {
       AuraHandledException aex = new AuraHandledException(ex.getMessage());
       aex.setMessage(ex.getMessage());

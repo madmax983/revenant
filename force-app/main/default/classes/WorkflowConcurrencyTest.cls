@@ -1482,7 +1482,7 @@ public class WorkflowConcurrencyTest {
 
       // 5. Execute skip/resume
       Test.startTest();
-      WorkflowEngine.resumePastStep(
+      WorkflowOperatorSkip.resumePastStep(
         inst.Id,
         'WorkflowConcurrencyTest.WaitStep',
         '{}'

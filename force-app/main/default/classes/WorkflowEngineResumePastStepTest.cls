@@ -21,7 +21,7 @@ public class WorkflowEngineResumePastStepTest {
     );
 
     Test.startTest();
-    WorkflowEngine.resumePastStep(
+    WorkflowOperatorSkip.resumePastStep(
       instanceId,
       stepNameToSkip,
       '{"overrideVal": "skippedOutput"}'
@@ -68,7 +68,7 @@ public class WorkflowEngineResumePastStepTest {
     ];
 
     Test.startTest();
-    WorkflowEngine.resumePastStep(
+    WorkflowOperatorSkip.resumePastStep(
       instanceId,
       'WorkflowEngineMocksATest.SkipParallelB',
       '{"val": "skippedParallelB"}'
@@ -142,7 +142,7 @@ public class WorkflowEngineResumePastStepTest {
           )
       );
 
-      // 5. Run next step execution (should resume from SkipTestStep3 because WorkflowEngine.resumePastStep enqueued it)
+      // 5. Run next step execution (should resume from SkipTestStep3 because WorkflowOperatorSkip.resumePastStep enqueued it)
       Workflow_Instance__c finalInst = [
         SELECT Status__c, Output__c, Compensation_Stack__c
         FROM Workflow_Instance__c
@@ -377,7 +377,7 @@ public class WorkflowEngineResumePastStepTest {
 
       // 4. Resume past ParallelB
       Test.startTest();
-      WorkflowEngine.resumePastStep(
+      WorkflowOperatorSkip.resumePastStep(
         instanceId,
         'WorkflowEngineMocksATest.SkipParallelB',
         '{"val": "skippedParallelB"}'
@@ -420,7 +420,7 @@ public class WorkflowEngineResumePastStepTest {
         .execute(null);
 
       // 3. Resume past ParallelB (sets it to OperatorSkipped)
-      WorkflowEngine.resumePastStep(
+      WorkflowOperatorSkip.resumePastStep(
         instanceId,
         'WorkflowEngineMocksATest.SkipParallelB',
         '{"val": "skippedParallelB"}'
@@ -498,7 +498,7 @@ public class WorkflowEngineResumePastStepTest {
       System.assertEquals('Failed', instFailed.Status__c);
 
       // 5. Resume past ParallelB
-      WorkflowEngine.resumePastStep(
+      WorkflowOperatorSkip.resumePastStep(
         instanceId,
         'WorkflowEngineMocksATest.SkipParallelB',
         '{"val": "skippedParallelB"}'
@@ -564,7 +564,7 @@ public class WorkflowEngineResumePastStepTest {
 
       // Both A and C will be reset/enqueued in memory or as no-ops since disableQueueableInTest is true.
       // We run them manually to drive their execution synchronously.
-      WorkflowEngine.resumePastStep(
+      WorkflowOperatorSkip.resumePastStep(
         instanceId,
         'WorkflowEngineMocksATest.SkipParallelB',
         '{"val": "skippedParallelB"}'
@@ -631,7 +631,7 @@ public class WorkflowEngineResumePastStepTest {
 
       // 2. Skip the terminal step. This will transition status to 'Completed'.
       Test.startTest();
-      WorkflowEngine.resumePastStep(
+      WorkflowOperatorSkip.resumePastStep(
         instanceId,
         'WorkflowEngineMocksBTest.TerminalSkipStep',
         '{"overrideVal": "skippedOutput"}'
@@ -678,7 +678,7 @@ public class WorkflowEngineResumePastStepTest {
 
       // 3. Try to skip the step
       try {
-        WorkflowEngine.resumePastStep(
+        WorkflowOperatorSkip.resumePastStep(
           inst.Id,
           'WorkflowEngineMocksBTest.LoopExposeStep',
           '{}'
@@ -735,7 +735,7 @@ public class WorkflowEngineResumePastStepTest {
         .execute(null);
 
       // 3. Resume past ParallelB (the skip).
-      WorkflowEngine.resumePastStep(
+      WorkflowOperatorSkip.resumePastStep(
         instanceId,
         'WorkflowEngineMocksATest.SkipParallelB',
         '{"val": "skippedParallelB"}'

@@ -151,7 +151,7 @@ public class WorkflowEngineTimedSignalTest {
       insert inst;
 
       Test.startTest();
-      Boolean matched = WorkflowEngine.redeliverCapturedSignal(sig.Id);
+      Boolean matched = WorkflowUnroutedSignals.redeliverCapturedSignal(sig.Id);
       Test.stopTest();
 
       System.assertEquals(
@@ -203,7 +203,7 @@ public class WorkflowEngineTimedSignalTest {
       insert sig;
 
       Test.startTest();
-      Boolean matched = WorkflowEngine.redeliverCapturedSignal(sig.Id);
+      Boolean matched = WorkflowUnroutedSignals.redeliverCapturedSignal(sig.Id);
       Test.stopTest();
 
       System.assertEquals(
