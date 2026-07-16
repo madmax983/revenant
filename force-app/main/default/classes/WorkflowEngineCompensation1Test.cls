@@ -11,7 +11,7 @@ public class WorkflowEngineCompensation1Test {
     ];
     System.assertEquals('CompensationFailed', stalled.Status__c);
 
-    WorkflowEngine.resumeCompensation(instanceId);
+    WorkflowCompensation.resumeCompensation(instanceId);
     WorkflowEngine.runStep(instanceId, null);
     Test.stopTest();
 
@@ -587,7 +587,7 @@ public class WorkflowEngineCompensation1Test {
       // Now resume the stalled rollback from exactly the failed compensation point.
       WorkflowEngineMocksATest.compensationShouldFail = false;
 
-      WorkflowEngine.resumeCompensation(inst.Id);
+      WorkflowCompensation.resumeCompensation(inst.Id);
       WorkflowEngine.runStep(inst.Id, null); // Runs the fresh compensation attempt (completes)
       WorkflowEngine.runStep(inst.Id, null); // Stack empty -> transition status to Compensated
 
@@ -1051,7 +1051,7 @@ public class WorkflowEngineCompensation1Test {
 
       // The transient failure clears; the operator resumes the rollback.
       WorkflowEngineMocksATest.compensationShouldFail = false;
-      WorkflowEngine.resumeCompensation(inst.Id);
+      WorkflowCompensation.resumeCompensation(inst.Id);
 
       // The resumed rollback must remain cancel-driven, with the 'Cancelled' marker
       // intact so that a suspend (RETRY/SLEEP) before the stack drains still restores

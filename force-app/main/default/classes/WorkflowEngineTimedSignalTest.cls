@@ -863,7 +863,7 @@ public class WorkflowEngineTimedSignalTest {
       insert inst1;
 
       try {
-        WorkflowEngine.compensate(inst1.Id);
+        WorkflowCompensation.compensate(inst1.Id);
         System.assert(
           false,
           'Should have thrown exception for non-completed status'
@@ -884,7 +884,7 @@ public class WorkflowEngineTimedSignalTest {
       insert inst2;
 
       try {
-        WorkflowEngine.compensate(inst2.Id);
+        WorkflowCompensation.compensate(inst2.Id);
         System.assert(false, 'Should have thrown exception for missing stack');
       } catch (Exception ex) {
         System.assert(
@@ -927,7 +927,7 @@ public class WorkflowEngineTimedSignalTest {
       insert origExec;
 
       Test.startTest();
-      Id compensatingId = WorkflowEngine.compensate(target.Id);
+      Id compensatingId = WorkflowCompensation.compensate(target.Id);
       Test.stopTest();
 
       System.assertNotEquals(
@@ -1087,7 +1087,7 @@ public class WorkflowEngineTimedSignalTest {
       insert origExec;
 
       // 3. Compensate the completed child
-      Id compensatingId = WorkflowEngine.compensate(childId);
+      Id compensatingId = WorkflowCompensation.compensate(childId);
       System.assertNotEquals(null, compensatingId);
 
       // Verify the compensating run has NO Parent_Instance__c but DOES have Causation_Id__c!

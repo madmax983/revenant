@@ -9,8 +9,8 @@
  * engine. Extracted from `WorkflowEngine`, which retains the thin public
  * `cancel`/`cancelWithCompensations` delegators. The resident
  * `WorkflowEngine.WorkflowException`, `WorkflowEngine.disableQueueableInTest`,
- * `WorkflowEngine.preCreateFirstCompensationStep` and
- * `WorkflowEngine.appendCompensationRetryStep` members are referenced fully
+ * `WorkflowCompensation.preCreateFirstCompensationStep` and
+ * `WorkflowCompensationStepLog.appendCompensationRetryStep` members are referenced fully
  * qualified. All SOQL/DML executes in system mode.
  */
 public inherited sharing class WorkflowCancellation {
@@ -221,7 +221,10 @@ public inherited sharing class WorkflowCancellation {
 
       // Append a fresh attempt for the stalled top-of-stack step (the prior Failed
       // attempt is preserved) so the existing compensation loop re-runs it.
-      WorkflowEngine.appendCompensationRetryStep(instance, remaining);
+      WorkflowCompensationStepLog.appendCompensationRetryStep(
+        instance,
+        remaining
+      );
       WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
       enqueueOrchestratorTestAware(instance.Id);
       // Not terminal yet — the orchestrator emits the lifecycle event when the
@@ -339,7 +342,7 @@ public inherited sharing class WorkflowCancellation {
     if (hasCancelCompensations(runCompensations, instance)) {
       instance.Status__c = 'Cancelling';
       instance.Error_Message__c = 'Cancelled by user. Compensating.';
-      WorkflowEngine.preCreateFirstCompensationStep(instance);
+      WorkflowCompensation.preCreateFirstCompensationStep(instance);
       Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
       // Kick off rollback loop

@@ -7,7 +7,7 @@
  * stay resident on the engine and delegate to `failInstance` here. The resident
  * `WorkflowEngine.FailInstanceRequest` DTO, the `WorkflowEngine.CAT_*` failure
  * categories and the resident shared helpers `WorkflowEngine.enqueueOrchestratorForInstance`
- * and `WorkflowEngine.preCreateFirstCompensationStep` are referenced fully qualified.
+ * and `WorkflowCompensation.preCreateFirstCompensationStep` are referenced fully qualified.
  * Parent-completion notification is delegated to `WorkflowChildService`. All
  * SOQL/DML executes in system mode.
  */
@@ -288,7 +288,7 @@ public inherited sharing class WorkflowFailureService {
       ': ' +
       req.errorMessage)
       .left(255);
-    WorkflowEngine.preCreateFirstCompensationStep(instance);
+    WorkflowCompensation.preCreateFirstCompensationStep(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     WorkflowEngine.enqueueOrchestratorForInstance(instance.Id);

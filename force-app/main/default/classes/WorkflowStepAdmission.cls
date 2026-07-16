@@ -20,10 +20,10 @@ public inherited sharing class WorkflowStepAdmission {
     if (!isLiveCompensation(instance)) {
       return false;
     }
-    String reassertedStatus = WorkflowEngine.reassertCompensatingStatus(
+    String reassertedStatus = WorkflowCompensationRunner.reassertCompensatingStatus(
       instance
     );
-    WorkflowEngine.runCompensationStep(instance, reassertedStatus);
+    WorkflowCompensationRunner.runCompensationStep(instance, reassertedStatus);
     return true;
   }
 
