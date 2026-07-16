@@ -142,15 +142,15 @@ public class StepContextSignalEngineBranchTest {
 
       // Signal Resume: the suspended parallel branch must be enqueued BY NAME,
       // not via a blank-stepName enqueue that runStep would discard.
-      WorkflowEngine.enqueuedBranchKeys.clear();
+      WorkflowResumeEnqueue.enqueuedBranchKeys.clear();
       WorkflowEngine.signal('WakeKey', 'Resume', '{}');
 
       System.assert(
-        WorkflowEngine.enqueuedBranchKeys.contains(
+        WorkflowResumeEnqueue.enqueuedBranchKeys.contains(
           instanceId + '::StepContextSignalEngineBranchTest.WakeWaitBranch'
         ),
         'A parallel branch suspended on a signal must be woken by its step name. Keys: ' +
-        WorkflowEngine.enqueuedBranchKeys
+        WorkflowResumeEnqueue.enqueuedBranchKeys
       );
     }
   }
@@ -1024,7 +1024,7 @@ public class StepContextSignalEngineBranchTest {
         )
         .execute(null);
 
-      WorkflowEngine.enqueuedBranchKeys.clear();
+      WorkflowResumeEnqueue.enqueuedBranchKeys.clear();
       // One bulk signal for both parallel instances.
       WorkflowEngine.signal(
         new List<WorkflowEngine.SignalRequest>{
@@ -1034,18 +1034,18 @@ public class StepContextSignalEngineBranchTest {
       );
 
       System.assert(
-        WorkflowEngine.enqueuedBranchKeys.contains(
+        WorkflowResumeEnqueue.enqueuedBranchKeys.contains(
           i1 + '::StepContextSignalEngineBranchTest.WakeWaitBranch'
         ),
         'Bulk signal must wake instance 1 suspended branch by name. Keys: ' +
-        WorkflowEngine.enqueuedBranchKeys
+        WorkflowResumeEnqueue.enqueuedBranchKeys
       );
       System.assert(
-        WorkflowEngine.enqueuedBranchKeys.contains(
+        WorkflowResumeEnqueue.enqueuedBranchKeys.contains(
           i2 + '::StepContextSignalEngineBranchTest.WakeWaitBranch'
         ),
         'Bulk signal must wake instance 2 suspended branch by name. Keys: ' +
-        WorkflowEngine.enqueuedBranchKeys
+        WorkflowResumeEnqueue.enqueuedBranchKeys
       );
     }
   }

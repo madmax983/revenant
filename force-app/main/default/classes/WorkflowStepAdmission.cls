@@ -143,7 +143,7 @@ public inherited sharing class WorkflowStepAdmission {
       // admission-acquire path above re-hops. A fresh RUN_STEP re-reads this row
       // (now unparked) and runs the step cleanly.
       if (!(Test.isRunningTest() && WorkflowEngine.disableQueueableInTest)) {
-        WorkflowEngine.enqueueResume(instance.Id);
+        WorkflowResumeEnqueue.enqueueResume(instance.Id);
       }
 
       return true;
@@ -235,7 +235,7 @@ public inherited sharing class WorkflowStepAdmission {
       new List<Workflow_Instance__c>{ instance }
     );
     if (!(Test.isRunningTest() && WorkflowEngine.disableQueueableInTest)) {
-      WorkflowEngine.enqueueResume(instance.Id);
+      WorkflowResumeEnqueue.enqueueResume(instance.Id);
     }
   }
 }

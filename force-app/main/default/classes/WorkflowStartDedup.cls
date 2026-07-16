@@ -72,7 +72,7 @@ public inherited sharing class WorkflowStartDedup {
       ORDER BY Terminal_At__c DESC NULLS FIRST, CreatedDate DESC
       LIMIT 1
     ]) {
-      result.put(WorkflowEngine.normalizeKey(inst.Correlation_Key__c), inst);
+      result.put(WorkflowKeys.normalizeKey(inst.Correlation_Key__c), inst);
     }
     return result;
   }
@@ -104,7 +104,7 @@ public inherited sharing class WorkflowStartDedup {
       if (mt == null) {
         continue;
       }
-      String n = WorkflowEngine.normalizeKey((String) ar.get('ck'));
+      String n = WorkflowKeys.normalizeKey((String) ar.get('ck'));
       Datetime existing = maxTimeByKey.get(n);
       if (existing == null || mt > existing) {
         maxTimeByKey.put(n, mt);
@@ -127,7 +127,7 @@ public inherited sharing class WorkflowStartDedup {
   ) {
     Set<String> remaining = new Set<String>();
     for (String k : keys) {
-      if (!result.containsKey(WorkflowEngine.normalizeKey(k))) {
+      if (!result.containsKey(WorkflowKeys.normalizeKey(k))) {
         remaining.add(k);
       }
     }
@@ -153,7 +153,7 @@ public inherited sharing class WorkflowStartDedup {
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC
     ]) {
-      String n = WorkflowEngine.normalizeKey(inst.Correlation_Key__c);
+      String n = WorkflowKeys.normalizeKey(inst.Correlation_Key__c);
       if (
         !result.containsKey(n) && inst.Terminal_At__c == maxTimeByKey.get(n)
       ) {
@@ -203,7 +203,7 @@ public inherited sharing class WorkflowStartDedup {
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC
     ]) {
-      String n = WorkflowEngine.normalizeKey(inst.Correlation_Key__c);
+      String n = WorkflowKeys.normalizeKey(inst.Correlation_Key__c);
       if (!result.containsKey(n)) {
         result.put(n, inst);
       }
@@ -245,7 +245,7 @@ public inherited sharing class WorkflowStartDedup {
       ORDER BY Terminal_At__c DESC NULLS FIRST, CreatedDate DESC
       LIMIT :rowLimit
     ]) {
-      String normalized = WorkflowEngine.normalizeKey(inst.Correlation_Key__c);
+      String normalized = WorkflowKeys.normalizeKey(inst.Correlation_Key__c);
       if (!result.containsKey(normalized)) {
         result.put(normalized, inst);
       }

@@ -3,7 +3,7 @@
  * Drives the bulk-start flow end to end: delegates request validation, correlated
  * dedup and instance insertion to `WorkflowChildBulkPlanner`, then applies input
  * payloads and initial steps and schedules/enqueues or pauses each fresh child.
- * Extracted from `WorkflowEngine`; the resident `WorkflowEngine.normalizeKey` helper
+ * Extracted from `WorkflowEngine`; the resident `WorkflowKeys.normalizeKey` helper
  * and the shared `WorkflowChildService.resolveParentNamespace` lookup are referenced
  * fully qualified. All SOQL/DML executes in system mode.
  */
@@ -50,7 +50,7 @@ public inherited sharing class WorkflowChildBulkService {
       if (
         String.isNotBlank(req.correlationKey) &&
         existingByCorrKey.containsKey(
-          WorkflowEngine.normalizeKey(req.correlationKey)
+          WorkflowKeys.normalizeKey(req.correlationKey)
         )
       ) {
         continue;

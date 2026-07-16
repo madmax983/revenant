@@ -92,7 +92,7 @@ public inherited sharing class WorkflowStepSuspension {
 
     instance.Status__c = 'Suspended';
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    WorkflowEngine.redeliverMatchingSignalsForInstance(
+    WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
       instance.Correlation_Key__c
     );
@@ -176,7 +176,7 @@ public inherited sharing class WorkflowStepSuspension {
 
     instance.Status__c = 'Suspended';
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    WorkflowEngine.redeliverMatchingSignalsForInstance(
+    WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
       instance.Correlation_Key__c
     );
@@ -232,7 +232,7 @@ public inherited sharing class WorkflowStepSuspension {
 
     instance.Status__c = 'Suspended';
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    WorkflowEngine.redeliverMatchingSignalsForInstance(
+    WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
       instance.Correlation_Key__c
     );
@@ -286,7 +286,7 @@ public inherited sharing class WorkflowStepSuspension {
 
     instance.Status__c = 'Suspended';
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    WorkflowEngine.redeliverMatchingSignalsForInstance(
+    WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
       instance.Correlation_Key__c
     );

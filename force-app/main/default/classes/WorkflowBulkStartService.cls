@@ -145,7 +145,7 @@ public inherited sharing class WorkflowBulkStartService {
         continue;
       }
       String key = req.correlationKey;
-      String normKey = WorkflowEngine.normalizeKey(key);
+      String normKey = WorkflowKeys.normalizeKey(key);
 
       if (String.isNotBlank(key) && existingByKey.containsKey(normKey)) {
         results[i] = new WorkflowEngine.StartResult(
@@ -234,7 +234,7 @@ public inherited sharing class WorkflowBulkStartService {
       String key = run.requests[run.insertedReqIndexes[j]].correlationKey;
       if (String.isNotBlank(key)) {
         resolvedIdByKey.put(
-          WorkflowEngine.normalizeKey(key),
+          WorkflowKeys.normalizeKey(key),
           run.insertedInstances[j].Id
         );
       }

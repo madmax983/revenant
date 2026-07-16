@@ -114,7 +114,7 @@ public inherited sharing class WorkflowSignalBatchWake {
       if (sp != null) {
         Database.rollback(sp);
       }
-      WorkflowEngine.clearEnqueueGuards(part.activeInstById.keySet());
+      WorkflowResumeEnqueue.clearEnqueueGuards(part.activeInstById.keySet());
       throw e;
     }
   }
@@ -220,12 +220,12 @@ public inherited sharing class WorkflowSignalBatchWake {
         parallelInstances.add(inst);
         continue;
       }
-      if (!WorkflowEngine.enqueuedInstanceIds.contains(inst.Id)) {
-        WorkflowEngine.enqueuedInstanceIds.add(inst.Id);
+      if (!WorkflowResumeEnqueue.enqueuedInstanceIds.contains(inst.Id)) {
+        WorkflowResumeEnqueue.enqueuedInstanceIds.add(inst.Id);
         instanceIdsToEnqueue.add(inst.Id);
       }
     }
     WorkflowOrchestratorEnqueue.enqueueOrchestrators(instanceIdsToEnqueue);
-    WorkflowEngine.enqueueResumeBulk(parallelInstances);
+    WorkflowBranchResume.enqueueResumeBulk(parallelInstances);
   }
 }

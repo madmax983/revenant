@@ -110,13 +110,10 @@ public inherited sharing class WorkflowUnroutedSweep {
     Set<String> matchInstKeys = new Set<String>();
     for (Workflow_Instance__c inst : matchInsts) {
       String instIdStr = String.valueOf(inst.Id);
-      keyToInst.put(WorkflowEngine.normalizeKey(instIdStr), inst);
+      keyToInst.put(WorkflowKeys.normalizeKey(instIdStr), inst);
       matchInstKeys.add(instIdStr);
       if (String.isNotBlank(inst.Correlation_Key__c)) {
-        keyToInst.put(
-          WorkflowEngine.normalizeKey(inst.Correlation_Key__c),
-          inst
-        );
+        keyToInst.put(WorkflowKeys.normalizeKey(inst.Correlation_Key__c), inst);
         matchInstKeys.add(inst.Correlation_Key__c);
       }
     }
@@ -146,7 +143,7 @@ public inherited sharing class WorkflowUnroutedSweep {
         continue;
       }
       Workflow_Instance__c inst = keyToInst.get(
-        WorkflowEngine.normalizeKey(sig.Correlation_Key__c)
+        WorkflowKeys.normalizeKey(sig.Correlation_Key__c)
       );
       if (inst == null) {
         continue;
@@ -157,6 +154,9 @@ public inherited sharing class WorkflowUnroutedSweep {
       instIdToSignals.get(inst.Id).add(sig);
     }
 
-    WorkflowEngine.redeliverCapturedSignalsBulk(matchInsts, instIdToSignals);
+    WorkflowSignalRedelivery.redeliverCapturedSignalsBulk(
+      matchInsts,
+      instIdToSignals
+    );
   }
 }
