@@ -108,7 +108,7 @@ public inherited sharing class WorkflowOutcomePrepare {
     Workflow_Instance__c freshInstance
   ) {
     if (isTerminalOrTransitioningStatus(freshInstance.Status__c)) {
-      throw new WorkflowException(
+      throw new WorkflowEngine.WorkflowException(
         'Workflow execution was terminated, cancelled, is compensating, or was continued as new.'
       );
     }

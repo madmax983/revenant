@@ -143,7 +143,7 @@ public inherited sharing class WorkflowStepAdvance {
       WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
     );
     if (wflowType == null) {
-      throw new WorkflowException(
+      throw new WorkflowEngine.WorkflowException(
         'Could not resolve workflow definition class: ' +
         instance.Workflow_Name__c
       );

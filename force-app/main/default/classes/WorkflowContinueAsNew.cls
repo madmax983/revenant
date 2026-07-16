@@ -175,7 +175,7 @@ public inherited sharing class WorkflowContinueAsNew {
       Database.insert(nextInstance, true, AccessLevel.SYSTEM_MODE);
     } catch (DmlException ex) {
       if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
-        throw new WorkflowException(
+        throw new WorkflowEngine.WorkflowException(
           'An active workflow already exists with correlation key: ' + newKey
         );
       }

@@ -208,7 +208,7 @@ public inherited sharing class WorkflowStepSuspension {
       result.directive().childRequests == null ||
       result.directive().childRequests.isEmpty()
     ) {
-      throw new WorkflowException(
+      throw new WorkflowEngine.WorkflowException(
         'START_CHILDREN action requires at least one child request.'
       );
     }
