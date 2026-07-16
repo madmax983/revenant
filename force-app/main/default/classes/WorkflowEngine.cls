@@ -2179,7 +2179,7 @@ public inherited sharing class WorkflowEngine {
     outcome.stepExec = ctx.stepExec;
     outcome.result = result;
     outcome.context = context;
-    handleStepResult(outcome);
+    WorkflowStepOutcome.handleStepResult(outcome);
   }
 
   // Resolve and instantiate the WorkflowStep for the active step.
@@ -3088,7 +3088,7 @@ public inherited sharing class WorkflowEngine {
    * so it can never flip a sibling's concurrent claim back to Received.
    * @param context the step context whose claimed signal ids are rolled back
    */
-  private static void rollbackClaimedSignals(StepContext context) {
+  public static void rollbackClaimedSignals(StepContext context) {
     if (context == null) {
       return;
     }
@@ -3298,6 +3298,37 @@ public inherited sharing class WorkflowEngine {
     consumeSignals(toConsume);
   }
 
+  /**
+   * @description Consumes the signals a completing step observed, scoping claim
+   * promotion by the outcome's computed parallel-branch flag. A
+   * no-boolean-parameter seam so the extracted outcome handlers can drive the
+   * ownership-scoped consume without exposing a public Boolean parameter.
+   * @param instanceId Id of the instance whose signals are consumed
+   * @param outcome the step outcome bundle carrying the step context and the
+   * computed parallel-branch flag
+   */
+  public static void markSignalsConsumedForOutcome(
+    Id instanceId,
+    StepOutcomeContext outcome
+  ) {
+    markSignalsConsumed(instanceId, outcome.context, outcome.isParallel);
+  }
+
+  /**
+   * @description Consumes the signals a serial (non-branch) transition observed.
+   * A no-boolean-parameter seam so the extracted SPLIT handler can drive the
+   * consume for its serially-run spawning step without exposing a public Boolean
+   * parameter.
+   * @param instanceId Id of the instance whose signals are consumed
+   * @param context the step context carrying the observed signal ids and names
+   */
+  public static void markSignalsConsumedSerial(
+    Id instanceId,
+    StepContext context
+  ) {
+    markSignalsConsumed(instanceId, context, false);
+  }
+
   private static void populateTelemetry(
     Workflow_Step_Execution__c stepExec,
     Boolean isCrash
@@ -3376,59 +3407,6 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Publishes the union of the events a step buffered via ctx.events().emit() and those
-   * handed to StepResult.complete(next, output, events), coupled to the step's
-   * COMPLETE/SPLIT transition commit (issue #64). Called only from the COMPLETE
-   * and SPLIT paths, in the same transaction as the Completed record write, so
-   * a non-completing transition (retry/yield/suspend/rollback) publishes
-   * nothing. Delegates the actual publish (with DML-budget guard and
-   * fire-and-forget failure isolation) to WorkflowOutboundEventPublisher.
-   * @param result step result whose complete(...) events are published
-   * @param context step context whose buffered emit() events are published
-   */
-  private static void publishOutboundEvents(
-    StepResult result,
-    StepContext context
-  ) {
-    List<SObject> events = new List<SObject>();
-    // Filter null entries from both sources: a null SObject in the EventBus
-    // publish list throws before any per-row SaveResult, which the publisher then
-    // swallows (fire-and-forget) — silently dropping every valid event in the
-    // same batch. ctx.events().emit(null) is already ignored at the buffer; do the same
-    // for the complete(..., events) overload, where an author may have built the
-    // list conditionally.
-    if (context != null) {
-      addNonNullEvents(context.events().getPendingEmits(), events);
-    }
-    if (result != null) {
-      addNonNullEvents(result.directive().outboundEvents, events);
-    }
-    if (events.isEmpty()) {
-      return;
-    }
-    WorkflowOutboundEventPublisher.publish(events);
-  }
-
-  /**
-   * Appends the non-null entries of a source event list onto the publish list.
-   * @param source the candidate events (may be null)
-   * @param events the accumulating publish list
-   */
-  private static void addNonNullEvents(
-    List<SObject> source,
-    List<SObject> events
-  ) {
-    if (source == null) {
-      return;
-    }
-    for (SObject e : source) {
-      if (e != null) {
-        events.add(e);
-      }
-    }
-  }
-
-  /**
    * @description Internal wrapper bundling the values threaded through the
    * step-outcome handlers (handleStepResult, handleCompensationStepResult,
    * persistStepBreadcrumbs) so each takes a single parameter instead of a long
@@ -3440,986 +3418,21 @@ public inherited sharing class WorkflowEngine {
     public StepResult result;
     private List<String> stack;
     public StepContext context;
-    private Boolean isParallel;
+    public Boolean isParallel;
   }
 
-  private static void handleStepResult(StepOutcomeContext outcome) {
-    WorkflowBreadcrumbs.persistStepBreadcrumbs(outcome);
-    // Re-query to avoid overwriting a timeout or finalizer crash status and race conditions
-    Workflow_Instance__c freshInstance = [
-      SELECT
-        Id,
-        Status__c,
-        Current_Step__c,
-        Compensation_Stack__c,
-        Output__c,
-        Parent_Instance__c,
-        Workflow_Name__c,
-        Correlation_Key__c,
-        Root_Correlation_Key__c,
-        Input__c,
-        Definition_Version__c,
-        Previous_Run_At__c,
-        Concurrency_Parked__c,
-        Concurrency_Slot_Held__c,
-        CreatedDate,
-        Progress__c,
-        Causation_Id__c
-      FROM Workflow_Instance__c
-      WHERE Id = :outcome.instance.Id
-      WITH SYSTEM_MODE
-      FOR UPDATE
-    ];
-    if (!prepareStepOutcome(outcome, freshInstance)) {
-      return;
-    }
-    dispatchStepOutcome(outcome);
-  }
-
-  // Prepare the freshly-locked instance for the outcome dispatch. Returns false
-  // when this is a stale completion that must be ignored (already handled).
-  private static Boolean prepareStepOutcome(
-    StepOutcomeContext outcome,
-    Workflow_Instance__c freshInstance
-  ) {
-    if (isStaleCompletion(outcome, freshInstance)) {
-      return false;
-    }
-    applyProgressUpdate(outcome, freshInstance);
-    restoreBlankCurrentStep(outcome, freshInstance);
-    assertInstanceRunnable(freshInstance);
-    outcome.instance = freshInstance;
-    resetTransientRetryCounter(outcome.stepExec);
-    outcome.isParallel =
-      String.isNotBlank(freshInstance.Current_Step__c) &&
-      freshInstance.Current_Step__c.contains(',');
-    persistNewCaptures(outcome);
-    return true;
-  }
-
-  // Verify the completing step is still active in the current step list. If not,
-  // roll back its claimed signals, cancel a still-Running exec, and report stale.
-  private static Boolean isStaleCompletion(
-    StepOutcomeContext outcome,
-    Workflow_Instance__c freshInstance
-  ) {
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    Boolean stepIsActive = false;
-    if (String.isNotBlank(freshInstance.Current_Step__c) && stepExec != null) {
-      for (String activeStep : freshInstance.Current_Step__c.split(',')) {
-        if (activeStep.trim() == stepExec.Step_Name__c) {
-          stepIsActive = true;
-          break;
-        }
-      }
-    }
-    if (stepIsActive) {
-      return false;
-    }
-    rollbackClaimedSignals(outcome.context);
-    if (
-      stepExec != null &&
-      stepExec.Id != null &&
-      stepExec.Status__c == 'Running'
-    ) {
-      stepExec.Status__c = 'Cancelled';
-      Database.update(stepExec, true, AccessLevel.SYSTEM_MODE);
-    }
-    return true;
-  }
-
-  // Persist reported progress onto the fresh instance before dispatch.
-  private static void applyProgressUpdate(
-    StepOutcomeContext outcome,
-    Workflow_Instance__c freshInstance
-  ) {
-    StepContext context = outcome.context;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    if (context != null && context.progress().isProgressReported()) {
-      String progJson = context.progress().getProgressJson();
-      freshInstance.Progress__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-        freshInstance.Id,
-        progJson,
-        'Progress_' +
-        (stepExec != null && String.isNotBlank(stepExec.Step_Name__c)
-          ? stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-          : 'Default')
-      );
-    }
-  }
-
-  // Restore a blanked current step from the pre-drive instance snapshot.
-  private static void restoreBlankCurrentStep(
-    StepOutcomeContext outcome,
-    Workflow_Instance__c freshInstance
-  ) {
-    Workflow_Instance__c instance = outcome.instance;
-    if (
-      String.isBlank(freshInstance.Current_Step__c) &&
-      String.isNotBlank(instance.Current_Step__c)
-    ) {
-      freshInstance.Current_Step__c = instance.Current_Step__c;
-    }
-  }
-
-  // Guard against a terminal/compensating instance and flip Pending/Suspended to
-  // Running so the outcome dispatch always sees a runnable instance.
-  private static void assertInstanceRunnable(
-    Workflow_Instance__c freshInstance
-  ) {
-    if (isTerminalOrTransitioningStatus(freshInstance.Status__c)) {
-      throw new WorkflowException(
-        'Workflow execution was terminated, cancelled, is compensating, or was continued as new.'
-      );
-    }
-    if (
-      freshInstance.Status__c == 'Pending' ||
-      freshInstance.Status__c == 'Suspended'
-    ) {
-      freshInstance.Status__c = 'Running';
-    }
-  }
-
-  // True when a status is terminal, compensating, cancelling, or continued-as-new.
-  private static Boolean isTerminalOrTransitioningStatus(String status) {
-    return status == 'Failed' ||
-      status == 'Compensating' ||
-      status == 'Compensated' ||
-      status == 'CompensationFailed' ||
-      status == 'Cancelled' ||
-      status == 'Cancelling' ||
-      status == 'ContinuedAsNew';
-  }
-
-  // Reaching handleStepResult means the instance lock cleared, so reset the
-  // consecutive transient-retry counter on the step.
-  private static void resetTransientRetryCounter(
-    Workflow_Step_Execution__c stepExec
-  ) {
-    if (
-      stepExec != null &&
-      stepExec.Id != null &&
-      stepExec.Transient_Retry_Count__c != null &&
-      stepExec.Transient_Retry_Count__c > 0
-    ) {
-      // Targeted single-field update so this early reset never persists any other
-      // in-memory staging the outcome branches below have yet to commit.
-      Database.update(
-        new Workflow_Step_Execution__c(
-          Id = stepExec.Id,
-          Transient_Retry_Count__c = 0
-        ),
-        true,
-        AccessLevel.SYSTEM_MODE
-      );
-      stepExec.Transient_Retry_Count__c = 0;
-    }
-  }
-
-  // Persist capture-once values produced during this execution (once, before the
-  // action dispatch, so every outcome durably records new captures).
-  private static void persistNewCaptures(StepOutcomeContext outcome) {
-    StepContext context = outcome.context;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    Workflow_Instance__c instance = outcome.instance;
-    if (context.captures().hasNewCaptures()) {
-      String capturedJson = context.captures().getCapturedValuesJson();
-      stepExec.Captured_Values__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-        instance.Id,
-        capturedJson,
-        'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-      );
-    }
-  }
-
-  // Dispatch the step outcome to the matching action handler.
-  private static void dispatchStepOutcome(StepOutcomeContext outcome) {
-    if (dispatchTerminalOrAdvanceOutcome(outcome)) {
-      return;
-    }
-    dispatchSuspendingOutcome(outcome);
-  }
-
-  // Handlers that advance, split, retry, continue-as-new, or terminally fail the
-  // instance. Returns true when the action was handled here.
-  private static Boolean dispatchTerminalOrAdvanceOutcome(
-    StepOutcomeContext outcome
-  ) {
-    StepResult.ActionType action = outcome.result.directive().action;
-    if (action == StepResult.ActionType.COMPLETE) {
-      handleCompleteOutcome(outcome);
-      return true;
-    }
-    if (action == StepResult.ActionType.SPLIT) {
-      handleSplitOutcome(outcome);
-      return true;
-    }
-    if (action == StepResult.ActionType.RETRY) {
-      handleRetryOutcome(outcome);
-      return true;
-    }
-    if (action == StepResult.ActionType.CONTINUE_AS_NEW) {
-      handleContinueAsNewOutcome(outcome);
-      return true;
-    }
-    if (action == StepResult.ActionType.FAIL) {
-      handleFailOutcome(outcome);
-      return true;
-    }
-    return false;
-  }
-
-  // Handlers that suspend the instance awaiting an external event.
-  private static void dispatchSuspendingOutcome(StepOutcomeContext outcome) {
-    StepResult.ActionType action = outcome.result.directive().action;
-    if (action == StepResult.ActionType.YIELD) {
-      handleYieldOutcome(outcome);
-    } else if (action == StepResult.ActionType.SUSPEND) {
-      handleSuspendOutcome(outcome);
-    } else if (action == StepResult.ActionType.SLEEP) {
-      handleSleepOutcome(outcome);
-    } else if (action == StepResult.ActionType.START_CHILD) {
-      handleStartChildOutcome(outcome);
-    } else if (action == StepResult.ActionType.START_CHILDREN) {
-      handleStartChildrenOutcome(outcome);
-    } else if (action == StepResult.ActionType.WAIT_FOR_APPROVAL) {
-      handleWaitForApprovalOutcome(outcome);
-    }
-  }
-
-  // COMPLETE: durably complete the step and advance (serial) or join (parallel).
-  private static void handleCompleteOutcome(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-    StepContext context = outcome.context;
-    Boolean isParallel = outcome.isParallel;
-    // Step is complete. Store output.
-    stepExec.Status__c = 'Completed';
-    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      instance.Id,
-      result.directive().outputJson,
-      'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-    );
-    saveStepExec(stepExec);
-
-    // Tie signal consumption to the step's durable COMPLETE transition: only
-    // now (not on yield/retry/suspend) are the signals this step observed
-    // marked consumed, so an at-least-once redelivered duplicate cannot be
-    // reprocessed by a later step. A parallel branch consumes only its own
-    // claimed ids so it cannot strip a sibling branch's signal.
-    markSignalsConsumed(instance.Id, context, isParallel);
-
-    // Effectively-once outbound emit (issue #64): the step's buffered domain
-    // events publish here, in the same transaction that just wrote the
-    // Completed record and before the next step's RUN_STEP event is enqueued.
-    // Anything buffered on a yield/retry/suspend re-execution was discarded
-    // with that context, so a re-run before this commit publishes nothing.
-    publishOutboundEvents(result, context);
-
-    updateCompensationStackIfNeeded(instance, stepExec);
-
-    if (!isParallel) {
-      advanceSerialStep(outcome);
-      return;
-    }
-
-    completeParallelBranch(outcome);
-  }
-
-  // Push the just-completed step onto the compensation stack when it is a
-  // CompensatableStep, persisting the updated stack immediately.
-  private static void updateCompensationStackIfNeeded(
-    Workflow_Instance__c instance,
-    Workflow_Step_Execution__c stepExec
-  ) {
-    Type stepType = WorkflowTypeResolver.resolve(
-      stepExec.Step_Name__c,
-      WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
-    );
-    if (stepType == null) {
-      return;
-    }
-    Object stepInstanceObj = stepType.newInstance();
-    if (!(stepInstanceObj instanceof CompensatableStep)) {
-      return;
-    }
-    List<String> stack = new List<String>();
-    if (String.isNotBlank(instance.Compensation_Stack__c)) {
-      stack = (List<String>) JSON.deserialize(
-        instance.Compensation_Stack__c,
-        List<String>.class
-      );
-    }
-    stack.add(stepExec.Step_Name__c);
-    instance.Compensation_Stack__c = JSON.serialize(stack);
-    // If not parallel or if parallel and not all done, update here so stack is saved.
-    // (Parallel allDone paths will update instance later, but doing a single update here is safe).
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-  }
-
-  // Serial COMPLETE: resolve the next step and either finish the workflow or
-  // advance to the next step.
-  private static void advanceSerialStep(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-
-    String nextStepName = resolveNextStepName(
-      instance,
-      instance.Current_Step__c,
-      result
-    );
-
-    if (String.isBlank(nextStepName)) {
-      // Workflow is finished
-      completeWorkflowInstance(
-        instance,
-        result.directive().outputJson,
-        'Output_Final'
-      );
-      return;
-    }
-
-    // Advance to next step
-    instance.Current_Step__c = nextStepName;
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-    Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
-    nextStepExec.Workflow_Instance__c = instance.Id;
-    nextStepExec.Step_Name__c = nextStepName;
-    nextStepExec.Status__c = 'Pending';
-    nextStepExec.Input__c = stepExec.Output__c;
-    nextStepExec.Retry_Count__c = 0;
-    Database.insert(nextStepExec, true, AccessLevel.SYSTEM_MODE);
-
-    // Pass the in-memory instance (Current_Step__c just advanced to nextStepName,
-    // committed above) so the per-advance watchdog scheduling does not re-query the
-    // instance on every step — that re-read is what exhausts the SOQL limit on a
-    // long synchronous drive.
-    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance);
-    WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, null);
-  }
-
-  // Resolve the workflow definition class for an instance, throwing when it
-  // cannot be resolved.
-  private static WorkflowDefinition resolveWorkflowDefinition(
-    Workflow_Instance__c instance
-  ) {
-    Type wflowType = WorkflowTypeResolver.resolve(
-      instance.Workflow_Name__c,
-      WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
-    );
-    if (wflowType == null) {
-      throw new WorkflowException(
-        'Could not resolve workflow definition class: ' +
-        instance.Workflow_Name__c
-      );
-    }
-    return (WorkflowDefinition) wflowType.newInstance();
-  }
-
-  // Resolve the next step name, honoring VersionedWorkflow when applicable.
-  private static String resolveNextStepName(
-    Workflow_Instance__c instance,
-    String currentStepArg,
-    StepResult result
-  ) {
-    WorkflowDefinition def = resolveWorkflowDefinition(instance);
-    if (def instanceof VersionedWorkflow) {
-      return ((VersionedWorkflow) def)
-        .getNextStep(
-          currentStepArg,
-          result,
-          instance.Definition_Version__c != null
-            ? (Integer) instance.Definition_Version__c
-            : 1
-        );
-    }
-    return def.getNextStep(currentStepArg, result);
-  }
-
-  // Terminal completion of a workflow instance: store final output, clear the
-  // current step, notify the parent, and publish the lifecycle event.
-  private static void completeWorkflowInstance(
-    Workflow_Instance__c instance,
-    String outputJson,
-    String payloadLabel
-  ) {
-    instance.Status__c = 'Completed';
-    instance.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      instance.Id,
-      outputJson,
-      payloadLabel
-    );
-    instance.Current_Step__c = null;
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-    // Parent notification publishes the load-bearing Workflow_Event__e, so it
-    // runs BEFORE the best-effort lifecycle publish (first claim on DML budget).
-    WorkflowParentNotifier.notifyParentCompletion(instance);
-
-    // Fire-and-forget outbound lifecycle event on terminal transition.
-    WorkflowLifecyclePublisher.publish(instance);
-  }
-
-  // Parallel COMPLETE: when a branch finishes, either mark the instance
-  // suspended/failed (not all done) or proceed to the join step.
-  private static void completeParallelBranch(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    List<String> activeParallelSteps = instance.Current_Step__c.split(',');
-    Map<String, Workflow_Step_Execution__c> latestExecByStep = loadLatestParallelExecs(
-      instance.Id,
-      activeParallelSteps
-    );
-
-    if (!isAllParallelDone(activeParallelSteps, latestExecByStep)) {
-      applyIncompleteParallelStatus(
-        instance,
-        activeParallelSteps,
-        latestExecByStep
-      );
-      return;
-    }
-
-    proceedToJoin(outcome, activeParallelSteps, latestExecByStep);
-  }
-
-  // Load the latest step execution per active parallel step.
-  private static Map<String, Workflow_Step_Execution__c> loadLatestParallelExecs(
-    Id instanceId,
-    List<String> activeParallelSteps
-  ) {
-    List<Workflow_Step_Execution__c> parallelExecs = [
-      SELECT Step_Name__c, Status__c, Output__c, CPU_Time_Ms__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Step_Name__c IN :activeParallelSteps
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-    ];
-
-    Map<String, Workflow_Step_Execution__c> latestExecByStep = new Map<String, Workflow_Step_Execution__c>();
-    for (Workflow_Step_Execution__c pe : parallelExecs) {
-      if (!latestExecByStep.containsKey(pe.Step_Name__c)) {
-        latestExecByStep.put(pe.Step_Name__c, pe);
-      }
-    }
-    return latestExecByStep;
-  }
-
-  // True when every active parallel branch is Completed or OperatorSkipped.
-  private static Boolean isAllParallelDone(
-    List<String> activeParallelSteps,
-    Map<String, Workflow_Step_Execution__c> latestExecByStep
-  ) {
-    for (String ps : activeParallelSteps) {
-      Workflow_Step_Execution__c pe = latestExecByStep.get(ps);
-      if (
-        pe == null ||
-        (pe.Status__c != 'Completed' &&
-        pe.Status__c != 'OperatorSkipped')
-      ) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  // Not-all-done parallel branches: suspend when only pending work remains, or
-  // fail when the only non-done branches failed.
-  private static void applyIncompleteParallelStatus(
-    Workflow_Instance__c instance,
-    List<String> activeParallelSteps,
-    Map<String, Workflow_Step_Execution__c> latestExecByStep
-  ) {
-    String verdict = classifyIncompleteParallel(
-      activeParallelSteps,
-      latestExecByStep
-    );
-    if (verdict == 'SUSPEND') {
-      instance.Status__c = 'Suspended';
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    } else if (verdict == 'FAIL') {
-      instance.Status__c = 'Failed';
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    }
-  }
-
-  // Classify the not-all-done branch set as SUSPEND, FAIL, or NONE.
-  private static String classifyIncompleteParallel(
-    List<String> activeParallelSteps,
-    Map<String, Workflow_Step_Execution__c> latestExecByStep
-  ) {
-    Boolean hasPending = false;
-    Boolean hasRunning = false;
-    Boolean hasFailed = false;
-    for (String ps : activeParallelSteps) {
-      String cat = parallelBranchCategory(latestExecByStep.get(ps));
-      if (cat == 'RUNNING') {
-        hasRunning = true;
-      } else if (cat == 'FAILED') {
-        hasFailed = true;
-      } else if (cat == 'PENDING') {
-        hasPending = true;
-      }
-    }
-    return parallelVerdict(hasPending, hasRunning, hasFailed);
-  }
-
-  // Category of a single parallel branch's latest execution.
-  private static String parallelBranchCategory(Workflow_Step_Execution__c pe) {
-    if (pe == null) {
-      return 'RUNNING';
-    }
-    if (pe.Status__c == 'Running') {
-      return 'RUNNING';
-    }
-    if (pe.Status__c == 'Failed') {
-      return 'FAILED';
-    }
-    if (pe.Status__c == 'Retrying') {
-      return 'PENDING';
-    }
-    if (pe.Status__c == 'Pending') {
-      return pe.CPU_Time_Ms__c != null ? 'PENDING' : 'RUNNING';
-    }
-    return 'NONE';
-  }
-
-  // Overall verdict for a not-all-done parallel branch set.
-  private static String parallelVerdict(
-    Boolean hasPending,
-    Boolean hasRunning,
-    Boolean hasFailed
-  ) {
-    if (hasPending && !hasRunning) {
-      return 'SUSPEND';
-    }
-    if (!hasPending && !hasRunning && hasFailed) {
-      return 'FAIL';
-    }
-    return 'NONE';
-  }
-
-  // All parallel branches done: resolve the join step and either finish the
-  // workflow or create the join step execution.
-  private static void proceedToJoin(
-    StepOutcomeContext outcome,
-    List<String> activeParallelSteps,
-    Map<String, Workflow_Step_Execution__c> latestExecByStep
-  ) {
-    Workflow_Instance__c instance = outcome.instance;
-
-    // All parallel steps completed. Proceed to Join step.
-    List<Workflow_Step_Execution__c> spawningSteps = [
-      SELECT Step_Name__c, Output__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instance.Id
-        AND Status__c IN ('Completed', 'OperatorSkipped')
-        AND Step_Name__c NOT IN :activeParallelSteps
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
-    ];
-
-    String spawningStepName = !spawningSteps.isEmpty()
-      ? spawningSteps[0].Step_Name__c
-      : '';
-    StepResult mockResult = StepResult.complete(
-      null,
-      !spawningSteps.isEmpty() ? spawningSteps[0].Output__c : null
-    );
-
-    String nextStepName = resolveNextStepName(
-      instance,
-      spawningStepName,
-      mockResult
-    );
-
-    String joinInputJson = JSON.serialize(
-      buildJoinInput(activeParallelSteps, latestExecByStep)
-    );
-
-    if (String.isBlank(nextStepName)) {
-      completeWorkflowInstance(instance, joinInputJson, 'Output_Join');
-      return;
-    }
-
-    createJoinStep(instance, nextStepName, joinInputJson);
-  }
-
-  // Assemble the join step's input map from each branch's resolved output.
-  private static Map<String, Object> buildJoinInput(
-    List<String> activeParallelSteps,
-    Map<String, Workflow_Step_Execution__c> latestExecByStep
-  ) {
-    Map<String, Object> joinInput = new Map<String, Object>();
-    for (String ps : activeParallelSteps) {
-      Workflow_Step_Execution__c pe = latestExecByStep.get(ps);
-      if (pe == null) {
-        continue;
-      }
-      Object outputVal = null;
-      String resolvedOutput = WorkflowPayloadOffload.resolvePayload(
-        pe.Output__c
-      );
-      if (String.isNotBlank(resolvedOutput)) {
-        try {
-          outputVal = JSON.deserializeUntyped(resolvedOutput);
-        } catch (Exception ignored) {
-          // Output was not JSON; fall back to the raw string value.
-          outputVal = resolvedOutput;
-        }
-      }
-      joinInput.put(ps, outputVal);
-    }
-    return joinInput;
-  }
-
-  // Create the join step execution and advance the instance to it.
-  private static void createJoinStep(
-    Workflow_Instance__c instance,
-    String nextStepName,
-    String joinInputJson
-  ) {
-    Workflow_Step_Execution__c joinStepExec = new Workflow_Step_Execution__c();
-    joinStepExec.Workflow_Instance__c = instance.Id;
-    joinStepExec.Step_Name__c = nextStepName;
-    joinStepExec.Status__c = 'Pending';
-    joinStepExec.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      instance.Id,
-      joinInputJson,
-      'Input_' + nextStepName.replaceAll('[^a-zA-Z0-9]', '_')
-    );
-    joinStepExec.Retry_Count__c = 0;
-    Database.insert(joinStepExec, true, AccessLevel.SYSTEM_MODE);
-
-    instance.Current_Step__c = nextStepName;
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
-    WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, null);
-  }
-
-  // YIELD: save state to Output and re-run in a new transaction.
-  private static void handleYieldOutcome(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-    StepContext context = outcome.context;
-    Boolean isParallel = outcome.isParallel;
-    // Step yielded (e.g. Apex Cursor chunk). Save state to Output and run again in a new transaction.
-    if (isParallel) {
-      rollbackClaimedSignals(context);
-    }
-    stepExec.Status__c = 'Running';
-    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      instance.Id,
-      result.directive().stepStateJson,
-      'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-    );
-    saveStepExec(stepExec);
-
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
-    WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, null);
-  }
-
-  // SUSPEND: save state and suspend awaiting an external signal.
-  private static void handleSuspendOutcome(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-    StepContext context = outcome.context;
-    Boolean isParallel = outcome.isParallel;
-    // Step suspended (waiting for external signal). Save state and mark instance.
-    if (isParallel) {
-      rollbackClaimedSignals(context);
-    }
-    stepExec.Status__c = 'Pending';
-    String suspendStateJson;
-    if (String.isNotBlank(result.directive().timeout.step)) {
-      // Timed suspend (issue #35): persist the fallback step in a reserved key
-      // so the watchdog can route to it when the deadline elapses.
-      suspendStateJson = JSON.serialize(
-        new Map<String, Object>{
-          '$timeoutStep' => result.directive().timeout.step
-        }
-      );
-      instance.Sleep_Until__c = DateTime.now()
-        .addSeconds(result.directive().timeout.seconds);
-    } else {
-      // Explicit stepStateJson is preserved; no-arg suspend() nulls Output__c so
-      // stale yield checkpoints from a prior YIELD in the same execution don't
-      // survive into a retry and cause duplicate-spawn collisions.
-      suspendStateJson = result.directive().stepStateJson;
-      // A plain (deadline-less) suspend must not inherit a stale timer left by
-      // an earlier timed wait or a manual resume, or the watchdog would wake it
-      // early. Reset the deadline defensively (issue #35).
-      instance.Sleep_Until__c = null;
-    }
-    stepExec.Output__c = String.isNotBlank(suspendStateJson)
-      ? WorkflowPayloadOffload.savePayloadIfNeeded(
-          instance.Id,
-          suspendStateJson,
-          'State_Suspend_' +
-          stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-        )
-      : null;
-    saveStepExec(stepExec);
-
-    instance.Status__c = 'Suspended';
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    redeliverMatchingSignalsForInstance(
-      instance.Id,
-      instance.Correlation_Key__c
-    );
-  }
-
-  // SLEEP: suspend until the requested sleep deadline.
-  private static void handleSleepOutcome(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-    StepContext context = outcome.context;
-    Boolean isParallel = outcome.isParallel;
-    // Step requested sleep
-    if (isParallel) {
-      rollbackClaimedSignals(context);
-    }
-    stepExec.Status__c = 'Pending';
-    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      instance.Id,
-      result.directive().stepStateJson,
-      'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-    );
-    saveStepExec(stepExec);
-
-    instance.Status__c = 'Suspended';
-    instance.Sleep_Until__c = DateTime.now()
-      .addSeconds(result.directive().sleepDurationSeconds);
-    instance.Async_Job_Id__c = WorkflowRetrySleepScheduler.scheduleSleepResume(
-      instance.Id,
-      stepExec.Step_Name__c,
-      result.directive().sleepDurationSeconds
-    );
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-  }
-
-  // START_CHILD: suspend and start a single child workflow.
-  private static void handleStartChildOutcome(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-    StepContext context = outcome.context;
-    Boolean isParallel = outcome.isParallel;
-    // Step requested child workflow.
-    //
-    // Observed signals are intentionally NOT consumed here. START_CHILD
-    // suspends and re-runs the SAME step when the child completes (like
-    // SUSPEND/WAIT_FOR_APPROVAL), rather than transitioning forward like
-    // COMPLETE/SPLIT. Consuming on this path would break a step that re-reads
-    // its kickoff signal on resume to confirm it is still in the active flow.
-    // A START_CHILD step should therefore check the child-completion signal
-    // before re-acting on a kickoff signal (or stash needed data in step state).
-    if (isParallel) {
-      rollbackClaimedSignals(context);
-    }
-    stepExec.Status__c = 'Pending';
-    Map<String, Object> childInfo = new Map<String, Object>{
-      'childWorkflowName' => result.directive().childWorkflowName,
-      'childCorrelationKey' => result.directive().childCorrelationKey
-    };
-    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      instance.Id,
-      JSON.serialize(childInfo),
-      'State_ChildInfo_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-    );
-    saveStepExec(stepExec);
-
-    instance.Status__c = 'Suspended';
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    redeliverMatchingSignalsForInstance(
-      instance.Id,
-      instance.Correlation_Key__c
-    );
-
-    WorkflowChildService.ChildWorkflowStartRequest childReq = new WorkflowChildService.ChildWorkflowStartRequest();
-    childReq.parentId = instance.Id;
-    childReq.workflowName = result.directive().childWorkflowName;
-    childReq.correlationKey = result.directive().childCorrelationKey;
-    childReq.inputJson = result.directive().childInputJson;
-    WorkflowChildService.startChildWorkflow(childReq);
-  }
-
-  // START_CHILDREN: suspend and start multiple child workflows.
-  private static void handleStartChildrenOutcome(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-    StepContext context = outcome.context;
-    Boolean isParallel = outcome.isParallel;
-    if (
-      result.directive().childRequests == null ||
-      result.directive().childRequests.isEmpty()
-    ) {
-      throw new WorkflowException(
-        'START_CHILDREN action requires at least one child request.'
-      );
-    }
-    if (isParallel) {
-      rollbackClaimedSignals(context);
-    }
-    stepExec.Status__c = 'Pending';
-    List<String> childKeys = new List<String>();
-    for (StepResult.ChildRequest req : result.directive().childRequests) {
-      childKeys.add(req.correlationKey);
-    }
-    Map<String, Object> state = new Map<String, Object>{
-      'childCorrelationKeys' => childKeys
-    };
-    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      instance.Id,
-      JSON.serialize(state),
-      'State_ChildKeys_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-    );
-    saveStepExec(stepExec);
-
-    instance.Status__c = 'Suspended';
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    redeliverMatchingSignalsForInstance(
-      instance.Id,
-      instance.Correlation_Key__c
-    );
-
-    WorkflowChildBulkService.startChildWorkflows(
-      instance.Id,
-      result.directive().childRequests
-    );
-  }
-
-  // WAIT_FOR_APPROVAL: suspend awaiting an approval signal.
-  private static void handleWaitForApprovalOutcome(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-    StepContext context = outcome.context;
-    Boolean isParallel = outcome.isParallel;
-    if (isParallel) {
-      rollbackClaimedSignals(context);
-    }
-    stepExec.Status__c = 'Pending';
-    Map<String, Object> state = new Map<String, Object>{
-      'waitingForApproval' => true,
-      'approvalKey' => result.directive().approvalKey,
-      'approvalRole' => result.directive().approvalRole
-    };
-    if (String.isNotBlank(result.directive().timeout.step)) {
-      // Timed approval (issue #35): add fallback step so watchdog can route.
-      state.put('$timeoutStep', result.directive().timeout.step);
-      instance.Sleep_Until__c = DateTime.now()
-        .addSeconds(result.directive().timeout.seconds);
-    } else {
-      // A deadline-less approval wait must not inherit a stale timer left by an
-      // earlier timed wait or a manual resume (issue #35).
-      instance.Sleep_Until__c = null;
-    }
-    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      instance.Id,
-      JSON.serialize(state),
-      'State_Approval_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-    );
-    saveStepExec(stepExec);
-
-    instance.Status__c = 'Suspended';
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    redeliverMatchingSignalsForInstance(
-      instance.Id,
-      instance.Correlation_Key__c
-    );
-  }
-
-  // SPLIT: complete the spawning step and fan out parallel branches.
-  private static void handleSplitOutcome(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-    StepContext context = outcome.context;
-    stepExec.Status__c = 'Completed';
-    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      instance.Id,
-      result.directive().parallelInputJson != null
-        ? result.directive().parallelInputJson
-        : result.directive().outputJson,
-      'Output_Split_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-    );
-    saveStepExec(stepExec);
-
-    // The spawning step durably completed; consume the signals it observed so
-    // they are not re-loaded into the parallel branches it fans out to. The
-    // spawning step runs serially (it is the fan-out point, not a branch) and
-    // does not claim, so it consumes still-Received rows plus same-name
-    // duplicate cleanup.
-    markSignalsConsumed(instance.Id, context, false);
-
-    String parallelStepsStr = String.join(
-      result.directive().parallelStepNames,
-      ','
-    );
-    instance.Current_Step__c = parallelStepsStr;
-    instance.Status__c = 'Running';
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-    List<Workflow_Step_Execution__c> parallelExecs = new List<Workflow_Step_Execution__c>();
-    for (String ps : result.directive().parallelStepNames) {
-      Workflow_Step_Execution__c pe = new Workflow_Step_Execution__c();
-      pe.Workflow_Instance__c = instance.Id;
-      pe.Step_Name__c = ps;
-      pe.Status__c = 'Pending';
-      pe.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-        instance.Id,
-        result.directive().parallelInputJson != null
-          ? result.directive().parallelInputJson
-          : stepExec.Output__c,
-        'Input_Parallel_' + ps.replaceAll('[^a-zA-Z0-9]', '_')
-      );
-      pe.Retry_Count__c = 0;
-      Integer timeout = WorkflowStepTimeoutConfig.getStepTimeoutSeconds(
-        ps,
-        WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
-      );
-      if (timeout != null && timeout > 0) {
-        pe.Timeout_At__c = DateTime.now().addSeconds(timeout);
-      }
-      parallelExecs.add(pe);
-    }
-    Database.insert(parallelExecs, true, AccessLevel.SYSTEM_MODE);
-
-    WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
-    for (String ps : result.directive().parallelStepNames) {
-      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instance.Id, ps);
-    }
-
-    // Effectively-once outbound emit (issue #64): publish AFTER the SPLIT's
-    // required durable DML — the instance update, the branch-execution inserts,
-    // and the per-branch enqueueOrchestrator hand-offs (which scale with the
-    // fan-out). Publishing here means the best-effort emit can never consume the
-    // DML budget those writes need and roll back the SPLIT commit. The events
-    // still ride this same transaction, so a rollback anywhere above publishes
-    // nothing, and they remain part of the SPLIT commit that gates the branches.
-    publishOutboundEvents(result, context);
-  }
-
-  // Shared retry persistence: merge the sanitized policy's maximumAttempts into
-  // the step's captured values and re-offload them. Extracted from the forward
-  // (handleRetryOutcome) and compensation (handleCompensationRetry) retry paths,
-  // which persisted identical captures state before diverging on the
-  // retries-exhausted branch. Behavior is byte-identical to the inlined blocks.
-  private static void persistRetryMaxAttempts(
+  /**
+   * @description Shared retry persistence: merges the sanitized policy's
+   * maximumAttempts into the step's captured values and re-offloads them.
+   * Extracted from the forward and compensation retry paths, which persisted
+   * identical captures state before diverging on the retries-exhausted branch.
+   * Behavior is byte-identical to the inlined blocks. Public so the extracted
+   * outcome retry handler can invoke it, called qualified.
+   * @param instance the workflow instance owning the step
+   * @param stepExec the step execution whose captured values are updated
+   * @param policy the sanitized retry policy whose maximumAttempts is persisted
+   */
+  public static void persistRetryMaxAttempts(
     Workflow_Instance__c instance,
     Workflow_Step_Execution__c stepExec,
     RetryPolicy policy
@@ -4447,12 +3460,18 @@ public inherited sharing class WorkflowEngine {
     );
   }
 
-  // Shared exponential-backoff reschedule: mark the step Retrying, compute the
-  // capped backoff delay, suspend the instance and arm the retry job. Extracted
-  // from the not-yet-exhausted branch of handleRetryOutcome and
-  // handleCompensationRetry, which scheduled the next attempt identically.
-  // Behavior is byte-identical to the inlined else-branches.
-  private static void scheduleExponentialRetry(
+  /**
+   * @description Shared exponential-backoff reschedule: marks the step Retrying,
+   * computes the capped backoff delay, suspends the instance and arms the retry
+   * job. Extracted from the not-yet-exhausted branch of the forward and
+   * compensation retry paths, which scheduled the next attempt identically.
+   * Behavior is byte-identical to the inlined else-branches. Public so the
+   * extracted outcome retry handler can invoke it, called qualified.
+   * @param instance the workflow instance to suspend until the next attempt
+   * @param stepExec the step execution being rescheduled
+   * @param policy the sanitized retry policy driving the backoff computation
+   */
+  public static void scheduleExponentialRetry(
     Workflow_Instance__c instance,
     Workflow_Step_Execution__c stepExec,
     RetryPolicy policy
@@ -4477,296 +3496,6 @@ public inherited sharing class WorkflowEngine {
       delay
     );
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-  }
-
-  // RETRY: apply backoff, or fail the instance when retries are exhausted.
-  private static void handleRetryOutcome(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-    StepContext context = outcome.context;
-    Boolean isParallel = outcome.isParallel;
-    // Step requested retry
-    if (isParallel) {
-      rollbackClaimedSignals(context);
-    }
-    stepExec.Retry_Count__c += 1;
-
-    // Get and sanitize retry policy
-    RetryPolicy policy = sanitizePolicy(result.directive().retry.policy);
-
-    persistRetryMaxAttempts(instance, stepExec, policy);
-
-    if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
-      stepExec.Status__c = 'Failed';
-      stepExec.Error_Details__c =
-        'Max retries (' +
-        policy.maximumAttempts +
-        ') exceeded.';
-      saveStepExec(stepExec);
-
-      FailInstanceRequest maxRetriesReq = new FailInstanceRequest();
-      maxRetriesReq.instanceId = instance.Id;
-      maxRetriesReq.stepName = instance.Current_Step__c;
-      maxRetriesReq.errorMessage = 'Max retries exceeded.';
-      maxRetriesReq.failureCategory = CAT_RETRIES_EXHAUSTED;
-      failWorkflowInstance(maxRetriesReq);
-    } else {
-      scheduleExponentialRetry(instance, stepExec, policy);
-    }
-  }
-
-  // CONTINUE_AS_NEW: finish this instance and spawn a successor.
-  private static void handleContinueAsNewOutcome(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-    StepContext context = outcome.context;
-    Boolean isParallel = outcome.isParallel;
-    if (isParallel) {
-      rollbackClaimedSignals(context);
-    }
-    stepExec.Status__c = 'ContinuedAsNew';
-    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      instance.Id,
-      result.directive().continuation.nextInputJson,
-      'ContinueInput_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-    );
-    saveStepExec(stepExec);
-
-    // Resolve the new correlation key
-    String newKey = resolveContinueAsNewKey(
-      instance.Correlation_Key__c,
-      result.directive().continuation.newCorrelationKey
-    );
-
-    // Mark current instance as ContinuedAsNew
-    instance.Status__c = 'ContinuedAsNew';
-    instance.Current_Step__c = null;
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-    spawnContinueAsNewSuccessor(instance, result, newKey);
-  }
-
-  /**
-   * Resolves the successor's execution deadline from an execution-timeout-
-   * configurable workflow definition.
-   * @param defObj the instantiated workflow definition object
-   * @return the deadline DateTime, or null when no positive execution timeout is
-   *   configured
-   */
-  private static Datetime resolveExecutionDeadline(Object defObj) {
-    if (!(defObj instanceof ExecutionTimeoutConfigurable)) {
-      return null;
-    }
-    Integer timeoutSecs = ((ExecutionTimeoutConfigurable) defObj)
-      .getExecutionTimeoutSeconds();
-    return timeoutSecs != null ? DateTime.now().addSeconds(timeoutSecs) : null;
-  }
-
-  // Create and enqueue the successor instance for a CONTINUE_AS_NEW transition.
-  private static void spawnContinueAsNewSuccessor(
-    Workflow_Instance__c instance,
-    StepResult result,
-    String newKey
-  ) {
-    // Resolve initial step for successor instance
-    String initialStep = null;
-    Datetime nextDeadline = null;
-    Type wflowType = WorkflowTypeResolver.resolve(
-      instance.Workflow_Name__c,
-      WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
-    );
-    if (wflowType != null) {
-      Object defObj = wflowType.newInstance();
-      if (defObj instanceof WorkflowDefinition) {
-        initialStep = ((WorkflowDefinition) defObj).getInitialStep();
-      }
-      nextDeadline = resolveExecutionDeadline(defObj);
-    }
-
-    // Spawn successor instance. Carry the chain's root correlation key forward
-    // unchanged so the whole continue-as-new chain shares one stable key that
-    // external callers can correlate the terminal lifecycle event against.
-    // Fall back to the predecessor's own key if the root was never populated
-    // (pre-existing data created before the Root_Correlation_Key__c field).
-    String rootKey = String.isNotBlank(instance.Root_Correlation_Key__c)
-      ? instance.Root_Correlation_Key__c
-      : instance.Correlation_Key__c;
-    Workflow_Instance__c nextInstance = new Workflow_Instance__c(
-      Workflow_Name__c = instance.Workflow_Name__c,
-      Correlation_Key__c = newKey,
-      Root_Correlation_Key__c = rootKey,
-      Previous_Instance__c = instance.Id,
-      Definition_Version__c = instance.Definition_Version__c,
-      Current_Step__c = initialStep,
-      Deadline_At__c = nextDeadline,
-      Progress__c = instance.Progress__c,
-      Causation_Id__c = String.isNotBlank(instance.Causation_Id__c)
-        ? instance.Causation_Id__c
-        : instance.Parent_Instance__c,
-      // Use the predecessor's CreatedDate (when it started) rather than
-      // System.now() (when it finished). This prevents a gap: records
-      // modified during the predecessor's execution window are covered by
-      // the successor's query (>= predecessor start). The tradeoff is
-      // bounded overlap near the boundary, which is correct at-least-once
-      // behavior — the same contract Temporal/DBOS use for polling cursors.
-      Previous_Run_At__c = instance.CreatedDate
-    );
-    insertSuccessorRecord(nextInstance, newKey);
-    copyPredecessorSearchAttributes(instance.Id, nextInstance.Id);
-    finalizeSuccessorInstance(nextInstance, result, initialStep);
-  }
-
-  // Insert the successor instance, translating a duplicate-key collision into a
-  // WorkflowException.
-  private static void insertSuccessorRecord(
-    Workflow_Instance__c nextInstance,
-    String newKey
-  ) {
-    try {
-      Database.insert(nextInstance, true, AccessLevel.SYSTEM_MODE);
-    } catch (DmlException ex) {
-      if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
-        throw new WorkflowException(
-          'An active workflow already exists with correlation key: ' + newKey
-        );
-      }
-      throw ex;
-    }
-  }
-
-  // Copy the predecessor's search attributes onto the successor instance.
-  private static void copyPredecessorSearchAttributes(
-    Id predecessorId,
-    Id successorId
-  ) {
-    List<Workflow_Search_Attribute__c> predecessorAttrs = [
-      SELECT Key__c, Value__c
-      FROM Workflow_Search_Attribute__c
-      WHERE Workflow_Instance__c = :predecessorId
-      WITH SYSTEM_MODE
-    ];
-    if (predecessorAttrs.isEmpty()) {
-      return;
-    }
-    List<Workflow_Search_Attribute__c> successorAttrs = new List<Workflow_Search_Attribute__c>();
-    for (Workflow_Search_Attribute__c attr : predecessorAttrs) {
-      successorAttrs.add(
-        new Workflow_Search_Attribute__c(
-          Workflow_Instance__c = successorId,
-          Key__c = attr.Key__c,
-          Value__c = attr.Value__c,
-          Key_Value__c = attr.Key__c +
-            '=' +
-            (attr.Value__c == null ? '' : attr.Value__c)
-        )
-      );
-    }
-    Database.insert(successorAttrs, true, AccessLevel.SYSTEM_MODE);
-  }
-
-  // Set the successor's input, pre-create its first step, and enqueue its run.
-  private static void finalizeSuccessorInstance(
-    Workflow_Instance__c nextInstance,
-    StepResult result,
-    String initialStep
-  ) {
-    // Set input and save payload
-    nextInstance.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      nextInstance.Id,
-      result.directive().continuation.nextInputJson,
-      'Input_' + nextInstance.Id
-    );
-
-    // A concurrency-bounded successor must pass the admission gate on its first
-    // RUN_STEP before it owns a slot, so defer the initial step's timeout until
-    // admission re-arms it (mirrors doStart). Otherwise the still-Pending successor
-    // could be failed by the timeout sweep while waiting in the backlog for a slot.
-    Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(
-      nextInstance.Workflow_Name__c
-    );
-    // Durable awaiting-admission marker (see doStart): keeps the pre-start watchdog
-    // keyed off persisted state rather than the live CMDT. Cleared on admission.
-    if (deferTimeoutForConcurrency) {
-      nextInstance.Concurrency_Parked__c = true;
-    }
-    Database.update(nextInstance, true, AccessLevel.SYSTEM_MODE);
-
-    // Pre-create the successor's first step execution log
-    if (String.isNotBlank(initialStep)) {
-      Workflow_Step_Execution__c nextStepExec = new Workflow_Step_Execution__c();
-      nextStepExec.Workflow_Instance__c = nextInstance.Id;
-      nextStepExec.Step_Name__c = initialStep;
-      nextStepExec.Status__c = 'Pending';
-      nextStepExec.Input__c = nextInstance.Input__c;
-      nextStepExec.Retry_Count__c = 0;
-      Integer timeout = WorkflowStepTimeoutConfig.getStepTimeoutSeconds(
-        initialStep,
-        WorkflowTypeResolver.extractNamespace(nextInstance.Workflow_Name__c)
-      );
-      if (timeout != null && timeout > 0 && !deferTimeoutForConcurrency) {
-        nextStepExec.Timeout_At__c = DateTime.now().addSeconds(timeout);
-      }
-      Database.insert(nextStepExec, true, AccessLevel.SYSTEM_MODE);
-    }
-
-    // Enqueue the successor run
-    if (!deferTimeoutForConcurrency) {
-      WorkflowTimeoutArming.scheduleTimeoutJobForInstance(nextInstance.Id);
-    }
-    if (Test.isRunningTest()) {
-      if (!disableQueueableInTest) {
-        System.enqueueJob(new WorkflowOrchestrator(nextInstance.Id));
-      }
-    } else {
-      WorkflowOrchestratorEnqueue.enqueueOrchestrator(nextInstance.Id, null);
-    }
-  }
-
-  // FAIL: deliberate terminal failure routed through failWorkflowInstance.
-  private static void handleFailOutcome(StepOutcomeContext outcome) {
-    Workflow_Instance__c instance = outcome.instance;
-    Workflow_Step_Execution__c stepExec = outcome.stepExec;
-    StepResult result = outcome.result;
-    StepContext context = outcome.context;
-    Boolean isParallel = outcome.isParallel;
-    // Explicit terminal failure (issue #37): the author returned a deliberate
-    // business failure — not a crash, not a retry. Record the step terminal
-    // exactly once (append-only) with the operator-readable reason (and any
-    // structured failureData) in Error_Details__c, then route through the
-    // existing failWorkflowInstance path. That performs ZERO retry hops and
-    // transitions to Compensating (LIFO rollback) when a Compensation_Stack__c
-    // exists, or to Failed otherwise; Terminal_At__c is stamped by
-    // WorkflowInstanceTrigger on the terminal transition, exactly as a thrown
-    // failure does today.
-    //
-    // Signal consumption mirrors the COMPLETE path: the step ran to its terminal
-    // conclusion so any signals it observed are marked consumed (not rolled back),
-    // preventing re-delivery to later compensation steps.
-    markSignalsConsumed(instance.Id, context, isParallel);
-    stepExec.Status__c = 'Failed';
-    // Plain-text schema matches RETRY/crash paths. When failureData is present
-    // the raw JSON is appended on a second line for downstream inspection without
-    // needing to detect a JSON envelope.
-    stepExec.Error_Details__c = (result.directive().failureDataJson != null)
-      ? result.directive().failureReason +
-        '\nfailureData: ' +
-        result.directive().failureDataJson
-      : result.directive().failureReason;
-    saveStepExec(stepExec);
-
-    // Publish any domain events the step buffered via StepContext.emit() before
-    // returning fail() — same commit-coupling contract as COMPLETE/SPLIT so
-    // callers never silently lose events on deliberate terminal failures.
-    publishOutboundEvents(result, context);
-
-    FailInstanceRequest explicitFailReq = new FailInstanceRequest();
-    explicitFailReq.instanceId = instance.Id;
-    explicitFailReq.stepName = stepExec.Step_Name__c;
-    explicitFailReq.errorMessage = result.directive().failureReason;
-    explicitFailReq.failureCategory = CAT_EXPLICIT_FAIL;
-    failWorkflowInstance(explicitFailReq);
   }
 
   /**
@@ -7145,7 +5874,7 @@ public inherited sharing class WorkflowEngine {
     // complete(..., events) overload publishes here, coupled to the durable
     // Compensated transition — the same commit-coupling as the forward path,
     // so the public emit API does not silently drop events in rollback flows.
-    publishOutboundEvents(result, context);
+    WorkflowStepOutcome.publishOutboundEvents(result, context);
 
     stack.remove(stack.size() - 1);
     instance.Compensation_Stack__c = JSON.serialize(stack);
@@ -9168,27 +7897,6 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
-  private static String resolveContinueAsNewKey(
-    String currentKey,
-    String customKey
-  ) {
-    if (String.isNotBlank(customKey)) {
-      return customKey;
-    }
-    if (String.isBlank(currentKey)) {
-      return 'Run_' + System.currentTimeMillis();
-    }
-
-    Pattern p = Pattern.compile('^(.*)_run(\\d+)$');
-    Matcher m = p.matcher(currentKey);
-    if (m.matches()) {
-      String base = m.group(1);
-      Integer nextNum = Integer.valueOf(m.group(2)) + 1;
-      return base + '_run' + nextNum;
-    }
-    return currentKey + '_run2';
-  }
-
   /**
    * Parks an instance that could not acquire a concurrency slot. It suspends with a
    * short admission-retry wake time and re-enters admission through the SAME sleep/
@@ -9447,8 +8155,15 @@ public inherited sharing class WorkflowEngine {
     return true;
   }
 
-  @TestVisible
-  private static void redeliverMatchingSignalsForInstance(
+  /**
+   * @description Re-homes any Unrouted signals matching an instance (by id or
+   * correlation key) back onto it as Received, so a step that just suspended
+   * awaiting a signal immediately re-observes one that arrived during its run.
+   * Public so the extracted suspension handlers can invoke it, called qualified.
+   * @param instanceId Id of the instance to redeliver matching signals to
+   * @param correlationKey the instance's correlation key to match signals on
+   */
+  public static void redeliverMatchingSignalsForInstance(
     Id instanceId,
     String correlationKey
   ) {
@@ -9643,7 +8358,15 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
-  private static RetryPolicy sanitizePolicy(RetryPolicy policy) {
+  /**
+   * @description Returns a retry policy with only the valid, positive fields of
+   * the supplied policy applied over the defaults, so an author-supplied policy
+   * can never weaken the engine below its safe retry floor. Public so the
+   * extracted outcome retry handler can invoke it, called qualified.
+   * @param policy the author-supplied retry policy to sanitize (may be null)
+   * @return a sanitized retry policy safe for backoff scheduling
+   */
+  public static RetryPolicy sanitizePolicy(RetryPolicy policy) {
     RetryPolicy clean = new RetryPolicy();
     if (policy != null) {
       if (policy.maximumAttempts != null && policy.maximumAttempts > 0) {
