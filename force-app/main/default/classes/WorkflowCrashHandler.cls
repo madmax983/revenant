@@ -6,7 +6,7 @@
  * workflow. Extracted from `WorkflowEngine`; the public `handleCrash` entry points
  * stay resident on the engine and delegate to `processCrash` here. The resident
  * `WorkflowEngine.FailInstanceRequest` DTO, the `WorkflowEngine.CAT_*` failure
- * categories, `WorkflowEngine.failWorkflowInstance` and `WorkflowEngine.saveStepExecAsCrash`
+ * categories, `WorkflowEngine.failWorkflowInstance` and `WorkflowStepExecStore.saveStepExecAsCrash`
  * are referenced fully qualified. Transient row-lock retry classification and
  * re-drive is delegated to `WorkflowTransientLockRetry`. All SOQL/DML executes in
  * system mode.
@@ -161,7 +161,7 @@ public inherited sharing class WorkflowCrashHandler {
       Workflow_Step_Execution__c stepExec = stepExecs[0];
       stepExec.Status__c = 'Failed';
       stepExec.Error_Details__c = crashErrorDetails(ex);
-      WorkflowEngine.saveStepExecAsCrash(stepExec);
+      WorkflowStepExecStore.saveStepExecAsCrash(stepExec);
       return;
     }
     // Construct and insert the step execution log with failed status
@@ -170,7 +170,7 @@ public inherited sharing class WorkflowCrashHandler {
       targetStepName,
       ex
     );
-    WorkflowEngine.saveStepExecAsCrash(stepExec);
+    WorkflowStepExecStore.saveStepExecAsCrash(stepExec);
   }
 
   private static Workflow_Step_Execution__c buildCrashedStepExec(

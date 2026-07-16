@@ -155,6 +155,23 @@ public inherited sharing class WorkflowOrchestratorEnqueue {
   }
 
   /**
+   * @description Shared enqueue path used by the fail/error-routing branches: in
+   * tests, enqueue only when queueables are enabled; otherwise delegate to the
+   * standard orchestrator enqueue. Public so the extracted `WorkflowFailureService`
+   * can drive the orchestrator through the same test-aware path.
+   * @param instanceId Id of the instance whose orchestrator is enqueued
+   */
+  public static void enqueueOrchestratorForInstance(Id instanceId) {
+    if (!Test.isRunningTest()) {
+      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instanceId, null);
+      return;
+    }
+    if (!WorkflowEngine.disableQueueableInTest) {
+      System.enqueueJob(new WorkflowOrchestrator(instanceId));
+    }
+  }
+
+  /**
    * Raises a WorkflowException if any platform-event publish result failed.
    * @param srs the save results returned by EventBus.publish
    * @param errorPrefix message prefix identifying the failing publish site

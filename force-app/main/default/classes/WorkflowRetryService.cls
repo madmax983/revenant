@@ -52,7 +52,7 @@ public inherited sharing class WorkflowRetryService {
       String.isBlank(instance.Current_Step__c) ||
       !instance.Current_Step__c.contains(',')
     ) {
-      WorkflowEngine.enqueueOrchestratorForInstance(instanceId);
+      WorkflowOrchestratorEnqueue.enqueueOrchestratorForInstance(instanceId);
       return;
     }
 

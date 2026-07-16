@@ -251,7 +251,7 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
       Savepoint sp = Database.setSavepoint();
       try {
         if (runCompensations) {
-          WorkflowEngine.cancelWithCompensations(instId);
+          WorkflowCancellation.cancelWithCompensations(instId);
         } else {
           WorkflowEngine.cancel(instId);
         }

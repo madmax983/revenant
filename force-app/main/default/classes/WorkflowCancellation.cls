@@ -7,7 +7,7 @@
  * deep/wide trees cannot exhaust the SOQL or stack-depth governors; parent-before
  * -child ordering and the FOR UPDATE locking are preserved from the pre-extraction
  * engine. Extracted from `WorkflowEngine`, which retains the thin public
- * `cancel`/`cancelWithCompensations` delegators. The resident
+ * `cancel` delegator. The resident
  * `WorkflowEngine.WorkflowException`, `WorkflowEngine.disableQueueableInTest`,
  * `WorkflowCompensation.preCreateFirstCompensationStep` and
  * `WorkflowCompensationStepLog.appendCompensationRetryStep` members are referenced fully
@@ -32,6 +32,16 @@ public inherited sharing class WorkflowCancellation {
    */
   public static void cancelWithCompensationsInstance(Id instanceId) {
     cancelInstanceTree(instanceId, true);
+  }
+
+  /**
+   * @description Cancels a workflow instance (and its active descendants), aborts
+   * scheduled jobs, and rolls back completed steps via saga compensation. Public
+   * API entry relocated from `WorkflowEngine`.
+   * @param instanceId Id of the target instance to cancel (with its active descendants)
+   */
+  public static void cancelWithCompensations(Id instanceId) {
+    cancelWithCompensationsInstance(instanceId);
   }
 
   /**

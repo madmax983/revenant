@@ -33,7 +33,7 @@ public inherited sharing class WorkflowCompensationContext {
     if (!(stepInstanceObj instanceof CompensatableStep)) {
       Workflow_Step_Execution__c stepExec = run.stepExec;
       stepExec.Status__c = 'Compensated';
-      WorkflowEngine.saveStepExec(stepExec);
+      WorkflowStepExecStore.saveStepExec(stepExec);
 
       List<String> stack = run.stack;
       stack.remove(stack.size() - 1);
@@ -122,7 +122,7 @@ public inherited sharing class WorkflowCompensationContext {
     Integer maxAttempts = 1;
     Map<String, Object> capturesMap = new Map<String, Object>();
     if (compensatableStepInstance instanceof RetryConfigurable) {
-      RetryPolicy policy = WorkflowEngine.sanitizePolicy(
+      RetryPolicy policy = WorkflowRetryScheduling.sanitizePolicy(
         ((RetryConfigurable) compensatableStepInstance).getRetryPolicy()
       );
       maxAttempts = policy.maximumAttempts;

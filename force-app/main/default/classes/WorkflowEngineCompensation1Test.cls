@@ -706,7 +706,7 @@ public class WorkflowEngineCompensation1Test {
 
       Test.startTest();
       // Cancel with compensations
-      WorkflowEngine.cancelWithCompensations(instanceId);
+      WorkflowCancellation.cancelWithCompensations(instanceId);
 
       // Assert status is now Cancelling
       inst = [

@@ -173,7 +173,7 @@ public inherited sharing class WorkflowCompensationOutcome {
       result.directive().outputJson,
       'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     // A compensating step that read signals durably completed; consume them on
     // the same contract as a forward step so a later compensation attempt or
@@ -205,7 +205,7 @@ public inherited sharing class WorkflowCompensationOutcome {
       WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
     }
 
-    WorkflowEngine.enqueueOrchestratorForInstance(instance.Id);
+    WorkflowOrchestratorEnqueue.enqueueOrchestratorForInstance(instance.Id);
 
     // Fire-and-forget outbound lifecycle event; only fires once the stack is
     // drained and the instance has reached Compensated/Cancelled. Runs LAST so
@@ -225,7 +225,7 @@ public inherited sharing class WorkflowCompensationOutcome {
       result.directive().stepStateJson,
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
@@ -249,7 +249,7 @@ public inherited sharing class WorkflowCompensationOutcome {
           stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
         )
       : null;
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
     instance.Status__c = 'Suspended';
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
   }
@@ -266,7 +266,7 @@ public inherited sharing class WorkflowCompensationOutcome {
       result.directive().stepStateJson,
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
     instance.Status__c = 'Suspended';
     if (result.directive().sleepDurationSeconds != null) {
       instance.Sleep_Until__c = DateTime.now()
@@ -298,7 +298,7 @@ public inherited sharing class WorkflowCompensationOutcome {
       JSON.serialize(state),
       'State_Approval_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
     instance.Status__c = 'Suspended';
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
   }
@@ -311,11 +311,11 @@ public inherited sharing class WorkflowCompensationOutcome {
     StepResult result = outcome.result;
     stepExec.Retry_Count__c += 1;
     // Get and sanitize retry policy
-    RetryPolicy policy = WorkflowEngine.sanitizePolicy(
+    RetryPolicy policy = WorkflowRetryScheduling.sanitizePolicy(
       result.directive().retry.policy
     );
 
-    WorkflowEngine.persistRetryMaxAttempts(instance, stepExec, policy);
+    WorkflowRetryScheduling.persistRetryMaxAttempts(instance, stepExec, policy);
 
     if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
       stepExec.Status__c = 'Failed';
@@ -323,7 +323,7 @@ public inherited sharing class WorkflowCompensationOutcome {
         'Compensation max retries (' +
         policy.maximumAttempts +
         ') exceeded.';
-      WorkflowEngine.saveStepExec(stepExec);
+      WorkflowStepExecStore.saveStepExec(stepExec);
 
       // The author's RetryPolicy budget for the automatic phase is exhausted, but
       // the remaining stack is intact. Surface a recoverable "rollback incomplete"
@@ -335,7 +335,11 @@ public inherited sharing class WorkflowCompensationOutcome {
           ' failed after max retries.'
       );
     } else {
-      WorkflowEngine.scheduleExponentialRetry(instance, stepExec, policy);
+      WorkflowRetryScheduling.scheduleExponentialRetry(
+        instance,
+        stepExec,
+        policy
+      );
     }
   }
 
@@ -355,7 +359,7 @@ public inherited sharing class WorkflowCompensationOutcome {
         '\nfailureData: ' +
         result.directive().failureDataJson
       : result.directive().failureReason;
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     failCompensationRecoverable(
       instance,
@@ -376,7 +380,7 @@ public inherited sharing class WorkflowCompensationOutcome {
     stepExec.Error_Details__c =
       'Unsupported compensation action: ' +
       (result != null ? result.directive().action : null);
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     // Remaining stack is intact; leave the saga recoverable rather than abandoning it.
     failCompensationRecoverable(

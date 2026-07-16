@@ -39,13 +39,6 @@ public inherited sharing class WorkflowEngine {
   @TestVisible
   public static Datetime mockNow = null;
 
-  // Base + jitter (seconds) before a concurrency-parked instance re-attempts
-  // admission. Precise scheduling drives it promptly when slots free; under a large
-  // burst the scheduling degrades to the watchdog batch-resume (the scalable path).
-  @TestVisible
-  private static Integer concurrencyAdmissionRetrySeconds = 30;
-  private static final Integer CONCURRENCY_ADMISSION_RETRY_JITTER_SECONDS = 15;
-
   // Instances in these statuses are considered in-flight; a start that collides
   // with one of them always dedups to the existing instance.
   public static final Set<String> ACTIVE_STATUSES = new Set<String>{
@@ -540,83 +533,6 @@ public inherited sharing class WorkflowEngine {
     WorkflowStepRunner.runStepNamed(instanceId, stepName);
   }
 
-  private static void populateTelemetry(
-    Workflow_Step_Execution__c stepExec,
-    Boolean isCrash
-  ) {
-    if (stepExec != null) {
-      if (isCrash) {
-        stepExec.CPU_Time_Ms__c = null;
-        stepExec.SOQL_Query_Count__c = null;
-        stepExec.Heap_Size_Bytes__c = null;
-      } else {
-        stepExec.CPU_Time_Ms__c = Limits.getCpuTime();
-        stepExec.SOQL_Query_Count__c = Limits.getQueries();
-        stepExec.Heap_Size_Bytes__c = Limits.getHeapSize();
-      }
-    }
-  }
-
-  /**
-   * @description Persists a step execution (insert when transient, otherwise
-   * update) in system mode after populating its telemetry, for the non-crash
-   * case. Public so the extracted breadcrumb persistence can flush a transient
-   * step execution before correlating its logs.
-   * @param stepExec the step execution to persist
-   */
-  public static void saveStepExec(Workflow_Step_Execution__c stepExec) {
-    saveStepExec(stepExec, false);
-  }
-
-  /**
-   * @description Persists a step execution recorded by the crash handler, marking
-   * its telemetry as a crash outcome. Public entry so the extracted
-   * `WorkflowCrashHandler` can flush a crashed step execution without exposing the
-   * internal Boolean crash flag.
-   * @param stepExec the crashed step execution to persist
-   */
-  public static void saveStepExecAsCrash(Workflow_Step_Execution__c stepExec) {
-    saveStepExec(stepExec, true);
-  }
-
-  private static void saveStepExec(
-    Workflow_Step_Execution__c stepExec,
-    Boolean isCrash
-  ) {
-    populateTelemetry(stepExec, isCrash);
-    if (stepExec.Id == null) {
-      Database.insert(stepExec, true, AccessLevel.SYSTEM_MODE);
-    } else {
-      Database.update(stepExec, true, AccessLevel.SYSTEM_MODE);
-    }
-  }
-
-  /**
-   * Counts terminal (completed) executions of a step name within an instance.
-   * Used to derive the per-visit idempotency sequence for StepContext: the
-   * current (not-yet-completed) visit is excluded, so this is 0 for the first
-   * visit and increments each time the engine loops back to the same step.
-   * @param instanceId Id of the instance to count within
-   * @param stepName name of the step whose completed executions are counted
-   * @param completedStatuses the statuses that count as terminal/completed
-   * @return the number of already-completed executions of the step
-   */
-  private static Integer countCompletedStepExecutions(
-    Id instanceId,
-    String stepName,
-    Set<String> completedStatuses
-  ) {
-    return [
-      SELECT COUNT()
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Step_Name__c = :stepName
-        AND Status__c IN :completedStatuses
-      WITH SYSTEM_MODE
-    ];
-  }
-
   /**
    * @description Internal wrapper bundling the values threaded through the
    * step-outcome handlers (handleStepResult, handleCompensationStepResult,
@@ -630,83 +546,6 @@ public inherited sharing class WorkflowEngine {
     public List<String> stack;
     public StepContext context;
     public Boolean isParallel;
-  }
-
-  /**
-   * @description Shared retry persistence: merges the sanitized policy's
-   * maximumAttempts into the step's captured values and re-offloads them.
-   * Extracted from the forward and compensation retry paths, which persisted
-   * identical captures state before diverging on the retries-exhausted branch.
-   * Behavior is byte-identical to the inlined blocks. Public so the extracted
-   * outcome retry handler can invoke it, called qualified.
-   * @param instance the workflow instance owning the step
-   * @param stepExec the step execution whose captured values are updated
-   * @param policy the sanitized retry policy whose maximumAttempts is persisted
-   */
-  public static void persistRetryMaxAttempts(
-    Workflow_Instance__c instance,
-    Workflow_Step_Execution__c stepExec,
-    RetryPolicy policy
-  ) {
-    Map<String, Object> captures = new Map<String, Object>();
-    if (String.isNotBlank(stepExec.Captured_Values__c)) {
-      String resolvedCaptures = WorkflowPayloadOffload.resolvePayload(
-        stepExec.Captured_Values__c
-      );
-      if (String.isNotBlank(resolvedCaptures)) {
-        try {
-          captures = (Map<String, Object>) JSON.deserializeUntyped(
-            resolvedCaptures
-          );
-        } catch (Exception ignored) {
-          // Malformed captures; proceed with an empty captures map.
-        }
-      }
-    }
-    captures.put('__maxAttempts', policy.maximumAttempts);
-    stepExec.Captured_Values__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      instance.Id,
-      JSON.serialize(captures),
-      'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-    );
-  }
-
-  /**
-   * @description Shared exponential-backoff reschedule: marks the step Retrying,
-   * computes the capped backoff delay, suspends the instance and arms the retry
-   * job. Extracted from the not-yet-exhausted branch of the forward and
-   * compensation retry paths, which scheduled the next attempt identically.
-   * Behavior is byte-identical to the inlined else-branches. Public so the
-   * extracted outcome retry handler can invoke it, called qualified.
-   * @param instance the workflow instance to suspend until the next attempt
-   * @param stepExec the step execution being rescheduled
-   * @param policy the sanitized retry policy driving the backoff computation
-   */
-  public static void scheduleExponentialRetry(
-    Workflow_Instance__c instance,
-    Workflow_Step_Execution__c stepExec,
-    RetryPolicy policy
-  ) {
-    stepExec.Status__c = 'Retrying';
-    stepExec.Output__c = null;
-    saveStepExec(stepExec);
-
-    // Calculate exponential backoff
-    Double backoff = Math.pow(
-      (Double) policy.backoffCoefficient,
-      (Double) (stepExec.Retry_Count__c - 1)
-    );
-    Integer delay = (Integer) (policy.initialIntervalSeconds * backoff);
-    delay = Math.min(delay, 86400);
-
-    instance.Status__c = 'Suspended';
-    instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
-    instance.Async_Job_Id__c = WorkflowRetrySleepScheduler.scheduleRetry(
-      instance.Id,
-      stepExec.Step_Name__c,
-      delay
-    );
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
   }
 
   /**
@@ -777,23 +616,6 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * @description Shared enqueue path used by the fail/error-routing branches: in
-   * tests, enqueue only when queueables are enabled; otherwise delegate to the
-   * standard orchestrator enqueue. Public so the extracted `WorkflowFailureService`
-   * can drive the orchestrator through the same test-aware path.
-   * @param instanceId Id of the instance whose orchestrator is enqueued
-   */
-  public static void enqueueOrchestratorForInstance(Id instanceId) {
-    if (Test.isRunningTest()) {
-      if (!disableQueueableInTest) {
-        System.enqueueJob(new WorkflowOrchestrator(instanceId));
-      }
-    } else {
-      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instanceId, null);
-    }
-  }
-
-  /**
    * Sends an external signal to a workflow instance by correlation key or instance ID.
    * @param keyOrId correlation key or instance Id of the target
    * @param signalName name of the signal to deliver
@@ -842,15 +664,6 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
-   * Cancels a workflow instance (and its active descendants), aborts scheduled jobs,
-   * and rolls back completed steps via saga compensation.
-   * @param instanceId Id of the target instance to cancel (with its active descendants)
-   */
-  public static void cancelWithCompensations(Id instanceId) {
-    cancelInstance(instanceId, true);
-  }
-
-  /**
    * @description Cancels a workflow instance, aborts scheduled jobs, and
    * optionally runs saga compensations across the instance and its active
    * descendant tree. Thin dispatcher preserved for the engine's internal cancel
@@ -891,89 +704,5 @@ public inherited sharing class WorkflowEngine {
    */
   public static void processWatchdogHeartbeat() {
     WorkflowHeartbeatService.runWatchdogHeartbeat();
-  }
-
-  /**
-   * @description Parks an instance that could not acquire a concurrency slot. It
-   * suspends with a short admission-retry wake time and re-enters admission
-   * through the SAME sleep/watchdog resume path used by SLEEP — no busy spin, no
-   * dropped Queueable chain. The current Pending step's watchdog deadline is
-   * cleared so a parked (not-yet-executed) step is never failed by the timeout
-   * sweep; admission re-arms it. Public so the extracted `WorkflowStepRunner`
-   * admission gate can park a denied delivery.
-   * @param instance the instance that failed to acquire a concurrency slot
-   * @param resolvedStep name of the current Pending step being parked
-   */
-  public static void parkForConcurrency(
-    Workflow_Instance__c instance,
-    String resolvedStep
-  ) {
-    // Reset the current step's pre-execution state so a re-park is always clean: an
-    // external resume() can have flipped the not-yet-executed step to Running and
-    // stamped a deadline before this delivery reached the gate. Put it back to
-    // Pending and clear Timeout_At__c (the watchdog/timeout job already skips a
-    // Suspended parent, but this keeps the step row consistent and re-armable).
-    List<Workflow_Step_Execution__c> pending = [
-      SELECT Id, Status__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c = :instance.Id
-        AND Status__c IN ('Pending', 'Running')
-        AND Timeout_At__c != NULL
-      WITH SYSTEM_MODE
-    ];
-    if (!pending.isEmpty()) {
-      for (Workflow_Step_Execution__c step : pending) {
-        step.Status__c = 'Pending';
-        step.Timeout_At__c = null;
-      }
-      Database.update(pending, true, AccessLevel.SYSTEM_MODE);
-    }
-
-    Integer retrySeconds =
-      concurrencyAdmissionRetrySeconds +
-      (Integer) Math.floor(
-        Math.random() * CONCURRENCY_ADMISSION_RETRY_JITTER_SECONDS
-      );
-    instance.Status__c = 'Suspended';
-    instance.Concurrency_Parked__c = true;
-    instance.Concurrency_Slot_Held__c = false;
-    instance.Sleep_Until__c = DateTime.now().addSeconds(retrySeconds);
-    instance.Async_Job_Id__c = WorkflowRetrySleepScheduler.scheduleSleepResume(
-      instance.Id,
-      resolvedStep,
-      retrySeconds
-    );
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-  }
-
-  /**
-   * @description Returns a retry policy with only the valid, positive fields of
-   * the supplied policy applied over the defaults, so an author-supplied policy
-   * can never weaken the engine below its safe retry floor. Public so the
-   * extracted outcome retry handler can invoke it, called qualified.
-   * @param policy the author-supplied retry policy to sanitize (may be null)
-   * @return a sanitized retry policy safe for backoff scheduling
-   */
-  public static RetryPolicy sanitizePolicy(RetryPolicy policy) {
-    RetryPolicy clean = new RetryPolicy();
-    if (policy != null) {
-      if (policy.maximumAttempts != null && policy.maximumAttempts > 0) {
-        clean.maximumAttempts = policy.maximumAttempts;
-      }
-      if (
-        policy.initialIntervalSeconds != null &&
-        policy.initialIntervalSeconds > 0
-      ) {
-        clean.initialIntervalSeconds = policy.initialIntervalSeconds;
-      }
-      if (
-        policy.backoffCoefficient != null &&
-        policy.backoffCoefficient >= 1.0
-      ) {
-        clean.backoffCoefficient = policy.backoffCoefficient;
-      }
-    }
-    return clean;
   }
 }

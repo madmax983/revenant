@@ -167,7 +167,7 @@ public inherited sharing class WorkflowInstanceCommandService {
     WorkflowDashboardSupport.checkAuthorization();
     try {
       if (req.runCompensations) {
-        WorkflowEngine.cancelWithCompensations(req.instanceId);
+        WorkflowCancellation.cancelWithCompensations(req.instanceId);
       } else {
         WorkflowEngine.cancel(req.instanceId);
       }
