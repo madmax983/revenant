@@ -38,7 +38,7 @@ public inherited sharing class WorkflowStepAdvance {
     // marked consumed, so an at-least-once redelivered duplicate cannot be
     // reprocessed by a later step. A parallel branch consumes only its own
     // claimed ids so it cannot strip a sibling branch's signal.
-    WorkflowEngine.markSignalsConsumedForOutcome(instance.Id, outcome);
+    WorkflowSignalConsume.markSignalsConsumedForOutcome(instance.Id, outcome);
 
     // Effectively-once outbound emit (issue #64): the step's buffered domain
     // events publish here, in the same transaction that just wrote the

@@ -25,7 +25,7 @@ public inherited sharing class WorkflowContinueAsNew {
     Boolean isParallel = outcome.isParallel;
     // Step requested retry
     if (isParallel) {
-      WorkflowEngine.rollbackClaimedSignals(context);
+      WorkflowSignalConsume.rollbackClaimedSignals(context);
     }
     stepExec.Retry_Count__c += 1;
 
@@ -71,7 +71,7 @@ public inherited sharing class WorkflowContinueAsNew {
     StepContext context = outcome.context;
     Boolean isParallel = outcome.isParallel;
     if (isParallel) {
-      WorkflowEngine.rollbackClaimedSignals(context);
+      WorkflowSignalConsume.rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'ContinuedAsNew';
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
@@ -299,7 +299,7 @@ public inherited sharing class WorkflowContinueAsNew {
     // Signal consumption mirrors the COMPLETE path: the step ran to its terminal
     // conclusion so any signals it observed are marked consumed (not rolled back),
     // preventing re-delivery to later compensation steps.
-    WorkflowEngine.markSignalsConsumedForOutcome(instance.Id, outcome);
+    WorkflowSignalConsume.markSignalsConsumedForOutcome(instance.Id, outcome);
     stepExec.Status__c = 'Failed';
     // Plain-text schema matches RETRY/crash paths. When failureData is present
     // the raw JSON is appended on a second line for downstream inspection without

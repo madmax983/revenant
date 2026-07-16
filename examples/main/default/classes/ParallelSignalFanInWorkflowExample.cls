@@ -132,7 +132,7 @@ public inherited sharing class ParallelSignalFanInWorkflowExample implements Wor
       // a subset has arrived (the branch was re-driven before the rest were
       // buffered), suspend instead of completing on a partial set. The engine
       // rolls this branch's claims back from Processing to Received on any
-      // non-COMPLETE outcome (WorkflowEngine.rollbackClaimedSignals), so the
+      // non-COMPLETE outcome (WorkflowSignalConsume.rollbackClaimedSignals), so the
       // partial acks are neither consumed nor lost; when a later ack re-drives
       // this branch, getSignals() re-reads the full set and consumes it exactly
       // once at COMPLETE.

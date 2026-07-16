@@ -1271,7 +1271,7 @@ public class StepContextSignalEngineBranchTest {
   static void testNamedLookupNotFalselyAbsentAfterBudgetExhausted() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Shrink the cap so a single Noise row exhausts the budget.
-      WorkflowEngine.serialSignalRowCap = 1;
+      WorkflowSignalSources.serialSignalRowCap = 1;
 
       Id instanceId = WorkflowEngine.start(
         'StepContextSignalEngineBranchTest.BudgetWorkflow',

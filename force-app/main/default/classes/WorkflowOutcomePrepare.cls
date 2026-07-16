@@ -56,7 +56,7 @@ public inherited sharing class WorkflowOutcomePrepare {
     if (stepIsActive) {
       return false;
     }
-    WorkflowEngine.rollbackClaimedSignals(outcome.context);
+    WorkflowSignalConsume.rollbackClaimedSignals(outcome.context);
     if (
       stepExec != null &&
       stepExec.Id != null &&
