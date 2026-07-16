@@ -429,7 +429,7 @@ public class StepContextCaptureReplayTest {
         .instanceId(inst.Id)
         .workflowName('TestWorkflow')
         .stepName('TestStep')
-        .signalSource(new WorkflowEngine.PendingSignalSource(inst.Id))
+        .signalSource(new WorkflowSignalSources.PendingSignalSource(inst.Id))
         .build();
 
       // Call getSignal first to populate cache with empty result (no signals present yet in the context cache)
@@ -446,7 +446,7 @@ public class StepContextCaptureReplayTest {
         .instanceId(inst.Id)
         .workflowName('TestWorkflow')
         .stepName('TestStep')
-        .signalSource(new WorkflowEngine.PendingSignalSource(inst.Id))
+        .signalSource(new WorkflowSignalSources.PendingSignalSource(inst.Id))
         .build();
       Test.stopTest();
 

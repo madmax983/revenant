@@ -23,7 +23,7 @@ public inherited sharing class WorkflowStepSuspension {
     Boolean isParallel = outcome.isParallel;
     // Step yielded (e.g. Apex Cursor chunk). Save state to Output and run again in a new transaction.
     if (isParallel) {
-      WorkflowEngine.rollbackClaimedSignals(context);
+      WorkflowSignalConsume.rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'Running';
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
@@ -56,7 +56,7 @@ public inherited sharing class WorkflowStepSuspension {
     Boolean isParallel = outcome.isParallel;
     // Step suspended (waiting for external signal). Save state and mark instance.
     if (isParallel) {
-      WorkflowEngine.rollbackClaimedSignals(context);
+      WorkflowSignalConsume.rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'Pending';
     String suspendStateJson;
@@ -114,7 +114,7 @@ public inherited sharing class WorkflowStepSuspension {
     Boolean isParallel = outcome.isParallel;
     // Step requested sleep
     if (isParallel) {
-      WorkflowEngine.rollbackClaimedSignals(context);
+      WorkflowSignalConsume.rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'Pending';
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
@@ -160,7 +160,7 @@ public inherited sharing class WorkflowStepSuspension {
     // A START_CHILD step should therefore check the child-completion signal
     // before re-acting on a kickoff signal (or stash needed data in step state).
     if (isParallel) {
-      WorkflowEngine.rollbackClaimedSignals(context);
+      WorkflowSignalConsume.rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'Pending';
     Map<String, Object> childInfo = new Map<String, Object>{
@@ -213,7 +213,7 @@ public inherited sharing class WorkflowStepSuspension {
       );
     }
     if (isParallel) {
-      WorkflowEngine.rollbackClaimedSignals(context);
+      WorkflowSignalConsume.rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'Pending';
     List<String> childKeys = new List<String>();
@@ -259,7 +259,7 @@ public inherited sharing class WorkflowStepSuspension {
     StepContext context = outcome.context;
     Boolean isParallel = outcome.isParallel;
     if (isParallel) {
-      WorkflowEngine.rollbackClaimedSignals(context);
+      WorkflowSignalConsume.rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'Pending';
     Map<String, Object> state = new Map<String, Object>{
@@ -322,7 +322,7 @@ public inherited sharing class WorkflowStepSuspension {
     // spawning step runs serially (it is the fan-out point, not a branch) and
     // does not claim, so it consumes still-Received rows plus same-name
     // duplicate cleanup.
-    WorkflowEngine.markSignalsConsumedSerial(instance.Id, context);
+    WorkflowSignalConsume.markSignalsConsumedSerial(instance.Id, context);
 
     String parallelStepsStr = String.join(
       result.directive().parallelStepNames,
