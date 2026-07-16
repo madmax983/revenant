@@ -7,7 +7,7 @@ private class WorkflowDebounceTest {
       WorkflowEngine.mockNow = Datetime.now();
 
       Test.startTest();
-      WorkflowEngine.startDebounced(
+      WorkflowStartService.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'WorkflowEngineTest.HappyWorkflow',
             'deb_key_1',
@@ -94,7 +94,7 @@ private class WorkflowDebounceTest {
 
       Test.startTest();
       // First trigger
-      WorkflowEngine.startDebounced(
+      WorkflowStartService.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'WorkflowEngineTest.HappyWorkflow',
             'deb_key_2',
@@ -105,7 +105,7 @@ private class WorkflowDebounceTest {
 
       // Advance 5 seconds and trigger again
       WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(5);
-      WorkflowEngine.startDebounced(
+      WorkflowStartService.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'WorkflowEngineTest.HappyWorkflow',
             'deb_key_2',
@@ -177,7 +177,7 @@ private class WorkflowDebounceTest {
 
       Test.startTest();
       // First trigger: debounce = 10, maxWait = 15
-      WorkflowEngine.startDebounced(
+      WorkflowStartService.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'WorkflowEngineTest.HappyWorkflow',
             'deb_key_3',
@@ -189,7 +189,7 @@ private class WorkflowDebounceTest {
 
       // Trigger again at start + 8s: expected extended is start + 18s, but capped at start + 15s
       WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(8);
-      WorkflowEngine.startDebounced(
+      WorkflowStartService.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'WorkflowEngineTest.HappyWorkflow',
             'deb_key_3',
@@ -257,7 +257,7 @@ private class WorkflowDebounceTest {
       // Burst of 15 calls within 5 seconds
       for (Integer i = 0; i < 15; i++) {
         WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(1);
-        WorkflowEngine.startDebounced(
+        WorkflowStartService.startDebounced(
           new WorkflowDebouncer.DebounceRequest(
               'WorkflowEngineTest.HappyWorkflow',
               'deb_key_burst',
@@ -323,7 +323,7 @@ private class WorkflowDebounceTest {
       System.assertEquals(true, first.isNew);
 
       // Call startDebounced for the same key
-      WorkflowEngine.startDebounced(
+      WorkflowStartService.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'WorkflowEngineTest.HappyWorkflow',
             'deb_key_dedup',
@@ -373,7 +373,7 @@ private class WorkflowDebounceTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       String largeJson = 'x'.repeat(131073);
       try {
-        WorkflowEngine.startDebounced(
+        WorkflowStartService.startDebounced(
           new WorkflowDebouncer.DebounceRequest(
               'WorkflowEngineTest.HappyWorkflow',
               'deb_key_large',
@@ -399,7 +399,7 @@ private class WorkflowDebounceTest {
       WorkflowEngine.mockNow = Datetime.now();
 
       Test.startTest();
-      WorkflowEngine.startDebounced(
+      WorkflowStartService.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'WorkflowEngineTest.HappyWorkflow',
             'deb_key_metadata',
@@ -451,7 +451,7 @@ private class WorkflowDebounceTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       String longKey = 'k'.repeat(201);
       try {
-        WorkflowEngine.startDebounced(
+        WorkflowStartService.startDebounced(
           new WorkflowDebouncer.DebounceRequest(
               'WorkflowEngineTest.HappyWorkflow',
               longKey,
@@ -481,7 +481,7 @@ private class WorkflowDebounceTest {
 
       Test.startTest();
       // Enqueue debounce state with a invalid/non-existent workflow name
-      WorkflowEngine.startDebounced(
+      WorkflowStartService.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'NonExistentWorkflowClassDoesNotExist',
             'deb_key_fail_retry',
@@ -600,7 +600,7 @@ private class WorkflowDebounceTest {
       String longCorrelationKey = 'b'.repeat(200);
 
       Test.startTest();
-      WorkflowEngine.startDebounced(
+      WorkflowStartService.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             longWorkflowName,
             longCorrelationKey,
@@ -631,7 +631,7 @@ private class WorkflowDebounceTest {
         tooManyAttrs.put('key' + i, 'val' + i);
       }
       try {
-        WorkflowEngine.startDebounced(
+        WorkflowStartService.startDebounced(
           new WorkflowDebouncer.DebounceRequest(
               'WorkflowEngineTest.HappyWorkflow',
               'deb_key_limits_1',
@@ -656,7 +656,7 @@ private class WorkflowDebounceTest {
         'k'.repeat(101) => 'val'
       };
       try {
-        WorkflowEngine.startDebounced(
+        WorkflowStartService.startDebounced(
           new WorkflowDebouncer.DebounceRequest(
               'WorkflowEngineTest.HappyWorkflow',
               'deb_key_limits_2',
@@ -682,7 +682,7 @@ private class WorkflowDebounceTest {
         'key' => 'v'.repeat(151)
       };
       try {
-        WorkflowEngine.startDebounced(
+        WorkflowStartService.startDebounced(
           new WorkflowDebouncer.DebounceRequest(
               'WorkflowEngineTest.HappyWorkflow',
               'deb_key_limits_3',
@@ -713,7 +713,7 @@ private class WorkflowDebounceTest {
 
       Test.startTest();
       // 1. Enqueue state with invalid workflow to force a failure
-      WorkflowEngine.startDebounced(
+      WorkflowStartService.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'InvalidWorkflowToForceFailure',
             'deb_key_rearm_reset',
@@ -742,7 +742,7 @@ private class WorkflowDebounceTest {
 
       // 2. Re-arm the same key with the SAME invalid workflow name but new payload/timing
       WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(10);
-      WorkflowEngine.startDebounced(
+      WorkflowStartService.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'InvalidWorkflowToForceFailure',
             'deb_key_rearm_reset',
@@ -807,7 +807,7 @@ private class WorkflowDebounceTest {
 
       Test.startTest();
       // 1. Enqueue one valid and one invalid workflow start request
-      WorkflowEngine.startDebounced(
+      WorkflowStartService.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'WorkflowEngineTest.HappyWorkflow',
             'deb_key_valid_part',
@@ -815,7 +815,7 @@ private class WorkflowDebounceTest {
           )
           .withDebounce(10)
       );
-      WorkflowEngine.startDebounced(
+      WorkflowStartService.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'InvalidWorkflowToForceFailure',
             'deb_key_invalid_part',

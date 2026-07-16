@@ -389,7 +389,7 @@ private class WorkflowGetOrStartTest {
       );
       insert terminal;
 
-      Id newId = WorkflowEngine.startSingleton(
+      Id newId = WorkflowStartService.startSingleton(
         'WorkflowEngineTest.HappyWorkflow',
         'GOS_Singleton',
         null

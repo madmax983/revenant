@@ -71,7 +71,7 @@ public inherited sharing class WorkflowWatchdog implements Schedulable {
         // recent terminal (Failed/Cancelled/ContinuedAsNew) run must never
         // satisfy the start via the dedup window — otherwise polling stays
         // offline until the window expires.
-        WorkflowEngine.startSingleton(
+        WorkflowStartService.startSingleton(
           'WatchdogWorkflow',
           'SystemWatchdog',
           null
