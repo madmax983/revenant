@@ -105,7 +105,7 @@ public class WorkflowResumeServiceTest {
     Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c(
       Workflow_Instance__c = instanceId,
       Step_Name__c = stepName,
-      Status__c = 'Suspended',
+      Status__c = 'Running',
       Retry_Count__c = 0
     );
     insert stepExec;

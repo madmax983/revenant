@@ -67,6 +67,10 @@ public class WorkflowRetrySleepSchedulerTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Id instanceId = newInstanceId();
       WorkflowEngine.useDynamicScheduling = true;
+      // The scheduled WorkflowRetryJob fires at Test.stopTest() and enqueues an
+      // orchestrator; suppress that cascade so it does not try to resolve the
+      // stub workflow definition. We are only exercising the scheduling path.
+      WorkflowEngine.disableQueueableInTest = true;
 
       Test.startTest();
       // 130s is not a whole minute, and under test the queueable fast path is gated
@@ -76,8 +80,10 @@ public class WorkflowRetrySleepSchedulerTest {
         STEP_NAME,
         130
       );
-      Test.stopTest();
 
+      // Assert before stopTest(): the scheduled WorkflowRetryJob fires at
+      // Test.stopTest() and self-aborts its CronTrigger, so the row is gone
+      // afterwards.
       System.assertNotEquals(
         null,
         jobId,
@@ -92,6 +98,7 @@ public class WorkflowRetrySleepSchedulerTest {
         ],
         'A CronTrigger was created for the scheduled retry'
       );
+      Test.stopTest();
     }
   }
 
@@ -108,8 +115,10 @@ public class WorkflowRetrySleepSchedulerTest {
         STEP_NAME,
         130
       );
-      Test.stopTest();
 
+      // Assert before stopTest(): the scheduled WorkflowSleepJob fires at
+      // Test.stopTest() and self-aborts its CronTrigger, so the row is gone
+      // afterwards.
       System.assertNotEquals(
         null,
         jobId,
@@ -126,6 +135,7 @@ public class WorkflowRetrySleepSchedulerTest {
         'The sleep job name uses the WorkflowSleep_ prefix: ' +
         ct.CronJobDetail.Name
       );
+      Test.stopTest();
     }
   }
 }
