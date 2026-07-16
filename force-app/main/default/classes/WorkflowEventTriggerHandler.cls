@@ -148,7 +148,7 @@ public inherited sharing class WorkflowEventTriggerHandler {
 
   private void dispatchRequests() {
     if (!resumeRequests.isEmpty()) {
-      WorkflowEngine.resume(resumeRequests);
+      WorkflowBulkResumeService.resume(resumeRequests);
     }
     if (!signalRequests.isEmpty()) {
       WorkflowEngine.signal(signalRequests);

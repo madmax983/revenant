@@ -96,7 +96,7 @@ public class BatchFanoutWorkflowExampleTest {
       parentInst.Status__c = 'Failed';
       update parentInst;
 
-      WorkflowEngine.retryWorkflow(parentId);
+      WorkflowRetryService.retryWorkflow(parentId);
 
       // Drive to completion: FanoutStep re-runs idempotently (skips already-spawned
       // children), children complete, parent finishes. If FanoutStep were NOT

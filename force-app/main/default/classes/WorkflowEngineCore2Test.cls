@@ -93,7 +93,7 @@ public class WorkflowEngineCore2Test {
       );
 
       // Retry the workflow - should only reset ParallelStep1 and spawn orchestrator for it
-      WorkflowEngine.retryWorkflow(instanceId);
+      WorkflowRetryService.retryWorkflow(instanceId);
 
       step1Exec = [
         SELECT Status__c, Error_Details__c
@@ -335,7 +335,7 @@ public class WorkflowEngineCore2Test {
 
       // Run retry. It should not throw NullPointerException
       Test.startTest();
-      WorkflowEngine.retryWorkflow(instanceId);
+      WorkflowRetryService.retryWorkflow(instanceId);
       Test.stopTest();
 
       inst = [

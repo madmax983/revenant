@@ -975,7 +975,7 @@ public class WorkflowConcurrencyTest {
   static void testIsTransientLockErrorClassification() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       System.assert(
-        WorkflowEngine.isTransientLockError(
+        WorkflowTransientLockRetry.isTransientLockError(
           new WorkflowEngine.WorkflowException(
             'UNABLE_TO_LOCK_ROW, unable to obtain exclusive access to this record'
           )
@@ -983,7 +983,7 @@ public class WorkflowConcurrencyTest {
         'UNABLE_TO_LOCK_ROW must be classified transient'
       );
       System.assert(
-        WorkflowEngine.isTransientLockError(
+        WorkflowTransientLockRetry.isTransientLockError(
           new WorkflowEngine.WorkflowException(
             'Record Currently Unavailable: the record you are attempting to edit ' +
             'is currently being modified by another user. Please try again.'
@@ -992,7 +992,7 @@ public class WorkflowConcurrencyTest {
         'Record-currently-unavailable must be classified transient'
       );
       System.assert(
-        !WorkflowEngine.isTransientLockError(
+        !WorkflowTransientLockRetry.isTransientLockError(
           new WorkflowEngine.WorkflowException(
             'FIELD_CUSTOM_VALIDATION_EXCEPTION'
           )
@@ -1000,7 +1000,7 @@ public class WorkflowConcurrencyTest {
         'A genuine business error must NOT be classified transient'
       );
       System.assert(
-        !WorkflowEngine.isTransientLockError(null),
+        !WorkflowTransientLockRetry.isTransientLockError(null),
         'Null must not be classified transient'
       );
     }
@@ -1072,7 +1072,7 @@ public class WorkflowConcurrencyTest {
   @IsTest
   static void testTransientLockRetryBudgetExhaustionFails() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngine.maxTransientLockRetries = 2;
+      WorkflowTransientLockRetry.maxTransientLockRetries = 2;
       Workflow_Instance__c inst = new Workflow_Instance__c(
         Workflow_Name__c = WF,
         Status__c = 'Running',
@@ -1482,7 +1482,7 @@ public class WorkflowConcurrencyTest {
 
       // 5. Execute skip/resume
       Test.startTest();
-      WorkflowEngine.resumePastStep(
+      WorkflowOperatorSkip.resumePastStep(
         inst.Id,
         'WorkflowConcurrencyTest.WaitStep',
         '{}'

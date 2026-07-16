@@ -15,7 +15,7 @@
  *    yielding to a fresh transaction (`StepResult.yield`) whenever it approaches
  *    a governor limit, so an arbitrarily large selection never throws.
  *  - Each eligible instance is recovered through the EXISTING
- *    WorkflowEngine.retryWorkflow(Id) primitive — no new state-transition path.
+ *    WorkflowRetryService.retryWorkflow(Id) primitive — no new state-transition path.
  *    Idempotency leans on that primitive's FOR UPDATE active-state guard: an
  *    instance that is no longer Failed is skipped, never double-chained.
  *  - Eligibility is restricted to the operator-recoverable terminal set
@@ -233,7 +233,7 @@ public inherited sharing class BulkRedriveWorkflow implements WorkflowDefinition
     private RedriveOutcome redriveOne(Id instId) {
       Savepoint sp = Database.setSavepoint();
       try {
-        WorkflowEngine.retryWorkflow(instId);
+        WorkflowRetryService.retryWorkflow(instId);
         return RedriveOutcome.REDRIVEN;
       } catch (WorkflowEngine.WorkflowException wex) {
         Database.rollback(sp);

@@ -263,7 +263,7 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
         'body' => 'Async callout job failed: ' + jobException.getMessage()
       };
       try {
-        WorkflowEngine.resumeInstance(instanceId, JSON.serialize(state));
+        WorkflowResumeService.resumeInstance(instanceId, JSON.serialize(state));
       } catch (Exception ignored) {
         // Nothing more can be done from the Finalizer.
       }
@@ -305,7 +305,7 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
 
     // Resume the suspended instance with the callout result
     try {
-      WorkflowEngine.resumeInstance(instanceId, JSON.serialize(state));
+      WorkflowResumeService.resumeInstance(instanceId, JSON.serialize(state));
     } catch (Exception ignored) {
     }
   }

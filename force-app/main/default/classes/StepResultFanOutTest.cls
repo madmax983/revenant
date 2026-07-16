@@ -514,16 +514,16 @@ public class StepResultFanOutTest {
       child.Current_Step__c = 'StepResultFanOutTest.ChildStep';
       insert as system child;
 
-      // Call WorkflowEngine.startChildWorkflow with the matching correlation key in mixed case (e.g. 'Child1_')
+      // Call WorkflowChildService.startChildWorkflow with the matching correlation key in mixed case (e.g. 'Child1_')
       // Under our case-insensitive check, this call should resolve to a no-op (idempotent re-suspend)
       // rather than throwing a duplicate key exception or trying to insert a new row.
       try {
-        WorkflowEngine.ChildWorkflowStartRequest childReq = new WorkflowEngine.ChildWorkflowStartRequest();
+        WorkflowChildService.ChildWorkflowStartRequest childReq = new WorkflowChildService.ChildWorkflowStartRequest();
         childReq.parentId = parentId;
         childReq.workflowName = 'StepResultFanOutTest.SimpleChildWorkflow';
         childReq.correlationKey = 'Child1_' + parentId;
         childReq.inputJson = '{}';
-        WorkflowEngine.startChildWorkflow(childReq);
+        WorkflowChildService.startChildWorkflow(childReq);
         System.assert(
           true,
           'Should have resolved idempotently without throwing a duplicate exception'
