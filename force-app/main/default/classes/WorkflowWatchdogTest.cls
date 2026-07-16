@@ -1127,7 +1127,7 @@ public class WorkflowWatchdogTest {
       WorkflowEngine.disableQueueableInTest = true;
       WorkflowEngine.reclaimThresholdMinutes = 10;
       WorkflowEngine.mockNow = DateTime.now().addMinutes(15);
-      WorkflowEngine.watchdogTimeoutBatchSize = 0;
+      WorkflowTimeoutSweep.watchdogTimeoutBatchSize = 0;
 
       // Create candidate instance stuck in Running with a dead job ID
       Workflow_Instance__c inst = new Workflow_Instance__c(
