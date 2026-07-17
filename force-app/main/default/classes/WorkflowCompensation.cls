@@ -21,6 +21,11 @@ public inherited sharing class WorkflowCompensation {
    * @param instanceId Id of the CompensationFailed instance to resume rolling back
    */
   public static void resumeCompensation(Id instanceId) {
+    if (instanceId == null) {
+      // Nothing to resume; the operator action is idempotent, so a null
+      // reference is treated as a safe no-op.
+      return;
+    }
     List<Workflow_Instance__c> instances = [
       SELECT
         Id,
