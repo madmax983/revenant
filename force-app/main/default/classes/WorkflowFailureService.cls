@@ -6,8 +6,8 @@
  * Extracted from `WorkflowEngine`; the public `failWorkflowInstance` entry points
  * stay resident on the engine and delegate to `failInstance` here. The resident
  * `WorkflowEngine.FailInstanceRequest` DTO, the `WorkflowEngine.CAT_*` failure
- * categories and the resident shared helpers `WorkflowEngine.enqueueOrchestratorForInstance`
- * and `WorkflowEngine.preCreateFirstCompensationStep` are referenced fully qualified.
+ * categories and the resident shared helpers `WorkflowOrchestratorEnqueue.enqueueOrchestratorForInstance`
+ * and `WorkflowCompensation.preCreateFirstCompensationStep` are referenced fully qualified.
  * Parent-completion notification is delegated to `WorkflowChildService`. All
  * SOQL/DML executes in system mode.
  */
@@ -202,7 +202,7 @@ public inherited sharing class WorkflowFailureService {
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance);
-    WorkflowEngine.enqueueOrchestratorForInstance(instance.Id);
+    WorkflowOrchestratorEnqueue.enqueueOrchestratorForInstance(instance.Id);
   }
 
   private static void cancelSiblingStepsForErrorRouting(
@@ -288,10 +288,10 @@ public inherited sharing class WorkflowFailureService {
       ': ' +
       req.errorMessage)
       .left(255);
-    WorkflowEngine.preCreateFirstCompensationStep(instance);
+    WorkflowCompensation.preCreateFirstCompensationStep(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
-    WorkflowEngine.enqueueOrchestratorForInstance(instance.Id);
+    WorkflowOrchestratorEnqueue.enqueueOrchestratorForInstance(instance.Id);
   }
 
   // Prepends the cancel-phase marker to a stalled-rollback detail message when the

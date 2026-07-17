@@ -75,12 +75,12 @@ public inherited sharing class WorkflowStepInvoke {
     if (timeoutSeconds != null && timeoutSeconds > 0) {
       stepExec.Timeout_At__c = DateTime.now().addSeconds(timeoutSeconds);
       if (!deferPreExecDml) {
-        WorkflowEngine.saveStepExec(stepExec);
+        WorkflowStepExecStore.saveStepExec(stepExec);
       }
     } else {
       stepExec.Timeout_At__c = null;
       if (stepExec.Id == null && !deferPreExecDml) {
-        WorkflowEngine.saveStepExec(stepExec);
+        WorkflowStepExecStore.saveStepExec(stepExec);
       }
     }
     return timeoutSeconds;
@@ -111,7 +111,7 @@ public inherited sharing class WorkflowStepInvoke {
     } finally {
       if (timeoutSeconds != null && timeoutSeconds > 0) {
         stepExec.Timeout_At__c = null;
-        WorkflowEngine.saveStepExec(stepExec);
+        WorkflowStepExecStore.saveStepExec(stepExec);
         WorkflowTimeoutScheduler.cancelTimeoutJob(
           ctx.instanceId,
           ctx.activeStepName

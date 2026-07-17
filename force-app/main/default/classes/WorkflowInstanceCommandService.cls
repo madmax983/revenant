@@ -97,7 +97,7 @@ public inherited sharing class WorkflowInstanceCommandService {
   public static void resumeCompensationRollback(Id instanceId) {
     WorkflowDashboardSupport.checkAuthorization();
     try {
-      WorkflowEngine.resumeCompensation(instanceId);
+      WorkflowCompensation.resumeCompensation(instanceId);
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
     }
@@ -151,7 +151,7 @@ public inherited sharing class WorkflowInstanceCommandService {
   public static Id compensate(Id instanceId) {
     WorkflowDashboardSupport.checkAuthorization();
     try {
-      return WorkflowEngine.compensate(instanceId);
+      return WorkflowCompensation.compensate(instanceId);
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
     }
@@ -167,7 +167,7 @@ public inherited sharing class WorkflowInstanceCommandService {
     WorkflowDashboardSupport.checkAuthorization();
     try {
       if (req.runCompensations) {
-        WorkflowEngine.cancelWithCompensations(req.instanceId);
+        WorkflowCancellation.cancelWithCompensations(req.instanceId);
       } else {
         WorkflowEngine.cancel(req.instanceId);
       }

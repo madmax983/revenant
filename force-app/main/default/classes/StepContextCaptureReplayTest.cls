@@ -436,7 +436,7 @@ public class StepContextCaptureReplayTest {
       System.assertEquals(false, ctx.signals().getSignal('Go').isPresent());
 
       Test.startTest();
-      WorkflowEngine.redeliverMatchingSignalsForInstance(
+      WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
         inst.Id,
         inst.Correlation_Key__c
       );
@@ -494,7 +494,7 @@ public class StepContextCaptureReplayTest {
       insert sig2;
 
       Test.startTest();
-      WorkflowEngine.redeliverMatchingSignalsForInstance(
+      WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
         inst.Id,
         inst.Correlation_Key__c
       );
@@ -551,7 +551,7 @@ public class StepContextCaptureReplayTest {
       insert signals;
 
       Test.startTest();
-      WorkflowEngine.redeliverMatchingSignalsForInstance(
+      WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
         inst.Id,
         inst.Correlation_Key__c
       );

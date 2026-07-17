@@ -64,7 +64,7 @@ public inherited sharing class WorkflowBulkStartFinalize {
       if (requests[i] == null || results[i] != null) {
         continue;
       }
-      String normKey = WorkflowEngine.normalizeKey(requests[i].correlationKey);
+      String normKey = WorkflowKeys.normalizeKey(requests[i].correlationKey);
       if (
         String.isNotBlank(requests[i].correlationKey) &&
         resolvedIdByKey.containsKey(normKey)

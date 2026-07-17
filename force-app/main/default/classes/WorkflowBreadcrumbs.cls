@@ -69,7 +69,7 @@ public inherited sharing class WorkflowBreadcrumbs {
     }
 
     if (stepExec.Id == null) {
-      WorkflowEngine.saveStepExec(stepExec);
+      WorkflowStepExecStore.saveStepExec(stepExec);
     }
 
     insertBreadcrumbLogs(outcome, crumbs);

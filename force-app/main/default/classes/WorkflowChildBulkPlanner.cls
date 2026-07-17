@@ -4,7 +4,7 @@
  * validates child requests, indexes already-existing correlated children, builds the
  * unsaved child instances, and bulk-inserts them with a DUPLICATE_VALUE reconciliation
  * backstop. Called by `WorkflowChildBulkService`. Extracted from `WorkflowEngine`; the
- * resident `WorkflowEngine.WorkflowException` type and `WorkflowEngine.normalizeKey`
+ * resident `WorkflowEngine.WorkflowException` type and `WorkflowKeys.normalizeKey`
  * helper are referenced fully qualified. All SOQL/DML executes in system mode.
  */
 public inherited sharing class WorkflowChildBulkPlanner {
@@ -76,7 +76,7 @@ public inherited sharing class WorkflowChildBulkPlanner {
     for (Workflow_Instance__c existing : existingActive) {
       if (existing.Parent_Instance__c == parentId) {
         existingByCorrKey.put(
-          WorkflowEngine.normalizeKey(existing.Active_Correlation_Key__c),
+          WorkflowKeys.normalizeKey(existing.Active_Correlation_Key__c),
           existing
         );
       } else {
@@ -97,7 +97,7 @@ public inherited sharing class WorkflowChildBulkPlanner {
     ];
     for (Workflow_Instance__c existing : existingSiblings) {
       existingByCorrKey.put(
-        WorkflowEngine.normalizeKey(existing.Correlation_Key__c),
+        WorkflowKeys.normalizeKey(existing.Correlation_Key__c),
         existing
       );
     }
@@ -175,7 +175,7 @@ public inherited sharing class WorkflowChildBulkPlanner {
     Set<String> corrKeys = new Set<String>();
     for (Workflow_Instance__c inst : instances) {
       if (String.isNotBlank(inst.Correlation_Key__c)) {
-        corrKeys.add(WorkflowEngine.normalizeKey(inst.Correlation_Key__c));
+        corrKeys.add(WorkflowKeys.normalizeKey(inst.Correlation_Key__c));
       }
     }
     return corrKeys;
@@ -198,7 +198,7 @@ public inherited sharing class WorkflowChildBulkPlanner {
         WITH SYSTEM_MODE
       ]) {
         siblingsMap.put(
-          WorkflowEngine.normalizeKey(sibling.Active_Correlation_Key__c),
+          WorkflowKeys.normalizeKey(sibling.Active_Correlation_Key__c),
           sibling
         );
       }
@@ -206,7 +206,7 @@ public inherited sharing class WorkflowChildBulkPlanner {
     for (Workflow_Instance__c inst : instancesToInsert) {
       if (String.isNotBlank(inst.Correlation_Key__c)) {
         Workflow_Instance__c sibling = siblingsMap.get(
-          WorkflowEngine.normalizeKey(inst.Correlation_Key__c)
+          WorkflowKeys.normalizeKey(inst.Correlation_Key__c)
         );
         if (sibling == null || sibling.Parent_Instance__c != parentId) {
           throw new WorkflowEngine.WorkflowException(

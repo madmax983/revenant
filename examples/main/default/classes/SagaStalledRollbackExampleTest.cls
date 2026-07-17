@@ -54,7 +54,7 @@ public class SagaStalledRollbackExampleTest {
 
       // The transient outage clears, then the operator resumes the rollback.
       SagaStalledRollbackExample.failShipmentCompensation = false;
-      WorkflowEngine.resumeCompensation(instanceId);
+      WorkflowCompensation.resumeCompensation(instanceId);
 
       // Drive the resumed rollback to completion: Ship -> Reserve -> Charge -> done.
       WorkflowEngine.runStep(instanceId, null); // ShipOrderStep compensate (now succeeds)
@@ -271,10 +271,10 @@ public class SagaStalledRollbackExampleTest {
 
       Test.startTest();
       // First resume transitions out of the stalled state.
-      WorkflowEngine.resumeCompensation(inst.Id);
+      WorkflowCompensation.resumeCompensation(inst.Id);
       // Second (double-click) resume must be a no-op: status is no longer
       // CompensationFailed, so nothing is re-enqueued or mutated.
-      WorkflowEngine.resumeCompensation(inst.Id);
+      WorkflowCompensation.resumeCompensation(inst.Id);
       Test.stopTest();
 
       Workflow_Instance__c afterResume = [

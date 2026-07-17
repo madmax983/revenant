@@ -124,8 +124,8 @@ public inherited sharing class WorkflowSignalOrStartWake {
         inst.Current_Step__c.contains(',')
       ) {
         parallelInstances.add(inst);
-      } else if (!WorkflowEngine.enqueuedInstanceIds.contains(inst.Id)) {
-        WorkflowEngine.enqueuedInstanceIds.add(inst.Id);
+      } else if (!WorkflowResumeEnqueue.enqueuedInstanceIds.contains(inst.Id)) {
+        WorkflowResumeEnqueue.enqueuedInstanceIds.add(inst.Id);
         instanceIdsToEnqueue.add(inst.Id);
       }
     }
@@ -134,7 +134,7 @@ public inherited sharing class WorkflowSignalOrStartWake {
       WorkflowOrchestratorEnqueue.enqueueOrchestrators(instanceIdsToEnqueue);
     }
     if (!parallelInstances.isEmpty()) {
-      WorkflowEngine.enqueueResumeBulk(parallelInstances);
+      WorkflowBranchResume.enqueueResumeBulk(parallelInstances);
     }
   }
 

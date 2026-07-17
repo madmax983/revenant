@@ -52,7 +52,7 @@ public inherited sharing class WorkflowScalarStartService {
     Map<String, Workflow_Instance__c> found = includeTerminal
       ? WorkflowStartDedup.findExistingByKey(keys)
       : WorkflowStartDedup.findActiveByKey(keys);
-    return found.get(WorkflowEngine.normalizeKey(correlationKey));
+    return found.get(WorkflowKeys.normalizeKey(correlationKey));
   }
 
   /**
@@ -90,7 +90,7 @@ public inherited sharing class WorkflowScalarStartService {
       Workflow_Instance__c winner = WorkflowStartDedup.findAnyByKey(
           new Set<String>{ correlationKey }
         )
-        .get(WorkflowEngine.normalizeKey(correlationKey));
+        .get(WorkflowKeys.normalizeKey(correlationKey));
       if (winner != null) {
         return new WorkflowEngine.StartResult(winner.Id);
       }

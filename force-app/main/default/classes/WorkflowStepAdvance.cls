@@ -31,7 +31,7 @@ public inherited sharing class WorkflowStepAdvance {
       result.directive().outputJson,
       'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     // Tie signal consumption to the step's durable COMPLETE transition: only
     // now (not on yield/retry/suspend) are the signals this step observed

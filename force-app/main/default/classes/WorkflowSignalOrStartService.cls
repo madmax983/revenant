@@ -76,7 +76,7 @@ public inherited sharing class WorkflowSignalOrStartService {
       return run.startResults;
     } catch (Exception e) {
       Database.rollback(sp);
-      WorkflowEngine.clearEnqueueGuards(run.activeInstIdsToWake);
+      WorkflowResumeEnqueue.clearEnqueueGuards(run.activeInstIdsToWake);
       throw e;
     }
   }

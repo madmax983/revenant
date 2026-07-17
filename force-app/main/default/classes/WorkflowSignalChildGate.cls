@@ -31,7 +31,7 @@ public inherited sharing class WorkflowSignalChildGate {
       Set<String> expectedKeys = new Set<String>();
       for (Object o : keysObj) {
         if (o != null) {
-          expectedKeys.add(WorkflowEngine.normalizeKey(String.valueOf(o)));
+          expectedKeys.add(WorkflowKeys.normalizeKey(String.valueOf(o)));
         }
       }
       return expectedKeys;
@@ -58,7 +58,7 @@ public inherited sharing class WorkflowSignalChildGate {
     }
     for (Workflow_Instance__c child : children) {
       if (String.isNotBlank(child.Correlation_Key__c)) {
-        String normChildKey = WorkflowEngine.normalizeKey(
+        String normChildKey = WorkflowKeys.normalizeKey(
           child.Correlation_Key__c
         );
         if (

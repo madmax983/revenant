@@ -34,7 +34,7 @@ public class WorkflowEngineCompensation2Test {
       );
 
       Test.startTest();
-      WorkflowEngine.cancelWithCompensations(parent.Id);
+      WorkflowCancellation.cancelWithCompensations(parent.Id);
 
       // The stalled child must now be resumed under the cancel phase.
       Workflow_Instance__c resumedChild = [
@@ -207,7 +207,7 @@ public class WorkflowEngineCompensation2Test {
       );
 
       WorkflowEngineMocksATest.cancelWordCompensationShouldFail = false;
-      WorkflowEngine.resumeCompensation(inst.Id);
+      WorkflowCompensation.resumeCompensation(inst.Id);
 
       Workflow_Instance__c resumed = [
         SELECT Status__c
@@ -268,7 +268,7 @@ public class WorkflowEngineCompensation2Test {
       );
 
       Test.startTest();
-      WorkflowEngine.resumeCompensation(inst.Id);
+      WorkflowCompensation.resumeCompensation(inst.Id);
       Test.stopTest();
 
       List<Workflow_Step_Execution__c> attempts = [
@@ -401,7 +401,7 @@ public class WorkflowEngineCompensation2Test {
         'The cancel marker must survive the suspended-compensation crash'
       );
 
-      WorkflowEngine.resumeCompensation(inst.Id);
+      WorkflowCompensation.resumeCompensation(inst.Id);
       WorkflowEngine.runStep(inst.Id, null);
       Test.stopTest();
 

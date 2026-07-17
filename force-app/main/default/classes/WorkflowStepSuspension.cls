@@ -31,7 +31,7 @@ public inherited sharing class WorkflowStepSuspension {
       result.directive().stepStateJson,
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
@@ -88,11 +88,11 @@ public inherited sharing class WorkflowStepSuspension {
           stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
         )
       : null;
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     instance.Status__c = 'Suspended';
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    WorkflowEngine.redeliverMatchingSignalsForInstance(
+    WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
       instance.Correlation_Key__c
     );
@@ -122,7 +122,7 @@ public inherited sharing class WorkflowStepSuspension {
       result.directive().stepStateJson,
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     instance.Status__c = 'Suspended';
     instance.Sleep_Until__c = DateTime.now()
@@ -172,11 +172,11 @@ public inherited sharing class WorkflowStepSuspension {
       JSON.serialize(childInfo),
       'State_ChildInfo_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     instance.Status__c = 'Suspended';
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    WorkflowEngine.redeliverMatchingSignalsForInstance(
+    WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
       instance.Correlation_Key__c
     );
@@ -228,11 +228,11 @@ public inherited sharing class WorkflowStepSuspension {
       JSON.serialize(state),
       'State_ChildKeys_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     instance.Status__c = 'Suspended';
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    WorkflowEngine.redeliverMatchingSignalsForInstance(
+    WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
       instance.Correlation_Key__c
     );
@@ -282,11 +282,11 @@ public inherited sharing class WorkflowStepSuspension {
       JSON.serialize(state),
       'State_Approval_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     instance.Status__c = 'Suspended';
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    WorkflowEngine.redeliverMatchingSignalsForInstance(
+    WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
       instance.Correlation_Key__c
     );
@@ -315,7 +315,7 @@ public inherited sharing class WorkflowStepSuspension {
         : result.directive().outputJson,
       'Output_Split_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     // The spawning step durably completed; consume the signals it observed so
     // they are not re-loaded into the parallel branches it fans out to. The

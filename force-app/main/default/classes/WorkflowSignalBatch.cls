@@ -147,7 +147,7 @@ public inherited sharing class WorkflowSignalBatch {
         // resolve the instance stored as 'Order-1' rather than miss the map and
         // be treated as unmatched (which would skip a keyed cancel entirely).
         maps.instByKey.put(
-          WorkflowEngine.normalizeKey(inst.Correlation_Key__c),
+          WorkflowKeys.normalizeKey(inst.Correlation_Key__c),
           inst
         );
       }
@@ -169,7 +169,7 @@ public inherited sharing class WorkflowSignalBatch {
   ) {
     Workflow_Instance__c inst = maps.instById.get(req.keyOrId);
     if (inst == null) {
-      inst = maps.instByKey.get(WorkflowEngine.normalizeKey(req.keyOrId));
+      inst = maps.instByKey.get(WorkflowKeys.normalizeKey(req.keyOrId));
     }
     return inst;
   }

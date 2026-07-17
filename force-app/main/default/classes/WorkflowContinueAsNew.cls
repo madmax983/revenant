@@ -30,11 +30,11 @@ public inherited sharing class WorkflowContinueAsNew {
     stepExec.Retry_Count__c += 1;
 
     // Get and sanitize retry policy
-    RetryPolicy policy = WorkflowEngine.sanitizePolicy(
+    RetryPolicy policy = WorkflowRetryScheduling.sanitizePolicy(
       result.directive().retry.policy
     );
 
-    WorkflowEngine.persistRetryMaxAttempts(instance, stepExec, policy);
+    WorkflowRetryScheduling.persistRetryMaxAttempts(instance, stepExec, policy);
 
     if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
       stepExec.Status__c = 'Failed';
@@ -42,7 +42,7 @@ public inherited sharing class WorkflowContinueAsNew {
         'Max retries (' +
         policy.maximumAttempts +
         ') exceeded.';
-      WorkflowEngine.saveStepExec(stepExec);
+      WorkflowStepExecStore.saveStepExec(stepExec);
 
       WorkflowEngine.FailInstanceRequest maxRetriesReq = new WorkflowEngine.FailInstanceRequest();
       maxRetriesReq.instanceId = instance.Id;
@@ -51,7 +51,11 @@ public inherited sharing class WorkflowContinueAsNew {
       maxRetriesReq.failureCategory = WorkflowEngine.CAT_RETRIES_EXHAUSTED;
       WorkflowEngine.failWorkflowInstance(maxRetriesReq);
     } else {
-      WorkflowEngine.scheduleExponentialRetry(instance, stepExec, policy);
+      WorkflowRetryScheduling.scheduleExponentialRetry(
+        instance,
+        stepExec,
+        policy
+      );
     }
   }
 
@@ -79,7 +83,7 @@ public inherited sharing class WorkflowContinueAsNew {
       result.directive().continuation.nextInputJson,
       'ContinueInput_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     // Resolve the new correlation key
     String newKey = resolveContinueAsNewKey(
@@ -309,7 +313,7 @@ public inherited sharing class WorkflowContinueAsNew {
         '\nfailureData: ' +
         result.directive().failureDataJson
       : result.directive().failureReason;
-    WorkflowEngine.saveStepExec(stepExec);
+    WorkflowStepExecStore.saveStepExec(stepExec);
 
     // Publish any domain events the step buffered via StepContext.emit() before
     // returning fail() — same commit-coupling contract as COMPLETE/SPLIT so

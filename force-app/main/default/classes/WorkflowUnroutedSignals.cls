@@ -7,7 +7,7 @@
  * wakes the instance through the normal resume handoff. The load and target
  * resolution lock their rows FOR UPDATE and run in system mode; the actual
  * re-parent/wake (with its savepoint and duplicate-key tombstoning) remains on
- * {@link WorkflowEngine#deliverRedeliveredSignal} because it shares the engine's
+ * {@link WorkflowSignalRedelivery#deliverRedeliveredSignal} because it shares the engine's
  * signal-dedup, wake and enqueue-guard primitives with the still-resident signal
  * router. Extracted from `WorkflowEngine`; callers invoke
  * {@link WorkflowUnroutedSignals#redeliverCapturedSignal} directly.
@@ -38,7 +38,7 @@ public inherited sharing class WorkflowUnroutedSignals {
       return false;
     }
 
-    return WorkflowEngine.deliverRedeliveredSignal(sig, instance);
+    return WorkflowSignalRedelivery.deliverRedeliveredSignal(sig, instance);
   }
 
   /**

@@ -133,7 +133,7 @@ public inherited sharing class WorkflowStepContext {
   ) {
     CaptureContext cc = new CaptureContext();
     if (stepInstance instanceof RetryConfigurable) {
-      RetryPolicy policy = WorkflowEngine.sanitizePolicy(
+      RetryPolicy policy = WorkflowRetryScheduling.sanitizePolicy(
         ((RetryConfigurable) stepInstance).getRetryPolicy()
       );
       cc.maxAttempts = policy.maximumAttempts;

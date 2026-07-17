@@ -243,12 +243,12 @@ public inherited sharing class WorkflowPauseResumeDrainer {
   }
 
   // Fan-out a resume enqueue per unfinished parallel branch (mirrors the logic
-  // in WorkflowEngine.enqueueResumeBulk but called from outside the engine). The
+  // in WorkflowBranchResume.enqueueResumeBulk but called from outside the engine). The
   // production path collects one RUN_STEP event per branch and publishes them in a
   // single EventBus.publish; the test path dispatches per branch directly.
   /**
    * @description Fans out a resume enqueue per unfinished parallel branch, mirroring
-   * WorkflowEngine.enqueueResumeBulk: resolve per-branch status, collect the
+   * WorkflowBranchResume.enqueueResumeBulk: resolve per-branch status, collect the
    * RUN_STEP events for unfinished branches, then publish them in one call.
    * @param instances The resumed multi-branch instances to fan out.
    */
@@ -269,7 +269,7 @@ public inherited sharing class WorkflowPauseResumeDrainer {
   // whose step row is already Completed. Resolve the latest status per
   // (instance, branch) so completed branches can be skipped — driving a no-op
   // worker per finished branch would waste the resume publish/DML budget and
-  // could roll back the resume (mirrors WorkflowEngine.enqueueResumeBulk).
+  // could roll back the resume (mirrors WorkflowBranchResume.enqueueResumeBulk).
   /**
    * @description Resolves the latest status per (instance, branch) so already
    * Completed branches can be skipped, keyed by "instanceId|stepName".

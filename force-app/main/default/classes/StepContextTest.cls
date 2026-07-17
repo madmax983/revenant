@@ -868,7 +868,7 @@ public class StepContextTest {
   static void testIdempotencyKeyCompensateDistinctAndStable() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // The engine builds a compensate() context with stepName "<step>_Compensate"
-      // (see WorkflowEngine.runCompensationStep). So the compensation key is
+      // (see WorkflowCompensationRunner.runCompensationStep). So the compensation key is
       // distinct from the forward execution key yet stable across compensation
       // retries.
       Id instanceId = TestIdFactory.generate(Organization.SObjectType);

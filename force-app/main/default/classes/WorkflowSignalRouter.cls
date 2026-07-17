@@ -302,17 +302,17 @@ public inherited sharing class WorkflowSignalRouter {
         throw ex;
       }
       try {
-        WorkflowEngine.wakeInstanceForSignal(instance);
+        WorkflowResumeEnqueue.wakeInstanceForSignal(instance);
       } catch (Exception e) {
         Database.rollback(sp);
-        WorkflowEngine.clearEnqueueGuards(new Set<Id>{ instance.Id });
+        WorkflowResumeEnqueue.clearEnqueueGuards(new Set<Id>{ instance.Id });
         throw e;
       }
       return;
     }
 
     Database.insert(sig, true, AccessLevel.SYSTEM_MODE);
-    WorkflowEngine.wakeInstanceForSignal(instance);
+    WorkflowResumeEnqueue.wakeInstanceForSignal(instance);
   }
 
   // Cancels a workflow instance, optionally running saga compensations across the
