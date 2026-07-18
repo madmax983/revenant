@@ -88,7 +88,7 @@ public class SleepStep implements WorkflowStep {
         if (ctx.stepStateJson != null) {
             return StepResult.complete(null, 'awake');
         }
-        return StepResult.sleep(300, 'sleeping'); // 5 minutes
+        return StepResult.sleep(300).withStepState('sleeping'); // 5 minutes
     }
 }
 

@@ -48,7 +48,7 @@ The step just calls this and returns `StepResult.complete()` with the classifica
 public String getNextStep(String currentStep, StepResult result) {
     if (currentStep == 'TriageWorkflow.AiClassifyStep') {
         String cls = (String)
-            ((Map<String,Object>) JSON.deserializeUntyped(result.outputJson)).get('classification');
+            ((Map<String,Object>) JSON.deserializeUntyped(result.directive().outputJson)).get('classification');
         if (cls == 'billing')   return 'TriageWorkflow.AutoResolveBillingStep';
         if (cls == 'technical') return 'TriageWorkflow.CreateCaseStep';
         return 'TriageWorkflow.EscalateStep';
@@ -230,7 +230,7 @@ The pattern is identical whether the preceding step was an LLM call or a human t
 ```java
 public String getNextStep(String currentStep, StepResult result) {
     if (currentStep == 'ReActLoopWorkflowExample.ReasonStep') {
-        Map<String,Object> out = (Map<String,Object>) JSON.deserializeUntyped(result.outputJson);
+        Map<String,Object> out = (Map<String,Object>) JSON.deserializeUntyped(result.directive().outputJson);
         Boolean done = (Boolean) out.get('done');
         return done ? 'ReActLoopWorkflowExample.FinishStep' : 'ReActLoopWorkflowExample.ActStep';
     }
