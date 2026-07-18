@@ -26,6 +26,20 @@ public inherited sharing class WorkflowCompensationStepLog {
     String activeStepName = stack[stack.size() - 1];
     String compensationStepLogName = activeStepName + '_Compensate';
 
+    // Nothing to append when there is no instance to log against or no step
+    // name to compensate; a resumed rollback with missing context is a no-op.
+    // These guards also dominate the SOQL binds in insertCompensationRetryStep,
+    // which is only reachable from here.
+    if (instance.Id == null) {
+      return;
+    }
+    if (activeStepName == null) {
+      return;
+    }
+    if (compensationStepLogName == null) {
+      return;
+    }
+
     // Only the latest attempt is read (existing[0]) for idempotency and to seed
     // the next retry, so LIMIT 1 avoids loading every historical attempt's inline
     // Captured_Values__c payload into heap on a repeatedly operator-resumed

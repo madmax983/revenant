@@ -47,6 +47,9 @@ public inherited sharing class WorkflowUnroutedSignals {
    * @return the locked Unrouted signal row, or null when none matches
    */
   private static Workflow_Signal__c loadUnroutedSignal(Id signalId) {
+    if (signalId == null) {
+      return null;
+    }
     List<Workflow_Signal__c> rows = [
       SELECT
         Id,
