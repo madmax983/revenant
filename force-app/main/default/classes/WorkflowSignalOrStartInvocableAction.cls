@@ -81,10 +81,12 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
   )
   /**
    * @description Idempotently starts and signals workflows for each request in one
-   * transaction. Rows with valid contract input are batched to the engine; rows
-   * with invalid input are delegated individually so a dedup hit is still
-   * delivered while a genuine new-start contract failure becomes a branchable
-   * isValid=false result.
+   * transaction. Rows with valid contract input are batched to the engine FIRST;
+   * then rows with invalid input are delegated individually so a dedup hit — to a
+   * pre-existing instance OR one just created by a same-key valid sibling in this
+   * batch — still delivers its signal, while a genuine new-start contract failure
+   * becomes a branchable isValid=false result. Per-row results stay aligned to the
+   * original request order despite the internal reordering.
    * @param requests The signal-or-start requests to process.
    * @return One result per request, or an empty list when requests is null/empty.
    */
@@ -102,6 +104,12 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
 
     List<WorkflowEngine.SignalOrStartRequest> cleanEngineRequests = new List<WorkflowEngine.SignalOrStartRequest>();
     List<Integer> cleanEngineIndices = new List<Integer>();
+    // Rows with invalid input are collected here and resolved AFTER the clean
+    // batch, never during the loop — so a same-key valid sibling has already
+    // created its instance and this row's signal can be delivered to it.
+    List<SignalOrStartRequest> suspectRequests = new List<SignalOrStartRequest>();
+    List<Integer> suspectIndices = new List<Integer>();
+    List<List<WorkflowInputFieldError>> suspectErrors = new List<List<WorkflowInputFieldError>>();
 
     for (Integer i = 0; i < requests.size(); i++) {
       SignalOrStartRequest req = requests[i];
@@ -116,11 +124,25 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
         cleanEngineRequests.add(toEngineRequest(req));
         cleanEngineIndices.add(i);
       } else {
-        results[i] = resolveSuspect(req, inputErrors);
+        suspectRequests.add(req);
+        suspectIndices.add(i);
+        suspectErrors.add(inputErrors);
       }
     }
 
+    // Create/resolve the valid rows FIRST (one bulk call), so an invalid row
+    // sharing a correlation key can dedup-resolve to the just-created sibling and
+    // its signal is delivered instead of dropped.
     applyCleanResults(cleanEngineRequests, cleanEngineIndices, results);
+
+    // Then resolve the invalid-input rows individually against the now-existing
+    // instances (intra-batch siblings included), preserving each row's index.
+    for (Integer s = 0; s < suspectRequests.size(); s++) {
+      results[suspectIndices[s]] = resolveSuspect(
+        suspectRequests[s],
+        suspectErrors[s]
+      );
+    }
 
     return results;
   }

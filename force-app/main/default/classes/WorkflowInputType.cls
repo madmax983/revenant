@@ -10,10 +10,14 @@
  * Coercion rules applied by {@link WorkflowInputValidator} (strict, no mutation of
  * the payload):
  * - `STRING_TYPE`   — the value is a JSON string.
- * - `INTEGER_TYPE`  — the value is a whole number (`Integer` or `Long`); a
- *                     fractional number or a numeric string does NOT satisfy it.
- * - `LONG_TYPE`     — same acceptance set as `INTEGER_TYPE` (`Integer` or `Long`),
- *                     for authors who want to name a wide integer explicitly.
+ * - `INTEGER_TYPE`  — the value is a whole number within the signed 32-bit range
+ *                     [-2147483648, 2147483647] (an Apex `Integer`, or a `Long`
+ *                     that fits). A whole number OUTSIDE that range is rejected —
+ *                     use `LONG_TYPE` for wide integers — because a downstream step
+ *                     reading the field as an Apex `Integer` would otherwise fail.
+ *                     A fractional number or a numeric string never satisfies it.
+ * - `LONG_TYPE`     — any whole number (`Integer` or `Long`), including values
+ *                     outside the 32-bit range; use it to name a wide integer.
  * - `DECIMAL_TYPE`  — the value is any JSON number (`Integer`, `Long`, `Double`, or
  *                     `Decimal`); the issue's generic "Number" maps here.
  * - `BOOLEAN_TYPE`  — the value is a JSON boolean; the strings "true"/"false" do

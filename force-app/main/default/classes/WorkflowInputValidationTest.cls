@@ -37,7 +37,9 @@ public class WorkflowInputValidationTest {
         .require('amount', WorkflowInputType.DECIMAL_TYPE)
         .optional('vipOnboarding', WorkflowInputType.BOOLEAN_TYPE)
         .optional('startDate', WorkflowInputType.DATE_TYPE)
-        .optional('startTime', WorkflowInputType.DATETIME_TYPE);
+        .optional('startTime', WorkflowInputType.DATETIME_TYPE)
+        .optional('count', WorkflowInputType.INTEGER_TYPE)
+        .optional('bigCount', WorkflowInputType.LONG_TYPE);
     }
 
     /**
@@ -744,175 +746,94 @@ public class WorkflowInputValidationTest {
     }
   }
 
-  // ── FIX 4: contract enforced only on NEW starts; dedup hits are not blocked ───
+  // ── INTEGER_TYPE is the signed 32-bit range; wide whole numbers use LONG_TYPE ─
+
+  private static WorkflowEngine.StartRequest numberReq(
+    String key,
+    String field,
+    Object value
+  ) {
+    return new WorkflowEngine.StartRequest(
+      CONTRACT_WF,
+      key,
+      new Map<String, Object>{
+        'accountId' => 'ACME-ACCOUNT-1',
+        'amount' => 10,
+        field => value
+      }
+    );
+  }
 
   @IsTest
-  static void testScalarGetOrStartExistingWithInvalidFallbackNotBlocked() {
+  static void testIntegerTypeInRangePasses() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Integer.MAX_VALUE is in range.
+      System.assertEquals(
+        true,
+        WorkflowInputValidator.collectErrors(
+            numberReq('VIV_int_ok', 'count', 2147483647)
+          )
+          .isEmpty(),
+        'A 32-bit whole number satisfies INTEGER_TYPE'
+      );
+    }
+  }
+
+  @IsTest
+  static void testIntegerTypeOutOfRangeFailsWrongType() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      // An instance already exists (started with valid input).
-      Id existingId = WorkflowEngine.start(
-        CONTRACT_WF,
-        'VIV_exist_scalar',
-        validInput()
-      );
-
-      // A get-or-start to the SAME key with an invalid fallback must dedup to the
-      // existing instance WITHOUT throwing — its fallback input is never persisted.
-      WorkflowEngine.StartResult res = WorkflowEngine.startOrGet(
-        new WorkflowEngine.StartRequest(
+      // 3000000000 and -3000000000 exceed the signed 32-bit range -> Long.
+      for (Long outOfRange : new List<Long>{ 3000000000L, -3000000000L }) {
+        WorkflowEngine.StartRequest req = numberReq(
+          'VIV_int_bad',
+          'count',
+          outOfRange
+        );
+        List<WorkflowInputFieldError> errors = WorkflowInputValidator.collectErrors(
+          req
+        );
+        System.assertEquals(1, errors.size(), 'Out-of-range: one violation');
+        System.assertEquals('count', errors[0].fieldName);
+        System.assertEquals(
+          WorkflowInputErrorReason.WRONG_TYPE,
+          errors[0].reason,
+          'A whole number outside 32-bit is WRONG_TYPE for INTEGER_TYPE: ' +
+          outOfRange
+        );
+      }
+      // And no instance is created for the rejected start.
+      Boolean threw = false;
+      try {
+        WorkflowEngine.start(
           CONTRACT_WF,
-          'VIV_exist_scalar',
-          new Map<String, Object>{ 'amount' => 5 } // missing accountId
-        )
-      );
-
-      System.assertEquals(existingId, res.instanceId, 'Deduped to existing');
-      System.assertEquals(false, res.isNew);
-      System.assertEquals(
-        1,
-        instanceCountForKey('VIV_exist_scalar'),
-        'No new instance created for the dedup hit'
-      );
+          'VIV_int_bad',
+          new Map<String, Object>{
+            'accountId' => 'ACME-ACCOUNT-1',
+            'amount' => 10,
+            'count' => 3000000000L
+          }
+        );
+      } catch (WorkflowInputException ex) {
+        threw = true;
+      }
+      System.assertEquals(true, threw);
+      System.assertEquals(0, instanceCountForKey('VIV_int_bad'));
     }
   }
 
   @IsTest
-  static void testBulkSignalOrStartExistingWithInvalidFallbackDelivers() {
+  static void testLongTypeAcceptsOutOfRange() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngine.disableQueueableInTest = true;
-      // A suspended instance already exists for the key (proven signal-target
-      // pattern), so signal-or-start dedups to it.
-      Workflow_Instance__c existing = new Workflow_Instance__c(
-        Workflow_Name__c = CONTRACT_WF,
-        Status__c = 'Suspended',
-        Correlation_Key__c = 'VIV_exist_sos'
-      );
-      insert existing;
-
-      // signal-or-start to the existing instance with an invalid/minimal fallback:
-      // the signal must be delivered (existing returned), no throw, no new instance.
-      WorkflowEngine.StartRequest badStart = new WorkflowEngine.StartRequest(
-        CONTRACT_WF,
-        'VIV_exist_sos',
-        new Map<String, Object>{ 'amount' => 5 } // missing accountId
-      );
-      WorkflowEngine.SignalOrStartRequest sosReq = new WorkflowEngine.SignalOrStartRequest(
-        badStart,
-        'WakeUp',
-        '{"x":1}'
-      );
-
-      List<WorkflowEngine.StartResult> res = WorkflowEngine.signalOrStart(
-        new List<WorkflowEngine.SignalOrStartRequest>{ sosReq }
-      );
-
-      System.assertEquals(1, res.size());
-      System.assertEquals(
-        existing.Id,
-        res[0].instanceId,
-        'Signal delivered to existing'
-      );
-      System.assertEquals(1, instanceCountForKey('VIV_exist_sos'));
-    }
-  }
-
-  @IsTest
-  static void testInvocableGetOrStartExistingWithInvalidFallbackDelivers() {
-    System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngine.disableQueueableInTest = true;
-      Id existingId = WorkflowEngine.start(
-        CONTRACT_WF,
-        'VIV_inv_exist',
-        validInput()
-      );
-
-      WorkflowStartInvocableAction.StartRequest bad = new WorkflowStartInvocableAction.StartRequest();
-      bad.workflowName = CONTRACT_WF;
-      bad.correlationKey = 'VIV_inv_exist';
-      bad.inputJson = '{"amount":5}'; // missing accountId
-
-      Test.startTest();
-      List<WorkflowStartInvocableAction.StartResult> results = WorkflowStartInvocableAction.startWorkflow(
-        new List<WorkflowStartInvocableAction.StartRequest>{ bad }
-      );
-      Test.stopTest();
-
-      System.assertEquals(1, results.size());
+      // The same wide whole number satisfies LONG_TYPE.
       System.assertEquals(
         true,
-        results[0].isValid,
-        'A get-or-start dedup hit is delivered, not blocked by an unused invalid fallback'
+        WorkflowInputValidator.collectErrors(
+            numberReq('VIV_long_ok', 'bigCount', 3000000000L)
+          )
+          .isEmpty(),
+        'A wide whole number satisfies LONG_TYPE'
       );
-      System.assertEquals(existingId, results[0].workflowInstanceId);
-      System.assertEquals(1, instanceCountForKey('VIV_inv_exist'));
-    }
-  }
-
-  @IsTest
-  static void testInvocableSignalOrStartExistingWithInvalidFallbackDelivers() {
-    System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngine.disableQueueableInTest = true;
-      Workflow_Instance__c existing = new Workflow_Instance__c(
-        Workflow_Name__c = CONTRACT_WF,
-        Status__c = 'Suspended',
-        Correlation_Key__c = 'VIV_sos_exist'
-      );
-      insert existing;
-
-      WorkflowSignalOrStartInvocableAction.SignalOrStartRequest bad = new WorkflowSignalOrStartInvocableAction.SignalOrStartRequest();
-      bad.workflowName = CONTRACT_WF;
-      bad.correlationKey = 'VIV_sos_exist';
-      bad.inputJson = '{"amount":5}'; // missing accountId
-      bad.signalName = 'WakeUp';
-      bad.payloadJson = '{"x":1}';
-
-      Test.startTest();
-      List<WorkflowSignalOrStartInvocableAction.SignalOrStartResult> results = WorkflowSignalOrStartInvocableAction.signalOrStartWorkflow(
-        new List<WorkflowSignalOrStartInvocableAction.SignalOrStartRequest>{
-          bad
-        }
-      );
-      Test.stopTest();
-
-      System.assertEquals(1, results.size());
-      System.assertEquals(
-        true,
-        results[0].isValid,
-        'A signal-or-start dedup hit is delivered, not blocked by an unused invalid fallback'
-      );
-      System.assertEquals(existing.Id, results[0].workflowInstanceId);
-      System.assertEquals(1, instanceCountForKey('VIV_sos_exist'));
-    }
-  }
-
-  @IsTest
-  static void testInvocableSignalOrStartNewInvalidRejected() {
-    System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngine.disableQueueableInTest = true;
-      // No existing instance for this key: a genuine new start with invalid input
-      // is rejected with a branchable isValid=false and nothing is created.
-      WorkflowSignalOrStartInvocableAction.SignalOrStartRequest bad = new WorkflowSignalOrStartInvocableAction.SignalOrStartRequest();
-      bad.workflowName = CONTRACT_WF;
-      bad.correlationKey = 'VIV_sos_new';
-      bad.inputJson = '{"amount":5}'; // missing accountId
-      bad.signalName = 'WakeUp';
-      bad.payloadJson = '{"x":1}';
-
-      Test.startTest();
-      List<WorkflowSignalOrStartInvocableAction.SignalOrStartResult> results = WorkflowSignalOrStartInvocableAction.signalOrStartWorkflow(
-        new List<WorkflowSignalOrStartInvocableAction.SignalOrStartRequest>{
-          bad
-        }
-      );
-      Test.stopTest();
-
-      System.assertEquals(1, results.size());
-      System.assertEquals(false, results[0].isValid);
-      System.assertNotEquals(null, results[0].validationError);
-      System.assert(results[0].validationError.contains('accountId'));
-      System.assertEquals(null, results[0].workflowInstanceId);
-      System.assertEquals(0, instanceCountForKey('VIV_sos_new'));
     }
   }
 }

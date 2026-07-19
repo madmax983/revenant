@@ -25,7 +25,10 @@ public inherited sharing class WorkflowInputTypeChecker {
       when BOOLEAN_TYPE {
         return rawValue instanceof Boolean;
       }
-      when INTEGER_TYPE, LONG_TYPE {
+      when INTEGER_TYPE {
+        return isInt32(rawValue);
+      }
+      when LONG_TYPE {
         return rawValue instanceof Integer || rawValue instanceof Long;
       }
       when DECIMAL_TYPE {
@@ -83,6 +86,22 @@ public inherited sharing class WorkflowInputTypeChecker {
       rawValue instanceof Long ||
       rawValue instanceof Decimal ||
       rawValue instanceof Double;
+  }
+
+  // A whole number within the signed 32-bit Integer range. Post JSON round-trip a
+  // whole number arrives as Apex Integer (always in range) or Long (by magnitude);
+  // an Apex Integer is accepted as-is, a Long only when it fits [-2^31, 2^31-1].
+  // A whole number outside the 32-bit range must use LONG_TYPE. Fractional numbers
+  // are rejected (they are Double/Decimal, not Integer/Long).
+  private static Boolean isInt32(Object rawValue) {
+    if (rawValue instanceof Integer) {
+      return true;
+    }
+    if (rawValue instanceof Long) {
+      Long asLong = (Long) rawValue;
+      return asLong >= -2147483648L && asLong <= 2147483647L;
+    }
+    return false;
   }
 
   // A DATE field must be a JSON string parseable as an ISO-8601 date.
