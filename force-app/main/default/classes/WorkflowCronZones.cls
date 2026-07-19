@@ -125,13 +125,48 @@ public inherited sharing class WorkflowCronZones {
     DateTime localNow = DateTime.valueOfGmt(
       req.now.format('yyyy-MM-dd HH:mm:ss', req.zoneId)
     );
-    DateTime localHit = req.forward
-      ? WorkflowCronEvaluator.nextFireTime(req.cronExpr, localNow)
-      : WorkflowCronEvaluator.previousFireTime(req.cronExpr, localNow);
+    if (req.forward) {
+      return resolveForwardHit(req, localNow);
+    }
+    DateTime localHit = WorkflowCronEvaluator.previousFireTime(
+      req.cronExpr,
+      localNow
+    );
     if (localHit == null) {
       return null;
     }
     return CronMath.resolveLocalToUtc(req.zoneId, localHit);
+  }
+
+  // Forward-search resolver. Walks local wall-clock matches from `localNow` and
+  // resolves each to a UTC instant. During a fall-back overlap the same local
+  // wall clock occurs twice and CronMath.resolveLocalToUtc deliberately returns
+  // the EARLIEST (pre-transition) occurrence — correct for due-detection, but for
+  // a forward search that earliest instant can land BEFORE req.now (e.g. local
+  // 01:30 on a fall-back day resolving to 05:30Z when req.now is 06:00Z). When
+  // the resolved instant is strictly before req.now it is rejected and the walk
+  // advances to the next local match, so nextFireTime always returns a
+  // strictly-future (>= req.now) instant. A normal (non-overlap) forward search
+  // accepts the first match unchanged, since its resolved instant is >= req.now.
+  private static DateTime resolveForwardHit(
+    ResolveRequest req,
+    DateTime localNow
+  ) {
+    DateTime localHit = WorkflowCronEvaluator.nextFireTime(
+      req.cronExpr,
+      localNow
+    );
+    while (localHit != null) {
+      DateTime utc = CronMath.resolveLocalToUtc(req.zoneId, localHit);
+      if (utc == null || utc >= req.now) {
+        return utc;
+      }
+      localHit = WorkflowCronEvaluator.nextFireTime(
+        req.cronExpr,
+        localHit.addMinutes(1)
+      );
+    }
+    return null;
   }
 
   // Bundles a zone-aware resolve request so the resolver takes one argument

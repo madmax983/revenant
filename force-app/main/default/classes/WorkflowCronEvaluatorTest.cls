@@ -632,6 +632,66 @@ public class WorkflowCronEvaluatorTest {
     }
   }
 
+  @IsTest
+  static void testZoneFallBackForwardReturnsFutureInstant() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Fall-back day 2026-11-01: local 01:30 occurs twice — 05:30Z (EDT,
+      // pre-transition) and 06:30Z (EST, post-transition). With now at 06:00Z
+      // (between the two occurrences) the earliest occurrence 05:30Z is already
+      // in the past, so a forward search must NOT return it; it must skip to the
+      // next day's 01:30 fire, which under EST resolves to 2026-11-02 06:30Z.
+      DateTime nowBetween = DateTime.newInstanceGmt(2026, 11, 1, 6, 0, 0);
+      DateTime forward = WorkflowCronEvaluator.nextFireTime(
+        '30 1 * * *',
+        nowBetween,
+        NY
+      );
+      System.assert(
+        forward >= nowBetween,
+        'Forward search across a fall-back overlap must return a strictly-future instant, not the past 05:30Z occurrence (got ' +
+          forward +
+          ')'
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 2, 6, 30, 0),
+        forward,
+        'Forward search should skip to the next day 01:30 EST fire at 06:30Z'
+      );
+
+      // The backward/due-detection path is unchanged: previous still resolves the
+      // overlap to the earliest (EDT) occurrence 05:30Z at or before now.
+      DateTime backward = WorkflowCronEvaluator.previousFireTime(
+        '30 1 * * *',
+        nowBetween,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 1, 5, 30, 0),
+        backward,
+        'Previous must still resolve the overlap to the earliest (EDT) 05:30Z occurrence'
+      );
+
+      // No regression on a normal (non-transition) summer day: no overlap, so the
+      // forward search accepts the first matched local wall clock. 2026-06-17
+      // 01:30 EDT (offset -4) resolves to 05:30Z and is returned unchanged.
+      DateTime normalRef = DateTime.newInstanceGmt(2026, 6, 17, 0, 0, 0);
+      DateTime normalForward = WorkflowCronEvaluator.nextFireTime(
+        '30 1 * * *',
+        normalRef,
+        NY
+      );
+      System.assert(
+        normalForward >= normalRef,
+        'Normal-day forward search must return an instant at or after now'
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 6, 17, 5, 30, 0),
+        normalForward,
+        'Normal-day 01:30 EDT should resolve to 05:30Z with no overlap skipping'
+      );
+    }
+  }
+
   // ── Backward compatibility: blank/null zone == the no-arg exact-GMT path ────
 
   @IsTest
