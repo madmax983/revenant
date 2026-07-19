@@ -502,6 +502,83 @@ public class WorkflowScheduleControllerTest {
   }
 
   @IsTest
+  static void testGetTimeZones() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      List<String> zones = WorkflowScheduleController.getTimeZones();
+      Test.stopTest();
+
+      System.assertNotEquals(null, zones, 'Time-zone list should not be null');
+      System.assert(
+        !zones.isEmpty(),
+        'Supported time-zone list should be non-empty'
+      );
+      System.assert(
+        zones.contains('America/New_York'),
+        'Supported time zones should include the known IANA id America/New_York'
+      );
+    }
+  }
+
+  @IsTest
+  static void testGuardAndErrorPathsThrow() {
+    // Consolidated into one method on purpose: each of these controller entry
+    // points has a null-scheduleId / delegated-failure branch that surfaces as an
+    // AuraHandledException, and grouping them keeps the class under the analyzer's
+    // cyclomatic-complexity ceiling while still exercising every guarded path.
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Boolean deleteThrew = false;
+      Boolean enableThrew = false;
+      Boolean runNowThrew = false;
+      Boolean registerThrew = false;
+      Test.startTest();
+      // deleteSchedule's own required-Id guard.
+      try {
+        WorkflowScheduleController.deleteSchedule(null);
+      } catch (AuraHandledException e) {
+        deleteThrew = true;
+      }
+      // enableSchedule -> loadScheduleForToggle required-Id guard (shared by
+      // disableSchedule, which is already covered on the happy path).
+      try {
+        WorkflowScheduleController.enableSchedule(null);
+      } catch (AuraHandledException e) {
+        enableThrew = true;
+      }
+      // runNow wraps the delegate's failure via its catch/throwAura error path.
+      try {
+        WorkflowScheduleController.runNow(null);
+      } catch (AuraHandledException e) {
+        runNowThrew = true;
+      }
+      // registerDedicatedJob likewise wraps the delegate's failure via throwAura.
+      try {
+        WorkflowScheduleController.registerDedicatedJob(null);
+      } catch (AuraHandledException e) {
+        registerThrew = true;
+      }
+      Test.stopTest();
+
+      System.assert(
+        deleteThrew,
+        'deleteSchedule(null) should reject a missing scheduleId'
+      );
+      System.assert(
+        enableThrew,
+        'enableSchedule(null) should reject a missing scheduleId'
+      );
+      System.assert(
+        runNowThrew,
+        'runNow with a null scheduleId should surface an AuraHandledException'
+      );
+      System.assert(
+        registerThrew,
+        'registerDedicatedJob with a null scheduleId should surface an AuraHandledException'
+      );
+    }
+  }
+
+  @IsTest
   static void testGetWorkflowDefinitions() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
