@@ -8,7 +8,12 @@
 public inherited sharing class WorkflowSignalCommandService {
   /**
    * @description Operator action to manually inject a signal into an instance from the
-   * dashboard, gated on the signal-injection permission.
+   * dashboard. Signal injection MUTATES engine state, so it must clear the same operator-ACTION
+   * baseline as the other recovery endpoints (Workflow_Operator_Action OR Workflow_Admin OR
+   * Modify-All, via checkOperatorAction) IN ADDITION to holding the specific
+   * Workflow_Signal_Injection capability. This prevents a read-only monitoring operator
+   * (Workflow_Dashboard_View, which now satisfies checkAuthorization) from injecting signals
+   * without an action grant.
    * @param instanceId The target workflow instance.
    * @param signalName The name of the signal to deliver.
    * @param payloadJson The signal payload as JSON, or blank.
@@ -19,6 +24,7 @@ public inherited sharing class WorkflowSignalCommandService {
     String payloadJson
   ) {
     WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
     validateSignalInjectionPermission();
 
     if (instanceId == null) {
