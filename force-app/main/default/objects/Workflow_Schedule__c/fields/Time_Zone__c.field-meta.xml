@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Time_Zone__c</fullName>
+    <description>IANA time-zone id (e.g. America/New_York) the cron is interpreted in. Blank = UTC (preserves pre-existing behavior).</description>
+    <externalId>false</externalId>
+    <label>Time Zone</label>
+    <length>64</length>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>
