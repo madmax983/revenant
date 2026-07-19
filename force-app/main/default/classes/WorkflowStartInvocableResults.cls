@@ -25,6 +25,25 @@ public inherited sharing class WorkflowStartInvocableResults {
   }
 
   /**
+   * @description Builds a delivered result for an invalid-input row that
+   * dedup-resolved to an existing instance (pre-existing or a just-created
+   * same-key sibling): its unused fallback input is never persisted, so it is
+   * delivered with isValid=true and isNew=false.
+   * @param instanceId the resolved existing instance Id
+   * @return a StartResult flagged valid, pointing at the existing instance
+   */
+  public static WorkflowStartInvocableAction.StartResult dedupHitResult(
+    Id instanceId
+  ) {
+    WorkflowStartInvocableAction.StartResult res = new WorkflowStartInvocableAction.StartResult();
+    res.workflowInstanceId = instanceId;
+    res.isNew = false;
+    res.isValid = true;
+    res.validationError = null;
+    return res;
+  }
+
+  /**
    * @description Builds a branchable failure result for a row whose new-instance
    * start input violated the workflow's declared contract.
    * @param validationError the enumerated field-level violation message

@@ -36,7 +36,7 @@ public inherited sharing class WorkflowStartInvocableRouter {
     List<WorkflowEngine.StartRequest> cleanEngineRequests = new List<WorkflowEngine.StartRequest>();
     List<Integer> cleanEngineIndices = new List<Integer>();
     List<WorkflowDebouncer.DebounceRequest> debounceRequests = new List<WorkflowDebouncer.DebounceRequest>();
-    SuspectRows suspects = new SuspectRows();
+    WorkflowStartInvocableSuspects.SuspectRows suspects = new WorkflowStartInvocableSuspects.SuspectRows();
 
     for (Integer i = 0; i < requests.size(); i++) {
       WorkflowStartInvocableAction.StartRequest req = requests[i];
@@ -73,32 +73,11 @@ public inherited sharing class WorkflowStartInvocableRouter {
     // sharing a correlation key can dedup-resolve to the just-created sibling.
     applyCleanStartResults(cleanEngineRequests, cleanEngineIndices, results);
 
-    // Then resolve the invalid-input rows individually against the now-existing
-    // instances (intra-batch siblings included), preserving each row's index.
-    resolveSuspectStarts(suspects, results);
+    // Then resolve ALL invalid-input rows with ONE bulk key lookup (intra-batch
+    // siblings included), preserving each row's index.
+    WorkflowStartInvocableSuspects.resolve(suspects, results);
 
     return results;
-  }
-
-  /**
-   * @description Collector for the invalid-input rows deferred past the clean bulk
-   * call: the invocable request, its original result index, and its pre-computed
-   * contract violations, kept index-aligned.
-   */
-  private class SuspectRows {
-    final List<WorkflowStartInvocableAction.StartRequest> requests = new List<WorkflowStartInvocableAction.StartRequest>();
-    final List<Integer> indices = new List<Integer>();
-    final List<List<WorkflowInputFieldError>> errors = new List<List<WorkflowInputFieldError>>();
-
-    void add(
-      WorkflowStartInvocableAction.StartRequest req,
-      Integer index,
-      List<WorkflowInputFieldError> rowErrors
-    ) {
-      this.requests.add(req);
-      this.indices.add(index);
-      this.errors.add(rowErrors);
-    }
   }
 
   // Runs the batched get-or-start for the contract-valid rows in one bulk call and
@@ -118,22 +97,6 @@ public inherited sharing class WorkflowStartInvocableRouter {
       results[
         cleanEngineIndices[j]
       ] = WorkflowStartInvocableResults.startedResult(engineResults[j]);
-    }
-  }
-
-  // Resolves each collected invalid-input row individually (after the clean batch)
-  // and writes the result back at the row's original index.
-  private static void resolveSuspectStarts(
-    SuspectRows suspects,
-    List<WorkflowStartInvocableAction.StartResult> results
-  ) {
-    for (Integer s = 0; s < suspects.requests.size(); s++) {
-      results[
-        suspects.indices[s]
-      ] = WorkflowStartInvocableRequests.resolveSuspectStart(
-        suspects.requests[s],
-        suspects.errors[s]
-      );
     }
   }
 }

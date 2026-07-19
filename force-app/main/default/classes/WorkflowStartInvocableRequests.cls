@@ -80,37 +80,4 @@ public inherited sharing class WorkflowStartInvocableRequests {
     debounceReq.causationId = req.causationId;
     return debounceReq;
   }
-
-  /**
-   * @description Resolves one invalid-input row by delegating to the engine so its
-   * dedup decides: a malformed/unbuildable payload is rejected immediately;
-   * otherwise the engine dedup-resolves to an existing instance (delivered,
-   * isValid=true) or, for a genuine new start, throws WorkflowInputException which
-   * is translated to a branchable isValid=false.
-   * @param req the invocable start request with invalid contract input
-   * @param inputErrors the pre-computed contract violations for the message
-   * @return a branchable StartResult (delivered existing, or invalid)
-   */
-  public static WorkflowStartInvocableAction.StartResult resolveSuspectStart(
-    WorkflowStartInvocableAction.StartRequest req,
-    List<WorkflowInputFieldError> inputErrors
-  ) {
-    WorkflowEngine.StartRequest engineReq;
-    try {
-      engineReq = toEngineRequest(req);
-    } catch (WorkflowEngine.WorkflowException buildFailure) {
-      return WorkflowStartInvocableResults.invalidResult(
-        WorkflowInputValidator.describeErrors(inputErrors)
-      );
-    }
-    try {
-      return WorkflowStartInvocableResults.startedResult(
-        WorkflowEngine.startOrGet(engineReq)
-      );
-    } catch (WorkflowInputException contractFailure) {
-      return WorkflowStartInvocableResults.invalidResult(
-        contractFailure.getMessage()
-      );
-    }
-  }
 }
