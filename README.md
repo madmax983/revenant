@@ -490,10 +490,10 @@ Where `WorkflowValidator` checks the _definition's shape_, the next section vali
 public class OnboardingWorkflow implements WorkflowDefinition, ValidatedWorkflow {
     public WorkflowInputContract getInputContract() {
         return new WorkflowInputContract()
-            .require('accountId', WorkflowInputType.STRING)
-            .require('amount', WorkflowInputType.DECIMAL)
-            .optional('vipOnboarding', WorkflowInputType.BOOLEAN)
-            .optional('startDate', WorkflowInputType.DATE);
+            .require('accountId', WorkflowInputType.STRING_TYPE)
+            .require('amount', WorkflowInputType.DECIMAL_TYPE)
+            .optional('vipOnboarding', WorkflowInputType.BOOLEAN_TYPE)
+            .optional('startDate', WorkflowInputType.DATE_TYPE);
     }
     // ... getSteps() / getInitialStep() / getNextStep() as usual
 }
@@ -503,15 +503,15 @@ A `WorkflowInputContract` is an ordered list of field specs — `require(name, t
 
 | `WorkflowInputType` | Accepts (JSON) |
 | ------------------- | -------------- |
-| `STRING`            | A JSON string. |
-| `INTEGER`           | A whole-number JSON value in the 32-bit range (not a fractional number or a numeric string). |
-| `LONG`              | A whole-number JSON value (not a fractional number or a numeric string). |
-| `DECIMAL`           | Any JSON number. |
-| `BOOLEAN`           | A JSON boolean (`true`/`false`, not `"true"`). |
-| `DATE`              | An ISO-8601 date string. |
-| `DATETIME`          | An ISO-8601 datetime string. |
+| `STRING_TYPE`            | A JSON string. |
+| `INTEGER_TYPE`           | A whole-number JSON value in the 32-bit range (not a fractional number or a numeric string). |
+| `LONG_TYPE`              | A whole-number JSON value (not a fractional number or a numeric string). |
+| `DECIMAL_TYPE`           | Any JSON number. |
+| `BOOLEAN_TYPE`           | A JSON boolean (`true`/`false`, not `"true"`). |
+| `DATE_TYPE`              | An ISO-8601 date string. |
+| `DATETIME_TYPE`          | An ISO-8601 datetime string. |
 
-The issue's generic **Number** maps to **`DECIMAL`** (any JSON numeric); reach for `INTEGER`/`LONG` when the field must be a whole number.
+The issue's generic **Number** maps to **`DECIMAL_TYPE`** (any JSON numeric); reach for `INTEGER_TYPE`/`LONG_TYPE` when the field must be a whole number.
 
 **Fully backward compatible and free for the simple case.** A definition that does _not_ implement `ValidatedWorkflow` is never inspected — detection is a single in-memory `instanceof` on the already-resolved definition. Validation adds **zero SOQL and zero DML** to the start path and nothing to the `WorkflowOrchestrator` Queueable hot path; it is a pure parse-and-check that runs **before any `Workflow_Instance__c` is inserted and before any job is enqueued**, so the append-only audit trail is untouched on rejection.
 
@@ -522,7 +522,7 @@ try {
     WorkflowEngine.start('OnboardingWorkflow', key, '{"amount":"lots"}');
 } catch (WorkflowInputException ex) {
     // ex.getMessage() enumerates: accountId is required but missing;
-    //   amount expected DECIMAL but was String
+    //   amount expected DECIMAL_TYPE but was String
     for (WorkflowInputFieldError fe : ex.getFieldErrors()) { /* fe.fieldName, fe.reason ... */ }
 }
 ```

@@ -19,29 +19,28 @@ public inherited sharing class WorkflowInputTypeChecker {
     WorkflowInputType expectedType
   ) {
     switch on expectedType {
-      when STRING {
+      when STRING_TYPE {
         return rawValue instanceof String;
       }
-      when BOOLEAN {
+      when BOOLEAN_TYPE {
         return rawValue instanceof Boolean;
       }
-      when INTEGER, LONG {
+      when INTEGER_TYPE, LONG_TYPE {
         return rawValue instanceof Integer || rawValue instanceof Long;
       }
-      when DECIMAL {
+      when DECIMAL_TYPE {
         return isNumeric(rawValue);
       }
-      when DATE {
+      when DATE_TYPE {
         return isDate(rawValue);
       }
-      when DATETIME {
+      when DATETIME_TYPE {
         return isDatetime(rawValue);
       }
       when else {
         return false;
       }
     }
-    return false;
   }
 
   /**

@@ -25,10 +25,10 @@ private class WorkflowInputValidationTest {
      */
     public WorkflowInputContract getInputContract() {
       return new WorkflowInputContract()
-        .require('accountId', WorkflowInputType.STRING)
-        .require('amount', WorkflowInputType.DECIMAL)
-        .optional('vipOnboarding', WorkflowInputType.BOOLEAN)
-        .optional('startDate', WorkflowInputType.DATE);
+        .require('accountId', WorkflowInputType.STRING_TYPE)
+        .require('amount', WorkflowInputType.DECIMAL_TYPE)
+        .optional('vipOnboarding', WorkflowInputType.BOOLEAN_TYPE)
+        .optional('startDate', WorkflowInputType.DATE_TYPE);
     }
 
     /**
@@ -130,7 +130,7 @@ private class WorkflowInputValidationTest {
         System.assertEquals(1, ex.getFieldErrors().size());
         WorkflowInputFieldError fe = ex.getFieldErrors()[0];
         System.assertEquals('accountId', fe.fieldName);
-        System.assertEquals(WorkflowInputFieldError.Reason.MISSING, fe.reason);
+        System.assertEquals(WorkflowInputErrorReason.MISSING, fe.reason);
         System.assert(
           ex.getMessage().contains('accountId'),
           'Message should name the missing field: ' + ex.getMessage()
@@ -165,11 +165,8 @@ private class WorkflowInputValidationTest {
         System.assertEquals(1, ex.getFieldErrors().size());
         WorkflowInputFieldError fe = ex.getFieldErrors()[0];
         System.assertEquals('amount', fe.fieldName);
-        System.assertEquals(
-          WorkflowInputFieldError.Reason.WRONG_TYPE,
-          fe.reason
-        );
-        System.assertEquals(WorkflowInputType.DECIMAL, fe.expectedType);
+        System.assertEquals(WorkflowInputErrorReason.WRONG_TYPE, fe.reason);
+        System.assertEquals(WorkflowInputType.DECIMAL_TYPE, fe.expectedType);
         System.assertEquals('String', fe.actualType);
       }
       System.assertEquals(true, threw, 'Wrong-typed field must throw');
@@ -215,7 +212,7 @@ private class WorkflowInputValidationTest {
         threw = true;
         System.assertEquals(1, ex.getFieldErrors().size());
         System.assertEquals(
-          WorkflowInputFieldError.Reason.MALFORMED_JSON,
+          WorkflowInputErrorReason.MALFORMED_JSON,
           ex.getFieldErrors()[0].reason
         );
       }
@@ -239,7 +236,7 @@ private class WorkflowInputValidationTest {
         threw = true;
         System.assertEquals('startDate', ex.getFieldErrors()[0].fieldName);
         System.assertEquals(
-          WorkflowInputFieldError.Reason.WRONG_TYPE,
+          WorkflowInputErrorReason.WRONG_TYPE,
           ex.getFieldErrors()[0].reason
         );
       }

@@ -7,9 +7,9 @@
  * ```
  * public WorkflowInputContract getInputContract() {
  *   return new WorkflowInputContract()
- *     .require('accountId', WorkflowInputType.STRING)
- *     .require('amount', WorkflowInputType.DECIMAL)
- *     .optional('vipOnboarding', WorkflowInputType.BOOLEAN);
+ *     .require('accountId', WorkflowInputType.STRING_TYPE)
+ *     .require('amount', WorkflowInputType.DECIMAL_TYPE)
+ *     .optional('vipOnboarding', WorkflowInputType.BOOLEAN_TYPE);
  * }
  * ```
  *

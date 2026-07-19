@@ -23,10 +23,10 @@ public inherited sharing class ValidatedOnboardingWorkflowExample implements Wor
    */
   public WorkflowInputContract getInputContract() {
     return new WorkflowInputContract()
-      .require('accountId', WorkflowInputType.STRING)
-      .require('amount', WorkflowInputType.DECIMAL)
-      .optional('vipOnboarding', WorkflowInputType.BOOLEAN)
-      .optional('startDate', WorkflowInputType.DATE);
+      .require('accountId', WorkflowInputType.STRING_TYPE)
+      .require('amount', WorkflowInputType.DECIMAL_TYPE)
+      .optional('vipOnboarding', WorkflowInputType.BOOLEAN_TYPE)
+      .optional('startDate', WorkflowInputType.DATE_TYPE);
   }
 
   /**

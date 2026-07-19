@@ -386,9 +386,9 @@ because it introduces a new permanent author-facing API contract.
 
 A workflow definition MAY now implement **`ValidatedWorkflow`** (alongside
 `WorkflowDefinition`) to declare a `WorkflowInputContract` of required/optional
-fields and their `WorkflowInputType` primitives (`STRING`, `INTEGER`, `LONG`,
-`DECIMAL`, `BOOLEAN`, `DATE`, `DATETIME`). The issue's generic **Number** maps to
-**`DECIMAL`** (any JSON numeric); use `INTEGER`/`LONG` for whole numbers. When
+fields and their `WorkflowInputType` primitives (`STRING_TYPE`, `INTEGER_TYPE`, `LONG_TYPE`,
+`DECIMAL_TYPE`, `BOOLEAN_TYPE`, `DATE_TYPE`, `DATETIME_TYPE`). The issue's generic **Number** maps to
+**`DECIMAL_TYPE`** (any JSON numeric); use `INTEGER_TYPE`/`LONG_TYPE` for whole numbers. When
 present, the contract is enforced
 **synchronously at `WorkflowEngine.start(...)` / `startOrGet(...)`** — before any
 `Workflow_Instance__c` is inserted or any job enqueued, adding **zero SOQL/DML** to
@@ -400,8 +400,8 @@ wrong-typed, or malformed-JSON field.
 public class OnboardingWorkflow implements WorkflowDefinition, ValidatedWorkflow {
   public WorkflowInputContract getInputContract() {
     return new WorkflowInputContract()
-      .require('accountId', WorkflowInputType.STRING)
-      .require('amount', WorkflowInputType.DECIMAL);
+      .require('accountId', WorkflowInputType.STRING_TYPE)
+      .require('amount', WorkflowInputType.DECIMAL_TYPE);
   }
   // getSteps() / getInitialStep() / getNextStep() unchanged
 }
