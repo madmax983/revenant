@@ -164,15 +164,7 @@ public inherited sharing class CronMath {
       // Offset is self-consistent. If it renders back to the request the time
       // exists; resolve any fall-back overlap to the earliest occurrence.
       if (rendersTo(candA, zoneId, year, month, day, hour, minute)) {
-        return earliestOverlap(
-          candA,
-          zoneId,
-          year,
-          month,
-          day,
-          hour,
-          minute
-        );
+        return earliestOverlap(candA, zoneId, year, month, day, hour, minute);
       }
     }
 

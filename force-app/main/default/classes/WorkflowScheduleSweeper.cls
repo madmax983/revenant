@@ -95,6 +95,7 @@ public inherited sharing class WorkflowScheduleSweeper {
         Input_Json__c,
         Correlation_Key_Prefix__c,
         Overlap_Policy__c,
+        Time_Zone__c,
         Last_Fired_Window__c,
         Next_Fire_Window__c,
         CreatedDate

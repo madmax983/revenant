@@ -134,13 +134,36 @@ public inherited sharing class SalesforceCronTranslator {
    * @return The next window strictly after firedWindow, or null when unknown.
    */
   public static DateTime nextWindow(String cron, DateTime firedWindow) {
+    return nextWindow(cron, firedWindow, null);
+  }
+
+  /**
+   * @description Next fire instant STRICTLY after the handled window, interpreting the cron
+   * in the given IANA time zone (blank/null = UTC). Like the no-zone overload, evaluation
+   * starts one minute past the handled window so the inclusive nextFireTime advances the
+   * cursor. An unsupported zone is treated as UTC so a misconfigured row can still advance
+   * its cursor rather than stalling.
+   * @param cron The schedule's cron expression.
+   * @param firedWindow The window instant just handled.
+   * @param zoneId The IANA time-zone id the cron is interpreted in, or blank/null for UTC.
+   * @return The next window strictly after firedWindow, or null when unknown.
+   */
+  public static DateTime nextWindow(
+    String cron,
+    DateTime firedWindow,
+    String zoneId
+  ) {
     if (String.isBlank(cron) || firedWindow == null) {
       return null;
     }
+    String effectiveZone = WorkflowCronEvaluator.isValidZone(zoneId)
+      ? zoneId
+      : null;
     try {
       return WorkflowCronEvaluator.nextFireTime(
         cron,
-        firedWindow.addMinutes(1)
+        firedWindow.addMinutes(1),
+        effectiveZone
       );
     } catch (Exception e) {
       return null;

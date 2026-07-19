@@ -26,9 +26,27 @@ public inherited sharing class WorkflowScheduleDueClassifier {
     WorkflowScheduleSweepRunner.SweepState state
   ) {
     try {
+      // Isolate an unsupported time zone the same way an impossible cron is
+      // parked: a row created outside the manager (Setup/API) could carry a bad
+      // Time_Zone__c. Record the outcome, park the cursor a day out so it rotates
+      // out of future batches, and CONTINUE so one bad row can't abort the sweep.
+      if (
+        String.isNotBlank(sched.Time_Zone__c) &&
+        !WorkflowCronEvaluator.isValidZone(sched.Time_Zone__c)
+      ) {
+        state.toUpdate.add(
+          new Workflow_Schedule__c(
+            Id = sched.Id,
+            Next_Fire_Window__c = state.now.addDays(1),
+            Last_Outcome__c = 'Invalid time zone'
+          )
+        );
+        return;
+      }
       DateTime fireTime = WorkflowCronEvaluator.previousFireTime(
         sched.Cron_Expression__c,
-        state.now
+        state.now,
+        sched.Time_Zone__c
       );
       if (fireTime == null) {
         // Syntactically valid but impossible cron (e.g. "0 0 31 2 *") never
@@ -58,7 +76,8 @@ public inherited sharing class WorkflowScheduleDueClassifier {
               Id = sched.Id,
               Next_Fire_Window__c = SalesforceCronTranslator.nextWindow(
                 sched.Cron_Expression__c,
-                fireTime
+                fireTime,
+                sched.Time_Zone__c
               )
             )
           );
@@ -81,7 +100,8 @@ public inherited sharing class WorkflowScheduleDueClassifier {
             Id = sched.Id,
             Next_Fire_Window__c = SalesforceCronTranslator.nextWindow(
               sched.Cron_Expression__c,
-              fireTime
+              fireTime,
+              sched.Time_Zone__c
             )
           )
         );
