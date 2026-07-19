@@ -16,6 +16,7 @@ public class WorkflowScheduleSweeperTest {
     private String cron;
     private Boolean enabled;
     private String overlap;
+    private String zone;
 
     private Sched(String name, String cron) {
       this.name = name;
@@ -32,6 +33,11 @@ public class WorkflowScheduleSweeperTest {
       return this;
     }
 
+    private Sched zone(String value) {
+      this.zone = value;
+      return this;
+    }
+
     private Workflow_Schedule__c build() {
       return new Workflow_Schedule__c(
         Name = name,
@@ -40,6 +46,7 @@ public class WorkflowScheduleSweeperTest {
         Correlation_Key_Prefix__c = name,
         Enabled__c = enabled,
         Overlap_Policy__c = overlap,
+        Time_Zone__c = zone,
         Dedicated_Slot__c = false
       );
     }
@@ -963,6 +970,124 @@ public class WorkflowScheduleSweeperTest {
         '0 0 0 1 * ? *',
         WorkflowScheduleSweeper.toSalesforceCron('0 0 1 * *'),
         'Day-of-month uses ? for day-of-week'
+      );
+    }
+  }
+
+  // ── Time zone: 0-slot end-to-end + invalid-zone isolation ─────────────────
+
+  @IsTest
+  static void testZonedScheduleFiresAndAdvancesCursor() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+
+      // An every-minute schedule interpreted in a real zone always has a due
+      // window, so the sweep fires it once and records a UTC next-window cursor.
+      Workflow_Schedule__c sched = new Sched(PREFIX + 'TZ', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .zone('America/New_York')
+        .build();
+      insert sched;
+
+      Test.startTest();
+      WorkflowScheduleSweeper.sweep();
+      Test.stopTest();
+
+      List<Workflow_Instance__c> instances = [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE Correlation_Key__c LIKE :PREFIX + 'TZ_%'
+      ];
+      System.assertEquals(
+        1,
+        instances.size(),
+        'A zoned schedule should fire exactly once through the 0-slot sweep'
+      );
+
+      Workflow_Schedule__c after = [
+        SELECT Last_Outcome__c, Last_Fired_Window__c, Next_Fire_Window__c
+        FROM Workflow_Schedule__c
+        WHERE Id = :sched.Id
+      ];
+      System.assertEquals(
+        'Started',
+        after.Last_Outcome__c,
+        'Zoned fire should record a Started outcome'
+      );
+      System.assertNotEquals(
+        null,
+        after.Last_Fired_Window__c,
+        'Zoned fire should stamp Last_Fired_Window__c (the resolved UTC instant)'
+      );
+      System.assertNotEquals(
+        null,
+        after.Next_Fire_Window__c,
+        'Zoned fire should advance the cursor to the next UTC window'
+      );
+    }
+  }
+
+  @IsTest
+  static void testInvalidZoneIsolatesAndLogs() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+
+      // A row with an unsupported zone (as could be created via Setup/API) must
+      // be parked with an "Invalid time zone" outcome without aborting the batch:
+      // a sibling valid schedule in the same sweep still fires.
+      Workflow_Schedule__c bad = new Sched(PREFIX + 'BadTZ', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .zone('Not/AZone')
+        .build();
+      Workflow_Schedule__c good = new Sched(
+          PREFIX + 'GoodTZ',
+          EVERY_MINUTE_CRON
+        )
+        .enabled(true)
+        .overlap('Allow')
+        .zone('America/New_York')
+        .build();
+      insert new List<Workflow_Schedule__c>{ bad, good };
+
+      Test.startTest();
+      WorkflowScheduleSweeper.sweep();
+      Test.stopTest();
+
+      System.assertEquals(
+        0,
+        [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE Correlation_Key__c LIKE :PREFIX + 'BadTZ_%'
+        ],
+        'An invalid-zone schedule must not start an instance'
+      );
+      System.assertEquals(
+        1,
+        [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE Correlation_Key__c LIKE :PREFIX + 'GoodTZ_%'
+        ],
+        'A sibling valid-zone schedule must still fire (batch not aborted)'
+      );
+
+      Workflow_Schedule__c parked = [
+        SELECT Last_Outcome__c, Next_Fire_Window__c
+        FROM Workflow_Schedule__c
+        WHERE Id = :bad.Id
+      ];
+      System.assertEquals(
+        'Invalid time zone',
+        parked.Last_Outcome__c,
+        'Invalid zone should be logged as "Invalid time zone"'
+      );
+      System.assertNotEquals(
+        null,
+        parked.Next_Fire_Window__c,
+        'Invalid-zone row should be parked (cursor advanced) so it rotates out'
       );
     }
   }

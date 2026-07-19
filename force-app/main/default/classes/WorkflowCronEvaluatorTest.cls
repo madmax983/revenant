@@ -520,4 +520,198 @@ public class WorkflowCronEvaluatorTest {
       );
     }
   }
+
+  // ── Zone-aware evaluation (America/New_York) ──────────────────────────────
+
+  private static final String NY = 'America/New_York';
+
+  @IsTest
+  static void testZoneNightlyEst() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Winter: 02:00 US/Eastern (EST, UTC-5) resolves to 07:00Z. Reference is
+      // 2026-01-15 12:00Z (07:00 EST), so the previous 02:00 window is same day.
+      DateTime ref = DateTime.newInstanceGmt(2026, 1, 15, 12, 0, 0);
+      DateTime result = WorkflowCronEvaluator.previousFireTime(
+        '0 2 * * *',
+        ref,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 1, 15, 7, 0, 0),
+        result,
+        'EST nightly 02:00 should resolve to 07:00Z'
+      );
+    }
+  }
+
+  @IsTest
+  static void testZoneNightlyEdt() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Summer: 02:00 US/Eastern (EDT, UTC-4) resolves to 06:00Z. Reference is
+      // 2026-06-17 12:00Z (08:00 EDT).
+      DateTime ref = DateTime.newInstanceGmt(2026, 6, 17, 12, 0, 0);
+      DateTime result = WorkflowCronEvaluator.previousFireTime(
+        '0 2 * * *',
+        ref,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 6, 17, 6, 0, 0),
+        result,
+        'EDT nightly 02:00 should resolve to 06:00Z'
+      );
+    }
+  }
+
+  @IsTest
+  static void testZoneSpringGapFiresOnceAtBoundary() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Spring-forward day 2026-03-08: local clocks jump 02:00 → 03:00, so the
+      // 02:00 wall clock never occurs. Policy returns the gap boundary ONCE: the
+      // transition instant 07:00Z, which renders as 03:00 EDT. Reference is
+      // 2026-03-08 12:00Z (08:00 EDT).
+      DateTime ref = DateTime.newInstanceGmt(2026, 3, 8, 12, 0, 0);
+      DateTime result = WorkflowCronEvaluator.previousFireTime(
+        '0 2 * * *',
+        ref,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 3, 8, 7, 0, 0),
+        result,
+        'Spring gap 02:00 should resolve once to the boundary 07:00Z'
+      );
+      System.assertEquals(
+        '2026-03-08 03:00',
+        result.format('yyyy-MM-dd HH:mm', NY),
+        'Boundary instant renders as 03:00 New York wall clock'
+      );
+
+      // A time strictly inside the gap (02:30) also collapses to the boundary.
+      DateTime midGap = WorkflowCronEvaluator.previousFireTime(
+        '30 2 * * *',
+        ref,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 3, 8, 7, 0, 0),
+        midGap,
+        'A local time inside the gap resolves to the same boundary instant'
+      );
+    }
+  }
+
+  @IsTest
+  static void testZoneFallBackFiresOnce() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Fall-back day 2026-11-01: local 01:00–01:59 occurs twice. 02:00 occurs
+      // once (EST) → 07:00Z. Reference is 2026-11-01 12:00Z (07:00 EST).
+      DateTime ref = DateTime.newInstanceGmt(2026, 11, 1, 12, 0, 0);
+      DateTime nightly = WorkflowCronEvaluator.previousFireTime(
+        '0 2 * * *',
+        ref,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 1, 7, 0, 0),
+        nightly,
+        'Fall-back 02:00 EST should resolve to 07:00Z'
+      );
+
+      // 01:30 exists twice; policy picks the FIRST (pre-transition, EDT) at
+      // 05:30Z so the calendar day fires exactly once.
+      DateTime overlap = WorkflowCronEvaluator.previousFireTime(
+        '30 1 * * *',
+        ref,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 1, 5, 30, 0),
+        overlap,
+        'Overlapping 01:30 should resolve to the earliest (EDT) occurrence 05:30Z'
+      );
+    }
+  }
+
+  // ── Backward compatibility: blank/null zone == the no-arg exact-GMT path ────
+
+  @IsTest
+  static void testBlankZoneMatchesNoArgExactly() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<String> crons = new List<String>{
+        '0 * * * *',
+        '*/15 * * * *',
+        '0 2 * * *',
+        '0 9 * * 1',
+        '0 0 1 * *',
+        '0-30/10 * * * *'
+      };
+      for (String cron : crons) {
+        DateTime baselinePrev = WorkflowCronEvaluator.previousFireTime(
+          cron,
+          REF
+        );
+        System.assertEquals(
+          baselinePrev,
+          WorkflowCronEvaluator.previousFireTime(cron, REF, null),
+          'Null zone previous must equal the no-arg result for ' + cron
+        );
+        System.assertEquals(
+          baselinePrev,
+          WorkflowCronEvaluator.previousFireTime(cron, REF, ''),
+          'Blank zone previous must equal the no-arg result for ' + cron
+        );
+
+        DateTime baselineNext = WorkflowCronEvaluator.nextFireTime(cron, REF);
+        System.assertEquals(
+          baselineNext,
+          WorkflowCronEvaluator.nextFireTime(cron, REF, null),
+          'Null zone next must equal the no-arg result for ' + cron
+        );
+        System.assertEquals(
+          baselineNext,
+          WorkflowCronEvaluator.nextFireTime(cron, REF, ''),
+          'Blank zone next must equal the no-arg result for ' + cron
+        );
+      }
+    }
+  }
+
+  // ── isValidZone ─────────────────────────────────────────────────────────────
+
+  @IsTest
+  static void testIsValidZone() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      System.assertEquals(
+        true,
+        WorkflowCronEvaluator.isValidZone(null),
+        'Null zone (UTC) is valid'
+      );
+      System.assertEquals(
+        true,
+        WorkflowCronEvaluator.isValidZone(''),
+        'Blank zone (UTC) is valid'
+      );
+      System.assertEquals(
+        true,
+        WorkflowCronEvaluator.isValidZone('America/New_York'),
+        'Supported IANA id is valid'
+      );
+      System.assertEquals(
+        true,
+        WorkflowCronEvaluator.isValidZone('UTC'),
+        'Explicit UTC is valid'
+      );
+      System.assertEquals(
+        false,
+        WorkflowCronEvaluator.isValidZone('Not/AZone'),
+        'Unsupported id is invalid'
+      );
+      System.assertEquals(
+        false,
+        WorkflowCronEvaluator.isValidZone('america/new_york'),
+        'Case-mismatched id is invalid'
+      );
+    }
+  }
 }
