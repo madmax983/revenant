@@ -1,0 +1,553 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <!-- Least-privilege monitoring role. Grants Apex access to the READ-only dashboard
+         controller only (NOT WorkflowDashboardCommandController), so an operator assigned
+         only this set can open the workflowDashboard LWC and inspect instances, steps and
+         signals but cannot reach any state-mutating recovery endpoint. Class-level security
+         is enforced only at the LWC entry point, so the controller's downstream service
+         classes need no entry. -->
+    <classAccesses>
+        <apexClass>WorkflowDashboardController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <!-- Workflow_Dashboard_View lets the operator pass WorkflowDashboardSupport.checkAuthorization()
+         WITHOUT holding Workflow_Admin. Holding Workflow_Admin would also satisfy the separate
+         operator-action gate (checkOperatorAction) and defeat the read-only/action separation,
+         so a distinct view-only custom permission is used here. The mutating recovery actions
+         additionally require Workflow_Operator_Action, which this set deliberately does NOT grant. -->
+    <customPermissions>
+        <enabled>true</enabled>
+        <name>Workflow_Dashboard_View</name>
+    </customPermissions>
+    <description>Least-privilege monitoring access for the Revenant Workflow Engine: read-only visibility into workflow instances, step executions and signals via the dashboard, with no create/edit/delete or modifyAll on any engine object and no access to the mutating recovery actions.</description>
+    <hasActivationRequired>false</hasActivationRequired>
+    <label>Revenant Operator</label>
+
+    <!-- ===== Object permissions: READ ONLY on every engine data object ===== -->
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Instance__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <!-- Workflow_Step_Execution__c: append-only audit trail. Read only; NO edit/delete/modifyAll. -->
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Step_Execution__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Signal__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Log__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Schedule__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Search_Attribute__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Pause_State__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Concurrency_State__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Rate_Limit_State__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Debounce_State__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <!-- Platform events: subscribe (read) only, never publish (create). -->
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Alert__e</object>
+        <viewAllRecords>false</viewAllRecords>
+    </objectPermissions>
+
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Lifecycle__e</object>
+        <viewAllRecords>false</viewAllRecords>
+    </objectPermissions>
+
+    <!-- ===== Field permissions: READ ONLY (editable=false) for every field Revenant_Admin
+         exposes. Critically Workflow_Instance__c.Compensation_Stack__c (LIFO integrity) and
+         all Workflow_Step_Execution__c.* fields (append-only audit) are readable but NOT
+         editable. ===== -->
+
+    <!-- Workflow_Instance__c -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Active_Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Causation_Id__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Async_Job_Id__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Compensation_Stack__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Current_Step__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Definition_Version__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Error_Message__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Compensated_By__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Input__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Output__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Progress__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Parent_Instance__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Previous_Instance__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Previous_Run_At__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Root_Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Sleep_Until__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Deadline_At__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Concurrency_Slot_Held__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Concurrency_Parked__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Terminal_At__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Failure_Category__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <!-- Workflow_Step_Execution__c (append-only audit trail) -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Step_Execution__c.Captured_Values__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Step_Execution__c.Error_Details__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Step_Execution__c.Input__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Step_Execution__c.Output__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Step_Execution__c.Timeout_At__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Step_Execution__c.Transient_Retry_Count__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Step_Execution__c.CPU_Time_Ms__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Step_Execution__c.Heap_Size_Bytes__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Step_Execution__c.SOQL_Query_Count__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <!-- Workflow_Signal__c -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Signal__c.Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Signal__c.Idempotency_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Signal__c.Payload__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Signal__c.Signal_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Signal__c.Workflow_Instance__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <!-- Workflow_Alert__e (subscribe) -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Alert_Reason__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Consecutive_Failures_Limit__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Error_Message__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Failure_Count_Limit__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Stall_Threshold_Minutes__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Time_Window_Minutes__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Workflow_Instance_Id__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Alert__e.Workflow_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <!-- Workflow_Lifecycle__e (subscribe) -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Lifecycle__e.Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Lifecycle__e.Failure_Detail__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Lifecycle__e.Is_Success__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Lifecycle__e.Root_Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Lifecycle__e.Terminal_At__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Lifecycle__e.Workflow_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <!-- Workflow_Schedule__c -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Schedule__c.Input_Json__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Schedule__c.Enabled__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Schedule__c.Overlap_Policy__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Schedule__c.Dedicated_Slot__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Schedule__c.Last_Fired_Window__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Schedule__c.Last_Outcome__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Schedule__c.Next_Fire_Window__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <!-- Workflow_Log__c -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Schedule__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Fire_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Log_Type__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Level__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Outcome__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Schedule_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Workflow_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Correlation_Key__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Fire_Time__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Workflow_Instance__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Log__c.Message__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <!-- Workflow_Pause_State__c -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Pause_State__c.Reason__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <!-- Workflow_Search_Attribute__c -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Search_Attribute__c.Value__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <!-- Debounce_State__c -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Debounce_State__c.Attributes_Json__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Debounce_State__c.Causation_Id__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Debounce_State__c.Error_Message__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Debounce_State__c.Input_Json__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Debounce_State__c.Retry_Count__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+</PermissionSet>
