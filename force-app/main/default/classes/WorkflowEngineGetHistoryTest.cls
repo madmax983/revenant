@@ -14,20 +14,17 @@ private class WorkflowEngineGetHistoryTest {
     return inst;
   }
 
-  // Builds (does not insert) a step-execution row for an instance.
+  // Builds (does not insert) a step-execution row for an instance. Retry count and
+  // error text are set by the caller on the returned row when a test needs them.
   private static Workflow_Step_Execution__c step(
     Id instanceId,
     String stepName,
-    String status,
-    Integer retryCount,
-    String errorDetails
+    String status
   ) {
     return new Workflow_Step_Execution__c(
       Workflow_Instance__c = instanceId,
       Step_Name__c = stepName,
-      Status__c = status,
-      Retry_Count__c = retryCount,
-      Error_Details__c = errorDetails
+      Status__c = status
     );
   }
 
@@ -45,27 +42,10 @@ private class WorkflowEngineGetHistoryTest {
   static void testGetHistoryOrderedByExecution() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c inst = newInstance('order-1');
-      Workflow_Step_Execution__c s1 = step(
-        inst.Id,
-        'StepOne',
-        'Completed',
-        0,
-        null
-      );
-      Workflow_Step_Execution__c s2 = step(
-        inst.Id,
-        'StepTwo',
-        'Completed',
-        2,
-        null
-      );
-      Workflow_Step_Execution__c s3 = step(
-        inst.Id,
-        'StepThree',
-        'Running',
-        0,
-        null
-      );
+      Workflow_Step_Execution__c s1 = step(inst.Id, 'StepOne', 'Completed');
+      Workflow_Step_Execution__c s2 = step(inst.Id, 'StepTwo', 'Completed');
+      s2.Retry_Count__c = 2;
+      Workflow_Step_Execution__c s3 = step(inst.Id, 'StepThree', 'Running');
       Database.insert(
         new List<Workflow_Step_Execution__c>{ s1, s2, s3 },
         AccessLevel.SYSTEM_MODE
@@ -76,7 +56,9 @@ private class WorkflowEngineGetHistoryTest {
       Test.setCreatedDate(s3.Id, DateTime.now().addMinutes(-10));
 
       Test.startTest();
-      WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(inst.Id);
+      WorkflowEngine.StepHistory history = WorkflowHistoryRead.getHistory(
+        inst.Id
+      );
       Test.stopTest();
 
       System.assertNotEquals(null, history, 'Known instance returns a wrapper');
@@ -125,19 +107,11 @@ private class WorkflowEngineGetHistoryTest {
   static void testGetHistoryTerminalAndInFlightTiming() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c inst = newInstance('timing-1');
-      Workflow_Step_Execution__c done = step(
-        inst.Id,
-        'DoneStep',
-        'Completed',
-        0,
-        null
-      );
+      Workflow_Step_Execution__c done = step(inst.Id, 'DoneStep', 'Completed');
       Workflow_Step_Execution__c running = step(
         inst.Id,
         'RunningStep',
-        'Running',
-        0,
-        null
+        'Running'
       );
       Database.insert(
         new List<Workflow_Step_Execution__c>{ done, running },
@@ -147,7 +121,9 @@ private class WorkflowEngineGetHistoryTest {
       Test.setCreatedDate(running.Id, DateTime.now().addMinutes(-20));
 
       Test.startTest();
-      WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(inst.Id);
+      WorkflowEngine.StepHistory history = WorkflowHistoryRead.getHistory(
+        inst.Id
+      );
       Test.stopTest();
 
       WorkflowEngine.StepHistoryEntry terminal = history.entries[0];
@@ -191,16 +167,14 @@ private class WorkflowEngineGetHistoryTest {
       Workflow_Step_Execution__c forwardFail = step(
         inst.Id,
         'ChargeCard',
-        'Failed',
-        3,
-        'Gateway timeout'
+        'Failed'
       );
+      forwardFail.Retry_Count__c = 3;
+      forwardFail.Error_Details__c = 'Gateway timeout';
       Workflow_Step_Execution__c comp = step(
         inst.Id,
         'ChargeCard_Compensate',
-        'Compensated',
-        0,
-        null
+        'Compensated'
       );
       Database.insert(
         new List<Workflow_Step_Execution__c>{ forwardFail, comp },
@@ -210,7 +184,9 @@ private class WorkflowEngineGetHistoryTest {
       Test.setCreatedDate(comp.Id, DateTime.now().addMinutes(-20));
 
       Test.startTest();
-      WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(inst.Id);
+      WorkflowEngine.StepHistory history = WorkflowHistoryRead.getHistory(
+        inst.Id
+      );
       Test.stopTest();
 
       System.assertEquals(
@@ -244,7 +220,9 @@ private class WorkflowEngineGetHistoryTest {
       Workflow_Instance__c inst = newInstance('empty-1');
 
       Test.startTest();
-      WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(inst.Id);
+      WorkflowEngine.StepHistory history = WorkflowHistoryRead.getHistory(
+        inst.Id
+      );
       Test.stopTest();
 
       System.assertNotEquals(
@@ -263,7 +241,7 @@ private class WorkflowEngineGetHistoryTest {
   static void testGetHistoryUnknownIdReturnsNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
-      WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(
+      WorkflowEngine.StepHistory history = WorkflowHistoryRead.getHistory(
         unknownInstanceId()
       );
       Test.stopTest();
@@ -277,7 +255,7 @@ private class WorkflowEngineGetHistoryTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       System.assertEquals(
         null,
-        WorkflowEngine.getHistory((Id) null),
+        WorkflowHistoryRead.getHistory((Id) null),
         'Null Id returns null'
       );
     }
@@ -292,12 +270,14 @@ private class WorkflowEngineGetHistoryTest {
       Integer cap = WorkflowHistoryRead.MAX_HISTORY_ROWS;
       List<Workflow_Step_Execution__c> rows = new List<Workflow_Step_Execution__c>();
       for (Integer i = 0; i < cap + 5; i++) {
-        rows.add(step(inst.Id, 'Step' + i, 'Completed', 0, null));
+        rows.add(step(inst.Id, 'Step' + i, 'Completed'));
       }
       Database.insert(rows, AccessLevel.SYSTEM_MODE);
 
       Test.startTest();
-      WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(inst.Id);
+      WorkflowEngine.StepHistory history = WorkflowHistoryRead.getHistory(
+        inst.Id
+      );
       Test.stopTest();
 
       System.assertEquals(
@@ -322,21 +302,9 @@ private class WorkflowEngineGetHistoryTest {
       Workflow_Instance__c instB = newInstance('bulk-b');
       Workflow_Instance__c instEmpty = newInstance('bulk-empty');
 
-      Workflow_Step_Execution__c a1 = step(
-        instA.Id,
-        'A1',
-        'Completed',
-        0,
-        null
-      );
-      Workflow_Step_Execution__c a2 = step(instA.Id, 'A2', 'Running', 0, null);
-      Workflow_Step_Execution__c b1 = step(
-        instB.Id,
-        'B1',
-        'Completed',
-        0,
-        null
-      );
+      Workflow_Step_Execution__c a1 = step(instA.Id, 'A1', 'Completed');
+      Workflow_Step_Execution__c a2 = step(instA.Id, 'A2', 'Running');
+      Workflow_Step_Execution__c b1 = step(instB.Id, 'B1', 'Completed');
       Database.insert(
         new List<Workflow_Step_Execution__c>{ a1, a2, b1 },
         AccessLevel.SYSTEM_MODE
@@ -347,7 +315,7 @@ private class WorkflowEngineGetHistoryTest {
       Id unknownId = unknownInstanceId();
 
       Test.startTest();
-      Map<Id, WorkflowEngine.StepHistory> byId = WorkflowEngine.getHistory(
+      Map<Id, WorkflowEngine.StepHistory> byId = WorkflowHistoryRead.getHistory(
         new List<Id>{ instA.Id, instB.Id, instEmpty.Id, unknownId }
       );
       Test.stopTest();
@@ -390,12 +358,12 @@ private class WorkflowEngineGetHistoryTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       System.assertEquals(
         0,
-        WorkflowEngine.getHistory(new List<Id>()).size(),
+        WorkflowHistoryRead.getHistory(new List<Id>()).size(),
         'Empty input yields empty map'
       );
       System.assertEquals(
         0,
-        WorkflowEngine.getHistory((List<Id>) null).size(),
+        WorkflowHistoryRead.getHistory((List<Id>) null).size(),
         'Null input yields empty map'
       );
     }

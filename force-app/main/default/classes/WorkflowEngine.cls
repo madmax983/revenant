@@ -328,41 +328,23 @@ public inherited sharing class WorkflowEngine {
     public Boolean isTruncated { get; private set; }
 
     /**
-     * @description Builds the wrapper from the projected (already-capped) entries
-     * and the truncation flag computed by the read layer.
-     * @param entries the ordered, capped history entries
-     * @param isTruncated whether the history was truncated at the row cap
+     * @description Projects a set of queried, append-ordered step-execution rows
+     * for one instance into the capped `entries` list, setting `isTruncated` when
+     * the input held more rows than the cap. Mirrors the projecting constructor of
+     * {@link WorkflowStatus}; used by the extracted read layer
+     * ({@link WorkflowHistoryRead}).
+     * @param rows the instance's step-execution rows in append order
+     * @param rowCap the maximum number of entries to retain
      */
-    public StepHistory(List<StepHistoryEntry> entries, Boolean isTruncated) {
-      this.entries = entries;
-      this.isTruncated = isTruncated;
+    public StepHistory(List<Workflow_Step_Execution__c> rows, Integer rowCap) {
+      this.entries = new List<StepHistoryEntry>();
+      Integer rowCount = rows == null ? 0 : rows.size();
+      this.isTruncated = rowCount > rowCap;
+      Integer take = this.isTruncated ? rowCap : rowCount;
+      for (Integer i = 0; i < take; i++) {
+        this.entries.add(new StepHistoryEntry(rows[i]));
+      }
     }
-  }
-
-  /**
-   * @description Returns the ordered step-execution timeline for a workflow
-   * instance by Id, or null when no instance with that Id exists. A known
-   * instance with no logged steps returns a `StepHistory` with an empty `entries`
-   * list. Read-only: at most 2 SOQL queries and zero DML. Thin delegator to
-   * {@link WorkflowHistoryRead}.
-   * @param instanceId Id of the workflow instance to read
-   * @return the instance's step history, or null when no such instance exists
-   */
-  public static StepHistory getHistory(Id instanceId) {
-    return WorkflowHistoryRead.getHistory(instanceId);
-  }
-
-  /**
-   * @description Bulk variant — returns a map from instance Id to its ordered
-   * step history. An Id with no matching instance is absent from the map; a known
-   * instance with no logged steps is present with an empty `entries` list.
-   * Read-only: a bounded, constant number of SOQL queries regardless of list size
-   * and zero DML. Thin delegator to {@link WorkflowHistoryRead}.
-   * @param instanceIds instance Ids to read
-   * @return map of instance Id to step history (absent key per unmatched Id)
-   */
-  public static Map<Id, StepHistory> getHistory(List<Id> instanceIds) {
-    return WorkflowHistoryRead.getHistory(instanceIds);
   }
 
   // ─── End Read API ──────────────────────────────────────────────────────────

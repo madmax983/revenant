@@ -459,17 +459,17 @@ List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(keyLi
 
 #### Read a Workflow's Step Timeline (Apex)
 
-`getStatus` returns the **outcome**; `WorkflowEngine.getHistory` is its **timeline** complement — the ordered, append-order list of step executions for an instance (which steps ran, in what order, with attempt counts, timing, errors, and a forward-vs-compensation flag). As with `getStatus`, do **not** query `Workflow_Step_Execution__c` directly: the field names are internal. `getHistory` is **strictly read-only** (constant SOQL, zero DML) and safe to call from any Apex context.
+`getStatus` returns the **outcome**; `WorkflowHistoryRead.getHistory` is its **timeline** complement — the ordered, append-order list of step executions for an instance (which steps ran, in what order, with attempt counts, timing, errors, and a forward-vs-compensation flag). Like `getStatus`, it is a service-class read contract (returning the resident `WorkflowEngine.StepHistory` / `WorkflowEngine.StepHistoryEntry` DTOs). As with `getStatus`, do **not** query `Workflow_Step_Execution__c` directly: the field names are internal. `getHistory` is **strictly read-only** (constant SOQL, zero DML) and safe to call from any Apex context.
 
 ```java
 // Single instance — null when no instance matches; empty entries when it has no steps yet
-WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(instanceId);
+WorkflowEngine.StepHistory history = WorkflowHistoryRead.getHistory(instanceId);
 for (WorkflowEngine.StepHistoryEntry e : history.entries) {
   System.debug(e.stepName + ' ' + e.status + ' attempt=' + e.attempt);
 }
 
 // Bulk — constant SOQL regardless of list size; unmatched Ids are absent from the map
-Map<Id, WorkflowEngine.StepHistory> byId = WorkflowEngine.getHistory(idList);
+Map<Id, WorkflowEngine.StepHistory> byId = WorkflowHistoryRead.getHistory(idList);
 ```
 
 **`StepHistory` fields:**
