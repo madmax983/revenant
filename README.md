@@ -499,7 +499,19 @@ public class OnboardingWorkflow implements WorkflowDefinition, ValidatedWorkflow
 }
 ```
 
-A `WorkflowInputContract` is an ordered list of field specs — `require(name, type)` (must be present and non-null) and `optional(name, type)` (type-checked only when present). The `WorkflowInputType` primitives are `STRING`, `INTEGER`, `LONG`, `DECIMAL`, `BOOLEAN`, `DATE`, and `DATETIME`. Type-checking is **strict and never mutates the payload**: `INTEGER`/`LONG` accept a whole-number JSON value (not a fractional number or a numeric string), `DECIMAL` accepts any JSON number, `BOOLEAN` accepts a JSON boolean (not `"true"`), and `DATE`/`DATETIME` accept an ISO-8601 string.
+A `WorkflowInputContract` is an ordered list of field specs — `require(name, type)` (must be present and non-null) and `optional(name, type)` (type-checked only when present). The seven `WorkflowInputType` primitives, each type-checked **strictly** and **without ever mutating the payload**:
+
+| `WorkflowInputType` | Accepts (JSON) |
+| ------------------- | -------------- |
+| `STRING`            | A JSON string. |
+| `INTEGER`           | A whole-number JSON value in the 32-bit range (not a fractional number or a numeric string). |
+| `LONG`              | A whole-number JSON value (not a fractional number or a numeric string). |
+| `DECIMAL`           | Any JSON number. |
+| `BOOLEAN`           | A JSON boolean (`true`/`false`, not `"true"`). |
+| `DATE`              | An ISO-8601 date string. |
+| `DATETIME`          | An ISO-8601 datetime string. |
+
+The issue's generic **Number** maps to **`DECIMAL`** (any JSON numeric); reach for `INTEGER`/`LONG` when the field must be a whole number.
 
 **Fully backward compatible and free for the simple case.** A definition that does _not_ implement `ValidatedWorkflow` is never inspected — detection is a single in-memory `instanceof` on the already-resolved definition. Validation adds **zero SOQL and zero DML** to the start path and nothing to the `WorkflowOrchestrator` Queueable hot path; it is a pure parse-and-check that runs **before any `Workflow_Instance__c` is inserted and before any job is enqueued**, so the append-only audit trail is untouched on rejection.
 
@@ -518,6 +530,13 @@ try {
 The bulk `startOrGet(List<StartRequest>)` validates every request up front and, consistent with the pipeline's existing all-or-none semantics, throws a single `WorkflowInputException` enumerating every bad field across every offending request (tagged `request[i]`) — writing no rows for any request in the batch.
 
 **Flow (Start Workflow invocable).** Instead of a hard Flow fault, the invocable returns a **branchable** result: on invalid input the row carries `Is Valid = false` and a `Validation Error` string enumerating the bad fields (and no instance is started), while valid rows carry `Is Valid = true`, `Validation Error = null`, and proceed. A Flow Decision routes bad input declaratively, and one invalid row never aborts its valid siblings. See [`ValidatedOnboardingWorkflowExample`](examples/main/default/classes/ValidatedOnboardingWorkflowExample.cls) for a copyable reference.
+
+**Two-layer semantics — atomic in bulk Apex, per-row at the invocable.** The two entry points reject invalid input on deliberately different contracts, and the difference is by design:
+
+- **Bulk Apex (`WorkflowEngine` bulk start): ATOMIC validation.** If any request's input is invalid, the whole batch is rejected with a single `WorkflowInputException` enumerating **every** bad field across **all** offending requests, and **zero** rows are written — fix all and retry. This preserves the engine's all-or-none bulk invariant: a validation-only partial-success would make bulk semantics mode-dependent (validation errors partial-succeeding while DML errors roll everything back), which is incoherent for programmatic callers.
+- **Flow invocable (`WorkflowStartInvocableAction`): PER-ROW routing.** Each row is validated independently; an invalid row returns `isValid=false` + `validationError` (no Flow fault) while valid sibling rows still start. Per-row independence lives here because this is where the acceptance criterion's motivation lives — Flow can't catch Apex exceptions.
+
+If a per-row, non-aborting **bulk Apex** API is ever needed, the additive path is a `validationError` field on `WorkflowEngine.StartResult` (deferred; not in v1).
 
 ---
 

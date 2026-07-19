@@ -387,7 +387,9 @@ because it introduces a new permanent author-facing API contract.
 A workflow definition MAY now implement **`ValidatedWorkflow`** (alongside
 `WorkflowDefinition`) to declare a `WorkflowInputContract` of required/optional
 fields and their `WorkflowInputType` primitives (`STRING`, `INTEGER`, `LONG`,
-`DECIMAL`, `BOOLEAN`, `DATE`, `DATETIME`). When present, the contract is enforced
+`DECIMAL`, `BOOLEAN`, `DATE`, `DATETIME`). The issue's generic **Number** maps to
+**`DECIMAL`** (any JSON numeric); use `INTEGER`/`LONG` for whole numbers. When
+present, the contract is enforced
 **synchronously at `WorkflowEngine.start(...)` / `startOrGet(...)`** — before any
 `Workflow_Instance__c` is inserted or any job enqueued, adding **zero SOQL/DML** to
 the start path. Bad input throws the new top-level typed **`WorkflowInputException`**
