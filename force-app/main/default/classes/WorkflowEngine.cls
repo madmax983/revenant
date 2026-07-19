@@ -851,4 +851,177 @@ public inherited sharing class WorkflowEngine {
   public static void processWatchdogHeartbeat() {
     WorkflowHeartbeatService.runWatchdogHeartbeat();
   }
+
+  // ─── Find / List API ───────────────────────────────────────────────────────
+  // Forever-public DTOs for the paginated instance-enumeration contract
+  // implemented by WorkflowInstanceQuery.findInstances. Placed in their own region
+  // (rather than beside the WorkflowStatus read DTO above) so this additive surface
+  // stays a self-contained block. Read-only projections with private setters,
+  // mirroring the WorkflowStatus DTO convention.
+
+  /**
+   * @description Filter + pagination criteria for
+   * {@link WorkflowInstanceQuery#findInstances}. Every field is optional; an
+   * all-null/empty criteria (or a null argument) matches all instances. This is a
+   * forever-public API contract, so the shape is deliberately minimal and each
+   * field's null/empty semantics are fixed here.
+   */
+  public class InstanceCriteria {
+    /**
+     * @description Exact `Workflow_Name__c` (definition developer name) to match.
+     * Null or blank matches any definition.
+     */
+    public String definitionName;
+    /**
+     * @description Lifecycle statuses to include (matches `Status__c IN`). Null or
+     * empty matches any status. Because this is a raw row enumeration (not a
+     * continue-as-new chain resolution), including `ContinuedAsNew` returns
+     * predecessor hand-off generations as their own rows; omitting it excludes
+     * them. See the {@link WorkflowInstanceQuery} class doc for the full stance.
+     */
+    public Set<String> statuses;
+    /**
+     * @description Inclusive lower bound on `CreatedDate` (`CreatedDate &gt;=`).
+     * Null leaves the lower bound unbounded.
+     */
+    public Datetime createdAfter;
+    /**
+     * @description Inclusive upper bound on `CreatedDate` (`CreatedDate &lt;=`).
+     * Null leaves the upper bound unbounded.
+     */
+    public Datetime createdBefore;
+    /**
+     * @description Inclusive lower bound on `LastModifiedDate`
+     * (`LastModifiedDate &gt;=`). Null leaves the lower bound unbounded.
+     */
+    public Datetime modifiedAfter;
+    /**
+     * @description Inclusive upper bound on `LastModifiedDate`
+     * (`LastModifiedDate &lt;=`). Null leaves the upper bound unbounded.
+     */
+    public Datetime modifiedBefore;
+    /**
+     * @description Requested page size. Null uses
+     * {@link WorkflowInstanceQuery#DEFAULT_PAGE_SIZE}; a value above
+     * {@link WorkflowInstanceQuery#MAX_PAGE_SIZE} is clamped to that cap; a
+     * non-positive value throws a `WorkflowException`. The effective size applied
+     * is echoed on `InstancePage.pageSize`.
+     */
+    public Integer pageSize;
+    /**
+     * @description Opaque next-page cursor. Null or blank starts from the first
+     * page; otherwise pass a previous page's `InstancePage.nextCursor` back
+     * <b>verbatim</b>. A non-blank value that is not a cursor this API produced
+     * throws a `WorkflowException`. Do not parse, build, or mutate this string.
+     */
+    public String cursor;
+  }
+
+  /**
+   * @description Lightweight, payload-free summary of one `Workflow_Instance__c`
+   * row returned by {@link WorkflowInstanceQuery#findInstances}. Deliberately omits
+   * the heavy long-text payloads (`Input__c` / `Output__c` / `Progress__c`): fetch a
+   * terminal instance's full output per-Id via
+   * {@link WorkflowStatusRead#getStatus}. A forever-public read contract; all fields
+   * are read-only to callers (private setters), populated once via the projecting
+   * constructor.
+   */
+  public class WorkflowInstanceSummary {
+    /** @description Salesforce Id of the workflow instance. */
+    public Id instanceId { get; private set; }
+    /** @description Developer name of the workflow definition (`Workflow_Name__c`). */
+    public String definitionName { get; private set; }
+    /** @description Correlation key the instance was started with. */
+    public String correlationKey { get; private set; }
+    /** @description Raw `Status__c` lifecycle value (e.g. `Running`, `Failed`). */
+    public String status { get; private set; }
+    /**
+     * @description True when `status` is a terminal outcome (`Completed`, `Failed`,
+     * `Compensated`, `Cancelled`) per
+     * {@link WorkflowStatusRead#TERMINAL_GETSTATUS_STATUSES}. `ContinuedAsNew` is a
+     * non-terminal hand-off, so it reports `false` — consistent with `getStatus`.
+     */
+    public Boolean isTerminal { get; private set; }
+    /** @description When the instance was created (`CreatedDate`). */
+    public Datetime createdAt { get; private set; }
+    /** @description When the instance was last modified (`LastModifiedDate`). */
+    public Datetime lastModifiedAt { get; private set; }
+
+    /**
+     * @description Projects a queried instance row into a payload-free summary.
+     * Terminality is derived here (from the shared getStatus terminal set) so the
+     * read layer never touches the private setters. Mirrors the projecting
+     * constructor of {@link WorkflowStatus}. The row must carry the six selected
+     * scalar fields; no long-text field is read.
+     * @param inst the queried `Workflow_Instance__c` row to project
+     */
+    public WorkflowInstanceSummary(Workflow_Instance__c inst) {
+      this.instanceId = inst.Id;
+      this.definitionName = inst.Workflow_Name__c;
+      this.correlationKey = inst.Correlation_Key__c;
+      this.status = inst.Status__c;
+      this.isTerminal = WorkflowStatusRead.TERMINAL_GETSTATUS_STATUSES.contains(
+        inst.Status__c
+      );
+      this.createdAt = inst.CreatedDate;
+      this.lastModifiedAt = inst.LastModifiedDate;
+    }
+  }
+
+  /**
+   * @description One page of {@link WorkflowInstanceQuery#findInstances} results:
+   * the ordered summaries plus the keyset cursor for the next page. Callers page
+   * until `hasMore` is false (equivalently, `nextCursor` is null). No exact total
+   * is exposed: an unbounded, deeply-paged result set cannot be counted within a
+   * constant SOQL/heap budget, so callers walk pages instead. A forever-public
+   * contract; fields are read-only to callers (private setters).
+   */
+  public class InstancePage {
+    /**
+     * @description The instance summaries for this page, newest first
+     * (`CreatedDate DESC, Id DESC`), at most `pageSize` of them. Empty when nothing
+     * matched.
+     */
+    public List<WorkflowInstanceSummary> entries { get; private set; }
+    /**
+     * @description Opaque cursor for the next page, or null on the last page. Pass
+     * it back verbatim as `InstanceCriteria.cursor` to fetch the following page.
+     */
+    public String nextCursor { get; private set; }
+    /**
+     * @description True when at least one further page exists (i.e. `nextCursor` is
+     * non-null). False on the last page. Derived from `nextCursor` so the two are
+     * always consistent.
+     */
+    public Boolean hasMore { get; private set; }
+    /**
+     * @description The effective page size the engine applied for this call — the
+     * caller's `InstanceCriteria.pageSize` after defaulting/clamping. Lets callers
+     * observe when a request above {@link WorkflowInstanceQuery#MAX_PAGE_SIZE} was
+     * clamped.
+     */
+    public Integer pageSize { get; private set; }
+
+    /**
+     * @description Assembles a page from the already-projected summaries and the
+     * next-page cursor, deriving `hasMore` from whether `nextCursor` is non-null so
+     * the more-pages signal and the cursor can never disagree. Used by the
+     * extracted read layer ({@link WorkflowInstanceQuery}).
+     * @param entries the projected summaries for this page
+     * @param nextCursor the next-page cursor, or null on the last page
+     * @param pageSize the effective page size applied for this call
+     */
+    public InstancePage(
+      List<WorkflowInstanceSummary> entries,
+      String nextCursor,
+      Integer pageSize
+    ) {
+      this.entries = entries;
+      this.nextCursor = nextCursor;
+      this.hasMore = nextCursor != null;
+      this.pageSize = pageSize;
+    }
+  }
+
+  // ─── End Find / List API ─────────────────────────────────────────────────────
 }
