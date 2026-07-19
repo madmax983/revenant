@@ -6,6 +6,7 @@ import getInstanceDetails from "@salesforce/apex/WorkflowDashboardController.get
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
+import getStorageFootprint from "@salesforce/apex/WorkflowDashboardController.getStorageFootprint";
 import getCancelEligibleCount from "@salesforce/apex/WorkflowDashboardController.getCancelEligibleCount";
 import cancelMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandController.cancelMatchingInstances";
 import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardController.getRedriveEligibleCount";
@@ -114,6 +115,13 @@ jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus",
   () => ({
     default: jest.fn(() => Promise.resolve([])),
+  }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getStorageFootprint",
+  () => ({
+    default: jest.fn(() => Promise.resolve(null)),
   }),
   { virtual: true },
 );
@@ -300,6 +308,75 @@ describe("c-workflow-dashboard trends panel", () => {
     const rows = element.shadowRoot.querySelectorAll('[data-id="trend-row"]');
     expect(rows.length).toBe(0);
     const empty = element.shadowRoot.querySelector('[data-id="trend-empty"]');
+    expect(empty).not.toBeNull();
+  });
+
+  it("renders the Storage Footprint panel with a row per object and warning state", async () => {
+    getStorageFootprint.mockResolvedValue({
+      objects: [
+        {
+          apiName: "Workflow_Instance__c",
+          label: "Workflow Instance",
+          recordCount: 3,
+          estimatedBytes: 6000,
+          delta7: 2,
+          delta30: 3,
+        },
+        {
+          apiName: "Workflow_Log__c",
+          label: "Workflow Log",
+          recordCount: 10,
+          estimatedBytes: 20000,
+          delta7: 0,
+          delta30: 5,
+        },
+      ],
+      contentVersionBytes: 1048576,
+      estimatedRecordBytes: 26000,
+      estimatedTotalBytes: 1074576,
+      hasStorageLimit: true,
+      percentOfAllowance: 82.5,
+      warningThresholdPercent: 75,
+      isOverThreshold: true,
+    });
+    const element = createComponent();
+
+    await flushPromises();
+
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "System Doctor");
+    button.dispatchEvent(new CustomEvent("click"));
+
+    await flushPromises();
+    await flushPromises();
+
+    expect(getStorageFootprint).toHaveBeenCalled();
+    const rows = element.shadowRoot.querySelectorAll('[data-id="storage-row"]');
+    expect(rows.length).toBe(2);
+
+    const panelText = element.shadowRoot.textContent;
+    expect(panelText).toContain("Workflow Instance");
+    expect(panelText).toContain("82.5%");
+    expect(panelText).toContain("1.0 MB");
+    expect(panelText).toContain("Over threshold");
+  });
+
+  it("shows the Storage Footprint empty state when unavailable", async () => {
+    getStorageFootprint.mockResolvedValue(null);
+    const element = createComponent();
+
+    await flushPromises();
+
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "System Doctor");
+    button.dispatchEvent(new CustomEvent("click"));
+
+    await flushPromises();
+    await flushPromises();
+
+    const empty = element.shadowRoot.querySelector('[data-id="storage-empty"]');
     expect(empty).not.toBeNull();
   });
 

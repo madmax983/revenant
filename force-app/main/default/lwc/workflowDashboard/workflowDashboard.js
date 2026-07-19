@@ -35,6 +35,7 @@ import redeliverSignal from "@salesforce/apex/WorkflowDashboardCommandController
 import pauseDefinition from "@salesforce/apex/WorkflowDashboardCommandController.pauseDefinition";
 import resumeDefinition from "@salesforce/apex/WorkflowDashboardCommandController.resumeDefinition";
 import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
+import getStorageFootprint from "@salesforce/apex/WorkflowDashboardController.getStorageFootprint";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
 import compensateWorkflow from "@salesforce/apex/WorkflowDashboardCommandController.compensateWorkflow";
@@ -77,6 +78,11 @@ export default class WorkflowDashboard extends LightningElement {
   loadingDoctor = false;
   doctorData = { config: {} };
   concurrencyRows = [];
+
+  // Storage Footprint panel state (System Doctor). storageData holds the shaped
+  // per-object rows and allowance metrics returned by getStorageFootprint.
+  storageData = null;
+  storageObjectRows = [];
 
   // Schedules view state (renders the standalone workflowScheduleManager component)
   viewingSchedules = false;
@@ -1427,10 +1433,94 @@ export default class WorkflowDashboard extends LightningElement {
           this.reduceErrors(error),
         );
       });
+
+    this.loadStorageFootprint();
   }
 
   get hasConcurrencyRows() {
     return this.concurrencyRows && this.concurrencyRows.length > 0;
+  }
+
+  // Loads the read-only Storage Footprint snapshot and shapes each per-object row with a
+  // human-readable size and formatted growth deltas for the panel. Best-effort: a failure
+  // clears the panel and logs, never blocking the rest of the System Doctor view.
+  loadStorageFootprint() {
+    getStorageFootprint()
+      .then((result) => {
+        if (!result) {
+          this.storageData = null;
+          this.storageObjectRows = [];
+          return;
+        }
+        this.storageData = result;
+        this.storageObjectRows = (result.objects || []).map((row) => ({
+          ...row,
+          estimatedSizeLabel: this.formatBytes(row.estimatedBytes),
+          delta7Label: this.formatDelta(row.delta7),
+          delta30Label: this.formatDelta(row.delta30),
+        }));
+      })
+      .catch((error) => {
+        this.storageData = null;
+        this.storageObjectRows = [];
+        console.error(
+          "Failed to load storage footprint:",
+          this.reduceErrors(error),
+        );
+      });
+  }
+
+  get hasStorageData() {
+    return !!this.storageData;
+  }
+
+  get storageContentSizeLabel() {
+    return this.storageData
+      ? this.formatBytes(this.storageData.contentVersionBytes)
+      : "—";
+  }
+
+  get storageTotalSizeLabel() {
+    return this.storageData
+      ? this.formatBytes(this.storageData.estimatedTotalBytes)
+      : "—";
+  }
+
+  // CSS class for the allowance meter: warning styling once the estimated footprint crosses
+  // the operator-configured threshold, otherwise the normal accent.
+  get storageAllowanceClass() {
+    return this.storageData && this.storageData.isOverThreshold
+      ? "storage-meter storage-meter_warning"
+      : "storage-meter";
+  }
+
+  get storagePercentLabel() {
+    if (!this.storageData || !this.storageData.hasStorageLimit) {
+      return "N/A";
+    }
+    return this.storageData.percentOfAllowance + "%";
+  }
+
+  // Formats a byte count as a compact human-readable size (B / KB / MB / GB).
+  formatBytes(bytes) {
+    const value = Number(bytes) || 0;
+    if (value < 1024) {
+      return value + " B";
+    }
+    const units = ["KB", "MB", "GB", "TB"];
+    let size = value / 1024;
+    let unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex += 1;
+    }
+    return size.toFixed(1) + " " + units[unitIndex];
+  }
+
+  // Formats a trailing-window growth delta with an explicit "+" so acceleration reads clearly.
+  formatDelta(delta) {
+    const value = Number(delta) || 0;
+    return "+" + value;
   }
 
   handleEnqueueWatchdog() {
