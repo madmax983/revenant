@@ -284,6 +284,9 @@
                                                             <template if:true={inst.waitingOn}>
                                                                 <span class={inst.waitingOnBadgeClass} style="margin-right: 8px;">{inst.waitingOn}</span>
                                                             </template>
+                                                            <template if:true={inst.hasWaitDescriptor}>
+                                                                <span class="badge badge-teal" style="margin-right: 8px;" title="Awaited signal - paste into Send Signal">{inst.waitDescriptorLabel}</span>
+                                                            </template>
                                                             <span class={inst.statusBadgeClass}>{inst.Status__c}</span>
                                                         </div>
                                                     </div>
@@ -998,6 +1001,9 @@
                                          </template>
                                          <template if:true={selectedInst.waitingOn}>
                                              <span class={selectedInst.waitingOnBadgeClass} style="margin-right: 8px;">Waiting On: {selectedInst.waitingOn}</span>
+                                         </template>
+                                         <template if:true={selectedInst.hasWaitDescriptor}>
+                                             <span class="badge badge-teal" style="margin-right: 8px;" title="Awaited signal - paste into Send Signal">Awaiting: {selectedInst.waitDescriptorLabel}</span>
                                          </template>
                                          <span class={selectedInst.statusBadgeClass}>{selectedInst.Status__c}</span>
                                     </div>

@@ -169,6 +169,10 @@
   background-color: var(--slds-g-color-accent-light-2, hsl(240, 100%, 95%));
   color: var(--slds-g-color-palette-indigo-30, hsl(240, 95%, 38%));
 }
+.badge-teal {
+  background-color: var(--slds-g-color-palette-teal-90, hsl(180, 55%, 92%));
+  color: var(--slds-g-color-palette-teal-30, hsl(185, 90%, 25%));
+}
 
 /* Code Blocks */
 .code-block {

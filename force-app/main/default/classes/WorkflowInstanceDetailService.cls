@@ -40,6 +40,14 @@ public inherited sharing class WorkflowInstanceDetailService {
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC
     ];
+    // Derive the awaited-signal descriptor from the parked step state BEFORE payload
+    // resolution mutates (and may truncate) the step Output fields for display; the
+    // service rehydrates any offloaded output itself through WorkflowPayloadOffload.
+    Map<String, Object> waitDescriptor = WorkflowWaitDescriptorService.describeSignalWait(
+      instance,
+      steps
+    );
+
     Map<String, Object> payloadFiles = WorkflowPayloadService.resolvePayloadsInBulk(
       instance,
       steps
@@ -104,6 +112,7 @@ public inherited sharing class WorkflowInstanceDetailService {
       'children' => children,
       'successor' => successors.isEmpty() ? null : successors[0],
       'waitingOn' => computeDetailWaitingOn(instance),
+      'waitDescriptor' => waitDescriptor,
       'pendingCompensationCount' => pendingCompensations.size(),
       'pendingCompensations' => pendingCompensations,
       'payloadFiles' => payloadFiles,

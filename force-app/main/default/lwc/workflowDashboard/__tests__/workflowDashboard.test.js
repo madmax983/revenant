@@ -1655,6 +1655,128 @@ describe("c-workflow-dashboard operator signal injection", () => {
   });
 });
 
+describe("c-workflow-dashboard awaited-signal descriptor (#84)", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function createComponent() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    return element;
+  }
+
+  it("renders the awaited-signal descriptor badge in the instance list", async () => {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+        waitDescriptor: {
+          type: "approval",
+          signalName: "Approve:PurchaseApproval",
+          label: "Approve:PurchaseApproval",
+          stepName: "ApproveStep",
+        },
+      },
+    ]);
+
+    const element = createComponent();
+    await flushPromises();
+
+    const badge = element.shadowRoot.querySelector(".badge-teal");
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toBe("Approve:PurchaseApproval");
+  });
+
+  it("pre-fills the Send Signal modal with the awaited signal name", async () => {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {},
+      waitDescriptor: {
+        type: "child-completion",
+        signalName: "ChildCompleted:order-42",
+        label: "ChildCompleted:order-42",
+        stepName: "ChildStep",
+      },
+    });
+
+    const element = await openSignalModal();
+
+    const nameInput = element.shadowRoot.querySelector(
+      'lightning-input[data-id="signal-name-input"]',
+    );
+    expect(nameInput.value).toBe("ChildCompleted:order-42");
+    // A pre-filled name enables the confirm button with no operator typing.
+    const confirmBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="confirm-signal-btn"]',
+    );
+    expect(confirmBtn.disabled).toBe(false);
+  });
+
+  it("shows a generic descriptor label and leaves the modal name blank", async () => {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {},
+      waitDescriptor: {
+        type: "generic-signal",
+        signalName: null,
+        label: "Awaiting signal at step WaitStep",
+        stepName: "WaitStep",
+      },
+    });
+
+    const element = await openSignalModal();
+
+    const badge = element.shadowRoot.querySelector(".badge-teal");
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toBe(
+      "Awaiting: Awaiting signal at step WaitStep",
+    );
+    // No derivable name → the Signal Name input stays empty for manual entry.
+    const nameInput = element.shadowRoot.querySelector(
+      'lightning-input[data-id="signal-name-input"]',
+    );
+    expect(nameInput.value).toBe("");
+  });
+});
+
 describe("c-workflow-dashboard business attributes filters", () => {
   afterEach(() => {
     while (document.body.firstChild) {
