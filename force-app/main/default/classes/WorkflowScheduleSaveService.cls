@@ -13,7 +13,7 @@ public inherited sharing class WorkflowScheduleSaveService {
   /**
    * @description Creates (no Id) or updates (Id present) a schedule. Validates cron
    * and the optional input JSON before committing, reseeds the fire cursor when the
-   * cron changes, and keeps any armed dedicated job in sync.
+   * cron or the time zone changes, and keeps any armed dedicated job in sync.
    * @param fields The schedule field values from the editor.
    * @return The Id of the created or updated schedule.
    */
@@ -22,10 +22,15 @@ public inherited sharing class WorkflowScheduleSaveService {
     String prefix = (String) fields.get('Correlation_Key_Prefix__c');
     validateScheduleInput(fields);
 
+    String zone = (String) fields.get('Time_Zone__c');
+
     Id existingId = resolveExistingId(fields);
-    // Capture the prior cron so we can re-arm an already-armed dedicated job if the
-    // cadence changes (System.schedule can't be updated in place).
-    String oldCron = loadOldCron(existingId);
+    // Capture the prior cron and zone so we can re-arm an already-armed dedicated
+    // job if the cadence changes (System.schedule can't be updated in place) and
+    // reseed the fire cursor when either the cron or the zone changes.
+    Workflow_Schedule__c oldRecord = loadExistingSchedule(existingId);
+    String oldCron = oldRecord.Cron_Expression__c;
+    String oldZone = oldRecord.Time_Zone__c;
     assertUniquePrefix(prefix, existingId);
 
     Workflow_Schedule__c sched = buildScheduleRecord(fields, existingId);
@@ -35,13 +40,20 @@ public inherited sharing class WorkflowScheduleSaveService {
       throwAura('Could not save schedule: ' + e.getMessage());
     }
 
-    // Recompute the engine-managed cursor on create or whenever the cron changes.
-    // sweep() only selects rows whose Next_Fire_Window__c is null or <= now, so a
-    // stale cursor from the prior cron (e.g. next month for a monthly schedule)
-    // would keep an edited every-minute schedule filtered out until that old date.
-    // Pointing the cursor at the new cron's next window both fixes that and gives
-    // the list view an immediate "next run" without a per-row evaluator scan.
-    if (existingId == null || oldCron != cron) {
+    // Recompute the engine-managed cursor on create or whenever the cron OR the
+    // time zone changes. sweep() only selects rows whose Next_Fire_Window__c is
+    // null or <= now, so a stale cursor from the prior cron (e.g. next month for a
+    // monthly schedule) would keep an edited every-minute schedule filtered out
+    // until that old date. A zone-only edit leaves the cursor computed in the OLD
+    // zone, which can fire a stale prior-day window or delay the intended one, so
+    // it must reseed too. Pointing the cursor at the new cron/zone's next window
+    // both fixes that and gives the list view an immediate "next run" without a
+    // per-row evaluator scan.
+    if (
+      existingId == null ||
+      oldCron != cron ||
+      normalizeZone(oldZone) != normalizeZone(zone)
+    ) {
       reseedCursor(sched, 'ScheduleSave');
     }
 
@@ -104,22 +116,42 @@ public inherited sharing class WorkflowScheduleSaveService {
   }
 
   /**
-   * @description Reads the currently-persisted cron for an edit.
+   * @description Reads the currently-persisted cron and time zone for an edit so the
+   * save can detect a cadence change (dedicated-job re-arm) or a cron/zone change
+   * (cursor reseed). Never queries on create and always returns a non-null record:
+   * a blank Workflow_Schedule__c (null cron and zone) stands in for create or a
+   * missing row, so callers can read the prior fields without a null guard.
    * @param existingId The schedule being edited, or null on create.
-   * @return The stored cron expression, or null on create or a missing row.
+   * @return The stored schedule row (Cron_Expression__c, Time_Zone__c), or a blank
+   * record on create or a missing row.
    */
-  private static String loadOldCron(Id existingId) {
+  private static Workflow_Schedule__c loadExistingSchedule(Id existingId) {
     if (existingId == null) {
-      return null;
+      return new Workflow_Schedule__c();
     }
     List<Workflow_Schedule__c> existing = [
-      SELECT Cron_Expression__c
+      SELECT Cron_Expression__c, Time_Zone__c
       FROM Workflow_Schedule__c
       WHERE Id = :existingId
       WITH SYSTEM_MODE
       LIMIT 1
     ];
-    return existing.isEmpty() ? null : existing[0].Cron_Expression__c;
+    // Append a blank fallback so a missing row still yields a non-null record
+    // (existing[0]) without an extra branch on isEmpty().
+    existing.add(new Workflow_Schedule__c());
+    return existing[0];
+  }
+
+  /**
+   * @description Normalizes a schedule time zone for change detection: a blank/null
+   * (or whitespace) zone means UTC and collapses to the empty string, so a
+   * null-to-empty difference is not seen as a zone change while a real IANA-id
+   * change (or a switch to/from UTC) is.
+   * @param zoneId The time zone to normalize, or blank/null for UTC.
+   * @return The zone id, or the empty string when the zone is blank (UTC).
+   */
+  private static String normalizeZone(String zoneId) {
+    return String.isBlank(zoneId) ? '' : zoneId;
   }
 
   /**

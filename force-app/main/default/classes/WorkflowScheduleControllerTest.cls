@@ -119,6 +119,146 @@ public class WorkflowScheduleControllerTest {
   }
 
   @IsTest
+  static void testEditZoneOnlyReseedsCursor() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Create a UTC schedule (blank zone): its cursor is the next 02:00Z.
+      Id id = WorkflowScheduleController.saveSchedule(
+        new Map<String, Object>{
+          'Name' => 'CtrlZone',
+          'Workflow_Name__c' => TEST_WF,
+          'Cron_Expression__c' => '0 2 * * *',
+          'Correlation_Key_Prefix__c' => 'CtrlZone',
+          'Enabled__c' => true,
+          'Overlap_Policy__c' => 'Skip',
+          'Dedicated_Slot__c' => false
+        }
+      );
+      DateTime utcCursor = [
+        SELECT Next_Fire_Window__c
+        FROM Workflow_Schedule__c
+        WHERE Id = :id
+      ]
+      .Next_Fire_Window__c;
+
+      Test.startTest();
+      // Edit changing ONLY the time zone — the cron is byte-identical.
+      WorkflowScheduleController.saveSchedule(
+        new Map<String, Object>{
+          'Id' => id,
+          'Name' => 'CtrlZone',
+          'Workflow_Name__c' => TEST_WF,
+          'Cron_Expression__c' => '0 2 * * *',
+          'Correlation_Key_Prefix__c' => 'CtrlZone',
+          'Enabled__c' => true,
+          'Overlap_Policy__c' => 'Skip',
+          'Dedicated_Slot__c' => false,
+          'Time_Zone__c' => 'America/New_York'
+        }
+      );
+      Test.stopTest();
+
+      DateTime after = [
+        SELECT Next_Fire_Window__c
+        FROM Workflow_Schedule__c
+        WHERE Id = :id
+      ]
+      .Next_Fire_Window__c;
+      System.assertNotEquals(
+        utcCursor,
+        after,
+        'A zone-only edit must recompute the cursor in the new zone, not keep the old-zone (UTC) value'
+      );
+      System.assertEquals(
+        WorkflowCronEvaluator.nextFireTime(
+          '0 2 * * *',
+          DateTime.now(),
+          'America/New_York'
+        ),
+        after,
+        'Zone-only edit should reseed the cursor to the new zone next 02:00 local'
+      );
+    }
+  }
+
+  @IsTest
+  static void testNoOpSaveDoesNotReseedCursor() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Schedule__c sched = makeSchedule('CtrlNoOp');
+      // A sentinel cursor a reseed would never compute for this cron/zone.
+      DateTime sentinel = DateTime.newInstanceGmt(2030, 1, 1, 12, 34, 0);
+      sched.Next_Fire_Window__c = sentinel;
+      insert sched;
+
+      Test.startTest();
+      // Save with byte-identical field values — cron and zone unchanged.
+      WorkflowScheduleController.saveSchedule(
+        new Map<String, Object>{
+          'Id' => sched.Id,
+          'Name' => 'CtrlNoOp',
+          'Workflow_Name__c' => TEST_WF,
+          'Cron_Expression__c' => '0 2 * * *',
+          'Correlation_Key_Prefix__c' => 'CtrlNoOp',
+          'Enabled__c' => true,
+          'Overlap_Policy__c' => 'Skip',
+          'Dedicated_Slot__c' => false
+        }
+      );
+      Test.stopTest();
+
+      System.assertEquals(
+        sentinel,
+        [
+          SELECT Next_Fire_Window__c
+          FROM Workflow_Schedule__c
+          WHERE Id = :sched.Id
+        ]
+        .Next_Fire_Window__c,
+        'A no-op save (nothing changed) must NOT reseed the cursor'
+      );
+    }
+  }
+
+  @IsTest
+  static void testNullToEmptyZoneIsNotAChange() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Schedule__c sched = makeSchedule('CtrlZoneBlank');
+      sched.Time_Zone__c = null; // stored blank == UTC
+      DateTime sentinel = DateTime.newInstanceGmt(2030, 2, 2, 8, 15, 0);
+      sched.Next_Fire_Window__c = sentinel;
+      insert sched;
+
+      Test.startTest();
+      // Save passing an EMPTY-STRING zone: null <-> '' both mean UTC, so this is
+      // not a real zone change and the cursor must NOT be reseeded.
+      WorkflowScheduleController.saveSchedule(
+        new Map<String, Object>{
+          'Id' => sched.Id,
+          'Name' => 'CtrlZoneBlank',
+          'Workflow_Name__c' => TEST_WF,
+          'Cron_Expression__c' => '0 2 * * *',
+          'Correlation_Key_Prefix__c' => 'CtrlZoneBlank',
+          'Enabled__c' => true,
+          'Overlap_Policy__c' => 'Skip',
+          'Dedicated_Slot__c' => false,
+          'Time_Zone__c' => ''
+        }
+      );
+      Test.stopTest();
+
+      System.assertEquals(
+        sentinel,
+        [
+          SELECT Next_Fire_Window__c
+          FROM Workflow_Schedule__c
+          WHERE Id = :sched.Id
+        ]
+        .Next_Fire_Window__c,
+        'A null-to-empty-string zone edit is not a real zone change and must NOT reseed'
+      );
+    }
+  }
+
+  @IsTest
   static void testSaveCreateAndEdit() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
