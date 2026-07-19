@@ -26,6 +26,15 @@ public inherited sharing class WorkflowHistoryRead {
   public static final Integer MAX_HISTORY_ROWS = 500;
 
   /**
+   * @description Row-budget headroom the bulk scan leaves unused, so a very large
+   * batch degrades to graceful truncation rather than consuming the entire
+   * per-transaction SOQL row governor (leaving room for any queries the caller
+   * runs after `getHistory` returns). Kept small relative to the 50,000-row
+   * ceiling.
+   */
+  private static final Integer SCAN_ROW_SAFETY_MARGIN = 1000;
+
+  /**
    * @description Step statuses treated as terminal for a single step execution.
    * A terminal step has a settled `endedAt`/`totalDurationMs`; any other status is
    * considered in flight and reports null timing. Public so the resident
@@ -57,8 +66,11 @@ public inherited sharing class WorkflowHistoryRead {
     if (instanceId == null) {
       return null;
     }
+    // A single instance's scan is tiny (at most the cap plus one), so it needs no
+    // budget arithmetic: cap + 1 lets the truncated case be detected cheaply.
     List<Workflow_Step_Execution__c> rows = queryRowsByInstance(
-        new Set<Id>{ instanceId }
+        new Set<Id>{ instanceId },
+        MAX_HISTORY_ROWS + 1
       )
       .get(instanceId);
 
@@ -90,15 +102,20 @@ public inherited sharing class WorkflowHistoryRead {
    * Uses a bounded, constant number of SOQL queries regardless of list size and
    * zero DML.
    *
-   * Correctness invariant: a step-bearing instance is NEVER reported as empty.
-   * The per-instance row scan is capped at `ids.size() * (MAX_HISTORY_ROWS + 1)`
-   * rows (clamped to the SOQL row ceiling) to stay heap-bounded, so a large
-   * sibling can starve another instance of scan budget — but an authoritative
-   * `COUNT()` grouped by instance (one query over the whole batch) supplies every
-   * requested instance's real `totalCount`. A starved instance therefore comes
-   * back with `isTruncated = true` and its true `totalCount` (with whatever rows
-   * the scan retrieved, possibly none), never as a false-empty history. To get the
-   * full `entries` of such a very large history, re-read that instance singly.
+   * The queries are ordered small-first so the large row scan runs LAST and is
+   * sized from the REMAINING row budget — the bulk read therefore never throws
+   * `System.LimitException: Too many query rows`, even for batches large enough
+   * that the ideal scan would exceed the per-transaction row governor. It
+   * degrades gracefully to truncation instead: the small grouped `COUNT()` (≤ one
+   * aggregate row per instance) and the existence probe run first; the scan then
+   * takes whatever budget is left.
+   *
+   * Correctness invariant: a step-bearing instance is NEVER reported as empty. The
+   * authoritative `COUNT()` supplies every requested instance's real `totalCount`,
+   * so an instance whose rows the scan could not fully retrieve (starved by a
+   * larger sibling or by the remaining row budget) still comes back with
+   * `isTruncated = true` and its true `totalCount` — never a false-empty history.
+   * To get the full `entries` of such a very large history, re-read it singly.
    * @param instanceIds instance Ids to read
    * @return map of instance Id to step history (absent key per unmatched Id)
    */
@@ -111,39 +128,75 @@ public inherited sharing class WorkflowHistoryRead {
       return out;
     }
 
-    // Query 1: the (budget-capped) rows per instance in append order.
-    Map<Id, List<Workflow_Step_Execution__c>> rowsByInstance = queryRowsByInstance(
-      lookupIds
-    );
-    // Query 2: the authoritative real step total for every requested instance in
-    // one grouped COUNT — this is what makes a scan-starved instance impossible to
-    // mistake for an empty one.
+    // Query 1 (small): the authoritative real step total per instance. Instances
+    // absent from the result have zero steps.
     Map<Id, Integer> realTotals = realStepTotals(lookupIds);
 
-    for (Id instId : lookupIds) {
-      Integer totalCount = realTotals.containsKey(instId)
-        ? realTotals.get(instId)
-        : 0;
-      if (totalCount == 0) {
-        // No steps: existence is resolved below (known-empty vs unknown Id).
-        continue;
-      }
+    // Query 2 (small, only when there are step-less Ids): an existence probe
+    // separates a known step-less instance (present, empty entries) from an
+    // unknown Id (absent). Resolved from the COUNT results, so it runs before the
+    // big scan.
+    Set<Id> steplessIds = new Set<Id>(lookupIds);
+    steplessIds.removeAll(realTotals.keySet());
+    addExistingSteplessInstances(steplessIds, out);
+
+    // Query 3 (large, LAST): the row scan. Its LIMIT is the ideal number of rows
+    // (each instance capped at MAX_HISTORY_ROWS) clamped to the row budget still
+    // available after the small queries above — so it can never overrun the row
+    // governor. Because it runs last, nothing queries after it.
+    Integer desired = 0;
+    for (Id instId : realTotals.keySet()) {
+      desired += Math.min(realTotals.get(instId), MAX_HISTORY_ROWS);
+    }
+    Integer scanLimit = resolveScanLimit(
+      desired,
+      Limits.getLimitQueryRows() - Limits.getQueryRows()
+    );
+    Map<Id, List<Workflow_Step_Execution__c>> rowsByInstance = scanLimit > 0
+      ? queryRowsByInstance(lookupIds, scanLimit)
+      : new Map<Id, List<Workflow_Step_Execution__c>>();
+
+    // Build a history for every step-bearing instance. totalCount is authoritative
+    // (from the COUNT); the DTO derives isTruncated from totalCount vs the retained
+    // entries, so a scan-starved instance is flagged truncated, never false-empty.
+    for (Id instId : realTotals.keySet()) {
       List<Workflow_Step_Execution__c> rows = rowsByInstance.containsKey(instId)
         ? rowsByInstance.get(instId)
         : new List<Workflow_Step_Execution__c>();
       out.put(
         instId,
-        new WorkflowEngine.StepHistory(rows, MAX_HISTORY_ROWS, totalCount)
+        new WorkflowEngine.StepHistory(
+          rows,
+          MAX_HISTORY_ROWS,
+          realTotals.get(instId)
+        )
       );
     }
-
-    // Query 3 (only when there are step-less requested Ids): an existence probe
-    // separates a known step-less instance (present, empty entries) from an
-    // unknown Id (absent from the map).
-    Set<Id> steplessIds = new Set<Id>(lookupIds);
-    steplessIds.removeAll(out.keySet());
-    addExistingSteplessInstances(steplessIds, out);
     return out;
+  }
+
+  /**
+   * @description Pure helper that sizes the bulk row scan so it can never overrun
+   * the SOQL row governor: the scan runs last, so it may consume all remaining row
+   * budget less a small safety margin, but no more than the ideal (desired) row
+   * count. Returns 0 when there is no budget or nothing to fetch, in which case the
+   * caller skips the scan entirely and every instance still gets its authoritative
+   * `totalCount` from the COUNT.
+   * @param desired the ideal scan row count (sum of per-instance capped totals)
+   * @param remainingRowBudget query rows still available this transaction
+   * ({@link System.Limits#getLimitQueryRows} minus
+   * {@link System.Limits#getQueryRows})
+   * @return the scan LIMIT to use, never negative and never above the budget
+   */
+  @TestVisible
+  private static Integer resolveScanLimit(
+    Integer desired,
+    Integer remainingRowBudget
+  ) {
+    return Math.max(
+      0,
+      Math.min(desired, remainingRowBudget - SCAN_ROW_SAFETY_MARGIN)
+    );
   }
 
   /**
@@ -192,19 +245,17 @@ public inherited sharing class WorkflowHistoryRead {
 
   /**
    * @description Queries the step-execution rows for the requested instances in a
-   * single bounded query and buckets them per instance in append order. The scan
-   * is capped at `lookupIds.size() * (MAX_HISTORY_ROWS + 1)` rows (clamped to the
-   * SOQL row ceiling) so no single instance can exhaust the heap.
+   * single query (bounded by the caller-supplied `scanLimit`) and buckets them per
+   * instance in append order. Ordering by instance then append time makes each
+   * instance's rows contiguous so a per-instance cap can be applied downstream.
    * @param lookupIds the instances to read
+   * @param scanLimit the SOQL LIMIT for the scan (already sized to the row budget)
    * @return map of instance Id to its append-ordered step-execution rows
    */
   private static Map<Id, List<Workflow_Step_Execution__c>> queryRowsByInstance(
-    Set<Id> lookupIds
+    Set<Id> lookupIds,
+    Integer scanLimit
   ) {
-    Integer scanLimit = Math.min(
-      50000,
-      lookupIds.size() * (MAX_HISTORY_ROWS + 1)
-    );
     Map<Id, List<Workflow_Step_Execution__c>> rowsByInstance = new Map<Id, List<Workflow_Step_Execution__c>>();
     for (Workflow_Step_Execution__c row : [
       SELECT

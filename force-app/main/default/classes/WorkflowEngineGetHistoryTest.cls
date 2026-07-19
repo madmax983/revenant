@@ -540,4 +540,58 @@ private class WorkflowEngineGetHistoryTest {
       );
     }
   }
+
+  // ─── pure row-budget sizing (covers the 50k-governor case unit-style) ───────
+  // A real 50,000-row scan cannot be integration-tested — the 10,000-rows-per-
+  // transaction DML governor blocks inserting that much data — so the headroom
+  // arithmetic that prevents "Too many query rows" is verified directly on the
+  // pure helper. The margin mirrors WorkflowHistoryRead.SCAN_ROW_SAFETY_MARGIN
+  // (1000).
+
+  @IsTest
+  static void testResolveScanLimitDesiredWithinBudget() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Ample budget: the ideal (desired) row count is used unchanged.
+      System.assertEquals(
+        100,
+        WorkflowHistoryRead.resolveScanLimit(100, 50000),
+        'desired below budget is returned as-is'
+      );
+    }
+  }
+
+  @IsTest
+  static void testResolveScanLimitDesiredExceedsBudget() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Ideal exceeds budget: clamp to remaining budget minus the safety margin,
+      // never to the governor ceiling itself.
+      System.assertEquals(
+        49000,
+        WorkflowHistoryRead.resolveScanLimit(100000, 50000),
+        'desired above budget clamps to budget minus safety margin'
+      );
+    }
+  }
+
+  @IsTest
+  static void testResolveScanLimitBudgetExhaustedReturnsZero() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Remaining budget already at/under the margin: skip the scan entirely.
+      System.assertEquals(
+        0,
+        WorkflowHistoryRead.resolveScanLimit(500, 500),
+        'tiny budget yields 0 (scan skipped)'
+      );
+      System.assertEquals(
+        0,
+        WorkflowHistoryRead.resolveScanLimit(500, 0),
+        'no budget yields 0'
+      );
+      System.assertEquals(
+        0,
+        WorkflowHistoryRead.resolveScanLimit(500, -100),
+        'negative budget yields 0'
+      );
+    }
+  }
 }
