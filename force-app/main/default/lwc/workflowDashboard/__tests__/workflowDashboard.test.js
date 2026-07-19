@@ -5,6 +5,7 @@ import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.g
 import getInstanceDetails from "@salesforce/apex/WorkflowDashboardController.getInstanceDetails";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
+import getDefinitionLatency from "@salesforce/apex/WorkflowDashboardController.getDefinitionLatency";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
 import getCancelEligibleCount from "@salesforce/apex/WorkflowDashboardController.getCancelEligibleCount";
 import cancelMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandController.cancelMatchingInstances";
@@ -14,6 +15,11 @@ import injectSignal from "@salesforce/apex/WorkflowDashboardCommandController.in
 
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
+  () => ({ default: jest.fn() }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getDefinitionLatency",
   () => ({ default: jest.fn() }),
   { virtual: true },
 );
@@ -445,6 +451,109 @@ describe("c-workflow-dashboard failure breakdown panel", () => {
     );
     expect(exampleLink).not.toBeNull();
     expect(exampleLink.textContent).toBe("WI-0001");
+  });
+});
+
+describe("c-workflow-dashboard latency panel", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function createComponent() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    return element;
+  }
+
+  it("requests latency with default 24h window when clicking Latency button", async () => {
+    getDefinitionLatency.mockResolvedValue({
+      workflowName: "BillingWorkflow",
+      windowKey: "24h",
+      isCapped: false,
+      capLimit: 2000,
+      sampleSize: 0,
+      p50Ms: null,
+      p95Ms: null,
+      p99Ms: null,
+      maxMs: null,
+      steps: [],
+    });
+
+    const element = createComponent();
+    await flushPromises();
+
+    const combobox = element.shadowRoot.querySelector(
+      '[data-id="workflow-filter"]',
+    );
+    expect(combobox).not.toBeNull();
+    combobox.dispatchEvent(
+      new CustomEvent("change", { detail: { value: "BillingWorkflow" } }),
+    );
+
+    const button = findButton(element, (btn) => btn.label === "Latency");
+    expect(button).not.toBeNull();
+    button.dispatchEvent(new CustomEvent("click"));
+
+    await flushPromises();
+
+    expect(getDefinitionLatency).toHaveBeenCalledWith({
+      workflowName: "BillingWorkflow",
+      windowKey: "24h",
+    });
+  });
+
+  it("renders percentile tiles, the slowest-step ranking and the truncation badge", async () => {
+    getDefinitionLatency.mockResolvedValue({
+      workflowName: "BillingWorkflow",
+      windowKey: "24h",
+      isCapped: true,
+      capLimit: 2000,
+      sampleSize: 4,
+      p50Ms: 10000,
+      p95Ms: 19000,
+      p99Ms: 20000,
+      maxMs: 20000,
+      steps: [
+        { stepName: "ChargeCard", medianMs: 130000, sampleCount: 4 },
+        { stepName: "ReserveInventory", medianMs: 1000, sampleCount: 4 },
+      ],
+    });
+
+    const element = createComponent();
+    await flushPromises();
+
+    const combobox = element.shadowRoot.querySelector(
+      '[data-id="workflow-filter"]',
+    );
+    combobox.dispatchEvent(
+      new CustomEvent("change", { detail: { value: "BillingWorkflow" } }),
+    );
+
+    const button = findButton(element, (btn) => btn.label === "Latency");
+    button.dispatchEvent(new CustomEvent("click"));
+
+    await flushPromises();
+    await flushPromises();
+
+    const panelText = element.shadowRoot.textContent;
+    // p50 10000ms -> "10s"; p95 19000ms -> "19s".
+    expect(panelText).toContain("10s");
+    expect(panelText).toContain("19s");
+    // Truncation indicator surfaced.
+    expect(panelText).toContain("Sampled / window truncated");
+
+    // Slowest step first, median 130000ms -> "2m 10s".
+    const rows = element.shadowRoot.querySelectorAll("tbody tr");
+    expect(rows.length).toBe(2);
+    expect(rows[0].textContent).toContain("ChargeCard");
+    expect(rows[0].textContent).toContain("2m 10s");
+    expect(rows[1].textContent).toContain("ReserveInventory");
+    expect(rows[1].textContent).toContain("1s");
   });
 });
 

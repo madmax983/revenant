@@ -37,6 +37,7 @@ import resumeDefinition from "@salesforce/apex/WorkflowDashboardCommandControlle
 import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
+import getDefinitionLatency from "@salesforce/apex/WorkflowDashboardController.getDefinitionLatency";
 import compensateWorkflow from "@salesforce/apex/WorkflowDashboardCommandController.compensateWorkflow";
 import injectSignal from "@salesforce/apex/WorkflowDashboardCommandController.injectSignal";
 import resumePastStepInstance from "@salesforce/apex/WorkflowDashboardCommandController.resumePastStepInstance";
@@ -162,6 +163,19 @@ export default class WorkflowDashboard extends LightningElement {
   breakdownTimeWindow = "24h";
   breakdownData = null;
   breakdownTimeWindowOptions = [
+    { label: "Last 1 hour", value: "1h" },
+    { label: "Last 24 hours", value: "24h" },
+    { label: "Last 7 days", value: "7d" },
+    { label: "All Time", value: "all" },
+  ];
+
+  // Latency view state (end-to-end percentiles + slowest-step ranking, wall-clock)
+  viewingLatency = false;
+  loadingLatency = false;
+  latencyWorkflow = "";
+  latencyTimeWindow = "24h";
+  latencyData = null;
+  latencyTimeWindowOptions = [
     { label: "Last 1 hour", value: "1h" },
     { label: "Last 24 hours", value: "24h" },
     { label: "Last 7 days", value: "7d" },
@@ -294,6 +308,71 @@ export default class WorkflowDashboard extends LightningElement {
 
   get breakdownIsCapped() {
     return this.breakdownData ? this.breakdownData.isCapped : false;
+  }
+
+  // Formats a wall-clock duration in milliseconds into a compact human-readable string
+  // (e.g. "1h 2m", "3m 4s", "500ms"). Returns an em dash for null/undefined.
+  formatDuration(ms) {
+    if (ms === null || ms === undefined) {
+      return "—";
+    }
+    if (ms < 1000) {
+      return `${ms}ms`;
+    }
+    const totalSeconds = Math.floor(ms / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
+  }
+
+  get hasLatencyData() {
+    return !!(this.latencyData && this.latencyData.sampleSize > 0);
+  }
+
+  get latencyIsCapped() {
+    return this.latencyData ? this.latencyData.isCapped : false;
+  }
+
+  get latencySampleSize() {
+    return this.latencyData ? this.latencyData.sampleSize : 0;
+  }
+
+  // Formatted p50/p95/p99/max tiles for the percentile row.
+  get latencyPercentiles() {
+    const d = this.latencyData;
+    return [
+      { key: "p50", label: "p50", value: this.formatDuration(d && d.p50Ms) },
+      { key: "p95", label: "p95", value: this.formatDuration(d && d.p95Ms) },
+      { key: "p99", label: "p99", value: this.formatDuration(d && d.p99Ms) },
+      { key: "max", label: "Max", value: this.formatDuration(d && d.maxMs) },
+    ];
+  }
+
+  get hasLatencySteps() {
+    return !!(
+      this.latencyData &&
+      this.latencyData.steps &&
+      this.latencyData.steps.length > 0
+    );
+  }
+
+  // Slowest-first step ranking rows with the median wall-clock pre-formatted for display.
+  get latencyStepRows() {
+    if (!this.latencyData || !this.latencyData.steps) {
+      return [];
+    }
+    return this.latencyData.steps.map((step) => ({
+      stepName: step.stepName,
+      sampleCount: step.sampleCount,
+      medianDisplay: this.formatDuration(step.medianMs),
+    }));
   }
 
   get isFailed() {
@@ -1090,6 +1169,9 @@ export default class WorkflowDashboard extends LightningElement {
     if (this.viewingFailureBreakdown) {
       this.fetchFailureBreakdown();
     }
+    if (this.viewingLatency) {
+      this.fetchLatency();
+    }
     this.fetchTrends();
     this.refreshInstances().then(() => {
       this.showToast("Success", "Workflow dashboard refreshed", "success");
@@ -1101,6 +1183,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDrain = false;
     this.viewingUnrouted = false;
     this.viewingFailureBreakdown = false;
+    this.viewingLatency = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     this.loadDoctorStatus();
@@ -1115,6 +1198,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDoctor = false;
     this.viewingUnrouted = false;
     this.viewingFailureBreakdown = false;
+    this.viewingLatency = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     // Re-run the query if a workflow is already selected; the combobox value
@@ -1136,6 +1220,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDrain = false;
     this.viewingUnrouted = false;
     this.viewingFailureBreakdown = false;
+    this.viewingLatency = false;
     this.selectedInstanceId = null;
   }
 
@@ -1149,6 +1234,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDoctor = false;
     this.viewingSchedules = false;
     this.viewingFailureBreakdown = false;
+    this.viewingLatency = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     this.loadUnroutedSignals();
@@ -1164,6 +1250,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDrain = false;
     this.viewingUnrouted = false;
     this.viewingSchedules = false;
+    this.viewingLatency = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     if (this.selectedWorkflow) {
@@ -1215,6 +1302,67 @@ export default class WorkflowDashboard extends LightningElement {
         );
         this.loadingFailureBreakdown = false;
         this.breakdownData = null;
+      });
+  }
+
+  handleOpenLatency() {
+    this.viewingLatency = true;
+    this.viewingFailureBreakdown = false;
+    this.viewingDoctor = false;
+    this.viewingDrain = false;
+    this.viewingUnrouted = false;
+    this.viewingSchedules = false;
+    this.selectedInstanceId = null;
+    this.filterInstancesList();
+    if (this.selectedWorkflow) {
+      this.latencyWorkflow = this.selectedWorkflow;
+    } else if (!this.latencyWorkflow && this.definitionOptions.length > 0) {
+      this.latencyWorkflow = this.definitionOptions[0].value;
+    }
+    this.fetchLatency();
+  }
+
+  handleCloseLatency() {
+    this.viewingLatency = false;
+  }
+
+  handleLatencyWorkflowChange(event) {
+    this.latencyWorkflow = event.detail
+      ? event.detail.value
+      : event.target.value;
+    this.fetchLatency();
+  }
+
+  handleLatencyTimeWindowChange(event) {
+    this.latencyTimeWindow = event.detail
+      ? event.detail.value
+      : event.target.value;
+    this.fetchLatency();
+  }
+
+  fetchLatency() {
+    if (!this.latencyWorkflow) {
+      this.latencyData = null;
+      return;
+    }
+    this.loadingLatency = true;
+    getDefinitionLatency({
+      workflowName: this.latencyWorkflow,
+      windowKey:
+        this.latencyTimeWindow === "all" ? null : this.latencyTimeWindow,
+    })
+      .then((result) => {
+        this.latencyData = result;
+        this.loadingLatency = false;
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to retrieve latency metrics: " + this.reduceErrors(error),
+          "error",
+        );
+        this.loadingLatency = false;
+        this.latencyData = null;
       });
   }
 

@@ -261,6 +261,24 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
+   * @description Returns end-to-end instance-duration percentiles (p50/p95/p99/max) and a
+   * median-wall-clock step ranking for a workflow definition over the given window, computed
+   * from a governor-bounded sample with an isCapped flag when the sample is truncated.
+   * Strictly read-only (Terminal_At__c and step CreatedDate are read, never written).
+   * @param workflowName The workflow definition name to analyze.
+   * @param windowKey The window key ('1h' | '24h' | '7d'; blank/unknown → all time).
+   * @return A map with the window, cap metadata/isCapped flag, sample size, the p50/p95/p99/max
+   *         duration milliseconds, and the per-step median ranking rows.
+   */
+  @AuraEnabled(cacheable=true)
+  public static Map<String, Object> getDefinitionLatency(
+    String workflowName,
+    String windowKey
+  ) {
+    return WorkflowLatencyService.definitionLatency(workflowName, windowKey);
+  }
+
+  /**
    * @description Exact count of failed instances that a "Re-drive matching" action would
    * re-enqueue for the operator's current filter.
    * @param workflowName The workflow name filter, or null for all.
