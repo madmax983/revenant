@@ -20,7 +20,13 @@ public inherited sharing class WorkflowScheduleSaveService {
   public static Id save(Map<String, Object> fields) {
     String cron = (String) fields.get('Cron_Expression__c');
     String prefix = (String) fields.get('Correlation_Key_Prefix__c');
-    validateScheduleInput(cron, (String) fields.get('Input_Json__c'), prefix);
+    String zoneId = (String) fields.get('Time_Zone__c');
+    validateScheduleInput(
+      cron,
+      (String) fields.get('Input_Json__c'),
+      prefix,
+      zoneId
+    );
 
     Id existingId = resolveExistingId(fields);
     // Capture the prior cron so we can re-arm an already-armed dedicated job if the
@@ -42,7 +48,7 @@ public inherited sharing class WorkflowScheduleSaveService {
     // Pointing the cursor at the new cron's next window both fixes that and gives
     // the list view an immediate "next run" without a per-row evaluator scan.
     if (existingId == null || oldCron != cron) {
-      reseedCursor(sched.Id, cron, 'ScheduleSave');
+      reseedCursor(sched.Id, cron, zoneId, 'ScheduleSave');
     }
 
     // Keep any armed dedicated CronTrigger consistent with the saved record.
@@ -61,14 +67,19 @@ public inherited sharing class WorkflowScheduleSaveService {
    * @param cron The cron expression to validate.
    * @param inputJson The optional input JSON to validate, or blank.
    * @param prefix The correlation-key prefix to validate.
+   * @param zoneId The optional IANA time zone to validate (blank = UTC).
    */
   private static void validateScheduleInput(
     String cron,
     String inputJson,
-    String prefix
+    String prefix,
+    String zoneId
   ) {
     if (!WorkflowCronEvaluator.isValidCron(cron)) {
       throwAura('Invalid cron expression: ' + cron);
+    }
+    if (!WorkflowCronEvaluator.isValidZone(zoneId)) {
+      throwAura('Invalid time zone: ' + zoneId);
     }
     if (String.isNotBlank(inputJson)) {
       try {
@@ -178,6 +189,7 @@ public inherited sharing class WorkflowScheduleSaveService {
     sched.Input_Json__c = (String) fields.get('Input_Json__c');
     sched.Enabled__c = toBool(fields.get('Enabled__c'));
     sched.Overlap_Policy__c = (String) fields.get('Overlap_Policy__c');
+    sched.Time_Zone__c = (String) fields.get('Time_Zone__c');
     sched.Dedicated_Slot__c = toBool(fields.get('Dedicated_Slot__c'));
     return sched;
   }
@@ -231,11 +243,13 @@ public inherited sharing class WorkflowScheduleSaveService {
    * read-only to admins.
    * @param scheduleId The schedule whose cursor is reseeded.
    * @param cron The cron expression used to compute the next window.
+   * @param zoneId The IANA time zone the cron is interpreted in (blank = UTC).
    * @param logSource The caller label recorded in any error log.
    */
   public static void reseedCursor(
     Id scheduleId,
     String cron,
+    String zoneId,
     String logSource
   ) {
     try {
@@ -243,7 +257,8 @@ public inherited sharing class WorkflowScheduleSaveService {
         Id = scheduleId,
         Next_Fire_Window__c = WorkflowCronEvaluator.nextFireTime(
           cron,
-          DateTime.now()
+          DateTime.now(),
+          zoneId
         )
       );
     } catch (Exception ex) {

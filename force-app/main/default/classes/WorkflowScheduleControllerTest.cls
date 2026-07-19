@@ -327,16 +327,37 @@ public class WorkflowScheduleControllerTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Map<String, Object> good = WorkflowScheduleController.previewCron(
-        '0 2 * * *'
+        '0 2 * * *',
+        ''
       );
       Map<String, Object> bad = WorkflowScheduleController.previewCron(
-        'not a cron'
+        'not a cron',
+        ''
+      );
+      Map<String, Object> zoned = WorkflowScheduleController.previewCron(
+        '0 2 * * *',
+        'America/New_York'
+      );
+      Map<String, Object> badZone = WorkflowScheduleController.previewCron(
+        '0 2 * * *',
+        'Not/AZone'
       );
       Test.stopTest();
 
       System.assertEquals(true, good.get('valid'), 'Valid cron');
       System.assertNotEquals(null, good.get('nextFire'), 'Next fire computed');
       System.assertEquals(false, bad.get('valid'), 'Invalid cron');
+      System.assertEquals(true, zoned.get('valid'), 'Valid zoned cron');
+      System.assertNotEquals(
+        null,
+        zoned.get('nextFire'),
+        'Zoned next fire computed'
+      );
+      System.assertEquals(
+        false,
+        badZone.get('valid'),
+        'Unsupported zone marks preview invalid'
+      );
     }
   }
 

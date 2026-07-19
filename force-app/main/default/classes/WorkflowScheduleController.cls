@@ -80,14 +80,26 @@ public with sharing class WorkflowScheduleController {
 
   /**
    * @description Live cron preview for the editor: validity plus last/next fire
-   * instants.
+   * instants, evaluated in the selected IANA time zone (blank = UTC).
    * @param cron The cron expression to preview.
+   * @param timeZone The IANA time zone the cron is interpreted in (blank = UTC).
    * @return A map with the valid flag and, when valid, last/next fire times.
    */
   @AuraEnabled
-  public static Map<String, Object> previewCron(String cron) {
+  public static Map<String, Object> previewCron(String cron, String timeZone) {
     checkAuthorization();
-    return WorkflowScheduleReadService.buildCronPreview(cron);
+    return WorkflowScheduleReadService.buildCronPreview(cron, timeZone);
+  }
+
+  /**
+   * @description Supported IANA time-zone ids for the editor's time-zone picker. A blank
+   * selection stored on the schedule means UTC (the pre-existing behavior).
+   * @return The sorted list of supported IANA time-zone ids.
+   */
+  @AuraEnabled(cacheable=true)
+  public static List<String> getTimeZones() {
+    checkAuthorization();
+    return WorkflowScheduleReadService.listTimeZones();
   }
 
   // ── Writes ──────────────────────────────────────────────────────────────────
@@ -157,6 +169,7 @@ public with sharing class WorkflowScheduleController {
       WorkflowScheduleSaveService.reseedCursor(
         scheduleId,
         sched.Cron_Expression__c,
+        sched.Time_Zone__c,
         'ScheduleToggle'
       );
     }
@@ -194,7 +207,7 @@ public with sharing class WorkflowScheduleController {
       throw new AuraHandledException('scheduleId is required.');
     }
     return [
-      SELECT Id, Enabled__c, Dedicated_Slot__c, Cron_Expression__c
+      SELECT Id, Enabled__c, Dedicated_Slot__c, Cron_Expression__c, Time_Zone__c
       FROM Workflow_Schedule__c
       WHERE Id = :scheduleId
       WITH USER_MODE
