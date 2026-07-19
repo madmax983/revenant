@@ -177,6 +177,7 @@ public inherited sharing class WorkflowInstanceQuery {
    * keyset predicate selects everything strictly "after" the cursor row in the
    * `CreatedDate DESC, Id DESC` ordering, with the Id tie-breaker so rows sharing a
    * `CreatedDate` are still totally ordered (no duplicates, no gaps across pages).
+   * Exposed to tests through {@link #buildWhereForTest} to pin the bound operators.
    * @param criteria the filter criteria supplying the optional predicates
    * @param cursor the decoded keyset cursor to append, or null to omit it
    * @param binds the bind map to populate; mutated in place with each clause's value
@@ -211,7 +212,7 @@ public inherited sharing class WorkflowInstanceQuery {
     }
     if (criteria.modifiedBefore != null) {
       binds.put('modifiedBefore', criteria.modifiedBefore);
-      clauses.add('LastModifiedDate <= :modifiedBefore');
+      clauses.add('LastModifiedDate < :modifiedBefore');
     }
     if (cursor != null) {
       binds.put('cursorCreated', cursor.createdAt);
@@ -221,6 +222,26 @@ public inherited sharing class WorkflowInstanceQuery {
       );
     }
     return String.join(clauses, ' AND ');
+  }
+
+  /**
+   * @description `@TestVisible` seam returning the composed WHERE body for a
+   * criteria (no keyset cursor, throwaway bind map), so a unit test can pin the
+   * exact comparison operator of each of the four time-window bounds
+   * (inclusive-after `&gt;=` / exclusive-before `&lt;`) directly against the
+   * generated clause text. This is the only way to assert the half-open contract
+   * for the modified window, because Apex cannot set a real `LastModifiedDate` to
+   * exercise it end-to-end. Wraps {@link #buildWhere} rather than exposing it
+   * directly so no test needs to name the private `Cursor` type. Not a
+   * suppression — `@TestVisible` is an accepted repo convention.
+   * @param criteria the filter criteria to compose predicates from
+   * @return the composed WHERE body (without the leading `WHERE`)
+   */
+  @TestVisible
+  private static String buildWhereForTest(
+    WorkflowEngine.InstanceCriteria criteria
+  ) {
+    return buildWhere(criteria, null, new Map<String, Object>());
   }
 
   /**

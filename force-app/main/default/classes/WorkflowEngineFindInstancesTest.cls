@@ -423,21 +423,147 @@ private class WorkflowEngineFindInstancesTest {
   @IsTest
   static void testPageSizeNonPositiveThrows() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Boolean threw = false;
-      try {
-        WorkflowInstanceQuery.findInstances(criteriaFor(DEF_A, 0));
-      } catch (WorkflowEngine.WorkflowException ex) {
-        threw = true;
-        System.assert(
-          ex.getMessage()
-            .contains(String.valueOf(WorkflowInstanceQuery.MAX_PAGE_SIZE)),
-          'Message names the cap: ' + ex.getMessage()
+      // Both zero and a strictly negative page size are caller errors and throw.
+      for (Integer badSize : new List<Integer>{ 0, -5 }) {
+        Boolean threw = false;
+        try {
+          WorkflowInstanceQuery.findInstances(criteriaFor(DEF_A, badSize));
+        } catch (WorkflowEngine.WorkflowException ex) {
+          threw = true;
+          System.assert(
+            ex.getMessage()
+              .contains(String.valueOf(WorkflowInstanceQuery.MAX_PAGE_SIZE)),
+            'Message names the cap: ' + ex.getMessage()
+          );
+        }
+        System.assertEquals(
+          true,
+          threw,
+          'pageSize ' +
+            badSize +
+            ' throws WorkflowEngine.WorkflowException (non-positive)'
         );
       }
+    }
+  }
+
+  // ─── operator-pinning: the four bound predicates use the exact operators ────
+  // Pins the half-open contract at the SOURCE (the generated clause text), so a
+  // regression like modifiedBefore reverting to `<=` fails here even though Apex
+  // cannot set a real LastModifiedDate to exercise it end-to-end.
+
+  @IsTest
+  static void testBoundOperatorsArePinned() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.InstanceCriteria c = new WorkflowEngine.InstanceCriteria();
+      c.createdAfter = Datetime.now().addDays(-1);
+      c.createdBefore = Datetime.now();
+      c.modifiedAfter = Datetime.now().addDays(-1);
+      c.modifiedBefore = Datetime.now();
+
+      // @TestVisible seam: assert against the composed WHERE body directly.
+      String clause = WorkflowInstanceQuery.buildWhereForTest(c);
+
+      System.assert(
+        clause.contains('CreatedDate >= :createdAfter'),
+        'createdAfter is inclusive (>=): ' + clause
+      );
+      System.assert(
+        clause.contains('CreatedDate < :createdBefore'),
+        'createdBefore is exclusive (<): ' + clause
+      );
+      System.assert(
+        clause.contains('LastModifiedDate >= :modifiedAfter'),
+        'modifiedAfter is inclusive (>=): ' + clause
+      );
+      System.assert(
+        clause.contains('LastModifiedDate < :modifiedBefore'),
+        'modifiedBefore is exclusive (<): ' + clause
+      );
+      // Guard against an inclusive "before" bound sneaking back in on either field.
+      System.assert(
+        !clause.contains('CreatedDate <= :createdBefore'),
+        'createdBefore must not be inclusive: ' + clause
+      );
+      System.assert(
+        !clause.contains('LastModifiedDate <= :modifiedBefore'),
+        'modifiedBefore must not be inclusive: ' + clause
+      );
+    }
+  }
+
+  // ─── keyset Id tie-breaker: same CreatedDate paged deterministically ───────
+
+  @IsTest
+  static void testKeysetIdTiebreakSameCreatedDate() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Three rows sharing the EXACT same CreatedDate force the ordering onto the
+      // Id DESC tie-breaker, exercising the `CreatedDate = cursor AND Id < cursorId`
+      // keyset branch.
+      Datetime shared = Datetime.newInstanceGmt(2026, 3, 1, 12, 0, 0);
+      List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>();
+      for (Integer i = 1; i <= 3; i++) {
+        insts.add(newInstance(DEF_A, 'tie-' + i, 'Running'));
+      }
+      for (Workflow_Instance__c inst : insts) {
+        Test.setCreatedDate(inst.Id, shared);
+      }
+
+      Test.startTest();
+      List<Id> walked = new List<Id>();
+      String cursor = null;
+      Integer pages = 0;
+      WorkflowEngine.InstancePage page;
+      do {
+        WorkflowEngine.InstanceCriteria c = criteriaFor(DEF_A, 1);
+        c.cursor = cursor;
+        page = WorkflowInstanceQuery.findInstances(c);
+        for (WorkflowEngine.WorkflowInstanceSummary s : page.entries) {
+          walked.add(s.instanceId);
+        }
+        cursor = page.nextCursor;
+        pages++;
+      } while (page.hasMore && pages < 10);
+      Test.stopTest();
+
       System.assertEquals(
-        true,
-        threw,
-        'A non-positive pageSize throws WorkflowEngine.WorkflowException'
+        3,
+        pages,
+        'Three equal-CreatedDate rows at pageSize 1 span three pages'
+      );
+      System.assertEquals(
+        null,
+        page.nextCursor,
+        'The final page has a null cursor'
+      );
+      System.assertEquals(
+        false,
+        page.hasMore,
+        'Final page reports no more pages'
+      );
+      System.assertEquals(3, walked.size(), 'Every row is visited once');
+      System.assertEquals(
+        3,
+        new Set<Id>(walked).size(),
+        'No duplicates and no gaps despite the identical CreatedDate'
+      );
+      // Ground-truth order from a single ORDER BY of the same predicate: the paged
+      // walk must reproduce it exactly, so the Id-descending tie-break is applied
+      // consistently (no reliance on Apex Id.sort collation matching SOQL).
+      List<Id> expectedOrder = new List<Id>();
+      for (Workflow_Instance__c e : [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE Workflow_Name__c = :DEF_A
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC, Id DESC
+      ]) {
+        expectedOrder.add(e.Id);
+      }
+      System.assertEquals(
+        expectedOrder,
+        walked,
+        'Paged walk reproduces the engine CreatedDate DESC, Id DESC order exactly'
       );
     }
   }
