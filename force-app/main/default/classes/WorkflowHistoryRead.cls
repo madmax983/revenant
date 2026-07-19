@@ -44,7 +44,12 @@ public inherited sharing class WorkflowHistoryRead {
    * @description Returns the ordered step-execution timeline for a workflow
    * instance by Id, or null when no instance with that Id exists. A known
    * instance that has not yet logged a step returns a `StepHistory` whose
-   * `entries` list is empty. Costs at most 2 SOQL queries and zero DML.
+   * `entries` list is empty. Costs at most 2 SOQL queries and zero DML — and
+   * exactly ONE query in the common case (rows present and within the row cap):
+   * the real total is resolved lazily with a `COUNT()` only when the history is
+   * truncated, and instance existence is probed only when no rows are returned.
+   * A single instance can never be scan-starved (its scan budget covers its own
+   * cap), so this lazy path cannot produce a false-empty history.
    * @param instanceId Id of the workflow instance to read
    * @return the instance's step history, or null when no such instance exists
    */
@@ -52,7 +57,29 @@ public inherited sharing class WorkflowHistoryRead {
     if (instanceId == null) {
       return null;
     }
-    return getHistory(new List<Id>{ instanceId }).get(instanceId);
+    List<Workflow_Step_Execution__c> rows = queryRowsByInstance(
+        new Set<Id>{ instanceId }
+      )
+      .get(instanceId);
+
+    if (rows == null || rows.isEmpty()) {
+      // No rows: distinguish a known step-less instance (empty history) from an
+      // unknown Id (null) with a single existence probe.
+      return instanceExists(instanceId)
+        ? new WorkflowEngine.StepHistory(
+            new List<Workflow_Step_Execution__c>(),
+            MAX_HISTORY_ROWS,
+            0
+          )
+        : null;
+    }
+
+    // Rows present. Only when the scan hit the cap do we need the real total; an
+    // untruncated read stays at the single scan query.
+    Integer totalCount = rows.size() > MAX_HISTORY_ROWS
+      ? countSteps(instanceId)
+      : rows.size();
+    return new WorkflowEngine.StepHistory(rows, MAX_HISTORY_ROWS, totalCount);
   }
 
   /**
@@ -60,14 +87,18 @@ public inherited sharing class WorkflowHistoryRead {
    * from instance Id to its ordered step history. An Id with no matching instance
    * is absent from the map; a known instance with no logged steps is present with
    * an empty `entries` list (mirroring the single-Id null-vs-empty distinction).
-   * Uses a bounded, constant number of SOQL queries regardless of list size (at
-   * most 2) and zero DML.
+   * Uses a bounded, constant number of SOQL queries regardless of list size and
+   * zero DML.
    *
-   * Per-instance rows are capped at {@link #MAX_HISTORY_ROWS}. To stay heap-bounded
-   * the step scan is limited to `ids.size() * (MAX_HISTORY_ROWS + 1)` rows (clamped
-   * to the SOQL row ceiling); in the pathological case where a single instance's
-   * trail alone exhausts that budget, later instances in the same batch may
-   * under-report — read such very long histories one Id at a time.
+   * Correctness invariant: a step-bearing instance is NEVER reported as empty.
+   * The per-instance row scan is capped at `ids.size() * (MAX_HISTORY_ROWS + 1)`
+   * rows (clamped to the SOQL row ceiling) to stay heap-bounded, so a large
+   * sibling can starve another instance of scan budget — but an authoritative
+   * `COUNT()` grouped by instance (one query over the whole batch) supplies every
+   * requested instance's real `totalCount`. A starved instance therefore comes
+   * back with `isTruncated = true` and its true `totalCount` (with whatever rows
+   * the scan retrieved, possibly none), never as a false-empty history. To get the
+   * full `entries` of such a very large history, re-read that instance singly.
    * @param instanceIds instance Ids to read
    * @return map of instance Id to step history (absent key per unmatched Id)
    */
@@ -80,59 +111,58 @@ public inherited sharing class WorkflowHistoryRead {
       return out;
     }
 
-    // One query for the whole batch (constant SOQL), grouped per instance in
-    // append order.
+    // Query 1: the (budget-capped) rows per instance in append order.
     Map<Id, List<Workflow_Step_Execution__c>> rowsByInstance = queryRowsByInstance(
       lookupIds
     );
+    // Query 2: the authoritative real step total for every requested instance in
+    // one grouped COUNT — this is what makes a scan-starved instance impossible to
+    // mistake for an empty one.
+    Map<Id, Integer> realTotals = realStepTotals(lookupIds);
 
-    // Only instances whose retained rows exceeded the cap need their real total
-    // resolved; the untruncated common case adds zero extra SOQL.
-    Set<Id> truncatedIds = new Set<Id>();
-    for (Id instId : rowsByInstance.keySet()) {
-      if (rowsByInstance.get(instId).size() > MAX_HISTORY_ROWS) {
-        truncatedIds.add(instId);
-      }
-    }
-    Map<Id, Integer> realTotals = realTotalsForTruncated(truncatedIds);
-
-    for (Id instId : rowsByInstance.keySet()) {
-      List<Workflow_Step_Execution__c> rows = rowsByInstance.get(instId);
-      Integer totalCount = truncatedIds.contains(instId)
+    for (Id instId : lookupIds) {
+      Integer totalCount = realTotals.containsKey(instId)
         ? realTotals.get(instId)
-        : rows.size();
+        : 0;
+      if (totalCount == 0) {
+        // No steps: existence is resolved below (known-empty vs unknown Id).
+        continue;
+      }
+      List<Workflow_Step_Execution__c> rows = rowsByInstance.containsKey(instId)
+        ? rowsByInstance.get(instId)
+        : new List<Workflow_Step_Execution__c>();
       out.put(
         instId,
         new WorkflowEngine.StepHistory(rows, MAX_HISTORY_ROWS, totalCount)
       );
     }
 
-    // A single existence query separates known-but-empty instances (present with
-    // empty entries) from unknown Ids (absent from the map).
-    Set<Id> withoutRows = new Set<Id>(lookupIds);
-    withoutRows.removeAll(rowsByInstance.keySet());
-    addKnownEmptyInstances(withoutRows, out);
+    // Query 3 (only when there are step-less requested Ids): an existence probe
+    // separates a known step-less instance (present, empty entries) from an
+    // unknown Id (absent from the map).
+    Set<Id> steplessIds = new Set<Id>(lookupIds);
+    steplessIds.removeAll(out.keySet());
+    addExistingSteplessInstances(steplessIds, out);
     return out;
   }
 
   /**
-   * @description Resolves the real step-execution total for each truncated
-   * instance in a single aggregate `COUNT()` query, keeping the truncated path
-   * bounded to one extra query regardless of how many instances were truncated.
-   * Returns an empty map (and runs no query) when nothing was truncated, so the
-   * common untruncated path adds zero SOQL.
-   * @param truncatedIds instances whose histories exceeded the row cap
+   * @description Resolves the real step-execution total for every requested
+   * instance in a single aggregate `COUNT()` query. Instances with no step rows
+   * are simply absent from the result (treated as a total of 0 by the caller).
+   * Returns an empty map (and runs no query) for an empty input set.
+   * @param instanceIds the instances to total
    * @return map of instance Id to its real step-execution count
    */
-  private static Map<Id, Integer> realTotalsForTruncated(Set<Id> truncatedIds) {
+  private static Map<Id, Integer> realStepTotals(Set<Id> instanceIds) {
     Map<Id, Integer> totals = new Map<Id, Integer>();
-    if (truncatedIds.isEmpty()) {
+    if (instanceIds.isEmpty()) {
       return totals;
     }
     for (AggregateResult ar : [
       SELECT Workflow_Instance__c instId, COUNT(Id) total
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c IN :truncatedIds
+      WHERE Workflow_Instance__c IN :instanceIds
       WITH SYSTEM_MODE
       GROUP BY Workflow_Instance__c
     ]) {
@@ -205,14 +235,16 @@ public inherited sharing class WorkflowHistoryRead {
   }
 
   /**
-   * @description Adds a known instance that logged no step rows to the result as
-   * an empty `StepHistory`, so callers can distinguish it from an unknown Id
-   * (which stays absent from the map). Costs one SOQL query when there is at least
-   * one such Id, zero otherwise.
-   * @param candidateIds requested Ids that produced no step rows
+   * @description Adds each genuinely step-less but existing instance to the result
+   * as an empty (`totalCount = 0`, `isTruncated = false`) `StepHistory`, so callers
+   * can distinguish it from an unknown Id (which stays absent from the map). By
+   * construction these Ids have a real step total of 0, so this can never mask a
+   * scan-starved step-bearing instance. Costs one SOQL query when there is at
+   * least one such Id, zero otherwise.
+   * @param candidateIds requested Ids with no step executions
    * @param out the result map to populate in place
    */
-  private static void addKnownEmptyInstances(
+  private static void addExistingSteplessInstances(
     Set<Id> candidateIds,
     Map<Id, WorkflowEngine.StepHistory> out
   ) {
@@ -234,5 +266,36 @@ public inherited sharing class WorkflowHistoryRead {
         )
       );
     }
+  }
+
+  /**
+   * @description Whether a workflow instance with the given Id exists. Used by the
+   * single-Id read to distinguish a known step-less instance from an unknown Id.
+   * @param instanceId the instance Id to probe
+   * @return true when an instance with that Id exists
+   */
+  private static Boolean instanceExists(Id instanceId) {
+    return [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE Id = :instanceId
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ] > 0;
+  }
+
+  /**
+   * @description Real step-execution count for a single instance, used lazily by
+   * the single-Id read only when its history is truncated at the row cap.
+   * @param instanceId the instance whose steps to count
+   * @return the instance's real step-execution count
+   */
+  private static Integer countSteps(Id instanceId) {
+    return [
+      SELECT COUNT()
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId
+      WITH SYSTEM_MODE
+    ];
   }
 }

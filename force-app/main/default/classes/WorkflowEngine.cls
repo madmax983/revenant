@@ -329,30 +329,31 @@ public inherited sharing class WorkflowEngine {
      */
     public List<StepHistoryEntry> entries { get; private set; }
     /**
-     * @description True when the instance had more step executions than the row
-     * cap and `entries` was truncated to the earliest
-     * {@link WorkflowHistoryRead#MAX_HISTORY_ROWS} rows.
+     * @description True when the instance's real step total exceeds the retained
+     * `entries` — either the history was cut at the row cap, or (in a bulk read) the
+     * instance was starved of scan budget by a larger sibling in the same batch.
+     * Either way `totalCount` still reports the real total, so a step-bearing
+     * instance is never returned as an empty (`isTruncated = false`) history.
      */
     public Boolean isTruncated { get; private set; }
     /**
-     * @description The real total number of step executions for the instance.
-     * Equals `entries.size()` in the common (untruncated) case, where it costs no
-     * extra SOQL. When `isTruncated` is true, the read layer supplies the true
-     * total via a single `COUNT()` query so callers can still learn the full size
-     * even though `entries` is capped — that extra query runs ONLY on the
-     * truncated path, keeping the common case at one query.
+     * @description The real total number of step executions for the instance,
+     * supplied authoritatively by the read layer. Equals `entries.size()` exactly
+     * when nothing was dropped; when `isTruncated` is true it is the real total
+     * (from a `COUNT()` query) even though `entries` is capped or partial, so
+     * callers always know the full size. `0` for a known instance with no steps.
      */
     public Integer totalCount { get; private set; }
 
     /**
      * @description Projects a set of queried, append-ordered step-execution rows
-     * for one instance into the capped `entries` list, setting `isTruncated` when
-     * the input held more rows than the cap. Mirrors the projecting constructor of
-     * {@link WorkflowStatus}; used by the extracted read layer
-     * ({@link WorkflowHistoryRead}). The read layer passes `totalCount` (the real
-     * step total) — equal to the retained row count when untruncated, or a
-     * `COUNT()`-derived total when truncated — so this DTO stays SOQL-free.
-     * @param rows the instance's step-execution rows in append order
+     * for one instance into the capped `entries` list, and derives `isTruncated`
+     * from the authoritative `totalCount` versus the retained entry count (so a
+     * scan-starved bulk instance is flagged truncated, never false-empty). Mirrors
+     * the projecting constructor of {@link WorkflowStatus}; used by the extracted
+     * read layer ({@link WorkflowHistoryRead}), which supplies `totalCount` so this
+     * DTO stays SOQL-free.
+     * @param rows the instance's retained step-execution rows in append order
      * @param rowCap the maximum number of entries to retain
      * @param totalCount the real total step-execution count for the instance
      */
@@ -363,12 +364,12 @@ public inherited sharing class WorkflowEngine {
     ) {
       this.entries = new List<StepHistoryEntry>();
       Integer rowCount = rows == null ? 0 : rows.size();
-      this.isTruncated = rowCount > rowCap;
-      Integer take = this.isTruncated ? rowCap : rowCount;
+      Integer take = rowCount > rowCap ? rowCap : rowCount;
       for (Integer i = 0; i < take; i++) {
         this.entries.add(new StepHistoryEntry(rows[i]));
       }
       this.totalCount = totalCount;
+      this.isTruncated = totalCount > this.entries.size();
     }
   }
 

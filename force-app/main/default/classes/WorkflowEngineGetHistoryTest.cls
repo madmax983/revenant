@@ -433,6 +433,95 @@ private class WorkflowEngineGetHistoryTest {
         byId.get(instEmpty.Id).entries.size(),
         'Empty instance has empty entries'
       );
+      System.assertEquals(
+        0,
+        byId.get(instEmpty.Id).totalCount,
+        'Empty instance has totalCount 0'
+      );
+      System.assertEquals(
+        false,
+        byId.get(instEmpty.Id).isTruncated,
+        'Genuinely empty instance is not truncated'
+      );
+    }
+  }
+
+  // ─── regression: bulk read never reports a step-bearing instance as empty ───
+
+  @IsTest
+  static void testGetHistoryBulkStarvedInstanceNotFalseEmpty() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Integer cap = WorkflowHistoryRead.MAX_HISTORY_ROWS;
+      // Two Ids in the batch → scan budget = 2 * (cap + 1). A hot instance with
+      // more than the whole budget consumes it entirely, starving the sibling.
+      Integer budget = 2 * (cap + 1);
+
+      // Insert the hot instance FIRST so it sorts first (lowest Id) and its rows
+      // fill the shared scan budget before the sibling's are reached.
+      Workflow_Instance__c hot = newInstance('starve-hot');
+      List<Workflow_Step_Execution__c> hotRows = new List<Workflow_Step_Execution__c>();
+      Integer hotTotal = budget + 5;
+      for (Integer i = 0; i < hotTotal; i++) {
+        hotRows.add(step(hot.Id, 'H' + i, 'Completed'));
+      }
+      Database.insert(hotRows, AccessLevel.SYSTEM_MODE);
+
+      // A second, higher-Id instance with just a handful of steps.
+      Workflow_Instance__c small = newInstance('starve-small');
+      Database.insert(
+        new List<Workflow_Step_Execution__c>{
+          step(small.Id, 'S1', 'Completed'),
+          step(small.Id, 'S2', 'Completed'),
+          step(small.Id, 'S3', 'Running')
+        },
+        AccessLevel.SYSTEM_MODE
+      );
+
+      Test.startTest();
+      Map<Id, WorkflowEngine.StepHistory> byId = WorkflowHistoryRead.getHistory(
+        new List<Id>{ hot.Id, small.Id }
+      );
+      Test.stopTest();
+
+      // The starved sibling must NOT be reported as empty: it is present,
+      // truncated, and carries its REAL total (3), never 0.
+      System.assert(
+        byId.containsKey(small.Id),
+        'Starved step-bearing instance is present in the map'
+      );
+      WorkflowEngine.StepHistory smallHistory = byId.get(small.Id);
+      System.assertEquals(
+        3,
+        smallHistory.totalCount,
+        'Starved instance reports its real step count, not 0'
+      );
+      System.assertEquals(
+        true,
+        smallHistory.isTruncated,
+        'Starved instance is flagged truncated, not false-empty'
+      );
+      System.assert(
+        smallHistory.entries.size() < smallHistory.totalCount,
+        'Starved instance retrieved fewer entries than its real total'
+      );
+
+      // The hot instance is truncated with its real total and capped entries.
+      WorkflowEngine.StepHistory hotHistory = byId.get(hot.Id);
+      System.assertEquals(
+        true,
+        hotHistory.isTruncated,
+        'Hot instance is truncated'
+      );
+      System.assertEquals(
+        hotTotal,
+        hotHistory.totalCount,
+        'Hot instance reports its real total'
+      );
+      System.assertEquals(
+        cap,
+        hotHistory.entries.size(),
+        'Hot instance entries capped at MAX_HISTORY_ROWS'
+      );
     }
   }
 
