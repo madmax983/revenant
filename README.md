@@ -513,7 +513,12 @@ A `WorkflowInputContract` is an ordered list of field specs — `require(name, t
 
 The issue's generic **Number** maps to **`DECIMAL_TYPE`** (any JSON numeric); reach for `INTEGER_TYPE`/`LONG_TYPE` when the field must be a whole number.
 
-**One rule, every input form.** Validation normalizes the start payload through the same JSON round-trip the engine uses to persist it (`JSON.serialize` → `JSON.deserializeUntyped`), so a value validates identically whether the caller passes an `inputJson` string, a `Map<String, Object>`, or a typed Apex object. A native Apex `Date`/`Datetime` handed in a `Map` is checked by its ISO form (as `DATE_TYPE`/`DATETIME_TYPE`), matching the JSON-string form — so the two entry forms never disagree. (This is an additive, permissive broadening of the accepted inputs; it rejects nothing that was previously accepted.)
+**Validation checks the exact graph the engine persists.** The engine stores `inputJson` verbatim when it is set, otherwise it stores `JSON.serialize(input)`; validation mirrors that byte-for-byte, so what you validate is exactly what the first step receives:
+
+- **`inputJson`** is validated as the raw object graph (it is preserved as-is). **Use `inputJson` to supply an object payload.**
+- **`input`** (any value) is validated as it will be JSON-serialized — through the same `JSON.serialize` → `JSON.deserializeUntyped` round-trip the engine uses to persist. A native Apex `Date`/`Datetime` in a `Map` is therefore checked by its ISO form (matching `DATE_TYPE`/`DATETIME_TYPE`), and numbers normalize to the same kinds, so a `Map`, a typed Apex object, and a JSON string never disagree. Note that a **JSON-object _string_ passed as `input`** (e.g. `start(wf, key, '{"accountId":"A"}')`) is serialized to a quoted scalar string — the step receives a `String`, not an object — so a contract expecting object fields correctly fails validation. Pass such a payload via `inputJson` instead.
+
+(Accepting a native `Date`/`Datetime` in a `Map` is an additive, permissive broadening; it rejects nothing that was previously accepted.)
 
 **Fully backward compatible and free for the simple case.** A definition that does _not_ implement `ValidatedWorkflow` is never inspected — detection is a single in-memory `instanceof` on the already-resolved definition. Validation adds **zero SOQL and zero DML** to the start path and nothing to the `WorkflowOrchestrator` Queueable hot path; it is a pure parse-and-check that runs **before any `Workflow_Instance__c` is inserted and before any job is enqueued**, so the append-only audit trail is untouched on rejection.
 

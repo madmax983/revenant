@@ -213,10 +213,19 @@ public class WorkflowInputValidationTest {
   @IsTest
   static void testMalformedJsonThrows() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Malformed JSON supplied via inputJson (the raw-object channel the engine
+      // stores verbatim): a parse failure is a MALFORMED_JSON input error. (A
+      // malformed string passed as `input` instead is serialized to a scalar and
+      // validated as such — see testJsonObjectStringAsInputValidatesAsScalarAndFails.)
+      WorkflowEngine.StartRequest req = new WorkflowEngine.StartRequest(
+        CONTRACT_WF,
+        'VIV_malformed',
+        null
+      );
+      req.inputJson = '{"accountId":';
       Boolean threw = false;
       try {
-        // Malformed JSON string passed as the start input.
-        WorkflowEngine.start(CONTRACT_WF, 'VIV_malformed', '{"accountId":');
+        WorkflowEngine.startOrGet(req);
       } catch (WorkflowInputException ex) {
         threw = true;
         System.assertEquals(1, ex.getFieldErrors().size());
@@ -225,7 +234,7 @@ public class WorkflowInputValidationTest {
           ex.getFieldErrors()[0].reason
         );
       }
-      System.assertEquals(true, threw, 'Malformed JSON is an input error');
+      System.assertEquals(true, threw, 'Malformed inputJson is an input error');
       System.assertEquals(0, instanceCountForKey('VIV_malformed'));
     }
   }
@@ -647,6 +656,108 @@ public class WorkflowInputValidationTest {
       System.assertEquals(
         WorkflowInputErrorReason.WRONG_TYPE,
         jsonErrors[0].reason
+      );
+    }
+  }
+
+  // ── FIX 3: validation graph == persistence graph (String input vs inputJson) ──
+
+  @IsTest
+  static void testJsonObjectStringAsInputValidatesAsScalarAndFails() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      // A JSON-object STRING passed as `input` (NOT inputJson). The engine will
+      // persist JSON.serialize(String) — a quoted scalar string — so the first
+      // step would receive a String, not an object. Validation must agree: the
+      // scalar carries none of the required object fields, so start fails and
+      // nothing is inserted (matching what the step would actually see).
+      String objectString = '{"accountId":"ACME-ACCOUNT-1","amount":10}';
+      Boolean threw = false;
+      try {
+        WorkflowEngine.start(CONTRACT_WF, 'VIV_strinput', objectString);
+      } catch (WorkflowInputException ex) {
+        threw = true;
+        System.assert(
+          ex.getMessage().contains('accountId'),
+          'Required accountId is missing from a scalar payload: ' +
+          ex.getMessage()
+        );
+        System.assert(
+          ex.getMessage().contains('amount'),
+          'Required amount is missing from a scalar payload: ' + ex.getMessage()
+        );
+      }
+      System.assertEquals(
+        true,
+        threw,
+        'A JSON-object string as `input` must fail (it is validated as the scalar the step receives)'
+      );
+      System.assertEquals(0, instanceCountForKey('VIV_strinput'));
+    }
+  }
+
+  @IsTest
+  static void testSameObjectViaInputJsonPassesAndPersistsRaw() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      // The SAME object supplied via inputJson (preserved raw) validates as an
+      // object and starts; the persisted graph is exactly what was validated.
+      String rawObjectJson = '{"accountId":"ACME-ACCOUNT-1","amount":10}';
+      WorkflowEngine.StartRequest req = new WorkflowEngine.StartRequest(
+        CONTRACT_WF,
+        'VIV_jsoninput',
+        null
+      );
+      req.inputJson = rawObjectJson;
+
+      WorkflowEngine.StartResult res = WorkflowEngine.startOrGet(req);
+
+      System.assertEquals(true, res.isNew);
+      System.assertEquals(1, instanceCountForKey('VIV_jsoninput'));
+      Workflow_Instance__c inst = [
+        SELECT Input__c
+        FROM Workflow_Instance__c
+        WHERE Id = :res.instanceId
+      ];
+      // Validation graph == persistence graph: inputJson is stored verbatim.
+      System.assertEquals(
+        rawObjectJson,
+        inst.Input__c,
+        'inputJson must be persisted raw, matching the validated object graph'
+      );
+    }
+  }
+
+  @IsTest
+  static void testStringInputPersistsAsScalarConfirmingMirror() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      // Non-validated workflow, so no contract blocks the start: prove the engine
+      // persists JSON.serialize(String) for a String `input`, i.e. a quoted scalar
+      // that deserializes back to a String (not an object). This is exactly the
+      // graph the parser now validates, so validation and persistence agree.
+      String objectString = '{"accountId":"A"}';
+      Id instanceId = WorkflowEngine.start(
+        PLAIN_WF,
+        'VIV_strpersist',
+        objectString
+      );
+
+      Workflow_Instance__c inst = [
+        SELECT Input__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instanceId
+      ];
+      System.assertEquals(
+        JSON.serialize(objectString),
+        inst.Input__c,
+        'A String input is persisted as JSON.serialize(input) — a quoted scalar'
+      );
+      Object persistedGraph = JSON.deserializeUntyped(inst.Input__c);
+      System.assertEquals(
+        true,
+        persistedGraph instanceof String,
+        'A String input round-trips to a scalar String, not an object — matching validation'
       );
     }
   }
