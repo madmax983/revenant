@@ -441,12 +441,16 @@ public class WorkflowInputValidationTest {
   }
 
   @IsTest
-  static void testInvocableDebounceInvalidIsBranchableNoPersist() {
+  static void testInvocableDebounceInvalidInputStillArms() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Debounce wraps a dedup verb (sweep-time startOrGet), so the invocable does
+      // NOT pre-validate it — that would block a row that might dedup-resolve at
+      // sweep. The row is armed (isValid=true) and its contract is checked only if
+      // the sweep-time start actually creates a new instance.
       WorkflowStartInvocableAction.StartRequest bad = new WorkflowStartInvocableAction.StartRequest();
       bad.workflowName = CONTRACT_WF;
-      bad.correlationKey = 'VIV_deb_bad';
-      bad.inputJson = '{"amount":5}'; // missing required accountId
+      bad.correlationKey = 'VIV_deb_defer';
+      bad.inputJson = '{"amount":5}'; // missing accountId (parseable)
       bad.debounceSeconds = 10;
 
       Test.startTest();
@@ -456,35 +460,13 @@ public class WorkflowInputValidationTest {
       Test.stopTest();
 
       System.assertEquals(1, results.size());
-      System.assertEquals(false, results[0].isValid);
-      System.assertNotEquals(null, results[0].validationError);
-      System.assert(results[0].validationError.contains('accountId'));
+      System.assertEquals(
+        true,
+        results[0].isValid,
+        'Debounce is armed without pre-validation; validation is deferred to sweep'
+      );
       System.assertEquals(null, results[0].workflowInstanceId);
-      // A rejected debounced input persists nothing: no debounce state, no instance.
-      System.assertEquals(0, debounceStateCountForKey('VIV_deb_bad'));
-      System.assertEquals(0, instanceCountForKey('VIV_deb_bad'));
-    }
-  }
-
-  @IsTest
-  static void testInvocableDebounceMalformedJsonIsBranchableNoPersist() {
-    System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowStartInvocableAction.StartRequest bad = new WorkflowStartInvocableAction.StartRequest();
-      bad.workflowName = CONTRACT_WF;
-      bad.correlationKey = 'VIV_deb_malformed';
-      bad.inputJson = '{"accountId":';
-      bad.debounceSeconds = 10;
-
-      Test.startTest();
-      List<WorkflowStartInvocableAction.StartResult> results = WorkflowStartInvocableAction.startWorkflow(
-        new List<WorkflowStartInvocableAction.StartRequest>{ bad }
-      );
-      Test.stopTest();
-
-      System.assertEquals(1, results.size());
-      System.assertEquals(false, results[0].isValid);
-      System.assertNotEquals(null, results[0].validationError);
-      System.assertEquals(0, debounceStateCountForKey('VIV_deb_malformed'));
+      System.assertEquals(1, debounceStateCountForKey('VIV_deb_defer'));
     }
   }
 
@@ -759,6 +741,178 @@ public class WorkflowInputValidationTest {
         persistedGraph instanceof String,
         'A String input round-trips to a scalar String, not an object — matching validation'
       );
+    }
+  }
+
+  // ── FIX 4: contract enforced only on NEW starts; dedup hits are not blocked ───
+
+  @IsTest
+  static void testScalarGetOrStartExistingWithInvalidFallbackNotBlocked() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      // An instance already exists (started with valid input).
+      Id existingId = WorkflowEngine.start(
+        CONTRACT_WF,
+        'VIV_exist_scalar',
+        validInput()
+      );
+
+      // A get-or-start to the SAME key with an invalid fallback must dedup to the
+      // existing instance WITHOUT throwing — its fallback input is never persisted.
+      WorkflowEngine.StartResult res = WorkflowEngine.startOrGet(
+        new WorkflowEngine.StartRequest(
+          CONTRACT_WF,
+          'VIV_exist_scalar',
+          new Map<String, Object>{ 'amount' => 5 } // missing accountId
+        )
+      );
+
+      System.assertEquals(existingId, res.instanceId, 'Deduped to existing');
+      System.assertEquals(false, res.isNew);
+      System.assertEquals(
+        1,
+        instanceCountForKey('VIV_exist_scalar'),
+        'No new instance created for the dedup hit'
+      );
+    }
+  }
+
+  @IsTest
+  static void testBulkSignalOrStartExistingWithInvalidFallbackDelivers() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      // A suspended instance already exists for the key (proven signal-target
+      // pattern), so signal-or-start dedups to it.
+      Workflow_Instance__c existing = new Workflow_Instance__c(
+        Workflow_Name__c = CONTRACT_WF,
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'VIV_exist_sos'
+      );
+      insert existing;
+
+      // signal-or-start to the existing instance with an invalid/minimal fallback:
+      // the signal must be delivered (existing returned), no throw, no new instance.
+      WorkflowEngine.StartRequest badStart = new WorkflowEngine.StartRequest(
+        CONTRACT_WF,
+        'VIV_exist_sos',
+        new Map<String, Object>{ 'amount' => 5 } // missing accountId
+      );
+      WorkflowEngine.SignalOrStartRequest sosReq = new WorkflowEngine.SignalOrStartRequest(
+        badStart,
+        'WakeUp',
+        '{"x":1}'
+      );
+
+      List<WorkflowEngine.StartResult> res = WorkflowEngine.signalOrStart(
+        new List<WorkflowEngine.SignalOrStartRequest>{ sosReq }
+      );
+
+      System.assertEquals(1, res.size());
+      System.assertEquals(
+        existing.Id,
+        res[0].instanceId,
+        'Signal delivered to existing'
+      );
+      System.assertEquals(1, instanceCountForKey('VIV_exist_sos'));
+    }
+  }
+
+  @IsTest
+  static void testInvocableGetOrStartExistingWithInvalidFallbackDelivers() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Id existingId = WorkflowEngine.start(
+        CONTRACT_WF,
+        'VIV_inv_exist',
+        validInput()
+      );
+
+      WorkflowStartInvocableAction.StartRequest bad = new WorkflowStartInvocableAction.StartRequest();
+      bad.workflowName = CONTRACT_WF;
+      bad.correlationKey = 'VIV_inv_exist';
+      bad.inputJson = '{"amount":5}'; // missing accountId
+
+      Test.startTest();
+      List<WorkflowStartInvocableAction.StartResult> results = WorkflowStartInvocableAction.startWorkflow(
+        new List<WorkflowStartInvocableAction.StartRequest>{ bad }
+      );
+      Test.stopTest();
+
+      System.assertEquals(1, results.size());
+      System.assertEquals(
+        true,
+        results[0].isValid,
+        'A get-or-start dedup hit is delivered, not blocked by an unused invalid fallback'
+      );
+      System.assertEquals(existingId, results[0].workflowInstanceId);
+      System.assertEquals(1, instanceCountForKey('VIV_inv_exist'));
+    }
+  }
+
+  @IsTest
+  static void testInvocableSignalOrStartExistingWithInvalidFallbackDelivers() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c existing = new Workflow_Instance__c(
+        Workflow_Name__c = CONTRACT_WF,
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'VIV_sos_exist'
+      );
+      insert existing;
+
+      WorkflowSignalOrStartInvocableAction.SignalOrStartRequest bad = new WorkflowSignalOrStartInvocableAction.SignalOrStartRequest();
+      bad.workflowName = CONTRACT_WF;
+      bad.correlationKey = 'VIV_sos_exist';
+      bad.inputJson = '{"amount":5}'; // missing accountId
+      bad.signalName = 'WakeUp';
+      bad.payloadJson = '{"x":1}';
+
+      Test.startTest();
+      List<WorkflowSignalOrStartInvocableAction.SignalOrStartResult> results = WorkflowSignalOrStartInvocableAction.signalOrStartWorkflow(
+        new List<WorkflowSignalOrStartInvocableAction.SignalOrStartRequest>{
+          bad
+        }
+      );
+      Test.stopTest();
+
+      System.assertEquals(1, results.size());
+      System.assertEquals(
+        true,
+        results[0].isValid,
+        'A signal-or-start dedup hit is delivered, not blocked by an unused invalid fallback'
+      );
+      System.assertEquals(existing.Id, results[0].workflowInstanceId);
+      System.assertEquals(1, instanceCountForKey('VIV_sos_exist'));
+    }
+  }
+
+  @IsTest
+  static void testInvocableSignalOrStartNewInvalidRejected() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      // No existing instance for this key: a genuine new start with invalid input
+      // is rejected with a branchable isValid=false and nothing is created.
+      WorkflowSignalOrStartInvocableAction.SignalOrStartRequest bad = new WorkflowSignalOrStartInvocableAction.SignalOrStartRequest();
+      bad.workflowName = CONTRACT_WF;
+      bad.correlationKey = 'VIV_sos_new';
+      bad.inputJson = '{"amount":5}'; // missing accountId
+      bad.signalName = 'WakeUp';
+      bad.payloadJson = '{"x":1}';
+
+      Test.startTest();
+      List<WorkflowSignalOrStartInvocableAction.SignalOrStartResult> results = WorkflowSignalOrStartInvocableAction.signalOrStartWorkflow(
+        new List<WorkflowSignalOrStartInvocableAction.SignalOrStartRequest>{
+          bad
+        }
+      );
+      Test.stopTest();
+
+      System.assertEquals(1, results.size());
+      System.assertEquals(false, results[0].isValid);
+      System.assertNotEquals(null, results[0].validationError);
+      System.assert(results[0].validationError.contains('accountId'));
+      System.assertEquals(null, results[0].workflowInstanceId);
+      System.assertEquals(0, instanceCountForKey('VIV_sos_new'));
     }
   }
 }

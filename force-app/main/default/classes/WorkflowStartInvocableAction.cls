@@ -67,9 +67,23 @@ public inherited sharing class WorkflowStartInvocableAction {
     description='Initiates a Revenant durable workflow instance'
   )
   /**
-   * @description Bulk invocable that starts a workflow instance per request,
-   * routing debounced requests to WorkflowDebouncer and the rest to the engine,
-   * and returns one result per input positionally aligned to the requests.
+   * @description Bulk invocable that starts (or debounces) a workflow instance per
+   * request and returns one result per input, positionally aligned to the requests.
+   *
+   * The "Start Workflow" action is a GET-OR-START verb (it dedups on the
+   * correlation key), so input-contract validation (INV-51) is applied only where
+   * a new instance would actually be created:
+   * - Rows with valid contract input are batched through {@link
+   *   WorkflowEngine#startOrGet} (one bulk call; each returns isValid=true whether
+   *   it started a new instance or resolved an existing one).
+   * - Rows with invalid contract input are NOT blocked up front; each is delegated
+   *   to the engine individually so its dedup decides: a row that resolves to an
+   *   EXISTING instance is delivered (isValid=true — its unused fallback input was
+   *   never persisted), while a row that would create a NEW instance is rejected
+   *   with a branchable isValid=false + validationError (no Flow fault, no insert).
+   * - Debounce rows arm a future startOrGet at sweep; the dedup outcome is unknown
+   *   now, so they are not pre-validated (that would block a row that will
+   *   dedup-resolve). The sweep-time startOrGet validates only fresh starts.
    * @param requests The list of start requests, one per Flow invocation row.
    * @return A list of results aligned by index to the input requests.
    */
@@ -83,8 +97,8 @@ public inherited sharing class WorkflowStartInvocableAction {
       results.add(null);
     }
 
-    List<WorkflowEngine.StartRequest> engineRequests = new List<WorkflowEngine.StartRequest>();
-    List<Integer> engineRequestIndices = new List<Integer>();
+    List<WorkflowEngine.StartRequest> cleanEngineRequests = new List<WorkflowEngine.StartRequest>();
+    List<Integer> cleanEngineIndices = new List<Integer>();
     List<WorkflowDebouncer.DebounceRequest> debounceRequests = new List<WorkflowDebouncer.DebounceRequest>();
 
     for (Integer i = 0; i < requests.size(); i++) {
@@ -93,28 +107,20 @@ public inherited sharing class WorkflowStartInvocableAction {
         results[i] = nullResult();
         continue;
       }
-      // Opt-in input-contract validation (INV-51): validate this row in memory
-      // BEFORE it reaches any start path — the debounce path persists a
-      // Debounce_State__c row (itself an enqueue), so validation must run before
-      // that too. An invalid row yields a branchable failure result (isValid=false
-      // + a field-level validationError) and is neither routed to the engine nor
-      // armed for debounce, so nothing is inserted for it and its valid siblings
-      // are unaffected. A non-ValidatedWorkflow workflow yields no errors,
-      // preserving today's behavior exactly (including the debounce path's
-      // existing malformed-JSON fault via toDebounceRequest).
+      if (req.debounceSeconds != null) {
+        // Debounce wraps a dedup verb (sweep-time startOrGet): don't pre-validate.
+        debounceRequests.add(toDebounceRequest(req));
+        results[i] = debouncedResult();
+        continue;
+      }
       List<WorkflowInputFieldError> inputErrors = WorkflowInputValidator.collectErrors(
         toValidationProbe(req)
       );
-      if (!inputErrors.isEmpty()) {
-        results[i] = invalidResult(
-          WorkflowInputValidator.describeErrors(inputErrors)
-        );
-      } else if (req.debounceSeconds != null) {
-        debounceRequests.add(toDebounceRequest(req));
-        results[i] = debouncedResult();
+      if (inputErrors.isEmpty()) {
+        cleanEngineRequests.add(toEngineRequest(req));
+        cleanEngineIndices.add(i);
       } else {
-        engineRequests.add(toEngineRequest(req));
-        engineRequestIndices.add(i);
+        results[i] = resolveSuspectStart(req, inputErrors);
       }
     }
 
@@ -122,9 +128,39 @@ public inherited sharing class WorkflowStartInvocableAction {
       WorkflowDebouncer.startDebounced(debounceRequests);
     }
 
-    applyEngineResults(engineRequests, engineRequestIndices, results);
+    applyCleanStartResults(cleanEngineRequests, cleanEngineIndices, results);
 
     return results;
+  }
+
+  /**
+   * @description Resolves a single row whose contract input is invalid by
+   * delegating to the engine so its dedup decides, rather than blocking it up
+   * front. A malformed/unbuildable payload cannot be delivered and is rejected
+   * immediately; otherwise the engine dedup-resolves to an existing instance
+   * (delivered, isValid=true) or, for a genuine new start, throws
+   * WorkflowInputException which is translated to a branchable isValid=false.
+   * @param req the invocable start request with invalid contract input
+   * @param inputErrors the pre-computed contract violations for the message
+   * @return a branchable StartResult (delivered existing, or invalid)
+   */
+  private static StartResult resolveSuspectStart(
+    StartRequest req,
+    List<WorkflowInputFieldError> inputErrors
+  ) {
+    WorkflowEngine.StartRequest engineReq;
+    try {
+      engineReq = toEngineRequest(req);
+    } catch (WorkflowEngine.WorkflowException buildFailure) {
+      // Unparseable input (malformed JSON / bad attributes) can never be
+      // delivered as-is; reject up front with the enumerated violations.
+      return invalidResult(WorkflowInputValidator.describeErrors(inputErrors));
+    }
+    try {
+      return startedResult(WorkflowEngine.startOrGet(engineReq));
+    } catch (WorkflowInputException contractFailure) {
+      return invalidResult(contractFailure.getMessage());
+    }
   }
 
   private static WorkflowDebouncer.DebounceRequest toDebounceRequest(
@@ -188,30 +224,47 @@ public inherited sharing class WorkflowStartInvocableAction {
     return startReq;
   }
 
-  private static void applyEngineResults(
-    List<WorkflowEngine.StartRequest> engineRequests,
-    List<Integer> engineRequestIndices,
+  /**
+   * @description Runs the batched get-or-start for the rows with valid contract
+   * input (which never trip fresh-start validation) in one bulk engine call and
+   * maps each result back to its original index with isValid=true.
+   * @param cleanEngineRequests the engine requests for contract-valid rows
+   * @param cleanEngineIndices their original indices in the invocable results
+   * @param results the result list to populate in place
+   */
+  private static void applyCleanStartResults(
+    List<WorkflowEngine.StartRequest> cleanEngineRequests,
+    List<Integer> cleanEngineIndices,
     List<StartResult> results
   ) {
-    if (engineRequests.isEmpty()) {
+    if (cleanEngineRequests.isEmpty()) {
       return;
     }
     List<WorkflowEngine.StartResult> engineResults = WorkflowEngine.startOrGet(
-      engineRequests
+      cleanEngineRequests
     );
     for (Integer j = 0; j < engineResults.size(); j++) {
-      WorkflowEngine.StartResult engineResult = engineResults[j];
-      Integer origIndex = engineRequestIndices[j];
-      StartResult res = new StartResult();
-      res.workflowInstanceId = engineResult == null
-        ? null
-        : engineResult.instanceId;
-      res.isNew = engineResult == null ? null : engineResult.isNew;
-      // This row passed input-contract validation before it was routed here.
-      res.isValid = true;
-      res.validationError = null;
-      results[origIndex] = res;
+      results[cleanEngineIndices[j]] = startedResult(engineResults[j]);
     }
+  }
+
+  /**
+   * @description Builds a successful (delivered) result from an engine start
+   * result — a new or dedup-resolved instance — flagged isValid=true.
+   * @param engineResult the engine's start result (may be null)
+   * @return a StartResult carrying the instance Id / isNew and isValid=true
+   */
+  private static StartResult startedResult(
+    WorkflowEngine.StartResult engineResult
+  ) {
+    StartResult res = new StartResult();
+    res.workflowInstanceId = engineResult == null
+      ? null
+      : engineResult.instanceId;
+    res.isNew = engineResult == null ? null : engineResult.isNew;
+    res.isValid = true;
+    res.validationError = null;
+    return res;
   }
 
   private static StartResult nullResult() {

@@ -2,6 +2,15 @@
  * @description Flow/Process Builder entry point that idempotently starts a workflow
  * and delivers a signal to it in a single transaction, adapting Invocable request
  * and result wrappers to the underlying WorkflowEngine signal-or-start API.
+ *
+ * "Signal or Start" is a dedup verb: the fallback start input is persisted only
+ * when the call creates a NEW instance, so input-contract validation (INV-51) is
+ * applied only there. A row that dedup-resolves to an EXISTING instance is
+ * delivered even with an invalid/minimal fallback payload (that payload is never
+ * persisted), while a row that would create a new instance with invalid input is
+ * rejected with a branchable isValid=false + validationError (no Flow fault). Rows
+ * with valid input are batched through the bulk engine call; rows with invalid
+ * input are delegated to the engine individually so its dedup makes the call.
  */
 public inherited sharing class WorkflowSignalOrStartInvocableAction {
   /**
@@ -38,8 +47,9 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
   }
 
   /**
-   * @description Invocable output carrying the resolved workflow instance id and a
-   * flag indicating whether a new instance was started or an existing one reused.
+   * @description Invocable output carrying the resolved workflow instance id, a
+   * flag indicating whether a new instance was started or an existing one reused,
+   * and the branchable input-contract validation result.
    */
   public class SignalOrStartResult {
     @InvocableVariable(label='Workflow Instance ID')
@@ -50,6 +60,18 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
       description='True if a new instance was started; false if an existing instance was resolved.'
     )
     public Boolean isNew;
+
+    @InvocableVariable(
+      label='Is Valid'
+      description='True when the signal was delivered / the workflow resolved (an existing instance is always delivered, since its fallback input is never persisted); false only when a NEW instance would have been created but its input failed the workflow\'s declared contract, in which case Validation Error explains why and nothing was created. Branch a Flow Decision on this.'
+    )
+    public Boolean isValid;
+
+    @InvocableVariable(
+      label='Validation Error'
+      description='When Is Valid is false, a readable, field-level enumeration of every input-contract violation; null on success.'
+    )
+    public String validationError;
   }
 
   @InvocableMethod(
@@ -59,8 +81,10 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
   )
   /**
    * @description Idempotently starts and signals workflows for each request in one
-   * transaction, delegating to WorkflowEngine.signalOrStart and mapping the engine
-   * results back to Invocable outputs.
+   * transaction. Rows with valid contract input are batched to the engine; rows
+   * with invalid input are delegated individually so a dedup hit is still
+   * delivered while a genuine new-start contract failure becomes a branchable
+   * isValid=false result.
    * @param requests The signal-or-start requests to process.
    * @return One result per request, or an empty list when requests is null/empty.
    */
@@ -71,25 +95,108 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
       return new List<SignalOrStartResult>();
     }
 
-    List<WorkflowEngine.SignalOrStartRequest> engineRequests = new List<WorkflowEngine.SignalOrStartRequest>();
-    for (SignalOrStartRequest req : requests) {
-      engineRequests.add(toEngineRequest(req));
+    List<SignalOrStartResult> results = new List<SignalOrStartResult>();
+    for (Integer i = 0; i < requests.size(); i++) {
+      results.add(null);
     }
 
-    List<WorkflowEngine.StartResult> engineResults = WorkflowEngine.signalOrStart(
-      engineRequests
-    );
+    List<WorkflowEngine.SignalOrStartRequest> cleanEngineRequests = new List<WorkflowEngine.SignalOrStartRequest>();
+    List<Integer> cleanEngineIndices = new List<Integer>();
 
-    return toResults(engineResults);
+    for (Integer i = 0; i < requests.size(); i++) {
+      SignalOrStartRequest req = requests[i];
+      if (req == null) {
+        results[i] = nullResult();
+        continue;
+      }
+      List<WorkflowInputFieldError> inputErrors = WorkflowInputValidator.collectErrors(
+        toValidationProbe(req)
+      );
+      if (inputErrors.isEmpty()) {
+        cleanEngineRequests.add(toEngineRequest(req));
+        cleanEngineIndices.add(i);
+      } else {
+        results[i] = resolveSuspect(req, inputErrors);
+      }
+    }
+
+    applyCleanResults(cleanEngineRequests, cleanEngineIndices, results);
+
+    return results;
+  }
+
+  /**
+   * @description Resolves a single row whose contract input is invalid by
+   * delegating to the engine so its dedup decides. A malformed/unbuildable payload
+   * is rejected immediately; otherwise the engine dedup-resolves to an existing
+   * instance (delivered, isValid=true) or, for a genuine new start, throws
+   * WorkflowInputException which is translated to a branchable isValid=false.
+   * @param req the invocable signal-or-start request with invalid contract input
+   * @param inputErrors the pre-computed contract violations for the message
+   * @return a branchable SignalOrStartResult (delivered existing, or invalid)
+   */
+  private static SignalOrStartResult resolveSuspect(
+    SignalOrStartRequest req,
+    List<WorkflowInputFieldError> inputErrors
+  ) {
+    WorkflowEngine.SignalOrStartRequest engineReq;
+    try {
+      engineReq = toEngineRequest(req);
+    } catch (WorkflowEngine.WorkflowException buildFailure) {
+      return invalidResult(WorkflowInputValidator.describeErrors(inputErrors));
+    }
+    try {
+      return deliveredResult(WorkflowEngine.signalOrStart(engineReq));
+    } catch (WorkflowInputException contractFailure) {
+      return invalidResult(contractFailure.getMessage());
+    }
+  }
+
+  /**
+   * @description Runs the batched signal-or-start for rows with valid contract
+   * input (which never trip fresh-start validation) in one bulk engine call and
+   * maps each result back to its original index with isValid=true.
+   * @param cleanEngineRequests the engine requests for contract-valid rows
+   * @param cleanEngineIndices their original indices in the invocable results
+   * @param results the result list to populate in place
+   */
+  private static void applyCleanResults(
+    List<WorkflowEngine.SignalOrStartRequest> cleanEngineRequests,
+    List<Integer> cleanEngineIndices,
+    List<SignalOrStartResult> results
+  ) {
+    if (cleanEngineRequests.isEmpty()) {
+      return;
+    }
+    List<WorkflowEngine.StartResult> engineResults = WorkflowEngine.signalOrStart(
+      cleanEngineRequests
+    );
+    for (Integer j = 0; j < engineResults.size(); j++) {
+      results[cleanEngineIndices[j]] = deliveredResult(engineResults[j]);
+    }
+  }
+
+  /**
+   * @description Builds a side-effect-free start request used only to validate the
+   * embedded start input's contract in memory (name + raw input JSON).
+   * @param req the invocable signal-or-start request to probe
+   * @return an engine start request carrying only the name and raw input JSON
+   */
+  private static WorkflowEngine.StartRequest toValidationProbe(
+    SignalOrStartRequest req
+  ) {
+    WorkflowEngine.StartRequest probe = new WorkflowEngine.StartRequest(
+      req.workflowName,
+      req.correlationKey,
+      null
+    );
+    probe.inputJson = req.inputJson;
+    return probe;
   }
 
   private static WorkflowEngine.SignalOrStartRequest toEngineRequest(
     SignalOrStartRequest req
   ) {
-    if (req == null) {
-      return null;
-    }
-
     Object input = WorkflowInvocableInputParser.parseInputJson(req.inputJson);
     Map<String, String> attributes = WorkflowInvocableInputParser.parseAttributesJson(
       req.attributesJson
@@ -112,18 +219,46 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
       .withIdempotencyKey(req.idempotencyKey);
   }
 
-  private static List<SignalOrStartResult> toResults(
-    List<WorkflowEngine.StartResult> engineResults
+  /**
+   * @description Builds a delivered result (new or dedup-resolved instance),
+   * flagged isValid=true.
+   * @param engineResult the engine's start result (may be null)
+   * @return a SignalOrStartResult carrying the instance Id / isNew and isValid=true
+   */
+  private static SignalOrStartResult deliveredResult(
+    WorkflowEngine.StartResult engineResult
   ) {
-    List<SignalOrStartResult> results = new List<SignalOrStartResult>();
-    for (WorkflowEngine.StartResult engineResult : engineResults) {
-      SignalOrStartResult res = new SignalOrStartResult();
-      res.workflowInstanceId = engineResult == null
-        ? null
-        : engineResult.instanceId;
-      res.isNew = engineResult == null ? null : engineResult.isNew;
-      results.add(res);
-    }
-    return results;
+    SignalOrStartResult res = new SignalOrStartResult();
+    res.workflowInstanceId = engineResult == null
+      ? null
+      : engineResult.instanceId;
+    res.isNew = engineResult == null ? null : engineResult.isNew;
+    res.isValid = true;
+    res.validationError = null;
+    return res;
+  }
+
+  /**
+   * @description Builds a branchable failure result for a row whose new-instance
+   * start input violated the workflow's declared contract.
+   * @param validationError the enumerated field-level violation message
+   * @return a SignalOrStartResult flagged invalid, with no instance
+   */
+  private static SignalOrStartResult invalidResult(String validationError) {
+    SignalOrStartResult res = new SignalOrStartResult();
+    res.workflowInstanceId = null;
+    res.isNew = null;
+    res.isValid = false;
+    res.validationError = validationError;
+    return res;
+  }
+
+  private static SignalOrStartResult nullResult() {
+    SignalOrStartResult res = new SignalOrStartResult();
+    res.workflowInstanceId = null;
+    res.isNew = null;
+    res.isValid = null;
+    res.validationError = null;
+    return res;
   }
 }

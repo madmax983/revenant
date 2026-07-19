@@ -38,27 +38,40 @@ public inherited sharing class WorkflowInputValidator {
   }
 
   /**
-   * @description Validates every request in a bulk start before any row is
-   * inserted. Because the bulk admission pipeline is all-or-none (a genuine error
-   * rolls the whole batch back and leaves no partial writes), an invalid input is
-   * a genuine error: this throws a single {@link WorkflowInputException}
-   * enumerating every bad field across every offending request (tagged by request
-   * index) and no instance is created. Per-row, non-aborting behavior for
-   * declarative callers is provided at the Flow-facing invocable, which validates
-   * each row and routes only the valid ones to the engine.
-   * @param requests the bulk start requests to validate (nulls skipped)
+   * @description Validates ONLY the bulk requests that will create a new instance,
+   * identified by their original index in `requests`. The bulk pipeline calls this
+   * AFTER the resolve-existing/dedup decision has determined which rows are fresh
+   * starts and BEFORE those rows are inserted — so a request that deduped to an
+   * existing instance (a get-or-start or signal-or-start hit) is never validated,
+   * because its fallback start input is never persisted. Because the bulk admission
+   * pipeline is all-or-none (a genuine error rolls the whole batch back and leaves
+   * no partial writes), an invalid fresh-start input is a genuine error: this
+   * throws a single {@link WorkflowInputException} enumerating every bad field
+   * across every offending new-start request (tagged by original request index)
+   * and no instance is created. Per-row, non-aborting behavior for declarative
+   * callers is provided at the Flow-facing invocable.
+   * @param requests the full bulk request list (indexed by newStartIndexes)
+   * @param newStartIndexes original indices of the requests that will be inserted
+   *   as new instances (the fresh-start subset)
    */
-  public static void validateBulk(List<WorkflowEngine.StartRequest> requests) {
-    if (requests == null || requests.isEmpty()) {
+  public static void validateNewStarts(
+    List<WorkflowEngine.StartRequest> requests,
+    List<Integer> newStartIndexes
+  ) {
+    if (
+      requests == null ||
+      newStartIndexes == null ||
+      newStartIndexes.isEmpty()
+    ) {
       return;
     }
     List<String> clauses = new List<String>();
     List<WorkflowInputFieldError> allErrors = new List<WorkflowInputFieldError>();
-    for (Integer i = 0; i < requests.size(); i++) {
-      List<WorkflowInputFieldError> errors = collectErrors(requests[i]);
+    for (Integer idx : newStartIndexes) {
+      List<WorkflowInputFieldError> errors = collectErrors(requests[idx]);
       if (!errors.isEmpty()) {
         allErrors.addAll(errors);
-        clauses.add('request[' + i + '] ' + describeErrors(errors));
+        clauses.add('request[' + idx + '] ' + describeErrors(errors));
       }
     }
     if (!allErrors.isEmpty()) {
@@ -77,7 +90,7 @@ public inherited sharing class WorkflowInputValidator {
    * workflow's input contract. Returns an empty list when the workflow does not
    * implement {@link ValidatedWorkflow}, when its contract is empty, or when the
    * payload satisfies the contract. Used by the invocable to build branchable
-   * results and by {@link #validate}/{@link #validateBulk} before they throw.
+   * results and by {@link #validate}/{@link #validateNewStarts} before they throw.
    * @param req the start request whose input to inspect (null yields no errors)
    * @return the complete set of violations (empty when valid or not opted in)
    */
