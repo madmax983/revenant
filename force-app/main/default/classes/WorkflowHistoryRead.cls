@@ -29,6 +29,19 @@ public inherited sharing class WorkflowHistoryRead {
   public static final Integer MAX_HISTORY_ROWS = 500;
 
   /**
+   * @description Maximum number of distinct instance Ids the bulk `getHistory`
+   * accepts in one call. The bulk read resolves per-instance totals with a grouped
+   * aggregate `COUNT()` that returns one `AggregateResult` per step-bearing
+   * instance, and Apex aggregate SOQL cannot `queryMore()` past 2,000 rows — a
+   * larger batch would throw `Aggregate query does not support queryMore()`. This
+   * cap (which also matches the standard Batch Apex `execute()` scope of 2,000)
+   * turns that into a clear, up-front input-contract error. Callers with more Ids
+   * must split them into batches of this size or fewer. Public so callers can size
+   * their own chunking against the documented boundary.
+   */
+  public static final Integer MAX_INSTANCES_PER_CALL = 2000;
+
+  /**
    * @description Row-budget headroom the bulk scan leaves unused, so a very large
    * batch degrades to graceful truncation rather than consuming the entire
    * per-transaction SOQL row governor (leaving room for any queries the caller
@@ -102,16 +115,18 @@ public inherited sharing class WorkflowHistoryRead {
    * from instance Id to its ordered step history. An Id with no matching instance
    * is absent from the map; a known instance with no logged steps is present with
    * an empty `entries` list (mirroring the single-Id null-vs-empty distinction).
-   * Uses a bounded, constant number of SOQL queries regardless of list size and
-   * zero DML.
+   * Uses a bounded, constant number of SOQL queries (≤ 3) and zero DML for valid
+   * input.
    *
-   * The queries are ordered small-first so the large row scan runs LAST and is
-   * sized from the REMAINING row budget — the bulk read therefore never throws
-   * `System.LimitException: Too many query rows`, even for batches large enough
-   * that the ideal scan would exceed the per-transaction row governor. It degrades
-   * gracefully to truncation instead: the small grouped `COUNT()` (≤ one aggregate
-   * row per instance) and the existence probe run first; the scan then takes
-   * whatever budget is left (nothing queries after it).
+   * Input contract: at most {@link #MAX_INSTANCES_PER_CALL} distinct instance Ids
+   * per call — more throws a `WorkflowEngine.WorkflowException` (the grouped
+   * aggregate `COUNT()` cannot page beyond 2,000 rows). For valid input the read
+   * never throws a governor or aggregate-`queryMore()` error: the queries are
+   * ordered small-first so the large row scan runs LAST, sized from the REMAINING
+   * row budget, so it can never overrun `System.LimitException: Too many query
+   * rows` — it degrades gracefully to truncation instead. The small grouped
+   * `COUNT()` (≤ one aggregate row per instance) and the existence probe run first;
+   * the scan then takes whatever budget is left (nothing queries after it).
    *
    * Correctness invariant: a step-bearing instance is NEVER reported as empty. The
    * authoritative `COUNT()` supplies every requested instance's real `totalCount`,
@@ -122,6 +137,8 @@ public inherited sharing class WorkflowHistoryRead {
    * Heap-safe: no long-text field is loaded.
    * @param instanceIds instance Ids to read
    * @return map of instance Id to step history (absent key per unmatched Id)
+   * @throws WorkflowEngine.WorkflowException when more than
+   * {@link #MAX_INSTANCES_PER_CALL} distinct instance Ids are supplied
    */
   public static Map<Id, WorkflowEngine.StepHistory> getHistory(
     List<Id> instanceIds
@@ -130,6 +147,22 @@ public inherited sharing class WorkflowHistoryRead {
     Set<Id> lookupIds = toLookupIds(instanceIds);
     if (lookupIds.isEmpty()) {
       return out;
+    }
+
+    // Input-contract guard — runs BEFORE any query so the grouped aggregate below
+    // never hits its 2,000-row queryMore ceiling.
+    if (lookupIds.size() > MAX_INSTANCES_PER_CALL) {
+      throw new WorkflowEngine.WorkflowException(
+        'getHistory supports at most ' +
+          MAX_INSTANCES_PER_CALL +
+          ' instances per call (Salesforce aggregate SOQL cannot page beyond ' +
+          MAX_INSTANCES_PER_CALL +
+          ' rows); received ' +
+          lookupIds.size() +
+          '. Split the Ids into batches of ' +
+          MAX_INSTANCES_PER_CALL +
+          ' or fewer.'
+      );
     }
 
     // Query 1 (small): the authoritative real step total per instance. Instances

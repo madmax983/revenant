@@ -44,6 +44,22 @@ private class WorkflowEngineGetHistoryTest {
       .getKeyPrefix() + '000000000001');
   }
 
+  // `count` distinct, well-formed, non-existent Workflow_Instance__c Ids — built in
+  // memory (no DML) so the input-cap guard can be exercised cheaply.
+  private static List<Id> syntheticInstanceIds(Integer count) {
+    String prefix = Workflow_Instance__c.SObjectType.getDescribe(
+        SObjectDescribeOptions.DEFERRED
+      )
+      .getKeyPrefix();
+    List<Id> ids = new List<Id>();
+    for (Integer i = 1; i <= count; i++) {
+      String suffix = String.valueOf(i);
+      suffix = '000000000000'.substring(0, 12 - suffix.length()) + suffix;
+      ids.add((Id) (prefix + suffix));
+    }
+    return ids;
+  }
+
   // ─── getHistory(Id) — ordering + field projection ─────────────────────────
 
   @IsTest
@@ -581,6 +597,47 @@ private class WorkflowEngineGetHistoryTest {
         cap,
         hotHistory.entries.size(),
         'Hot instance entries capped at MAX_HISTORY_ROWS'
+      );
+    }
+  }
+
+  // ─── bulk input cap: 2000 allowed, 2001 throws the typed exception ─────────
+
+  @IsTest
+  static void testGetHistoryBulkInstanceCapBoundary() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Integer cap = WorkflowHistoryRead.MAX_INSTANCES_PER_CALL;
+
+      Test.startTest();
+      // Exactly the cap is allowed (no guard exception). None of the synthetic Ids
+      // exist, so the map comes back empty — the point is that it does not throw.
+      Map<Id, WorkflowEngine.StepHistory> atCap = WorkflowHistoryRead.getHistory(
+        syntheticInstanceIds(cap)
+      );
+      System.assertEquals(
+        0,
+        atCap.size(),
+        'Exactly MAX_INSTANCES_PER_CALL is allowed and matches no synthetic Ids'
+      );
+
+      // One over the cap throws the typed exception, naming the cap, before any
+      // query runs.
+      Boolean threw = false;
+      try {
+        WorkflowHistoryRead.getHistory(syntheticInstanceIds(cap + 1));
+      } catch (WorkflowEngine.WorkflowException ex) {
+        threw = true;
+        System.assert(
+          ex.getMessage().contains(String.valueOf(cap)),
+          'Message names the cap: ' + ex.getMessage()
+        );
+      }
+      Test.stopTest();
+
+      System.assertEquals(
+        true,
+        threw,
+        'Over-cap bulk call throws WorkflowEngine.WorkflowException'
       );
     }
   }
