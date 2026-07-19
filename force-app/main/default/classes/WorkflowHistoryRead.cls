@@ -27,7 +27,7 @@ public inherited sharing class WorkflowHistoryRead {
 
   /**
    * @description Step statuses treated as terminal for a single step execution.
-   * A terminal step has a settled `endedAt`/`durationMs`; any other status is
+   * A terminal step has a settled `endedAt`/`totalDurationMs`; any other status is
    * considered in flight and reports null timing. Public so the resident
    * `WorkflowEngine.StepHistoryEntry` constructor shares one source of truth.
    */
@@ -85,13 +85,25 @@ public inherited sharing class WorkflowHistoryRead {
     Map<Id, List<Workflow_Step_Execution__c>> rowsByInstance = queryRowsByInstance(
       lookupIds
     );
+
+    // Only instances whose retained rows exceeded the cap need their real total
+    // resolved; the untruncated common case adds zero extra SOQL.
+    Set<Id> truncatedIds = new Set<Id>();
     for (Id instId : rowsByInstance.keySet()) {
+      if (rowsByInstance.get(instId).size() > MAX_HISTORY_ROWS) {
+        truncatedIds.add(instId);
+      }
+    }
+    Map<Id, Integer> realTotals = realTotalsForTruncated(truncatedIds);
+
+    for (Id instId : rowsByInstance.keySet()) {
+      List<Workflow_Step_Execution__c> rows = rowsByInstance.get(instId);
+      Integer totalCount = truncatedIds.contains(instId)
+        ? realTotals.get(instId)
+        : rows.size();
       out.put(
         instId,
-        new WorkflowEngine.StepHistory(
-          rowsByInstance.get(instId),
-          MAX_HISTORY_ROWS
-        )
+        new WorkflowEngine.StepHistory(rows, MAX_HISTORY_ROWS, totalCount)
       );
     }
 
@@ -101,6 +113,32 @@ public inherited sharing class WorkflowHistoryRead {
     withoutRows.removeAll(rowsByInstance.keySet());
     addKnownEmptyInstances(withoutRows, out);
     return out;
+  }
+
+  /**
+   * @description Resolves the real step-execution total for each truncated
+   * instance in a single aggregate `COUNT()` query, keeping the truncated path
+   * bounded to one extra query regardless of how many instances were truncated.
+   * Returns an empty map (and runs no query) when nothing was truncated, so the
+   * common untruncated path adds zero SOQL.
+   * @param truncatedIds instances whose histories exceeded the row cap
+   * @return map of instance Id to its real step-execution count
+   */
+  private static Map<Id, Integer> realTotalsForTruncated(Set<Id> truncatedIds) {
+    Map<Id, Integer> totals = new Map<Id, Integer>();
+    if (truncatedIds.isEmpty()) {
+      return totals;
+    }
+    for (AggregateResult ar : [
+      SELECT Workflow_Instance__c instId, COUNT(Id) total
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :truncatedIds
+      WITH SYSTEM_MODE
+      GROUP BY Workflow_Instance__c
+    ]) {
+      totals.put((Id) ar.get('instId'), (Integer) ar.get('total'));
+    }
+    return totals;
   }
 
   /**
@@ -191,7 +229,8 @@ public inherited sharing class WorkflowHistoryRead {
         inst.Id,
         new WorkflowEngine.StepHistory(
           new List<Workflow_Step_Execution__c>(),
-          MAX_HISTORY_ROWS
+          MAX_HISTORY_ROWS,
+          0
         )
       );
     }

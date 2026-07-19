@@ -474,24 +474,25 @@ Map<Id, WorkflowEngine.StepHistory> byId = WorkflowHistoryRead.getHistory(idList
 
 **`StepHistory` fields:**
 
-| Field         | Type                     | Description                                                                                  |
-| ------------- | ------------------------ | -------------------------------------------------------------------------------------------- |
-| `entries`     | `List<StepHistoryEntry>` | Step executions in append (execution) order, capped at `WorkflowHistoryRead.MAX_HISTORY_ROWS`. |
-| `isTruncated` | `Boolean`                | `true` when the instance had more executions than the cap and `entries` was truncated.       |
+| Field         | Type                     | Description                                                                                                                                                                      |
+| ------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `entries`     | `List<StepHistoryEntry>` | Step executions in append (execution) order, capped at `WorkflowHistoryRead.MAX_HISTORY_ROWS`.                                                                                  |
+| `isTruncated` | `Boolean`                | `true` when the instance had more executions than the cap and `entries` was truncated.                                                                                         |
+| `totalCount`  | `Integer`                | The real total step count. Equals `entries.size()` when untruncated (no extra SOQL); when `isTruncated`, the true total via a single `COUNT()` query run **only** on that path. |
 
 **`StepHistoryEntry` fields:**
 
-| Field            | Type       | Description                                                                                   |
-| ---------------- | ---------- | -------------------------------------------------------------------------------------------- |
-| `executionId`    | `Id`       | The `Workflow_Step_Execution__c` record Id (stable identifier).                              |
-| `stepName`       | `String`   | Logical step name; compensation executions carry the `<step>_Compensate` name.               |
-| `status`         | `String`   | Raw `Status__c` (e.g. `Pending`, `Running`, `Completed`, `Failed`, `Compensated`).           |
-| `attempt`        | `Integer`  | Retry attempt count (`0` on the first attempt).                                              |
-| `startedAt`      | `Datetime` | When the execution was first appended to the trail.                                          |
-| `endedAt`        | `Datetime` | When the step reached a terminal status; `null` while in flight.                            |
-| `durationMs`     | `Long`     | Elapsed `startedAt`→`endedAt` in milliseconds; `null` while in flight.                        |
-| `errorMessage`   | `String`   | Failure detail; `null` unless recorded.                                                      |
-| `isCompensation` | `Boolean`  | `true` for a compensation (rollback) execution, `false` for a forward execution.             |
+| Field             | Type       | Description                                                                                                                                                                                     |
+| ----------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `executionId`     | `Id`       | The `Workflow_Step_Execution__c` record Id (stable identifier).                                                                                                                                |
+| `stepName`        | `String`   | Logical step name; compensation executions carry the `<step>_Compensate` name.                                                                                                                 |
+| `status`          | `String`   | Raw `Status__c`. Terminal: `Completed`, `Failed`, `Compensated`, `Cancelled`, `OperatorSkipped`, `ContinuedAsNew`. In flight: `Pending`, `Running`, `Retrying`, `Compensating`, `Cancelling`. |
+| `attempt`         | `Integer`  | Retry attempt count (`0` on the first attempt).                                                                                                                                                |
+| `startedAt`       | `Datetime` | When the execution was first appended to the trail.                                                                                                                                            |
+| `endedAt`         | `Datetime` | Last modification of the terminal step-execution row (the engine reuses one row across retries, so this is the last modification, not per-attempt); `null` while in flight.                     |
+| `totalDurationMs` | `Long`     | Total wall-clock `startedAt`→`endedAt` in ms, across **all** attempts including retry backoff (one row is reused per retry — not a single attempt); use `attempt` to disambiguate. `null` in flight. |
+| `errorMessage`    | `String`   | Failure detail; `null` unless recorded.                                                                                                                                                       |
+| `isCompensation`  | `Boolean`  | `true` for a compensation (rollback) execution. Convention-derived from the step name's `_Compensate` suffix — a step an author manually names ending in `_Compensate` would be a false positive. |
 
 **Key semantics:**
 

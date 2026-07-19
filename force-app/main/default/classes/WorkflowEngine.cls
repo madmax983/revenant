@@ -250,8 +250,11 @@ public inherited sharing class WorkflowEngine {
      */
     public String stepName { get; private set; }
     /**
-     * @description Raw step status (e.g. `Pending`, `Running`, `Completed`,
-     * `Failed`, `Compensated`).
+     * @description Raw `Status__c` of the step execution. One of the engine's
+     * eleven step statuses: terminal — `Completed`, `Failed`, `Compensated`,
+     * `Cancelled`, `OperatorSkipped`, `ContinuedAsNew`; in flight — `Pending`,
+     * `Running`, `Retrying`, `Compensating`, `Cancelling`. A terminal status
+     * settles `endedAt`/`totalDurationMs`; an in-flight status leaves them null.
      */
     public String status { get; private set; }
     /** @description Retry attempt count for this step (0 on the first attempt). */
@@ -259,28 +262,33 @@ public inherited sharing class WorkflowEngine {
     /** @description When this step execution was first appended to the trail. */
     public Datetime startedAt { get; private set; }
     /**
-     * @description When this step reached a terminal status; null while the step
-     * is still in flight.
+     * @description Last modification time of the terminal step-execution row (the
+     * engine reuses one row across retries, so this is the last modification, not
+     * per-attempt); null while the step is still in flight.
      */
     public Datetime endedAt { get; private set; }
     /**
-     * @description Elapsed time from `startedAt` to `endedAt` in milliseconds;
-     * null while the step is still in flight.
+     * @description Total wall-clock from `startedAt` to `endedAt` in milliseconds,
+     * across ALL attempts including retry backoff — not a single attempt's
+     * duration, because the engine reuses one step-execution row for every retry.
+     * Use `attempt` to disambiguate a retried row. Null while in flight.
      */
-    public Long durationMs { get; private set; }
+    public Long totalDurationMs { get; private set; }
     /** @description Failure detail for a failed step; null when none is recorded. */
     public String errorMessage { get; private set; }
     /**
      * @description True when this row is a compensation (rollback) execution,
-     * false for a forward execution.
+     * false for a forward execution. Convention-derived: it is inferred from the
+     * step name ending in the engine's `_Compensate` suffix, so a step an author
+     * manually names ending in `_Compensate` would be a false positive.
      */
     public Boolean isCompensation { get; private set; }
 
     /**
      * @description Builds a fully-populated history entry from a queried
-     * step-execution row. Terminality (and therefore `endedAt`/`durationMs`), the
-     * compensation flag, and the normalized attempt count are derived here so the
-     * read layer never touches the private setters. Used by the extracted read
+     * step-execution row. Terminality (and therefore `endedAt`/`totalDurationMs`),
+     * the compensation flag, and the normalized attempt count are derived here so
+     * the read layer never touches the private setters. Used by the extracted read
      * layer ({@link WorkflowHistoryRead}).
      * @param row the queried `Workflow_Step_Execution__c` row to project
      */
@@ -296,7 +304,7 @@ public inherited sharing class WorkflowEngine {
         row.Status__c
       );
       this.endedAt = isTerminal ? row.LastModifiedDate : null;
-      this.durationMs = (isTerminal &&
+      this.totalDurationMs = (isTerminal &&
         this.startedAt != null &&
         this.endedAt != null)
         ? this.endedAt.getTime() - this.startedAt.getTime()
@@ -326,17 +334,33 @@ public inherited sharing class WorkflowEngine {
      * {@link WorkflowHistoryRead#MAX_HISTORY_ROWS} rows.
      */
     public Boolean isTruncated { get; private set; }
+    /**
+     * @description The real total number of step executions for the instance.
+     * Equals `entries.size()` in the common (untruncated) case, where it costs no
+     * extra SOQL. When `isTruncated` is true, the read layer supplies the true
+     * total via a single `COUNT()` query so callers can still learn the full size
+     * even though `entries` is capped — that extra query runs ONLY on the
+     * truncated path, keeping the common case at one query.
+     */
+    public Integer totalCount { get; private set; }
 
     /**
      * @description Projects a set of queried, append-ordered step-execution rows
      * for one instance into the capped `entries` list, setting `isTruncated` when
      * the input held more rows than the cap. Mirrors the projecting constructor of
      * {@link WorkflowStatus}; used by the extracted read layer
-     * ({@link WorkflowHistoryRead}).
+     * ({@link WorkflowHistoryRead}). The read layer passes `totalCount` (the real
+     * step total) — equal to the retained row count when untruncated, or a
+     * `COUNT()`-derived total when truncated — so this DTO stays SOQL-free.
      * @param rows the instance's step-execution rows in append order
      * @param rowCap the maximum number of entries to retain
+     * @param totalCount the real total step-execution count for the instance
      */
-    public StepHistory(List<Workflow_Step_Execution__c> rows, Integer rowCap) {
+    public StepHistory(
+      List<Workflow_Step_Execution__c> rows,
+      Integer rowCap,
+      Integer totalCount
+    ) {
       this.entries = new List<StepHistoryEntry>();
       Integer rowCount = rows == null ? 0 : rows.size();
       this.isTruncated = rowCount > rowCap;
@@ -344,6 +368,7 @@ public inherited sharing class WorkflowEngine {
       for (Integer i = 0; i < take; i++) {
         this.entries.add(new StepHistoryEntry(rows[i]));
       }
+      this.totalCount = totalCount;
     }
   }
 

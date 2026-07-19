@@ -69,6 +69,11 @@ private class WorkflowEngineGetHistoryTest {
         'All three steps returned'
       );
       System.assertEquals(
+        3,
+        history.totalCount,
+        'totalCount equals entries.size() when untruncated'
+      );
+      System.assertEquals(
         'StepOne',
         history.entries[0].stepName,
         'First in append order'
@@ -139,10 +144,13 @@ private class WorkflowEngineGetHistoryTest {
       );
       System.assertNotEquals(
         null,
-        terminal.durationMs,
-        'Terminal step has durationMs'
+        terminal.totalDurationMs,
+        'Terminal step has totalDurationMs'
       );
-      System.assert(terminal.durationMs >= 0, 'durationMs is non-negative');
+      System.assert(
+        terminal.totalDurationMs >= 0,
+        'totalDurationMs is non-negative'
+      );
 
       WorkflowEngine.StepHistoryEntry inFlight = history.entries[1];
       System.assertEquals(
@@ -152,8 +160,8 @@ private class WorkflowEngineGetHistoryTest {
       );
       System.assertEquals(
         null,
-        inFlight.durationMs,
-        'In-flight step has null durationMs'
+        inFlight.totalDurationMs,
+        'In-flight step has null totalDurationMs'
       );
     }
   }
@@ -289,6 +297,81 @@ private class WorkflowEngineGetHistoryTest {
         true,
         history.isTruncated,
         'Over-cap history is flagged truncated'
+      );
+      System.assertEquals(
+        cap + 5,
+        history.totalCount,
+        'Truncated totalCount reports the real total, not the capped size'
+      );
+    }
+  }
+
+  // ─── totalCount: untruncated stays at one SOQL; truncated reports real total ─
+
+  @IsTest
+  static void testGetHistoryTotalCount() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Integer cap = WorkflowHistoryRead.MAX_HISTORY_ROWS;
+
+      // Untruncated instance: three steps.
+      Workflow_Instance__c small = newInstance('total-small');
+      Database.insert(
+        new List<Workflow_Step_Execution__c>{
+          step(small.Id, 'S1', 'Completed'),
+          step(small.Id, 'S2', 'Completed'),
+          step(small.Id, 'S3', 'Running')
+        },
+        AccessLevel.SYSTEM_MODE
+      );
+
+      // Truncated instance: cap + 5 steps.
+      Workflow_Instance__c big = newInstance('total-big');
+      List<Workflow_Step_Execution__c> bigRows = new List<Workflow_Step_Execution__c>();
+      for (Integer i = 0; i < cap + 5; i++) {
+        bigRows.add(step(big.Id, 'B' + i, 'Completed'));
+      }
+      Database.insert(bigRows, AccessLevel.SYSTEM_MODE);
+
+      Test.startTest();
+      // The untruncated single-instance read must cost exactly one SOQL query
+      // (no COUNT, no existence probe).
+      Integer before = Limits.getQueries();
+      WorkflowEngine.StepHistory smallHistory = WorkflowHistoryRead.getHistory(
+        small.Id
+      );
+      Integer used = Limits.getQueries() - before;
+      WorkflowEngine.StepHistory bigHistory = WorkflowHistoryRead.getHistory(
+        big.Id
+      );
+      Test.stopTest();
+
+      System.assertEquals(
+        1,
+        used,
+        'Untruncated single read stays at exactly one SOQL query'
+      );
+      System.assertEquals(false, smallHistory.isTruncated, 'small untruncated');
+      System.assertEquals(
+        smallHistory.entries.size(),
+        smallHistory.totalCount,
+        'Untruncated totalCount equals entries.size()'
+      );
+      System.assertEquals(3, smallHistory.totalCount, 'Real total is three');
+
+      System.assertEquals(true, bigHistory.isTruncated, 'big truncated');
+      System.assertEquals(
+        cap,
+        bigHistory.entries.size(),
+        'Entries capped at MAX_HISTORY_ROWS'
+      );
+      System.assert(
+        bigHistory.totalCount > cap,
+        'Truncated totalCount exceeds the cap'
+      );
+      System.assertEquals(
+        cap + 5,
+        bigHistory.totalCount,
+        'Truncated totalCount is the real total'
       );
     }
   }
