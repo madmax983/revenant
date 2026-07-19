@@ -1,0 +1,403 @@
+@IsTest
+private class WorkflowEngineGetHistoryTest {
+  // ─── helpers ─────────────────────────────────────────────────────────────
+
+  // Inserts a workflow instance and returns it. All DML runs in system mode so
+  // the test never depends on the running user's object/field permissions.
+  private static Workflow_Instance__c newInstance(String correlationKey) {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineGetHistoryTest.StubWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = correlationKey
+    );
+    Database.insert(inst, AccessLevel.SYSTEM_MODE);
+    return inst;
+  }
+
+  // Builds (does not insert) a step-execution row for an instance.
+  private static Workflow_Step_Execution__c step(
+    Id instanceId,
+    String stepName,
+    String status,
+    Integer retryCount,
+    String errorDetails
+  ) {
+    return new Workflow_Step_Execution__c(
+      Workflow_Instance__c = instanceId,
+      Step_Name__c = stepName,
+      Status__c = status,
+      Retry_Count__c = retryCount,
+      Error_Details__c = errorDetails
+    );
+  }
+
+  // A well-formed but non-existent Workflow_Instance__c Id.
+  private static Id unknownInstanceId() {
+    return (Id) (Workflow_Instance__c.SObjectType.getDescribe(
+        SObjectDescribeOptions.DEFERRED
+      )
+      .getKeyPrefix() + '000000000001');
+  }
+
+  // ─── getHistory(Id) — ordering + field projection ─────────────────────────
+
+  @IsTest
+  static void testGetHistoryOrderedByExecution() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = newInstance('order-1');
+      Workflow_Step_Execution__c s1 = step(
+        inst.Id,
+        'StepOne',
+        'Completed',
+        0,
+        null
+      );
+      Workflow_Step_Execution__c s2 = step(
+        inst.Id,
+        'StepTwo',
+        'Completed',
+        2,
+        null
+      );
+      Workflow_Step_Execution__c s3 = step(
+        inst.Id,
+        'StepThree',
+        'Running',
+        0,
+        null
+      );
+      Database.insert(
+        new List<Workflow_Step_Execution__c>{ s1, s2, s3 },
+        AccessLevel.SYSTEM_MODE
+      );
+      // Force ascending append order regardless of insert timing.
+      Test.setCreatedDate(s1.Id, DateTime.now().addMinutes(-30));
+      Test.setCreatedDate(s2.Id, DateTime.now().addMinutes(-20));
+      Test.setCreatedDate(s3.Id, DateTime.now().addMinutes(-10));
+
+      Test.startTest();
+      WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(inst.Id);
+      Test.stopTest();
+
+      System.assertNotEquals(null, history, 'Known instance returns a wrapper');
+      System.assertEquals(false, history.isTruncated, 'Not truncated');
+      System.assertEquals(
+        3,
+        history.entries.size(),
+        'All three steps returned'
+      );
+      System.assertEquals(
+        'StepOne',
+        history.entries[0].stepName,
+        'First in append order'
+      );
+      System.assertEquals(
+        'StepTwo',
+        history.entries[1].stepName,
+        'Second in append order'
+      );
+      System.assertEquals(
+        'StepThree',
+        history.entries[2].stepName,
+        'Third in append order'
+      );
+      System.assertEquals(
+        2,
+        history.entries[1].attempt,
+        'attempt maps to Retry_Count__c'
+      );
+      System.assertEquals(
+        s1.Id,
+        history.entries[0].executionId,
+        'executionId maps to the row Id'
+      );
+      System.assertEquals(
+        false,
+        history.entries[0].isCompensation,
+        'Forward step is not a compensation'
+      );
+    }
+  }
+
+  // ─── terminal vs in-flight timing ─────────────────────────────────────────
+
+  @IsTest
+  static void testGetHistoryTerminalAndInFlightTiming() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = newInstance('timing-1');
+      Workflow_Step_Execution__c done = step(
+        inst.Id,
+        'DoneStep',
+        'Completed',
+        0,
+        null
+      );
+      Workflow_Step_Execution__c running = step(
+        inst.Id,
+        'RunningStep',
+        'Running',
+        0,
+        null
+      );
+      Database.insert(
+        new List<Workflow_Step_Execution__c>{ done, running },
+        AccessLevel.SYSTEM_MODE
+      );
+      Test.setCreatedDate(done.Id, DateTime.now().addMinutes(-30));
+      Test.setCreatedDate(running.Id, DateTime.now().addMinutes(-20));
+
+      Test.startTest();
+      WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(inst.Id);
+      Test.stopTest();
+
+      WorkflowEngine.StepHistoryEntry terminal = history.entries[0];
+      System.assertNotEquals(
+        null,
+        terminal.startedAt,
+        'startedAt always populated'
+      );
+      System.assertNotEquals(
+        null,
+        terminal.endedAt,
+        'Terminal step has endedAt'
+      );
+      System.assertNotEquals(
+        null,
+        terminal.durationMs,
+        'Terminal step has durationMs'
+      );
+      System.assert(terminal.durationMs >= 0, 'durationMs is non-negative');
+
+      WorkflowEngine.StepHistoryEntry inFlight = history.entries[1];
+      System.assertEquals(
+        null,
+        inFlight.endedAt,
+        'In-flight step has null endedAt'
+      );
+      System.assertEquals(
+        null,
+        inFlight.durationMs,
+        'In-flight step has null durationMs'
+      );
+    }
+  }
+
+  // ─── compensation flag + error message ────────────────────────────────────
+
+  @IsTest
+  static void testGetHistoryCompensationAndError() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = newInstance('comp-1');
+      Workflow_Step_Execution__c forwardFail = step(
+        inst.Id,
+        'ChargeCard',
+        'Failed',
+        3,
+        'Gateway timeout'
+      );
+      Workflow_Step_Execution__c comp = step(
+        inst.Id,
+        'ChargeCard_Compensate',
+        'Compensated',
+        0,
+        null
+      );
+      Database.insert(
+        new List<Workflow_Step_Execution__c>{ forwardFail, comp },
+        AccessLevel.SYSTEM_MODE
+      );
+      Test.setCreatedDate(forwardFail.Id, DateTime.now().addMinutes(-30));
+      Test.setCreatedDate(comp.Id, DateTime.now().addMinutes(-20));
+
+      Test.startTest();
+      WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(inst.Id);
+      Test.stopTest();
+
+      System.assertEquals(
+        'Gateway timeout',
+        history.entries[0].errorMessage,
+        'errorMessage maps to Error_Details__c'
+      );
+      System.assertEquals(
+        false,
+        history.entries[0].isCompensation,
+        'Forward execution is not a compensation'
+      );
+      System.assertEquals(
+        true,
+        history.entries[1].isCompensation,
+        '_Compensate suffix marks a compensation execution'
+      );
+      System.assertEquals(
+        null,
+        history.entries[1].errorMessage,
+        'No error on the successful compensation'
+      );
+    }
+  }
+
+  // ─── known instance with no steps → empty list (not null) ─────────────────
+
+  @IsTest
+  static void testGetHistoryKnownInstanceNoStepsIsEmpty() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = newInstance('empty-1');
+
+      Test.startTest();
+      WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(inst.Id);
+      Test.stopTest();
+
+      System.assertNotEquals(
+        null,
+        history,
+        'Known instance never returns null'
+      );
+      System.assertEquals(0, history.entries.size(), 'Empty entries');
+      System.assertEquals(false, history.isTruncated, 'Empty is not truncated');
+    }
+  }
+
+  // ─── unknown / null Id → null ─────────────────────────────────────────────
+
+  @IsTest
+  static void testGetHistoryUnknownIdReturnsNull() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(
+        unknownInstanceId()
+      );
+      Test.stopTest();
+
+      System.assertEquals(null, history, 'Unknown Id returns null');
+    }
+  }
+
+  @IsTest
+  static void testGetHistoryNullIdReturnsNull() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      System.assertEquals(
+        null,
+        WorkflowEngine.getHistory((Id) null),
+        'Null Id returns null'
+      );
+    }
+  }
+
+  // ─── truncation / row cap ─────────────────────────────────────────────────
+
+  @IsTest
+  static void testGetHistoryTruncatesAtRowCap() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = newInstance('trunc-1');
+      Integer cap = WorkflowHistoryRead.MAX_HISTORY_ROWS;
+      List<Workflow_Step_Execution__c> rows = new List<Workflow_Step_Execution__c>();
+      for (Integer i = 0; i < cap + 5; i++) {
+        rows.add(step(inst.Id, 'Step' + i, 'Completed', 0, null));
+      }
+      Database.insert(rows, AccessLevel.SYSTEM_MODE);
+
+      Test.startTest();
+      WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(inst.Id);
+      Test.stopTest();
+
+      System.assertEquals(
+        cap,
+        history.entries.size(),
+        'Entries capped at MAX_HISTORY_ROWS'
+      );
+      System.assertEquals(
+        true,
+        history.isTruncated,
+        'Over-cap history is flagged truncated'
+      );
+    }
+  }
+
+  // ─── bulk map form ────────────────────────────────────────────────────────
+
+  @IsTest
+  static void testGetHistoryBulkMap() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c instA = newInstance('bulk-a');
+      Workflow_Instance__c instB = newInstance('bulk-b');
+      Workflow_Instance__c instEmpty = newInstance('bulk-empty');
+
+      Workflow_Step_Execution__c a1 = step(
+        instA.Id,
+        'A1',
+        'Completed',
+        0,
+        null
+      );
+      Workflow_Step_Execution__c a2 = step(instA.Id, 'A2', 'Running', 0, null);
+      Workflow_Step_Execution__c b1 = step(
+        instB.Id,
+        'B1',
+        'Completed',
+        0,
+        null
+      );
+      Database.insert(
+        new List<Workflow_Step_Execution__c>{ a1, a2, b1 },
+        AccessLevel.SYSTEM_MODE
+      );
+      Test.setCreatedDate(a1.Id, DateTime.now().addMinutes(-30));
+      Test.setCreatedDate(a2.Id, DateTime.now().addMinutes(-20));
+
+      Id unknownId = unknownInstanceId();
+
+      Test.startTest();
+      Map<Id, WorkflowEngine.StepHistory> byId = WorkflowEngine.getHistory(
+        new List<Id>{ instA.Id, instB.Id, instEmpty.Id, unknownId }
+      );
+      Test.stopTest();
+
+      System.assertEquals(3, byId.size(), 'Only known instances are keyed');
+      System.assertEquals(
+        false,
+        byId.containsKey(unknownId),
+        'Unknown Id is absent from the map'
+      );
+      System.assertEquals(
+        2,
+        byId.get(instA.Id).entries.size(),
+        'Instance A has two steps'
+      );
+      System.assertEquals(
+        'A1',
+        byId.get(instA.Id).entries[0].stepName,
+        'Instance A ordered by append'
+      );
+      System.assertEquals(
+        1,
+        byId.get(instB.Id).entries.size(),
+        'Instance B has one step'
+      );
+      System.assert(
+        byId.containsKey(instEmpty.Id),
+        'Known-but-empty instance is present'
+      );
+      System.assertEquals(
+        0,
+        byId.get(instEmpty.Id).entries.size(),
+        'Empty instance has empty entries'
+      );
+    }
+  }
+
+  @IsTest
+  static void testGetHistoryBulkEmptyInputReturnsEmptyMap() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      System.assertEquals(
+        0,
+        WorkflowEngine.getHistory(new List<Id>()).size(),
+        'Empty input yields empty map'
+      );
+      System.assertEquals(
+        0,
+        WorkflowEngine.getHistory((List<Id>) null).size(),
+        'Null input yields empty map'
+      );
+    }
+  }
+}
