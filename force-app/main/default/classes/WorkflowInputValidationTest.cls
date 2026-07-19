@@ -5,9 +5,17 @@
  * WorkflowStartInvocableAction} outputs. The `ContractWorkflow` fixture below
  * implements both {@link WorkflowDefinition} (so the engine authorizes it) and
  * {@link ValidatedWorkflow} (so its start input is validated).
+ *
+ * This class is declared `public` (not `private`) on purpose: the engine
+ * authorizes a workflow by looking it up in `ApexTypeImplementor`
+ * (WorkflowStartInstanceBuilder.validateWorkflowAuthorization), which only
+ * surfaces public/global implementors. A `public` inner fixture of a `private`
+ * outer test class is not enumerable there and would fail authorization, so the
+ * outer class matches the proven shared-fixture pattern of the public
+ * `WorkflowEngineTest`.
  */
 @IsTest
-private class WorkflowInputValidationTest {
+public class WorkflowInputValidationTest {
   private static final String CONTRACT_WF = 'WorkflowInputValidationTest.ContractWorkflow';
   private static final String PLAIN_WF = 'WorkflowEngineTest.HappyWorkflow';
 
