@@ -91,27 +91,30 @@ public inherited sharing class WorkflowStartInvocableAction {
       StartRequest req = requests[i];
       if (req == null) {
         results[i] = nullResult();
+        continue;
+      }
+      // Opt-in input-contract validation (INV-51): validate this row in memory
+      // BEFORE it reaches any start path — the debounce path persists a
+      // Debounce_State__c row (itself an enqueue), so validation must run before
+      // that too. An invalid row yields a branchable failure result (isValid=false
+      // + a field-level validationError) and is neither routed to the engine nor
+      // armed for debounce, so nothing is inserted for it and its valid siblings
+      // are unaffected. A non-ValidatedWorkflow workflow yields no errors,
+      // preserving today's behavior exactly (including the debounce path's
+      // existing malformed-JSON fault via toDebounceRequest).
+      List<WorkflowInputFieldError> inputErrors = WorkflowInputValidator.collectErrors(
+        toValidationProbe(req)
+      );
+      if (!inputErrors.isEmpty()) {
+        results[i] = invalidResult(
+          WorkflowInputValidator.describeErrors(inputErrors)
+        );
       } else if (req.debounceSeconds != null) {
         debounceRequests.add(toDebounceRequest(req));
         results[i] = debouncedResult();
       } else {
-        // Opt-in input-contract validation (INV-51): validate this row in memory
-        // before it reaches the engine. An invalid row yields a branchable
-        // failure result (isValid=false + a field-level validationError) and is
-        // NOT routed to the engine, so no instance is started for it and its
-        // valid siblings are unaffected. A non-ValidatedWorkflow workflow yields
-        // no errors, preserving today's behavior exactly.
-        List<WorkflowInputFieldError> inputErrors = WorkflowInputValidator.collectErrors(
-          toValidationProbe(req)
-        );
-        if (!inputErrors.isEmpty()) {
-          results[i] = invalidResult(
-            WorkflowInputValidator.describeErrors(inputErrors)
-          );
-        } else {
-          engineRequests.add(toEngineRequest(req));
-          engineRequestIndices.add(i);
-        }
+        engineRequests.add(toEngineRequest(req));
+        engineRequestIndices.add(i);
       }
     }
 

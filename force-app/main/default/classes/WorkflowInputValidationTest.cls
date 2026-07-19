@@ -23,8 +23,8 @@ public class WorkflowInputValidationTest {
 
   /**
    * @description Validated workflow fixture: requires a String `accountId` and a
-   * numeric `amount`; type-checks optional `vipOnboarding` (Boolean) and
-   * `startDate` (Date) when present.
+   * numeric `amount`; type-checks optional `vipOnboarding` (Boolean), `startDate`
+   * (Date) and `startTime` (Datetime) when present.
    */
   public class ContractWorkflow implements WorkflowDefinition, ValidatedWorkflow {
     /**
@@ -36,7 +36,8 @@ public class WorkflowInputValidationTest {
         .require('accountId', WorkflowInputType.STRING_TYPE)
         .require('amount', WorkflowInputType.DECIMAL_TYPE)
         .optional('vipOnboarding', WorkflowInputType.BOOLEAN_TYPE)
-        .optional('startDate', WorkflowInputType.DATE_TYPE);
+        .optional('startDate', WorkflowInputType.DATE_TYPE)
+        .optional('startTime', WorkflowInputType.DATETIME_TYPE);
     }
 
     /**
@@ -417,6 +418,236 @@ public class WorkflowInputValidationTest {
       System.assertNotEquals(null, results[0].validationError);
       System.assertEquals(null, results[0].workflowInstanceId);
       System.assertEquals(0, instanceCountForKey('VIV_inv_malformed'));
+    }
+  }
+
+  // ── FIX 1: debounce start path validates before persistence ──────────────────
+
+  private static Integer debounceStateCountForKey(String key) {
+    return [
+      SELECT COUNT()
+      FROM Debounce_State__c
+      WHERE Correlation_Key__c = :key
+    ];
+  }
+
+  @IsTest
+  static void testInvocableDebounceInvalidIsBranchableNoPersist() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowStartInvocableAction.StartRequest bad = new WorkflowStartInvocableAction.StartRequest();
+      bad.workflowName = CONTRACT_WF;
+      bad.correlationKey = 'VIV_deb_bad';
+      bad.inputJson = '{"amount":5}'; // missing required accountId
+      bad.debounceSeconds = 10;
+
+      Test.startTest();
+      List<WorkflowStartInvocableAction.StartResult> results = WorkflowStartInvocableAction.startWorkflow(
+        new List<WorkflowStartInvocableAction.StartRequest>{ bad }
+      );
+      Test.stopTest();
+
+      System.assertEquals(1, results.size());
+      System.assertEquals(false, results[0].isValid);
+      System.assertNotEquals(null, results[0].validationError);
+      System.assert(results[0].validationError.contains('accountId'));
+      System.assertEquals(null, results[0].workflowInstanceId);
+      // A rejected debounced input persists nothing: no debounce state, no instance.
+      System.assertEquals(0, debounceStateCountForKey('VIV_deb_bad'));
+      System.assertEquals(0, instanceCountForKey('VIV_deb_bad'));
+    }
+  }
+
+  @IsTest
+  static void testInvocableDebounceMalformedJsonIsBranchableNoPersist() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowStartInvocableAction.StartRequest bad = new WorkflowStartInvocableAction.StartRequest();
+      bad.workflowName = CONTRACT_WF;
+      bad.correlationKey = 'VIV_deb_malformed';
+      bad.inputJson = '{"accountId":';
+      bad.debounceSeconds = 10;
+
+      Test.startTest();
+      List<WorkflowStartInvocableAction.StartResult> results = WorkflowStartInvocableAction.startWorkflow(
+        new List<WorkflowStartInvocableAction.StartRequest>{ bad }
+      );
+      Test.stopTest();
+
+      System.assertEquals(1, results.size());
+      System.assertEquals(false, results[0].isValid);
+      System.assertNotEquals(null, results[0].validationError);
+      System.assertEquals(0, debounceStateCountForKey('VIV_deb_malformed'));
+    }
+  }
+
+  @IsTest
+  static void testInvocableDebounceValidPersists() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowStartInvocableAction.StartRequest good = new WorkflowStartInvocableAction.StartRequest();
+      good.workflowName = CONTRACT_WF;
+      good.correlationKey = 'VIV_deb_good';
+      good.inputJson = JSON.serialize(validInput());
+      good.debounceSeconds = 10;
+
+      Test.startTest();
+      List<WorkflowStartInvocableAction.StartResult> results = WorkflowStartInvocableAction.startWorkflow(
+        new List<WorkflowStartInvocableAction.StartRequest>{ good }
+      );
+      Test.stopTest();
+
+      System.assertEquals(1, results.size());
+      System.assertEquals(true, results[0].isValid);
+      System.assertEquals(null, results[0].validationError);
+      // Debounced: no instance started immediately, but the state IS armed.
+      System.assertEquals(null, results[0].workflowInstanceId);
+      System.assertEquals(1, debounceStateCountForKey('VIV_deb_good'));
+    }
+  }
+
+  // ── FIX 2: DATE_TYPE / DATETIME_TYPE validate identically for Map & JSON ──────
+
+  @IsTest
+  static void testDatePassesAsNativeMapAndJsonString() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Map form carrying a native Apex Date.
+      WorkflowEngine.StartRequest mapReq = new WorkflowEngine.StartRequest(
+        CONTRACT_WF,
+        'VIV_date_map',
+        new Map<String, Object>{
+          'accountId' => 'ACME-ACCOUNT-1',
+          'amount' => 10,
+          'startDate' => Date.newInstance(2026, 7, 19)
+        }
+      );
+      // JSON string form carrying the equivalent ISO date.
+      WorkflowEngine.StartRequest jsonReq = new WorkflowEngine.StartRequest(
+        CONTRACT_WF,
+        'VIV_date_json',
+        null
+      );
+      jsonReq.inputJson = '{"accountId":"ACME-ACCOUNT-1","amount":10,"startDate":"2026-07-19"}';
+
+      System.assertEquals(
+        true,
+        WorkflowInputValidator.collectErrors(mapReq).isEmpty(),
+        'Native Apex Date in a Map must satisfy DATE_TYPE'
+      );
+      System.assertEquals(
+        true,
+        WorkflowInputValidator.collectErrors(jsonReq).isEmpty(),
+        'ISO date string must satisfy DATE_TYPE'
+      );
+    }
+  }
+
+  @IsTest
+  static void testDatetimePassesAsNativeMapAndJsonString() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.StartRequest mapReq = new WorkflowEngine.StartRequest(
+        CONTRACT_WF,
+        'VIV_dt_map',
+        new Map<String, Object>{
+          'accountId' => 'ACME-ACCOUNT-1',
+          'amount' => 10,
+          'startTime' => Datetime.newInstanceGmt(2026, 7, 19, 8, 30, 0)
+        }
+      );
+      WorkflowEngine.StartRequest jsonReq = new WorkflowEngine.StartRequest(
+        CONTRACT_WF,
+        'VIV_dt_json',
+        null
+      );
+      jsonReq.inputJson = '{"accountId":"ACME-ACCOUNT-1","amount":10,"startTime":"2026-07-19T08:30:00.000Z"}';
+
+      System.assertEquals(
+        true,
+        WorkflowInputValidator.collectErrors(mapReq).isEmpty(),
+        'Native Apex Datetime in a Map must satisfy DATETIME_TYPE'
+      );
+      System.assertEquals(
+        true,
+        WorkflowInputValidator.collectErrors(jsonReq).isEmpty(),
+        'ISO datetime string must satisfy DATETIME_TYPE'
+      );
+    }
+  }
+
+  @IsTest
+  static void testBadDateFailsWrongTypeBothForms() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.StartRequest mapReq = new WorkflowEngine.StartRequest(
+        CONTRACT_WF,
+        'VIV_baddate_map',
+        new Map<String, Object>{
+          'accountId' => 'ACME-ACCOUNT-1',
+          'amount' => 10,
+          'startDate' => 'not-a-date'
+        }
+      );
+      WorkflowEngine.StartRequest jsonReq = new WorkflowEngine.StartRequest(
+        CONTRACT_WF,
+        'VIV_baddate_json',
+        null
+      );
+      jsonReq.inputJson = '{"accountId":"ACME-ACCOUNT-1","amount":10,"startDate":"not-a-date"}';
+
+      List<WorkflowInputFieldError> mapErrors = WorkflowInputValidator.collectErrors(
+        mapReq
+      );
+      List<WorkflowInputFieldError> jsonErrors = WorkflowInputValidator.collectErrors(
+        jsonReq
+      );
+      System.assertEquals(1, mapErrors.size(), 'Map form: one violation');
+      System.assertEquals('startDate', mapErrors[0].fieldName);
+      System.assertEquals(
+        WorkflowInputErrorReason.WRONG_TYPE,
+        mapErrors[0].reason
+      );
+      System.assertEquals(1, jsonErrors.size(), 'JSON form: one violation');
+      System.assertEquals('startDate', jsonErrors[0].fieldName);
+      System.assertEquals(
+        WorkflowInputErrorReason.WRONG_TYPE,
+        jsonErrors[0].reason
+      );
+    }
+  }
+
+  @IsTest
+  static void testBadDatetimeFailsWrongTypeBothForms() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.StartRequest mapReq = new WorkflowEngine.StartRequest(
+        CONTRACT_WF,
+        'VIV_baddt_map',
+        new Map<String, Object>{
+          'accountId' => 'ACME-ACCOUNT-1',
+          'amount' => 10,
+          'startTime' => 'not-a-datetime'
+        }
+      );
+      WorkflowEngine.StartRequest jsonReq = new WorkflowEngine.StartRequest(
+        CONTRACT_WF,
+        'VIV_baddt_json',
+        null
+      );
+      jsonReq.inputJson = '{"accountId":"ACME-ACCOUNT-1","amount":10,"startTime":"not-a-datetime"}';
+
+      List<WorkflowInputFieldError> mapErrors = WorkflowInputValidator.collectErrors(
+        mapReq
+      );
+      List<WorkflowInputFieldError> jsonErrors = WorkflowInputValidator.collectErrors(
+        jsonReq
+      );
+      System.assertEquals(1, mapErrors.size(), 'Map form: one violation');
+      System.assertEquals('startTime', mapErrors[0].fieldName);
+      System.assertEquals(
+        WorkflowInputErrorReason.WRONG_TYPE,
+        mapErrors[0].reason
+      );
+      System.assertEquals(1, jsonErrors.size(), 'JSON form: one violation');
+      System.assertEquals('startTime', jsonErrors[0].fieldName);
+      System.assertEquals(
+        WorkflowInputErrorReason.WRONG_TYPE,
+        jsonErrors[0].reason
+      );
     }
   }
 }

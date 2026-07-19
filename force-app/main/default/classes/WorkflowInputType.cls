@@ -18,9 +18,13 @@
  *                     `Decimal`); the issue's generic "Number" maps here.
  * - `BOOLEAN_TYPE`  — the value is a JSON boolean; the strings "true"/"false" do
  *                     NOT satisfy it.
- * - `DATE_TYPE`     — the value is a JSON string parseable as an ISO-8601 date
- *                     (`yyyy-MM-dd`).
- * - `DATETIME_TYPE` — the value is a JSON string parseable as an ISO-8601 datetime.
+ * - `DATE_TYPE`     — an ISO-8601 date (`yyyy-MM-dd`). Accepted as a JSON string,
+ *                     or as a native Apex `Date` supplied in a `Map` start input
+ *                     (the engine normalizes it to its ISO form before checking,
+ *                     so both input forms validate identically).
+ * - `DATETIME_TYPE` — an ISO-8601 datetime. Accepted as a JSON string, or as a
+ *                     native Apex `Datetime` supplied in a `Map` start input
+ *                     (normalized to its ISO form before checking).
  */
 public enum WorkflowInputType {
   STRING_TYPE,
