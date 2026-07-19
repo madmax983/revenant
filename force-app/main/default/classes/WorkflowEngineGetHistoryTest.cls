@@ -174,7 +174,7 @@ private class WorkflowEngineGetHistoryTest {
     }
   }
 
-  // ─── compensation flag + hasError + per-step error detail ──────────────────
+  // ─── compensation flag + per-step error detail (getStepError) ──────────────
 
   @IsTest
   static void testGetHistoryCompensationAndError() {
@@ -205,10 +205,12 @@ private class WorkflowEngineGetHistoryTest {
       );
       Test.stopTest();
 
+      // The forward step ended in a failure status; attempt records the retries.
+      System.assertEquals('Failed', history.entries[0].status, 'Failed status');
       System.assertEquals(
-        true,
-        history.entries[0].hasError,
-        'hasError is true when Error_Details__c is populated'
+        3,
+        history.entries[0].attempt,
+        'attempt reflects retries'
       );
       System.assertEquals(
         false,
@@ -219,11 +221,6 @@ private class WorkflowEngineGetHistoryTest {
         true,
         history.entries[1].isCompensation,
         '_Compensate suffix marks a compensation execution'
-      );
-      System.assertEquals(
-        false,
-        history.entries[1].hasError,
-        'No error on the successful compensation'
       );
       // The timeline never carries the error text; it is fetched per-step.
       System.assertEquals(
@@ -244,10 +241,10 @@ private class WorkflowEngineGetHistoryTest {
     }
   }
 
-  // ─── hasError reflects populated detail, not status (retried-then-succeeded) ─
+  // ─── getStepError returns retained detail on a retried-then-succeeded row ────
 
   @IsTest
-  static void testGetHistoryHasErrorIndependentOfStatus() {
+  static void testGetStepErrorOnRetriedThenSucceededRow() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c inst = newInstance('retried-1');
       // The engine reuses one row across retries: a step that errored then retried
@@ -270,14 +267,15 @@ private class WorkflowEngineGetHistoryTest {
       WorkflowEngine.StepHistoryEntry entry = history.entries[0];
       System.assertEquals('Completed', entry.status, 'Terminal-success status');
       System.assertEquals(
-        true,
-        entry.hasError,
-        'hasError reflects populated Error_Details__c even on a succeeded retry'
+        2,
+        entry.attempt,
+        'attempt > 0 signals it was retried'
       );
+      // Even under a success status, the retained error detail is still fetchable.
       System.assertEquals(
         'Transient 503 on attempt 1',
         WorkflowHistoryRead.getStepError(entry.executionId),
-        'The retained error detail is still fetchable'
+        'getStepError returns the retained detail regardless of status'
       );
     }
   }
@@ -395,9 +393,8 @@ private class WorkflowEngineGetHistoryTest {
       Database.insert(bigRows, AccessLevel.SYSTEM_MODE);
 
       Test.startTest();
-      // The untruncated single-instance read costs exactly two SOQL queries: the
-      // row scan plus the bounded Id-only error probe (no COUNT, no existence
-      // probe). The error probe is the heap-safety cost of not loading long-text.
+      // The untruncated single-instance read costs exactly one SOQL query (just
+      // the row scan — no COUNT, no existence probe).
       Integer before = Limits.getQueries();
       WorkflowEngine.StepHistory smallHistory = WorkflowHistoryRead.getHistory(
         small.Id
@@ -409,9 +406,9 @@ private class WorkflowEngineGetHistoryTest {
       Test.stopTest();
 
       System.assertEquals(
-        2,
+        1,
         used,
-        'Untruncated single read costs scan + Id-only error probe'
+        'Untruncated single read stays at exactly one SOQL query'
       );
       System.assertEquals(false, smallHistory.isTruncated, 'small untruncated');
       System.assertEquals(
@@ -626,19 +623,13 @@ private class WorkflowEngineGetHistoryTest {
   @IsTest
   static void testResolveScanLimitDesiredExceedsBudget() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      // Ideal exceeds budget: clamp to HALF of (remaining - margin), reserving the
-      // other half for the follow-up error probe — never the governor ceiling.
-      // (50000 - 1000) / 2 = 24500.
+      // Ideal exceeds budget: clamp to remaining budget minus the safety margin.
+      // The scan is the last query, so it may use the full remaining budget.
+      // 50000 - 1000 = 49000.
       System.assertEquals(
-        24500,
+        49000,
         WorkflowHistoryRead.resolveScanLimit(100000, 50000),
-        'desired above budget clamps to half of (budget - margin)'
-      );
-      // Boundary: (2000 - 1000) / 2 = 500 exactly.
-      System.assertEquals(
-        500,
-        WorkflowHistoryRead.resolveScanLimit(500, 2000),
-        'scan takes at most half the remaining budget'
+        'desired above budget clamps to budget minus safety margin'
       );
     }
   }
