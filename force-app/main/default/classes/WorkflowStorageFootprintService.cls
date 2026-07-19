@@ -28,6 +28,18 @@ public inherited sharing class WorkflowStorageFootprintService {
   // Number of bytes in one megabyte, for converting the MB allowance to a byte budget.
   private static final Long BYTES_PER_MB = 1048576;
 
+  // Default warning threshold (percent of the org's data-storage allowance) applied when the
+  // Default Revenant_Config__mdt record or its Storage_Warning_Threshold_Percent__c field is
+  // absent. The panel flips to a warning state at or above this percentage.
+  @TestVisible
+  private static final Decimal DEFAULT_WARNING_THRESHOLD_PERCENT = 75;
+
+  // Test-only override for the warning threshold. When non-null it wins over the metadata read
+  // so unit tests can drive the over-threshold classification both ways without deploying
+  // config records.
+  @TestVisible
+  private static Decimal thresholdOverride = null;
+
   /**
    * @description Returns the Revenant data-storage footprint snapshot for the System Doctor
    * panel: per-object record counts, estimated bytes and 7-/30-day growth deltas; the summed
@@ -289,7 +301,7 @@ public inherited sharing class WorkflowStorageFootprintService {
   // DataStorageMB limit the percentage is 0 and hasStorageLimit is false so the panel can
   // degrade gracefully rather than divide by zero.
   private static Map<String, Object> allowanceMetrics(Long totalBytes) {
-    Decimal threshold = WorkflowEngine.storageWarningThresholdPercent;
+    Decimal threshold = warningThresholdPercent();
     Map<String, System.OrgLimit> limitsMap = System.OrgLimits.getMap();
     Integer usedMb = 0;
     Integer limitMb = 0;
@@ -318,6 +330,23 @@ public inherited sharing class WorkflowStorageFootprintService {
       'warningThresholdPercent' => threshold,
       'isOverThreshold' => hasLimit && percentOfAllowance >= threshold
     };
+  }
+
+  // Reads the operator-configured storage warning threshold from the Default
+  // Revenant_Config__mdt record via getInstance — a SOQL-free custom-metadata retrieval that
+  // adds no query/DML/FLS surface, matching how WorkflowFailureAlertEvaluator reads its config.
+  // Falls back to DEFAULT_WARNING_THRESHOLD_PERCENT (75) when the record or its
+  // Storage_Warning_Threshold_Percent__c field is absent. A non-null test override wins so unit
+  // tests can exercise both classification outcomes deterministically.
+  private static Decimal warningThresholdPercent() {
+    if (thresholdOverride != null) {
+      return thresholdOverride;
+    }
+    Revenant_Config__mdt config = Revenant_Config__mdt.getInstance('Default');
+    if (config != null && config.Storage_Warning_Threshold_Percent__c != null) {
+      return config.Storage_Warning_Threshold_Percent__c;
+    }
+    return DEFAULT_WARNING_THRESHOLD_PERCENT;
   }
 
   // Human-readable object label derived from the API name (strip the '__c' suffix, swap

@@ -164,10 +164,10 @@ private class WorkflowStorageFootprintServiceTest {
       Test.startTest();
       // A zero threshold classifies any non-zero footprint as over-threshold whenever the
       // org exposes a data-storage allowance.
-      WorkflowEngine.storageWarningThresholdPercent = 0;
+      WorkflowStorageFootprintService.thresholdOverride = 0;
       Map<String, Object> low = WorkflowDashboardController.getStorageFootprint();
       // An unreachable threshold never trips.
-      WorkflowEngine.storageWarningThresholdPercent = 999999;
+      WorkflowStorageFootprintService.thresholdOverride = 999999;
       Map<String, Object> high = WorkflowDashboardController.getStorageFootprint();
       Test.stopTest();
 

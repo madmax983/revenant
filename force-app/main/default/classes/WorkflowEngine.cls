@@ -36,11 +36,6 @@ public inherited sharing class WorkflowEngine {
   // Revenant_Config__mdt.Stale_Threshold_Minutes__c; default 60 minutes.
   public static Integer staleThresholdMinutes = 60;
   public static Integer reclaimThresholdMinutes = null;
-
-  // Percentage of the org's data-storage allowance at or above which the System Doctor
-  // Storage Footprint panel (#108) flips to a warning state. Configurable via
-  // Revenant_Config__mdt.Storage_Warning_Threshold_Percent__c; default 75%.
-  public static Decimal storageWarningThresholdPercent = 75;
   @TestVisible
   public static Datetime mockNow = null;
 
@@ -106,55 +101,44 @@ public inherited sharing class WorkflowEngine {
 
   static {
     try {
-      applyConfigOverrides();
+      List<Revenant_Config__mdt> configs = [
+        SELECT
+          Watchdog_Delay_Minutes__c,
+          Use_Dynamic_Scheduling__c,
+          Publish_Lifecycle_Events__c,
+          Dedup_Window_Minutes__c,
+          Stale_Threshold_Minutes__c,
+          Reclaim_Threshold_Minutes__c
+        FROM Revenant_Config__mdt
+        WHERE DeveloperName = 'Default'
+        WITH SYSTEM_MODE
+        LIMIT 1
+      ];
+      if (!configs.isEmpty()) {
+        if (configs[0].Watchdog_Delay_Minutes__c != null) {
+          watchdogDelayMinutes = configs[0]
+            .Watchdog_Delay_Minutes__c.intValue();
+        }
+        if (configs[0].Use_Dynamic_Scheduling__c != null) {
+          useDynamicScheduling = configs[0].Use_Dynamic_Scheduling__c;
+        }
+        if (configs[0].Publish_Lifecycle_Events__c != null) {
+          publishLifecycleEvents = configs[0].Publish_Lifecycle_Events__c;
+        }
+        if (configs[0].Dedup_Window_Minutes__c != null) {
+          dedupWindowMinutes = configs[0].Dedup_Window_Minutes__c.intValue();
+        }
+        if (configs[0].Stale_Threshold_Minutes__c != null) {
+          staleThresholdMinutes = configs[0]
+            .Stale_Threshold_Minutes__c.intValue();
+        }
+        if (configs[0].Reclaim_Threshold_Minutes__c != null) {
+          reclaimThresholdMinutes = configs[0]
+            .Reclaim_Threshold_Minutes__c.intValue();
+        }
+      }
     } catch (Exception ignored) {
       // Configuration metadata is optional; fall back to defaults on any read failure.
-    }
-  }
-
-  // Loads the Default Revenant_Config__mdt record and applies each non-null override onto the
-  // engine's static settings. Extracted from the static initializer and written with an early
-  // return so the per-field overrides stay flat (one nesting level) rather than nested inside
-  // an isEmpty guard.
-  private static void applyConfigOverrides() {
-    List<Revenant_Config__mdt> configs = [
-      SELECT
-        Watchdog_Delay_Minutes__c,
-        Use_Dynamic_Scheduling__c,
-        Publish_Lifecycle_Events__c,
-        Dedup_Window_Minutes__c,
-        Stale_Threshold_Minutes__c,
-        Reclaim_Threshold_Minutes__c,
-        Storage_Warning_Threshold_Percent__c
-      FROM Revenant_Config__mdt
-      WHERE DeveloperName = 'Default'
-      WITH SYSTEM_MODE
-      LIMIT 1
-    ];
-    if (configs.isEmpty()) {
-      return;
-    }
-    Revenant_Config__mdt cfg = configs[0];
-    if (cfg.Watchdog_Delay_Minutes__c != null) {
-      watchdogDelayMinutes = cfg.Watchdog_Delay_Minutes__c.intValue();
-    }
-    if (cfg.Use_Dynamic_Scheduling__c != null) {
-      useDynamicScheduling = cfg.Use_Dynamic_Scheduling__c;
-    }
-    if (cfg.Publish_Lifecycle_Events__c != null) {
-      publishLifecycleEvents = cfg.Publish_Lifecycle_Events__c;
-    }
-    if (cfg.Dedup_Window_Minutes__c != null) {
-      dedupWindowMinutes = cfg.Dedup_Window_Minutes__c.intValue();
-    }
-    if (cfg.Stale_Threshold_Minutes__c != null) {
-      staleThresholdMinutes = cfg.Stale_Threshold_Minutes__c.intValue();
-    }
-    if (cfg.Reclaim_Threshold_Minutes__c != null) {
-      reclaimThresholdMinutes = cfg.Reclaim_Threshold_Minutes__c.intValue();
-    }
-    if (cfg.Storage_Warning_Threshold_Percent__c != null) {
-      storageWarningThresholdPercent = cfg.Storage_Warning_Threshold_Percent__c;
     }
   }
 
