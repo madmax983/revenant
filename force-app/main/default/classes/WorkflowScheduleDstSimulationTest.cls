@@ -17,18 +17,17 @@ public class WorkflowScheduleDstSimulationTest {
   private static final String TOKYO = 'Asia/Tokyo';
   private static final Integer DAYS = 365; // 2026 is not a leap year.
 
-  // Walks `count` consecutive daily fires forward from `start`, interpreting the
+  // Walks DAYS consecutive daily fires forward from `start`, interpreting the
   // cron in the given zone. Each step advances one minute past the prior fire so
   // the inclusive nextFireTime returns the following window.
   private static List<DateTime> walkYear(
     String cron,
     DateTime start,
-    String zoneId,
-    Integer count
+    String zoneId
   ) {
     List<DateTime> fires = new List<DateTime>();
     DateTime cursor = start;
-    for (Integer i = 0; i < count; i++) {
+    for (Integer i = 0; i < DAYS; i++) {
       DateTime fire = WorkflowCronEvaluator.nextFireTime(cron, cursor, zoneId);
       System.assertNotEquals(
         null,
@@ -72,7 +71,7 @@ public class WorkflowScheduleDstSimulationTest {
       DateTime start = DateTime.newInstanceGmt(2026, 1, 1, 0, 0, 0);
 
       Test.startTest();
-      List<DateTime> fires = walkYear(NIGHTLY, start, NY, DAYS);
+      List<DateTime> fires = walkYear(NIGHTLY, start, NY);
       Test.stopTest();
 
       assertStrictlyIncreasing(fires);
@@ -117,7 +116,7 @@ public class WorkflowScheduleDstSimulationTest {
       DateTime start = DateTime.newInstanceGmt(2026, 1, 1, 0, 0, 0);
 
       Test.startTest();
-      List<DateTime> fires = walkYear(NIGHTLY, start, TOKYO, DAYS);
+      List<DateTime> fires = walkYear(NIGHTLY, start, TOKYO);
       Test.stopTest();
 
       assertStrictlyIncreasing(fires);
@@ -147,8 +146,8 @@ public class WorkflowScheduleDstSimulationTest {
         cursor = fire.addMinutes(1);
       }
       // Blank-zone and null-zone walks must reproduce it byte-for-byte.
-      List<DateTime> blankZone = walkYear(NIGHTLY, start, '', DAYS);
-      List<DateTime> nullZone = walkYear(NIGHTLY, start, null, DAYS);
+      List<DateTime> blankZone = walkYear(NIGHTLY, start, '');
+      List<DateTime> nullZone = walkYear(NIGHTLY, start, null);
       Test.stopTest();
 
       System.assertEquals(DAYS, baseline.size(), 'Baseline covers the year');

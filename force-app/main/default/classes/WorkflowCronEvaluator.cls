@@ -37,7 +37,7 @@ public inherited sharing class WorkflowCronEvaluator {
    * @return The matching fire time, or null if the expression is invalid or no match falls within the lookback window.
    */
   public static DateTime previousFireTime(String cronExpr, DateTime now) {
-    return previousFireTime(cronExpr, now, null);
+    return fireTime(cronExpr, now, false);
   }
 
   /**
@@ -56,10 +56,7 @@ public inherited sharing class WorkflowCronEvaluator {
     DateTime now,
     String zoneId
   ) {
-    if (String.isBlank(zoneId)) {
-      return fireTime(cronExpr, now, false);
-    }
-    return zoneFireTime(cronExpr, now, false, zoneId);
+    return WorkflowCronZones.previous(cronExpr, now, zoneId);
   }
 
   /**
@@ -70,7 +67,7 @@ public inherited sharing class WorkflowCronEvaluator {
    * @return The matching fire time, or null if the expression is invalid or no match falls within the lookahead window.
    */
   public static DateTime nextFireTime(String cronExpr, DateTime now) {
-    return nextFireTime(cronExpr, now, null);
+    return fireTime(cronExpr, now, true);
   }
 
   /**
@@ -89,10 +86,7 @@ public inherited sharing class WorkflowCronEvaluator {
     DateTime now,
     String zoneId
   ) {
-    if (String.isBlank(zoneId)) {
-      return fireTime(cronExpr, now, true);
-    }
-    return zoneFireTime(cronExpr, now, true, zoneId);
+    return WorkflowCronZones.next(cronExpr, now, zoneId);
   }
 
   /**
@@ -105,59 +99,23 @@ public inherited sharing class WorkflowCronEvaluator {
     return CronFieldParser.parse(cronExpr) != null;
   }
 
-  // Curated set of supported IANA time-zone ids. Salesforce's
-  // TimeZone.getTimeZone returns GMT for an unknown id rather than failing, so
-  // a supplied zone is validated against this explicit allow-list instead. The
-  // same set backs the editor's time-zone picker (WorkflowScheduleController).
-  private static final Set<String> SUPPORTED_ZONES = new Set<String>{
-    'UTC',
-    'Pacific/Honolulu',
-    'America/Anchorage',
-    'America/Los_Angeles',
-    'America/Phoenix',
-    'America/Denver',
-    'America/Chicago',
-    'America/New_York',
-    'America/Sao_Paulo',
-    'Europe/London',
-    'Europe/Paris',
-    'Europe/Berlin',
-    'Europe/Madrid',
-    'Europe/Moscow',
-    'Africa/Johannesburg',
-    'Asia/Dubai',
-    'Asia/Kolkata',
-    'Asia/Singapore',
-    'Asia/Shanghai',
-    'Asia/Tokyo',
-    'Australia/Sydney',
-    'Pacific/Auckland'
-  };
-
   /**
-   * @description Whether a schedule time zone is usable. A blank/null zone means UTC and is
-   * always valid (it preserves the pre-existing exact-GMT behavior). A non-blank zone must
-   * be one of the supported IANA ids: Salesforce's TimeZone API silently falls back to GMT
-   * for an unknown id, so validation is an explicit allow-list check rather than a round-trip.
+   * @description Whether a schedule time zone is usable (blank/null means UTC and is always
+   * valid). Delegates to WorkflowCronZones, which owns the supported-zone allow-list.
    * @param zoneId The candidate IANA time-zone id, or blank/null for UTC.
    * @return True if the zone is blank (UTC) or a supported IANA id, otherwise false.
    */
   public static Boolean isValidZone(String zoneId) {
-    if (String.isBlank(zoneId)) {
-      return true;
-    }
-    return SUPPORTED_ZONES.contains(zoneId);
+    return WorkflowCronZones.isZoneSupported(zoneId);
   }
 
   /**
-   * @description The supported IANA time-zone ids offered by the editor's time-zone picker,
-   * sorted alphabetically for a stable combobox ordering.
+   * @description The supported IANA time-zone ids offered by the editor's time-zone picker.
+   * Delegates to WorkflowCronZones.
    * @return The sorted list of supported IANA time-zone ids.
    */
   public static List<String> supportedZones() {
-    List<String> zones = new List<String>(SUPPORTED_ZONES);
-    zones.sort();
-    return zones;
+    return WorkflowCronZones.listZones();
   }
 
   // Walks day by day (backwards when forward=false, forwards when forward=true)
@@ -196,38 +154,6 @@ public inherited sharing class WorkflowCronEvaluator {
     }
 
     return null; // No match within the window.
-  }
-
-  // Zone-aware walk: reuse the exact UTC walk in the target zone's wall-clock
-  // "space". `now` is projected to the zone's wall clock as a pseudo-GMT
-  // DateTime (its Gmt fields ARE the local Y/M/D/H/M), so the existing
-  // fireTime/CronMath machinery — which reads *Gmt fields — matches the cron in
-  // local time unchanged. The matched local wall clock is then resolved back to
-  // a real UTC instant with DST gap/overlap policy via CronMath.resolveLocalToUtc.
-  private static DateTime zoneFireTime(
-    String cronExpr,
-    DateTime now,
-    Boolean forward,
-    String zoneId
-  ) {
-    if (now == null) {
-      return null;
-    }
-    DateTime localNow = DateTime.valueOfGmt(
-      now.format('yyyy-MM-dd HH:mm:ss', zoneId)
-    );
-    DateTime localHit = fireTime(cronExpr, localNow, forward);
-    if (localHit == null) {
-      return null;
-    }
-    return CronMath.resolveLocalToUtc(
-      zoneId,
-      localHit.yearGmt(),
-      localHit.monthGmt(),
-      localHit.dayGmt(),
-      localHit.hourGmt(),
-      localHit.minuteGmt()
-    );
   }
 
   // Finds the matching instant on candidate's own day, or null when the day has

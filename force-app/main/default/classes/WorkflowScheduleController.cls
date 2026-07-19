@@ -166,12 +166,7 @@ public with sharing class WorkflowScheduleController {
     // at 10:00 should not fire that day's 02:00 run). Written in system mode since
     // the cursor field is read-only to admins.
     if (!wasEnabled) {
-      WorkflowScheduleSaveService.reseedCursor(
-        scheduleId,
-        sched.Cron_Expression__c,
-        sched.Time_Zone__c,
-        'ScheduleToggle'
-      );
+      WorkflowScheduleSaveService.reseedCursor(sched, 'ScheduleToggle');
     }
   }
 

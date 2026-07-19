@@ -41,10 +41,7 @@ public inherited sharing class WorkflowScheduleFireService {
     // Workflow_Name__c, or Input_Json__c was set outside the manager could
     // otherwise fail on every tick with stale UI state. Record an Error and
     // advance instead of throwing.
-    if (
-      String.isNotBlank(sched.Time_Zone__c) &&
-      !WorkflowCronEvaluator.isValidZone(sched.Time_Zone__c)
-    ) {
+    if (zoneIsInvalid(sched)) {
       recordError(ctx, 'Invalid time zone: ' + sched.Time_Zone__c);
       return;
     }
@@ -76,6 +73,18 @@ public inherited sharing class WorkflowScheduleFireService {
       upsert as system ScheduleFireLog.build(spec) Fire_Key__c;
     }
     updateState(ctx, outcome);
+  }
+
+  /**
+   * @description Whether a schedule carries a non-blank but unsupported Time_Zone__c. Only
+   * reachable for rows created outside the manager UI (which rejects unsupported zones at
+   * save); blank means UTC and is always valid.
+   * @param sched The schedule to check.
+   * @return True if the zone is set and unsupported, otherwise false.
+   */
+  private static Boolean zoneIsInvalid(Workflow_Schedule__c sched) {
+    return String.isNotBlank(sched.Time_Zone__c) &&
+      !WorkflowCronEvaluator.isValidZone(sched.Time_Zone__c);
   }
 
   /**

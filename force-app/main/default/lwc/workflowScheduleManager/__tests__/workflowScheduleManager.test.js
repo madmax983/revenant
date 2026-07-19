@@ -83,8 +83,10 @@ jest.mock(
 
 const ZONES = ["America/New_York", "Asia/Tokyo", "Europe/London", "UTC"];
 
+// Microtask-based flush (no timers) so the suite stays clean under the LWC
+// no-async-operation lint rule while still draining the promise/render queue.
 function flushPromises() {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+  return Promise.resolve().then(() => Promise.resolve());
 }
 
 function createComponent() {

@@ -28,19 +28,9 @@ public inherited sharing class WorkflowScheduleDueClassifier {
     try {
       // Isolate an unsupported time zone the same way an impossible cron is
       // parked: a row created outside the manager (Setup/API) could carry a bad
-      // Time_Zone__c. Record the outcome, park the cursor a day out so it rotates
-      // out of future batches, and CONTINUE so one bad row can't abort the sweep.
-      if (
-        String.isNotBlank(sched.Time_Zone__c) &&
-        !WorkflowCronEvaluator.isValidZone(sched.Time_Zone__c)
-      ) {
-        state.toUpdate.add(
-          new Workflow_Schedule__c(
-            Id = sched.Id,
-            Next_Fire_Window__c = state.now.addDays(1),
-            Last_Outcome__c = 'Invalid time zone'
-          )
-        );
+      // Time_Zone__c. The helper records the outcome, parks the cursor, and one
+      // bad row can't abort the sweep.
+      if (parkIfInvalidZone(sched, state)) {
         return;
       }
       DateTime fireTime = WorkflowCronEvaluator.previousFireTime(
@@ -110,6 +100,35 @@ public inherited sharing class WorkflowScheduleDueClassifier {
       state.dueItems.add(buildDueItem(sched, fireTime));
     } catch (Exception ignored) {
     }
+  }
+
+  /**
+   * @description Parks a schedule whose Time_Zone__c is set but unsupported: queues a
+   * cursor-only update a day out with an 'Invalid time zone' outcome so it rotates out of
+   * future batches, mirroring the impossible-cron branch. Only reachable for rows created
+   * outside the manager UI (which rejects unsupported zones at save).
+   * @param sched The schedule being classified.
+   * @param state The mutable sweep working set the park update is queued into.
+   * @return True if the row was parked (caller should stop), false if the zone is usable.
+   */
+  private static Boolean parkIfInvalidZone(
+    Workflow_Schedule__c sched,
+    WorkflowScheduleSweepRunner.SweepState state
+  ) {
+    if (
+      String.isBlank(sched.Time_Zone__c) ||
+      WorkflowCronEvaluator.isValidZone(sched.Time_Zone__c)
+    ) {
+      return false;
+    }
+    state.toUpdate.add(
+      new Workflow_Schedule__c(
+        Id = sched.Id,
+        Next_Fire_Window__c = state.now.addDays(1),
+        Last_Outcome__c = 'Invalid time zone'
+      )
+    );
+    return true;
   }
 
   /**

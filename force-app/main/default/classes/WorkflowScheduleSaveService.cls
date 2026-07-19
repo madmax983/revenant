@@ -20,13 +20,7 @@ public inherited sharing class WorkflowScheduleSaveService {
   public static Id save(Map<String, Object> fields) {
     String cron = (String) fields.get('Cron_Expression__c');
     String prefix = (String) fields.get('Correlation_Key_Prefix__c');
-    String zoneId = (String) fields.get('Time_Zone__c');
-    validateScheduleInput(
-      cron,
-      (String) fields.get('Input_Json__c'),
-      prefix,
-      zoneId
-    );
+    validateScheduleInput(fields);
 
     Id existingId = resolveExistingId(fields);
     // Capture the prior cron so we can re-arm an already-armed dedicated job if the
@@ -48,7 +42,7 @@ public inherited sharing class WorkflowScheduleSaveService {
     // Pointing the cursor at the new cron's next window both fixes that and gives
     // the list view an immediate "next run" without a per-row evaluator scan.
     if (existingId == null || oldCron != cron) {
-      reseedCursor(sched.Id, cron, zoneId, 'ScheduleSave');
+      reseedCursor(sched, 'ScheduleSave');
     }
 
     // Keep any armed dedicated CronTrigger consistent with the saved record.
@@ -62,19 +56,16 @@ public inherited sharing class WorkflowScheduleSaveService {
   }
 
   /**
-   * @description Validates the cron, optional input JSON, and correlation-key prefix;
-   * throws an AuraHandledException on any invalid value.
-   * @param cron The cron expression to validate.
-   * @param inputJson The optional input JSON to validate, or blank.
-   * @param prefix The correlation-key prefix to validate.
-   * @param zoneId The optional IANA time zone to validate (blank = UTC).
+   * @description Validates the cron, optional time zone, optional input JSON, and
+   * correlation-key prefix from the incoming field map; throws an AuraHandledException on
+   * any invalid value.
+   * @param fields The incoming schedule field map.
    */
-  private static void validateScheduleInput(
-    String cron,
-    String inputJson,
-    String prefix,
-    String zoneId
-  ) {
+  private static void validateScheduleInput(Map<String, Object> fields) {
+    String cron = (String) fields.get('Cron_Expression__c');
+    String zoneId = (String) fields.get('Time_Zone__c');
+    String inputJson = (String) fields.get('Input_Json__c');
+    String prefix = (String) fields.get('Correlation_Key_Prefix__c');
     if (!WorkflowCronEvaluator.isValidCron(cron)) {
       throwAura('Invalid cron expression: ' + cron);
     }
@@ -239,26 +230,23 @@ public inherited sharing class WorkflowScheduleSaveService {
 
   /**
    * @description (Re)computes the engine-managed Next_Fire_Window__c cursor for a
-   * schedule from its cron. Written in SYSTEM mode since the cursor field is
-   * read-only to admins.
-   * @param scheduleId The schedule whose cursor is reseeded.
-   * @param cron The cron expression used to compute the next window.
-   * @param zoneId The IANA time zone the cron is interpreted in (blank = UTC).
+   * schedule from its cron, interpreted in the schedule's time zone. Written in SYSTEM mode
+   * since the cursor field is read-only to admins. The schedule must carry Id,
+   * Cron_Expression__c, and Time_Zone__c.
+   * @param sched The schedule whose cursor is reseeded (source of Id, cron, and zone).
    * @param logSource The caller label recorded in any error log.
    */
   public static void reseedCursor(
-    Id scheduleId,
-    String cron,
-    String zoneId,
+    Workflow_Schedule__c sched,
     String logSource
   ) {
     try {
       update as system new Workflow_Schedule__c(
-        Id = scheduleId,
+        Id = sched.Id,
         Next_Fire_Window__c = WorkflowCronEvaluator.nextFireTime(
-          cron,
+          sched.Cron_Expression__c,
           DateTime.now(),
-          zoneId
+          sched.Time_Zone__c
         )
       );
     } catch (Exception ex) {

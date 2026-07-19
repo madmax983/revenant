@@ -138,44 +138,49 @@ public inherited sharing class CronMath {
    * A blank/UTC zone is handled by the caller's exact-GMT path and never reaches
    * here, so this method leaves the pre-existing behavior byte-identical.
    * @param zoneId The IANA time-zone id (e.g. America/New_York).
-   * @param year The intended local calendar year.
-   * @param month The intended local calendar month (1-12).
-   * @param day The intended local calendar day.
-   * @param hour The intended local hour (0-23).
-   * @param minute The intended local minute (0-59).
+   * @param localWallClock A pseudo-GMT DateTime whose GMT fields are the intended
+   * local wall clock (i.e. the local Y/M/D/H/M read via the *Gmt accessors).
    * @return The UTC DateTime for the requested local wall clock under the policy above.
    */
   public static DateTime resolveLocalToUtc(
     String zoneId,
-    Integer year,
-    Integer month,
-    Integer day,
-    Integer hour,
-    Integer minute
+    DateTime localWallClock
   ) {
-    // Treat the requested local fields as if they were GMT: the resolved UTC
+    // The requested local wall clock, treated as if it were GMT: the resolved UTC
     // instant differs from this guess only by the zone offset.
-    DateTime guess = DateTime.newInstanceGmt(year, month, day, hour, minute, 0);
+    DateTime guess = truncateToMinute(localWallClock);
     Integer offA = zoneOffsetMinutes(guess, zoneId);
     DateTime candA = guess.addMinutes(-offA);
     Integer offB = zoneOffsetMinutes(candA, zoneId);
 
-    if (offA == offB) {
-      // Offset is self-consistent. If it renders back to the request the time
-      // exists; resolve any fall-back overlap to the earliest occurrence.
-      if (rendersTo(candA, zoneId, year, month, day, hour, minute)) {
-        return earliestOverlap(candA, zoneId, year, month, day, hour, minute);
-      }
+    // Offset self-consistent and the candidate renders back to the request: the
+    // time exists. Resolve any fall-back overlap to the earliest occurrence.
+    if (offA == offB && rendersTo(candA, zoneId, guess)) {
+      return earliestOverlap(candA, zoneId, guess);
     }
+    // Otherwise we are at a transition — classify gap vs overlap by wall clock.
+    return resolveNearTransition(guess, zoneId);
+  }
 
-    // Near a transition the two offsets disagree. Build the candidate for each
-    // offset and classify by which (if any) renders to the requested wall clock.
+  /**
+   * @description Resolves a local wall clock that sits at (or across) a DST transition,
+   * where the two nearby zone offsets disagree. Builds the candidate UTC instant for each
+   * offset and classifies: both render to the request → overlap, return the earliest;
+   * exactly one renders → that instant; neither renders → spring gap, return the transition
+   * boundary (the first valid instant at or after the requested local time).
+   * @param guess The requested local wall clock as a pseudo-GMT DateTime.
+   * @param zoneId The IANA time-zone id.
+   * @return The resolved UTC instant under the gap/overlap policy.
+   */
+  private static DateTime resolveNearTransition(DateTime guess, String zoneId) {
+    Integer offA = zoneOffsetMinutes(guess, zoneId);
+    DateTime candA = guess.addMinutes(-offA);
+    Integer offB = zoneOffsetMinutes(candA, zoneId);
     DateTime candB = guess.addMinutes(-offB);
-    Boolean aValid = rendersTo(candA, zoneId, year, month, day, hour, minute);
-    Boolean bValid = rendersTo(candB, zoneId, year, month, day, hour, minute);
 
+    Boolean aValid = rendersTo(candA, zoneId, guess);
+    Boolean bValid = rendersTo(candB, zoneId, guess);
     if (aValid && bValid) {
-      // Overlap: both offsets are valid — pick the earliest (first) occurrence.
       return (candA <= candB) ? candA : candB;
     }
     if (aValid) {
@@ -184,9 +189,6 @@ public inherited sharing class CronMath {
     if (bValid) {
       return candB;
     }
-
-    // Spring gap: neither offset renders to the request. Return the transition
-    // boundary — the first valid instant at or after the requested local time.
     DateTime lo = (candA <= candB) ? candA : candB;
     DateTime hi = (candA <= candB) ? candB : candA;
     return transitionBoundary(lo, hi, zoneId);
@@ -213,25 +215,16 @@ public inherited sharing class CronMath {
    * local wall clock in the target zone (minute granularity).
    * @param candidate The UTC instant to test.
    * @param zoneId The IANA time-zone id.
-   * @param year The requested local year.
-   * @param month The requested local month.
-   * @param day The requested local day.
-   * @param hour The requested local hour.
-   * @param minute The requested local minute.
+   * @param want The requested local wall clock as a pseudo-GMT DateTime.
    * @return True if the candidate's zone wall clock equals the request.
    */
   private static Boolean rendersTo(
     DateTime candidate,
     String zoneId,
-    Integer year,
-    Integer month,
-    Integer day,
-    Integer hour,
-    Integer minute
+    DateTime want
   ) {
-    String want = DateTime.newInstanceGmt(year, month, day, hour, minute, 0)
-      .formatGmt('yyyy-MM-dd HH:mm');
-    return candidate.format('yyyy-MM-dd HH:mm', zoneId) == want;
+    return candidate.format('yyyy-MM-dd HH:mm', zoneId) ==
+      want.formatGmt('yyyy-MM-dd HH:mm');
   }
 
   /**
@@ -243,24 +236,16 @@ public inherited sharing class CronMath {
    * to the request, so a non-overlapping time is returned unchanged.
    * @param candidate A UTC instant already known to render to the request.
    * @param zoneId The IANA time-zone id.
-   * @param year The requested local year.
-   * @param month The requested local month.
-   * @param day The requested local day.
-   * @param hour The requested local hour.
-   * @param minute The requested local minute.
+   * @param want The requested local wall clock as a pseudo-GMT DateTime.
    * @return The earliest UTC instant rendering to the requested wall clock.
    */
   private static DateTime earliestOverlap(
     DateTime candidate,
     String zoneId,
-    Integer year,
-    Integer month,
-    Integer day,
-    Integer hour,
-    Integer minute
+    DateTime want
   ) {
     DateTime earlier = candidate.addHours(-1);
-    if (rendersTo(earlier, zoneId, year, month, day, hour, minute)) {
+    if (rendersTo(earlier, zoneId, want)) {
       return earlier;
     }
     return candidate;

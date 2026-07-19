@@ -9,6 +9,7 @@ public class WorkflowCronEvaluatorTest {
     37,
     0
   );
+  private static final String NY = 'America/New_York';
 
   // ── Exact-minute anchor ──────────────────────────────────────────────────
 
@@ -522,8 +523,6 @@ public class WorkflowCronEvaluatorTest {
   }
 
   // ── Zone-aware evaluation (America/New_York) ──────────────────────────────
-
-  private static final String NY = 'America/New_York';
 
   @IsTest
   static void testZoneNightlyEst() {
