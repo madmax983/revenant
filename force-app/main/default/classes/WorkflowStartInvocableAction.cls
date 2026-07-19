@@ -47,6 +47,18 @@ public inherited sharing class WorkflowStartInvocableAction {
       description='True if a new instance was started; false if an existing instance was returned for a deduplicated (already-seen) correlation key.'
     )
     public Boolean isNew;
+
+    @InvocableVariable(
+      label='Is Valid'
+      description='True when the start input satisfied the workflow\'s declared input contract (or the workflow declares none) and the start proceeded; false when validation rejected the input, in which case Validation Error explains why and no instance was started. Branch a Flow Decision on this.'
+    )
+    public Boolean isValid;
+
+    @InvocableVariable(
+      label='Validation Error'
+      description='When Is Valid is false, a readable, field-level enumeration of every input-contract violation; null on success.'
+    )
+    public String validationError;
   }
 
   @InvocableMethod(
@@ -83,8 +95,23 @@ public inherited sharing class WorkflowStartInvocableAction {
         debounceRequests.add(toDebounceRequest(req));
         results[i] = debouncedResult();
       } else {
-        engineRequests.add(toEngineRequest(req));
-        engineRequestIndices.add(i);
+        // Opt-in input-contract validation (INV-51): validate this row in memory
+        // before it reaches the engine. An invalid row yields a branchable
+        // failure result (isValid=false + a field-level validationError) and is
+        // NOT routed to the engine, so no instance is started for it and its
+        // valid siblings are unaffected. A non-ValidatedWorkflow workflow yields
+        // no errors, preserving today's behavior exactly.
+        List<WorkflowInputFieldError> inputErrors = WorkflowInputValidator.collectErrors(
+          toValidationProbe(req)
+        );
+        if (!inputErrors.isEmpty()) {
+          results[i] = invalidResult(
+            WorkflowInputValidator.describeErrors(inputErrors)
+          );
+        } else {
+          engineRequests.add(toEngineRequest(req));
+          engineRequestIndices.add(i);
+        }
       }
     }
 
@@ -119,6 +146,26 @@ public inherited sharing class WorkflowStartInvocableAction {
     debounceReq.attributesJson = req.attributesJson;
     debounceReq.causationId = req.causationId;
     return debounceReq;
+  }
+
+  /**
+   * @description Builds a lightweight, side-effect-free engine start request used
+   * only to validate the input contract in memory. It carries the workflow name
+   * and the raw input JSON so the validator can parse and check the payload
+   * without the request ever being inserted or enqueued.
+   * @param req the invocable start request to probe
+   * @return an engine start request carrying only the name and raw input JSON
+   */
+  private static WorkflowEngine.StartRequest toValidationProbe(
+    StartRequest req
+  ) {
+    WorkflowEngine.StartRequest probe = new WorkflowEngine.StartRequest(
+      req.workflowName,
+      req.correlationKey,
+      null
+    );
+    probe.inputJson = req.inputJson;
+    return probe;
   }
 
   private static WorkflowEngine.StartRequest toEngineRequest(StartRequest req) {
@@ -157,6 +204,9 @@ public inherited sharing class WorkflowStartInvocableAction {
         ? null
         : engineResult.instanceId;
       res.isNew = engineResult == null ? null : engineResult.isNew;
+      // This row passed input-contract validation before it was routed here.
+      res.isValid = true;
+      res.validationError = null;
       results[origIndex] = res;
     }
   }
@@ -165,6 +215,8 @@ public inherited sharing class WorkflowStartInvocableAction {
     StartResult res = new StartResult();
     res.workflowInstanceId = null;
     res.isNew = null;
+    res.isValid = null;
+    res.validationError = null;
     return res;
   }
 
@@ -172,6 +224,24 @@ public inherited sharing class WorkflowStartInvocableAction {
     StartResult res = new StartResult();
     res.workflowInstanceId = null;
     res.isNew = false;
+    res.isValid = true;
+    res.validationError = null;
+    return res;
+  }
+
+  /**
+   * @description Builds a branchable failure result for a row whose input violated
+   * the workflow's declared contract: no instance Id, isValid=false, and the
+   * field-level enumeration in validationError so a Flow Decision can route it.
+   * @param validationError the enumerated field-level violation message
+   * @return a StartResult flagged invalid, with no started instance
+   */
+  private static StartResult invalidResult(String validationError) {
+    StartResult res = new StartResult();
+    res.workflowInstanceId = null;
+    res.isNew = null;
+    res.isValid = false;
+    res.validationError = validationError;
     return res;
   }
 }

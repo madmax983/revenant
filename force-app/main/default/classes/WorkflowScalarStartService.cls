@@ -147,6 +147,12 @@ public inherited sharing class WorkflowScalarStartService {
     Map<String, String> attributes = req.attributes;
     WorkflowPayloadOffload.validateCorrelationKey(correlationKey);
     WorkflowStartValidation.validateAttributes(attributes);
+    // Opt-in input-contract validation (INV-51): if the target workflow
+    // implements ValidatedWorkflow, reject a bad start payload here — before the
+    // dedup pre-query, the instance insert, or any enqueue — with a field-level
+    // WorkflowInputException. A non-ValidatedWorkflow workflow is a free no-op
+    // (an instanceof on the resolved definition; zero SOQL, zero DML).
+    WorkflowInputValidator.validate(req);
 
     // Get-or-start: return an existing instance within the dedup scope (active,
     // and optionally recently terminal within the configured window) instead of

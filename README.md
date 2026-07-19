@@ -478,6 +478,47 @@ static void onboardingWorkflowIsWellFormed() {
 
 `validate` flags: a definition class that doesn't resolve or doesn't implement `WorkflowDefinition`; a `getInitialStep()` that is blank or not contained in `getSteps()`; any `getSteps()` entry that doesn't resolve to an instantiable `WorkflowStep`/`CompensatableStep`; and duplicate `getSteps()` entries. It additionally runs a **best-effort** transition probe that drives `getNextStep(...)` for each declared step and flags any returned successor not in `getSteps()` — best-effort because `getNextStep` is data-dependent and cannot be fully enumerated. Inspect `result.defects` (each has a `code`, `stepName`, and `message`) or `result.getMessages()` for the full list. This is why `getSteps()` is part of the `WorkflowDefinition` contract: it is the authoritative step inventory the validator checks the DAG against.
 
+Where `WorkflowValidator` checks the _definition's shape_, the next section validates _each invocation's payload_.
+
+---
+
+### 10. Validate Start Input Against a Contract (opt-in)
+
+`WorkflowEngine.start(name, key, json)` and the **Start Workflow** invocable accept an opaque payload: a missing or misspelled field (`accountId` vs `AccountId`) is invisible until the first step dereferences it deep inside an async Queueable, surfacing as a cryptic `NullPointerException` on a `Failed` instance that a Flow builder can't diagnose. A workflow can **opt in** to synchronous, field-level start-input validation by implementing **`ValidatedWorkflow`** alongside `WorkflowDefinition`:
+
+```java
+public class OnboardingWorkflow implements WorkflowDefinition, ValidatedWorkflow {
+    public WorkflowInputContract getInputContract() {
+        return new WorkflowInputContract()
+            .require('accountId', WorkflowInputType.STRING)
+            .require('amount', WorkflowInputType.DECIMAL)
+            .optional('vipOnboarding', WorkflowInputType.BOOLEAN)
+            .optional('startDate', WorkflowInputType.DATE);
+    }
+    // ... getSteps() / getInitialStep() / getNextStep() as usual
+}
+```
+
+A `WorkflowInputContract` is an ordered list of field specs — `require(name, type)` (must be present and non-null) and `optional(name, type)` (type-checked only when present). The `WorkflowInputType` primitives are `STRING`, `INTEGER`, `LONG`, `DECIMAL`, `BOOLEAN`, `DATE`, and `DATETIME`. Type-checking is **strict and never mutates the payload**: `INTEGER`/`LONG` accept a whole-number JSON value (not a fractional number or a numeric string), `DECIMAL` accepts any JSON number, `BOOLEAN` accepts a JSON boolean (not `"true"`), and `DATE`/`DATETIME` accept an ISO-8601 string.
+
+**Fully backward compatible and free for the simple case.** A definition that does _not_ implement `ValidatedWorkflow` is never inspected — detection is a single in-memory `instanceof` on the already-resolved definition. Validation adds **zero SOQL and zero DML** to the start path and nothing to the `WorkflowOrchestrator` Queueable hot path; it is a pure parse-and-check that runs **before any `Workflow_Instance__c` is inserted and before any job is enqueued**, so the append-only audit trail is untouched on rejection.
+
+**Apex (scalar & bulk).** On invalid input, `start(...)` / `startOrGet(...)` throw a typed **`WorkflowInputException`** whose message enumerates **every** bad field (not just the first), with the structured list also available via `ex.getFieldErrors()` (each a `WorkflowInputFieldError` carrying `fieldName`, a `reason` of `MISSING` / `WRONG_TYPE` / `MALFORMED_JSON`, and the expected/actual type). Malformed JSON is reported as an input error, never as an uncaught `JSONException`. No instance row is created.
+
+```java
+try {
+    WorkflowEngine.start('OnboardingWorkflow', key, '{"amount":"lots"}');
+} catch (WorkflowInputException ex) {
+    // ex.getMessage() enumerates: accountId is required but missing;
+    //   amount expected DECIMAL but was String
+    for (WorkflowInputFieldError fe : ex.getFieldErrors()) { /* fe.fieldName, fe.reason ... */ }
+}
+```
+
+The bulk `startOrGet(List<StartRequest>)` validates every request up front and, consistent with the pipeline's existing all-or-none semantics, throws a single `WorkflowInputException` enumerating every bad field across every offending request (tagged `request[i]`) — writing no rows for any request in the batch.
+
+**Flow (Start Workflow invocable).** Instead of a hard Flow fault, the invocable returns a **branchable** result: on invalid input the row carries `Is Valid = false` and a `Validation Error` string enumerating the bad fields (and no instance is started), while valid rows carry `Is Valid = true`, `Validation Error = null`, and proceed. A Flow Decision routes bad input declaratively, and one invalid row never aborts its valid siblings. See [`ValidatedOnboardingWorkflowExample`](examples/main/default/classes/ValidatedOnboardingWorkflowExample.cls) for a copyable reference.
+
 ---
 
 ## Operations & Alerting Configuration

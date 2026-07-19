@@ -53,6 +53,14 @@ public inherited sharing class WorkflowBulkStartService {
       requests
     );
 
+    // 1b. Opt-in input-contract validation (INV-51): reject bad start payloads
+    // before any instance is inserted. Consistent with this pipeline's existing
+    // all-or-none semantics, an invalid input is a genuine error — validateBulk
+    // throws a single WorkflowInputException enumerating every bad field across
+    // every offending request, and no row is written. Per-row, non-aborting
+    // behavior for Flow is provided by WorkflowStartInvocableAction.
+    WorkflowInputValidator.validateBulk(requests);
+
     // 2. Pre-resolve existing instances within the dedup scope (keyed by the
     //    normalized correlation key to honor case-insensitive matching).
     Map<String, Workflow_Instance__c> existingByKey = WorkflowStartDedup.findExistingByKey(

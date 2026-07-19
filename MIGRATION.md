@@ -378,6 +378,41 @@ StepContext ctx = new StepContextTestBuilder()
 
 ---
 
+## New (additive, non-breaking): `ValidatedWorkflow` opt-in start-input validation
+
+**Issue #51.** This is **not a breaking change** — no existing signature changes and
+workflows that do not opt in behave exactly as before — but it is recorded here
+because it introduces a new permanent author-facing API contract.
+
+A workflow definition MAY now implement **`ValidatedWorkflow`** (alongside
+`WorkflowDefinition`) to declare a `WorkflowInputContract` of required/optional
+fields and their `WorkflowInputType` primitives (`STRING`, `INTEGER`, `LONG`,
+`DECIMAL`, `BOOLEAN`, `DATE`, `DATETIME`). When present, the contract is enforced
+**synchronously at `WorkflowEngine.start(...)` / `startOrGet(...)`** — before any
+`Workflow_Instance__c` is inserted or any job enqueued, adding **zero SOQL/DML** to
+the start path. Bad input throws the new top-level typed **`WorkflowInputException`**
+(`getFieldErrors()` → `List<WorkflowInputFieldError>`), enumerating every missing,
+wrong-typed, or malformed-JSON field.
+
+```apex
+public class OnboardingWorkflow implements WorkflowDefinition, ValidatedWorkflow {
+  public WorkflowInputContract getInputContract() {
+    return new WorkflowInputContract()
+      .require('accountId', WorkflowInputType.STRING)
+      .require('amount', WorkflowInputType.DECIMAL);
+  }
+  // getSteps() / getInitialStep() / getNextStep() unchanged
+}
+```
+
+The **Start Workflow** invocable gains two additive outputs — `Is Valid` (Boolean)
+and `Validation Error` (String) — so a Flow can branch on invalid input instead of
+catching a fault. Existing invocable outputs (`Workflow Instance ID`, `Is New`) are
+unchanged. See the README's "Validate Start Input Against a Contract (opt-in)"
+section for the full contract shape, type-coercion rules, and bulk/Flow behavior.
+
+---
+
 ## PR index
 
 | PR | Breaking change(s) covered here |
