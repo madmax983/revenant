@@ -128,6 +128,27 @@ public inherited sharing class WorkflowCronZones {
     if (req.forward) {
       return resolveForwardHit(req, localNow);
     }
+    return resolveBackwardHit(req, localNow);
+  }
+
+  // Backward-search resolver. The naive walk projects `now` to a single local
+  // wall clock and runs the pure-UTC previous-fire walk there, then resolves the
+  // matched local wall clock to a UTC instant. That single projection is faithful
+  // everywhere EXCEPT inside a fall-back overlap's SECOND (post-transition)
+  // occurrence: there the repeated local hour's cron windows already fired at
+  // their EARLIER (pre-transition) UTC occurrence — which is < now — but the
+  // post-transition projection makes those windows look "future", so the naive
+  // walk skips them (to an earlier window, or even the prior day). The overlap
+  // candidate walk recovers the true most-recent fire by enumerating the repeated
+  // hour's cron windows, resolving each to its EARLIEST UTC occurrence (the same
+  // fire-once policy the corrKey/Fire_Key depend on, per CronMath.resolveLocalToUtc)
+  // and keeping the latest such instant that is at or before now. The later of the
+  // two candidates is returned; both are real fires <= now, so the result is the
+  // most-recent fire window at or before now.
+  private static DateTime resolveBackwardHit(
+    ResolveRequest req,
+    DateTime localNow
+  ) {
     DateTime localHit = WorkflowCronEvaluator.previousFireTime(
       req.cronExpr,
       localNow
@@ -135,7 +156,120 @@ public inherited sharing class WorkflowCronZones {
     if (localHit == null) {
       return null;
     }
-    return CronMath.resolveLocalToUtc(req.zoneId, localHit);
+    DateTime naiveUtc = CronMath.resolveLocalToUtc(req.zoneId, localHit);
+    DateTime overlapUtc = overlapFallBackHit(req, localNow);
+    if (overlapUtc != null && (naiveUtc == null || overlapUtc > naiveUtc)) {
+      return overlapUtc;
+    }
+    return naiveUtc;
+  }
+
+  /**
+   * @description Recovers the most-recent fire instant hidden by a fall-back overlap when
+   * `now` sits in the repeated hour's SECOND (post-transition) occurrence. When `now`'s local
+   * hour is a fall-back-repeated hour, this walks that local hour's cron windows, resolves each
+   * to its EARLIEST UTC occurrence (the pre-transition instant chosen by
+   * CronMath.resolveLocalToUtc so a window fires exactly once), and returns the latest such
+   * instant that is at or before `now` (truncated to the minute). Returns null when `now`'s
+   * local hour is not a fall-back-repeated hour (all normal days, spring days, and instants
+   * outside the overlap hour), leaving the naive backward walk's result untouched. The
+   * at-or-before-now filter guarantees the returned instant never exceeds `now` and never
+   * returns a repeated-hour window that has not yet fired at its earliest occurrence.
+   * @param req The zone-aware resolve request (cron, now, zoneId).
+   * @param localNow `now` projected into the zone's wall clock as a pseudo-GMT DateTime.
+   * @return The latest earliest-UTC repeated-hour fire at or before now, or null when
+   * `now`'s local hour is not a fall-back-repeated hour.
+   */
+  private static DateTime overlapFallBackHit(
+    ResolveRequest req,
+    DateTime localNow
+  ) {
+    // The local hour containing `now`, as a pseudo-GMT wall clock (H:00 local).
+    DateTime hourStartLocal = DateTime.newInstanceGmt(
+      localNow.yearGmt(),
+      localNow.monthGmt(),
+      localNow.dayGmt(),
+      localNow.hourGmt(),
+      0,
+      0
+    );
+    if (!isFallBackRepeatedHour(req.zoneId, hourStartLocal)) {
+      return null;
+    }
+    return latestRepeatedHourFire(req, hourStartLocal);
+  }
+
+  /**
+   * @description True when the given local hour is the SECOND (repeated) occurrence of a
+   * fall-back overlap: its earliest UTC occurrence and the instant exactly one DST hour later
+   * both render to the same local wall clock. Normal hours, spring-gap hours, and hours outside
+   * an overlap render to distinct wall clocks one hour apart and return false.
+   * @param zoneId The IANA time-zone id.
+   * @param hourStartLocal The local hour start (H:00) as a pseudo-GMT DateTime.
+   * @return True when the local hour is a fall-back-repeated hour, otherwise false.
+   */
+  private static Boolean isFallBackRepeatedHour(
+    String zoneId,
+    DateTime hourStartLocal
+  ) {
+    DateTime earliestHour = CronMath.resolveLocalToUtc(zoneId, hourStartLocal);
+    if (earliestHour == null) {
+      return false;
+    }
+    return wallClockRendersTo(earliestHour.addHours(1), zoneId, hourStartLocal);
+  }
+
+  /**
+   * @description Walks the cron windows within a single repeated local hour from H:59
+   * downwards, resolves each to its EARLIEST UTC occurrence (the fire-once instant per
+   * CronMath.resolveLocalToUtc), and returns the latest such instant at or before `now`
+   * (truncated to the minute). The walk is bounded to the one local hour — it stops as soon as
+   * a match falls before the hour start — so at most one hour of cron windows is scanned.
+   * @param req The zone-aware resolve request (cron, now, zoneId).
+   * @param hourStartLocal The repeated local hour start (H:00) as a pseudo-GMT DateTime.
+   * @return The latest earliest-UTC repeated-hour fire at or before now, or null if none.
+   */
+  private static DateTime latestRepeatedHourFire(
+    ResolveRequest req,
+    DateTime hourStartLocal
+  ) {
+    DateTime nowFloor = CronMath.truncateToMinute(req.now);
+    DateTime best = null;
+    DateTime cursor = hourStartLocal.addMinutes(59);
+    for (Integer guard = 0; guard < 70 && cursor != null; guard++) {
+      DateTime localMatch = WorkflowCronEvaluator.previousFireTime(
+        req.cronExpr,
+        cursor
+      );
+      if (localMatch == null || localMatch < hourStartLocal) {
+        break;
+      }
+      DateTime utc = CronMath.resolveLocalToUtc(req.zoneId, localMatch);
+      if (utc != null && utc <= nowFloor && (best == null || utc > best)) {
+        best = utc;
+      }
+      cursor = localMatch.addMinutes(-1);
+    }
+    return best;
+  }
+
+  /**
+   * @description True when the candidate UTC instant renders to exactly the requested local
+   * wall clock in the target zone (minute granularity). Used to detect a fall-back overlap
+   * without a direct zone-offset API. Kept local to this class (a distinct simple name) so it
+   * is never confused with the identically-purposed private helper in CronMath.
+   * @param candidate The UTC instant to test.
+   * @param zoneId The IANA time-zone id.
+   * @param want The requested local wall clock as a pseudo-GMT DateTime.
+   * @return True if the candidate's zone wall clock equals the requested wall clock.
+   */
+  private static Boolean wallClockRendersTo(
+    DateTime candidate,
+    String zoneId,
+    DateTime want
+  ) {
+    return candidate.format('yyyy-MM-dd HH:mm', zoneId) ==
+      want.formatGmt('yyyy-MM-dd HH:mm');
   }
 
   // Forward-search resolver. Walks local wall-clock matches from `localNow` and

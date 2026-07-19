@@ -629,6 +629,48 @@ public class WorkflowCronEvaluatorTest {
         overlap,
         'Overlapping 01:30 should resolve to the earliest (EDT) occurrence 05:30Z'
       );
+
+      // Due-detection INSIDE the repeated hour's second (EST) occurrence. At the
+      // transition boundary 06:00Z (local 01:00 EST), the 01:30 window already
+      // fired at its earliest (EDT) occurrence 05:30Z — which is before now — so
+      // the most-recent fire at or before now is 2026-11-01 05:30Z, NOT the prior
+      // day. This is the linchpin the naive single-projection walk got wrong.
+      DateTime atBoundary = DateTime.newInstanceGmt(2026, 11, 1, 6, 0, 0);
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 1, 5, 30, 0),
+        WorkflowCronEvaluator.previousFireTime('30 1 * * *', atBoundary, NY),
+        'At 06:00Z (local 01:00 EST) previous must be Nov-1 05:30Z, not the prior day'
+      );
+
+      // Later in the second occurrence (06:45Z, local 01:45 EST): the 01:30 window
+      // still resolves to its earliest (EDT) 05:30Z. It must NOT return the second
+      // occurrence 06:30Z — that would carry a different Fire_Key and double-fire.
+      DateTime lateInHour = DateTime.newInstanceGmt(2026, 11, 1, 6, 45, 0);
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 1, 5, 30, 0),
+        WorkflowCronEvaluator.previousFireTime('30 1 * * *', lateInHour, NY),
+        'At 06:45Z the 01:30 window must fire once at 05:30Z, never at 06:30Z'
+      );
+
+      // Multi-fire-per-hour proves a single probe is insufficient: */15 in local
+      // hour 01 fires 01:00/01:15/01:30/01:45, whose earliest (EDT) occurrences are
+      // 05:00/05:15/05:30/05:45Z. At 06:10Z the latest earliest-UTC at or before
+      // now is 05:45Z, requiring a bounded walk of the overlap hour.
+      DateTime multiRef = DateTime.newInstanceGmt(2026, 11, 1, 6, 10, 0);
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 1, 5, 45, 0),
+        WorkflowCronEvaluator.previousFireTime('*/15 1 * * *', multiRef, NY),
+        'At 06:10Z the latest earliest-UTC */15 window at or before now is 05:45Z'
+      );
+
+      // No regression on a normal (non-overlap) summer day: 01:30 EDT is a single
+      // occurrence resolving to 05:30Z, with no overlap-walk influence.
+      DateTime normalRef = DateTime.newInstanceGmt(2026, 6, 17, 12, 0, 0);
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 6, 17, 5, 30, 0),
+        WorkflowCronEvaluator.previousFireTime('30 1 * * *', normalRef, NY),
+        'Normal-day 01:30 EDT resolves to 05:30Z unchanged'
+      );
     }
   }
 
