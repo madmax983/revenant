@@ -689,6 +689,45 @@ public class WorkflowCronEvaluatorTest {
         normalForward,
         'Normal-day 01:30 EDT should resolve to 05:30Z with no overlap skipping'
       );
+
+      // Current-minute window must be KEPT when now carries seconds. Summer EDT
+      // (UTC-4): 09:00:30 local is 13:00:30Z. A "0 9 * * *" forward search must
+      // return TODAY's 09:00 fire (13:00:00Z), not push to tomorrow — the guard
+      // floors now to the minute so the minute-aligned candidate is accepted,
+      // matching the blank/UTC path which truncates now before matching.
+      DateTime nowWithSeconds = DateTime.newInstanceGmt(2026, 7, 19, 13, 0, 30);
+      DateTime currentMinute = WorkflowCronEvaluator.nextFireTime(
+        '0 9 * * *',
+        nowWithSeconds,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 7, 19, 13, 0, 0),
+        currentMinute,
+        'Zoned forward search at 09:00:30 must keep the current 09:00 minute (13:00Z), not skip to tomorrow'
+      );
+
+      // Blank/UTC path is unchanged: it already truncates now to the minute, so
+      // 09:00:30Z on "0 9 * * *" keeps the current 09:00Z window (the behavior
+      // the zoned path above is being made consistent with).
+      DateTime blankNowWithSeconds = DateTime.newInstanceGmt(
+        2026,
+        7,
+        19,
+        9,
+        0,
+        30
+      );
+      DateTime blankCurrentMinute = WorkflowCronEvaluator.nextFireTime(
+        '0 9 * * *',
+        blankNowWithSeconds,
+        ''
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 7, 19, 9, 0, 0),
+        blankCurrentMinute,
+        'Blank-zone forward search keeps the current 09:00Z minute at 09:00:30Z'
+      );
     }
   }
 

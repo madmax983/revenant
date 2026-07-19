@@ -144,21 +144,31 @@ public inherited sharing class WorkflowCronZones {
   // the EARLIEST (pre-transition) occurrence — correct for due-detection, but for
   // a forward search that earliest instant can land BEFORE req.now (e.g. local
   // 01:30 on a fall-back day resolving to 05:30Z when req.now is 06:00Z). When
-  // the resolved instant is strictly before req.now it is rejected and the walk
+  // the resolved instant is earlier than req.now it is rejected and the walk
   // advances to the next local match, so nextFireTime always returns a
-  // strictly-future (>= req.now) instant. A normal (non-overlap) forward search
-  // accepts the first match unchanged, since its resolved instant is >= req.now.
+  // future (>= req.now) instant. A normal (non-overlap) forward search accepts
+  // the first match unchanged, since its resolved instant is >= req.now.
+  //
+  // The comparison floor is req.now truncated to the minute: candidate fire
+  // instants are minute-aligned (seconds zeroed by the cron walk), so comparing
+  // against an untruncated req.now that carries seconds (e.g. 09:00:30) would
+  // reject the current-minute window (09:00 → resolved UTC) and skip it to the
+  // next day. The blank/UTC path already truncates `now` to the minute before
+  // matching (WorkflowCronEvaluator.fireTime), so flooring here keeps the two
+  // paths consistent — the current minute is accepted while genuinely-prior
+  // fall-back occurrences (earlier than the current minute) are still rejected.
   private static DateTime resolveForwardHit(
     ResolveRequest req,
     DateTime localNow
   ) {
+    DateTime nowFloor = CronMath.truncateToMinute(req.now);
     DateTime localHit = WorkflowCronEvaluator.nextFireTime(
       req.cronExpr,
       localNow
     );
     while (localHit != null) {
       DateTime utc = CronMath.resolveLocalToUtc(req.zoneId, localHit);
-      if (utc == null || utc >= req.now) {
+      if (utc == null || utc >= nowFloor) {
         return utc;
       }
       localHit = WorkflowCronEvaluator.nextFireTime(
