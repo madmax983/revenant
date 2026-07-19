@@ -49,6 +49,13 @@
                     onclick={handleOpenFailureBreakdown}
                     class="slds-m-left_small">
                 </lightning-button>
+                <lightning-button
+                    label="Catalog"
+                    icon-name="utility:apps"
+                    variant="neutral"
+                    onclick={handleOpenCatalog}
+                    class="slds-m-left_small">
+                </lightning-button>
 
                 <lightning-button-icon
                     icon-name="utility:refresh"
@@ -913,6 +920,111 @@
                         </template>
 
                         <template if:false={viewingFailureBreakdown}>
+                        <!-- Workflow Catalog Panel -->
+                        <template if:true={viewingCatalog}>
+                            <template if:true={loadingCatalog}>
+                                <div class="slds-align_absolute-center slds-p-around_large spinner-height">
+                                    <lightning-spinner alternative-text="Loading catalog..." size="medium"></lightning-spinner>
+                                </div>
+                            </template>
+                            <template if:false={loadingCatalog}>
+                                <div class="slds-p-around_medium">
+                                    <!-- Header -->
+                                    <div class="slds-grid slds-grid_align-spread slds-m-bottom_medium border-bottom slds-p-bottom_small">
+                                        <div>
+                                            <h2 class="slds-text-heading_medium font-outfit slds-grid slds-grid_vertical-align-center">
+                                                <lightning-icon icon-name="utility:apps" size="small" class="slds-m-right_small text-primary"></lightning-icon>
+                                                Workflow Catalog
+                                            </h2>
+                                            <p class="slds-text-color_weak slds-m-top_xx-small">Every deployed, startable workflow definition with its description, version, and live health. Click a definition or a status count to see its instances.</p>
+                                        </div>
+                                        <lightning-button
+                                            label="Close"
+                                            variant="neutral"
+                                            icon-name="utility:close"
+                                            onclick={handleCloseCatalog}>
+                                        </lightning-button>
+                                    </div>
+
+                                    <template if:true={hasCatalogRows}>
+                                        <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+                                            <thead>
+                                                <tr class="slds-line-height_reset">
+                                                    <th scope="col"><div class="slds-truncate" title="Workflow">Workflow</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Version">Version</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Active">Active</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Failed">Failed</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Suspended">Suspended</div></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <template for:each={catalogRows} for:item="def">
+                                                    <tr key={def.className} class="slds-hint-parent">
+                                                        <td data-label="Workflow">
+                                                            <button
+                                                                type="button"
+                                                                data-definition={def.className}
+                                                                onclick={handleCatalogRowClick}
+                                                                class="slds-button link-button slds-text-align_left">
+                                                                <span class="slds-text-body_regular slds-text-color_default">{def.label}</span>
+                                                            </button>
+                                                            <div class="slds-text-body_small font-mono slds-text-color_weak">{def.className}</div>
+                                                            <template if:true={def.descriptionDisplay}>
+                                                                <div class="slds-text-body_small slds-m-top_xx-small">{def.descriptionDisplay}</div>
+                                                            </template>
+                                                            <template if:true={def.isUndocumented}>
+                                                                <span class="badge badge-grey slds-m-top_xx-small">Undocumented</span>
+                                                            </template>
+                                                        </td>
+                                                        <td data-label="Version">{def.versionDisplay}</td>
+                                                        <td data-label="Active">
+                                                            <button
+                                                                type="button"
+                                                                data-definition={def.className}
+                                                                data-status="Running"
+                                                                onclick={handleCatalogRowClick}
+                                                                class="slds-button link-button">
+                                                                <span class="badge badge-blue">{def.active}</span>
+                                                            </button>
+                                                        </td>
+                                                        <td data-label="Failed">
+                                                            <button
+                                                                type="button"
+                                                                data-definition={def.className}
+                                                                data-status="Failed"
+                                                                onclick={handleCatalogRowClick}
+                                                                class="slds-button link-button">
+                                                                <span class="badge badge-red">{def.failed}</span>
+                                                            </button>
+                                                        </td>
+                                                        <td data-label="Suspended">
+                                                            <button
+                                                                type="button"
+                                                                data-definition={def.className}
+                                                                data-status="Suspended"
+                                                                onclick={handleCatalogRowClick}
+                                                                class="slds-button link-button">
+                                                                <span class="badge badge-orange">{def.suspended}</span>
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                </template>
+                                            </tbody>
+                                        </table>
+                                    </template>
+                                    <template if:false={hasCatalogRows}>
+                                        <div class="slds-align_absolute-center slds-p-around_large slds-text-align_center">
+                                            <div class="slds-flex_column">
+                                                <lightning-icon icon-name="utility:apps" size="large" class="slds-m-bottom_medium text-weak-icon"></lightning-icon>
+                                                <p class="slds-text-color_weak">No startable workflow definitions were discovered in this org.</p>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                        </template>
+
+                        <template if:false={viewingCatalog}>
                         <template if:true={selectedInstanceId}>
                         <template if:true={loadingDetails}>
 
@@ -1342,6 +1454,7 @@
                             <p class="slds-text-color_weak slds-m-top_x-small">Select a workflow instance from the list to view its DAG path, state values, and execution steps.</p>
                         </div>
                     </template>
+                        </template><!-- /if:false viewingCatalog -->
                         </template>
                         </template>
                         </template>
