@@ -219,7 +219,7 @@ static void testIntermediateState() {
 }
 ```
 
-A harness instance is stateful — its hop counter, known-instance set, and `disableQueueableInTest` flag persist across calls. You can call `step()`, `driveUntilStep()`, and `drive()` in sequence on the same harness and they compose correctly.
+A harness instance is stateful — its hop counter, known-instance set, and `disableAutoTimeSkip` flag persist across calls. You can call `step()`, `driveUntilStep()`, and `drive()` in sequence on the same harness and they compose correctly.
 
 ---
 
@@ -294,15 +294,15 @@ static void testStepIdempotency() {
         .build();
 
     StepResult result = new MyWorkflow.ChargeStep().execute(ctx);
-    System.assertEquals(StepResult.ActionType.COMPLETE, result.action);
+    System.assertEquals(StepResult.ActionType.COMPLETE, result.directive().action);
 
     // Re-run with the same context — side effects should be deduplicated.
     StepResult retry = new MyWorkflow.ChargeStep().execute(ctx);
-    System.assert(((Map<String,Object>)JSON.deserializeUntyped(retry.outputJson)).get('deduplicated') == true);
+    System.assert(((Map<String,Object>)JSON.deserializeUntyped(retry.directive().outputJson)).get('deduplicated') == true);
 }
 ```
 
-For more detailed information, see the [StepContextTestBuilder Developer Guide](file:///c:/Users/markm/revenant/docs/step-context-test-builder.md). See `IdempotentChargeWorkflowExampleTest.testChargePaymentStepWithBuilder` for a reference example.
+For more detailed information, see the [StepContextTestBuilder Developer Guide](./step-context-test-builder.md). See `IdempotentChargeWorkflowExampleTest.testChargePaymentStepWithBuilder` for a reference example.
 
 ---
 

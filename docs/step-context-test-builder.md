@@ -11,9 +11,9 @@ It enables unit-testing step behavior (input parsing, branching, idempotency, ou
 - **Fluent Chained Setters**: Easily set any property of `StepContext` (workflow name, step name, instance ID, inputs, outputs, attempt count).
 - **Auto-serialization Overloads**: Set map/object inputs directly via `input(Object)`, `workflowInput(Object)`, `previousStepOutput(Object)`, and `stepState(Object)`. They are automatically serialized to JSON.
 - **Auto-generated IDs**: Automatically generates valid faked Salesforce IDs for the workflow instance and signal records if they are not explicitly specified.
-- **Inbound Signal Seeding**: Seed inbound signals via name and payload (or full Signal objects) without inserting `Workflow_Signal__c` database rows.
-- **Pre-seeded once() Captures**: Seed stable return values for the `once()` capture-once API without running the producers. Seeded values are automatically JSON-normalized to replicate production deserialization boundaries.
-- **Genuine StepContext**: Produces a real `StepContext` instance, ensuring that methods like `once()`, `getSignal()`, `idempotencyKey`, and `getPendingEmits()` behave exactly as they do in production.
+- **Inbound Signal Seeding**: Seed inbound signals as `StepContext.Signal` objects without inserting `Workflow_Signal__c` database rows.
+- **Pre-seeded once() Captures**: Seed stable return values for the `captures().once()` capture-once API without running the producers. Seeded values are automatically JSON-normalized to replicate production deserialization boundaries.
+- **Genuine StepContext**: Produces a real `StepContext` instance, ensuring that the accessor sub-objects — `captures().once()`, `signals().getSignal()`, `events().getPendingEmits()` — and `idempotencyKey` behave exactly as they do in production.
 
 ---
 
@@ -34,9 +34,9 @@ static void testMyStepInIsolation() {
     StepResult result = new MyWorkflow.ChargePaymentStep().execute(ctx);
 
     // 3. Assert on outputs and next step routing
-    System.assertEquals(StepResult.ActionType.COMPLETE, result.action);
-    System.assertEquals('MyWorkflow.SuccessStep', result.nextStepName);
-    Map<String, Object> output = (Map<String, Object>) JSON.deserializeUntyped(result.outputJson);
+    System.assertEquals(StepResult.ActionType.COMPLETE, result.directive().action);
+    System.assertEquals('MyWorkflow.SuccessStep', result.directive().nextStepName);
+    Map<String, Object> output = (Map<String, Object>) JSON.deserializeUntyped(result.directive().outputJson);
     System.assertEquals('Success', (String) output.get('status'));
 }
 ```
@@ -45,21 +45,21 @@ static void testMyStepInIsolation() {
 
 ## Seeding Inbound Signals
 
-You can simulate inbound signals on the instance by using `addSignal(name, payload)`:
+You can simulate inbound signals on the instance by passing a `StepContext.Signal` to `addSignal(...)` (the constructor is `new StepContext.Signal(signalId, name, payload)` — pass `null` for the id to have one auto-generated):
 
 ```java
 @isTest
 static void testStepWaitingForApproval() {
     // Arrange: Seed an approval signal with a payload
     StepContext ctx = new StepContextTestBuilder()
-        .addSignal('Approve:Order', '{"approved":true,"approver":"mgr@example.com"}')
+        .addSignal(new StepContext.Signal(null, 'Approve:Order', '{"approved":true,"approver":"mgr@example.com"}'))
         .build();
 
     // Act: Execute the step
     StepResult result = new MyWorkflow.ShipOrderStep().execute(ctx);
 
     // Assert: The step successfully consumed the signal
-    System.assertEquals('MyWorkflow.DeliverStep', result.nextStepName);
+    System.assertEquals('MyWorkflow.DeliverStep', result.directive().nextStepName);
 }
 ```
 
@@ -67,7 +67,7 @@ static void testStepWaitingForApproval() {
 
 ## Seeding once() Captured Values
 
-If a step uses the capture-once API (`ctx.once(key, producer)`) to stabilize non-deterministic values (like generated reference numbers or timestamps), you can pre-seed their values to test replay behavior. Seeded values undergo a JSON serialize/deserialize round-trip to guarantee 100% fidelity with the production database serialization:
+If a step uses the capture-once API (`ctx.captures().once(key, producer)`) to stabilize non-deterministic values (like generated reference numbers or timestamps), you can pre-seed their values to test replay behavior. Seeded values undergo a JSON serialize/deserialize round-trip to guarantee 100% fidelity with the production database serialization:
 
 ```java
 @isTest
@@ -81,7 +81,7 @@ static void testReplayBehavior() {
     StepResult result = new MyWorkflow.GenerateInvoiceStep().execute(ctx);
 
     // Assert
-    Map<String, Object> output = (Map<String, Object>) JSON.deserializeUntyped(result.outputJson);
+    Map<String, Object> output = (Map<String, Object>) JSON.deserializeUntyped(result.directive().outputJson);
     System.assertEquals('TX-777', (String) output.get('invoiceTxId'));
 }
 ```

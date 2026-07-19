@@ -47,7 +47,7 @@ a marker.
 
 When an output exceeds ~100k characters the engine offloads it to `ContentVersion`
 and leaves a marker (`{"$attachmentId":...}`) in `Workflow_Instance__c.Output__c`.
-Only Apex paths that call `WorkflowEngine.resolvePayload()` (and the dashboard
+Only Apex paths that call `WorkflowPayloadOffload.resolvePayload()` (and the dashboard
 helpers) rehydrate the real body. **A Flow/API subscriber that reads `Output__c`
 directly will get the marker, not the JSON**, for those runs. To read output
 reliably, route through a rehydrating Apex invocable / the #9 read action, or look up

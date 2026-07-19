@@ -4,6 +4,8 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 
 <img width="3726" height="1832" alt="Screenshot 2026-06-24 100608" src="https://github.com/user-attachments/assets/6056cf52-6918-45bc-bf20-03590460aa7d" />
 
+> **Upgrading from an earlier build?** The public API was reshaped around request objects, `StepContext` accessor sub-objects (`ctx.signals()`, `ctx.events()`, `ctx.captures()`, …), and a fluent `StepResult` builder. See **[MIGRATION.md](MIGRATION.md)** for the full list of breaking changes and old→new mappings.
+
 ---
 
 ## Key Features
@@ -21,13 +23,13 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 - **Watchdog Step Timeouts**: Steps can declare custom execution timeouts. A single global watchdog poller ([WorkflowWatchdog](force-app/main/default/classes/WorkflowWatchdog.cls)) sweeps the database for any timed-out steps or suspended instances, failing or resuming them cleanly without hitting Salesforce's 100 concurrent scheduled jobs limit.
 - **Large Payload Offloading**: When input, output, or state serialization strings exceed 100,000 characters (approaching the 131,072-character long text area limit), the engine transparently offloads the payload to `ContentVersion` files and links them to the parent instance.
 - **Effective-Once Side Effects (Idempotency Keys)**: The engine guarantees only at-least-once execution, so `execute()` (and `compensate()`) can re-run on retries, operator re-drives, and at-least-once event resumes. [StepContext](force-app/main/default/classes/StepContext.cls) exposes a read-only `idempotencyKey` that is stable across every re-execution of the same logical step yet distinct per `(instance, step)`. Forward it to an external system (e.g. as a Stripe `Idempotency-Key` header) for effective-once side effects without inventing your own dedup token. See [IdempotentChargeWorkflowExample](examples/main/default/classes/IdempotentChargeWorkflowExample.cls).
-- **Capture-Once Local Values (`once()`)**: Stabilizes values generated _locally_ inside a step — generated reference numbers, Crypto-random tokens, random branch decisions, timestamps — so they do not drift across retries, yield/resume cycles, at-least-once event resumes, or operator re-drives. `StepContext.once(key, producer)` invokes the producer at most once per `(instance, step, key)` and returns the same durably recorded value on every subsequent re-execution. Captures are JSON-normalized for durability, so producers should return JSON-native values (capture a timestamp as epoch millis or an ISO string rather than a native `Datetime`), and a capture becomes durable once the step reaches its next checkpoint (complete/yield/sleep/suspend/graceful retry). Contrast with `idempotencyKey`: use `idempotencyKey` to make an **external API call** effective-once; use `once()` to keep a **locally generated value** stable. See [CaptureOnceWorkflowExample](examples/main/default/classes/CaptureOnceWorkflowExample.cls).
+- **Capture-Once Local Values (`once()`)**: Stabilizes values generated _locally_ inside a step — generated reference numbers, Crypto-random tokens, random branch decisions, timestamps — so they do not drift across retries, yield/resume cycles, at-least-once event resumes, or operator re-drives. `ctx.captures().once(key, producer)` invokes the producer at most once per `(instance, step, key)` and returns the same durably recorded value on every subsequent re-execution. Captures are JSON-normalized for durability, so producers should return JSON-native values (capture a timestamp as epoch millis or an ISO string rather than a native `Datetime`), and a capture becomes durable once the step reaches its next checkpoint (complete/yield/sleep/suspend/graceful retry). Contrast with `idempotencyKey`: use `idempotencyKey` to make an **external API call** effective-once; use `once()` to keep a **locally generated value** stable. Capture-once lives on the `ctx.captures()` accessor. See [CaptureOnceWorkflowExample](examples/main/default/classes/CaptureOnceWorkflowExample.cls).
 - **Durable Rate Limiting (`RateLimiter`)**: Throttle outbound callouts to external APIs (e.g. Stripe, Slack) across many concurrent workflow instances. A step calls `RateLimiter.acquire(integrationKey)`. When the rate limit is exceeded (`isAllowed == false`), the step returns `StepResult.sleep(sleepDurationSeconds)` to suspend and resume once tokens refill, avoiding CPU-burning busy-tries and saga-rolling exceptions. Pair with `StepContext.idempotencyKey` to keep callouts effective-once. Note: Transient callout retries (via `RetryPolicy`) or manual operator re-drives bypass the limiter but are safely throttled by the retry back-off delay. See [ThrottledCalloutWorkflowExample](examples/main/default/classes/ThrottledCalloutWorkflowExample.cls).
 
 ### Integration & Monitoring
 
-- **Platform Event Signaling**: External integrations, webhook listeners, or human-in-the-loop approvals wake up suspended workflows by publishing `Workflow_Event__e` platform events. The resuming step reads the inbound signal name and payload directly from `StepContext` (e.g. `ctx.getSignal('Approve:Order')`), and the engine marks observed signals consumed at the step's `COMPLETE` transition so at-least-once redelivered duplicates are never double-processed.
-- **Effectively-Once Outbound Emit (`ctx.emit()`)**: A step can hand the engine one or more author-owned domain Platform Events to publish mid-workflow — `ctx.emit(new Order_Shipped__e(...))` or `StepResult.complete(next, output, events)` — instead of calling `EventBus.publish()` itself. The engine buffers them and publishes them in the **same transaction that writes the step's append-only `COMPLETE`/`SPLIT` record**, before the next step begins, so retries, yields, suspends, operator re-drives, and at-least-once resumes that re-run `execute()` before that commit publish **nothing**, and a step already durably `COMPLETE` never re-executes and so never re-emits — producer-side effectively-once with no hand-rolled dedup token. Authors keep their own `__e` (use `publishBehavior=PublishAfterCommit`); the engine imposes no envelope. Delivery to subscribers stays at-least-once, so subscribers remain idempotent. This is the mid-flight outbound complement to inbound signals and the terminal lifecycle event. See [OrderChoreographyWorkflowExample](examples/main/default/classes/OrderChoreographyWorkflowExample.cls) (workflow A emits an event that starts workflow B).
+- **Platform Event Signaling**: External integrations, webhook listeners, or human-in-the-loop approvals wake up suspended workflows by publishing `Workflow_Event__e` platform events. The resuming step reads the inbound signal name and payload directly from `StepContext` via the signals accessor (e.g. `ctx.signals().getSignal('Approve:Order')`), and the engine marks observed signals consumed at the step's `COMPLETE` transition so at-least-once redelivered duplicates are never double-processed.
+- **Effectively-Once Outbound Emit (`ctx.events().emit()`)**: A step can hand the engine one or more author-owned domain Platform Events to publish mid-workflow — `ctx.events().emit(new Order_Shipped__e(...))` — instead of calling `EventBus.publish()` itself. The engine buffers them and publishes them in the **same transaction that writes the step's append-only `COMPLETE`/`SPLIT` record**, before the next step begins, so retries, yields, suspends, operator re-drives, and at-least-once resumes that re-run `execute()` before that commit publish **nothing**, and a step already durably `COMPLETE` never re-executes and so never re-emits — producer-side effectively-once with no hand-rolled dedup token. Authors keep their own `__e` (use `publishBehavior=PublishAfterCommit`); the engine imposes no envelope. Delivery to subscribers stays at-least-once, so subscribers remain idempotent. This is the mid-flight outbound complement to inbound signals and the terminal lifecycle event. See [OrderChoreographyWorkflowExample](examples/main/default/classes/OrderChoreographyWorkflowExample.cls) (workflow A emits an event that starts workflow B).
 - **Outbound Lifecycle Events**: The engine publishes a `Workflow_Lifecycle__e` platform event (outcome metadata only) each time an instance reaches a terminal state (`Completed`/`Failed`/`Compensated`/`Cancelled`), so a Flow **Pause** element or an external subscriber can react event-driven instead of polling — exactly one event per logical workflow (one per `ContinuedAsNew` chain). Fire-and-forget and operator-toggleable via `Revenant_Config__mdt.Publish_Lifecycle_Events__c`. See [docs/workflow-lifecycle-event.md](docs/workflow-lifecycle-event.md).
 - **Salesforce Flow Interoperability**: Launches or signals workflows using Invocable Actions from Salesforce Flow, or executes standard Autolaunched Flows as steps within a workflow using the generic `WorkflowFlowStep` wrapper.
 - **Custom Metadata Alerts**: Supports operator-configurable failure notification thresholds (consecutive failures, sliding rate counts) using `Workflow_Alert_Config__mdt` custom metadata records.
@@ -157,14 +159,33 @@ Id instanceId = WorkflowEngine.start(
 );
 ```
 
+**The request-object pattern.** Every engine entry point that takes more than a name/key/payload now accepts a small **request object** instead of a long telescoping argument list — `WorkflowEngine.StartRequest`, `WorkflowEngine.SignalRequest`, `WorkflowEngine.SignalOrStartRequest`, and `WorkflowDebouncer.DebounceRequest`. Each has a constructor for its required fields and fluent `with*` setters for the optional ones, and each entry point has a `List<...>` overload for bulk calls. The three-argument `start(...)` and `signal(...)` shortcuts above still exist for the common case; reach for the request object when you need attributes, a parent link, a dedup/idempotency key, or bulk processing:
+
+```java
+// Attach searchable business attributes and a parent link at start.
+Id instanceId = WorkflowEngine.start(
+    new WorkflowEngine.StartRequest('OnboardingWorkflow', 'Opp_Onboarding_006As00000abcde', inputMap)
+        .withAttributes(new Map<String, String>{ 'region' => 'EU' })
+        .withParent(parentInstanceId)
+);
+
+// Signal with an explicit idempotency key for at-least-once event sources.
+WorkflowEngine.signal(
+    new WorkflowEngine.SignalRequest(correlationKey, 'Approve:Order', '{"approved":true}')
+        .withIdempotencyKey(inboundEventId)
+);
+```
+
 ### 4. Read Inbound Signals & Approvals
 
-A step that suspends for an approval (`StepResult.waitForApproval(...)`) or an external event (`StepResult.suspend()`) is woken by `WorkflowEngine.signal(keyOrId, name, payload)` (or a `SIGNAL:`-typed `Workflow_Event__e`). On resume, the step reads the signal that woke it directly from `StepContext` — no SOQL against engine-internal objects, and no hand-rolled "consumed" marker:
+A step that suspends for an approval (`StepResult.waitForApproval(...)`) or an external event (`StepResult.suspend()`) is woken by `WorkflowEngine.signal(keyOrId, name, payload)` (or a `SIGNAL:`-typed `Workflow_Event__e`). On resume, the step reads the signal that woke it directly from `StepContext` — no SOQL against engine-internal objects, and no hand-rolled "consumed" marker.
+
+**Accessor sub-objects.** `StepContext` groups its step-facing primitives onto six accessor sub-objects rather than exposing dozens of methods on the context itself: `ctx.signals()` (read inbound signals and child outcomes), `ctx.events()` (buffer outbound Platform Events), `ctx.captures()` (capture-once / patch markers), `ctx.logger()` (step breadcrumbs), `ctx.progress()` (progress reporting), and `ctx.retry()` (attempt/failure metadata). Plain state — `ctx.workflowInputJson`, `ctx.stepStateJson`, `ctx.previousStepOutput`, `ctx.idempotencyKey`, `ctx.previousRunAt`, `ctx.attempt`, `ctx.shouldYield()` — stays directly on the context. So signal reads go through `ctx.signals()`:
 
 ```java
 public StepResult execute(StepContext ctx) {
     // Most recent signal of this name; never null.
-    StepContext.Signal decision = ctx.getSignal('Approve:Order');
+    StepContext.Signal decision = ctx.signals().getSignal('Approve:Order');
 
     if (!decision.isPresent()) {
         // First run (or resumed by a timer): nothing has signaled us yet.
@@ -183,12 +204,12 @@ public StepResult execute(StepContext ctx) {
 
 Accessors available inside `execute()` and `compensate()`:
 
-| Accessor               | Returns                                                                                                                                          |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ctx.getSignals()`     | All pending signals, in arrival order (never null).                                                                                              |
-| `ctx.getSignals(name)` | Pending signals matching `name`, in arrival order.                                                                                               |
-| `ctx.getSignal(name)`  | The most recent pending signal of `name`, or a clean empty result (`isPresent() == false`, `payload == null`) when none is pending — never null. |
-| `ctx.hasSignal(name)`  | `true` if any pending signal matches `name`.                                                                                                     |
+| Accessor                         | Returns                                                                                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ctx.signals().getSignals()`     | All pending signals, in arrival order (never null).                                                                                              |
+| `ctx.signals().getSignals(name)` | Pending signals matching `name`, in arrival order.                                                                                               |
+| `ctx.signals().getSignal(name)`  | The most recent pending signal of `name`, or a clean empty result (`isPresent() == false`, `payload == null`) when none is pending — never null. |
+| `ctx.signals().hasSignal(name)`  | `true` if any pending signal matches `name`.                                                                                                     |
 
 Consumption is engine-managed and tied to the step's successful `COMPLETE` (or `SPLIT`) transition: signals the step observes are marked consumed only once the step completes, so a step that yields or retries before completing re-observes the same pending signal, and an at-least-once redelivered duplicate cannot be reprocessed by a later step. Transitions that suspend and **re-run the same step** — `SUSPEND`, `WAIT_FOR_APPROVAL`, `SLEEP`, and `START_CHILD` — intentionally do _not_ consume, so the signal that resumes the step survives to be read. A `START_CHILD` step that also reads a kickoff signal should therefore check its child-completion signal before re-acting on the kickoff (or stash what it needs in step state). `Cancel` / `CancelWorkflow` control signals remain engine-handled and are never surfaced as readable payloads. See [`ApprovalSignalWorkflowExample`](examples/main/default/classes/ApprovalSignalWorkflowExample.cls) for a complete approve/reject example with a redelivery test.
 
@@ -196,7 +217,7 @@ Consumption is engine-managed and tied to the step's successful `COMPLETE` (or `
 
 When a step reads a signal while running as one branch of a parallel (scatter-gather) fan-out, the engine **atomically claims** each signal it reads (moving it to an internal `Processing` state) so two concurrent branches can never both process the same payload; the claim is promoted to consumed when the branch completes, and rolled back if the branch yields/suspends/retries. Each branch consumes (and rolls back) only the signals it itself claimed, tracked per row, so it never disturbs a signal a sibling has claimed or merely observed. A parallel instance suspended on a signal is resumed branch-by-branch when the signal arrives, and a bulk signal to many parallel instances wakes their branches with a single platform-event publish.
 
-Claims are bounded for governor safety. A branch that needs to inspect **many distinct signal names** should call `ctx.getSignals()` once and filter in memory rather than issuing a separate `ctx.getSignal(name)` / `ctx.hasSignal(name)` lookup per name: each named claim is its own DML statement and lock query, so beyond an internal claim budget the overflow reads degrade to **at-least-once** (read without claiming) instead of failing. `getSignals()` claims a whole page in one statement and stays exactly-once. [`ParallelSignalFanInWorkflowExample`](examples/main/default/classes/ParallelSignalFanInWorkflowExample.cls) is the copyable reference for this fan-in pattern.
+Claims are bounded for governor safety. A branch that needs to inspect **many distinct signal names** should call `ctx.signals().getSignals()` once and filter in memory rather than issuing a separate `ctx.signals().getSignal(name)` / `ctx.signals().hasSignal(name)` lookup per name: each named claim is its own DML statement and lock query, so beyond an internal claim budget the overflow reads degrade to **at-least-once** (read without claiming) instead of failing. `getSignals()` claims a whole page in one statement and stays exactly-once. [`ParallelSignalFanInWorkflowExample`](examples/main/default/classes/ParallelSignalFanInWorkflowExample.cls) is the copyable reference for this fan-in pattern.
 
 Because claiming writes uncommitted DML, a parallel-branch step that makes an **HTTP callout whose endpoint or body comes from the signal payload** must implement the [`CalloutStep`](force-app/main/default/classes/CalloutStep.cls) marker. Such a step reads signals _without_ claiming (at-least-once delivery instead of exactly-once), so the callout is legal; use distinct signal names per branch or idempotent callouts when relying on this mode. A `CalloutStep` may also be `TimeoutConfigurable`: the engine defers its pre-execution timeout write past `execute()` (and past `compensate()` for a `CalloutStep` that is also a `CompensatableStep`) so the synchronous callout is not blocked by uncommitted work (the step's timeout was already armed when it was queued, so the watchdog stays in effect).
 
@@ -227,7 +248,7 @@ The suspend→signal→resume pattern combined with saga rollback on rejection i
 
 ```java
 public StepResult execute(StepContext ctx) {
-    StepContext.Signal decision = ctx.getSignal('Approve:PurchaseApproval');
+    StepContext.Signal decision = ctx.signals().getSignal('Approve:PurchaseApproval');
 
     if (!decision.isPresent()) {
         // First run: nothing decided yet -- suspend until an approver signals the workflow.
@@ -235,6 +256,9 @@ public StepResult execute(StepContext ctx) {
         // requires an approver to hold; null leaves the gate unrestricted (pass e.g.
         // 'Workflow_Admin' to restrict who may decide).
         return StepResult.waitForApproval('PurchaseApproval', null);
+        // Need a deadline? Chain the fluent timeout instead of a longer arg list:
+        //   return StepResult.waitForApproval('PurchaseApproval', null)
+        //       .withApprovalTimeout(86400, 'PurchaseApprovalTimedOut');
     }
 
     // Resume: forward the decision payload; getNextStep() will route to approve or reject.
@@ -249,7 +273,7 @@ public StepResult execute(StepContext ctx) {
 public String getNextStep(String currentStepName, StepResult result) {
     if (currentStepName == 'ApprovalWorkflowExample.RequestApprovalStep') {
         Map<String, Object> decision =
-            (Map<String, Object>) JSON.deserializeUntyped(result.outputJson);
+            (Map<String, Object>) JSON.deserializeUntyped(result.directive().outputJson);
         Boolean approved = (Boolean) decision.get('approved');
         return approved
             ? 'ApprovalWorkflowExample.PlaceOrderStep'
@@ -273,14 +297,14 @@ WorkflowEngine.signal(correlationKey, 'Approve:PurchaseApproval', '{"approved":t
 
 **Saga rollback on rejection.** The reject step throws a `WorkflowEngine.WorkflowException`. Because the prior `CompensatableStep` is on `Compensation_Stack__c`, the engine automatically calls its `compensate()` method in LIFO order — reading the original step output from `ctx.stepStateJson` to retrieve any resource identifiers — and the instance reaches `Compensated` when the rollback is done. No additional wiring is required: the stack is maintained by the engine whenever a `CompensatableStep` completes on the forward path.
 
-**Deliberate, terminal failures — `StepResult.fail(reason)`.** For a _planned_ business-rule failure ("order already refunded", "account closed", "KYC rejected"), return `StepResult.fail(reason)` instead of throwing. Unlike a thrown exception — which surfaces an Apex stack trace in `Error_Message__c` / on the dashboard — `fail()` records your operator-readable `reason` verbatim and stops the workflow in **zero retry hops** (it is Revenant's non-retryable / permanent-failure primitive, the terminal counterpart to opt-in `StepResult.retry()`). It honors the same compensation contract: with a non-empty `Compensation_Stack__c` the instance transitions to `Compensating` and runs `compensate()` LIFO; with no stack it goes straight to `Failed`. Pass structured data with `StepResult.fail(reason, failureData)` — it is persisted on the failing step's `Error_Details__c` for downstream compensation/alerting to inspect.
+**Deliberate, terminal failures — `StepResult.fail(reason)`.** For a _planned_ business-rule failure ("order already refunded", "account closed", "KYC rejected"), return `StepResult.fail(reason)` instead of throwing. Unlike a thrown exception — which surfaces an Apex stack trace in `Error_Message__c` / on the dashboard — `fail()` records your operator-readable `reason` verbatim and stops the workflow in **zero retry hops** (it is Revenant's non-retryable / permanent-failure primitive, the terminal counterpart to opt-in `StepResult.retry(policy)`). It honors the same compensation contract: with a non-empty `Compensation_Stack__c` the instance transitions to `Compensating` and runs `compensate()` LIFO; with no stack it goes straight to `Failed`. Pass structured data with `StepResult.fail(reason, failureData)` — it is persisted on the failing step's `Error_Details__c` for downstream compensation/alerting to inspect.
 
 ```java
 public StepResult execute(StepContext ctx) {
     if (orderAlreadyRefunded(ctx)) {
         return StepResult.fail(
             'Order already refunded',
-            new Map<String, Object>{ 'orderId' => ctx.getSignal('Order').payload }
+            new Map<String, Object>{ 'orderId' => ctx.signals().getSignal('Order').payload }
         );
     }
     ...
@@ -313,10 +337,10 @@ The engine ships full parent→child orchestration: `StepResult.startChild()` su
 | Concern               | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Suspend**           | Return `StepResult.startChild(childWorkflowName, childKey, input)` from the step that launches the child. The engine suspends the parent automatically — do **not** also return `StepResult.suspend()`.                                                                                                                                                                                                                                                      |
-| **Child output**      | The child's final outcome (status, error message, and output) can be read with `ctx.getChildOutcome(childKey)`. This is the preferred way to distinguish a successful child from a failed, compensated, or cancelled one without hand-rolled SOQL. For backward compatibility, the successful child's final output still arrives as the payload of the `ChildCompleted:<childKey>` signal (read with `ctx.getSignal("ChildCompleted:" + childKey).payload`). |
+| **Child output**      | The child's final outcome (status, error message, and output) can be read with `ctx.signals().getChildOutcome(childKey)`. This is the preferred way to distinguish a successful child from a failed, compensated, or cancelled one without hand-rolled SOQL. For backward compatibility, the successful child's final output still arrives as the payload of the `ChildCompleted:<childKey>` signal (read with `ctx.signals().getSignal("ChildCompleted:" + childKey).payload`). |
 | **Idempotent resume** | The step that launched the child also handles the resume: check for the child outcome first, then act on it. Return `StepResult.complete()` (not `suspend()`) on the resume path — returning COMPLETE triggers engine-managed signal consumption, so an at-least-once redelivered duplicate completion or failure event cannot double-advance the parent.                                                                                                    |
 | **Idempotent launch** | The engine automatically dedupes child launches against the deterministic `(Parent_Instance__c, Correlation_Key__c)` pair. If `startChild()` is called again during a re-entrant hop or watchdog re-check, and the active child already exists, the engine resolves to an idempotent re-suspend without starting a duplicate or failing the parent.                                                                                                          |
-| **Cancellation**      | `WorkflowEngine.cancel(parentId)` cancels the parent and all of its active descendants (root-first traversal over `Parent_Instance__c`), so explicitly cancelling a parent reaps its in-flight children. (Use `WorkflowEngine.cancelWithCompensations(parentId)` to also run each cancelled instance's compensation stack.)                                                                                                                                                                                                                                              |
+| **Cancellation**      | `WorkflowEngine.cancel(parentId)` cancels the parent and all of its active descendants (root-first traversal over `Parent_Instance__c`), so explicitly cancelling a parent reaps its in-flight children. (Use `WorkflowCancellation.cancelWithCompensations(parentId)` — the compensating-cancel entry point lives on `WorkflowCancellation`, not the engine — to also run each cancelled instance's compensation stack.)                                                                                                                                                                                                                                              |
 
 **Caveats (failure paths are not auto-handled).** This contract covers parent→child composition. One failure mode still needs explicit handling in a production composite:
 
@@ -328,13 +352,13 @@ The engine ships full parent→child orchestration: `StepResult.startChild()` su
 public class RequestCreditCheckStep implements WorkflowStep {
     public StepResult execute(StepContext ctx) {
         String childKey = 'CreditCheck_' + ctx.workflowInstanceId;
-        StepContext.ChildOutcome outcome = ctx.getChildOutcome(childKey);
+        StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome(childKey);
 
         if (outcome.isPresent()) {
             if (outcome.isSuccess()) {
                 // Resume: read the child's output.
                 Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(
-                    WorkflowEngine.resolvePayload(outcome.output)
+                    WorkflowPayloadOffload.resolvePayload(outcome.output)
                 );
                 // ... inspect childResult and return StepResult.complete(nextStep, output)
             } else {
@@ -400,18 +424,18 @@ _Honest Boundary:_ The guard is best-effort under concurrent re-hops (mirroring 
 
 ### 8. Read a Workflow's Result (Apex)
 
-For Apex callers — ISVs, trigger handlers, batch jobs, invocable wrappers — `WorkflowEngine.getStatus` is the **supported read contract**. Do not query `Workflow_Instance__c` fields directly: the field names are internal, and `Output__c` silently holds a storage pointer (not the real value) when the output exceeds 100k characters.
+For Apex callers — ISVs, trigger handlers, batch jobs, invocable wrappers — `WorkflowStatusRead.getStatus` is the **supported read contract** (it returns the `WorkflowEngine.WorkflowStatus` DTO). Do not query `Workflow_Instance__c` fields directly: the field names are internal, and `Output__c` silently holds a storage pointer (not the real value) when the output exceeds 100k characters.
 
 ```java
 // By instance Id (precise handle — does not follow ContinuedAsNew chains)
-WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(instanceId);
+WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(instanceId);
 
 // By correlation key (preferred for polling — picks the live/latest run)
-WorkflowEngine.WorkflowStatus ws = WorkflowEngine.getStatus(correlationKey);
+WorkflowEngine.WorkflowStatus ws = WorkflowStatusRead.getStatus(correlationKey);
 
 // Bulk variants (constant SOQL, regardless of list size)
-List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(idList);
-List<WorkflowEngine.WorkflowStatus> results = WorkflowEngine.getStatus(keyList);
+List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(idList);
+List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(keyList);
 ```
 
 **`WorkflowStatus` fields:**
