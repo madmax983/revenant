@@ -290,7 +290,6 @@ public inherited sharing class WorkflowStorageFootprintService {
         OR Title LIKE 'Captures_%'
         OR Title LIKE 'VerificationPayload%')
       WITH SYSTEM_MODE
-      LIMIT 50000
     ];
     Object total = ar.get('total');
     return total == null ? 0L : ((Decimal) total).longValue();
