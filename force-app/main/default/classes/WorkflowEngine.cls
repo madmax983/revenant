@@ -235,6 +235,136 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  /**
+   * Stable read-only DTO for a single step execution in an instance's timeline.
+   * A forever-public API contract: v1 is metadata-only (no per-step input/output
+   * payload bodies). All fields are read-only to callers (private setters); the
+   * read layer populates them once via the constructor.
+   */
+  public class StepHistoryEntry {
+    /** @description Salesforce Id of the step-execution row (stable identifier). */
+    public Id executionId { get; private set; }
+    /**
+     * @description Logical step name. Compensation executions carry the
+     * `<step>_Compensate` name; use {@link #isCompensation} to distinguish them.
+     */
+    public String stepName { get; private set; }
+    /**
+     * @description Raw step status (e.g. `Pending`, `Running`, `Completed`,
+     * `Failed`, `Compensated`).
+     */
+    public String status { get; private set; }
+    /** @description Retry attempt count for this step (0 on the first attempt). */
+    public Integer attempt { get; private set; }
+    /** @description When this step execution was first appended to the trail. */
+    public Datetime startedAt { get; private set; }
+    /**
+     * @description When this step reached a terminal status; null while the step
+     * is still in flight.
+     */
+    public Datetime endedAt { get; private set; }
+    /**
+     * @description Elapsed time from `startedAt` to `endedAt` in milliseconds;
+     * null while the step is still in flight.
+     */
+    public Long durationMs { get; private set; }
+    /** @description Failure detail for a failed step; null when none is recorded. */
+    public String errorMessage { get; private set; }
+    /**
+     * @description True when this row is a compensation (rollback) execution,
+     * false for a forward execution.
+     */
+    public Boolean isCompensation { get; private set; }
+
+    /**
+     * @description Builds a fully-populated history entry from a queried
+     * step-execution row. Terminality (and therefore `endedAt`/`durationMs`), the
+     * compensation flag, and the normalized attempt count are derived here so the
+     * read layer never touches the private setters. Used by the extracted read
+     * layer ({@link WorkflowHistoryRead}).
+     * @param row the queried `Workflow_Step_Execution__c` row to project
+     */
+    public StepHistoryEntry(Workflow_Step_Execution__c row) {
+      this.executionId = row.Id;
+      this.stepName = row.Step_Name__c;
+      this.status = row.Status__c;
+      this.attempt = row.Retry_Count__c == null
+        ? 0
+        : row.Retry_Count__c.intValue();
+      this.startedAt = row.CreatedDate;
+      Boolean isTerminal = WorkflowHistoryRead.TERMINAL_STEP_STATUSES.contains(
+        row.Status__c
+      );
+      this.endedAt = isTerminal ? row.LastModifiedDate : null;
+      this.durationMs = (isTerminal &&
+        this.startedAt != null &&
+        this.endedAt != null)
+        ? this.endedAt.getTime() - this.startedAt.getTime()
+        : null;
+      this.errorMessage = row.Error_Details__c;
+      this.isCompensation =
+        row.Step_Name__c != null && row.Step_Name__c.endsWith('_Compensate');
+    }
+  }
+
+  /**
+   * Stable read-only wrapper returned by the history read API for one instance:
+   * the ordered `StepHistoryEntry` list plus an explicit truncation flag so a
+   * capped history is never silently cut. Forever-public contract; fields are
+   * read-only to callers (private setters).
+   */
+  public class StepHistory {
+    /**
+     * @description The step-execution entries in append (execution) order,
+     * capped at {@link WorkflowHistoryRead#MAX_HISTORY_ROWS}. Empty for a known
+     * instance that has not yet logged a step.
+     */
+    public List<StepHistoryEntry> entries { get; private set; }
+    /**
+     * @description True when the instance had more step executions than the row
+     * cap and `entries` was truncated to the earliest
+     * {@link WorkflowHistoryRead#MAX_HISTORY_ROWS} rows.
+     */
+    public Boolean isTruncated { get; private set; }
+
+    /**
+     * @description Builds the wrapper from the projected (already-capped) entries
+     * and the truncation flag computed by the read layer.
+     * @param entries the ordered, capped history entries
+     * @param isTruncated whether the history was truncated at the row cap
+     */
+    public StepHistory(List<StepHistoryEntry> entries, Boolean isTruncated) {
+      this.entries = entries;
+      this.isTruncated = isTruncated;
+    }
+  }
+
+  /**
+   * @description Returns the ordered step-execution timeline for a workflow
+   * instance by Id, or null when no instance with that Id exists. A known
+   * instance with no logged steps returns a `StepHistory` with an empty `entries`
+   * list. Read-only: at most 2 SOQL queries and zero DML. Thin delegator to
+   * {@link WorkflowHistoryRead}.
+   * @param instanceId Id of the workflow instance to read
+   * @return the instance's step history, or null when no such instance exists
+   */
+  public static StepHistory getHistory(Id instanceId) {
+    return WorkflowHistoryRead.getHistory(instanceId);
+  }
+
+  /**
+   * @description Bulk variant — returns a map from instance Id to its ordered
+   * step history. An Id with no matching instance is absent from the map; a known
+   * instance with no logged steps is present with an empty `entries` list.
+   * Read-only: a bounded, constant number of SOQL queries regardless of list size
+   * and zero DML. Thin delegator to {@link WorkflowHistoryRead}.
+   * @param instanceIds instance Ids to read
+   * @return map of instance Id to step history (absent key per unmatched Id)
+   */
+  public static Map<Id, StepHistory> getHistory(List<Id> instanceIds) {
+    return WorkflowHistoryRead.getHistory(instanceIds);
+  }
+
   // ─── End Read API ──────────────────────────────────────────────────────────
 
   /**
