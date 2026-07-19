@@ -5,15 +5,19 @@
  * `WorkflowEngine.StepHistoryEntry` and `WorkflowEngine.StepHistory`. This is the
  * timeline complement to {@link WorkflowStatusRead} (which returns the terminal
  * outcome): callers get every step that ran, in order, with attempt counts,
- * timing, error text, and a forward-vs-compensation flag, without coupling to the
- * internal `Workflow_Step_Execution__c` field API names. It is the supported read
- * contract — mirroring how `WorkflowStatusRead.getStatus` (not the facade) is the
- * supported outcome contract; the forever-public DTOs remain on `WorkflowEngine`.
+ * timing, an error flag, and a forward-vs-compensation flag, without coupling to
+ * the internal `Workflow_Step_Execution__c` field API names. It is the supported
+ * read contract — mirroring how `WorkflowStatusRead.getStatus` (not the facade) is
+ * the supported outcome contract; the forever-public DTOs remain on
+ * `WorkflowEngine`.
  *
  * Strictly read-only: a small constant number of SOQL queries and zero DML. The
- * read never mutates the append-only step-execution trail. v1 is metadata-only —
- * per-step input/output payload bodies are deliberately excluded to stay
- * heap-bounded; terminal output still comes from {@link WorkflowStatusRead}.
+ * read never mutates the append-only step-execution trail. The timeline is
+ * payload-free / heap-safe: it never loads the potentially large
+ * `Error_Details__c`, `Input__c`, or `Output__c` long-text fields. Each entry
+ * carries `hasError` (a `Boolean` derived from a bounded Id-only probe), not the
+ * error text; fetch the full detail for one row via {@link #getStepError}, and get
+ * terminal output from {@link WorkflowStatusRead}.
  */
 public inherited sharing class WorkflowHistoryRead {
   /**
@@ -53,12 +57,13 @@ public inherited sharing class WorkflowHistoryRead {
    * @description Returns the ordered step-execution timeline for a workflow
    * instance by Id, or null when no instance with that Id exists. A known
    * instance that has not yet logged a step returns a `StepHistory` whose
-   * `entries` list is empty. Costs at most 2 SOQL queries and zero DML — and
-   * exactly ONE query in the common case (rows present and within the row cap):
-   * the real total is resolved lazily with a `COUNT()` only when the history is
-   * truncated, and instance existence is probed only when no rows are returned.
+   * `entries` list is empty. Read-only and heap-safe (never loads `Error_Details__c`).
+   * Costs at most 3 SOQL queries and zero DML: the row scan plus a bounded Id-only
+   * error probe (2 queries in the common case of rows present and within the row
+   * cap); the real total is resolved lazily with a `COUNT()` only when the history
+   * is truncated, and instance existence is probed only when no rows are returned.
    * A single instance can never be scan-starved (its scan budget covers its own
-   * cap), so this lazy path cannot produce a false-empty history.
+   * cap), so this path cannot produce a false-empty history.
    * @param instanceId Id of the workflow instance to read
    * @return the instance's step history, or null when no such instance exists
    */
@@ -80,18 +85,20 @@ public inherited sharing class WorkflowHistoryRead {
       return instanceExists(instanceId)
         ? new WorkflowEngine.StepHistory(
             new List<Workflow_Step_Execution__c>(),
-            MAX_HISTORY_ROWS,
-            0
+            0,
+            new Set<Id>()
           )
         : null;
     }
 
-    // Rows present. Only when the scan hit the cap do we need the real total; an
-    // untruncated read stays at the single scan query.
+    // Rows present. Resolve which rows have error detail with a bounded Id-only
+    // probe (no long-text loaded), then the real total lazily — only a truncated
+    // history needs the COUNT.
+    Set<Id> errorIds = errorExecutionIds(rowIds(rows));
     Integer totalCount = rows.size() > MAX_HISTORY_ROWS
       ? countSteps(instanceId)
       : rows.size();
-    return new WorkflowEngine.StepHistory(rows, MAX_HISTORY_ROWS, totalCount);
+    return new WorkflowEngine.StepHistory(rows, totalCount, errorIds);
   }
 
   /**
@@ -102,13 +109,15 @@ public inherited sharing class WorkflowHistoryRead {
    * Uses a bounded, constant number of SOQL queries regardless of list size and
    * zero DML.
    *
-   * The queries are ordered small-first so the large row scan runs LAST and is
-   * sized from the REMAINING row budget — the bulk read therefore never throws
-   * `System.LimitException: Too many query rows`, even for batches large enough
-   * that the ideal scan would exceed the per-transaction row governor. It
-   * degrades gracefully to truncation instead: the small grouped `COUNT()` (≤ one
-   * aggregate row per instance) and the existence probe run first; the scan then
-   * takes whatever budget is left.
+   * The queries are ordered small-first so the large row scan (and its equally
+   * bounded follow-up error probe) run LAST, sized from the REMAINING row budget —
+   * the bulk read therefore never throws `System.LimitException: Too many query
+   * rows`, even for batches large enough that the ideal scan would exceed the
+   * per-transaction row governor. It degrades gracefully to truncation instead:
+   * the small grouped `COUNT()` (≤ one aggregate row per instance) and the
+   * existence probe run first; the scan then takes at most half of whatever budget
+   * is left (reserving room for the Id-only error probe, whose rows never exceed
+   * the scan's).
    *
    * Correctness invariant: a step-bearing instance is NEVER reported as empty. The
    * authoritative `COUNT()` supplies every requested instance's real `totalCount`,
@@ -116,6 +125,7 @@ public inherited sharing class WorkflowHistoryRead {
    * larger sibling or by the remaining row budget) still comes back with
    * `isTruncated = true` and its true `totalCount` — never a false-empty history.
    * To get the full `entries` of such a very large history, re-read it singly.
+   * Heap-safe: `Error_Details__c` is never loaded; `hasError` comes from the probe.
    * @param instanceIds instance Ids to read
    * @return map of instance Id to step history (absent key per unmatched Id)
    */
@@ -140,10 +150,10 @@ public inherited sharing class WorkflowHistoryRead {
     steplessIds.removeAll(realTotals.keySet());
     addExistingSteplessInstances(steplessIds, out);
 
-    // Query 3 (large, LAST): the row scan. Its LIMIT is the ideal number of rows
-    // (each instance capped at MAX_HISTORY_ROWS) clamped to the row budget still
-    // available after the small queries above — so it can never overrun the row
-    // governor. Because it runs last, nothing queries after it.
+    // Query 3 (large, LAST-but-one): the row scan. Its LIMIT is the ideal number
+    // of rows (each instance capped at MAX_HISTORY_ROWS) clamped to the row budget
+    // still available after the small queries above — and further halved so the
+    // Id-only error probe that follows also fits under the governor.
     Integer desired = 0;
     for (Id instId : realTotals.keySet()) {
       desired += Math.min(realTotals.get(instId), MAX_HISTORY_ROWS);
@@ -156,6 +166,11 @@ public inherited sharing class WorkflowHistoryRead {
       ? queryRowsByInstance(lookupIds, scanLimit)
       : new Map<Id, List<Workflow_Step_Execution__c>>();
 
+    // Query 4 (small, LAST): the Id-only error probe over the scanned rows — its
+    // row count never exceeds the scan's, which resolveScanLimit already reserved
+    // budget for. No long-text is loaded.
+    Set<Id> errorIds = errorExecutionIds(scannedRowIds(rowsByInstance));
+
     // Build a history for every step-bearing instance. totalCount is authoritative
     // (from the COUNT); the DTO derives isTruncated from totalCount vs the retained
     // entries, so a scan-starved instance is flagged truncated, never false-empty.
@@ -165,38 +180,36 @@ public inherited sharing class WorkflowHistoryRead {
         : new List<Workflow_Step_Execution__c>();
       out.put(
         instId,
-        new WorkflowEngine.StepHistory(
-          rows,
-          MAX_HISTORY_ROWS,
-          realTotals.get(instId)
-        )
+        new WorkflowEngine.StepHistory(rows, realTotals.get(instId), errorIds)
       );
     }
     return out;
   }
 
   /**
-   * @description Pure helper that sizes the bulk row scan so it can never overrun
-   * the SOQL row governor: the scan runs last, so it may consume all remaining row
-   * budget less a small safety margin, but no more than the ideal (desired) row
-   * count. Returns 0 when there is no budget or nothing to fetch, in which case the
-   * caller skips the scan entirely and every instance still gets its authoritative
-   * `totalCount` from the COUNT.
+   * @description Pure helper that sizes the bulk row scan so neither it nor the
+   * Id-only error probe that follows can overrun the SOQL row governor. The scan
+   * and probe are the last two queries, and the probe's row count never exceeds the
+   * scan's, so the budget must hold BOTH: the scan is capped at half of the
+   * remaining budget (less a small safety margin), and never above the ideal
+   * (desired) row count. Returns 0 when there is no budget or nothing to fetch, in
+   * which case the caller skips the scan entirely and every instance still gets its
+   * authoritative `totalCount` from the COUNT.
    * @param desired the ideal scan row count (sum of per-instance capped totals)
    * @param remainingRowBudget query rows still available this transaction
    * ({@link System.Limits#getLimitQueryRows} minus
    * {@link System.Limits#getQueryRows})
-   * @return the scan LIMIT to use, never negative and never above the budget
+   * @return the scan LIMIT to use, never negative and leaving room for the probe
    */
   @TestVisible
   private static Integer resolveScanLimit(
     Integer desired,
     Integer remainingRowBudget
   ) {
-    return Math.max(
-      0,
-      Math.min(desired, remainingRowBudget - SCAN_ROW_SAFETY_MARGIN)
-    );
+    // Reserve the margin for the caller's continued transaction, then halve so the
+    // follow-up error probe (<= scan rows) also fits.
+    Integer scanBudget = (remainingRowBudget - SCAN_ROW_SAFETY_MARGIN) / 2;
+    return Math.max(0, Math.min(desired, scanBudget));
   }
 
   /**
@@ -257,6 +270,9 @@ public inherited sharing class WorkflowHistoryRead {
     Integer scanLimit
   ) {
     Map<Id, List<Workflow_Step_Execution__c>> rowsByInstance = new Map<Id, List<Workflow_Step_Execution__c>>();
+    // Deliberately excludes the long-text fields (Error_Details__c / Input__c /
+    // Output__c) so the timeline stays heap-bounded; hasError comes from a separate
+    // Id-only probe.
     for (Workflow_Step_Execution__c row : [
       SELECT
         Id,
@@ -264,7 +280,6 @@ public inherited sharing class WorkflowHistoryRead {
         Step_Name__c,
         Status__c,
         Retry_Count__c,
-        Error_Details__c,
         CreatedDate,
         LastModifiedDate
       FROM Workflow_Step_Execution__c
@@ -312,8 +327,8 @@ public inherited sharing class WorkflowHistoryRead {
         inst.Id,
         new WorkflowEngine.StepHistory(
           new List<Workflow_Step_Execution__c>(),
-          MAX_HISTORY_ROWS,
-          0
+          0,
+          new Set<Id>()
         )
       );
     }
@@ -348,5 +363,84 @@ public inherited sharing class WorkflowHistoryRead {
       WHERE Workflow_Instance__c = :instanceId
       WITH SYSTEM_MODE
     ];
+  }
+
+  /**
+   * @description Collects the row Ids from one instance's scanned step-execution
+   * rows.
+   * @param rows the scanned rows for a single instance
+   * @return the set of their record Ids
+   */
+  private static Set<Id> rowIds(List<Workflow_Step_Execution__c> rows) {
+    Set<Id> ids = new Set<Id>();
+    for (Workflow_Step_Execution__c row : rows) {
+      ids.add(row.Id);
+    }
+    return ids;
+  }
+
+  /**
+   * @description Collects the row Ids from every instance's scanned step-execution
+   * rows (used by the bulk error probe).
+   * @param rowsByInstance the bucketed scan result
+   * @return the set of all scanned record Ids
+   */
+  private static Set<Id> scannedRowIds(
+    Map<Id, List<Workflow_Step_Execution__c>> rowsByInstance
+  ) {
+    Set<Id> ids = new Set<Id>();
+    for (List<Workflow_Step_Execution__c> rows : rowsByInstance.values()) {
+      ids.addAll(rowIds(rows));
+    }
+    return ids;
+  }
+
+  /**
+   * @description Heap-safe probe returning the subset of the given execution Ids
+   * whose `Error_Details__c` is currently populated. Selects Id only (never the
+   * long-text body), and is bounded by the number of Ids passed in — never more
+   * than the rows the scan already returned. Runs no query for an empty input.
+   * @param executionIds the scanned execution Ids to check for recorded error text
+   * @return the Ids among them that have non-null `Error_Details__c`
+   */
+  private static Set<Id> errorExecutionIds(Set<Id> executionIds) {
+    Set<Id> withError = new Set<Id>();
+    if (executionIds == null || executionIds.isEmpty()) {
+      return withError;
+    }
+    for (Workflow_Step_Execution__c row : [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE Id IN :executionIds AND Error_Details__c != NULL
+      WITH SYSTEM_MODE
+    ]) {
+      withError.add(row.Id);
+    }
+    return withError;
+  }
+
+  /**
+   * @description Returns the full `Error_Details__c` text for a single step
+   * execution, or null when the Id is unknown or the row has no error recorded.
+   * This is the per-step detail read callers use after seeing
+   * {@link WorkflowEngine.StepHistoryEntry#hasError} — it loads the long-text for
+   * exactly ONE row, so it stays heap-bounded by construction. Costs 1 SOQL query
+   * and zero DML.
+   * @param executionId Id of the step-execution row
+   * ({@link WorkflowEngine.StepHistoryEntry#executionId})
+   * @return the recorded error detail, or null when unknown or error-free
+   */
+  public static String getStepError(Id executionId) {
+    if (executionId == null) {
+      return null;
+    }
+    List<Workflow_Step_Execution__c> rows = [
+      SELECT Id, Error_Details__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :executionId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    return rows.isEmpty() ? null : rows[0].Error_Details__c;
   }
 }

@@ -274,8 +274,17 @@ public inherited sharing class WorkflowEngine {
      * Use `attempt` to disambiguate a retried row. Null while in flight.
      */
     public Long totalDurationMs { get; private set; }
-    /** @description Failure detail for a failed step; null when none is recorded. */
-    public String errorMessage { get; private set; }
+    /**
+     * @description Whether this step-execution row currently has error detail
+     * recorded (`Error_Details__c` is populated). The timeline is payload-free: the
+     * error text itself is NOT loaded here (it can be a 131k long-text field);
+     * fetch it per-step via {@link WorkflowHistoryRead#getStepError}. Because the
+     * engine reuses one row across retries, `hasError` reflects the row's CURRENT
+     * (last-attempt) error state — a step that errored and then retried to success
+     * can still be `hasError = true` with a terminal-success `status`, so this is
+     * NOT equivalent to `status`.
+     */
+    public Boolean hasError { get; private set; }
     /**
      * @description True when this row is a compensation (rollback) execution,
      * false for a forward execution. Convention-derived: it is inferred from the
@@ -288,11 +297,17 @@ public inherited sharing class WorkflowEngine {
      * @description Builds a fully-populated history entry from a queried
      * step-execution row. Terminality (and therefore `endedAt`/`totalDurationMs`),
      * the compensation flag, and the normalized attempt count are derived here so
-     * the read layer never touches the private setters. Used by the extracted read
-     * layer ({@link WorkflowHistoryRead}).
+     * the read layer never touches the private setters. `hasError` is set from the
+     * pre-resolved set of execution Ids that have error detail — the read layer
+     * resolves that with a bounded Id-only probe, so no long-text is loaded here.
+     * Used by the extracted read layer ({@link WorkflowHistoryRead}).
      * @param row the queried `Workflow_Step_Execution__c` row to project
+     * @param errorExecutionIds Ids of rows with non-null `Error_Details__c`
      */
-    public StepHistoryEntry(Workflow_Step_Execution__c row) {
+    public StepHistoryEntry(
+      Workflow_Step_Execution__c row,
+      Set<Id> errorExecutionIds
+    ) {
       this.executionId = row.Id;
       this.stepName = row.Step_Name__c;
       this.status = row.Status__c;
@@ -309,7 +324,8 @@ public inherited sharing class WorkflowEngine {
         this.endedAt != null)
         ? this.endedAt.getTime() - this.startedAt.getTime()
         : null;
-      this.errorMessage = row.Error_Details__c;
+      this.hasError =
+        errorExecutionIds != null && errorExecutionIds.contains(row.Id);
       this.isCompensation =
         row.Step_Name__c != null && row.Step_Name__c.endsWith('_Compensate');
     }
@@ -354,19 +370,21 @@ public inherited sharing class WorkflowEngine {
      * read layer ({@link WorkflowHistoryRead}), which supplies `totalCount` so this
      * DTO stays SOQL-free.
      * @param rows the instance's retained step-execution rows in append order
-     * @param rowCap the maximum number of entries to retain
      * @param totalCount the real total step-execution count for the instance
+     * @param errorExecutionIds Ids of rows with non-null `Error_Details__c`, used
+     * to set each entry's `hasError` without loading the error text
      */
     public StepHistory(
       List<Workflow_Step_Execution__c> rows,
-      Integer rowCap,
-      Integer totalCount
+      Integer totalCount,
+      Set<Id> errorExecutionIds
     ) {
       this.entries = new List<StepHistoryEntry>();
+      Integer rowCap = WorkflowHistoryRead.MAX_HISTORY_ROWS;
       Integer rowCount = rows == null ? 0 : rows.size();
       Integer take = rowCount > rowCap ? rowCap : rowCount;
       for (Integer i = 0; i < take; i++) {
-        this.entries.add(new StepHistoryEntry(rows[i]));
+        this.entries.add(new StepHistoryEntry(rows[i], errorExecutionIds));
       }
       this.totalCount = totalCount;
       this.isTruncated = totalCount > this.entries.size();

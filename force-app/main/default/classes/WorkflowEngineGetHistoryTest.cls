@@ -36,6 +36,14 @@ private class WorkflowEngineGetHistoryTest {
       .getKeyPrefix() + '000000000001');
   }
 
+  // A well-formed but non-existent Workflow_Step_Execution__c Id.
+  private static Id unknownStepExecutionId() {
+    return (Id) (Workflow_Step_Execution__c.SObjectType.getDescribe(
+        SObjectDescribeOptions.DEFERRED
+      )
+      .getKeyPrefix() + '000000000001');
+  }
+
   // ─── getHistory(Id) — ordering + field projection ─────────────────────────
 
   @IsTest
@@ -166,7 +174,7 @@ private class WorkflowEngineGetHistoryTest {
     }
   }
 
-  // ─── compensation flag + error message ────────────────────────────────────
+  // ─── compensation flag + hasError + per-step error detail ──────────────────
 
   @IsTest
   static void testGetHistoryCompensationAndError() {
@@ -198,9 +206,9 @@ private class WorkflowEngineGetHistoryTest {
       Test.stopTest();
 
       System.assertEquals(
-        'Gateway timeout',
-        history.entries[0].errorMessage,
-        'errorMessage maps to Error_Details__c'
+        true,
+        history.entries[0].hasError,
+        'hasError is true when Error_Details__c is populated'
       );
       System.assertEquals(
         false,
@@ -213,9 +221,63 @@ private class WorkflowEngineGetHistoryTest {
         '_Compensate suffix marks a compensation execution'
       );
       System.assertEquals(
-        null,
-        history.entries[1].errorMessage,
+        false,
+        history.entries[1].hasError,
         'No error on the successful compensation'
+      );
+      // The timeline never carries the error text; it is fetched per-step.
+      System.assertEquals(
+        'Gateway timeout',
+        WorkflowHistoryRead.getStepError(history.entries[0].executionId),
+        'getStepError returns the full stored detail'
+      );
+      System.assertEquals(
+        null,
+        WorkflowHistoryRead.getStepError(history.entries[1].executionId),
+        'getStepError is null for an error-free row'
+      );
+      System.assertEquals(
+        null,
+        WorkflowHistoryRead.getStepError(unknownStepExecutionId()),
+        'getStepError is null for an unknown Id'
+      );
+    }
+  }
+
+  // ─── hasError reflects populated detail, not status (retried-then-succeeded) ─
+
+  @IsTest
+  static void testGetHistoryHasErrorIndependentOfStatus() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = newInstance('retried-1');
+      // The engine reuses one row across retries: a step that errored then retried
+      // to success has a terminal-success status but still-populated error detail.
+      Workflow_Step_Execution__c retried = step(
+        inst.Id,
+        'FlakyCallout',
+        'Completed'
+      );
+      retried.Retry_Count__c = 2;
+      retried.Error_Details__c = 'Transient 503 on attempt 1';
+      Database.insert(retried, AccessLevel.SYSTEM_MODE);
+
+      Test.startTest();
+      WorkflowEngine.StepHistory history = WorkflowHistoryRead.getHistory(
+        inst.Id
+      );
+      Test.stopTest();
+
+      WorkflowEngine.StepHistoryEntry entry = history.entries[0];
+      System.assertEquals('Completed', entry.status, 'Terminal-success status');
+      System.assertEquals(
+        true,
+        entry.hasError,
+        'hasError reflects populated Error_Details__c even on a succeeded retry'
+      );
+      System.assertEquals(
+        'Transient 503 on attempt 1',
+        WorkflowHistoryRead.getStepError(entry.executionId),
+        'The retained error detail is still fetchable'
       );
     }
   }
@@ -333,8 +395,9 @@ private class WorkflowEngineGetHistoryTest {
       Database.insert(bigRows, AccessLevel.SYSTEM_MODE);
 
       Test.startTest();
-      // The untruncated single-instance read must cost exactly one SOQL query
-      // (no COUNT, no existence probe).
+      // The untruncated single-instance read costs exactly two SOQL queries: the
+      // row scan plus the bounded Id-only error probe (no COUNT, no existence
+      // probe). The error probe is the heap-safety cost of not loading long-text.
       Integer before = Limits.getQueries();
       WorkflowEngine.StepHistory smallHistory = WorkflowHistoryRead.getHistory(
         small.Id
@@ -346,9 +409,9 @@ private class WorkflowEngineGetHistoryTest {
       Test.stopTest();
 
       System.assertEquals(
-        1,
+        2,
         used,
-        'Untruncated single read stays at exactly one SOQL query'
+        'Untruncated single read costs scan + Id-only error probe'
       );
       System.assertEquals(false, smallHistory.isTruncated, 'small untruncated');
       System.assertEquals(
@@ -563,12 +626,19 @@ private class WorkflowEngineGetHistoryTest {
   @IsTest
   static void testResolveScanLimitDesiredExceedsBudget() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      // Ideal exceeds budget: clamp to remaining budget minus the safety margin,
-      // never to the governor ceiling itself.
+      // Ideal exceeds budget: clamp to HALF of (remaining - margin), reserving the
+      // other half for the follow-up error probe — never the governor ceiling.
+      // (50000 - 1000) / 2 = 24500.
       System.assertEquals(
-        49000,
+        24500,
         WorkflowHistoryRead.resolveScanLimit(100000, 50000),
-        'desired above budget clamps to budget minus safety margin'
+        'desired above budget clamps to half of (budget - margin)'
+      );
+      // Boundary: (2000 - 1000) / 2 = 500 exactly.
+      System.assertEquals(
+        500,
+        WorkflowHistoryRead.resolveScanLimit(500, 2000),
+        'scan takes at most half the remaining budget'
       );
     }
   }

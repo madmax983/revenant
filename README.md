@@ -459,13 +459,18 @@ List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(keyLi
 
 #### Read a Workflow's Step Timeline (Apex)
 
-`getStatus` returns the **outcome**; `WorkflowHistoryRead.getHistory` is its **timeline** complement — the ordered, append-order list of step executions for an instance (which steps ran, in what order, with attempt counts, timing, errors, and a forward-vs-compensation flag). Like `getStatus`, it is a service-class read contract (returning the resident `WorkflowEngine.StepHistory` / `WorkflowEngine.StepHistoryEntry` DTOs). As with `getStatus`, do **not** query `Workflow_Step_Execution__c` directly: the field names are internal. `getHistory` is **strictly read-only** (constant SOQL, zero DML) and safe to call from any Apex context.
+`getStatus` returns the **outcome**; `WorkflowHistoryRead.getHistory` is its **timeline** complement — the ordered, append-order list of step executions for an instance (which steps ran, in what order, with attempt counts, timing, an error flag, and a forward-vs-compensation flag). Like `getStatus`, it is a service-class read contract (returning the resident `WorkflowEngine.StepHistory` / `WorkflowEngine.StepHistoryEntry` DTOs). As with `getStatus`, do **not** query `Workflow_Step_Execution__c` directly: the field names are internal. `getHistory` is **strictly read-only** (constant SOQL, zero DML) and safe to call from any Apex context.
+
+The timeline is **payload-free / heap-safe**: it never loads the potentially large `Error_Details__c` long-text (nor `Input__c`/`Output__c`). Each entry carries `hasError` (a `Boolean`), not the error text; fetch the full stack trace for one row with `WorkflowHistoryRead.getStepError(executionId)` after you see `hasError = true`.
 
 ```java
 // Single instance — null when no instance matches; empty entries when it has no steps yet
 WorkflowEngine.StepHistory history = WorkflowHistoryRead.getHistory(instanceId);
 for (WorkflowEngine.StepHistoryEntry e : history.entries) {
   System.debug(e.stepName + ' ' + e.status + ' attempt=' + e.attempt);
+  if (e.hasError) {
+    String detail = WorkflowHistoryRead.getStepError(e.executionId); // one row, heap-bounded
+  }
 }
 
 // Bulk — constant SOQL regardless of list size; unmatched Ids are absent from the map
@@ -491,15 +496,15 @@ Map<Id, WorkflowEngine.StepHistory> byId = WorkflowHistoryRead.getHistory(idList
 | `startedAt`       | `Datetime` | When the execution was first appended to the trail.                                                                                                                                            |
 | `endedAt`         | `Datetime` | Last modification of the terminal step-execution row (the engine reuses one row across retries, so this is the last modification, not per-attempt); `null` while in flight.                     |
 | `totalDurationMs` | `Long`     | Total wall-clock `startedAt`→`endedAt` in ms, across **all** attempts including retry backoff (one row is reused per retry — not a single attempt); use `attempt` to disambiguate. `null` in flight. |
-| `errorMessage`    | `String`   | Failure detail; `null` unless recorded.                                                                                                                                                       |
+| `hasError`        | `Boolean`  | `true` when this row's `Error_Details__c` is currently populated (the error text itself is not loaded — fetch it via `getStepError(executionId)`). Reflects the row's **current** (last-attempt) error state: a step that errored then retried to success can be `hasError = true` with a terminal-success `status`, so this is **not** equivalent to `status`. |
 | `isCompensation`  | `Boolean`  | `true` for a compensation (rollback) execution. Convention-derived from the step name's `_Compensate` suffix — a step an author manually names ending in `_Compensate` would be a false positive. |
 
 **Key semantics:**
 
 - Single form returns `null` for an unknown Id (not an exception) and a `StepHistory` with an **empty** `entries` list for a known instance that has logged no steps. The bulk form omits unmatched Ids from the map and includes known-but-empty instances with empty entries.
-- **v1 is metadata-only** to stay heap-bounded: per-step input/output payload bodies are deliberately excluded — terminal output still comes from `getStatus`.
-- Reading is **governor-bounded** and zero DML, with a documented per-instance row cap (`WorkflowHistoryRead.MAX_HISTORY_ROWS`); a longer history is reported as `isTruncated = true` (with the real size in `totalCount`) rather than silently cut. The single-Id read costs one SOQL query in the common case (rows present and within the cap), a second only when truncated or when probing existence. The bulk read is constant-SOQL regardless of batch size (a row scan plus one grouped `COUNT()`, and an existence probe only when some requested Ids are step-less).
-- **A bulk read never reports a step-bearing instance as empty, and never exceeds the SOQL row governor.** The small grouped `COUNT()` and existence probe run first; the large row scan runs last, sized from the row budget still available, so even a batch whose ideal scan would blow past the 50,000-row limit degrades to graceful truncation instead of throwing. The row scan shares that budget, so a very large instance can starve a sibling of retrieved rows — but the authoritative `COUNT()` still gives every instance its real `totalCount`, so a starved (or budget-truncated) instance comes back with `isTruncated = true` and its true `totalCount` (with whatever rows were retrieved, possibly none), never as a false-empty history. To get the full `entries` of such a history, re-read that instance singly.
+- **Metadata-only / heap-safe:** per-step input/output/error payload bodies are deliberately never loaded (terminal output comes from `getStatus`; per-step error text from `getStepError`). Entries carry `hasError`, derived from a bounded Id-only probe.
+- Reading is **governor-bounded** and zero DML, with a documented per-instance row cap (`WorkflowHistoryRead.MAX_HISTORY_ROWS`); a longer history is reported as `isTruncated = true` (with the real size in `totalCount`) rather than silently cut. The single-Id read costs **two** SOQL queries in the common case (the row scan plus the bounded Id-only error probe), a third only when truncated (`COUNT()`) or when probing existence. `getStepError` is one more query for a single row. The bulk read is constant-SOQL regardless of batch size (a grouped `COUNT()`, an existence probe only when some requested Ids are step-less, the row scan, and the Id-only error probe).
+- **A bulk read never reports a step-bearing instance as empty, and never exceeds the SOQL row governor.** The small grouped `COUNT()` and existence probe run first; the large row scan runs last, sized from the row budget still available (and halved so the follow-up Id-only error probe also fits), so even a batch whose ideal scan would blow past the 50,000-row limit degrades to graceful truncation instead of throwing. The scan shares that budget, so a very large instance can starve a sibling of retrieved rows — but the authoritative `COUNT()` still gives every instance its real `totalCount`, so a starved (or budget-truncated) instance comes back with `isTruncated = true` and its true `totalCount` (with whatever rows were retrieved, possibly none), never as a false-empty history. To get the full `entries` of such a history, re-read that instance singly.
 
 ### 9. Validate a Workflow Definition (Apex)
 
