@@ -457,6 +457,48 @@ List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(keyLi
 - By correlation key, the active/live run is preferred over a recently-terminal one when a key has been reused. Lookup is case-insensitive (matching the correlation-key fields) and follows `ContinuedAsNew` chains via the shared root key, so polling the original key — **or any intermediate successor key** — returns the live/final successor, not a stale predecessor. `null` is returned (not an exception) when nothing matches.
 - **Known limitation — don't reuse a chain's correlation key for an unrelated run while that chain is live.** Chain following matches on the shared `Root_Correlation_Key__c`, which a continue-as-new chain shares with _any_ independent run that reuses the same key. If you start a separate workflow with a correlation key that is also the root of a still-live continue-as-new chain, polling an intermediate successor key of that chain may resolve to the unrelated reused run. Use distinct correlation keys per logical workflow (the normal case) to avoid this; precise disambiguation would require walking the `Previous_Instance__c` lineage, which is intentionally out of scope to keep `getStatus` bounded and constant-SOQL.
 
+#### Read a Workflow's Step Timeline (Apex)
+
+`getStatus` returns the **outcome**; `WorkflowEngine.getHistory` is its **timeline** complement — the ordered, append-order list of step executions for an instance (which steps ran, in what order, with attempt counts, timing, errors, and a forward-vs-compensation flag). As with `getStatus`, do **not** query `Workflow_Step_Execution__c` directly: the field names are internal. `getHistory` is **strictly read-only** (constant SOQL, zero DML) and safe to call from any Apex context.
+
+```java
+// Single instance — null when no instance matches; empty entries when it has no steps yet
+WorkflowEngine.StepHistory history = WorkflowEngine.getHistory(instanceId);
+for (WorkflowEngine.StepHistoryEntry e : history.entries) {
+  System.debug(e.stepName + ' ' + e.status + ' attempt=' + e.attempt);
+}
+
+// Bulk — constant SOQL regardless of list size; unmatched Ids are absent from the map
+Map<Id, WorkflowEngine.StepHistory> byId = WorkflowEngine.getHistory(idList);
+```
+
+**`StepHistory` fields:**
+
+| Field         | Type                     | Description                                                                                  |
+| ------------- | ------------------------ | -------------------------------------------------------------------------------------------- |
+| `entries`     | `List<StepHistoryEntry>` | Step executions in append (execution) order, capped at `WorkflowHistoryRead.MAX_HISTORY_ROWS`. |
+| `isTruncated` | `Boolean`                | `true` when the instance had more executions than the cap and `entries` was truncated.       |
+
+**`StepHistoryEntry` fields:**
+
+| Field            | Type       | Description                                                                                   |
+| ---------------- | ---------- | -------------------------------------------------------------------------------------------- |
+| `executionId`    | `Id`       | The `Workflow_Step_Execution__c` record Id (stable identifier).                              |
+| `stepName`       | `String`   | Logical step name; compensation executions carry the `<step>_Compensate` name.               |
+| `status`         | `String`   | Raw `Status__c` (e.g. `Pending`, `Running`, `Completed`, `Failed`, `Compensated`).           |
+| `attempt`        | `Integer`  | Retry attempt count (`0` on the first attempt).                                              |
+| `startedAt`      | `Datetime` | When the execution was first appended to the trail.                                          |
+| `endedAt`        | `Datetime` | When the step reached a terminal status; `null` while in flight.                            |
+| `durationMs`     | `Long`     | Elapsed `startedAt`→`endedAt` in milliseconds; `null` while in flight.                        |
+| `errorMessage`   | `String`   | Failure detail; `null` unless recorded.                                                      |
+| `isCompensation` | `Boolean`  | `true` for a compensation (rollback) execution, `false` for a forward execution.             |
+
+**Key semantics:**
+
+- Single form returns `null` for an unknown Id (not an exception) and a `StepHistory` with an **empty** `entries` list for a known instance that has logged no steps. The bulk form omits unmatched Ids from the map and includes known-but-empty instances with empty entries.
+- **v1 is metadata-only** to stay heap-bounded: per-step input/output payload bodies are deliberately excluded — terminal output still comes from `getStatus`.
+- Reading is **governor-bounded**: at most 2 SOQL queries and zero DML, with a documented per-instance row cap (`WorkflowHistoryRead.MAX_HISTORY_ROWS`); a longer history is reported as `isTruncated = true` rather than silently cut. In a bulk read, if one instance's trail alone exhausts the batch scan budget, later instances in the same batch may under-report — read very long histories one Id at a time.
+
 ### 9. Validate a Workflow Definition (Apex)
 
 A `WorkflowDefinition` is otherwise only exercised at runtime: the engine resolves each step class lazily via `Type.forName` as it reaches it, so a typo'd successor, an entry point missing from `getSteps()`, or a step name that doesn't resolve to a real `WorkflowStep` only surfaces **mid-execution — after earlier forward steps (and their side effects) have already committed**, triggering a real compensation rollback in production. `WorkflowValidator` moves that detection to authoring/deploy time.
