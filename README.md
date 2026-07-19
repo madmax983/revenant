@@ -566,10 +566,10 @@ do {
 | ---------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `definitionName` | `String`      | Exact `Workflow_Name__c` match; null/blank matches **any** definition.                                             |
 | `statuses`       | `Set<String>` | `Status__c IN` the set; null/empty matches **any** status.                                                         |
-| `createdAfter`   | `Datetime`    | Inclusive `CreatedDate >=`; null is unbounded below.                                                               |
-| `createdBefore`  | `Datetime`    | Inclusive `CreatedDate <=`; null is unbounded above.                                                               |
-| `modifiedAfter`  | `Datetime`    | Inclusive `LastModifiedDate >=`; null is unbounded below.                                                          |
-| `modifiedBefore` | `Datetime`    | Inclusive `LastModifiedDate <=`; null is unbounded above.                                                          |
+| `createdAfter`   | `Datetime`    | **Inclusive** `CreatedDate >=`; null is unbounded below.                                                           |
+| `createdBefore`  | `Datetime`    | **Exclusive** `CreatedDate <`; null is unbounded above.                                                            |
+| `modifiedAfter`  | `Datetime`    | **Inclusive** `LastModifiedDate >=`; null is unbounded below.                                                      |
+| `modifiedBefore` | `Datetime`    | **Exclusive** `LastModifiedDate <`; null is unbounded above.                                                       |
 | `pageSize`       | `Integer`     | Null → `WorkflowInstanceQuery.DEFAULT_PAGE_SIZE` (50); above `MAX_PAGE_SIZE` (200) → clamped; `<= 0` → throws.     |
 | `cursor`         | `String`      | Opaque next-page token; null/blank starts at page one. Pass a page's `nextCursor` back **verbatim**; garbage throws. |
 
@@ -596,6 +596,7 @@ do {
 
 **Key semantics:**
 
+- **Time windows are half-open `[after, before)`.** The `after` bounds are **inclusive** (`CreatedDate`/`LastModifiedDate >=`) and the `before` bounds are **exclusive** (`<`). An instance whose timestamp lands exactly on `createdAfter`/`modifiedAfter` is **included**; one landing exactly on `createdBefore`/`modifiedBefore` is **excluded**. This lets adjacent windows (e.g. hour-by-hour sweeps) chain with no overlap and no gap.
 - **Deep pagination is keyset-based, not `OFFSET`.** SOQL `OFFSET` is capped at 2,000 rows by the platform and throws beyond it, so a definition with millions of historical instances could not be paged past that with `OFFSET`. `findInstances` orders by the stable total ordering `CreatedDate DESC, Id DESC` and pages via a keyset predicate on `(CreatedDate, Id)`, so you can walk the **entire** result set — however deep — one bounded page at a time, with **no duplicates and no gaps**. The cursor is **opaque**: pass it back verbatim; do not parse, build, or mutate it. A garbage/tampered cursor throws `WorkflowEngine.WorkflowException`.
 - **No exact total is exposed.** An unbounded, deeply-paged result set cannot be counted within a constant SOQL/heap budget, so there is deliberately no `totalCount`; page until `hasMore` is `false`. (A single `COUNT()` over a huge filtered set still counts rows against the 50,000 query-rows governor, so exposing it would break the constant-budget guarantee.)
 - **ContinueAsNew is consistent with `getStatus`.** `findInstances` is a raw row enumeration, **not** a chain resolution: it returns each matching row on its own and does **not** collapse a continue-as-new chain to a single winner the way `getStatus(correlationKey)` does. A `ContinuedAsNew` predecessor generation is its own row, returned only when the `statuses` filter admits it (unset/empty, or explicitly includes `ContinuedAsNew`); and — matching `getStatus` — `ContinuedAsNew` is a non-terminal hand-off, so its summary's `isTerminal` is `false`. To resolve a chain to its live/final successor, take a matching row's `correlationKey` and call `getStatus(correlationKey)`.

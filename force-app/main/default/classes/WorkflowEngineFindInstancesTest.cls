@@ -128,6 +128,65 @@ private class WorkflowEngineFindInstancesTest {
     }
   }
 
+  // ─── half-open window boundary: at-after included, at-before excluded ──────
+
+  @IsTest
+  static void testCreatedWindowHalfOpenBoundaries() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Fixed, deterministic bounds. The window is half-open [after, before):
+      // after is inclusive (>=), before is exclusive (<).
+      Datetime afterBound = Datetime.newInstanceGmt(2026, 1, 1, 0, 0, 0);
+      Datetime beforeBound = Datetime.newInstanceGmt(2026, 2, 1, 0, 0, 0);
+      Datetime insideMoment = Datetime.newInstanceGmt(2026, 1, 15, 0, 0, 0);
+
+      Workflow_Instance__c atAfter = newInstance(DEF_A, 'at-after', 'Running');
+      Workflow_Instance__c inside = newInstance(DEF_A, 'inside', 'Running');
+      Workflow_Instance__c atBefore = newInstance(
+        DEF_A,
+        'at-before',
+        'Running'
+      );
+      // Land each instance's CreatedDate exactly on the relevant edge / midpoint.
+      Test.setCreatedDate(atAfter.Id, afterBound);
+      Test.setCreatedDate(inside.Id, insideMoment);
+      Test.setCreatedDate(atBefore.Id, beforeBound);
+
+      WorkflowEngine.InstanceCriteria c = criteriaFor(DEF_A, null);
+      c.createdAfter = afterBound;
+      c.createdBefore = beforeBound;
+
+      Test.startTest();
+      WorkflowEngine.InstancePage page = WorkflowInstanceQuery.findInstances(c);
+      Test.stopTest();
+
+      Set<String> keys = new Set<String>();
+      for (WorkflowEngine.WorkflowInstanceSummary s : page.entries) {
+        keys.add(s.correlationKey);
+      }
+
+      System.assertEquals(
+        2,
+        page.entries.size(),
+        'Half-open window returns exactly the at-after and inside rows'
+      );
+      System.assert(
+        keys.contains('at-after'),
+        'Instance exactly AT createdAfter is INCLUDED (inclusive lower bound)'
+      );
+      System.assert(
+        keys.contains('inside'),
+        'Instance inside the window is included'
+      );
+      System.assert(
+        !keys.contains('at-before'),
+        'Instance exactly AT createdBefore is EXCLUDED (exclusive upper bound)'
+      );
+      // The modified window uses the identical operator convention (inclusive >=,
+      // exclusive <); it is covered by the created window here because
+      // LastModifiedDate cannot be deterministically back-dated in an Apex test.
+    }
+  }
+
   // ─── modified-time window ─────────────────────────────────────────────────
 
   @IsTest

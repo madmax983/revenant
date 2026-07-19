@@ -881,23 +881,35 @@ public inherited sharing class WorkflowEngine {
      */
     public Set<String> statuses;
     /**
-     * @description Inclusive lower bound on `CreatedDate` (`CreatedDate &gt;=`).
-     * Null leaves the lower bound unbounded.
+     * @description <b>Inclusive</b> lower bound on `CreatedDate`
+     * (`CreatedDate &gt;= createdAfter`). Null leaves the lower bound unbounded.
+     * After bounds are inclusive (`&gt;=`) and before bounds are exclusive
+     * (`&lt;`) — a half-open `[after, before)` window that composes without overlap
+     * across chained windows.
      */
     public Datetime createdAfter;
     /**
-     * @description Inclusive upper bound on `CreatedDate` (`CreatedDate &lt;=`).
-     * Null leaves the upper bound unbounded.
+     * @description <b>Exclusive</b> upper bound on `CreatedDate`
+     * (`CreatedDate &lt; createdBefore`). Null leaves the upper bound unbounded.
+     * After bounds are inclusive (`&gt;=`) and before bounds are exclusive
+     * (`&lt;`) — a half-open `[after, before)` window that composes without overlap
+     * across chained windows.
      */
     public Datetime createdBefore;
     /**
-     * @description Inclusive lower bound on `LastModifiedDate`
-     * (`LastModifiedDate &gt;=`). Null leaves the lower bound unbounded.
+     * @description <b>Inclusive</b> lower bound on `LastModifiedDate`
+     * (`LastModifiedDate &gt;= modifiedAfter`). Null leaves the lower bound
+     * unbounded. After bounds are inclusive (`&gt;=`) and before bounds are
+     * exclusive (`&lt;`) — a half-open `[after, before)` window that composes
+     * without overlap across chained windows.
      */
     public Datetime modifiedAfter;
     /**
-     * @description Inclusive upper bound on `LastModifiedDate`
-     * (`LastModifiedDate &lt;=`). Null leaves the upper bound unbounded.
+     * @description <b>Exclusive</b> upper bound on `LastModifiedDate`
+     * (`LastModifiedDate &lt; modifiedBefore`). Null leaves the upper bound
+     * unbounded. After bounds are inclusive (`&gt;=`) and before bounds are
+     * exclusive (`&lt;`) — a half-open `[after, before)` window that composes
+     * without overlap across chained windows.
      */
     public Datetime modifiedBefore;
     /**

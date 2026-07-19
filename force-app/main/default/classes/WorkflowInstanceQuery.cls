@@ -67,11 +67,13 @@ public inherited sharing class WorkflowInstanceQuery {
    *   exact `Workflow_Name__c` match.</li>
    *   <li><b>statuses</b> — null/empty matches any status; otherwise `Status__c`
    *   must be one of the set.</li>
-   *   <li><b>createdAfter / createdBefore</b> — null bounds are unbounded; a set
-   *   bound is inclusive (`CreatedDate &gt;= createdAfter`, `CreatedDate &lt;=
-   *   createdBefore`).</li>
-   *   <li><b>modifiedAfter / modifiedBefore</b> — same inclusive/unbounded
-   *   semantics against `LastModifiedDate`.</li>
+   *   <li><b>createdAfter / createdBefore</b> — null bounds are unbounded. The
+   *   window is half-open `[after, before)`: the after bound is inclusive
+   *   (`CreatedDate &gt;= createdAfter`) and the before bound is exclusive
+   *   (`CreatedDate &lt; createdBefore`), so adjacent windows compose without
+   *   overlap.</li>
+   *   <li><b>modifiedAfter / modifiedBefore</b> — same half-open
+   *   inclusive-after / exclusive-before semantics against `LastModifiedDate`.</li>
    * </ul>
    *
    * @param criteria the filter + pagination criteria (null = match all, first page)
@@ -201,7 +203,7 @@ public inherited sharing class WorkflowInstanceQuery {
     }
     if (criteria.createdBefore != null) {
       binds.put('createdBefore', criteria.createdBefore);
-      clauses.add('CreatedDate <= :createdBefore');
+      clauses.add('CreatedDate < :createdBefore');
     }
     if (criteria.modifiedAfter != null) {
       binds.put('modifiedAfter', criteria.modifiedAfter);
