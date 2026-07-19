@@ -283,9 +283,9 @@ public inherited sharing class WorkflowInstanceQuery {
       return null;
     }
     try {
-      String json = EncodingUtil.base64Decode(cursor).toString();
+      String decodedJson = EncodingUtil.base64Decode(cursor).toString();
       Map<String, Object> payload = (Map<String, Object>) JSON.deserializeUntyped(
-        json
+        decodedJson
       );
       Long millis = Long.valueOf(String.valueOf(payload.get('c')));
       Id rowId = (Id) String.valueOf(payload.get('i'));
