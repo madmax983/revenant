@@ -183,9 +183,9 @@ describe("c-workflow-schedule-manager time zone selector", () => {
     await flushPromises();
 
     const findSave = () =>
-      Array.from(
-        element.shadowRoot.querySelectorAll("lightning-button"),
-      ).find((b) => b.label === "Save");
+      Array.from(element.shadowRoot.querySelectorAll("lightning-button")).find(
+        (b) => b.label === "Save",
+      );
 
     // A supported zone keeps Save enabled.
     zoneCombobox(element).dispatchEvent(
