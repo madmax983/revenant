@@ -41,6 +41,25 @@ public inherited sharing class WorkflowCronEvaluator {
   }
 
   /**
+   * @description Computes the most-recent fire instant at or before `now`, interpreting the
+   * cron in the given IANA time zone. A blank/null zone means UTC and takes the exact-GMT
+   * path with zero behavioral change; a non-blank zone walks the calendar in the zone's
+   * wall clock and resolves each matched local time to a UTC instant (DST gap/overlap
+   * policy per CronMath.resolveLocalToUtc).
+   * @param cronExpr The 5-field cron expression to evaluate.
+   * @param now The UTC reference instant to search backwards from.
+   * @param zoneId The IANA time-zone id the cron is interpreted in, or blank/null for UTC.
+   * @return The matching fire time, or null if the expression is invalid or no match falls within the lookback window.
+   */
+  public static DateTime previousFireTime(
+    String cronExpr,
+    DateTime now,
+    String zoneId
+  ) {
+    return WorkflowCronZones.previous(cronExpr, now, zoneId);
+  }
+
+  /**
    * @description Computes the next fire instant at or after `now`, useful for "next run"
    * previews in the UI.
    * @param cronExpr The 5-field cron expression to evaluate.
@@ -52,6 +71,25 @@ public inherited sharing class WorkflowCronEvaluator {
   }
 
   /**
+   * @description Computes the next fire instant at or after `now`, interpreting the cron in
+   * the given IANA time zone. A blank/null zone means UTC and takes the exact-GMT path with
+   * zero behavioral change; a non-blank zone walks the calendar in the zone's wall clock and
+   * resolves each matched local time to a UTC instant (DST gap/overlap policy per
+   * CronMath.resolveLocalToUtc).
+   * @param cronExpr The 5-field cron expression to evaluate.
+   * @param now The UTC reference instant to search forwards from.
+   * @param zoneId The IANA time-zone id the cron is interpreted in, or blank/null for UTC.
+   * @return The matching fire time, or null if the expression is invalid or no match falls within the lookahead window.
+   */
+  public static DateTime nextFireTime(
+    String cronExpr,
+    DateTime now,
+    String zoneId
+  ) {
+    return WorkflowCronZones.next(cronExpr, now, zoneId);
+  }
+
+  /**
    * @description Cheap validity check for editor input: true when the expression has
    * exactly 5 fields that all parse to a non-empty value set.
    * @param cronExpr The candidate cron expression to validate.
@@ -59,6 +97,25 @@ public inherited sharing class WorkflowCronEvaluator {
    */
   public static Boolean isValidCron(String cronExpr) {
     return CronFieldParser.parse(cronExpr) != null;
+  }
+
+  /**
+   * @description Whether a schedule time zone is usable (blank/null means UTC and is always
+   * valid). Delegates to WorkflowCronZones, which owns the supported-zone allow-list.
+   * @param zoneId The candidate IANA time-zone id, or blank/null for UTC.
+   * @return True if the zone is blank (UTC) or a supported IANA id, otherwise false.
+   */
+  public static Boolean isValidZone(String zoneId) {
+    return WorkflowCronZones.isZoneSupported(zoneId);
+  }
+
+  /**
+   * @description The supported IANA time-zone ids offered by the editor's time-zone picker.
+   * Delegates to WorkflowCronZones.
+   * @return The sorted list of supported IANA time-zone ids.
+   */
+  public static List<String> supportedZones() {
+    return WorkflowCronZones.listZones();
   }
 
   // Walks day by day (backwards when forward=false, forwards when forward=true)

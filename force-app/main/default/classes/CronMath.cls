@@ -110,4 +110,176 @@ public inherited sharing class CronMath {
     Integer nextMonth = (month == 12) ? 1 : month + 1;
     return DateTime.newInstanceGmt(nextYear, nextMonth, 1, 0, 0, 0);
   }
+
+  /**
+   * @description Resolves an intended local wall-clock time in the given IANA
+   * time zone to the corresponding UTC instant, applying deterministic DST
+   * gap/overlap policy so a calendar schedule fires exactly once per window.
+   *
+   * Salesforce exposes no direct zone-offset API, so the offset is derived by
+   * formatting a candidate instant in the target zone and measuring the delta
+   * between that zone-local rendering and the same instant's GMT rendering. The
+   * requested local time is first treated as if it were GMT (the guess), the
+   * zone offset at the guess is subtracted, and — because the offset can change
+   * across a transition — the correction is re-evaluated at the corrected
+   * instant. The corrected candidate is then round-tripped back to the zone's
+   * wall clock and compared with the request:
+   *
+   *  - EXISTS ONCE (normal): the round-trip matches — return that instant.
+   *  - FALL-BACK OVERLAP (local time occurs twice): both the pre- and
+   *    post-transition offsets yield an instant that renders to the requested
+   *    wall clock. The FIRST (earlier UTC, pre-transition) occurrence is chosen
+   *    so a calendar day fires exactly once.
+   *  - SPRING GAP (local time does not exist): neither offset renders to the
+   *    requested wall clock. The gap-boundary instant — the transition instant,
+   *    i.e. the first valid instant at or after the requested local time — is
+   *    returned ONCE (never skipped, never duplicated).
+   *
+   * A blank/UTC zone is handled by the caller's exact-GMT path and never reaches
+   * here, so this method leaves the pre-existing behavior byte-identical.
+   * @param zoneId The IANA time-zone id (e.g. America/New_York).
+   * @param localWallClock A pseudo-GMT DateTime whose GMT fields are the intended
+   * local wall clock (i.e. the local Y/M/D/H/M read via the *Gmt accessors).
+   * @return The UTC DateTime for the requested local wall clock under the policy above.
+   */
+  public static DateTime resolveLocalToUtc(
+    String zoneId,
+    DateTime localWallClock
+  ) {
+    // The requested local wall clock, treated as if it were GMT: the resolved UTC
+    // instant differs from this guess only by the zone offset.
+    DateTime guess = truncateToMinute(localWallClock);
+    Integer offA = zoneOffsetMinutes(guess, zoneId);
+    DateTime candA = guess.addMinutes(-offA);
+    Integer offB = zoneOffsetMinutes(candA, zoneId);
+
+    // Offset self-consistent and the candidate renders back to the request: the
+    // time exists. Resolve any fall-back overlap to the earliest occurrence.
+    if (offA == offB && rendersTo(candA, zoneId, guess)) {
+      return earliestOverlap(candA, zoneId, guess);
+    }
+    // Otherwise we are at a transition — classify gap vs overlap by wall clock.
+    return resolveNearTransition(guess, zoneId);
+  }
+
+  /**
+   * @description Resolves a local wall clock that sits at (or across) a DST transition,
+   * where the two nearby zone offsets disagree. Builds the candidate UTC instant for each
+   * offset and classifies: both render to the request → overlap, return the earliest;
+   * exactly one renders → that instant; neither renders → spring gap, return the transition
+   * boundary (the first valid instant at or after the requested local time).
+   * @param guess The requested local wall clock as a pseudo-GMT DateTime.
+   * @param zoneId The IANA time-zone id.
+   * @return The resolved UTC instant under the gap/overlap policy.
+   */
+  private static DateTime resolveNearTransition(DateTime guess, String zoneId) {
+    Integer offA = zoneOffsetMinutes(guess, zoneId);
+    DateTime candA = guess.addMinutes(-offA);
+    Integer offB = zoneOffsetMinutes(candA, zoneId);
+    DateTime candB = guess.addMinutes(-offB);
+
+    Boolean aValid = rendersTo(candA, zoneId, guess);
+    Boolean bValid = rendersTo(candB, zoneId, guess);
+    if (aValid && bValid) {
+      return (candA <= candB) ? candA : candB;
+    }
+    if (aValid) {
+      return candA;
+    }
+    if (bValid) {
+      return candB;
+    }
+    DateTime lo = (candA <= candB) ? candA : candB;
+    DateTime hi = (candA <= candB) ? candB : candA;
+    return transitionBoundary(lo, hi, zoneId);
+  }
+
+  /**
+   * @description Zone offset in minutes at the given instant: the signed delta
+   * between the instant's wall clock in the target zone and its GMT wall clock
+   * (e.g. -300 for US Eastern Standard Time). Derived by parsing the zone-local
+   * rendering back as GMT, since Salesforce has no direct offset API.
+   * @param instant The instant whose zone offset is measured.
+   * @param zoneId The IANA time-zone id.
+   * @return The offset in minutes (zone wall clock minus GMT wall clock).
+   */
+  private static Integer zoneOffsetMinutes(DateTime instant, String zoneId) {
+    DateTime localAsGmt = DateTime.valueOfGmt(
+      instant.format('yyyy-MM-dd HH:mm:ss', zoneId)
+    );
+    return (Integer) ((localAsGmt.getTime() - instant.getTime()) / 60000L);
+  }
+
+  /**
+   * @description True when the candidate instant renders to exactly the requested
+   * local wall clock in the target zone (minute granularity).
+   * @param candidate The UTC instant to test.
+   * @param zoneId The IANA time-zone id.
+   * @param want The requested local wall clock as a pseudo-GMT DateTime.
+   * @return True if the candidate's zone wall clock equals the request.
+   */
+  private static Boolean rendersTo(
+    DateTime candidate,
+    String zoneId,
+    DateTime want
+  ) {
+    return candidate.format('yyyy-MM-dd HH:mm', zoneId) ==
+      want.formatGmt('yyyy-MM-dd HH:mm');
+  }
+
+  /**
+   * @description For a valid resolved instant, returns the earliest instant that
+   * still renders to the requested local wall clock, so a fall-back overlap
+   * (the same local time occurring twice, one DST hour apart) fires on its FIRST
+   * occurrence. Assumes the standard one-hour DST shift used by the supported
+   * zones; the shift is only applied when the earlier instant actually renders
+   * to the request, so a non-overlapping time is returned unchanged.
+   * @param candidate A UTC instant already known to render to the request.
+   * @param zoneId The IANA time-zone id.
+   * @param want The requested local wall clock as a pseudo-GMT DateTime.
+   * @return The earliest UTC instant rendering to the requested wall clock.
+   */
+  private static DateTime earliestOverlap(
+    DateTime candidate,
+    String zoneId,
+    DateTime want
+  ) {
+    DateTime earlier = candidate.addHours(-1);
+    if (rendersTo(earlier, zoneId, want)) {
+      return earlier;
+    }
+    return candidate;
+  }
+
+  /**
+   * @description Binary-searches for the DST transition instant in (lo, hi]:
+   * the first minute whose zone offset differs from the offset at lo. Used to
+   * return the gap boundary when a requested local time does not exist.
+   * @param lo An instant on the pre-transition side (offset == offset(lo)).
+   * @param hi An instant on the post-transition side (offset != offset(lo)).
+   * @param zoneId The IANA time-zone id.
+   * @return The minute-aligned UTC instant at which the offset changes.
+   */
+  private static DateTime transitionBoundary(
+    DateTime lo,
+    DateTime hi,
+    String zoneId
+  ) {
+    Integer loOff = zoneOffsetMinutes(lo, zoneId);
+    DateTime low = lo;
+    DateTime high = hi;
+    while (high.getTime() - low.getTime() > 60000L) {
+      Long midMs = low.getTime() + (high.getTime() - low.getTime()) / 2;
+      DateTime mid = truncateToMinute(DateTime.newInstance(midMs));
+      if (mid.getTime() <= low.getTime()) {
+        mid = DateTime.newInstance(low.getTime() + 60000L);
+      }
+      if (zoneOffsetMinutes(mid, zoneId) == loOff) {
+        low = mid;
+      } else {
+        high = mid;
+      }
+    }
+    return high;
+  }
 }

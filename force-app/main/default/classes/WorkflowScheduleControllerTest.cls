@@ -119,6 +119,146 @@ public class WorkflowScheduleControllerTest {
   }
 
   @IsTest
+  static void testEditZoneOnlyReseedsCursor() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Create a UTC schedule (blank zone): its cursor is the next 02:00Z.
+      Id id = WorkflowScheduleController.saveSchedule(
+        new Map<String, Object>{
+          'Name' => 'CtrlZone',
+          'Workflow_Name__c' => TEST_WF,
+          'Cron_Expression__c' => '0 2 * * *',
+          'Correlation_Key_Prefix__c' => 'CtrlZone',
+          'Enabled__c' => true,
+          'Overlap_Policy__c' => 'Skip',
+          'Dedicated_Slot__c' => false
+        }
+      );
+      DateTime utcCursor = [
+        SELECT Next_Fire_Window__c
+        FROM Workflow_Schedule__c
+        WHERE Id = :id
+      ]
+      .Next_Fire_Window__c;
+
+      Test.startTest();
+      // Edit changing ONLY the time zone — the cron is byte-identical.
+      WorkflowScheduleController.saveSchedule(
+        new Map<String, Object>{
+          'Id' => id,
+          'Name' => 'CtrlZone',
+          'Workflow_Name__c' => TEST_WF,
+          'Cron_Expression__c' => '0 2 * * *',
+          'Correlation_Key_Prefix__c' => 'CtrlZone',
+          'Enabled__c' => true,
+          'Overlap_Policy__c' => 'Skip',
+          'Dedicated_Slot__c' => false,
+          'Time_Zone__c' => 'America/New_York'
+        }
+      );
+      Test.stopTest();
+
+      DateTime after = [
+        SELECT Next_Fire_Window__c
+        FROM Workflow_Schedule__c
+        WHERE Id = :id
+      ]
+      .Next_Fire_Window__c;
+      System.assertNotEquals(
+        utcCursor,
+        after,
+        'A zone-only edit must recompute the cursor in the new zone, not keep the old-zone (UTC) value'
+      );
+      System.assertEquals(
+        WorkflowCronEvaluator.nextFireTime(
+          '0 2 * * *',
+          DateTime.now(),
+          'America/New_York'
+        ),
+        after,
+        'Zone-only edit should reseed the cursor to the new zone next 02:00 local'
+      );
+    }
+  }
+
+  @IsTest
+  static void testNoOpSaveDoesNotReseedCursor() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Schedule__c sched = makeSchedule('CtrlNoOp');
+      // A sentinel cursor a reseed would never compute for this cron/zone.
+      DateTime sentinel = DateTime.newInstanceGmt(2030, 1, 1, 12, 34, 0);
+      sched.Next_Fire_Window__c = sentinel;
+      insert sched;
+
+      Test.startTest();
+      // Save with byte-identical field values — cron and zone unchanged.
+      WorkflowScheduleController.saveSchedule(
+        new Map<String, Object>{
+          'Id' => sched.Id,
+          'Name' => 'CtrlNoOp',
+          'Workflow_Name__c' => TEST_WF,
+          'Cron_Expression__c' => '0 2 * * *',
+          'Correlation_Key_Prefix__c' => 'CtrlNoOp',
+          'Enabled__c' => true,
+          'Overlap_Policy__c' => 'Skip',
+          'Dedicated_Slot__c' => false
+        }
+      );
+      Test.stopTest();
+
+      System.assertEquals(
+        sentinel,
+        [
+          SELECT Next_Fire_Window__c
+          FROM Workflow_Schedule__c
+          WHERE Id = :sched.Id
+        ]
+        .Next_Fire_Window__c,
+        'A no-op save (nothing changed) must NOT reseed the cursor'
+      );
+    }
+  }
+
+  @IsTest
+  static void testNullToEmptyZoneIsNotAChange() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Schedule__c sched = makeSchedule('CtrlZoneBlank');
+      sched.Time_Zone__c = null; // stored blank == UTC
+      DateTime sentinel = DateTime.newInstanceGmt(2030, 2, 2, 8, 15, 0);
+      sched.Next_Fire_Window__c = sentinel;
+      insert sched;
+
+      Test.startTest();
+      // Save passing an EMPTY-STRING zone: null <-> '' both mean UTC, so this is
+      // not a real zone change and the cursor must NOT be reseeded.
+      WorkflowScheduleController.saveSchedule(
+        new Map<String, Object>{
+          'Id' => sched.Id,
+          'Name' => 'CtrlZoneBlank',
+          'Workflow_Name__c' => TEST_WF,
+          'Cron_Expression__c' => '0 2 * * *',
+          'Correlation_Key_Prefix__c' => 'CtrlZoneBlank',
+          'Enabled__c' => true,
+          'Overlap_Policy__c' => 'Skip',
+          'Dedicated_Slot__c' => false,
+          'Time_Zone__c' => ''
+        }
+      );
+      Test.stopTest();
+
+      System.assertEquals(
+        sentinel,
+        [
+          SELECT Next_Fire_Window__c
+          FROM Workflow_Schedule__c
+          WHERE Id = :sched.Id
+        ]
+        .Next_Fire_Window__c,
+        'A null-to-empty-string zone edit is not a real zone change and must NOT reseed'
+      );
+    }
+  }
+
+  @IsTest
   static void testSaveCreateAndEdit() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
@@ -327,16 +467,114 @@ public class WorkflowScheduleControllerTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Map<String, Object> good = WorkflowScheduleController.previewCron(
-        '0 2 * * *'
+        '0 2 * * *',
+        ''
       );
       Map<String, Object> bad = WorkflowScheduleController.previewCron(
-        'not a cron'
+        'not a cron',
+        ''
+      );
+      Map<String, Object> zoned = WorkflowScheduleController.previewCron(
+        '0 2 * * *',
+        'America/New_York'
+      );
+      Map<String, Object> badZone = WorkflowScheduleController.previewCron(
+        '0 2 * * *',
+        'Not/AZone'
       );
       Test.stopTest();
 
       System.assertEquals(true, good.get('valid'), 'Valid cron');
       System.assertNotEquals(null, good.get('nextFire'), 'Next fire computed');
       System.assertEquals(false, bad.get('valid'), 'Invalid cron');
+      System.assertEquals(true, zoned.get('valid'), 'Valid zoned cron');
+      System.assertNotEquals(
+        null,
+        zoned.get('nextFire'),
+        'Zoned next fire computed'
+      );
+      System.assertEquals(
+        false,
+        badZone.get('valid'),
+        'Unsupported zone marks preview invalid'
+      );
+    }
+  }
+
+  @IsTest
+  static void testGetTimeZones() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      List<String> zones = WorkflowScheduleController.getTimeZones();
+      Test.stopTest();
+
+      System.assertNotEquals(null, zones, 'Time-zone list should not be null');
+      System.assert(
+        !zones.isEmpty(),
+        'Supported time-zone list should be non-empty'
+      );
+      System.assert(
+        zones.contains('America/New_York'),
+        'Supported time zones should include the known IANA id America/New_York'
+      );
+    }
+  }
+
+  @IsTest
+  static void testGuardAndErrorPathsThrow() {
+    // Consolidated into one method on purpose: each of these controller entry
+    // points has a null-scheduleId / delegated-failure branch that surfaces as an
+    // AuraHandledException, and grouping them keeps the class under the analyzer's
+    // cyclomatic-complexity ceiling while still exercising every guarded path.
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Boolean deleteThrew = false;
+      Boolean enableThrew = false;
+      Boolean runNowThrew = false;
+      Boolean registerThrew = false;
+      Test.startTest();
+      // deleteSchedule's own required-Id guard.
+      try {
+        WorkflowScheduleController.deleteSchedule(null);
+      } catch (AuraHandledException e) {
+        deleteThrew = true;
+      }
+      // enableSchedule -> loadScheduleForToggle required-Id guard (shared by
+      // disableSchedule, which is already covered on the happy path).
+      try {
+        WorkflowScheduleController.enableSchedule(null);
+      } catch (AuraHandledException e) {
+        enableThrew = true;
+      }
+      // runNow wraps the delegate's failure via its catch/throwAura error path.
+      try {
+        WorkflowScheduleController.runNow(null);
+      } catch (AuraHandledException e) {
+        runNowThrew = true;
+      }
+      // registerDedicatedJob likewise wraps the delegate's failure via throwAura.
+      try {
+        WorkflowScheduleController.registerDedicatedJob(null);
+      } catch (AuraHandledException e) {
+        registerThrew = true;
+      }
+      Test.stopTest();
+
+      System.assert(
+        deleteThrew,
+        'deleteSchedule(null) should reject a missing scheduleId'
+      );
+      System.assert(
+        enableThrew,
+        'enableSchedule(null) should reject a missing scheduleId'
+      );
+      System.assert(
+        runNowThrew,
+        'runNow with a null scheduleId should surface an AuraHandledException'
+      );
+      System.assert(
+        registerThrew,
+        'registerDedicatedJob with a null scheduleId should surface an AuraHandledException'
+      );
     }
   }
 
