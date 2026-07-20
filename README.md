@@ -539,6 +539,22 @@ static void onboardingWorkflowIsWellFormed() {
 
 Revenant supports Custom Metadata-driven failure alerting. Operators can configure notifications directly in Salesforce Setup without code modifications by creating **Workflow Alert Config** (`Workflow_Alert_Config__mdt`) records:
 
+### Access Model (Three-Tier Least-Privilege)
+
+Revenant ships least-privilege permission sets so that monitoring staff are granted exactly the access they need. The engine's replay correctness and saga integrity depend on the append-only `Workflow_Step_Execution__c` audit trail and the `Workflow_Instance__c.Compensation_Stack__c` LIFO field never being mutated out-of-band, so **do not** reach for `Revenant_Admin` just to let someone watch the dashboard. Pick the lowest tier that fits the persona:
+
+| Tier | Persona | Assign | Can do | Cannot do |
+| --- | --- | --- | --- | --- |
+| **1. Read-only Operator** | NOC / support tier-2 / on-call monitoring | `Revenant_Operator` permission set | Open the `workflowDashboard` LWC; read every `Workflow_Instance__c`, `Workflow_Step_Execution__c` and `Workflow_Signal__c` (including rehydrated offloaded payloads) | No create/edit/delete or `modifyAll` on any engine object; no recovery actions (re-drive, cancel, resume, compensate, pause/resume, redeliver, start, inject) |
+| **2. Action-capable Operator** | Ops engineer trusted to recover stuck runs | `Revenant_Operator` **plus** the `Workflow_Operator_Action` custom permission **and** Apex access to `WorkflowDashboardCommandController` (e.g. via a small supplemental permission set) | Everything in Tier 1, plus the guarded recovery actions that mutate engine state | Still no direct record edit/delete of the append-only trail or the compensation stack (mutations run through system-mode engine Apex, never raw DML) |
+| **3. Admin** | Revenant administrator / installer | `Revenant_Admin` permission set (unchanged) | Full Create/Edit/Delete + `modifyAll`/`viewAll` on all engine objects; every dashboard action; signal injection; step-skip | — |
+
+How the gates map to permissions:
+
+- **Dashboard visibility** is gated by `WorkflowDashboardSupport.checkAuthorization()`, which passes for holders of the `Workflow_Dashboard_View` custom permission (granted by `Revenant_Operator`), the `Workflow_Admin` custom permission (granted by `Revenant_Admin`), or the "Modify All Data" system permission.
+- **State-mutating recovery actions** are separately gated by `WorkflowDashboardSupport.checkOperatorAction()`, which passes only for holders of the `Workflow_Operator_Action` custom permission, `Workflow_Admin`, or "Modify All Data". Because the read-only tier holds `Workflow_Dashboard_View` (not `Workflow_Admin`), **granting dashboard visibility never implicitly grants the ability to re-drive, cancel, or delete.**
+- **Signal injection** (`Workflow_Signal_Injection`) and **step-skip** (`Workflow_Step_Skip`) remain independently gated on their own custom permissions, layered on top of the action gate.
+
 ### Mapping Workflow Definitions to Alert Configurations
 
 The engine maps a workflow's class name to a custom metadata record's `DeveloperName` (Workflow Alert Config Name) by replacing all non-alphanumeric characters (such as dots) with underscores:

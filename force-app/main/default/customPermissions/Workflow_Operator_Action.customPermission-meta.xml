@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomPermission xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Gates the mutating recovery actions of the Revenant workflow dashboard (re-drive, cancel, resume, compensate, pause/resume, redeliver) so that granting read-only dashboard visibility does not implicitly grant the ability to change engine state.</description>
+    <label>Workflow Operator Action</label>
+</CustomPermission>

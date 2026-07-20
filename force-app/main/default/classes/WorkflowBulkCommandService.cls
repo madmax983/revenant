@@ -47,6 +47,7 @@ public inherited sharing class WorkflowBulkCommandService {
     String searchTerm
   ) {
     WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
     try {
       Integer eligibleCount = BulkRedriveWorkflow.countEligible(
         workflowName,
@@ -162,6 +163,7 @@ public inherited sharing class WorkflowBulkCommandService {
     Map<String, Object> filter
   ) {
     WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
     try {
       String workflowName = (String) filter.get('workflowName');
       String status = (String) filter.get('status');
