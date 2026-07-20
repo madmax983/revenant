@@ -235,6 +235,152 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  /**
+   * Stable read-only DTO for a single step execution in an instance's timeline.
+   * A forever-public API contract: v1 is metadata-only (no per-step input/output
+   * payload bodies). All fields are read-only to callers (private setters); the
+   * read layer populates them once via the constructor.
+   */
+  public class StepHistoryEntry {
+    /** @description Salesforce Id of the step-execution row (stable identifier). */
+    public Id executionId { get; private set; }
+    /**
+     * @description Logical step name. Compensation executions carry the
+     * `<step>_Compensate` name; use {@link #isCompensation} to distinguish them.
+     */
+    public String stepName { get; private set; }
+    /**
+     * @description Raw `Status__c` of the step execution. One of the engine's
+     * eleven step statuses: terminal — `Completed`, `Failed`, `Compensated`,
+     * `Cancelled`, `OperatorSkipped`, `ContinuedAsNew`; in flight — `Pending`,
+     * `Running`, `Retrying`, `Compensating`, `Cancelling`. A terminal status
+     * settles `endedAt`/`totalDurationMs`; an in-flight status leaves them null.
+     */
+    public String status { get; private set; }
+    /** @description Retry attempt count for this step (0 on the first attempt). */
+    public Integer attempt { get; private set; }
+    /** @description When this step execution was first appended to the trail. */
+    public Datetime startedAt { get; private set; }
+    /**
+     * @description Last modification time of the terminal step-execution row (the
+     * engine reuses one row across retries, so this is the last modification, not
+     * per-attempt); null while the step is still in flight.
+     */
+    public Datetime endedAt { get; private set; }
+    /**
+     * @description Total wall-clock from `startedAt` to `endedAt` in milliseconds,
+     * across ALL attempts including retry backoff — not a single attempt's
+     * duration, because the engine reuses one step-execution row for every retry.
+     * Use `attempt` to disambiguate a retried row. Null while in flight.
+     */
+    public Long totalDurationMs { get; private set; }
+    /**
+     * @description True when this row is a compensation (rollback) execution,
+     * false for a forward execution. Convention-derived: it is inferred from the
+     * step name ending in the engine's `_Compensate` suffix, so a step an author
+     * manually names ending in `_Compensate` would be a false positive.
+     */
+    public Boolean isCompensation { get; private set; }
+
+    /**
+     * @description Builds a fully-populated history entry from a queried
+     * step-execution row. Terminality (and therefore `endedAt`/`totalDurationMs`),
+     * the compensation flag, and the normalized attempt count are derived here so
+     * the read layer never touches the private setters. The timeline is
+     * payload-free: no long-text (`Error_Details__c`/`Input__c`/`Output__c`) is
+     * loaded. Derive error/retry facts from the lightweight fields —
+     * <ul>
+     *   <li><b>ended in error</b>: `status` is a failure state — `Failed`,
+     *   `Compensating`, `Compensated`, `Cancelling`, or `Cancelled` (a `Retrying`
+     *   status means an attempt failed and another is queued);</li>
+     *   <li><b>was retried</b>: `attempt` &gt; 0;</li>
+     *   <li><b>full error text / stack trace</b>: call
+     *   {@link WorkflowHistoryRead#getStepError} with `executionId` (a step can
+     *   have retained error detail from an earlier attempt even under a
+     *   terminal-success `status`, since the engine reuses one row across
+     *   retries).</li>
+     * </ul>
+     * @param row the queried `Workflow_Step_Execution__c` row to project
+     */
+    public StepHistoryEntry(Workflow_Step_Execution__c row) {
+      this.executionId = row.Id;
+      this.stepName = row.Step_Name__c;
+      this.status = row.Status__c;
+      this.attempt = row.Retry_Count__c == null
+        ? 0
+        : row.Retry_Count__c.intValue();
+      this.startedAt = row.CreatedDate;
+      Boolean isTerminal = WorkflowHistoryRead.TERMINAL_STEP_STATUSES.contains(
+        row.Status__c
+      );
+      this.endedAt = isTerminal ? row.LastModifiedDate : null;
+      this.totalDurationMs = (isTerminal &&
+        this.startedAt != null &&
+        this.endedAt != null)
+        ? this.endedAt.getTime() - this.startedAt.getTime()
+        : null;
+      this.isCompensation =
+        row.Step_Name__c != null && row.Step_Name__c.endsWith('_Compensate');
+    }
+  }
+
+  /**
+   * Stable read-only wrapper returned by the history read API for one instance:
+   * the ordered `StepHistoryEntry` list plus an explicit truncation flag so a
+   * capped history is never silently cut. Forever-public contract; fields are
+   * read-only to callers (private setters).
+   */
+  public class StepHistory {
+    /**
+     * @description The step-execution entries in append (execution) order,
+     * capped at {@link WorkflowHistoryRead#MAX_HISTORY_ROWS}. Empty for a known
+     * instance that has not yet logged a step.
+     */
+    public List<StepHistoryEntry> entries { get; private set; }
+    /**
+     * @description True when the instance's real step total exceeds the retained
+     * `entries` — either the history was cut at the row cap, or (in a bulk read) the
+     * instance was starved of scan budget by a larger sibling in the same batch.
+     * Either way `totalCount` still reports the real total, so a step-bearing
+     * instance is never returned as an empty (`isTruncated = false`) history.
+     */
+    public Boolean isTruncated { get; private set; }
+    /**
+     * @description The real total number of step executions for the instance,
+     * supplied authoritatively by the read layer. Equals `entries.size()` exactly
+     * when nothing was dropped; when `isTruncated` is true it is the real total
+     * (from a `COUNT()` query) even though `entries` is capped or partial, so
+     * callers always know the full size. `0` for a known instance with no steps.
+     */
+    public Integer totalCount { get; private set; }
+
+    /**
+     * @description Projects a set of queried, append-ordered step-execution rows
+     * for one instance into the capped `entries` list, and derives `isTruncated`
+     * from the authoritative `totalCount` versus the retained entry count (so a
+     * scan-starved bulk instance is flagged truncated, never false-empty). Mirrors
+     * the projecting constructor of {@link WorkflowStatus}; used by the extracted
+     * read layer ({@link WorkflowHistoryRead}), which supplies `totalCount` so this
+     * DTO stays SOQL-free.
+     * @param rows the instance's retained step-execution rows in append order
+     * @param totalCount the real total step-execution count for the instance
+     */
+    public StepHistory(
+      List<Workflow_Step_Execution__c> rows,
+      Integer totalCount
+    ) {
+      this.entries = new List<StepHistoryEntry>();
+      Integer rowCap = WorkflowHistoryRead.MAX_HISTORY_ROWS;
+      Integer rowCount = rows == null ? 0 : rows.size();
+      Integer take = rowCount > rowCap ? rowCap : rowCount;
+      for (Integer i = 0; i < take; i++) {
+        this.entries.add(new StepHistoryEntry(rows[i]));
+      }
+      this.totalCount = totalCount;
+      this.isTruncated = totalCount > this.entries.size();
+    }
+  }
+
   // ─── End Read API ──────────────────────────────────────────────────────────
 
   /**

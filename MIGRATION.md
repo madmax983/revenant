@@ -58,6 +58,20 @@ StepContext.Signal s;                                                      // un
 WorkflowEngine.signal(correlationKey, 'ApprovalReceived', payloadJson);    // still valid
 ```
 
+> **📖 Reading an instance's step history.** The supported read contracts live on
+> dedicated read classes, not the facade — `WorkflowStatusRead.getStatus` for the
+> **outcome**, and **`WorkflowHistoryRead.getHistory`** for the ordered **step
+> timeline** (which steps ran, in order, with attempt counts, timing, errors, and a
+> compensation flag). Do **not** query `Workflow_Step_Execution__c` directly — those
+> field names are internal.
+>
+> ```apex
+> WorkflowEngine.StepHistory h = WorkflowHistoryRead.getHistory(instanceId);
+> for (WorkflowEngine.StepHistoryEntry e : h.entries) { /* e.stepName, e.status, e.attempt, ... */ }
+> ```
+>
+> See the README's "Read a Workflow's Step Timeline (Apex)" section for the full DTO shape.
+
 ---
 
 ## 2. `cancel(Id, Boolean)` split — and `cancelWithCompensations` is NOT on the engine

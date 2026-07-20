@@ -457,6 +457,61 @@ List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(keyLi
 - By correlation key, the active/live run is preferred over a recently-terminal one when a key has been reused. Lookup is case-insensitive (matching the correlation-key fields) and follows `ContinuedAsNew` chains via the shared root key, so polling the original key — **or any intermediate successor key** — returns the live/final successor, not a stale predecessor. `null` is returned (not an exception) when nothing matches.
 - **Known limitation — don't reuse a chain's correlation key for an unrelated run while that chain is live.** Chain following matches on the shared `Root_Correlation_Key__c`, which a continue-as-new chain shares with _any_ independent run that reuses the same key. If you start a separate workflow with a correlation key that is also the root of a still-live continue-as-new chain, polling an intermediate successor key of that chain may resolve to the unrelated reused run. Use distinct correlation keys per logical workflow (the normal case) to avoid this; precise disambiguation would require walking the `Previous_Instance__c` lineage, which is intentionally out of scope to keep `getStatus` bounded and constant-SOQL.
 
+#### Read a Workflow's Step Timeline (Apex)
+
+`getStatus` returns the **outcome**; `WorkflowHistoryRead.getHistory` is its **timeline** complement — the ordered, append-order list of step executions for an instance (which steps ran, in what order, with attempt counts, timing, and a forward-vs-compensation flag). Like `getStatus`, it is a service-class read contract (returning the resident `WorkflowEngine.StepHistory` / `WorkflowEngine.StepHistoryEntry` DTOs). As with `getStatus`, do **not** query `Workflow_Step_Execution__c` directly: the field names are internal. `getHistory` is **strictly read-only** (constant SOQL, zero DML) and safe to call from any Apex context.
+
+The timeline is **payload-free / heap-safe**: it never loads the potentially large `Error_Details__c` long-text (nor `Input__c`/`Output__c`). Derive the error/retry story from the lightweight fields:
+
+- **ended in error** → `status` is a failure state (`Failed`, `Compensating`, `Compensated`, `Cancelling`, `Cancelled`; `Retrying` means an attempt failed and another is queued);
+- **was retried** → `attempt > 0`;
+- **full error text / stack trace** → `WorkflowHistoryRead.getStepError(executionId)` (loads one row, heap-bounded — a retried-then-succeeded step can still return retained detail here even under a success `status`).
+
+```java
+// Single instance — null when no instance matches; empty entries when it has no steps yet
+WorkflowEngine.StepHistory history = WorkflowHistoryRead.getHistory(instanceId);
+for (WorkflowEngine.StepHistoryEntry e : history.entries) {
+  System.debug(e.stepName + ' ' + e.status + ' attempt=' + e.attempt);
+  String detail = WorkflowHistoryRead.getStepError(e.executionId); // null unless error text recorded
+}
+
+// Bulk — constant SOQL regardless of list size; unmatched Ids are absent from the map
+Map<Id, WorkflowEngine.StepHistory> byId = WorkflowHistoryRead.getHistory(idList);
+```
+
+**`StepHistory` fields:**
+
+| Field         | Type                     | Description                                                                                                                                                                      |
+| ------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `entries`     | `List<StepHistoryEntry>` | Step executions in append (execution) order, capped at `WorkflowHistoryRead.MAX_HISTORY_ROWS`.                                                                                  |
+| `isTruncated` | `Boolean`                | `true` when the instance had more executions than the cap and `entries` was truncated.                                                                                         |
+| `totalCount`  | `Integer`                | The real total step count. Equals `entries.size()` when untruncated (no extra SOQL); when `isTruncated`, the true total via a single `COUNT()` query run **only** on that path. |
+
+**`StepHistoryEntry` fields:**
+
+| Field             | Type       | Description                                                                                                                                                                                     |
+| ----------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `executionId`     | `Id`       | The `Workflow_Step_Execution__c` record Id (stable identifier).                                                                                                                                |
+| `stepName`        | `String`   | Logical step name; compensation executions carry the `<step>_Compensate` name.                                                                                                                 |
+| `status`          | `String`   | Raw `Status__c`. Terminal: `Completed`, `Failed`, `Compensated`, `Cancelled`, `OperatorSkipped`, `ContinuedAsNew`. In flight: `Pending`, `Running`, `Retrying`, `Compensating`, `Cancelling`. |
+| `attempt`         | `Integer`  | Retry attempt count (`0` on the first attempt).                                                                                                                                                |
+| `startedAt`       | `Datetime` | When the execution was first appended to the trail.                                                                                                                                            |
+| `endedAt`         | `Datetime` | Last modification of the terminal step-execution row (the engine reuses one row across retries, so this is the last modification, not per-attempt); `null` while in flight.                     |
+| `totalDurationMs` | `Long`     | Total wall-clock `startedAt`→`endedAt` in ms, across **all** attempts including retry backoff (one row is reused per retry — not a single attempt); use `attempt` to disambiguate. `null` in flight. |
+| `isCompensation`  | `Boolean`  | `true` for a compensation (rollback) execution. Convention-derived from the step name's `_Compensate` suffix — a step an author manually names ending in `_Compensate` would be a false positive. |
+
+> **Errors are not on the timeline.** There is deliberately no per-entry error field: a heap-safe boolean would require filtering the `Error_Details__c` long-text (impossible in SOQL) or maintaining a separate flag across the engine's write path. Read whether a step ended badly from `status`, whether it was retried from `attempt`, and the full text from `getStepError(executionId)`.
+
+**`getStepError`:** `WorkflowHistoryRead.getStepError(Id executionId)` → the full `Error_Details__c` for one step-execution row, or `null` for an unknown Id or a row with no error recorded. One SOQL query, heap-bounded to a single row.
+
+**Key semantics:**
+
+- Single form returns `null` for an unknown Id (not an exception) and a `StepHistory` with an **empty** `entries` list for a known instance that has logged no steps. The bulk form omits unmatched Ids from the map and includes known-but-empty instances with empty entries.
+- **Metadata-only / heap-safe:** per-step input/output/error payload bodies are deliberately never loaded (terminal output comes from `getStatus`; per-step error text from `getStepError`).
+- Reading is **governor-bounded** and zero DML, with a documented per-instance row cap (`WorkflowHistoryRead.MAX_HISTORY_ROWS`); a longer history is reported as `isTruncated = true` (with the real size in `totalCount`) rather than silently cut. The single-Id read costs **one** SOQL query in the common case (rows present and within the cap), a second only when truncated (`COUNT()`) or when probing existence. `getStepError` is one more query for a single row. The bulk read is constant-SOQL regardless of batch size (a grouped `COUNT()`, the row scan, and an existence probe only when some requested Ids are step-less).
+- **Bulk input cap: at most `WorkflowHistoryRead.MAX_INSTANCES_PER_CALL` (2000) distinct instance Ids per call.** The bulk read totals each instance with a grouped aggregate `COUNT()`, and Apex aggregate SOQL cannot page beyond 2000 rows; passing more throws a `WorkflowEngine.WorkflowException` up front (before any query) naming the cap. Callers with more Ids must chunk them into batches of 2000 or fewer (which also matches the standard Batch Apex `execute()` scope). The single-Id form has no cap.
+- **For valid input, a bulk read never reports a step-bearing instance as empty, and never exceeds the SOQL row governor.** The small grouped `COUNT()` and existence probe run first; the large row scan runs last, sized from the row budget still available, so even a batch whose ideal scan would blow past the 50,000-row limit degrades to graceful truncation instead of throwing. The scan shares that budget, so a very large instance can starve a sibling of retrieved rows — but the authoritative `COUNT()` still gives every instance its real `totalCount`, so a starved (or budget-truncated) instance comes back with `isTruncated = true` and its true `totalCount` (with whatever rows were retrieved, possibly none), never as a false-empty history. To get the full `entries` of such a history, re-read that instance singly.
+
 ### 9. Validate a Workflow Definition (Apex)
 
 A `WorkflowDefinition` is otherwise only exercised at runtime: the engine resolves each step class lazily via `Type.forName` as it reaches it, so a typo'd successor, an entry point missing from `getSteps()`, or a step name that doesn't resolve to a real `WorkflowStep` only surfaces **mid-execution — after earlier forward steps (and their side effects) have already committed**, triggering a real compensation rollback in production. `WorkflowValidator` moves that detection to authoring/deploy time.
