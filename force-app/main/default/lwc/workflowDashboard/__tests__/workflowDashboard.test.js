@@ -708,6 +708,74 @@ describe("c-workflow-dashboard latency panel", () => {
       "End-to-end duration percentiles",
     );
   });
+
+  it("clears the Failure Breakdown panel and shows the instance detail when an instance is selected while Failure Breakdown is open", async () => {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {},
+    });
+    getWorkflowFailureBreakdown.mockResolvedValue({
+      workflowName: "TestWorkflow",
+      timeWindow: "24h",
+      isCapped: false,
+      capLimit: 2000,
+      totalFailures: 0,
+      steps: [],
+    });
+
+    const element = createComponent();
+    await flushPromises();
+
+    // Open the Failure Breakdown panel (viewingFailureBreakdown = true).
+    const breakdownButton = findButton(
+      element,
+      (btn) => btn.label === "Failure Breakdown",
+    );
+    breakdownButton.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Failure Breakdown panel is showing; the instance detail (Send Signal) is hidden.
+    expect(element.shadowRoot.textContent).toContain(
+      "Ranked failing steps and clustered error signatures",
+    );
+    expect(
+      element.shadowRoot.querySelector(
+        'lightning-button[data-id="send-signal-btn"]',
+      ),
+    ).toBeNull();
+
+    // Click an instance in the list while Failure Breakdown is still open.
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    // The detail pane is now visible and the Failure Breakdown panel has been cleared.
+    expect(
+      element.shadowRoot.querySelector(
+        'lightning-button[data-id="send-signal-btn"]',
+      ),
+    ).not.toBeNull();
+    expect(element.shadowRoot.textContent).not.toContain(
+      "Ranked failing steps and clustered error signatures",
+    );
+  });
 });
 
 describe("c-workflow-dashboard bulk cancel", () => {

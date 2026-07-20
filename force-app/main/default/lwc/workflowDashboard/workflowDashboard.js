@@ -921,6 +921,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDrain = false;
     this.viewingUnrouted = false;
     this.viewingLatency = false;
+    this.viewingFailureBreakdown = false;
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
