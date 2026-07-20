@@ -135,10 +135,18 @@ public class WorkflowWaitDescriptorServiceTest {
         d.get('type'),
         'Type is child-completion'
       );
+      // Issue #84: with >1 awaited key the parked state cannot tell which child is still
+      // outstanding, so the single pre-fill is intentionally blank (never the possibly-stale
+      // first key). The full list is surfaced for the operator to choose the outstanding one.
       System.assertEquals(
-        'ChildCompleted:k1',
+        null,
         d.get('signalName'),
-        'First awaited ChildCompleted is directly injectable'
+        'A multi-child join leaves the pre-fill blank rather than suggest a possibly-stale key'
+      );
+      System.assertEquals(
+        'Awaiting child completion — choose the outstanding child key',
+        d.get('label'),
+        'Label directs the operator to pick the still-outstanding child key'
       );
       List<String> names = (List<String>) d.get('childSignalNames');
       System.assertEquals(
@@ -148,6 +156,62 @@ public class WorkflowWaitDescriptorServiceTest {
       );
       System.assertEquals('ChildCompleted:k1', names[0]);
       System.assertEquals('ChildCompleted:k2', names[1]);
+    }
+  }
+
+  @IsTest
+  static void testSingleKeyChildrenListStillInjectable() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // A START_CHILDREN join with exactly one awaited key is unambiguous: that lone key IS
+      // the outstanding child, so it stays directly injectable as the pre-filled signal.
+      String output = JSON.serialize(
+        new Map<String, Object>{
+          'childCorrelationKeys' => new List<String>{ 'only-child' }
+        }
+      );
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
+        suspendedInstance(null),
+        oneStep(pendingStep('WaitDescTest.SingleFanOutStep', output))
+      );
+      System.assertEquals(
+        'ChildCompleted:only-child',
+        d.get('signalName'),
+        'A single awaited child key is unambiguous and directly injectable'
+      );
+      System.assertEquals(
+        'ChildCompleted:only-child',
+        d.get('label'),
+        'Label equals the injectable signal name for a single-child join'
+      );
+    }
+  }
+
+  @IsTest
+  static void testStaleFirstChildKeyIsNotSuggested() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Scenario: the join spawned k1 and k2; k1 already completed but the join is still gated
+      // on k2. The parked Output still holds the ORIGINAL full [k1, k2] list, so pre-filling
+      // ChildCompleted:k1 would inject an already-satisfied key that cannot unblock the flow.
+      // Path (b): the read side cannot derive outstanding keys, so it must NOT suggest k1.
+      String output = JSON.serialize(
+        new Map<String, Object>{
+          'childCorrelationKeys' => new List<String>{ 'k1', 'k2' }
+        }
+      );
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
+        suspendedInstance(null),
+        oneStep(pendingStep('WaitDescTest.GatedJoinStep', output))
+      );
+      System.assertNotEquals(
+        'ChildCompleted:k1',
+        d.get('signalName'),
+        'The already-completed first key must not be pre-filled as the injectable signal'
+      );
+      System.assertEquals(
+        null,
+        d.get('signalName'),
+        'A multi-child join with an ambiguous outstanding set pre-fills nothing'
+      );
     }
   }
 
@@ -365,6 +429,127 @@ public class WorkflowWaitDescriptorServiceTest {
         'Approve:OffloadedGate',
         d.get('signalName'),
         'Signal name is derived from the rehydrated ContentVersion body'
+      );
+    }
+  }
+
+  @IsTest
+  static void testListPathDoesNotRehydrateOffloadedBody() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Issue #84: the bulk LIST path must NOT pull an offloaded ContentVersion body (a page of
+      // such rows would blow the Apex heap). Here the offloaded body is a full approval state:
+      // if the list rehydrated it, the descriptor would classify as 'Approve:<key>'. Because the
+      // list refuses to rehydrate, it instead emits the lightweight, detail-deferred descriptor.
+      Workflow_Instance__c inst = suspendedInstance(null);
+      insert as system inst;
+
+      String approvalState = JSON.serialize(
+        new Map<String, Object>{
+          'waitingForApproval' => true,
+          'approvalKey' => 'ListOffloadedGate'
+        }
+      );
+      ContentVersion cv = new ContentVersion(
+        Title = 'State_Approval_ListOffloaded',
+        PathOnClient = 'State_Approval_ListOffloaded.json',
+        VersionData = Blob.valueOf(approvalState)
+      );
+      insert as system cv;
+      Id docId = [
+        SELECT ContentDocumentId
+        FROM ContentVersion
+        WHERE Id = :cv.Id
+      ]
+      .ContentDocumentId;
+      insert as system new ContentDocumentLink(
+        ContentDocumentId = docId,
+        LinkedEntityId = inst.Id,
+        ShareType = 'V',
+        Visibility = 'AllUsers'
+      );
+      String marker = JSON.serialize(
+        new Map<String, String>{ '$attachmentId' => docId }
+      );
+      Workflow_Step_Execution__c step = pendingStepFor(
+        inst.Id,
+        'WaitDescTest.ListOffloadStep',
+        marker
+      );
+      insert as system step;
+
+      Test.startTest();
+      Integer queriesBefore = Limits.getQueries();
+      Map<Id, Map<String, Object>> byInstance = WorkflowWaitDescriptorService.describeSignalWaits(
+        new List<Workflow_Instance__c>{ inst }
+      );
+      Integer queriesUsed = Limits.getQueries() - queriesBefore;
+      Test.stopTest();
+
+      Map<String, Object> d = byInstance.get(inst.Id);
+      System.assertNotEquals(
+        null,
+        d,
+        'The offloaded Suspended row still surfaces a wait descriptor'
+      );
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_GENERIC,
+        d.get('type'),
+        'The list did NOT rehydrate the offloaded approval body; it stays a generic descriptor'
+      );
+      System.assertEquals(
+        null,
+        d.get('signalName'),
+        'A deferred list descriptor carries no injectable name (that is derived in detail)'
+      );
+      System.assertEquals(
+        'Awaiting signal at step WaitDescTest.ListOffloadStep',
+        d.get('label'),
+        'The offloaded row gets the generic awaiting-signal label; detail derives the exact name'
+      );
+      // The definitive no-rehydration proof: a single pending-step query only — the offloaded
+      // approval body was never fetched (a rehydration would add a ContentVersion query).
+      System.assertEquals(
+        1,
+        queriesUsed,
+        'The list path issues only the pending-step query, never a ContentVersion body fetch'
+      );
+    }
+  }
+
+  @IsTest
+  static void testListPathClassifiesInlineStateInFull() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // A small, non-offloaded (inline) approval state on the list path is still classified in
+      // full — the heap-safe change only defers OFFLOADED states, not inline ones.
+      Workflow_Instance__c inst = suspendedInstance(null);
+      insert as system inst;
+      insert as system pendingStepFor(
+        inst.Id,
+        'WaitDescTest.InlineApproveStep',
+        JSON.serialize(
+          new Map<String, Object>{
+            'waitingForApproval' => true,
+            'approvalKey' => 'InlineGate'
+          }
+        )
+      );
+
+      Test.startTest();
+      Map<Id, Map<String, Object>> byInstance = WorkflowWaitDescriptorService.describeSignalWaits(
+        new List<Workflow_Instance__c>{ inst }
+      );
+      Test.stopTest();
+
+      Map<String, Object> d = byInstance.get(inst.Id);
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_APPROVAL,
+        d.get('type'),
+        'An inline approval state is fully classified on the list path'
+      );
+      System.assertEquals(
+        'Approve:InlineGate',
+        d.get('signalName'),
+        'The inline approval yields the operator-injectable Approve:<key> signal'
       );
     }
   }

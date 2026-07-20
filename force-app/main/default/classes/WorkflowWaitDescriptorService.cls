@@ -3,13 +3,23 @@
  * Suspended instance parked on a signal / approval / child-completion wait. The engine
  * already persists what the instance is waiting for in the parked (Status__c = 'Pending')
  * Workflow_Step_Execution__c row's Output__c JSON (written by WorkflowStepSuspension);
- * this service reads that state, rehydrating any offloaded payload through
- * WorkflowPayloadOffload the same way the rest of the read path does, and classifies the
- * wait into an approval, child-completion, or generic signal descriptor.
+ * this service reads that state and classifies the wait into an approval, child-completion,
+ * or generic signal descriptor.
  *
- * <p>The descriptor's signalName for approval / child waits is the exact operator-injectable
- * form ('Approve:<key>' / 'ChildCompleted:<key>') consumed by the dashboard Send Signal
- * action, so it is copy/paste-usable with no transformation.
+ * <p><b>List vs. detail (issue #84):</b> the single-row detail path
+ * ({@link #describeSignalWait}) rehydrates an offloaded payload through WorkflowPayloadOffload
+ * the same way the rest of the read path does. The bulk list path
+ * ({@link #describeSignalWaits}) does NOT — bulk-pulling every offloaded body on a page would
+ * blow the Apex heap — so it classifies the raw parked state as-is: inline (non-offloaded)
+ * states classify in full, while an offloaded {@code {"$attachmentId":...}} marker is a small
+ * object with no approval/child key and so falls through to a generic descriptor, deferring the
+ * exact awaited name to the detail view.
+ *
+ * <p>The descriptor's signalName for an approval / single-child wait is the exact
+ * operator-injectable form ('Approve:<key>' / 'ChildCompleted:<key>') consumed by the dashboard
+ * Send Signal action, so it is copy/paste-usable with no transformation. A START_CHILDREN join
+ * with more than one awaited key leaves signalName blank (the read side cannot tell which child
+ * is still outstanding) and surfaces the full key list for the operator to choose from.
  *
  * <p>Strictly read-only: it issues no DML and mutates no Workflow_Step_Execution__c record.
  * A sleep / retry timer wait also parks a Pending step but carries a resume job on the
@@ -54,9 +64,21 @@ public inherited sharing class WorkflowWaitDescriptorService {
 
   /**
    * @description Bulk-derives signal-wait descriptors for a page of instances (list-view
-   * path) in a single pending-step query, rehydrating offloaded outputs in one bulk pass
-   * to avoid N+1 SOQL. Only Suspended instances on a signal wait get an entry. The caller
-   * (the instance-list service) always supplies a non-null instance list.
+   * path) in a single pending-step query. Only Suspended instances on a signal wait get an
+   * entry. The caller (the instance-list service) always supplies a non-null instance list.
+   *
+   * <p><b>List-vs-detail split (issue #84):</b> unlike the single-row detail path, this bulk
+   * path deliberately does NOT rehydrate offloaded ContentVersion bodies. A page of Suspended
+   * rows (limitSize up to ~100) can hold many steps whose parked state was offloaded (each
+   * &gt;100,000 chars); bulk-pulling every VersionData into one synchronous transaction blows
+   * the Apex heap before any classification runs. Instead this path passes the RAW parked state
+   * to buildDescriptor: an inline (small, non-offloaded) state is classified in full exactly as
+   * before, while an offloaded {@code {"$attachmentId":...}} marker is itself a small object
+   * with no approval/child key, so it falls through to a generic descriptor and the full
+   * approval/child derivation is deferred to the single-row {@link #describeSignalWait} detail
+   * view (which can safely rehydrate one body). In practice the engine writes approval/child
+   * markers as small inline JSON, so only an author's large plain-suspend state is ever
+   * offloaded — a generic wait either way.
    * @param instances The page of instances (Status__c and Async_Job_Id__c are read).
    * @return A map of instance id to its wait descriptor, for signal-waiting instances only.
    */
@@ -72,20 +94,16 @@ public inherited sharing class WorkflowWaitDescriptorService {
     Map<Id, Workflow_Step_Execution__c> pendingByInstance = mostRecentPendingSteps(
       suspendedIds
     );
-    List<Id> orderedIds = new List<Id>(pendingByInstance.keySet());
-    // Bulk-rehydrate any offloaded step outputs in one ContentVersion query (index-aligned).
-    List<String> rawOutputs = new List<String>();
-    for (Id instId : orderedIds) {
-      rawOutputs.add(pendingByInstance.get(instId).Output__c);
-    }
-    List<String> resolvedOutputs = WorkflowPayloadOffload.resolvePayloads(
-      rawOutputs
-    );
-    for (Integer i = 0; i < orderedIds.size(); i++) {
-      Id instId = orderedIds[i];
+    for (Id instId : pendingByInstance.keySet()) {
+      Workflow_Step_Execution__c pending = pendingByInstance.get(instId);
+      // Pass the RAW (unresolved) parked state — never WorkflowPayloadOffload.resolvePayload(s)
+      // — so the bulk path issues no ContentVersion body fetch. An inline state classifies in
+      // full; an offloaded {"$attachmentId":...} marker is itself a small JSON object carrying
+      // no approval/child key, so it falls through buildDescriptor to the generic branch and the
+      // exact awaited name is derived by the single-row detail view instead.
       Map<String, Object> descriptor = buildDescriptor(
-        pendingByInstance.get(instId).Step_Name__c,
-        resolvedOutputs[i],
+        pending.Step_Name__c,
+        pending.Output__c,
         asyncBlankIds.contains(instId)
       );
       if (descriptor != null) {
@@ -209,13 +227,26 @@ public inherited sharing class WorkflowWaitDescriptorService {
     if (childSignalNames.isEmpty()) {
       return null;
     }
-    // The first awaited ChildCompleted is directly injectable; the full list is surfaced so
-    // the operator can see every child the step is blocked on.
-    Map<String, Object> d = descriptor(
-      TYPE_CHILD,
-      childSignalNames[0],
-      stepName
-    );
+    // A single awaited child is unambiguous, so its ChildCompleted:<key> is directly injectable.
+    //
+    // For a START_CHILDREN join with >1 key the parked state holds the ORIGINAL full key list
+    // and carries NO read-side record of which children have already completed: that lives on
+    // the child instances' statuses (WorkflowSignalChildGate.collectFinishedChildKeys), which
+    // this read path deliberately does not query — doing so on the bulk list path would re-add
+    // the SOQL/heap cost this service avoids. Pre-filling the FIRST key would suggest a possibly
+    // already-satisfied ChildCompleted:<k1> that no longer unblocks the join (issue #84). So the
+    // suggestion stays honest: leave the single pre-fill blank and surface the full list for the
+    // operator to pick the still-outstanding child from.
+    Map<String, Object> d;
+    if (childSignalNames.size() == 1) {
+      d = descriptor(TYPE_CHILD, childSignalNames[0], stepName);
+    } else {
+      d = descriptor(TYPE_CHILD, null, stepName);
+      d.put(
+        'label',
+        'Awaiting child completion — choose the outstanding child key'
+      );
+    }
     d.put('childSignalNames', childSignalNames);
     return d;
   }
