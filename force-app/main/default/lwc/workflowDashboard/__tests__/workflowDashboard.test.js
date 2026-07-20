@@ -1671,7 +1671,10 @@ describe("c-workflow-dashboard awaited-signal descriptor (#84)", () => {
     return element;
   }
 
-  it("renders the awaited-signal descriptor badge in the instance list", async () => {
+  it("renders the lightweight awaiting-signal indicator in the instance list", async () => {
+    // Option A (#84): the LIST descriptor is now the lightweight generic indicator only — the
+    // heap-safe list query never selects Output__c, so it cannot classify approval/child or
+    // carry an awaited name (those move to the detail view). The list badge shows the label.
     getFilteredInstances.mockResolvedValue([
       {
         Id: "a0G000000000001",
@@ -1679,9 +1682,9 @@ describe("c-workflow-dashboard awaited-signal descriptor (#84)", () => {
         Workflow_Name__c: "TestWorkflow",
         Status__c: "Suspended",
         waitDescriptor: {
-          type: "approval",
-          signalName: "Approve:PurchaseApproval",
-          label: "Approve:PurchaseApproval",
+          type: "generic-signal",
+          signalName: null,
+          label: "Awaiting signal at step ApproveStep",
           stepName: "ApproveStep",
         },
       },
@@ -1692,7 +1695,7 @@ describe("c-workflow-dashboard awaited-signal descriptor (#84)", () => {
 
     const badge = element.shadowRoot.querySelector(".badge-teal");
     expect(badge).not.toBeNull();
-    expect(badge.textContent).toBe("Approve:PurchaseApproval");
+    expect(badge.textContent).toBe("Awaiting signal at step ApproveStep");
   });
 
   it("pre-fills the Send Signal modal with the awaited signal name", async () => {

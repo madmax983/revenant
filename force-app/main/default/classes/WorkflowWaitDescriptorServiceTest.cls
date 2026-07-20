@@ -436,10 +436,11 @@ public class WorkflowWaitDescriptorServiceTest {
   @IsTest
   static void testListPathDoesNotRehydrateOffloadedBody() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      // Issue #84: the bulk LIST path must NOT pull an offloaded ContentVersion body (a page of
-      // such rows would blow the Apex heap). Here the offloaded body is a full approval state:
-      // if the list rehydrated it, the descriptor would classify as 'Approve:<key>'. Because the
-      // list refuses to rehydrate, it instead emits the lightweight, detail-deferred descriptor.
+      // Issue #84 / Option A: the bulk LIST path never selects Output__c and so never pulls an
+      // offloaded ContentVersion body either (a page of such rows would blow the Apex heap).
+      // Here the offloaded body is a full approval state: were it read + rehydrated, the
+      // descriptor would classify as 'Approve:<key>'. Because the list reads no Output at all, it
+      // emits only the lightweight, detail-deferred generic indicator and issues no body fetch.
       Workflow_Instance__c inst = suspendedInstance(null);
       insert as system inst;
 
@@ -517,10 +518,14 @@ public class WorkflowWaitDescriptorServiceTest {
   }
 
   @IsTest
-  static void testListPathClassifiesInlineStateInFull() {
+  static void testListPathDoesNotSelectOrClassifyOutput() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      // A small, non-offloaded (inline) approval state on the list path is still classified in
-      // full — the heap-safe change only defers OFFLOADED states, not inline ones.
+      // Option A (issue #84): the bulk LIST path must NOT select Output__c (a LongTextArea) at
+      // all — even a small INLINE approval state. This is the query-shape proof: were Output__c
+      // selected and classified, this row would come back as an 'Approve:InlineGate' approval
+      // descriptor. Because the list query omits Output__c entirely, it can only emit the
+      // lightweight generic "Awaiting signal" indicator; the exact type + name are derived in
+      // detail. (The offloaded-body variant is covered by testListPathDoesNotRehydrateOffloadedBody.)
       Workflow_Instance__c inst = suspendedInstance(null);
       insert as system inst;
       insert as system pendingStepFor(
@@ -542,14 +547,63 @@ public class WorkflowWaitDescriptorServiceTest {
 
       Map<String, Object> d = byInstance.get(inst.Id);
       System.assertEquals(
-        WorkflowWaitDescriptorService.TYPE_APPROVAL,
+        WorkflowWaitDescriptorService.TYPE_GENERIC,
         d.get('type'),
-        'An inline approval state is fully classified on the list path'
+        'The list never selects/classifies Output__c, so even an inline approval stays generic'
       );
       System.assertEquals(
-        'Approve:InlineGate',
+        null,
         d.get('signalName'),
-        'The inline approval yields the operator-injectable Approve:<key> signal'
+        'A lightweight list descriptor carries no injectable name (that is derived in detail)'
+      );
+      System.assertEquals(
+        'Awaiting signal at step WaitDescTest.InlineApproveStep',
+        d.get('label'),
+        'The list shows only the lightweight awaiting-signal indicator for the parked step'
+      );
+    }
+  }
+
+  @IsTest
+  static void testListPathStaysHeapLightForLargeInlineOutput() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Heap proxy for the #84 fix: a large (~100KB) inline parked Output on a Suspended row
+      // must not be materialized by the list path. The behavioral tell is that the row still
+      // classifies as the lightweight generic indicator (Output was never read) while the whole
+      // bulk resolution issues exactly ONE query (the pending-step label query) — no per-row or
+      // Output-driven fan-out. A 100-row page of such states is what would otherwise blow heap.
+      Workflow_Instance__c inst = suspendedInstance(null);
+      insert as system inst;
+      // A large inline approval state: if the list DID select + classify Output__c, this would
+      // come back as an approval descriptor with a signalName. It must not.
+      String bigApprovalState =
+        '{"waitingForApproval":true,"approvalKey":"BigInlineGate","pad":"' +
+        'x'.repeat(90000) +
+        '"}';
+      insert as system pendingStepFor(
+        inst.Id,
+        'WaitDescTest.BigInlineStep',
+        bigApprovalState
+      );
+
+      Test.startTest();
+      Integer queriesBefore = Limits.getQueries();
+      Map<Id, Map<String, Object>> byInstance = WorkflowWaitDescriptorService.describeSignalWaits(
+        new List<Workflow_Instance__c>{ inst }
+      );
+      Integer queriesUsed = Limits.getQueries() - queriesBefore;
+      Test.stopTest();
+
+      Map<String, Object> d = byInstance.get(inst.Id);
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_GENERIC,
+        d.get('type'),
+        'A large inline Output is never read by the list path; the row stays a generic indicator'
+      );
+      System.assertEquals(
+        1,
+        queriesUsed,
+        'The list resolves the whole page in one Output-free pending-step query'
       );
     }
   }
@@ -588,9 +642,27 @@ public class WorkflowWaitDescriptorServiceTest {
       System.assertNotEquals(
         null,
         descriptor,
-        'The list row carries the awaited-signal descriptor'
+        'The list row carries the lightweight wait indicator'
       );
-      System.assertEquals('Approve:ListGate', descriptor.get('signalName'));
+      // Option A (issue #84): the list no longer selects/classifies Output__c, so even an
+      // approval wait surfaces only the generic "Awaiting signal" indicator with no injectable
+      // name. The exact Approve:<key> name is derived on the detail path (see
+      // testDescriptorOnDetailPath) and is what the Send Signal modal pre-fills from.
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_GENERIC,
+        descriptor.get('type'),
+        'The list indicator is the lightweight generic wait, not a full approval classification'
+      );
+      System.assertEquals(
+        null,
+        descriptor.get('signalName'),
+        'The list indicator carries no awaited name (the detail view derives it)'
+      );
+      System.assertEquals(
+        'Awaiting signal at step WaitDescTest.ApproveStep',
+        descriptor.get('label'),
+        'The list shows the lightweight awaiting-signal indicator for the parked step'
+      );
     }
   }
 

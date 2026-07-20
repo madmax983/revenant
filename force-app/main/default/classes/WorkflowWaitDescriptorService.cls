@@ -7,13 +7,18 @@
  * or generic signal descriptor.
  *
  * <p><b>List vs. detail (issue #84):</b> the single-row detail path
- * ({@link #describeSignalWait}) rehydrates an offloaded payload through WorkflowPayloadOffload
- * the same way the rest of the read path does. The bulk list path
- * ({@link #describeSignalWaits}) does NOT — bulk-pulling every offloaded body on a page would
- * blow the Apex heap — so it classifies the raw parked state as-is: inline (non-offloaded)
- * states classify in full, while an offloaded {@code {"$attachmentId":...}} marker is a small
- * object with no approval/child key and so falls through to a generic descriptor, deferring the
- * exact awaited name to the detail view.
+ * ({@link #describeSignalWait}) reads the parked step's {@code Output__c} (rehydrating an
+ * offloaded body through WorkflowPayloadOffload) and classifies the wait in full. The bulk
+ * list path ({@link #describeSignalWaits}) deliberately does NOT select {@code Output__c} at
+ * all: it is a LongTextArea (up to ~100,000 chars) and a full page of inline parked states
+ * would materialize ~6-10MB into one synchronous transaction and exceed the 6MB Apex heap
+ * before any classification runs. The wait TYPE (approval / child / generic) lives ONLY inside
+ * that Output JSON — no small step/instance field encodes it — so the list cannot name the type
+ * without paying that heap cost. It therefore emits one lightweight indicator per signal wait
+ * ("Awaiting signal at step &lt;name&gt;"), while still distinguishing a signal wait from a
+ * timer/job wait via the resume-job ({@code Async_Job_Id__c}) branch, which needs no Output
+ * read. The exact approval/child classification and awaited signalName are deferred to the
+ * detail view (which can safely rehydrate one Output body).
  *
  * <p>The descriptor's signalName for an approval / single-child wait is the exact
  * operator-injectable form ('Approve:<key>' / 'ChildCompleted:<key>') consumed by the dashboard
@@ -68,19 +73,20 @@ public inherited sharing class WorkflowWaitDescriptorService {
    * entry. The caller (the instance-list service) always supplies a non-null instance list.
    *
    * <p><b>List-vs-detail split (issue #84):</b> unlike the single-row detail path, this bulk
-   * path deliberately does NOT rehydrate offloaded ContentVersion bodies. A page of Suspended
-   * rows (limitSize up to ~100) can hold many steps whose parked state was offloaded (each
-   * &gt;100,000 chars); bulk-pulling every VersionData into one synchronous transaction blows
-   * the Apex heap before any classification runs. Instead this path passes the RAW parked state
-   * to buildDescriptor: an inline (small, non-offloaded) state is classified in full exactly as
-   * before, while an offloaded {@code {"$attachmentId":...}} marker is itself a small object
-   * with no approval/child key, so it falls through to a generic descriptor and the full
-   * approval/child derivation is deferred to the single-row {@link #describeSignalWait} detail
-   * view (which can safely rehydrate one body). In practice the engine writes approval/child
-   * markers as small inline JSON, so only an author's large plain-suspend state is ever
-   * offloaded — a generic wait either way.
+   * path deliberately does NOT select the parked step's {@code Output__c} (a LongTextArea up to
+   * ~100,000 chars). A page of Suspended rows (limitSize up to ~100) whose inline parked states
+   * are each 60-100KB would materialize ~6-10MB into one synchronous transaction and exceed the
+   * 6MB Apex heap before any classification runs — even without the (already-removed) offloaded
+   * ContentVersion rehydration. The wait TYPE (approval / child / generic) is encoded ONLY inside
+   * that Output JSON; no small step/instance field carries it. So the list cannot label the type
+   * without paying the heap cost and instead emits a single lightweight generic "Awaiting signal"
+   * indicator for every signal wait. A signal wait is still distinguished from a timer/job wait
+   * without reading Output: a parked step whose instance has no resume job ({@code Async_Job_Id__c}
+   * blank) is a signal wait; one carrying a resume job is a timer and yields no descriptor
+   * (unchanged). The exact approval/child classification and awaited signalName are deferred to
+   * the single-row {@link #describeSignalWait} detail view, which can safely rehydrate one body.
    * @param instances The page of instances (Status__c and Async_Job_Id__c are read).
-   * @return A map of instance id to its wait descriptor, for signal-waiting instances only.
+   * @return A map of instance id to its lightweight wait descriptor, for signal-waiting instances only.
    */
   public static Map<Id, Map<String, Object>> describeSignalWaits(
     List<Workflow_Instance__c> instances
@@ -95,19 +101,15 @@ public inherited sharing class WorkflowWaitDescriptorService {
       suspendedIds
     );
     for (Id instId : pendingByInstance.keySet()) {
-      Workflow_Step_Execution__c pending = pendingByInstance.get(instId);
-      // Pass the RAW (unresolved) parked state — never WorkflowPayloadOffload.resolvePayload(s)
-      // — so the bulk path issues no ContentVersion body fetch. An inline state classifies in
-      // full; an offloaded {"$attachmentId":...} marker is itself a small JSON object carrying
-      // no approval/child key, so it falls through buildDescriptor to the generic branch and the
-      // exact awaited name is derived by the single-row detail view instead.
-      Map<String, Object> descriptor = buildDescriptor(
-        pending.Step_Name__c,
-        pending.Output__c,
-        asyncBlankIds.contains(instId)
-      );
-      if (descriptor != null) {
-        byInstance.put(instId, descriptor);
+      // The bulk query never selected Output__c, so no approval/child classification is possible
+      // here without a heap-blowing re-read. A parked step whose instance has no resume job is a
+      // signal wait and gets the lightweight generic indicator; one with a resume job is a timer
+      // and is skipped (no descriptor). The exact type + awaited name come from the detail view.
+      if (asyncBlankIds.contains(instId)) {
+        byInstance.put(
+          instId,
+          genericDescriptor(pendingByInstance.get(instId).Step_Name__c)
+        );
       }
     }
     return byInstance;
@@ -134,12 +136,15 @@ public inherited sharing class WorkflowWaitDescriptorService {
 
   // The most-recent Pending step per instance is the representative wait. Rows are read
   // CreatedDate-ascending so a later Pending step overwrites an earlier one in the map.
+  // Output__c (a LongTextArea) is deliberately NOT selected: a page of Suspended rows would
+  // materialize megabytes of inline parked state and blow the sync heap (issue #84). Only the
+  // small Step_Name__c label is read; the wait type + awaited name are derived on the detail view.
   private static Map<Id, Workflow_Step_Execution__c> mostRecentPendingSteps(
     Set<Id> suspendedIds
   ) {
     Map<Id, Workflow_Step_Execution__c> pendingByInstance = new Map<Id, Workflow_Step_Execution__c>();
     for (Workflow_Step_Execution__c se : [
-      SELECT Workflow_Instance__c, Step_Name__c, Output__c
+      SELECT Workflow_Instance__c, Step_Name__c
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c IN :suspendedIds AND Status__c = 'Pending'
       WITH SYSTEM_MODE
