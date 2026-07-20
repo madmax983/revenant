@@ -336,6 +336,8 @@ describe("c-workflow-dashboard trends panel", () => {
       estimatedTotalBytes: 1074576,
       hasStorageLimit: true,
       percentOfAllowance: 82.5,
+      hasFileStorageLimit: true,
+      filePercentOfAllowance: 12.5,
       warningThresholdPercent: 75,
       isOverThreshold: true,
     });
@@ -360,6 +362,10 @@ describe("c-workflow-dashboard trends panel", () => {
     expect(panelText).toContain("82.5%");
     expect(panelText).toContain("1.0 MB");
     expect(panelText).toContain("Over threshold");
+    // Both gauges render: the data percentage and the separate file-storage percentage.
+    expect(panelText).toContain("% of Org Data-Storage Allowance");
+    expect(panelText).toContain("% of Org File-Storage Allowance");
+    expect(panelText).toContain("12.5%");
   });
 
   it("shows the Storage Footprint empty state when unavailable", async () => {

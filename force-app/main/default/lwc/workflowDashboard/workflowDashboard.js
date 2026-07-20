@@ -1501,6 +1501,16 @@ export default class WorkflowDashboard extends LightningElement {
     return this.storageData.percentOfAllowance + "%";
   }
 
+  // File-storage gauge: offloaded ContentVersion payloads bill against the org's FILE storage
+  // allowance, reported separately from the data-storage percentage. Informational only — the
+  // configurable warning threshold applies to the data percentage, not this one.
+  get storageFilePercentLabel() {
+    if (!this.storageData || !this.storageData.hasFileStorageLimit) {
+      return "N/A";
+    }
+    return this.storageData.filePercentOfAllowance + "%";
+  }
+
   // Formats a byte count as a compact human-readable size (B / KB / MB / GB).
   formatBytes(bytes) {
     const value = Number(bytes) || 0;

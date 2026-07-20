@@ -50,6 +50,13 @@ private class WorkflowStorageFootprintServiceTest {
         Signal_Name__c = 'FootprintSignal',
         Status__c = 'Received'
       );
+      // One search attribute so the newly tracked Workflow_Search_Attribute__c object counts.
+      insert new Workflow_Search_Attribute__c(
+        Workflow_Instance__c = instances[1].Id,
+        Key__c = 'FootprintKey',
+        Value__c = 'FootprintValue',
+        Key_Value__c = 'FootprintKey=FootprintValue'
+      );
 
       // Engine-owned offloaded payload (counted) plus a user file (must NOT be counted).
       ContentVersion engineCv = new ContentVersion(
@@ -76,9 +83,26 @@ private class WorkflowStorageFootprintServiceTest {
 
       List<Object> objects = (List<Object>) result.get('objects');
       System.assertEquals(
-        7,
+        10,
         objects.size(),
-        'All seven Revenant objects should be reported'
+        'All ten Revenant durable objects should be reported'
+      );
+
+      // The three engine-written objects added in the #108 review fix are present and counted.
+      System.assertEquals(
+        1,
+        rowFor(objects, 'Workflow_Search_Attribute__c').get('recordCount'),
+        'The seeded search attribute is counted'
+      );
+      System.assertNotEquals(
+        null,
+        rowFor(objects, 'Debounce_State__c'),
+        'Debounce_State__c is a tracked engine object'
+      );
+      System.assertNotEquals(
+        null,
+        rowFor(objects, 'Concurrency_State__c'),
+        'Concurrency_State__c is a tracked engine object'
       );
 
       Map<String, Object> instRow = rowFor(objects, 'Workflow_Instance__c');
@@ -134,11 +158,26 @@ private class WorkflowStorageFootprintServiceTest {
         'Total bytes are record estimate plus content bytes'
       );
 
-      // Allowance metrics are present; the threshold defaults to the CMDT value.
+      // Allowance metrics are present; the threshold defaults to the CMDT value. The data
+      // percentage now measures record bytes against DataStorageMB (files excluded), and a
+      // separate file percentage measures offloaded bytes against FileStorageMB.
       System.assertNotEquals(
         null,
         result.get('percentOfAllowance'),
-        'Allowance percentage is populated'
+        'Data-allowance percentage is populated'
+      );
+      System.assertNotEquals(
+        null,
+        result.get('filePercentOfAllowance'),
+        'File-allowance percentage is populated as a separate gauge'
+      );
+      System.assert(
+        result.get('hasFileStorageLimit') instanceof Boolean,
+        'File-storage limit flag is a Boolean'
+      );
+      System.assert(
+        result.containsKey('orgFileStorageLimitMb'),
+        'File-storage limit MB is surfaced'
       );
       System.assertEquals(
         75,
