@@ -235,6 +235,35 @@ public class WorkflowLatencyServiceTest {
   }
 
   @IsTest
+  static void effectiveStepCapReservesInstanceRowsAgainstGovernor() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // With no override, the step-scan LIMIT must reserve the rows already consumed by the
+      // instance query so instance_rows + step_rows can never exceed the 50,000 sync row
+      // governor. Exercise at the production instance-sample cap (2000 rows).
+      Integer instanceRows = 2000;
+      Integer effectiveCap = WorkflowLatencyService.effectiveStepScanCap(
+        instanceRows
+      );
+
+      System.assert(
+        instanceRows + effectiveCap <= 50000,
+        'instance rows + effective step cap must stay within the 50k sync row governor'
+      );
+      System.assert(
+        effectiveCap < 50000,
+        'Effective step cap must drop below the raw 50k cap to reserve instance rows'
+      );
+
+      // Zero instance rows still reserves only the safety margin (50000 - 500 = 49500).
+      System.assertEquals(
+        49500,
+        WorkflowLatencyService.effectiveStepScanCap(0),
+        'With no instance rows the cap reserves just the safety margin'
+      );
+    }
+  }
+
+  @IsTest
   static void windowFilterExcludesInstancesTerminalBeforeTheWindow() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Recent terminal instance (inside a 24h window) and an old one (outside it).

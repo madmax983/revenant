@@ -265,12 +265,16 @@ public inherited sharing class WorkflowDashboardController {
    * median-wall-clock step ranking for a workflow definition over the given window, computed
    * from a governor-bounded sample with an isCapped flag when the sample is truncated.
    * Strictly read-only (Terminal_At__c and step CreatedDate are read, never written).
+   * Intentionally NON-cacheable: these are live metrics that change as instances terminate
+   * and as the time window advances, so a Lightning Data Service cache keyed on
+   * (workflowName, windowKey) would serve stale percentiles/step rankings on Refresh. The LWC
+   * calls this imperatively; matches the non-cacheable sibling getWorkflowFailureBreakdown.
    * @param workflowName The workflow definition name to analyze.
    * @param windowKey The window key ('1h' | '24h' | '7d'; blank/unknown → all time).
    * @return A map with the window, cap metadata/isCapped flag, sample size, the p50/p95/p99/max
    *         duration milliseconds, and the per-step median ranking rows.
    */
-  @AuraEnabled(cacheable=true)
+  @AuraEnabled
   public static Map<String, Object> getDefinitionLatency(
     String workflowName,
     String windowKey

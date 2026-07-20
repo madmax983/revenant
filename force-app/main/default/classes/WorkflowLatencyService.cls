@@ -31,6 +31,15 @@ public inherited sharing class WorkflowLatencyService {
   // instance cap because a definition may record many steps per instance.
   private static final Integer STEP_SCAN_CAP = 50000;
 
+  // Total query rows a single synchronous transaction may retrieve (platform governor). The
+  // instance sample and the step scan share this budget, so the step LIMIT must reserve the
+  // rows the instance query already consumed.
+  private static final Integer SYNC_ROW_GOVERNOR_LIMIT = 50000;
+
+  // Rows held back beyond the instance + step scans as headroom for incidental queries/overhead
+  // in the same transaction, so the two scans never crowd the governor to its exact ceiling.
+  private static final Integer STEP_SCAN_SAFETY_MARGIN = 500;
+
   // Test-only cap overrides so the truncation path can be exercised with bounded seeding
   // (a handful of records) instead of materializing the production caps. Null in production.
   @TestVisible
@@ -48,6 +57,26 @@ public inherited sharing class WorkflowLatencyService {
   // Effective step-scan cap (test override when set, else the production constant).
   private static Integer stepScanCap() {
     return stepScanCapOverride != null ? stepScanCapOverride : STEP_SCAN_CAP;
+  }
+
+  /**
+   * @description Effective LIMIT for the step-execution scan that runs after `instanceRows`
+   * instance rows have already been retrieved in this transaction. Reserves those instance rows
+   * (plus STEP_SCAN_SAFETY_MARGIN) against the SYNC_ROW_GOVERNOR_LIMIT so that
+   * instanceRows + stepRows can never exceed the 50,000 synchronous row governor, while never
+   * exceeding the analytical stepScanCap(). Floored at 1 so the query stays valid and the
+   * truncation flag can still trip. The @TestVisible stepScanCap override still binds when it is
+   * the smaller of the two, so the cap-truncation test path is preserved.
+   * @param instanceRows The number of instance rows already fetched this transaction.
+   * @return The row LIMIT to apply to the step-execution query.
+   */
+  @TestVisible
+  private static Integer effectiveStepScanCap(Integer instanceRows) {
+    Integer remaining =
+      SYNC_ROW_GOVERNOR_LIMIT -
+      instanceRows -
+      STEP_SCAN_SAFETY_MARGIN;
+    return Math.max(Math.min(stepScanCap(), remaining), 1);
   }
 
   /**
@@ -91,10 +120,13 @@ public inherited sharing class WorkflowLatencyService {
     Boolean stepsCapped = false;
     List<Map<String, Object>> stepRows = new List<Map<String, Object>>();
     if (!instanceIds.isEmpty()) {
+      // Reserve the rows the instance query already consumed against the sync row governor.
+      Integer stepCap = effectiveStepScanCap(instances.size());
       List<Workflow_Step_Execution__c> stepExecs = queryStepExecutions(
-        instanceIds
+        instanceIds,
+        stepCap
       );
-      stepsCapped = (stepExecs.size() >= stepScanCap());
+      stepsCapped = (stepExecs.size() >= stepCap);
       stepRows = WorkflowLatencyStats.rankStepsByMedianWallClock(stepExecs);
     }
 
@@ -169,11 +201,12 @@ public inherited sharing class WorkflowLatencyService {
   }
 
   // Ordered step-execution rows for the sampled instances. Row-returning query with a bounded
-  // LIMIT; ordering by instance then CreatedDate lets consecutive deltas be computed in Apex.
+  // LIMIT (reserved against the sync row governor by the caller); ordering by instance then
+  // CreatedDate lets consecutive deltas be computed in Apex.
   private static List<Workflow_Step_Execution__c> queryStepExecutions(
-    Set<Id> instanceIds
+    Set<Id> instanceIds,
+    Integer cap
   ) {
-    Integer cap = stepScanCap();
     return [
       SELECT Workflow_Instance__c, Step_Name__c, CreatedDate
       FROM Workflow_Step_Execution__c
