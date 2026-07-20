@@ -555,6 +555,159 @@ describe("c-workflow-dashboard latency panel", () => {
     expect(rows[1].textContent).toContain("ReserveInventory");
     expect(rows[1].textContent).toContain("1s");
   });
+
+  it("discards a stale latency response so a slow older request cannot overwrite the newer selection (latest-request-wins)", async () => {
+    // Two overlapping latency requests with manually controlled resolution so
+    // the OLDER one resolves LAST. The guard must discard it.
+    let resolveFirst;
+    let resolveSecond;
+    const firstResponse = new Promise((res) => {
+      resolveFirst = res;
+    });
+    const secondResponse = new Promise((res) => {
+      resolveSecond = res;
+    });
+    getDefinitionLatency
+      .mockReturnValueOnce(firstResponse)
+      .mockReturnValueOnce(secondResponse);
+    // handleRefresh also refreshes trends; keep that promise settleable.
+    getDefinitionTrends.mockResolvedValue({ windowKey: "24h", rows: [] });
+
+    const element = createComponent();
+    await flushPromises();
+
+    // Select a workflow so opening the panel issues the first latency request.
+    const combobox = element.shadowRoot.querySelector(
+      '[data-id="workflow-filter"]',
+    );
+    combobox.dispatchEvent(
+      new CustomEvent("change", { detail: { value: "BillingWorkflow" } }),
+    );
+
+    // Request #1 (in flight): open the Latency panel.
+    const latencyButton = findButton(element, (btn) => btn.label === "Latency");
+    latencyButton.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Request #2 (in flight): operator hits the global Refresh before #1 lands.
+    const refreshBtn = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button-icon"),
+    ).find((btn) => btn.iconName === "utility:refresh");
+    expect(refreshBtn).toBeDefined();
+    refreshBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    expect(getDefinitionLatency).toHaveBeenCalledTimes(2);
+
+    // The NEWER request (#2) resolves first with the fresh data.
+    resolveSecond({
+      workflowName: "BillingWorkflow",
+      windowKey: "24h",
+      isCapped: false,
+      capLimit: 2000,
+      sampleSize: 2,
+      p50Ms: 19000,
+      p95Ms: 19000,
+      p99Ms: 19000,
+      maxMs: 19000,
+      steps: [{ stepName: "FreshStep", medianMs: 1000, sampleCount: 2 }],
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(element.shadowRoot.textContent).toContain("FreshStep");
+
+    // The OLDER request (#1) resolves LAST -> must be discarded, NOT painted.
+    resolveFirst({
+      workflowName: "BillingWorkflow",
+      windowKey: "24h",
+      isCapped: true,
+      capLimit: 2000,
+      sampleSize: 9,
+      p50Ms: 10000,
+      p95Ms: 10000,
+      p99Ms: 10000,
+      maxMs: 10000,
+      steps: [{ stepName: "StaleStep", medianMs: 999000, sampleCount: 9 }],
+    });
+    await flushPromises();
+    await flushPromises();
+
+    const panelText = element.shadowRoot.textContent;
+    // Newer data survives; stale data is never shown.
+    expect(panelText).toContain("FreshStep");
+    expect(panelText).not.toContain("StaleStep");
+
+    const rows = element.shadowRoot.querySelectorAll("tbody tr");
+    expect(rows.length).toBe(1);
+    expect(rows[0].textContent).toContain("FreshStep");
+
+    // The stale resolution must not have re-shown the latency spinner.
+    const spinners = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-spinner"),
+    );
+    const latencySpinner = spinners.find((s) =>
+      (s.alternativeText || "").includes("latency"),
+    );
+    expect(latencySpinner).toBeUndefined();
+  });
+
+  it("clears the Latency panel and shows the instance detail when an instance is selected while Latency is open", async () => {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {},
+    });
+
+    const element = createComponent();
+    await flushPromises();
+
+    // Open the Latency panel (viewingLatency = true).
+    const latencyButton = findButton(element, (btn) => btn.label === "Latency");
+    latencyButton.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    // Latency panel is showing; the instance detail (Send Signal) is hidden.
+    expect(element.shadowRoot.textContent).toContain(
+      "End-to-end duration percentiles",
+    );
+    expect(
+      element.shadowRoot.querySelector(
+        'lightning-button[data-id="send-signal-btn"]',
+      ),
+    ).toBeNull();
+
+    // Click an instance in the list while Latency is still open.
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    // The detail pane is now visible and the Latency panel has been cleared.
+    expect(
+      element.shadowRoot.querySelector(
+        'lightning-button[data-id="send-signal-btn"]',
+      ),
+    ).not.toBeNull();
+    expect(element.shadowRoot.textContent).not.toContain(
+      "End-to-end duration percentiles",
+    );
+  });
 });
 
 describe("c-workflow-dashboard bulk cancel", () => {

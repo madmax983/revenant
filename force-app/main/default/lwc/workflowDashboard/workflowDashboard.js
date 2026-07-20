@@ -175,6 +175,9 @@ export default class WorkflowDashboard extends LightningElement {
   latencyWorkflow = "";
   latencyTimeWindow = "24h";
   latencyData = null;
+  // Monotonic request counter: latest-request-wins guard so a slow, stale
+  // latency response cannot overwrite a newer selection's data/spinner.
+  _latencyRequestSeq = 0;
   latencyTimeWindowOptions = [
     { label: "Last 1 hour", value: "1h" },
     { label: "Last 24 hours", value: "24h" },
@@ -917,6 +920,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDoctor = false;
     this.viewingDrain = false;
     this.viewingUnrouted = false;
+    this.viewingLatency = false;
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
@@ -1345,6 +1349,7 @@ export default class WorkflowDashboard extends LightningElement {
       this.latencyData = null;
       return;
     }
+    const requestId = ++this._latencyRequestSeq;
     this.loadingLatency = true;
     getDefinitionLatency({
       workflowName: this.latencyWorkflow,
@@ -1352,10 +1357,18 @@ export default class WorkflowDashboard extends LightningElement {
         this.latencyTimeWindow === "all" ? null : this.latencyTimeWindow,
     })
       .then((result) => {
+        // Discard a stale resolution: a newer request has superseded this one,
+        // so it must not overwrite the newer data or clear the newer spinner.
+        if (requestId !== this._latencyRequestSeq) {
+          return;
+        }
         this.latencyData = result;
         this.loadingLatency = false;
       })
       .catch((error) => {
+        if (requestId !== this._latencyRequestSeq) {
+          return;
+        }
         this.showToast(
           "Error",
           "Failed to retrieve latency metrics: " + this.reduceErrors(error),
