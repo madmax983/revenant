@@ -311,6 +311,156 @@ public class WorkflowWaitDescriptorServiceTest {
   }
 
   @IsTest
+  static void testOpaqueChildKeyWithoutWorkflowNameIsGeneric() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Issue #84 (Bug 1): opaque author state can legitimately carry a childCorrelationKey
+      // without being a START_CHILD wait. WorkflowStepSuspension.handleStartChildOutcome writes
+      // childWorkflowName alongside a REAL START_CHILD key, so its absence means this is a GENERIC
+      // signal wait — a ChildCompleted:<key> suggestion (which could not unblock the generic wait)
+      // must NOT be offered.
+      String output = JSON.serialize(
+        new Map<String, Object>{ 'childCorrelationKey' => 'order-42' }
+      );
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
+        suspendedInstance(null),
+        oneStep(pendingStep('WaitDescTest.OpaqueStep', output))
+      );
+      System.assertNotEquals(
+        null,
+        d,
+        'An opaque suspend still yields a descriptor'
+      );
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_GENERIC,
+        d.get('type'),
+        'A childCorrelationKey without the START_CHILD childWorkflowName marker is a generic wait'
+      );
+      System.assertEquals(
+        null,
+        d.get('signalName'),
+        'No child-completion name is suggested for opaque state'
+      );
+      System.assertEquals(
+        null,
+        d.get('childSignalNames'),
+        'No child signal names are surfaced for opaque state'
+      );
+    }
+  }
+
+  @IsTest
+  static void testRealStartChildStateStillChildCompletion() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // The counterpart to the opaque-key case: a REAL START_CHILD state carries the
+      // childWorkflowName marker WorkflowStepSuspension writes, so it stays a child-completion wait.
+      String output = JSON.serialize(
+        new Map<String, Object>{
+          'childWorkflowName' => 'WaitDescTest.ChildWorkflow',
+          'childCorrelationKey' => 'order-99'
+        }
+      );
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
+        suspendedInstance(null),
+        oneStep(pendingStep('WaitDescTest.ChildStep', output))
+      );
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_CHILD,
+        d.get('type'),
+        'A START_CHILD state with childWorkflowName is a child-completion wait'
+      );
+      System.assertEquals(
+        'ChildCompleted:order-99',
+        d.get('signalName'),
+        'The awaited ChildCompleted:<key> stays injectable for a real START_CHILD wait'
+      );
+    }
+  }
+
+  @IsTest
+  static void testSleepUntilTimerWithBlankAsyncYieldsNoDescriptorOnDetail() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Issue #84 (Bug 2): with dynamic scheduling off / limit-capped, scheduleSleepResume
+      // returns null, so a sleep/admission/transient-retry park has a Pending step + BLANK async
+      // id yet an armed Sleep_Until__c. With no explicit signal marker that is a pure TIMER wait,
+      // not a signal wait, so it yields no signal descriptor (keying off the blank async id alone
+      // would have mislabeled it "Awaiting signal").
+      Workflow_Instance__c inst = suspendedInstance(null);
+      inst.Sleep_Until__c = DateTime.now().addMinutes(5);
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
+        inst,
+        oneStep(pendingStep('WaitDescTest.SleepNoJobStep', '{"cursor":9}'))
+      );
+      System.assertEquals(
+        null,
+        d,
+        'A Sleep_Until__c timer with a blank async id is a timer wait, not a signal wait'
+      );
+    }
+  }
+
+  @IsTest
+  static void testTimedApprovalWithSleepUntilStillClassifiedOnDetail() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // A timed approval (issue #35) persists the approval marker plus $timeoutStep and arms
+      // Sleep_Until__c. Its explicit signal marker must win on the detail path: it stays an
+      // approval descriptor even though a fallback timer is set.
+      Workflow_Instance__c inst = suspendedInstance(null);
+      inst.Sleep_Until__c = DateTime.now().addMinutes(10);
+      String output = JSON.serialize(
+        new Map<String, Object>{
+          'waitingForApproval' => true,
+          'approvalKey' => 'TimedSleepGate',
+          'approvalRole' => null,
+          '$timeoutStep' => 'WaitDescTest.Fallback'
+        }
+      );
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
+        inst,
+        oneStep(pendingStep('WaitDescTest.TimedApproveStep', output))
+      );
+      System.assertNotEquals(
+        null,
+        d,
+        'A timed approval is a signal wait despite the armed Sleep_Until__c'
+      );
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_APPROVAL,
+        d.get('type'),
+        'The approval marker wins over the armed Sleep_Until__c timer'
+      );
+      System.assertEquals('Approve:TimedSleepGate', d.get('signalName'));
+    }
+  }
+
+  @IsTest
+  static void testTimedSuspendMarkerStaysSignalOnDetail() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // A timed suspend persists {"$timeoutStep":...} and arms Sleep_Until__c. The $timeoutStep
+      // marker is an explicit signal wait, so detail keeps a generic signal descriptor rather
+      // than treating the armed deadline as a bare sleep timer.
+      Workflow_Instance__c inst = suspendedInstance(null);
+      inst.Sleep_Until__c = DateTime.now().addMinutes(10);
+      String output = JSON.serialize(
+        new Map<String, Object>{ '$timeoutStep' => 'WaitDescTest.Fallback' }
+      );
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
+        inst,
+        oneStep(pendingStep('WaitDescTest.TimedSuspendStep', output))
+      );
+      System.assertNotEquals(
+        null,
+        d,
+        'A timed suspend marker is a signal wait despite the armed Sleep_Until__c'
+      );
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_GENERIC,
+        d.get('type'),
+        'A $timeoutStep-marked timed suspend stays a generic signal wait'
+      );
+    }
+  }
+
+  @IsTest
   static void testNonSuspendedYieldsNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c inst = suspendedInstance(null);
@@ -604,6 +754,36 @@ public class WorkflowWaitDescriptorServiceTest {
         1,
         queriesUsed,
         'The list resolves the whole page in one Output-free pending-step query'
+      );
+    }
+  }
+
+  @IsTest
+  static void testSleepUntilTimerWithBlankAsyncYieldsNoDescriptorOnList() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Issue #84 (Bug 2), list path: an armed Sleep_Until__c with a blank async id (dynamic
+      // scheduling off / limit-capped) is a sleep/retry/admission TIMER wait. The list reads the
+      // parent Sleep_Until__c (no Output read) and must NOT show the lightweight "Awaiting signal"
+      // indicator for it.
+      Workflow_Instance__c inst = suspendedInstance(null);
+      inst.Sleep_Until__c = DateTime.now().addMinutes(5);
+      insert as system inst;
+      insert as system pendingStepFor(
+        inst.Id,
+        'WaitDescTest.SleepListStep',
+        '{"cursor":9}'
+      );
+
+      Test.startTest();
+      Map<Id, Map<String, Object>> byInstance = WorkflowWaitDescriptorService.describeSignalWaits(
+        new List<Workflow_Instance__c>{ inst }
+      );
+      Test.stopTest();
+
+      System.assertEquals(
+        null,
+        byInstance.get(inst.Id),
+        'A Sleep_Until__c timer with a blank async id shows no Awaiting-signal indicator on the list'
       );
     }
   }

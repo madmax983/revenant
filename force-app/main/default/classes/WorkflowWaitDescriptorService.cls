@@ -16,9 +16,11 @@
  * that Output JSON — no small step/instance field encodes it — so the list cannot name the type
  * without paying that heap cost. It therefore emits one lightweight indicator per signal wait
  * ("Awaiting signal at step &lt;name&gt;"), while still distinguishing a signal wait from a
- * timer/job wait via the resume-job ({@code Async_Job_Id__c}) branch, which needs no Output
- * read. The exact approval/child classification and awaited signalName are deferred to the
- * detail view (which can safely rehydrate one Output body).
+ * timer/job wait via two small instance fields that need no Output read: a signal wait has no
+ * resume job ({@code Async_Job_Id__c} blank) AND no armed timer ({@code Sleep_Until__c} null);
+ * a resume job OR an armed {@code Sleep_Until__c} marks a sleep/retry/timer wait. The exact
+ * approval/child classification and awaited signalName are deferred to the detail view (which
+ * can safely rehydrate one Output body).
  *
  * <p>The descriptor's signalName for an approval / single-child wait is the exact
  * operator-injectable form ('Approve:<key>' / 'ChildCompleted:<key>') consumed by the dashboard
@@ -27,10 +29,14 @@
  * is still outstanding) and surfaces the full key list for the operator to choose from.
  *
  * <p>Strictly read-only: it issues no DML and mutates no Workflow_Step_Execution__c record.
- * A sleep / retry timer wait also parks a Pending step but carries a resume job on the
- * instance; those are deliberately not classified as signal waits so their existing
- * mechanism descriptor (Scheduled Job / Delayed Queueable / Watchdog) is unchanged. All
- * SOQL runs WITH SYSTEM_MODE.
+ * A sleep / retry / admission timer wait also parks a Pending step but carries a timer on the
+ * instance — a resume job ({@code Async_Job_Id__c}) or, when scheduling is off / limit-capped
+ * and the async id ends up blank, an armed {@code Sleep_Until__c} deadline; those are
+ * deliberately not classified as signal waits so their existing mechanism descriptor
+ * (Scheduled Job / Delayed Queueable / Watchdog) is unchanged. An explicitly-marked timed
+ * approval / suspend ({@code $timeoutStep}) is the exception on the detail path: its marker
+ * keeps its signal descriptor even with {@code Sleep_Until__c} armed. All SOQL runs WITH
+ * SYSTEM_MODE.
  */
 public inherited sharing class WorkflowWaitDescriptorService {
   /** Descriptor type for an approval (WAIT_FOR_APPROVAL) wait. */
@@ -45,7 +51,7 @@ public inherited sharing class WorkflowWaitDescriptorService {
    * already-queried step executions (detail-view path). Returns null unless the instance
    * is Suspended on a signal / approval / child wait (a timer / sleep / retry wait yields
    * null so its existing mechanism descriptor is preserved).
-   * @param instance The Suspended instance (Status__c and Async_Job_Id__c are read).
+   * @param instance The Suspended instance (Status__c, Async_Job_Id__c and Sleep_Until__c are read).
    * @param steps The instance's step executions, in CreatedDate-ascending order.
    * @return The wait descriptor map, or null when the instance is not on a signal wait.
    */
@@ -60,10 +66,17 @@ public inherited sharing class WorkflowWaitDescriptorService {
     if (pending == null) {
       return null;
     }
+    // A timer is armed when the instance carries a resume job (Async_Job_Id__c) OR an armed
+    // Sleep_Until__c deadline (the async id can be blank while Sleep_Until__c is set when
+    // scheduling is off / limit-capped — see buildDescriptor). Combined here so buildDescriptor
+    // takes a single timer flag.
+    Boolean timerArmed =
+      String.isNotBlank(instance.Async_Job_Id__c) ||
+      instance.Sleep_Until__c != null;
     return buildDescriptor(
       pending.Step_Name__c,
       WorkflowPayloadOffload.resolvePayload(pending.Output__c),
-      String.isBlank(instance.Async_Job_Id__c)
+      timerArmed
     );
   }
 
@@ -82,71 +95,85 @@ public inherited sharing class WorkflowWaitDescriptorService {
    * without paying the heap cost and instead emits a single lightweight generic "Awaiting signal"
    * indicator for every signal wait. A signal wait is still distinguished from a timer/job wait
    * without reading Output: a parked step whose instance has no resume job ({@code Async_Job_Id__c}
-   * blank) is a signal wait; one carrying a resume job is a timer and yields no descriptor
-   * (unchanged). The exact approval/child classification and awaited signalName are deferred to
-   * the single-row {@link #describeSignalWait} detail view, which can safely rehydrate one body.
-   * @param instances The page of instances (Status__c and Async_Job_Id__c are read).
+   * blank) AND no armed timer ({@code Sleep_Until__c} null) is a signal wait; one carrying a resume
+   * job OR an armed {@code Sleep_Until__c} is a timer and yields no descriptor. Accepted Option-A
+   * limitation: a timed approval/suspend (signal marker + {@code Sleep_Until__c}) shows as a timer
+   * on this list but still gets its full descriptor on the detail view. The exact approval/child
+   * classification and awaited signalName are deferred to the single-row {@link #describeSignalWait}
+   * detail view, which can safely rehydrate one body.
+   * @param instances The page of instances (Status__c is read to select the Suspended rows; the
+   * Async_Job_Id__c and Sleep_Until__c used for the signal/timer split are filtered in the parked
+   * step's parent (WHERE) clause, so the caller need not select them here).
    * @return A map of instance id to its lightweight wait descriptor, for signal-waiting instances only.
    */
   public static Map<Id, Map<String, Object>> describeSignalWaits(
     List<Workflow_Instance__c> instances
   ) {
     Map<Id, Map<String, Object>> byInstance = new Map<Id, Map<String, Object>>();
-    Set<Id> asyncBlankIds = new Set<Id>();
-    Set<Id> suspendedIds = suspendedInstanceIds(instances, asyncBlankIds);
+    Set<Id> suspendedIds = suspendedInstanceIds(instances);
     if (suspendedIds.isEmpty()) {
       return byInstance;
     }
-    Map<Id, Workflow_Step_Execution__c> pendingByInstance = mostRecentPendingSteps(
-      suspendedIds
-    );
-    for (Id instId : pendingByInstance.keySet()) {
-      // The bulk query never selected Output__c, so no approval/child classification is possible
-      // here without a heap-blowing re-read. A parked step whose instance has no resume job is a
-      // signal wait and gets the lightweight generic indicator; one with a resume job is a timer
-      // and is skipped (no descriptor). The exact type + awaited name come from the detail view.
-      if (asyncBlankIds.contains(instId)) {
-        byInstance.put(
-          instId,
-          genericDescriptor(pendingByInstance.get(instId).Step_Name__c)
-        );
-      }
+    // The bulk query never selected Output__c, so no approval/child classification is possible
+    // here without a heap-blowing re-read. It returns ONLY signal-wait steps — the signal/timer
+    // split is pushed into the pending-step query (see mostRecentPendingSignalSteps), which keeps
+    // only parked steps whose instance has no resume job AND no armed timer — so every returned
+    // step is a signal wait and simply gets the lightweight generic indicator.
+    // Accepted Option-A limitation (issue #84): the list cannot read Output__c, so it cannot tell an
+    // explicitly-marked TIMED APPROVAL/SUSPEND (approval/child/$timeoutStep marker + Sleep_Until__c)
+    // from a bare sleep — such a timed approval shows as a timer on the LIST, yet still gets its full
+    // approval descriptor on the DETAIL view (which can safely rehydrate one Output body).
+    for (
+      Workflow_Step_Execution__c pending : mostRecentPendingSignalSteps(
+          suspendedIds
+        )
+        .values()
+    ) {
+      byInstance.put(
+        pending.Workflow_Instance__c,
+        genericDescriptor(pending.Step_Name__c)
+      );
     }
     return byInstance;
   }
 
-  // Collects the ids of the Suspended instances, recording (in asyncBlankIds) those with no
-  // resume job attached so the generic-wait branch can tell a signal wait from a timer.
+  // Collects the ids of the Suspended instances on the page (the signal/timer distinction is
+  // then made in the pending-step query's WHERE clause — see mostRecentPendingSignalSteps).
   private static Set<Id> suspendedInstanceIds(
-    List<Workflow_Instance__c> instances,
-    Set<Id> asyncBlankIds
+    List<Workflow_Instance__c> instances
   ) {
     Set<Id> suspendedIds = new Set<Id>();
     for (Workflow_Instance__c inst : instances) {
-      if (inst.Status__c != 'Suspended') {
-        continue;
-      }
-      suspendedIds.add(inst.Id);
-      if (String.isBlank(inst.Async_Job_Id__c)) {
-        asyncBlankIds.add(inst.Id);
+      if (inst.Status__c == 'Suspended') {
+        suspendedIds.add(inst.Id);
       }
     }
     return suspendedIds;
   }
 
-  // The most-recent Pending step per instance is the representative wait. Rows are read
+  // The most-recent Pending SIGNAL-wait step per instance is the representative wait. Rows are read
   // CreatedDate-ascending so a later Pending step overwrites an earlier one in the map.
   // Output__c (a LongTextArea) is deliberately NOT selected: a page of Suspended rows would
-  // materialize megabytes of inline parked state and blow the sync heap (issue #84). Only the
-  // small Step_Name__c label is read; the wait type + awaited name are derived on the detail view.
-  private static Map<Id, Workflow_Step_Execution__c> mostRecentPendingSteps(
+  // materialize megabytes of inline parked state and blow the sync heap (issue #84); only the small
+  // Step_Name__c label is read. The signal/timer split is done in the WHERE clause (no Output read,
+  // no extra SOQL): a sleep/retry/admission/timed wait parks a Pending step too but carries a timer
+  // on its instance — a resume job (Async_Job_Id__c set) or, when scheduling is off / limit-capped
+  // and the async id is blank, an armed Sleep_Until__c deadline. Requiring BOTH parent fields null
+  // keeps only signal waits, so a pure timer is never mislabeled "Awaiting signal". (Async_Job_Id__c
+  // is only ever null or a real job id — never blank-string — so `= null` matches String.isBlank.)
+  // The exact wait type + awaited name are derived on the detail view.
+  private static Map<Id, Workflow_Step_Execution__c> mostRecentPendingSignalSteps(
     Set<Id> suspendedIds
   ) {
     Map<Id, Workflow_Step_Execution__c> pendingByInstance = new Map<Id, Workflow_Step_Execution__c>();
     for (Workflow_Step_Execution__c se : [
       SELECT Workflow_Instance__c, Step_Name__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c IN :suspendedIds AND Status__c = 'Pending'
+      WHERE
+        Workflow_Instance__c IN :suspendedIds
+        AND Status__c = 'Pending'
+        AND Workflow_Instance__r.Async_Job_Id__c = NULL
+        AND Workflow_Instance__r.Sleep_Until__c = NULL
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
       LIMIT 50000
@@ -173,37 +200,56 @@ public inherited sharing class WorkflowWaitDescriptorService {
     return pending;
   }
 
-  // Classifies a parked Pending step's (rehydrated) Output JSON into a wait descriptor:
-  // approval and child waits carry unambiguous markers; an opaque/absent state is a generic
-  // signal wait only when no resume job is attached (a sleep/retry parks a Pending step too
-  // but carries a resume job), otherwise it is a timer and yields null (unchanged).
+  // Classifies a parked Pending step's (rehydrated) Output JSON into a wait descriptor.
+  //
+  // An EXPLICIT signal marker wins even when a fallback timer is armed (issue #84/#35): an
+  // approval ({"waitingForApproval":true,...}), a child (START_CHILD/START_CHILDREN), or a
+  // timed suspend ({"$timeoutStep":...}, written by handleSuspendOutcome) is a genuine signal
+  // wait, so a timed approval/suspend keeps its descriptor even though Sleep_Until__c is set.
+  //
+  // Only when NO explicit signal marker is present is the deadline consulted: a bare sleep /
+  // transient-retry / concurrency-admission park (WorkflowStepSuspension.handleSleepOutcome,
+  // WorkflowTransientLockRetry, WorkflowStepAdmission) also leaves a Pending step, but carries
+  // a timer — either Sleep_Until__c armed OR a resume job (folded into the caller's timerArmed
+  // flag). Those scheduling paths call scheduleSleepResume/scheduleRetry, which return null when
+  // WorkflowEngine.useDynamicScheduling is off or a scheduling limit is hit, so the resume job
+  // can be blank while Sleep_Until__c is still set: keying off the async id alone would mislabel
+  // such a pure TIMER wait as a signal wait. So a parked step with no explicit marker AND a timer
+  // armed is a timer/watchdog wait and yields null (its mechanism descriptor is preserved).
   private static Map<String, Object> buildDescriptor(
     String stepName,
     String resolvedOutput,
-    Boolean asyncJobBlank
+    Boolean timerArmed
   ) {
     Map<String, Object> state = parseState(resolvedOutput);
-    if (state != null) {
-      Map<String, Object> approval = approvalDescriptor(stepName, state);
-      if (approval != null) {
-        return approval;
-      }
-      Map<String, Object> child = childDescriptor(stepName, state);
-      if (child != null) {
-        return child;
-      }
+    Map<String, Object> approval = approvalDescriptor(stepName, state);
+    if (approval != null) {
+      return approval;
     }
-    return asyncJobBlank ? genericDescriptor(stepName) : null;
+    Map<String, Object> child = childDescriptor(stepName, state);
+    if (child != null) {
+      return child;
+    }
+    // A timed suspend persists the engine-reserved $timeoutStep marker: it is an EXPLICIT
+    // signal wait with a deadline fallback (unlike a bare sleep, whose state carries no
+    // engine marker), so it stays a generic signal wait even with Sleep_Until__c armed.
+    if (state.containsKey('$timeoutStep')) {
+      return genericDescriptor(stepName);
+    }
+    return timerArmed ? null : genericDescriptor(stepName);
   }
 
-  // Parses the resolved Output into a JSON object, or null for blank/non-object/unparseable
-  // input (JSON.deserializeUntyped throws on blank/null and on a non-object, all → null).
+  // Parses the resolved Output into a JSON object, or an EMPTY map for blank/non-object/unparseable
+  // input (JSON.deserializeUntyped throws on blank/null and the cast throws on a non-object, both
+  // → empty map). Returning an empty map (never null) lets buildDescriptor's marker checks run
+  // uniformly: no marker key is present, so an opaque state falls through to a generic/timer wait.
   private static Map<String, Object> parseState(String resolvedOutput) {
     try {
       return (Map<String, Object>) JSON.deserializeUntyped(resolvedOutput);
     } catch (Exception ignored) {
-      // Opaque author state (or a non-object); treated as a generic wait by the caller.
-      return null;
+      // Opaque author state (or a non-object); carries no engine marker, so the caller
+      // classifies it as a generic signal (or timer) wait.
+      return new Map<String, Object>();
     }
   }
 
@@ -257,15 +303,30 @@ public inherited sharing class WorkflowWaitDescriptorService {
   }
 
   // Resolves the ordered awaited ChildCompleted: signal names from either the single-child
-  // (childCorrelationKey) or bulk (childCorrelationKeys list) parked state. Keys originate
-  // from validated non-blank correlation keys, so they are mapped directly.
+  // (START_CHILD) or bulk (START_CHILDREN) parked state. Keys originate from validated
+  // non-blank correlation keys, so they are mapped directly.
+  //
+  // Disambiguation (issue #84): a generic StepResult.suspend() persists OPAQUE author state
+  // that can legitimately carry a `childCorrelationKey` (or a `childCorrelationKeys` array)
+  // without being a child-completion wait — a stray ChildCompleted:<key> suggestion would not
+  // unblock that generic wait. WorkflowStepSuspension.handleStartChildOutcome writes the REAL
+  // single-child state as {"childWorkflowName": ..., "childCorrelationKey": ...}, so the
+  // START_CHILD-specific `childWorkflowName` marker MUST be present before a single key is
+  // classified as a child-completion wait; absent it, the caller falls back to a generic wait.
   private static List<String> childSignalNames(Map<String, Object> state) {
     List<String> names = new List<String>();
     String singleKey = readString(state, 'childCorrelationKey');
-    if (String.isNotBlank(singleKey)) {
+    if (
+      String.isNotBlank(singleKey) &&
+      String.isNotBlank(readString(state, 'childWorkflowName'))
+    ) {
       names.add('ChildCompleted:' + singleKey);
       return names;
     }
+    // START_CHILDREN (handleStartChildrenOutcome) persists {"childCorrelationKeys": [...]} — a
+    // non-empty list is its only marker (no companion key is written), so require an actual
+    // list of >=1 element before classifying a bulk child join. An opaque author state whose
+    // `childCorrelationKeys` is absent, empty, or not a list stays a generic wait.
     Object raw = state.get('childCorrelationKeys');
     if (raw instanceof List<Object>) {
       for (Object k : (List<Object>) raw) {
