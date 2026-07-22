@@ -4,6 +4,7 @@
  */
 public with sharing class WorkflowLog {
   private static final String LEVEL_ERROR = 'Error';
+  private static final String LEVEL_WARN = 'Warn';
   private static final Integer MAX_MESSAGE_LENGTH = 131000;
 
   /**
@@ -103,12 +104,42 @@ public with sharing class WorkflowLog {
    * @param entry The parameter object describing the error to persist.
    */
   public static void error(ErrorEntry entry) {
+    persist(LEVEL_ERROR, entry);
+  }
+
+  /**
+   * @description Records a Warn-level log entry associated with a specific workflow
+   * instance. Used for operationally significant, non-error events an operator/
+   * dashboard should be able to distinguish from a plain durable sleep — e.g. a step
+   * parked by an open circuit breaker.
+   * @param logType A short category label classifying the source of the entry.
+   * @param message The detail to persist; truncated if it exceeds the field limit.
+   * @param instanceId The Id of the workflow instance the entry relates to.
+   */
+  public static void warn(String logType, String message, Id instanceId) {
+    persist(
+      LEVEL_WARN,
+      new ErrorEntry(logType, message).withInstanceId(instanceId)
+    );
+  }
+
+  /**
+   * @description Persists a fully-contextualized Warn-level log entry.
+   * @param entry The parameter object describing the entry to persist.
+   */
+  public static void warn(ErrorEntry entry) {
+    persist(LEVEL_WARN, entry);
+  }
+
+  // Shared writer for every severity: truncates an oversized message and silently
+  // ignores any insert failure so diagnostics logging can never break execution.
+  private static void persist(String level, ErrorEntry entry) {
     String truncated = entry.message;
     if (truncated != null && truncated.length() > MAX_MESSAGE_LENGTH) {
       truncated = truncated.substring(0, MAX_MESSAGE_LENGTH);
     }
     Workflow_Log__c logRecord = new Workflow_Log__c(
-      Level__c = LEVEL_ERROR,
+      Level__c = level,
       Log_Type__c = entry.logType,
       Message__c = truncated,
       Workflow_Instance__c = entry.instanceId,

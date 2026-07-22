@@ -72,6 +72,16 @@ public inherited sharing class WorkflowHeartbeatService {
       // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
     }
 
+    // 4b. Reconcile circuit breakers: flip every Open breaker whose open duration
+    // has elapsed to Half-Open, so a dependency that opened and then went quiet still
+    // recovers within one heartbeat cadence with zero live traffic to drive the
+    // on-demand transition in tryAdmit.
+    try {
+      CircuitBreakerGate.sweepHalfOpen();
+    } catch (Exception ignored) {
+      // Best-effort sweep; a failure here must not abort the watchdog heartbeat.
+    }
+
     // 5. Rescue transient-lock retry branches orphaned when a parallel sibling
     // that completed during the backoff flipped the parent out of Suspended.
     WorkflowOrphanReclaimSweep.rescueOrphanedTransientRetryBranches(now);

@@ -21,6 +21,14 @@ public inherited sharing class WorkflowStepInvoke {
       ctx.instance,
       ctx.activeStepName
     );
+
+    // Circuit-breaker admission (issue #128): when the step is CircuitBreakerGuarded
+    // and its dependency's breaker is Open, fast-fail by parking instead of executing.
+    // The unguarded hot path short-circuits with 0 SOQL / 0 DML (see parkedByBreaker).
+    if (parkedByBreaker(ctx, stepInstance)) {
+      return;
+    }
+
     StepContext context = WorkflowStepContext.buildStepContext(
       ctx,
       stepInstance,
@@ -35,6 +43,34 @@ public inherited sharing class WorkflowStepInvoke {
     outcome.result = result;
     outcome.context = context;
     WorkflowStepOutcome.handleStepResult(outcome);
+  }
+
+  // Circuit-breaker admission gate (issue #128): parks the delivery (returns true)
+  // when the step is CircuitBreakerGuarded, its dependency is configured, and the
+  // breaker denies admission. The `instanceof` guard short-circuits the entire gate
+  // for an unguarded step, so the hot path — and every unguarded step in a mixed
+  // batch — incurs 0 SOQL / 0 DML. The already-resolved stepInstance is reused (the
+  // step is never resolved twice). Flattened with early returns to avoid deep nesting.
+  private static Boolean parkedByBreaker(
+    WorkflowStepRunner.RunStepContext ctx,
+    WorkflowStep stepInstance
+  ) {
+    if (!(stepInstance instanceof CircuitBreakerGuarded)) {
+      return false;
+    }
+    String depKey = ((CircuitBreakerGuarded) stepInstance).dependencyKey();
+    if (String.isBlank(depKey) || !CircuitBreakerGate.isConfigured(depKey)) {
+      return false;
+    }
+    if (CircuitBreakerGate.tryAdmit(depKey).admitted) {
+      return false;
+    }
+    CircuitBreakerPark.parkForCircuitBreaker(
+      ctx.instance,
+      ctx.activeStepName,
+      depKey
+    );
+    return true;
   }
 
   // Resolve and instantiate the WorkflowStep for the active step.

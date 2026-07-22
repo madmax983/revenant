@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Failure_Count__c</fullName>
+    <defaultValue>0</defaultValue>
+    <description>Number of failures recorded against this dependency in the current rolling window. Incremented on each retry-triggering/explicit failure of a guarded step; reset when the window elapses (still Closed) or when a half-open probe closes the breaker.</description>
+    <externalId>false</externalId>
+    <label>Failure Count</label>
+    <precision>18</precision>
+    <required>true</required>
+    <scale>0</scale>
+    <trackTrending>false</trackTrending>
+    <type>Number</type>
+</CustomField>

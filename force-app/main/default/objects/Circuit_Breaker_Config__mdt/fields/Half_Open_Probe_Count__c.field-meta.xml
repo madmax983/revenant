@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Half_Open_Probe_Count__c</fullName>
+    <description>Maximum number of trial probes admitted while the breaker is Half-Open. A probe success closes the breaker (resetting the failure count); a probe failure re-opens it. Probes beyond this budget are rejected (parked) until the outcome is known.</description>
+    <externalId>false</externalId>
+    <fieldManageability>DeveloperControlled</fieldManageability>
+    <label>Half Open Probe Count</label>
+    <precision>18</precision>
+    <required>true</required>
+    <scale>0</scale>
+    <type>Number</type>
+</CustomField>
