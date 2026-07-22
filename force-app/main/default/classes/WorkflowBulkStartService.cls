@@ -63,6 +63,20 @@ public inherited sharing class WorkflowBulkStartService {
     //    dedup to an intra-batch sibling, or build a fresh instance to insert.
     decideStartRequests(run, existingByKey);
 
+    // 3b. Opt-in input-contract validation (INV-51): validate ONLY the fresh-start
+    // subset (rows that will create a new instance, identified by
+    // run.insertReqIndexes), AFTER the resolve-existing/dedup decision above and
+    // BEFORE the insert below. A request that deduped to an existing instance (a
+    // get-or-start or signal-or-start hit) is NOT validated — its fallback start
+    // input is never persisted, so an invalid/minimal fallback must not block
+    // signal delivery. Consistent with this pipeline's all-or-none semantics, an
+    // invalid fresh-start input throws a single WorkflowInputException enumerating
+    // every bad field (by original request index) and no row is written.
+    WorkflowInputValidator.validateNewStarts(
+      run.requests,
+      run.insertReqIndexes
+    );
+
     // 4. Insert fresh instances, tolerating per-row DUPLICATE_VALUE from a
     //    concurrent winner (the unique Active_Correlation_Key__c backstop).
     insertFreshInstances(run);

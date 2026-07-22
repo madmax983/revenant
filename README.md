@@ -533,6 +533,77 @@ static void onboardingWorkflowIsWellFormed() {
 
 `validate` flags: a definition class that doesn't resolve or doesn't implement `WorkflowDefinition`; a `getInitialStep()` that is blank or not contained in `getSteps()`; any `getSteps()` entry that doesn't resolve to an instantiable `WorkflowStep`/`CompensatableStep`; and duplicate `getSteps()` entries. It additionally runs a **best-effort** transition probe that drives `getNextStep(...)` for each declared step and flags any returned successor not in `getSteps()` — best-effort because `getNextStep` is data-dependent and cannot be fully enumerated. Inspect `result.defects` (each has a `code`, `stepName`, and `message`) or `result.getMessages()` for the full list. This is why `getSteps()` is part of the `WorkflowDefinition` contract: it is the authoritative step inventory the validator checks the DAG against.
 
+Where `WorkflowValidator` checks the _definition's shape_, the next section validates _each invocation's payload_.
+
+---
+
+### 10. Validate Start Input Against a Contract (opt-in)
+
+`WorkflowEngine.start(name, key, json)` and the **Start Workflow** invocable accept an opaque payload: a missing or misspelled field (`accountId` vs `AccountId`) is invisible until the first step dereferences it deep inside an async Queueable, surfacing as a cryptic `NullPointerException` on a `Failed` instance that a Flow builder can't diagnose. A workflow can **opt in** to synchronous, field-level start-input validation by implementing **`ValidatedWorkflow`** alongside `WorkflowDefinition`:
+
+```java
+public class OnboardingWorkflow implements WorkflowDefinition, ValidatedWorkflow {
+    public WorkflowInputContract getInputContract() {
+        return new WorkflowInputContract()
+            .require('accountId', WorkflowInputType.STRING_TYPE)
+            .require('amount', WorkflowInputType.DECIMAL_TYPE)
+            .optional('vipOnboarding', WorkflowInputType.BOOLEAN_TYPE)
+            .optional('startDate', WorkflowInputType.DATE_TYPE);
+    }
+    // ... getSteps() / getInitialStep() / getNextStep() as usual
+}
+```
+
+A `WorkflowInputContract` is an ordered list of field specs — `require(name, type)` (must be present and non-null) and `optional(name, type)` (type-checked only when present). The seven `WorkflowInputType` primitives, each type-checked **strictly** and **without ever mutating the payload**:
+
+| `WorkflowInputType` | Accepts (JSON) |
+| ------------------- | -------------- |
+| `STRING_TYPE`            | A JSON string. |
+| `INTEGER_TYPE`           | A whole-number JSON value **within the signed 32-bit range** [-2147483648, 2147483647]; a whole number outside that range is rejected (use `LONG_TYPE`). Not a fractional number or a numeric string. |
+| `LONG_TYPE`              | Any whole-number JSON value, including values outside the 32-bit range (not a fractional number or a numeric string). |
+| `DECIMAL_TYPE`           | Any JSON number. |
+| `BOOLEAN_TYPE`           | A JSON boolean (`true`/`false`, not `"true"`). |
+| `DATE_TYPE`              | An ISO-8601 date (`yyyy-MM-dd`) — as a JSON string, **or** a native Apex `Date` in a `Map` input. |
+| `DATETIME_TYPE`          | An ISO-8601 datetime — as a JSON string, **or** a native Apex `Datetime` in a `Map` input. |
+
+The issue's generic **Number** maps to **`DECIMAL_TYPE`** (any JSON numeric); reach for `INTEGER_TYPE`/`LONG_TYPE` when the field must be a whole number.
+
+**Validation checks the exact graph the engine persists.** The engine stores `inputJson` verbatim when it is set, otherwise it stores `JSON.serialize(input)`; validation mirrors that byte-for-byte, so what you validate is exactly what the first step receives:
+
+- **`inputJson`** is validated as the raw object graph (it is preserved as-is). **Use `inputJson` to supply an object payload.**
+- **`input`** (any value) is validated as it will be JSON-serialized — through the same `JSON.serialize` → `JSON.deserializeUntyped` round-trip the engine uses to persist. A native Apex `Date`/`Datetime` in a `Map` is therefore checked by its ISO form (matching `DATE_TYPE`/`DATETIME_TYPE`), and numbers normalize to the same kinds, so a `Map`, a typed Apex object, and a JSON string never disagree. Note that a **JSON-object _string_ passed as `input`** (e.g. `start(wf, key, '{"accountId":"A"}')`) is serialized to a quoted scalar string — the step receives a `String`, not an object — so a contract expecting object fields correctly fails validation. Pass such a payload via `inputJson` instead.
+
+(Accepting a native `Date`/`Datetime` in a `Map` is an additive, permissive broadening; it rejects nothing that was previously accepted.)
+
+**Fully backward compatible and free for the simple case.** A definition that does _not_ implement `ValidatedWorkflow` is never inspected — detection is a single in-memory `instanceof` on the already-resolved definition. Validation adds **zero SOQL and zero DML** to the start path and nothing to the `WorkflowOrchestrator` Queueable hot path; it is a pure parse-and-check that runs **before any `Workflow_Instance__c` is inserted and before any job is enqueued**, so the append-only audit trail is untouched on rejection.
+
+**Only new instances are validated — dedup hits are never blocked.** Every start in Revenant is a get-or-start (it dedups on the correlation key), and `signalOrStart` folds a signal into that decision. The input contract is enforced **only for a request that actually creates a new instance** (whose start input will be persisted), and it still runs **before that insert**. A request that resolves to an **existing** instance — a get-or-start or signal-or-start dedup hit — is **not** validated: its fallback start input is never persisted, so an invalid/minimal fallback must not (and does not) block signal delivery or the return of the existing instance. This holds at both the engine layer (scalar and bulk) and the Flow layer.
+
+**Apex (scalar & bulk).** On invalid input for a **new** start, `start(...)` / `startOrGet(...)` throw a typed **`WorkflowInputException`** whose message enumerates **every** bad field (not just the first), with the structured list also available via `ex.getFieldErrors()` (each a `WorkflowInputFieldError` carrying `fieldName`, a `reason` of `MISSING` / `WRONG_TYPE` / `MALFORMED_JSON`, and the expected/actual type). Malformed JSON is reported as an input error, never as an uncaught `JSONException`. No instance row is created. A get-or-start / `signalOrStart` call that dedups to an existing instance returns/delivers normally even with an invalid fallback payload.
+
+```java
+try {
+    WorkflowEngine.start('OnboardingWorkflow', key, '{"amount":"lots"}');
+} catch (WorkflowInputException ex) {
+    // ex.getMessage() enumerates: accountId is required but missing;
+    //   amount expected DECIMAL_TYPE but was String
+    for (WorkflowInputFieldError fe : ex.getFieldErrors()) { /* fe.fieldName, fe.reason ... */ }
+}
+```
+
+The bulk `startOrGet(List<StartRequest>)` validates only the **fresh-start subset** (the requests that will create new instances), after the dedup decision and before the insert; consistent with the pipeline's all-or-none semantics, an invalid fresh start throws a single `WorkflowInputException` enumerating every bad field across every offending new-start request (tagged `request[i]`) and writes no rows. Requests that deduped to existing instances are unaffected.
+
+**Flow (Start Workflow / Signal or Start invocables).** Both invocables surface a **branchable** result (`Is Valid` / `Validation Error`) instead of a hard Flow fault, and both honor the new-instance-only rule. A row whose input is contract-valid is delivered with `Is Valid = true` (new or deduped). A row with invalid input is **not** blocked up front: it is delegated to the engine so its dedup decides — a row that resolves to an **existing** instance is delivered (`Is Valid = true`; its unused fallback was never persisted), while a row that would create a **new** instance is rejected with `Is Valid = false` and a `Validation Error` enumerating the bad fields (no fault, no insert). Contract-valid rows batch through one bulk engine call, so one invalid new-start row never aborts its valid siblings.
+
+A **debounced** `ValidatedWorkflow` start is armed immediately (`Is Valid = true` at arm time) and its input contract is enforced at **sweep time** — when the deferred start materializes as a new instance — **not** synchronously in Flow, because the dedup outcome is unknown when the debounce is armed. A contract failure at sweep is recorded on the debounce state (its `Error_Message__c` enumerates the bad fields) rather than surfaced as a synchronous `Is Valid = false`; the sweeper marks that debounce state failed with a bounded retry that quarantines instead of looping forever, and a failing debounced row never aborts its sibling debounce rows in the same sweep (each fires under its own savepoint). See [`ValidatedOnboardingWorkflowExample`](examples/main/default/classes/ValidatedOnboardingWorkflowExample.cls) for a copyable reference.
+
+**Two-layer semantics — atomic in bulk Apex, per-row at the invocable.** The two entry points reject invalid input on deliberately different contracts, and the difference is by design:
+
+- **Bulk Apex (`WorkflowEngine` bulk start): ATOMIC validation.** If any request's input is invalid, the whole batch is rejected with a single `WorkflowInputException` enumerating **every** bad field across **all** offending requests, and **zero** rows are written — fix all and retry. This preserves the engine's all-or-none bulk invariant: a validation-only partial-success would make bulk semantics mode-dependent (validation errors partial-succeeding while DML errors roll everything back), which is incoherent for programmatic callers.
+- **Flow invocable (`WorkflowStartInvocableAction`): PER-ROW routing.** Each row is validated independently; an invalid row returns `isValid=false` + `validationError` (no Flow fault) while valid sibling rows still start. Per-row independence lives here because this is where the acceptance criterion's motivation lives — Flow can't catch Apex exceptions.
+
+If a per-row, non-aborting **bulk Apex** API is ever needed, the additive path is a `validationError` field on `WorkflowEngine.StartResult` (deferred; not in v1).
+
 ---
 
 ### 10. List & Page Through Workflow Instances (Apex)
