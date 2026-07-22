@@ -535,6 +535,75 @@ static void onboardingWorkflowIsWellFormed() {
 
 ---
 
+### 10. List & Page Through Workflow Instances (Apex)
+
+`getStatus` answers "what is the outcome of the instance I already hold a key/Id for?" — it cannot **discover** instances you have no handle to. `WorkflowInstanceQuery.findInstances` is the supported **enumeration** contract: "give me every `Running` instance of `OnboardingWorkflow`", "every `Failed` instance in the last hour". Use it instead of querying `Workflow_Instance__c` directly — the field/relationship API names are internal and namespace-sensitive, so hard-coding them breaks across managed-package namespaces and schema revisions.
+
+It is **strictly read-only** (exactly **one** SOQL query per call, zero DML — regardless of page size or how many instances match) and **payload-free**: summaries deliberately omit the heavy long-text payloads (`Input__c` / `Output__c` / `Progress__c`), so a list call never materializes an offloaded-output storage pointer or exhausts the heap in bulk. Fetch a winner's full output per-Id via `getStatus`.
+
+```java
+// Page through every non-terminal instance of one definition (operator script / LWC controller path)
+WorkflowEngine.InstanceCriteria criteria = new WorkflowEngine.InstanceCriteria();
+criteria.definitionName = 'OnboardingWorkflow';
+criteria.statuses = new Set<String>{ 'Pending', 'Running', 'Suspended' };
+criteria.pageSize = 100; // null -> default (50); above the cap -> clamped to MAX_PAGE_SIZE (200)
+
+List<Id> allIds = new List<Id>();
+String cursor = null;
+do {
+  criteria.cursor = cursor; // pass the previous page's nextCursor back VERBATIM
+  WorkflowEngine.InstancePage page = WorkflowInstanceQuery.findInstances(criteria);
+  for (WorkflowEngine.WorkflowInstanceSummary s : page.entries) {
+    allIds.add(s.instanceId); // then WorkflowStatusRead.getStatus(s.instanceId) for full output
+  }
+  cursor = page.nextCursor; // null on the last page
+} while (cursor != null);
+```
+
+**`InstanceCriteria` (all fields optional; a null criteria or all-unset fields matches every instance):**
+
+| Field            | Type          | Null / empty semantics                                                                                             |
+| ---------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `definitionName` | `String`      | Exact `Workflow_Name__c` match; null/blank matches **any** definition.                                             |
+| `statuses`       | `Set<String>` | `Status__c IN` the set; null/empty matches **any** status.                                                         |
+| `createdAfter`   | `Datetime`    | **Inclusive** `CreatedDate >=`; null is unbounded below.                                                           |
+| `createdBefore`  | `Datetime`    | **Exclusive** `CreatedDate <`; null is unbounded above.                                                            |
+| `modifiedAfter`  | `Datetime`    | **Inclusive** `LastModifiedDate >=`; null is unbounded below.                                                      |
+| `modifiedBefore` | `Datetime`    | **Exclusive** `LastModifiedDate <`; null is unbounded above.                                                       |
+| `pageSize`       | `Integer`     | Null → `WorkflowInstanceQuery.DEFAULT_PAGE_SIZE` (50); above `MAX_PAGE_SIZE` (200) → clamped; `<= 0` → throws.     |
+| `cursor`         | `String`      | Opaque next-page token; null/blank starts at page one. Pass a page's `nextCursor` back **verbatim**; garbage throws. |
+
+**`WorkflowInstanceSummary` (lightweight, payload-free):**
+
+| Field            | Type       | Description                                                                                                          |
+| ---------------- | ---------- | ------------------------------------------------------------------------------------------------------------------ |
+| `instanceId`     | `Id`       | The `Workflow_Instance__c` record Id.                                                                               |
+| `definitionName` | `String`   | The workflow class name (`Workflow_Name__c`).                                                                       |
+| `correlationKey` | `String`   | The correlation key the instance was started with.                                                                 |
+| `status`         | `String`   | Raw `Status__c` value (e.g. `Running`, `Failed`).                                                                   |
+| `isTerminal`     | `Boolean`  | `true` for a terminal outcome (`Completed`, `Failed`, `Compensated`, `Cancelled`) — the **same** terminal set as `getStatus`. `ContinuedAsNew` is a non-terminal hand-off, so it reports `false`. |
+| `createdAt`      | `Datetime` | `CreatedDate`.                                                                                                      |
+| `lastModifiedAt` | `Datetime` | `LastModifiedDate`.                                                                                                 |
+
+**`InstancePage`:**
+
+| Field        | Type                            | Description                                                                                                       |
+| ------------ | ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `entries`    | `List<WorkflowInstanceSummary>` | The page's summaries, newest first (`CreatedDate DESC, Id DESC`), at most `pageSize`. Empty when nothing matched. |
+| `nextCursor` | `String`                        | Opaque cursor for the next page, or `null` on the last page. Pass back verbatim as `InstanceCriteria.cursor`.     |
+| `hasMore`    | `Boolean`                       | `true` when a further page exists (i.e. `nextCursor != null`). Page until this is `false`.                        |
+| `pageSize`   | `Integer`                       | The effective page size applied (after defaulting/clamping) — lets you observe when an over-cap request was clamped. |
+
+**Key semantics:**
+
+- **Time windows are half-open `[after, before)`.** The `after` bounds are **inclusive** (`CreatedDate`/`LastModifiedDate >=`) and the `before` bounds are **exclusive** (`<`). An instance whose timestamp lands exactly on `createdAfter`/`modifiedAfter` is **included**; one landing exactly on `createdBefore`/`modifiedBefore` is **excluded**. This lets adjacent windows (e.g. hour-by-hour sweeps) chain with no overlap and no gap.
+- **Deep pagination is keyset-based, not `OFFSET`.** SOQL `OFFSET` is capped at 2,000 rows by the platform and throws beyond it, so a definition with millions of historical instances could not be paged past that with `OFFSET`. `findInstances` orders by the stable total ordering `CreatedDate DESC, Id DESC` and pages via a keyset predicate on `(CreatedDate, Id)`, so you can walk the **entire** result set — however deep — one bounded page at a time, with **no duplicates and no gaps**. The cursor is **opaque**: pass it back verbatim; do not parse, build, or mutate it. A garbage/tampered cursor throws `WorkflowEngine.WorkflowException`.
+- **No exact total is exposed.** An unbounded, deeply-paged result set cannot be counted within a constant SOQL/heap budget, so there is deliberately no `totalCount`; page until `hasMore` is `false`. (A single `COUNT()` over a huge filtered set still counts rows against the 50,000 query-rows governor, so exposing it would break the constant-budget guarantee.)
+- **ContinueAsNew is consistent with `getStatus`.** `findInstances` is a raw row enumeration, **not** a chain resolution: it returns each matching row on its own and does **not** collapse a continue-as-new chain to a single winner the way `getStatus(correlationKey)` does. A `ContinuedAsNew` predecessor generation is its own row, returned only when the `statuses` filter admits it (unset/empty, or explicitly includes `ContinuedAsNew`); and — matching `getStatus` — `ContinuedAsNew` is a non-terminal hand-off, so its summary's `isTerminal` is `false`. To resolve a chain to its live/final successor, take a matching row's `correlationKey` and call `getStatus(correlationKey)`.
+- **Honest SOQL profile:** exactly **one** SOQL query per call and zero DML, no matter how many filters are set, the page size, or the total number of matching instances. Safe to call from any Apex context.
+
+---
+
 ## Operations & Alerting Configuration
 
 Revenant supports Custom Metadata-driven failure alerting. Operators can configure notifications directly in Salesforce Setup without code modifications by creating **Workflow Alert Config** (`Workflow_Alert_Config__mdt`) records:
