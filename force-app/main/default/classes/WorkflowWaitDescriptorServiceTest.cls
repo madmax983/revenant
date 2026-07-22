@@ -116,13 +116,18 @@ public class WorkflowWaitDescriptorServiceTest {
   @IsTest
   static void testBulkChildrenDescriptor() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
+      // A REAL START_CHILDREN join: the parent actually spawned children k1/k2 (Parent_Instance__c
+      // linkage), so the plural childCorrelationKeys state corroborates as a child-completion wait.
+      Workflow_Instance__c parent = seedParentWithChildren(
+        new List<String>{ 'k1', 'k2' }
+      );
       String output = JSON.serialize(
         new Map<String, Object>{
           'childCorrelationKeys' => new List<String>{ 'k1', 'k2' }
         }
       );
       Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
-        suspendedInstance(null),
+        parent,
         oneStep(pendingStep('WaitDescTest.FanOutStep', output))
       );
       System.assertNotEquals(
@@ -163,14 +168,18 @@ public class WorkflowWaitDescriptorServiceTest {
   static void testSingleKeyChildrenListStillInjectable() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // A START_CHILDREN join with exactly one awaited key is unambiguous: that lone key IS
-      // the outstanding child, so it stays directly injectable as the pre-filled signal.
+      // the outstanding child, so it stays directly injectable as the pre-filled signal. The
+      // parent actually spawned that child, so the plural state corroborates.
+      Workflow_Instance__c parent = seedParentWithChildren(
+        new List<String>{ 'only-child' }
+      );
       String output = JSON.serialize(
         new Map<String, Object>{
           'childCorrelationKeys' => new List<String>{ 'only-child' }
         }
       );
       Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
-        suspendedInstance(null),
+        parent,
         oneStep(pendingStep('WaitDescTest.SingleFanOutStep', output))
       );
       System.assertEquals(
@@ -193,13 +202,17 @@ public class WorkflowWaitDescriptorServiceTest {
       // on k2. The parked Output still holds the ORIGINAL full [k1, k2] list, so pre-filling
       // ChildCompleted:k1 would inject an already-satisfied key that cannot unblock the flow.
       // Path (b): the read side cannot derive outstanding keys, so it must NOT suggest k1.
+      // The parent really spawned k1/k2, so the plural state corroborates as a child join.
+      Workflow_Instance__c parent = seedParentWithChildren(
+        new List<String>{ 'k1', 'k2' }
+      );
       String output = JSON.serialize(
         new Map<String, Object>{
           'childCorrelationKeys' => new List<String>{ 'k1', 'k2' }
         }
       );
       Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
-        suspendedInstance(null),
+        parent,
         oneStep(pendingStep('WaitDescTest.GatedJoinStep', output))
       );
       System.assertNotEquals(
@@ -212,6 +225,93 @@ public class WorkflowWaitDescriptorServiceTest {
         d.get('signalName'),
         'A multi-child join with an ambiguous outstanding set pre-fills nothing'
       );
+    }
+  }
+
+  @IsTest
+  static void testPluralChildKeysWithoutCorroborationIsGeneric() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Issue #84 (plural path): opaque author state can legitimately carry a childCorrelationKeys
+      // array without being a START_CHILDREN wait, and the engine writes NO in-state companion
+      // marker for the plural join — so presence of the array alone must not classify a child
+      // wait. Here the parked parent is persisted but spawned NO matching children, so the
+      // corroboration query finds nothing: the state degrades to a GENERIC signal wait and offers
+      // no ChildCompleted suggestion (which could not unblock the generic wait).
+      Workflow_Instance__c parent = seedParentWithChildren(new List<String>{});
+      String output = JSON.serialize(
+        new Map<String, Object>{
+          'childCorrelationKeys' => new List<String>{ 'order-42' }
+        }
+      );
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
+        parent,
+        oneStep(pendingStep('WaitDescTest.OpaquePluralStep', output))
+      );
+      System.assertNotEquals(
+        null,
+        d,
+        'An uncorroborated plural suspend still yields a descriptor'
+      );
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_GENERIC,
+        d.get('type'),
+        'A childCorrelationKeys array with no matching spawned children is a generic wait'
+      );
+      System.assertEquals(
+        null,
+        d.get('signalName'),
+        'No child-completion name is suggested for uncorroborated plural state'
+      );
+      System.assertEquals(
+        null,
+        d.get('childSignalNames'),
+        'No child signal names are surfaced for uncorroborated plural state'
+      );
+      System.assertEquals(
+        'Awaiting signal at step WaitDescTest.OpaquePluralStep',
+        d.get('label'),
+        'The uncorroborated plural state gets the generic awaiting-signal label'
+      );
+    }
+  }
+
+  @IsTest
+  static void testRealStartChildrenCorroboratedIsChildCompletion() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // The counterpart to the uncorroborated case: a REAL START_CHILDREN join whose parent
+      // actually spawned children (Parent_Instance__c linkage) with Correlation_Key__c matching
+      // the state's childCorrelationKeys. The corroboration query finds them, so the plural state
+      // stays a child-completion wait and surfaces every awaited ChildCompleted:<key>.
+      Workflow_Instance__c parent = seedParentWithChildren(
+        new List<String>{ 'ship-1', 'ship-2' }
+      );
+      String output = JSON.serialize(
+        new Map<String, Object>{
+          'childCorrelationKeys' => new List<String>{ 'ship-1', 'ship-2' }
+        }
+      );
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
+        parent,
+        oneStep(pendingStep('WaitDescTest.RealFanOutStep', output))
+      );
+      System.assertNotEquals(
+        null,
+        d,
+        'A corroborated START_CHILDREN join yields a descriptor'
+      );
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_CHILD,
+        d.get('type'),
+        'A corroborated plural childCorrelationKeys state is a child-completion wait'
+      );
+      List<String> names = (List<String>) d.get('childSignalNames');
+      System.assertEquals(
+        2,
+        names.size(),
+        'All corroborated awaited child keys are surfaced'
+      );
+      System.assertEquals('ChildCompleted:ship-1', names[0]);
+      System.assertEquals('ChildCompleted:ship-2', names[1]);
     }
   }
 
@@ -921,5 +1021,32 @@ public class WorkflowWaitDescriptorServiceTest {
     Workflow_Step_Execution__c se = pendingStep(stepName, output);
     se.Workflow_Instance__c = instanceId;
     return se;
+  }
+
+  // Seeds a suspended parent (persisted so it has an Id the corroboration query can key on) plus
+  // one child Workflow_Instance__c per correlation key, linked via Parent_Instance__c=parent and
+  // carrying that Correlation_Key__c — mirroring the engine's own parent→child linkage
+  // (WorkflowChildBulkPlanner writes Parent_Instance__c; the gate matches on Correlation_Key__c).
+  // Children are seeded Completed so they don't collide on the active-correlation unique index.
+  private static Workflow_Instance__c seedParentWithChildren(
+    List<String> childKeys
+  ) {
+    Workflow_Instance__c parent = suspendedInstance(null);
+    insert as system parent;
+    List<Workflow_Instance__c> children = new List<Workflow_Instance__c>();
+    for (String key : childKeys) {
+      children.add(
+        new Workflow_Instance__c(
+          Workflow_Name__c = 'WaitDescTest.ChildWorkflow',
+          Status__c = 'Completed',
+          Parent_Instance__c = parent.Id,
+          Correlation_Key__c = key
+        )
+      );
+    }
+    if (!children.isEmpty()) {
+      insert as system children;
+    }
+    return parent;
   }
 }

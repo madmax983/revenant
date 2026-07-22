@@ -35,8 +35,14 @@
  * deliberately not classified as signal waits so their existing mechanism descriptor
  * (Scheduled Job / Delayed Queueable / Watchdog) is unchanged. An explicitly-marked timed
  * approval / suspend ({@code $timeoutStep}) is the exception on the detail path: its marker
- * keeps its signal descriptor even with {@code Sleep_Until__c} armed. All SOQL runs WITH
- * SYSTEM_MODE.
+ * keeps its signal descriptor even with {@code Sleep_Until__c} armed.
+ *
+ * <p>The detail path additionally issues one bounded, read-only corroboration query for a plural
+ * {@code childCorrelationKeys} state (which carries no in-state engine marker): it confirms the
+ * parked parent actually spawned a matching child (keyed by the indexed {@code Parent_Instance__c}
+ * lookup with a LIMIT cap) before labeling it a child-completion wait, so opaque author state that
+ * merely holds a {@code childCorrelationKeys} array is not mis-reported as a bulk-child join. All
+ * SOQL runs WITH SYSTEM_MODE.
  */
 public inherited sharing class WorkflowWaitDescriptorService {
   /** Descriptor type for an approval (WAIT_FOR_APPROVAL) wait. */
@@ -66,18 +72,7 @@ public inherited sharing class WorkflowWaitDescriptorService {
     if (pending == null) {
       return null;
     }
-    // A timer is armed when the instance carries a resume job (Async_Job_Id__c) OR an armed
-    // Sleep_Until__c deadline (the async id can be blank while Sleep_Until__c is set when
-    // scheduling is off / limit-capped — see buildDescriptor). Combined here so buildDescriptor
-    // takes a single timer flag.
-    Boolean timerArmed =
-      String.isNotBlank(instance.Async_Job_Id__c) ||
-      instance.Sleep_Until__c != null;
-    return buildDescriptor(
-      pending.Step_Name__c,
-      WorkflowPayloadOffload.resolvePayload(pending.Output__c),
-      timerArmed
-    );
+    return buildDescriptor(pending, instance);
   }
 
   /**
@@ -217,19 +212,27 @@ public inherited sharing class WorkflowWaitDescriptorService {
   // such a pure TIMER wait as a signal wait. So a parked step with no explicit marker AND a timer
   // armed is a timer/watchdog wait and yields null (its mechanism descriptor is preserved).
   private static Map<String, Object> buildDescriptor(
-    String stepName,
-    String resolvedOutput,
-    Boolean timerArmed
+    Workflow_Step_Execution__c pending,
+    Workflow_Instance__c instance
   ) {
-    Map<String, Object> state = parseState(resolvedOutput);
+    String stepName = pending.Step_Name__c;
+    Map<String, Object> state = parseState(
+      WorkflowPayloadOffload.resolvePayload(pending.Output__c)
+    );
     Map<String, Object> approval = approvalDescriptor(stepName, state);
     if (approval != null) {
       return approval;
     }
-    Map<String, Object> child = childDescriptor(stepName, state);
+    Map<String, Object> child = childDescriptor(stepName, state, instance.Id);
     if (child != null) {
       return child;
     }
+    // A timer is armed when the instance carries a resume job (Async_Job_Id__c) OR an armed
+    // Sleep_Until__c deadline (the async id can be blank while Sleep_Until__c is set when
+    // scheduling is off / limit-capped — see below).
+    Boolean timerArmed =
+      String.isNotBlank(instance.Async_Job_Id__c) ||
+      instance.Sleep_Until__c != null;
     // A timed suspend persists the engine-reserved $timeoutStep marker: it is an EXPLICIT
     // signal wait with a deadline fallback (unlike a bare sleep, whose state carries no
     // engine marker), so it stays a generic signal wait even with Sleep_Until__c armed.
@@ -272,10 +275,23 @@ public inherited sharing class WorkflowWaitDescriptorService {
   // (key list) parked step state, surfacing every awaited ChildCompleted signal name.
   private static Map<String, Object> childDescriptor(
     String stepName,
-    Map<String, Object> state
+    Map<String, Object> state,
+    Id instanceId
   ) {
     List<String> childSignalNames = childSignalNames(state);
     if (childSignalNames.isEmpty()) {
+      return null;
+    }
+    // Corroboration gate (issue #84). The singular START_CHILD path already requires its
+    // childWorkflowName companion marker (see childSignalNames) and is self-corroborating. The
+    // plural START_CHILDREN state ({"childCorrelationKeys":[...]}) carries NO in-state companion
+    // marker — the engine writes only the bare key array — so its mere presence cannot distinguish
+    // a REAL bulk-child join from opaque author state that happens to hold a `childCorrelationKeys`
+    // array (a stray ChildCompleted:<key> suggestion would not unblock such a generic wait). So the
+    // plural case is corroborated against the engine's own parent→child linkage before being
+    // labeled a child wait. Only the single-row detail path reaches here (buildDescriptor is never
+    // called in a loop), so at most one bounded query runs; absent corroboration → generic wait.
+    if (!WorkflowWaitChildCorroboration.isGenuineChildWait(state, instanceId)) {
       return null;
     }
     // A single awaited child is unambiguous, so its ChildCompleted:<key> is directly injectable.
@@ -325,8 +341,11 @@ public inherited sharing class WorkflowWaitDescriptorService {
     }
     // START_CHILDREN (handleStartChildrenOutcome) persists {"childCorrelationKeys": [...]} — a
     // non-empty list is its only marker (no companion key is written), so require an actual
-    // list of >=1 element before classifying a bulk child join. An opaque author state whose
-    // `childCorrelationKeys` is absent, empty, or not a list stays a generic wait.
+    // list of >=1 element before this reads as a candidate bulk child join. Presence alone is
+    // NOT sufficient to classify: opaque author state can carry a `childCorrelationKeys` array
+    // too, so childDescriptor additionally corroborates these keys against real spawned children
+    // (WorkflowWaitChildCorroboration) before treating them as a child-completion wait. An opaque
+    // author state whose `childCorrelationKeys` is absent, empty, or not a list stays a generic wait.
     Object raw = state.get('childCorrelationKeys');
     if (raw instanceof List<Object>) {
       for (Object k : (List<Object>) raw) {
