@@ -802,6 +802,7 @@ export default class WorkflowDashboard extends LightningElement {
   formatInstance(inst) {
     const idleLabel =
       inst.idleMinutes != null ? `${inst.idleMinutes}m idle` : null;
+    const waitDescriptor = inst.waitDescriptor || null;
     return {
       ...inst,
       formattedDate: this.formatDateTime(inst.CreatedDate),
@@ -810,6 +811,9 @@ export default class WorkflowDashboard extends LightningElement {
         : null,
       listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? "item-selected" : ""}`,
       statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
+      hasWaitDescriptor: !!waitDescriptor,
+      waitDescriptorLabel: waitDescriptor ? waitDescriptor.label : null,
+      awaitedSignalName: waitDescriptor ? waitDescriptor.signalName : null,
       isWatchdogWaiting: inst.waitingOn === "Watchdog",
       waitingOnBadgeClass:
         inst.waitingOn === "Watchdog"
@@ -913,6 +917,13 @@ export default class WorkflowDashboard extends LightningElement {
             payloadFiles["instance.Progress"],
           ),
           waitingOn: result.waitingOn,
+          hasWaitDescriptor: !!result.waitDescriptor,
+          waitDescriptorLabel: result.waitDescriptor
+            ? result.waitDescriptor.label
+            : null,
+          awaitedSignalName: result.waitDescriptor
+            ? result.waitDescriptor.signalName
+            : null,
           isWatchdogWaiting: result.waitingOn === "Watchdog",
           waitingOnBadgeClass:
             result.waitingOn === "Watchdog"
@@ -2078,7 +2089,12 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleOpenSignalModal() {
     this.signalModalOpen = true;
-    this.signalName = "";
+    // Pre-fill the awaited signal name (approval/child waits) so the operator can send it
+    // with no transformation; a generic/timer wait leaves it blank for manual entry.
+    this.signalName =
+      this.selectedInst && this.selectedInst.awaitedSignalName
+        ? this.selectedInst.awaitedSignalName
+        : "";
     this.signalPayload = "";
   }
 

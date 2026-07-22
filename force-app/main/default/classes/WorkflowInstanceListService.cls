@@ -132,6 +132,11 @@ public inherited sharing class WorkflowInstanceListService {
     Set<Id> instancesWithPendingStep = WorkflowJobLivenessService.queryInstancesWithPendingStep(
       pageIds
     );
+    // Awaited-signal descriptors for the Suspended rows parked on a signal/approval/child
+    // wait (bulk-resolved in one query to avoid N+1); timer waits get no descriptor.
+    Map<Id, Map<String, Object>> waitDescriptors = WorkflowWaitDescriptorService.describeSignalWaits(
+      instances
+    );
 
     Long nowMs = Datetime.now().getTime();
     List<Map<String, Object>> results = new List<Map<String, Object>>();
@@ -162,6 +167,7 @@ public inherited sharing class WorkflowInstanceListService {
       );
       m.put('stalled', stalled);
       m.put('Failure_Category__c', inst.Failure_Category__c);
+      m.put('waitDescriptor', waitDescriptors.get(inst.Id));
       results.add(m);
     }
     return results;
