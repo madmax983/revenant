@@ -235,30 +235,40 @@ public class WorkflowLatencyServiceTest {
   }
 
   @IsTest
-  static void effectiveStepCapReservesInstanceRowsAgainstGovernor() {
+  static void effectiveStepCapIsHeapSafeAndStaysWithinGovernor() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      // With no override, the step-scan LIMIT must reserve the rows already consumed by the
-      // instance query so instance_rows + step_rows can never exceed the 50,000 sync row
-      // governor. Exercise at the production instance-sample cap (2000 rows).
+      // The step-scan cap is sized for the 6MB synchronous Apex heap governor, not the row
+      // governor: it must be well below the 50,000 row limit so the per-instance buckets and
+      // per-step delta lists built over the scanned rows cannot blow heap before isCapped is
+      // returned. Assert the constant itself is heap-safe.
+      System.assert(
+        WorkflowLatencyService.STEP_SCAN_CAP <= 15000,
+        'Step-scan cap must be heap-safe (an order of magnitude below the 50k row governor)'
+      );
+
+      // With the heap-safe analytical cap the effective LIMIT is the analytical cap itself, not
+      // the row-governor reservation: even with zero instance rows the reservation (49500) far
+      // exceeds STEP_SCAN_CAP, so the smaller heap-safe cap binds.
+      System.assertEquals(
+        WorkflowLatencyService.STEP_SCAN_CAP,
+        WorkflowLatencyService.effectiveStepScanCap(0),
+        'Heap-safe analytical cap binds below the row-governor reservation'
+      );
+
+      // The row-governor reservation is still honored as defense-in-depth: at the production
+      // instance-sample cap (2000 rows) instance_rows + step_rows stays within the 50k governor.
       Integer instanceRows = 2000;
       Integer effectiveCap = WorkflowLatencyService.effectiveStepScanCap(
         instanceRows
       );
-
+      System.assertEquals(
+        WorkflowLatencyService.STEP_SCAN_CAP,
+        effectiveCap,
+        'At 2000 instance rows the heap-safe cap still binds below the reservation'
+      );
       System.assert(
         instanceRows + effectiveCap <= 50000,
         'instance rows + effective step cap must stay within the 50k sync row governor'
-      );
-      System.assert(
-        effectiveCap < 50000,
-        'Effective step cap must drop below the raw 50k cap to reserve instance rows'
-      );
-
-      // Zero instance rows still reserves only the safety margin (50000 - 500 = 49500).
-      System.assertEquals(
-        49500,
-        WorkflowLatencyService.effectiveStepScanCap(0),
-        'With no instance rows the cap reserves just the safety margin'
       );
     }
   }

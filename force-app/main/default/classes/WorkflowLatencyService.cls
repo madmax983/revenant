@@ -27,13 +27,33 @@ public inherited sharing class WorkflowLatencyService {
   // computed from these rows; if this many rows come back the window was truncated.
   private static final Integer INSTANCE_SAMPLE_CAP = 2000;
 
-  // Upper bound on step-execution rows scanned for the sampled instances. Independent of the
-  // instance cap because a definition may record many steps per instance.
-  private static final Integer STEP_SCAN_CAP = 50000;
+  // Upper bound on step-execution rows scanned for the sampled instances. Sized to stay within
+  // the 6MB synchronous Apex HEAP governor, not the row governor: this endpoint is a synchronous
+  // @AuraEnabled request, and rankStepsByMedianWallClock materializes the queried SObject list
+  // AND builds per-instance buckets + per-step delta lists over it, so an oversized scan blows
+  // heap BEFORE the code can return isCapped, turning high-step-volume definitions into an error
+  // instead of sampled metrics.
+  //
+  // Heap budget: each scanned Workflow_Step_Execution__c holds only Id + Workflow_Instance__c +
+  // Step_Name__c + CreatedDate, costing on the order of ~250 bytes/row across ALL retained
+  // structures combined — the queried SObject list (a few hundred bytes for so few small fields),
+  // the per-instance grouping map (which holds references to those same SObjects, not copies, so
+  // ~tens of bytes/row of list/map overhead), and the per-step Long delta lists it reduces into
+  // (~one boxed Long + map slot per row). 12,000 rows × ~250 bytes ≈ 3MB — inside the ≲2-3MB
+  // step-structure target and comfortably under the 6MB ceiling with headroom for the ≤2,000-row
+  // instance sample (~0.5MB) and framework overhead. Even a pessimistic ~400 bytes/row (~4.8MB)
+  // stays under 6MB, so 12,000 keeps a safe margin. Deliberately NOT near 50,000: at ~47k rows the
+  // old cap could exceed heap mid-reduction. Independent of the instance cap because a definition
+  // may record many steps per instance, and far below the 50,000 row governor as well (12k steps +
+  // ≤2k instances ≈ 14k rows total). @TestVisible so tests can assert it is heap-safe (≪ 50k).
+  @TestVisible
+  private static final Integer STEP_SCAN_CAP = 12000;
 
   // Total query rows a single synchronous transaction may retrieve (platform governor). The
   // instance sample and the step scan share this budget, so the step LIMIT must reserve the
-  // rows the instance query already consumed.
+  // rows the instance query already consumed. With the heap-safe STEP_SCAN_CAP this reservation
+  // is no longer the binding constraint (12k + ≤2k ≪ 50k), but it is retained as defense-in-depth
+  // so the step LIMIT can never crowd the row governor even if the caps are later raised.
   private static final Integer SYNC_ROW_GOVERNOR_LIMIT = 50000;
 
   // Rows held back beyond the instance + step scans as headroom for incidental queries/overhead
@@ -64,7 +84,9 @@ public inherited sharing class WorkflowLatencyService {
    * instance rows have already been retrieved in this transaction. Reserves those instance rows
    * (plus STEP_SCAN_SAFETY_MARGIN) against the SYNC_ROW_GOVERNOR_LIMIT so that
    * instanceRows + stepRows can never exceed the 50,000 synchronous row governor, while never
-   * exceeding the analytical stepScanCap(). Floored at 1 so the query stays valid and the
+   * exceeding the analytical stepScanCap(). With the heap-safe stepScanCap() (12,000) the
+   * analytical cap is normally the binding limit — the row-governor reservation only ever tightens
+   * things further if the caps are later raised. Floored at 1 so the query stays valid and the
    * truncation flag can still trip. The @TestVisible stepScanCap override still binds when it is
    * the smaller of the two, so the cap-truncation test path is preserved.
    * @param instanceRows The number of instance rows already fetched this transaction.
