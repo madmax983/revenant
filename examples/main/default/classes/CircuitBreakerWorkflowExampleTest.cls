@@ -26,6 +26,18 @@ public class CircuitBreakerWorkflowExampleTest {
 
   // Fresh, not-yet-driven instance (Pending instance + Pending initial step), so
   // runStep drives it through the breaker admission hook (mirrors WorkflowConcurrencyTest).
+  // A fast-tripping breaker (opens on the second failure) with a short open window,
+  // so a tiny started fleet trips it and the parked instance can then be woken for a
+  // half-open probe.
+  private static Circuit_Breaker_Config__mdt fastTripCfg() {
+    return (Circuit_Breaker_Config__mdt) JSON.deserialize(
+      '{"DeveloperName":"ExternalPaymentsApi","Failure_Threshold__c":2,' +
+        '"Rolling_Window_Seconds__c":300,"Open_Duration_Seconds__c":30,' +
+        '"Half_Open_Probe_Count__c":1}',
+      Circuit_Breaker_Config__mdt.class
+    );
+  }
+
   private static Id newPendingInstance(String key) {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = WF,
@@ -160,6 +172,105 @@ public class CircuitBreakerWorkflowExampleTest {
       } finally {
         WorkflowEngine.useDynamicScheduling = priorDynamic;
       }
+    }
+  }
+
+  // Same AC scenario as the two runStep tests above, but driven through the engine's
+  // public entry point WorkflowEngine.start(...) so it also proves the example
+  // workflow is discoverable/authorized via ApexTypeImplementor (a private starter or
+  // a non-public workflow/step would make start() throw "Unauthorized or invalid
+  // workflow definition"), and that the shipped start -> park -> sleep-resume ->
+  // half-open probe path recovers a real fleet end-to-end. Mirrors the start()-based
+  // ThrottledCalloutWorkflowExampleTest precedent (start, drive via WorkflowTestHarness,
+  // rewind the durable clock to make the wait eligible, then resume).
+  @IsTest
+  static void testStartedFleetParksThenAutoRecoversWhenDependencyHeals() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      CircuitBreakerWorkflowExample.reset(); // dependency down
+      CircuitBreakerGate.mockConfigs.put('ExternalPaymentsApi', fastTripCfg());
+
+      Test.startTest();
+      // Start the fleet through the engine's public entry point. This resolves the
+      // definition via the ApexTypeImplementor authorization path — if the example
+      // workflow (or this starter) were not public/discoverable, start() would throw
+      // "Unauthorized or invalid workflow definition".
+      Id trip1 = WorkflowEngine.start(WF, 'wf-cb-trip-1', null);
+      Id trip2 = WorkflowEngine.start(WF, 'wf-cb-trip-2', null);
+      Id parked = WorkflowEngine.start(WF, 'wf-cb-parked', null);
+
+      // The two failing attempts against the down dependency fill the window and trip
+      // the breaker Open.
+      System.assertEquals(
+        'Failed',
+        new WorkflowTestHarness(trip1).drive().status,
+        'A pre-open attempt against the down dependency fails'
+      );
+      System.assertEquals(
+        'Failed',
+        new WorkflowTestHarness(trip2).drive().status,
+        'The threshold-reaching attempt fails and trips the breaker Open'
+      );
+      System.assertEquals(
+        'Open',
+        breaker().Status__c,
+        'The breaker trips Open once the failure threshold is reached'
+      );
+      Integer callsWhileDown = CircuitBreakerWorkflowExample.callAttempts;
+
+      // The next instance arrives at the Open breaker and fast-fails (parks): the
+      // guarded step suspends on a durable sleep and the down dependency is not called.
+      WorkflowTestHarness parkedHarness = new WorkflowTestHarness(parked);
+      parkedHarness.disableAutoTimeSkip = true;
+      WorkflowTestHarness.Result parkedRes = parkedHarness.drive();
+      System.assertEquals(
+        'Suspended',
+        parkedRes.status,
+        'An instance arriving at the Open breaker parks instead of executing'
+      );
+      System.assert(
+        parkedRes.isSleeping,
+        'The breaker park is a durable sleep that re-checks the breaker on wake'
+      );
+      System.assertEquals(
+        callsWhileDown,
+        CircuitBreakerWorkflowExample.callAttempts,
+        'The parked instance never called the down dependency'
+      );
+
+      // The dependency heals and the breaker's open duration elapses, making it
+      // eligible for a half-open trial probe (mirrors ThrottledCallout rewinding its
+      // refill clock — Test.now() does not advance on its own).
+      CircuitBreakerWorkflowExample.dependencyHealthy = true;
+      Circuit_Breaker_State__c st = [
+        SELECT Id, Opened_At__c
+        FROM Circuit_Breaker_State__c
+        WHERE Dependency_Key__c = 'ExternalPaymentsApi'
+      ];
+      st.Opened_At__c = Datetime.now().addSeconds(-120);
+      update as system st;
+
+      // Wake the parked step through the engine's own sleep-resume path: it re-hits
+      // the breaker gate, is admitted as a half-open probe, calls the now-healthy
+      // dependency, completes, and closes the breaker — the fleet auto-recovers.
+      parkedHarness.disableAutoTimeSkip = false;
+      WorkflowTestHarness.Result recovered = parkedHarness.fireSleep(STEP);
+      Test.stopTest();
+
+      System.assertEquals(
+        'Completed',
+        recovered.status,
+        'The parked instance auto-recovers to completion once the dependency heals'
+      );
+      System.assertEquals(
+        'Closed',
+        breaker().Status__c,
+        'A successful half-open probe closes the breaker, restoring the fleet'
+      );
+      System.assertEquals(
+        callsWhileDown + 1,
+        CircuitBreakerWorkflowExample.callAttempts,
+        'Only the half-open probe re-invoked the (now healthy) dependency'
+      );
     }
   }
 }
