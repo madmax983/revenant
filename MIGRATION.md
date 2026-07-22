@@ -58,6 +58,20 @@ StepContext.Signal s;                                                      // un
 WorkflowEngine.signal(correlationKey, 'ApprovalReceived', payloadJson);    // still valid
 ```
 
+> **📖 Reading an instance's step history.** The supported read contracts live on
+> dedicated read classes, not the facade — `WorkflowStatusRead.getStatus` for the
+> **outcome**, and **`WorkflowHistoryRead.getHistory`** for the ordered **step
+> timeline** (which steps ran, in order, with attempt counts, timing, errors, and a
+> compensation flag). Do **not** query `Workflow_Step_Execution__c` directly — those
+> field names are internal.
+>
+> ```apex
+> WorkflowEngine.StepHistory h = WorkflowHistoryRead.getHistory(instanceId);
+> for (WorkflowEngine.StepHistoryEntry e : h.entries) { /* e.stepName, e.status, e.attempt, ... */ }
+> ```
+>
+> See the README's "Read a Workflow's Step Timeline (Apex)" section for the full DTO shape.
+
 ---
 
 ## 2. `cancel(Id, Boolean)` split — and `cancelWithCompensations` is NOT on the engine
@@ -412,6 +426,35 @@ and `Validation Error` (String) — so a Flow can branch on invalid input instea
 catching a fault. Existing invocable outputs (`Workflow Instance ID`, `Is New`) are
 unchanged. See the README's "Validate Start Input Against a Contract (opt-in)"
 section for the full contract shape, type-coercion rules, and bulk/Flow behavior.
+## 9. New (additive, non-breaking): `WorkflowInstanceQuery.findInstances`
+
+**Issue #93.** This is **not a breaking change** — it adds a new supported read
+contract with no change to any existing signature — but it is recorded here because
+it is the sanctioned replacement for a pattern the docs already forbid: querying
+`Workflow_Instance__c` fields directly to **enumerate** instances (the field and
+relationship API names are internal and namespace-sensitive). Where `getStatus`
+answers "what is the outcome of the instance I already hold a key/Id for?",
+`findInstances` answers "which instances match this definition / status / time
+window?" and pages through them.
+
+```apex
+// Enumerate + page (keyset cursor, not OFFSET) — payload-free, one SOQL per call
+WorkflowEngine.InstanceCriteria criteria = new WorkflowEngine.InstanceCriteria();
+criteria.definitionName = 'OnboardingWorkflow';
+criteria.statuses = new Set<String>{ 'Running', 'Failed' };
+criteria.pageSize = 100;                       // null -> 50; > 200 -> clamped; <= 0 -> throws
+
+WorkflowEngine.InstancePage page = WorkflowInstanceQuery.findInstances(criteria);
+for (WorkflowEngine.WorkflowInstanceSummary s : page.entries) { /* s.instanceId, s.status, ... */ }
+criteria.cursor = page.nextCursor;             // pass back VERBATIM; null on the last page
+```
+
+Like `getStatus` / `getHistory`, the contract lives on a dedicated `inherited
+sharing` service class (`WorkflowInstanceQuery`), while the forever-public DTOs
+(`InstanceCriteria`, `WorkflowInstanceSummary`, `InstancePage`) are resident inner
+classes of `WorkflowEngine`. It is strictly read-only and payload-free; see the
+README's "List & Page Through Workflow Instances (Apex)" section for the full DTO
+shapes, the keyset-cursor / ContinueAsNew semantics, and the honest SOQL profile.
 
 ---
 

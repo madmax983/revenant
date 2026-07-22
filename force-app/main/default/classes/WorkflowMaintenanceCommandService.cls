@@ -11,6 +11,7 @@ public inherited sharing class WorkflowMaintenanceCommandService {
    */
   public static void bootstrapWatchdog() {
     WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
     try {
       WorkflowWatchdog.bootstrap();
     } catch (Exception ex) {
@@ -27,6 +28,7 @@ public inherited sharing class WorkflowMaintenanceCommandService {
    */
   public static void pauseDef(String workflowName, String reason) {
     WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
     try {
       WorkflowPauseGate.pauseDefinition(workflowName, reason);
     } catch (Exception ex) {
@@ -41,6 +43,7 @@ public inherited sharing class WorkflowMaintenanceCommandService {
    */
   public static void resumeDef(String workflowName) {
     WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
     try {
       WorkflowPauseGate.resumeDefinition(workflowName);
     } catch (Exception ex) {

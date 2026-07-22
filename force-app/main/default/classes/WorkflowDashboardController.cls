@@ -227,6 +227,24 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
+   * @description Returns Revenant's data-storage footprint for the System Doctor panel:
+   * per-object record counts, estimated bytes and 7-/30-day growth deltas, the summed
+   * ContentVersion byte volume of offloaded payloads, and the combined estimate as a
+   * percentage of the org's data-storage allowance with the configured warning threshold.
+   * Strictly read-only (bounded aggregate reads only).
+   *
+   * Intentionally NOT cacheable: this backs a LIVE storage-warning surface whose metrics
+   * change as records are created, offloaded, or purged (e.g. CleanupWorkflow). A
+   * client-side Lightning cache would serve a stale footprint for a platform-managed
+   * duration on panel reopen, defeating the panel's purpose. Loaded imperatively by the LWC.
+   * @return A map of the storage-footprint fields consumed by the panel.
+   */
+  @AuraEnabled
+  public static Map<String, Object> getStorageFootprint() {
+    return WorkflowStorageFootprintService.storageFootprint();
+  }
+
+  /**
    * @description Returns a list of currently paused definitions with parked-instance
    * counts.
    * @return One map per paused definition, or an empty list when none are paused.

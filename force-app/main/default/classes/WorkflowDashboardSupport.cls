@@ -8,12 +8,21 @@
 public inherited sharing class WorkflowDashboardSupport {
   /**
    * @description Enforces the Workflow Dashboard authorization gate: allows callers who
-   * hold the Workflow_Admin custom permission, otherwise falls back to holders of the
-   * "Modify All Data" system permission. Throws an AuraHandledException with the exact
-   * restricted-access message when neither grant is present.
+   * hold the Workflow_Admin custom permission (full admin) or the least-privilege
+   * Workflow_Dashboard_View custom permission (read-only monitoring operator), otherwise
+   * falls back to holders of the "Modify All Data" system permission. Throws an
+   * AuraHandledException with the exact restricted-access message when no grant is present.
    */
   public static void checkAuthorization() {
     if (FeatureManagement.checkPermission('Workflow_Admin')) {
+      return;
+    }
+    // Read-only monitoring operators hold Workflow_Dashboard_View (granted by the
+    // Revenant_Operator permission set) so they can open the dashboard and inspect
+    // instances/steps/signals WITHOUT holding Workflow_Admin, which would otherwise also
+    // satisfy the separate operator-action gate (see checkOperatorAction) and defeat the
+    // read-only/action separation.
+    if (FeatureManagement.checkPermission('Workflow_Dashboard_View')) {
       return;
     }
     // Fall back to users who hold the "Modify All Data" system permission (see
@@ -30,6 +39,36 @@ public inherited sharing class WorkflowDashboardSupport {
     );
     ex.setMessage(
       'Unauthorized: Access to the Workflow Dashboard is restricted.'
+    );
+    throw ex;
+  }
+
+  /**
+   * @description Enforces the operator-ACTION gate for state-mutating recovery endpoints
+   * (re-drive, cancel, resume, compensate, pause/resume, redeliver, start). Allows callers
+   * who hold the Workflow_Operator_Action custom permission (action-capable operator) or the
+   * Workflow_Admin custom permission (full admin), otherwise falls back to holders of the
+   * "Modify All Data" system permission. Read-only operators hold only Workflow_Dashboard_View
+   * and are rejected here, so granting dashboard visibility never implicitly grants the ability
+   * to mutate engine state. Throws an AuraHandledException with the exact required-permission
+   * message when no grant is present.
+   */
+  public static void checkOperatorAction() {
+    if (
+      FeatureManagement.checkPermission('Workflow_Operator_Action') ||
+      FeatureManagement.checkPermission('Workflow_Admin')
+    ) {
+      return;
+    }
+    if (currentUserHasModifyAllData()) {
+      return;
+    }
+
+    AuraHandledException ex = new AuraHandledException(
+      'Unauthorized: this action requires the "Workflow_Operator_Action" permission.'
+    );
+    ex.setMessage(
+      'Unauthorized: this action requires the "Workflow_Operator_Action" permission.'
     );
     throw ex;
   }

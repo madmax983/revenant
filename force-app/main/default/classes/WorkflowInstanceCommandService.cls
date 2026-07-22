@@ -20,6 +20,7 @@ public inherited sharing class WorkflowInstanceCommandService {
     String inputJson
   ) {
     WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
     try {
       Object input = null;
       if (String.isNotBlank(inputJson)) {
@@ -50,6 +51,7 @@ public inherited sharing class WorkflowInstanceCommandService {
    */
   public static void retryInstance(Id instanceId) {
     WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
     try {
       WorkflowRetryService.retryWorkflow(instanceId);
     } catch (Exception ex) {
@@ -64,6 +66,7 @@ public inherited sharing class WorkflowInstanceCommandService {
    */
   public static void resumeInstance(Id instanceId) {
     WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
     try {
       List<Workflow_Instance__c> instances = [
         SELECT Id, Status__c, Sleep_Until__c
@@ -96,6 +99,7 @@ public inherited sharing class WorkflowInstanceCommandService {
    */
   public static void resumeCompensationRollback(Id instanceId) {
     WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
     try {
       WorkflowCompensation.resumeCompensation(instanceId);
     } catch (Exception ex) {
@@ -117,6 +121,7 @@ public inherited sharing class WorkflowInstanceCommandService {
     String suppliedOutputJson
   ) {
     WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
     if (
       !FeatureManagement.checkPermission('Workflow_Step_Skip') &&
       !WorkflowDashboardSupport.currentUserHasModifyAllData()
@@ -150,6 +155,7 @@ public inherited sharing class WorkflowInstanceCommandService {
    */
   public static Id compensate(Id instanceId) {
     WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
     try {
       return WorkflowCompensation.compensate(instanceId);
     } catch (Exception ex) {
@@ -165,6 +171,7 @@ public inherited sharing class WorkflowInstanceCommandService {
     WorkflowDashboardCommandController.CancelRequest req
   ) {
     WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
     try {
       if (req.runCompensations) {
         WorkflowCancellation.cancelWithCompensations(req.instanceId);

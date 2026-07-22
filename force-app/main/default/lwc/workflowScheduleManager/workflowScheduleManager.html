@@ -103,6 +103,17 @@
                         required
                         class="slds-m-top_small"
                     ></lightning-input>
+
+                    <lightning-combobox
+                        label="Time Zone"
+                        data-field="Time_Zone__c"
+                        value={form.Time_Zone__c}
+                        options={zoneOptions}
+                        onchange={handleFormChange}
+                        field-level-help="The cron is interpreted in this zone. UTC (default) preserves the original UTC behavior."
+                        class="slds-m-top_small"
+                    ></lightning-combobox>
+
                     <template if:true={cronValid}>
                         <p class="slds-text-color_success slds-text-body_small slds-m-top_xx-small">
                             ✓ Valid. Next run:
@@ -114,11 +125,12 @@
                                 hour="2-digit"
                                 minute="2-digit"
                             ></lightning-formatted-date-time>
+                            (evaluated in {zoneLabel})
                         </p>
                     </template>
                     <template if:true={cronInvalid}>
                         <p class="slds-text-color_error slds-text-body_small slds-m-top_xx-small">
-                            ✗ Invalid cron expression.
+                            ✗ Invalid cron expression or unsupported time zone.
                         </p>
                     </template>
 

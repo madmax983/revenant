@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomPermission xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Grants least-privilege read-only access to the Revenant workflow dashboard so a monitoring operator passes the dashboard authorization gate without holding the full Workflow_Admin custom permission.</description>
+    <label>Workflow Dashboard View</label>
+</CustomPermission>

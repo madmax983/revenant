@@ -142,7 +142,8 @@ public inherited sharing class WorkflowScheduleSweepRunner {
       Last_Outcome__c = outcome,
       Next_Fire_Window__c = SalesforceCronTranslator.nextWindow(
         item.sched.Cron_Expression__c,
-        item.fireTime
+        item.fireTime,
+        item.sched.Time_Zone__c
       )
     );
   }

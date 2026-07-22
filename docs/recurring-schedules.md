@@ -62,11 +62,12 @@ permission sets ship:
 | Correlation Key Prefix | `Correlation_Key_Prefix__c` | ✓ | Prefix for each run's correlation key. Must be unique across schedules. |
 | Enabled | `Enabled__c` | — | Gate. `false` = paused; `true` = active. |
 | Overlap Policy | `Overlap_Policy__c` | — | `Skip` (default) or `Allow`. See below. |
+| Time Zone | `Time_Zone__c` | — | IANA time-zone id (e.g. `America/New_York`) the cron is interpreted in. **Blank = UTC** (preserves the original behavior). See [Time zones](#time-zones). |
 | Dedicated Slot | `Dedicated_Slot__c` | — | `true` = opt out of 0-slot sweep; use `registerDedicatedJob()` to arm a CronTrigger. |
 | Input JSON | `Input_Json__c` | — | JSON template passed as input. Tokens `{{fireTime}}` and `{{scheduleName}}` are substituted. |
 | Last Fired Window | `Last_Fired_Window__c` | — | **Engine-managed.** Last fire-window DateTime. Do not edit manually. |
 | Next Fire Window | `Next_Fire_Window__c` | — | **Engine-managed.** Next fire window after the last processed one. The 0-slot sweep filters on this so already-handled low-cadence schedules rotate out of the batch (no starvation). It is (re)computed when a schedule is saved with a new cron and advanced by each sweep, and the manager's **Next Run** column reads it directly (no per-row cron scan on list load). Do not edit manually. |
-| Last Outcome | `Last_Outcome__c` | — | **Engine-managed.** Last outcome: `Started`, `Skipped`, `Deduped`, `Error` (malformed `Input_Json__c`), or `Invalid cron` (a syntactically valid cron that never fires, e.g. `0 0 31 2 *`). Do not edit manually. |
+| Last Outcome | `Last_Outcome__c` | — | **Engine-managed.** Last outcome: `Started`, `Skipped`, `Deduped`, `Error` (malformed `Input_Json__c`), `Invalid cron` (a syntactically valid cron that never fires, e.g. `0 0 31 2 *`), or `Invalid time zone` (an unsupported `Time_Zone__c` on a row created outside the UI). Do not edit manually. |
 
 ## Cron expression syntax (5-field)
 
@@ -81,6 +82,8 @@ minute  hour  day-of-month  month  day-of-week
 | day-of-month | 1–31 | |
 | month | 1–12 | |
 | day-of-week | 0–6 | 0 = Sunday |
+
+> The **hour** field is interpreted in the schedule's `Time_Zone__c` (blank = UTC). See [Time zones](#time-zones) below.
 
 **Operators:**
 
@@ -106,7 +109,18 @@ When both day-of-month and day-of-week are restricted (not `*`), they are **OR-e
 | `0 0 1 * *` | First day of every month at midnight |
 | `0 0 1 1 *` | Once a year: Jan 1 midnight |
 
-> **Timezone note:** All cron evaluation is in UTC (Salesforce `DateTime` is always UTC internally). Convert your desired local time to UTC when writing the expression.
+## Time zones
+
+By default (a blank `Time_Zone__c`) all cron evaluation is in **UTC** — Salesforce `DateTime` is always UTC internally — exactly as before. Set `Time_Zone__c` to an IANA time-zone id (e.g. `America/New_York`, `Europe/London`, `Asia/Tokyo`) to have the 0-slot sweep interpret the cron in that zone's **local wall clock** instead, resolving each matched local time back to the correct UTC instant. A nightly `0 2 * * *` in `America/New_York` therefore fires at 02:00 Eastern year-round — 07:00 UTC in winter (EST) and 06:00 UTC in summer (EDT) — automatically tracking daylight-saving transitions.
+
+The engine picks a **deterministic, fire-exactly-once** result across DST transitions:
+
+- **Spring-forward gap** — the requested local time does not exist (e.g. 02:00–02:59 on the US spring-forward day, when clocks jump 02:00 → 03:00). The schedule fires **once** at the gap boundary — the transition instant, i.e. the first valid instant at or after the requested local time (a `0 2 * * *` schedule fires at 03:00 local that day). It is never skipped and never doubled.
+- **Fall-back overlap** — the requested local time exists twice (e.g. 01:00–01:59 occurs twice on the US fall-back day). The schedule fires **once**, on the **first** (earlier, pre-transition) occurrence, so a calendar day still fires exactly once.
+
+Supported zones are a curated IANA set surfaced by the manager's **Time Zone** picker (and `WorkflowScheduleController.getTimeZones()`); a blank selection means UTC. An unsupported id is rejected at save with `Invalid time zone: <id>`, and a row carrying a bad zone created outside the UI (Setup/API) is isolated at sweep time with a `Last_Outcome__c` of `Invalid time zone` (see [Fire outcomes](#fire-outcomes-workflow_log__c)) without disturbing other schedules.
+
+> **Note:** The correlation-key fire-window stamp (`prefix_yyyyMMddHHmm`) is always the **resolved UTC instant**, so dedup is unaffected by the zone — a given window still fires exactly once.
 
 ## Overlap policies
 
@@ -135,6 +149,7 @@ Each run's correlation key is `prefix_yyyyMMddHHmm` (e.g. `NightlyRecon_20260617
 | `Deduped` | `startOrGet` resolved to an existing instance (safety net; rare). No log row is written for Deduped to avoid noise. |
 | `Error` | The schedule is misconfigured — malformed `Input_Json__c`, or a `Workflow_Name__c` that does not resolve to a `WorkflowDefinition` (e.g. the record was created via Setup, bypassing the manager's validation). The bad schedule is isolated and logged with `Outcome__c = 'Error'` (in both the 0-slot and dedicated paths); other due schedules in the same heartbeat are unaffected, and the cursor advances so it does not retry every tick. No instance is started. |
 | `Invalid cron` | A syntactically valid cron that never resolves to a fire window (e.g. `0 0 31 2 *`). The 0-slot sweep parks the row (advances its cursor) so it cannot starve other schedules. Re-saving with a valid cron clears it. |
+| `Invalid time zone` | An unsupported `Time_Zone__c` (only reachable for rows created via Setup/API — the UI rejects it at save). The 0-slot sweep isolates and parks the row (advances its cursor) without aborting the batch; the dedicated path records it as an `Error`. Re-saving with a supported zone (or blank for UTC) clears it. No instance is started. |
 
 Log rows are upserted on `Fire_Key__c` (`corrKey:outcome`) so repeated sweeps of the same window produce at most one row per outcome. Each log is linked to its schedule by the `Schedule__c` lookup (an immutable Id), so the audit trail stays attached even if the schedule is renamed.
 
@@ -180,9 +195,14 @@ Dedicated-slot mode arms a native `CronTrigger` via `System.schedule`, which beh
 differently from the 0-slot evaluator in three ways:
 
 - **Timezone:** `System.schedule` interprets the cron in the **time zone of the user who
-  arms the job**, whereas the 0-slot path evaluates in **UTC**. A dedicated `0 2 * * *`
-  armed by a `America/New_York` admin fires at 02:00 Eastern, not 02:00 UTC. Arm dedicated
-  jobs as a UTC user (or account for the offset) if you need them to match 0-slot timing.
+  arms the job**, which is independent of the schedule's `Time_Zone__c` field. The 0-slot
+  path honours `Time_Zone__c` (blank = UTC) with full DST handling (see [Time zones](#time-zones)),
+  but a dedicated CronTrigger ignores that field and uses the arming user's zone. A dedicated
+  `0 2 * * *` armed by an `America/New_York` admin fires at 02:00 Eastern regardless of
+  `Time_Zone__c`; to make a dedicated job match a specific `Time_Zone__c`, arm it as a user
+  in that zone (or account for the offset). The dedicated job's fire-window key/state is still
+  derived through the zone-aware evaluator using `Time_Zone__c`, so its correlation key and
+  `Last_Fired_Window__c` line up with what the 0-slot path would produce.
 - **Day-of-month + day-of-week together:** the 0-slot evaluator ORs them (standard cron),
   but Salesforce cron cannot. A cron that restricts **both** (e.g. `0 9 1 * 1`) is
   **rejected** when arming a dedicated job — use 0-slot mode for that schedule.
