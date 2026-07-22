@@ -260,11 +260,33 @@ public class CircuitBreakerWorkflowExampleTest {
       st.Opened_At__c = Datetime.now().addSeconds(-120);
       update as system st;
 
-      // Wake the parked step through the engine's own sleep-resume path: it re-hits
-      // the breaker gate, is admitted as a half-open probe, calls the now-healthy
-      // dependency, completes, and closes the breaker — the fleet auto-recovers.
+      // Wake the parked step exactly as PRODUCTION does: the watchdog heartbeat's
+      // sleep-resume sweep (WorkflowSleepResumeSweep) selects every Suspended instance
+      // whose Sleep_Until__c is due and flips it back to Running to re-run its current
+      // step — which re-hits the breaker gate, is admitted as a half-open probe, calls
+      // the now-healthy dependency, completes, and closes the breaker: the fleet
+      // auto-recovers. The sweep keys purely on the instance's Status__c='Suspended' +
+      // due Sleep_Until__c (both set by CircuitBreakerPark), independent of the step-exec
+      // shape, so a breaker park resumes on the vanilla sleep path with no dedicated
+      // branch. fireSleep is deliberately NOT used here: its matcher recognizes a plain
+      // sleep() step's *executed* step-exec (Pending with a metered SOQL_Query_Count__c),
+      // whereas a breaker park is an intentionally distinct *pre-execution* suspend
+      // (the guarded step never ran) that production resumes on instance state alone.
+      // Test.now() does not advance, so first make the durable wake due by rewinding
+      // Sleep_Until__c into the past (mirrors the concurrency-park watchdog tests and
+      // ThrottledCallout rewinding its refill clock), then tick the heartbeat and drive
+      // the woken instance to completion.
       parkedHarness.disableAutoTimeSkip = false;
-      WorkflowTestHarness.Result recovered = parkedHarness.fireSleep(STEP);
+      Workflow_Instance__c dueSleeper = [
+        SELECT Id, Sleep_Until__c
+        FROM Workflow_Instance__c
+        WHERE Id = :parked
+      ];
+      dueSleeper.Sleep_Until__c = DateTime.now().addSeconds(-60);
+      update as system dueSleeper;
+
+      WorkflowEngine.processWatchdogHeartbeat();
+      WorkflowTestHarness.Result recovered = parkedHarness.drive();
       Test.stopTest();
 
       System.assertEquals(
