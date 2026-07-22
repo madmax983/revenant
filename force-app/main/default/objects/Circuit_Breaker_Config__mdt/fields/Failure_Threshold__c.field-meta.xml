@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Failure_Threshold__c</fullName>
+    <description>Number of failures observed within the rolling window that trips the breaker from Closed to Open. Once Open, guarded steps for this dependency fast-fail (park) instead of executing until the open duration elapses.</description>
+    <externalId>false</externalId>
+    <fieldManageability>DeveloperControlled</fieldManageability>
+    <label>Failure Threshold</label>
+    <precision>18</precision>
+    <required>true</required>
+    <scale>0</scale>
+    <type>Number</type>
+</CustomField>

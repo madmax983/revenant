@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Dependency_Key__c</fullName>
+    <caseSensitive>false</caseSensitive>
+    <description>The dependency (external system/integration) name this breaker governs. Keyed by dependency, shared across every workflow whose guarded steps call it — NOT per workflow definition. Unique so each dependency has exactly one durable breaker row.</description>
+    <externalId>true</externalId>
+    <label>Dependency Key</label>
+    <length>100</length>
+    <required>true</required>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>true</unique>
+</CustomField>

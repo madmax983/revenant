@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Opened_At__c</fullName>
+    <description>When the breaker last transitioned to Open. The breaker auto-transitions to Half-Open once now reaches this instant plus Open_Duration_Seconds__c, and a parked guarded step sleeps until then so recovery lands within one open window with no traffic.</description>
+    <externalId>false</externalId>
+    <label>Opened At</label>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>DateTime</type>
+</CustomField>

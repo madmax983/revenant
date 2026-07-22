@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Per-dependency circuit-breaker thresholds. Maps a dependency key (an external system/integration name shared across workflows) to the failure count, rolling window, open duration, and half-open probe budget that govern its breaker, using the same DeveloperName convention as Concurrency_Config__mdt (including a Default fallback record). A dependency key with no matching record (and no Default) has no breaker.</description>
+    <label>Circuit Breaker Config</label>
+    <pluralLabel>Circuit Breaker Configs</pluralLabel>
+    <visibility>Public</visibility>
+</CustomObject>

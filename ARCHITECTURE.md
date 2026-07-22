@@ -55,6 +55,9 @@ is the concurrency gate that decides whether a step may run now.
 - `WorkflowStepTimeoutConfig`, `WorkflowTimeoutArming`, `WorkflowTimeoutReArm`
 - `ConcurrencyGate` (facade) + `ConcurrencyConfigResolver`,
   `ConcurrencyReconciler`, `ConcurrencyReleaseProcessor`
+- `CircuitBreakerGate` (facade) + `CircuitBreakerConfigResolver`,
+  `CircuitBreakerReconciler` — dependency-health fast-fail via the
+  `CircuitBreakerGuarded` step marker (issue #128)
 
 ## Signal claim, consume & routing
 
