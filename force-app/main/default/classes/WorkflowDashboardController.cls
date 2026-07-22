@@ -171,17 +171,6 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * @description WorkflowDefinition discovery WITHOUT an authorization check. Callers MUST
-   * perform their own authorization first. Exists so sibling controllers (e.g.
-   * WorkflowScheduleController, gated on a different permission) can reuse the exact
-   * discovery logic without tripping this controller's Workflow_Admin gate.
-   * @return The sorted list of concrete WorkflowDefinition class names.
-   */
-  public static List<String> getDefinitionsUnchecked() {
-    return WorkflowDefinitionDiscoveryService.discover();
-  }
-
-  /**
    * @description Returns the read-only Workflow Catalog: one row per concrete, startable
    * definition the engine discovers, each carrying its class name, a human-readable label,
    * a description (or "undocumented" marker), the current declared version for
@@ -288,6 +277,28 @@ public inherited sharing class WorkflowDashboardController {
     String timeWindow
   ) {
     return WorkflowFailureBreakdownService.breakdown(workflowName, timeWindow);
+  }
+
+  /**
+   * @description Returns end-to-end instance-duration percentiles (p50/p95/p99/max) and a
+   * median-wall-clock step ranking for a workflow definition over the given window, computed
+   * from a governor-bounded sample with an isCapped flag when the sample is truncated.
+   * Strictly read-only (Terminal_At__c and step CreatedDate are read, never written).
+   * Intentionally NON-cacheable: these are live metrics that change as instances terminate
+   * and as the time window advances, so a Lightning Data Service cache keyed on
+   * (workflowName, windowKey) would serve stale percentiles/step rankings on Refresh. The LWC
+   * calls this imperatively; matches the non-cacheable sibling getWorkflowFailureBreakdown.
+   * @param workflowName The workflow definition name to analyze.
+   * @param windowKey The window key ('1h' | '24h' | '7d'; blank/unknown → all time).
+   * @return A map with the window, cap metadata/isCapped flag, sample size, the p50/p95/p99/max
+   *         duration milliseconds, and the per-step median ranking rows.
+   */
+  @AuraEnabled
+  public static Map<String, Object> getDefinitionLatency(
+    String workflowName,
+    String windowKey
+  ) {
+    return WorkflowLatencyService.definitionLatency(workflowName, windowKey);
   }
 
   /**
