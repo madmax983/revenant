@@ -442,27 +442,7 @@
     <!-- fieldPermissions for Circuit_Breaker_State__c -->
     <fieldPermissions>
         <editable>true</editable>
-        <field>Circuit_Breaker_State__c.Dependency_Key__c</field>
-        <readable>true</readable>
-    </fieldPermissions>
-    <fieldPermissions>
-        <editable>true</editable>
-        <field>Circuit_Breaker_State__c.Failure_Count__c</field>
-        <readable>true</readable>
-    </fieldPermissions>
-    <fieldPermissions>
-        <editable>true</editable>
-        <field>Circuit_Breaker_State__c.Half_Open_Probes_Admitted__c</field>
-        <readable>true</readable>
-    </fieldPermissions>
-    <fieldPermissions>
-        <editable>true</editable>
         <field>Circuit_Breaker_State__c.Opened_At__c</field>
-        <readable>true</readable>
-    </fieldPermissions>
-    <fieldPermissions>
-        <editable>true</editable>
-        <field>Circuit_Breaker_State__c.Status__c</field>
         <readable>true</readable>
     </fieldPermissions>
     <fieldPermissions>
