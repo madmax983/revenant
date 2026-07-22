@@ -112,14 +112,25 @@ public class CircuitBreakerWorkflowExampleTest {
           'An instance arriving at the Open breaker fast-fails (parks)'
         );
         System.assertEquals('Suspended', status(i5), 'and so does the next');
+        // Message__c is a LongTextArea and is non-filterable in a WHERE clause, so
+        // key the query on the filterable Log_Type__c column and verify the
+        // dependency-named message text in Apex on the retrieved rows.
+        List<Workflow_Log__c> breakerLogs = [
+          SELECT Message__c
+          FROM Workflow_Log__c
+          WHERE Log_Type__c = 'CircuitBreaker'
+        ];
+        Integer parkSignals = 0;
+        for (Workflow_Log__c logRow : breakerLogs) {
+          if (
+            logRow.Message__c != null &&
+            logRow.Message__c.contains('parked by circuit breaker')
+          ) {
+            parkSignals++;
+          }
+        }
         System.assert(
-          [
-            SELECT COUNT()
-            FROM Workflow_Log__c
-            WHERE
-              Log_Type__c = 'CircuitBreaker'
-              AND Message__c LIKE '%parked by circuit breaker%'
-          ] >= 2,
+          parkSignals >= 2,
           'Each breaker park emits the distinct, dependency-named observability signal'
         );
       } finally {
