@@ -242,15 +242,27 @@ public inherited sharing class WorkflowWaitDescriptorService {
     return timerArmed ? null : genericDescriptor(stepName);
   }
 
-  // Parses the resolved Output into a JSON object, or an EMPTY map for blank/non-object/unparseable
-  // input (JSON.deserializeUntyped throws on blank/null and the cast throws on a non-object, both
-  // → empty map). Returning an empty map (never null) lets buildDescriptor's marker checks run
-  // uniformly: no marker key is present, so an opaque state falls through to a generic/timer wait.
+  // Parses the resolved Output into a JSON object, or an EMPTY map for blank/null/literal-null/
+  // non-object/unparseable input — never null. This is a crash guard (issue #84): a literal `null`
+  // body (valid opaque author state parked via withStepState('null')) makes JSON.deserializeUntyped
+  // return null WITHOUT throwing, so a plain cast would hand buildDescriptor a null map and its
+  // state.get / state.containsKey marker checks would NPE, throwing the DETAIL endpoint instead of
+  // showing a generic wait descriptor. Returning an empty map (never null) lets those marker checks
+  // run uniformly: no marker key is present, so an opaque state falls through to a generic/timer wait.
   private static Map<String, Object> parseState(String resolvedOutput) {
     try {
-      return (Map<String, Object>) JSON.deserializeUntyped(resolvedOutput);
+      // Coerce the parsed value through the Map copy-constructor so EVERY non-object case funnels
+      // into the catch and returns an empty map (never null). JSON.deserializeUntyped returns null
+      // WITHOUT throwing for a literal `null` body (a valid opaque author state parked via
+      // withStepState('null')) — the cast to Map succeeds on null, but `new Map<>(null)` rejects it —
+      // and yields a non-Map for any other scalar/array top-level value, which the cast itself
+      // rejects. Only a genuine JSON object survives, as a defensive copy the caller reads via
+      // state.get / state.containsKey, so its marker checks never NPE.
+      return new Map<String, Object>(
+        (Map<String, Object>) JSON.deserializeUntyped(resolvedOutput)
+      );
     } catch (Exception ignored) {
-      // Opaque author state (or a non-object); carries no engine marker, so the caller
+      // Blank / null / non-object / unparseable state; carries no engine marker, so the caller
       // classifies it as a generic signal (or timer) wait.
       return new Map<String, Object>();
     }

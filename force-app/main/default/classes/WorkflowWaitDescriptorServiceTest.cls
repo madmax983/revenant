@@ -343,6 +343,63 @@ public class WorkflowWaitDescriptorServiceTest {
   }
 
   @IsTest
+  static void testLiteralNullStateYieldsGenericAndDoesNotThrow() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Crash guard (issue #84): a valid opaque author state parked via withStepState('null')
+      // persists the LITERAL string `null` as Output__c. JSON.deserializeUntyped('null') returns
+      // null WITHOUT throwing, so parseState must still honor its empty-map contract (never return
+      // null) or buildDescriptor's downstream state.get(...)/state.containsKey(...) would NPE and the
+      // DETAIL endpoint would throw instead of showing a generic wait descriptor.
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
+        suspendedInstance(null),
+        oneStep(pendingStep('WaitDescTest.LiteralNullStep', 'null'))
+      );
+      System.assertNotEquals(
+        null,
+        d,
+        'A literal-null parked state yields a descriptor rather than throwing'
+      );
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_GENERIC,
+        d.get('type'),
+        'A literal-null state carries no engine marker, so it is a generic signal wait'
+      );
+      System.assertEquals(
+        'Awaiting signal at step WaitDescTest.LiteralNullStep',
+        d.get('label'),
+        'The literal-null state gets the generic awaiting-signal label'
+      );
+    }
+  }
+
+  @IsTest
+  static void testMalformedJsonStateYieldsGenericAndDoesNotThrow() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // A malformed Output body makes JSON.deserializeUntyped THROW; parseState's try/catch must
+      // fall back to an empty map (never null) so the wait still classifies as a generic signal.
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
+        suspendedInstance(null),
+        oneStep(pendingStep('WaitDescTest.MalformedStep', '{not valid json'))
+      );
+      System.assertNotEquals(
+        null,
+        d,
+        'A malformed parked state yields a descriptor rather than throwing'
+      );
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_GENERIC,
+        d.get('type'),
+        'A malformed state falls back to a generic signal wait'
+      );
+      System.assertEquals(
+        'Awaiting signal at step WaitDescTest.MalformedStep',
+        d.get('label'),
+        'The malformed state gets the generic awaiting-signal label'
+      );
+    }
+  }
+
+  @IsTest
   static void testGenericSignalDescriptorForNullOutput() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // A no-arg suspend() nulls Output; still a signal wait when no resume job is attached.
