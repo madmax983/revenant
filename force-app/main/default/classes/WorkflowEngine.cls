@@ -235,6 +235,152 @@ public inherited sharing class WorkflowEngine {
     }
   }
 
+  /**
+   * Stable read-only DTO for a single step execution in an instance's timeline.
+   * A forever-public API contract: v1 is metadata-only (no per-step input/output
+   * payload bodies). All fields are read-only to callers (private setters); the
+   * read layer populates them once via the constructor.
+   */
+  public class StepHistoryEntry {
+    /** @description Salesforce Id of the step-execution row (stable identifier). */
+    public Id executionId { get; private set; }
+    /**
+     * @description Logical step name. Compensation executions carry the
+     * `<step>_Compensate` name; use {@link #isCompensation} to distinguish them.
+     */
+    public String stepName { get; private set; }
+    /**
+     * @description Raw `Status__c` of the step execution. One of the engine's
+     * eleven step statuses: terminal — `Completed`, `Failed`, `Compensated`,
+     * `Cancelled`, `OperatorSkipped`, `ContinuedAsNew`; in flight — `Pending`,
+     * `Running`, `Retrying`, `Compensating`, `Cancelling`. A terminal status
+     * settles `endedAt`/`totalDurationMs`; an in-flight status leaves them null.
+     */
+    public String status { get; private set; }
+    /** @description Retry attempt count for this step (0 on the first attempt). */
+    public Integer attempt { get; private set; }
+    /** @description When this step execution was first appended to the trail. */
+    public Datetime startedAt { get; private set; }
+    /**
+     * @description Last modification time of the terminal step-execution row (the
+     * engine reuses one row across retries, so this is the last modification, not
+     * per-attempt); null while the step is still in flight.
+     */
+    public Datetime endedAt { get; private set; }
+    /**
+     * @description Total wall-clock from `startedAt` to `endedAt` in milliseconds,
+     * across ALL attempts including retry backoff — not a single attempt's
+     * duration, because the engine reuses one step-execution row for every retry.
+     * Use `attempt` to disambiguate a retried row. Null while in flight.
+     */
+    public Long totalDurationMs { get; private set; }
+    /**
+     * @description True when this row is a compensation (rollback) execution,
+     * false for a forward execution. Convention-derived: it is inferred from the
+     * step name ending in the engine's `_Compensate` suffix, so a step an author
+     * manually names ending in `_Compensate` would be a false positive.
+     */
+    public Boolean isCompensation { get; private set; }
+
+    /**
+     * @description Builds a fully-populated history entry from a queried
+     * step-execution row. Terminality (and therefore `endedAt`/`totalDurationMs`),
+     * the compensation flag, and the normalized attempt count are derived here so
+     * the read layer never touches the private setters. The timeline is
+     * payload-free: no long-text (`Error_Details__c`/`Input__c`/`Output__c`) is
+     * loaded. Derive error/retry facts from the lightweight fields —
+     * <ul>
+     *   <li><b>ended in error</b>: `status` is a failure state — `Failed`,
+     *   `Compensating`, `Compensated`, `Cancelling`, or `Cancelled` (a `Retrying`
+     *   status means an attempt failed and another is queued);</li>
+     *   <li><b>was retried</b>: `attempt` &gt; 0;</li>
+     *   <li><b>full error text / stack trace</b>: call
+     *   {@link WorkflowHistoryRead#getStepError} with `executionId` (a step can
+     *   have retained error detail from an earlier attempt even under a
+     *   terminal-success `status`, since the engine reuses one row across
+     *   retries).</li>
+     * </ul>
+     * @param row the queried `Workflow_Step_Execution__c` row to project
+     */
+    public StepHistoryEntry(Workflow_Step_Execution__c row) {
+      this.executionId = row.Id;
+      this.stepName = row.Step_Name__c;
+      this.status = row.Status__c;
+      this.attempt = row.Retry_Count__c == null
+        ? 0
+        : row.Retry_Count__c.intValue();
+      this.startedAt = row.CreatedDate;
+      Boolean isTerminal = WorkflowHistoryRead.TERMINAL_STEP_STATUSES.contains(
+        row.Status__c
+      );
+      this.endedAt = isTerminal ? row.LastModifiedDate : null;
+      this.totalDurationMs = (isTerminal &&
+        this.startedAt != null &&
+        this.endedAt != null)
+        ? this.endedAt.getTime() - this.startedAt.getTime()
+        : null;
+      this.isCompensation =
+        row.Step_Name__c != null && row.Step_Name__c.endsWith('_Compensate');
+    }
+  }
+
+  /**
+   * Stable read-only wrapper returned by the history read API for one instance:
+   * the ordered `StepHistoryEntry` list plus an explicit truncation flag so a
+   * capped history is never silently cut. Forever-public contract; fields are
+   * read-only to callers (private setters).
+   */
+  public class StepHistory {
+    /**
+     * @description The step-execution entries in append (execution) order,
+     * capped at {@link WorkflowHistoryRead#MAX_HISTORY_ROWS}. Empty for a known
+     * instance that has not yet logged a step.
+     */
+    public List<StepHistoryEntry> entries { get; private set; }
+    /**
+     * @description True when the instance's real step total exceeds the retained
+     * `entries` — either the history was cut at the row cap, or (in a bulk read) the
+     * instance was starved of scan budget by a larger sibling in the same batch.
+     * Either way `totalCount` still reports the real total, so a step-bearing
+     * instance is never returned as an empty (`isTruncated = false`) history.
+     */
+    public Boolean isTruncated { get; private set; }
+    /**
+     * @description The real total number of step executions for the instance,
+     * supplied authoritatively by the read layer. Equals `entries.size()` exactly
+     * when nothing was dropped; when `isTruncated` is true it is the real total
+     * (from a `COUNT()` query) even though `entries` is capped or partial, so
+     * callers always know the full size. `0` for a known instance with no steps.
+     */
+    public Integer totalCount { get; private set; }
+
+    /**
+     * @description Projects a set of queried, append-ordered step-execution rows
+     * for one instance into the capped `entries` list, and derives `isTruncated`
+     * from the authoritative `totalCount` versus the retained entry count (so a
+     * scan-starved bulk instance is flagged truncated, never false-empty). Mirrors
+     * the projecting constructor of {@link WorkflowStatus}; used by the extracted
+     * read layer ({@link WorkflowHistoryRead}), which supplies `totalCount` so this
+     * DTO stays SOQL-free.
+     * @param rows the instance's retained step-execution rows in append order
+     * @param totalCount the real total step-execution count for the instance
+     */
+    public StepHistory(
+      List<Workflow_Step_Execution__c> rows,
+      Integer totalCount
+    ) {
+      this.entries = new List<StepHistoryEntry>();
+      Integer rowCap = WorkflowHistoryRead.MAX_HISTORY_ROWS;
+      Integer rowCount = rows == null ? 0 : rows.size();
+      Integer take = rowCount > rowCap ? rowCap : rowCount;
+      for (Integer i = 0; i < take; i++) {
+        this.entries.add(new StepHistoryEntry(rows[i]));
+      }
+      this.totalCount = totalCount;
+      this.isTruncated = totalCount > this.entries.size();
+    }
+  }
+
   // ─── End Read API ──────────────────────────────────────────────────────────
 
   /**
@@ -705,4 +851,189 @@ public inherited sharing class WorkflowEngine {
   public static void processWatchdogHeartbeat() {
     WorkflowHeartbeatService.runWatchdogHeartbeat();
   }
+
+  // ─── Find / List API ───────────────────────────────────────────────────────
+  // Forever-public DTOs for the paginated instance-enumeration contract
+  // implemented by WorkflowInstanceQuery.findInstances. Placed in their own region
+  // (rather than beside the WorkflowStatus read DTO above) so this additive surface
+  // stays a self-contained block. Read-only projections with private setters,
+  // mirroring the WorkflowStatus DTO convention.
+
+  /**
+   * @description Filter + pagination criteria for
+   * {@link WorkflowInstanceQuery#findInstances}. Every field is optional; an
+   * all-null/empty criteria (or a null argument) matches all instances. This is a
+   * forever-public API contract, so the shape is deliberately minimal and each
+   * field's null/empty semantics are fixed here.
+   */
+  public class InstanceCriteria {
+    /**
+     * @description Exact `Workflow_Name__c` (definition developer name) to match.
+     * Null or blank matches any definition.
+     */
+    public String definitionName;
+    /**
+     * @description Lifecycle statuses to include (matches `Status__c IN`). Null or
+     * empty matches any status. Because this is a raw row enumeration (not a
+     * continue-as-new chain resolution), including `ContinuedAsNew` returns
+     * predecessor hand-off generations as their own rows; omitting it excludes
+     * them. See the {@link WorkflowInstanceQuery} class doc for the full stance.
+     */
+    public Set<String> statuses;
+    /**
+     * @description <b>Inclusive</b> lower bound on `CreatedDate`
+     * (`CreatedDate &gt;= createdAfter`). Null leaves the lower bound unbounded.
+     * After bounds are inclusive (`&gt;=`) and before bounds are exclusive
+     * (`&lt;`) — a half-open `[after, before)` window that composes without overlap
+     * across chained windows.
+     */
+    public Datetime createdAfter;
+    /**
+     * @description <b>Exclusive</b> upper bound on `CreatedDate`
+     * (`CreatedDate &lt; createdBefore`). Null leaves the upper bound unbounded.
+     * After bounds are inclusive (`&gt;=`) and before bounds are exclusive
+     * (`&lt;`) — a half-open `[after, before)` window that composes without overlap
+     * across chained windows.
+     */
+    public Datetime createdBefore;
+    /**
+     * @description <b>Inclusive</b> lower bound on `LastModifiedDate`
+     * (`LastModifiedDate &gt;= modifiedAfter`). Null leaves the lower bound
+     * unbounded. After bounds are inclusive (`&gt;=`) and before bounds are
+     * exclusive (`&lt;`) — a half-open `[after, before)` window that composes
+     * without overlap across chained windows.
+     */
+    public Datetime modifiedAfter;
+    /**
+     * @description <b>Exclusive</b> upper bound on `LastModifiedDate`
+     * (`LastModifiedDate &lt; modifiedBefore`). Null leaves the upper bound
+     * unbounded. After bounds are inclusive (`&gt;=`) and before bounds are
+     * exclusive (`&lt;`) — a half-open `[after, before)` window that composes
+     * without overlap across chained windows.
+     */
+    public Datetime modifiedBefore;
+    /**
+     * @description Requested page size. Null uses
+     * {@link WorkflowInstanceQuery#DEFAULT_PAGE_SIZE}; a value above
+     * {@link WorkflowInstanceQuery#MAX_PAGE_SIZE} is clamped to that cap; a
+     * non-positive value throws a `WorkflowException`. The effective size applied
+     * is echoed on `InstancePage.pageSize`.
+     */
+    public Integer pageSize;
+    /**
+     * @description Opaque next-page cursor. Null or blank starts from the first
+     * page; otherwise pass a previous page's `InstancePage.nextCursor` back
+     * <b>verbatim</b>. A non-blank value that is not a cursor this API produced
+     * throws a `WorkflowException`. Do not parse, build, or mutate this string.
+     */
+    public String cursor;
+  }
+
+  /**
+   * @description Lightweight, payload-free summary of one `Workflow_Instance__c`
+   * row returned by {@link WorkflowInstanceQuery#findInstances}. Deliberately omits
+   * the heavy long-text payloads (`Input__c` / `Output__c` / `Progress__c`): fetch a
+   * terminal instance's full output per-Id via
+   * {@link WorkflowStatusRead#getStatus}. A forever-public read contract; all fields
+   * are read-only to callers (private setters), populated once via the projecting
+   * constructor.
+   */
+  public class WorkflowInstanceSummary {
+    /** @description Salesforce Id of the workflow instance. */
+    public Id instanceId { get; private set; }
+    /** @description Developer name of the workflow definition (`Workflow_Name__c`). */
+    public String definitionName { get; private set; }
+    /** @description Correlation key the instance was started with. */
+    public String correlationKey { get; private set; }
+    /** @description Raw `Status__c` lifecycle value (e.g. `Running`, `Failed`). */
+    public String status { get; private set; }
+    /**
+     * @description True when `status` is a terminal outcome (`Completed`, `Failed`,
+     * `Compensated`, `Cancelled`) per
+     * {@link WorkflowStatusRead#TERMINAL_GETSTATUS_STATUSES}. `ContinuedAsNew` is a
+     * non-terminal hand-off, so it reports `false` — consistent with `getStatus`.
+     */
+    public Boolean isTerminal { get; private set; }
+    /** @description When the instance was created (`CreatedDate`). */
+    public Datetime createdAt { get; private set; }
+    /** @description When the instance was last modified (`LastModifiedDate`). */
+    public Datetime lastModifiedAt { get; private set; }
+
+    /**
+     * @description Projects a queried instance row into a payload-free summary.
+     * Terminality is derived here (from the shared getStatus terminal set) so the
+     * read layer never touches the private setters. Mirrors the projecting
+     * constructor of {@link WorkflowStatus}. The row must carry the six selected
+     * scalar fields; no long-text field is read.
+     * @param inst the queried `Workflow_Instance__c` row to project
+     */
+    public WorkflowInstanceSummary(Workflow_Instance__c inst) {
+      this.instanceId = inst.Id;
+      this.definitionName = inst.Workflow_Name__c;
+      this.correlationKey = inst.Correlation_Key__c;
+      this.status = inst.Status__c;
+      this.isTerminal = WorkflowStatusRead.TERMINAL_GETSTATUS_STATUSES.contains(
+        inst.Status__c
+      );
+      this.createdAt = inst.CreatedDate;
+      this.lastModifiedAt = inst.LastModifiedDate;
+    }
+  }
+
+  /**
+   * @description One page of {@link WorkflowInstanceQuery#findInstances} results:
+   * the ordered summaries plus the keyset cursor for the next page. Callers page
+   * until `hasMore` is false (equivalently, `nextCursor` is null). No exact total
+   * is exposed: an unbounded, deeply-paged result set cannot be counted within a
+   * constant SOQL/heap budget, so callers walk pages instead. A forever-public
+   * contract; fields are read-only to callers (private setters).
+   */
+  public class InstancePage {
+    /**
+     * @description The instance summaries for this page, newest first
+     * (`CreatedDate DESC, Id DESC`), at most `pageSize` of them. Empty when nothing
+     * matched.
+     */
+    public List<WorkflowInstanceSummary> entries { get; private set; }
+    /**
+     * @description Opaque cursor for the next page, or null on the last page. Pass
+     * it back verbatim as `InstanceCriteria.cursor` to fetch the following page.
+     */
+    public String nextCursor { get; private set; }
+    /**
+     * @description True when at least one further page exists (i.e. `nextCursor` is
+     * non-null). False on the last page. Derived from `nextCursor` so the two are
+     * always consistent.
+     */
+    public Boolean hasMore { get; private set; }
+    /**
+     * @description The effective page size the engine applied for this call — the
+     * caller's `InstanceCriteria.pageSize` after defaulting/clamping. Lets callers
+     * observe when a request above {@link WorkflowInstanceQuery#MAX_PAGE_SIZE} was
+     * clamped.
+     */
+    public Integer pageSize { get; private set; }
+
+    /**
+     * @description Assembles a page from the already-projected summaries and the
+     * next-page cursor, deriving `hasMore` from whether `nextCursor` is non-null so
+     * the more-pages signal and the cursor can never disagree. Used by the
+     * extracted read layer ({@link WorkflowInstanceQuery}).
+     * @param entries the projected summaries for this page
+     * @param nextCursor the next-page cursor, or null on the last page
+     * @param pageSize the effective page size applied for this call
+     */
+    public InstancePage(
+      List<WorkflowInstanceSummary> entries,
+      String nextCursor,
+      Integer pageSize
+    ) {
+      this.entries = entries;
+      this.nextCursor = nextCursor;
+      this.hasMore = nextCursor != null;
+      this.pageSize = pageSize;
+    }
+  }
+
+  // ─── End Find / List API ─────────────────────────────────────────────────────
 }

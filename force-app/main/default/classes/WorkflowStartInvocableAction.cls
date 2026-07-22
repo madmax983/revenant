@@ -47,6 +47,18 @@ public inherited sharing class WorkflowStartInvocableAction {
       description='True if a new instance was started; false if an existing instance was returned for a deduplicated (already-seen) correlation key.'
     )
     public Boolean isNew;
+
+    @InvocableVariable(
+      label='Is Valid'
+      description='True when the start input satisfied the workflow\'s declared input contract (or the workflow declares none) and the start proceeded; false when validation rejected the input, in which case Validation Error explains why and no instance was started. Branch a Flow Decision on this.'
+    )
+    public Boolean isValid;
+
+    @InvocableVariable(
+      label='Validation Error'
+      description='When Is Valid is false, a readable, field-level enumeration of every input-contract violation; null on success.'
+    )
+    public String validationError;
   }
 
   @InvocableMethod(
@@ -55,9 +67,13 @@ public inherited sharing class WorkflowStartInvocableAction {
     description='Initiates a Revenant durable workflow instance'
   )
   /**
-   * @description Bulk invocable that starts a workflow instance per request,
-   * routing debounced requests to WorkflowDebouncer and the rest to the engine,
-   * and returns one result per input positionally aligned to the requests.
+   * @description Bulk invocable that starts (or debounces) a workflow instance per
+   * request and returns one result per input, positionally aligned to the requests.
+   * Delegates the verb-aware get-or-start dedup routing to
+   * {@link WorkflowStartInvocableRouter}: contract-valid rows batch through one
+   * bulk engine call first, then invalid-input rows are delegated individually so
+   * an intra-batch (or pre-existing) same-key sibling is delivered rather than the
+   * row wrongly rejected; debounce rows arm a future sweep-time start.
    * @param requests The list of start requests, one per Flow invocation row.
    * @return A list of results aligned by index to the input requests.
    */
@@ -65,113 +81,6 @@ public inherited sharing class WorkflowStartInvocableAction {
     if (requests == null || requests.isEmpty()) {
       return new List<StartResult>();
     }
-
-    List<StartResult> results = new List<StartResult>();
-    for (Integer i = 0; i < requests.size(); i++) {
-      results.add(null);
-    }
-
-    List<WorkflowEngine.StartRequest> engineRequests = new List<WorkflowEngine.StartRequest>();
-    List<Integer> engineRequestIndices = new List<Integer>();
-    List<WorkflowDebouncer.DebounceRequest> debounceRequests = new List<WorkflowDebouncer.DebounceRequest>();
-
-    for (Integer i = 0; i < requests.size(); i++) {
-      StartRequest req = requests[i];
-      if (req == null) {
-        results[i] = nullResult();
-      } else if (req.debounceSeconds != null) {
-        debounceRequests.add(toDebounceRequest(req));
-        results[i] = debouncedResult();
-      } else {
-        engineRequests.add(toEngineRequest(req));
-        engineRequestIndices.add(i);
-      }
-    }
-
-    if (!debounceRequests.isEmpty()) {
-      WorkflowDebouncer.startDebounced(debounceRequests);
-    }
-
-    applyEngineResults(engineRequests, engineRequestIndices, results);
-
-    return results;
-  }
-
-  private static WorkflowDebouncer.DebounceRequest toDebounceRequest(
-    StartRequest req
-  ) {
-    if (req.debounceSeconds < 0) {
-      throw new WorkflowEngine.WorkflowException(
-        'Debounce seconds must be non-negative.'
-      );
-    }
-    // Validate the input JSON (result discarded; deferred deserialization).
-    WorkflowInvocableInputParser.parseInputJson(req.inputJson);
-    WorkflowDebouncer.validateAttributesJson(req.attributesJson);
-
-    WorkflowDebouncer.DebounceRequest debounceReq = new WorkflowDebouncer.DebounceRequest(
-      req.workflowName,
-      req.correlationKey,
-      req.inputJson
-    );
-    debounceReq.debounceSeconds = req.debounceSeconds;
-    debounceReq.maxWaitSeconds = req.maxWaitSeconds;
-    debounceReq.attributesJson = req.attributesJson;
-    debounceReq.causationId = req.causationId;
-    return debounceReq;
-  }
-
-  private static WorkflowEngine.StartRequest toEngineRequest(StartRequest req) {
-    Object input = WorkflowInvocableInputParser.parseInputJson(req.inputJson);
-    Map<String, String> attributes = WorkflowInvocableInputParser.parseAttributesJson(
-      req.attributesJson
-    );
-
-    WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
-        req.workflowName,
-        req.correlationKey,
-        input
-      )
-      .withAttributes(attributes);
-    startReq.inputJson = req.inputJson;
-    startReq.causationId = req.causationId;
-    return startReq;
-  }
-
-  private static void applyEngineResults(
-    List<WorkflowEngine.StartRequest> engineRequests,
-    List<Integer> engineRequestIndices,
-    List<StartResult> results
-  ) {
-    if (engineRequests.isEmpty()) {
-      return;
-    }
-    List<WorkflowEngine.StartResult> engineResults = WorkflowEngine.startOrGet(
-      engineRequests
-    );
-    for (Integer j = 0; j < engineResults.size(); j++) {
-      WorkflowEngine.StartResult engineResult = engineResults[j];
-      Integer origIndex = engineRequestIndices[j];
-      StartResult res = new StartResult();
-      res.workflowInstanceId = engineResult == null
-        ? null
-        : engineResult.instanceId;
-      res.isNew = engineResult == null ? null : engineResult.isNew;
-      results[origIndex] = res;
-    }
-  }
-
-  private static StartResult nullResult() {
-    StartResult res = new StartResult();
-    res.workflowInstanceId = null;
-    res.isNew = null;
-    return res;
-  }
-
-  private static StartResult debouncedResult() {
-    StartResult res = new StartResult();
-    res.workflowInstanceId = null;
-    res.isNew = false;
-    return res;
+    return WorkflowStartInvocableRouter.route(requests);
   }
 }

@@ -56,6 +56,13 @@
                     onclick={handleOpenLatency}
                     class="slds-m-left_small">
                 </lightning-button>
+                <lightning-button
+                    label="Catalog"
+                    icon-name="utility:apps"
+                    variant="neutral"
+                    onclick={handleOpenCatalog}
+                    class="slds-m-left_small">
+                </lightning-button>
 
                 <lightning-button-icon
                     icon-name="utility:refresh"
@@ -291,6 +298,9 @@
                                                             <template if:true={inst.waitingOn}>
                                                                 <span class={inst.waitingOnBadgeClass} style="margin-right: 8px;">{inst.waitingOn}</span>
                                                             </template>
+                                                            <template if:true={inst.hasWaitDescriptor}>
+                                                                <span class="badge badge-teal" style="margin-right: 8px;" title="Awaiting an inbound signal - open the instance to classify and send">{inst.waitDescriptorLabel}</span>
+                                                            </template>
                                                             <span class={inst.statusBadgeClass}>{inst.Status__c}</span>
                                                         </div>
                                                     </div>
@@ -432,6 +442,79 @@
                                                 <div class="slds-text-heading_small slds-m-top_xx-small">{doctorData.elasticAsyncValue} / {doctorData.elasticAsyncLimit}</div>
                                                 <div class="slds-text-body_small slds-text-color_weak">Scale-out limit dynamically allowed by Salesforce</div>
                                             </div>
+                                        </div>
+                                    </template>
+                                </div>
+
+                                <!-- Storage Footprint -->
+                                <div class="slds-m-bottom_large">
+                                    <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_small">
+                                        <h3 class="slds-text-heading_small font-outfit">Storage Footprint</h3>
+                                        <span class="slds-text-body_small slds-text-color_weak">Estimated (record counts &times; standard per-record size + offloaded payload bytes)</span>
+                                    </div>
+                                    <template if:true={hasStorageData}>
+                                        <!-- Allowance meter + summary tiles -->
+                                        <div class="slds-grid slds-wrap slds-gutters slds-m-bottom_small">
+                                            <div class="slds-col slds-size_1-of-3 slds-m-bottom_small">
+                                                <div class={storageAllowanceClass}>
+                                                    <div class="slds-text-title slds-text-color_weak">% of Org Data-Storage Allowance</div>
+                                                    <div class="slds-text-heading_medium slds-m-top_xx-small">{storagePercentLabel}</div>
+                                                    <div class="slds-text-body_small slds-text-color_weak">
+                                                        Warning threshold: {storageData.warningThresholdPercent}%
+                                                    </div>
+                                                    <template if:true={storageData.isOverThreshold}>
+                                                        <span class="badge badge-red slds-m-top_xx-small">Over threshold</span>
+                                                    </template>
+                                                </div>
+                                            </div>
+                                            <div class="slds-col slds-size_1-of-3 slds-m-bottom_small">
+                                                <div class="stat-card">
+                                                    <div class="slds-text-title slds-text-color_weak">Estimated Total Footprint</div>
+                                                    <div class="slds-text-heading_small slds-m-top_xx-small">{storageTotalSizeLabel}</div>
+                                                    <div class="slds-text-body_small slds-text-color_weak">Records estimate + offloaded payload bytes</div>
+                                                </div>
+                                            </div>
+                                            <div class="slds-col slds-size_1-of-3 slds-m-bottom_small">
+                                                <div class="stat-card">
+                                                    <div class="slds-text-title slds-text-color_weak">Offloaded Payloads (ContentVersion)</div>
+                                                    <div class="slds-text-heading_small slds-m-top_xx-small">{storageContentSizeLabel}</div>
+                                                    <div class="slds-text-body_small slds-text-color_weak">Exact bytes of engine-owned offloaded files</div>
+                                                    <div class="slds-text-body_small slds-text-color_weak slds-m-top_xx-small">% of Org File-Storage Allowance: {storageFilePercentLabel}</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <!-- Per-object table -->
+                                        <div class="panel-card slds-p-around_medium">
+                                            <table class="slds-table slds-table_cell-buffer slds-table_bordered" aria-label="Storage footprint by object">
+                                                <thead>
+                                                    <tr class="slds-line-height_reset">
+                                                        <th scope="col"><div class="slds-truncate" title="Object">Object</div></th>
+                                                        <th scope="col"><div class="slds-truncate" title="Records">Records</div></th>
+                                                        <th scope="col"><div class="slds-truncate" title="Estimated Size">Est. Size</div></th>
+                                                        <th scope="col"><div class="slds-truncate" title="7-day growth">+7d</div></th>
+                                                        <th scope="col"><div class="slds-truncate" title="30-day growth">+30d</div></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <template for:each={storageObjectRows} for:item="obj">
+                                                        <tr key={obj.apiName} data-id="storage-row" class="slds-hint-parent">
+                                                            <td><div class="slds-truncate" title={obj.apiName}>{obj.label}</div></td>
+                                                            <td>{obj.recordCount}</td>
+                                                            <td>{obj.estimatedSizeLabel}</td>
+                                                            <td class="text-green">{obj.delta7Label}</td>
+                                                            <td class="text-green">{obj.delta30Label}</td>
+                                                        </tr>
+                                                    </template>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <p class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">
+                                            Measurement only. To reclaim storage, use CleanupWorkflow (purge) or archival (#105).
+                                        </p>
+                                    </template>
+                                    <template if:false={hasStorageData}>
+                                        <div class="panel-card slds-p-around_medium slds-text-color_weak slds-text-align_center" data-id="storage-empty">
+                                            Storage footprint is unavailable.
                                         </div>
                                     </template>
                                 </div>
@@ -1043,7 +1126,112 @@
                             </template>
                         </template>
 
+                        <!-- Workflow Catalog Panel -->
+                        <template if:true={viewingCatalog}>
+                            <template if:true={loadingCatalog}>
+                                <div class="slds-align_absolute-center slds-p-around_large spinner-height">
+                                    <lightning-spinner alternative-text="Loading catalog..." size="medium"></lightning-spinner>
+                                </div>
+                            </template>
+                            <template if:false={loadingCatalog}>
+                                <div class="slds-p-around_medium">
+                                    <!-- Header -->
+                                    <div class="slds-grid slds-grid_align-spread slds-m-bottom_medium border-bottom slds-p-bottom_small">
+                                        <div>
+                                            <h2 class="slds-text-heading_medium font-outfit slds-grid slds-grid_vertical-align-center">
+                                                <lightning-icon icon-name="utility:apps" size="small" class="slds-m-right_small text-primary"></lightning-icon>
+                                                Workflow Catalog
+                                            </h2>
+                                            <p class="slds-text-color_weak slds-m-top_xx-small">Every deployed, startable workflow definition with its description, version, and live health. Click a definition or a status count to see its instances.</p>
+                                        </div>
+                                        <lightning-button
+                                            label="Close"
+                                            variant="neutral"
+                                            icon-name="utility:close"
+                                            onclick={handleCloseCatalog}>
+                                        </lightning-button>
+                                    </div>
+
+                                    <template if:true={hasCatalogRows}>
+                                        <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+                                            <thead>
+                                                <tr class="slds-line-height_reset">
+                                                    <th scope="col"><div class="slds-truncate" title="Workflow">Workflow</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Version">Version</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Active">Active</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Failed">Failed</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Suspended">Suspended</div></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <template for:each={catalogRows} for:item="def">
+                                                    <tr key={def.className} class="slds-hint-parent">
+                                                        <td data-label="Workflow">
+                                                            <button
+                                                                type="button"
+                                                                data-definition={def.className}
+                                                                onclick={handleCatalogRowClick}
+                                                                class="slds-button link-button slds-text-align_left">
+                                                                <span class="slds-text-body_regular slds-text-color_default">{def.label}</span>
+                                                            </button>
+                                                            <div class="slds-text-body_small font-mono slds-text-color_weak">{def.className}</div>
+                                                            <template if:true={def.descriptionDisplay}>
+                                                                <div class="slds-text-body_small slds-m-top_xx-small">{def.descriptionDisplay}</div>
+                                                            </template>
+                                                            <template if:true={def.isUndocumented}>
+                                                                <span class="badge badge-grey slds-m-top_xx-small">Undocumented</span>
+                                                            </template>
+                                                        </td>
+                                                        <td data-label="Version">{def.versionDisplay}</td>
+                                                        <td data-label="Active">
+                                                            <button
+                                                                type="button"
+                                                                data-definition={def.className}
+                                                                data-status="Running"
+                                                                onclick={handleCatalogRowClick}
+                                                                class="slds-button link-button">
+                                                                <span class="badge badge-blue">{def.active}</span>
+                                                            </button>
+                                                        </td>
+                                                        <td data-label="Failed">
+                                                            <button
+                                                                type="button"
+                                                                data-definition={def.className}
+                                                                data-status="Failed"
+                                                                onclick={handleCatalogRowClick}
+                                                                class="slds-button link-button">
+                                                                <span class="badge badge-red">{def.failed}</span>
+                                                            </button>
+                                                        </td>
+                                                        <td data-label="Suspended">
+                                                            <button
+                                                                type="button"
+                                                                data-definition={def.className}
+                                                                data-status="Suspended"
+                                                                onclick={handleCatalogRowClick}
+                                                                class="slds-button link-button">
+                                                                <span class="badge badge-orange">{def.suspended}</span>
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                </template>
+                                            </tbody>
+                                        </table>
+                                    </template>
+                                    <template if:false={hasCatalogRows}>
+                                        <div class="slds-align_absolute-center slds-p-around_large slds-text-align_center">
+                                            <div class="slds-flex_column">
+                                                <lightning-icon icon-name="utility:apps" size="large" class="slds-m-bottom_medium text-weak-icon"></lightning-icon>
+                                                <p class="slds-text-color_weak">No startable workflow definitions were discovered in this org.</p>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                        </template>
+
                         <template if:false={viewingLatency}>
+                        <template if:false={viewingCatalog}>
                         <template if:true={selectedInstanceId}>
                         <template if:true={loadingDetails}>
 
@@ -1129,6 +1317,9 @@
                                          </template>
                                          <template if:true={selectedInst.waitingOn}>
                                              <span class={selectedInst.waitingOnBadgeClass} style="margin-right: 8px;">Waiting On: {selectedInst.waitingOn}</span>
+                                         </template>
+                                         <template if:true={selectedInst.hasWaitDescriptor}>
+                                             <span class="badge badge-teal" style="margin-right: 8px;" title="Awaited signal - paste into Send Signal">Awaiting: {selectedInst.waitDescriptorLabel}</span>
                                          </template>
                                          <span class={selectedInst.statusBadgeClass}>{selectedInst.Status__c}</span>
                                     </div>
@@ -1473,6 +1664,7 @@
                             <p class="slds-text-color_weak slds-m-top_x-small">Select a workflow instance from the list to view its DAG path, state values, and execution steps.</p>
                         </div>
                     </template>
+                        </template><!-- /if:false viewingCatalog -->
                         </template>
                         </template>
                         </template>

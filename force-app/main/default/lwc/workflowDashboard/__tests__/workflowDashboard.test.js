@@ -7,11 +7,13 @@ import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.ge
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
 import getDefinitionLatency from "@salesforce/apex/WorkflowDashboardController.getDefinitionLatency";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
+import getStorageFootprint from "@salesforce/apex/WorkflowDashboardController.getStorageFootprint";
 import getCancelEligibleCount from "@salesforce/apex/WorkflowDashboardController.getCancelEligibleCount";
 import cancelMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandController.cancelMatchingInstances";
 import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardController.getRedriveEligibleCount";
 import redriveMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandController.redriveMatchingInstances";
 import injectSignal from "@salesforce/apex/WorkflowDashboardCommandController.injectSignal";
+import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog";
 
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
@@ -46,6 +48,11 @@ jest.mock(
 jest.mock(
   "@salesforce/apex/WorkflowDashboardCommandController.injectSignal",
   () => ({ default: jest.fn() }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog",
+  () => ({ default: jest.fn(() => Promise.resolve([])) }),
   { virtual: true },
 );
 
@@ -120,6 +127,13 @@ jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus",
   () => ({
     default: jest.fn(() => Promise.resolve([])),
+  }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getStorageFootprint",
+  () => ({
+    default: jest.fn(() => Promise.resolve(null)),
   }),
   { virtual: true },
 );
@@ -306,6 +320,81 @@ describe("c-workflow-dashboard trends panel", () => {
     const rows = element.shadowRoot.querySelectorAll('[data-id="trend-row"]');
     expect(rows.length).toBe(0);
     const empty = element.shadowRoot.querySelector('[data-id="trend-empty"]');
+    expect(empty).not.toBeNull();
+  });
+
+  it("renders the Storage Footprint panel with a row per object and warning state", async () => {
+    getStorageFootprint.mockResolvedValue({
+      objects: [
+        {
+          apiName: "Workflow_Instance__c",
+          label: "Workflow Instance",
+          recordCount: 3,
+          estimatedBytes: 6000,
+          delta7: 2,
+          delta30: 3,
+        },
+        {
+          apiName: "Workflow_Log__c",
+          label: "Workflow Log",
+          recordCount: 10,
+          estimatedBytes: 20000,
+          delta7: 0,
+          delta30: 5,
+        },
+      ],
+      contentVersionBytes: 1048576,
+      estimatedRecordBytes: 26000,
+      estimatedTotalBytes: 1074576,
+      hasStorageLimit: true,
+      percentOfAllowance: 82.5,
+      hasFileStorageLimit: true,
+      filePercentOfAllowance: 12.5,
+      warningThresholdPercent: 75,
+      isOverThreshold: true,
+    });
+    const element = createComponent();
+
+    await flushPromises();
+
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "System Doctor");
+    button.dispatchEvent(new CustomEvent("click"));
+
+    await flushPromises();
+    await flushPromises();
+
+    expect(getStorageFootprint).toHaveBeenCalled();
+    const rows = element.shadowRoot.querySelectorAll('[data-id="storage-row"]');
+    expect(rows.length).toBe(2);
+
+    const panelText = element.shadowRoot.textContent;
+    expect(panelText).toContain("Workflow Instance");
+    expect(panelText).toContain("82.5%");
+    expect(panelText).toContain("1.0 MB");
+    expect(panelText).toContain("Over threshold");
+    // Both gauges render: the data percentage and the separate file-storage percentage.
+    expect(panelText).toContain("% of Org Data-Storage Allowance");
+    expect(panelText).toContain("% of Org File-Storage Allowance");
+    expect(panelText).toContain("12.5%");
+  });
+
+  it("shows the Storage Footprint empty state when unavailable", async () => {
+    getStorageFootprint.mockResolvedValue(null);
+    const element = createComponent();
+
+    await flushPromises();
+
+    const button = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button"),
+    ).find((btn) => btn.label === "System Doctor");
+    button.dispatchEvent(new CustomEvent("click"));
+
+    await flushPromises();
+    await flushPromises();
+
+    const empty = element.shadowRoot.querySelector('[data-id="storage-empty"]');
     expect(empty).not.toBeNull();
   });
 
@@ -1985,6 +2074,131 @@ describe("c-workflow-dashboard operator signal injection", () => {
   });
 });
 
+describe("c-workflow-dashboard awaited-signal descriptor (#84)", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function createComponent() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    return element;
+  }
+
+  it("renders the lightweight awaiting-signal indicator in the instance list", async () => {
+    // Option A (#84): the LIST descriptor is now the lightweight generic indicator only — the
+    // heap-safe list query never selects Output__c, so it cannot classify approval/child or
+    // carry an awaited name (those move to the detail view). The list badge shows the label.
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+        waitDescriptor: {
+          type: "generic-signal",
+          signalName: null,
+          label: "Awaiting signal at step ApproveStep",
+          stepName: "ApproveStep",
+        },
+      },
+    ]);
+
+    const element = createComponent();
+    await flushPromises();
+
+    const badge = element.shadowRoot.querySelector(".badge-teal");
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toBe("Awaiting signal at step ApproveStep");
+  });
+
+  it("pre-fills the Send Signal modal with the awaited signal name", async () => {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {},
+      waitDescriptor: {
+        type: "child-completion",
+        signalName: "ChildCompleted:order-42",
+        label: "ChildCompleted:order-42",
+        stepName: "ChildStep",
+      },
+    });
+
+    const element = await openSignalModal();
+
+    const nameInput = element.shadowRoot.querySelector(
+      'lightning-input[data-id="signal-name-input"]',
+    );
+    expect(nameInput.value).toBe("ChildCompleted:order-42");
+    // A pre-filled name enables the confirm button with no operator typing.
+    const confirmBtn = element.shadowRoot.querySelector(
+      'lightning-button[data-id="confirm-signal-btn"]',
+    );
+    expect(confirmBtn.disabled).toBe(false);
+  });
+
+  it("shows a generic descriptor label and leaves the modal name blank", async () => {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {},
+      waitDescriptor: {
+        type: "generic-signal",
+        signalName: null,
+        label: "Awaiting signal at step WaitStep",
+        stepName: "WaitStep",
+      },
+    });
+
+    const element = await openSignalModal();
+
+    const badge = element.shadowRoot.querySelector(".badge-teal");
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toBe(
+      "Awaiting: Awaiting signal at step WaitStep",
+    );
+    // No derivable name → the Signal Name input stays empty for manual entry.
+    const nameInput = element.shadowRoot.querySelector(
+      'lightning-input[data-id="signal-name-input"]',
+    );
+    expect(nameInput.value).toBe("");
+  });
+});
+
 describe("c-workflow-dashboard business attributes filters", () => {
   afterEach(() => {
     while (document.body.firstChild) {
@@ -2187,5 +2401,109 @@ describe("c-workflow-dashboard business attributes filters", () => {
 
     pills = element.shadowRoot.querySelectorAll(".slds-pill");
     expect(pills.length).toBe(2);
+  });
+});
+
+describe("c-workflow-dashboard workflow catalog", () => {
+  const CATALOG_TWO_DEFS = [
+    {
+      className: "PurchaseApprovalWorkflow",
+      label: "Purchase Approval Workflow",
+      description: "Routes purchases for approval.",
+      documented: true,
+      versioned: true,
+      version: 3,
+      active: 4,
+      failed: 2,
+      suspended: 1,
+      total: 7,
+    },
+    {
+      className: "Order.HTTPRetryWorkflow",
+      label: "Order HTTP Retry Workflow",
+      description: null,
+      documented: false,
+      versioned: false,
+      version: null,
+      active: 0,
+      failed: 0,
+      suspended: 0,
+      total: 0,
+    },
+  ];
+
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  async function openCatalog() {
+    getWorkflowCatalog.mockResolvedValue(CATALOG_TWO_DEFS);
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+
+    const catalogBtn = findButton(element, (b) => b.label === "Catalog");
+    catalogBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    return element;
+  }
+
+  it("lists every discovered definition with counts, version and undocumented marker", async () => {
+    const element = await openCatalog();
+
+    expect(getWorkflowCatalog).toHaveBeenCalled();
+    const rows = element.shadowRoot.querySelectorAll("tbody tr");
+    expect(rows.length).toBe(2);
+
+    // The undocumented definition is flagged rather than dropped.
+    const badges = Array.from(
+      element.shadowRoot.querySelectorAll(".badge-grey"),
+    ).map((b) => b.textContent.trim());
+    expect(badges).toContain("Undocumented");
+
+    // The versioned definition surfaces its declared version.
+    expect(element.shadowRoot.textContent).toContain("v3");
+  });
+
+  it("deep-links a definition click to the filtered instance list", async () => {
+    const element = await openCatalog();
+    getFilteredInstances.mockClear();
+
+    const defButton = element.shadowRoot.querySelector(
+      'button.link-button[data-definition="PurchaseApprovalWorkflow"]:not([data-status])',
+    );
+    defButton.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    expect(getFilteredInstances).toHaveBeenCalled();
+    const criteria =
+      getFilteredInstances.mock.calls[
+        getFilteredInstances.mock.calls.length - 1
+      ][0].criteria;
+    expect(criteria.workflowName).toBe("PurchaseApprovalWorkflow");
+  });
+
+  it("deep-links a status count click to that definition and status", async () => {
+    const element = await openCatalog();
+    getFilteredInstances.mockClear();
+
+    const failedButton = element.shadowRoot.querySelector(
+      'button.link-button[data-definition="PurchaseApprovalWorkflow"][data-status="Failed"]',
+    );
+    failedButton.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    expect(getFilteredInstances).toHaveBeenCalled();
+    const criteria =
+      getFilteredInstances.mock.calls[
+        getFilteredInstances.mock.calls.length - 1
+      ][0].criteria;
+    expect(criteria.workflowName).toBe("PurchaseApprovalWorkflow");
+    expect(criteria.status).toBe("Failed");
   });
 });

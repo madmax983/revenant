@@ -171,14 +171,15 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * @description WorkflowDefinition discovery WITHOUT an authorization check. Callers MUST
-   * perform their own authorization first. Exists so sibling controllers (e.g.
-   * WorkflowScheduleController, gated on a different permission) can reuse the exact
-   * discovery logic without tripping this controller's Workflow_Admin gate.
-   * @return The sorted list of concrete WorkflowDefinition class names.
+   * @description Returns the read-only Workflow Catalog: one row per concrete, startable
+   * definition the engine discovers, each carrying its class name, a human-readable label,
+   * a description (or "undocumented" marker), the current declared version for
+   * VersionedWorkflow implementations, and an active/failed/suspended health rollup.
+   * @return One catalog row map per discovered definition, sorted by class name.
    */
-  public static List<String> getDefinitionsUnchecked() {
-    return WorkflowDefinitionDiscoveryService.discover();
+  @AuraEnabled(cacheable=true)
+  public static List<Map<String, Object>> getWorkflowCatalog() {
+    return WorkflowCatalogService.buildCatalog();
   }
 
   /**
@@ -224,6 +225,24 @@ public inherited sharing class WorkflowDashboardController {
   @AuraEnabled
   public static Map<String, Object> getWatchdogStatus() {
     return WorkflowDashboardStatusService.watchdogStatus();
+  }
+
+  /**
+   * @description Returns Revenant's data-storage footprint for the System Doctor panel:
+   * per-object record counts, estimated bytes and 7-/30-day growth deltas, the summed
+   * ContentVersion byte volume of offloaded payloads, and the combined estimate as a
+   * percentage of the org's data-storage allowance with the configured warning threshold.
+   * Strictly read-only (bounded aggregate reads only).
+   *
+   * Intentionally NOT cacheable: this backs a LIVE storage-warning surface whose metrics
+   * change as records are created, offloaded, or purged (e.g. CleanupWorkflow). A
+   * client-side Lightning cache would serve a stale footprint for a platform-managed
+   * duration on panel reopen, defeating the panel's purpose. Loaded imperatively by the LWC.
+   * @return A map of the storage-footprint fields consumed by the panel.
+   */
+  @AuraEnabled
+  public static Map<String, Object> getStorageFootprint() {
+    return WorkflowStorageFootprintService.storageFootprint();
   }
 
   /**

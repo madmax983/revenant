@@ -58,6 +58,20 @@ StepContext.Signal s;                                                      // un
 WorkflowEngine.signal(correlationKey, 'ApprovalReceived', payloadJson);    // still valid
 ```
 
+> **📖 Reading an instance's step history.** The supported read contracts live on
+> dedicated read classes, not the facade — `WorkflowStatusRead.getStatus` for the
+> **outcome**, and **`WorkflowHistoryRead.getHistory`** for the ordered **step
+> timeline** (which steps ran, in order, with attempt counts, timing, errors, and a
+> compensation flag). Do **not** query `Workflow_Step_Execution__c` directly — those
+> field names are internal.
+>
+> ```apex
+> WorkflowEngine.StepHistory h = WorkflowHistoryRead.getHistory(instanceId);
+> for (WorkflowEngine.StepHistoryEntry e : h.entries) { /* e.stepName, e.status, e.attempt, ... */ }
+> ```
+>
+> See the README's "Read a Workflow's Step Timeline (Apex)" section for the full DTO shape.
+
 ---
 
 ## 2. `cancel(Id, Boolean)` split — and `cancelWithCompensations` is NOT on the engine
@@ -375,6 +389,72 @@ StepContext ctx = new StepContextTestBuilder()
   .timeoutResume()
   .build();
 ```
+
+---
+
+## New (additive, non-breaking): `ValidatedWorkflow` opt-in start-input validation
+
+**Issue #51.** This is **not a breaking change** — no existing signature changes and
+workflows that do not opt in behave exactly as before — but it is recorded here
+because it introduces a new permanent author-facing API contract.
+
+A workflow definition MAY now implement **`ValidatedWorkflow`** (alongside
+`WorkflowDefinition`) to declare a `WorkflowInputContract` of required/optional
+fields and their `WorkflowInputType` primitives (`STRING_TYPE`, `INTEGER_TYPE`, `LONG_TYPE`,
+`DECIMAL_TYPE`, `BOOLEAN_TYPE`, `DATE_TYPE`, `DATETIME_TYPE`). The issue's generic **Number** maps to
+**`DECIMAL_TYPE`** (any JSON numeric); use `INTEGER_TYPE`/`LONG_TYPE` for whole numbers. When
+present, the contract is enforced
+**synchronously at `WorkflowEngine.start(...)` / `startOrGet(...)`** — before any
+`Workflow_Instance__c` is inserted or any job enqueued, adding **zero SOQL/DML** to
+the start path. Bad input throws the new top-level typed **`WorkflowInputException`**
+(`getFieldErrors()` → `List<WorkflowInputFieldError>`), enumerating every missing,
+wrong-typed, or malformed-JSON field.
+
+```apex
+public class OnboardingWorkflow implements WorkflowDefinition, ValidatedWorkflow {
+  public WorkflowInputContract getInputContract() {
+    return new WorkflowInputContract()
+      .require('accountId', WorkflowInputType.STRING_TYPE)
+      .require('amount', WorkflowInputType.DECIMAL_TYPE);
+  }
+  // getSteps() / getInitialStep() / getNextStep() unchanged
+}
+```
+
+The **Start Workflow** invocable gains two additive outputs — `Is Valid` (Boolean)
+and `Validation Error` (String) — so a Flow can branch on invalid input instead of
+catching a fault. Existing invocable outputs (`Workflow Instance ID`, `Is New`) are
+unchanged. See the README's "Validate Start Input Against a Contract (opt-in)"
+section for the full contract shape, type-coercion rules, and bulk/Flow behavior.
+## 9. New (additive, non-breaking): `WorkflowInstanceQuery.findInstances`
+
+**Issue #93.** This is **not a breaking change** — it adds a new supported read
+contract with no change to any existing signature — but it is recorded here because
+it is the sanctioned replacement for a pattern the docs already forbid: querying
+`Workflow_Instance__c` fields directly to **enumerate** instances (the field and
+relationship API names are internal and namespace-sensitive). Where `getStatus`
+answers "what is the outcome of the instance I already hold a key/Id for?",
+`findInstances` answers "which instances match this definition / status / time
+window?" and pages through them.
+
+```apex
+// Enumerate + page (keyset cursor, not OFFSET) — payload-free, one SOQL per call
+WorkflowEngine.InstanceCriteria criteria = new WorkflowEngine.InstanceCriteria();
+criteria.definitionName = 'OnboardingWorkflow';
+criteria.statuses = new Set<String>{ 'Running', 'Failed' };
+criteria.pageSize = 100;                       // null -> 50; > 200 -> clamped; <= 0 -> throws
+
+WorkflowEngine.InstancePage page = WorkflowInstanceQuery.findInstances(criteria);
+for (WorkflowEngine.WorkflowInstanceSummary s : page.entries) { /* s.instanceId, s.status, ... */ }
+criteria.cursor = page.nextCursor;             // pass back VERBATIM; null on the last page
+```
+
+Like `getStatus` / `getHistory`, the contract lives on a dedicated `inherited
+sharing` service class (`WorkflowInstanceQuery`), while the forever-public DTOs
+(`InstanceCriteria`, `WorkflowInstanceSummary`, `InstancePage`) are resident inner
+classes of `WorkflowEngine`. It is strictly read-only and payload-free; see the
+README's "List & Page Through Workflow Instances (Apex)" section for the full DTO
+shapes, the keyset-cursor / ContinueAsNew semantics, and the honest SOQL profile.
 
 ---
 

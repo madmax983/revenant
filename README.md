@@ -457,6 +457,61 @@ List<WorkflowEngine.WorkflowStatus> results = WorkflowStatusRead.getStatus(keyLi
 - By correlation key, the active/live run is preferred over a recently-terminal one when a key has been reused. Lookup is case-insensitive (matching the correlation-key fields) and follows `ContinuedAsNew` chains via the shared root key, so polling the original key — **or any intermediate successor key** — returns the live/final successor, not a stale predecessor. `null` is returned (not an exception) when nothing matches.
 - **Known limitation — don't reuse a chain's correlation key for an unrelated run while that chain is live.** Chain following matches on the shared `Root_Correlation_Key__c`, which a continue-as-new chain shares with _any_ independent run that reuses the same key. If you start a separate workflow with a correlation key that is also the root of a still-live continue-as-new chain, polling an intermediate successor key of that chain may resolve to the unrelated reused run. Use distinct correlation keys per logical workflow (the normal case) to avoid this; precise disambiguation would require walking the `Previous_Instance__c` lineage, which is intentionally out of scope to keep `getStatus` bounded and constant-SOQL.
 
+#### Read a Workflow's Step Timeline (Apex)
+
+`getStatus` returns the **outcome**; `WorkflowHistoryRead.getHistory` is its **timeline** complement — the ordered, append-order list of step executions for an instance (which steps ran, in what order, with attempt counts, timing, and a forward-vs-compensation flag). Like `getStatus`, it is a service-class read contract (returning the resident `WorkflowEngine.StepHistory` / `WorkflowEngine.StepHistoryEntry` DTOs). As with `getStatus`, do **not** query `Workflow_Step_Execution__c` directly: the field names are internal. `getHistory` is **strictly read-only** (constant SOQL, zero DML) and safe to call from any Apex context.
+
+The timeline is **payload-free / heap-safe**: it never loads the potentially large `Error_Details__c` long-text (nor `Input__c`/`Output__c`). Derive the error/retry story from the lightweight fields:
+
+- **ended in error** → `status` is a failure state (`Failed`, `Compensating`, `Compensated`, `Cancelling`, `Cancelled`; `Retrying` means an attempt failed and another is queued);
+- **was retried** → `attempt > 0`;
+- **full error text / stack trace** → `WorkflowHistoryRead.getStepError(executionId)` (loads one row, heap-bounded — a retried-then-succeeded step can still return retained detail here even under a success `status`).
+
+```java
+// Single instance — null when no instance matches; empty entries when it has no steps yet
+WorkflowEngine.StepHistory history = WorkflowHistoryRead.getHistory(instanceId);
+for (WorkflowEngine.StepHistoryEntry e : history.entries) {
+  System.debug(e.stepName + ' ' + e.status + ' attempt=' + e.attempt);
+  String detail = WorkflowHistoryRead.getStepError(e.executionId); // null unless error text recorded
+}
+
+// Bulk — constant SOQL regardless of list size; unmatched Ids are absent from the map
+Map<Id, WorkflowEngine.StepHistory> byId = WorkflowHistoryRead.getHistory(idList);
+```
+
+**`StepHistory` fields:**
+
+| Field         | Type                     | Description                                                                                                                                                                      |
+| ------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `entries`     | `List<StepHistoryEntry>` | Step executions in append (execution) order, capped at `WorkflowHistoryRead.MAX_HISTORY_ROWS`.                                                                                  |
+| `isTruncated` | `Boolean`                | `true` when the instance had more executions than the cap and `entries` was truncated.                                                                                         |
+| `totalCount`  | `Integer`                | The real total step count. Equals `entries.size()` when untruncated (no extra SOQL); when `isTruncated`, the true total via a single `COUNT()` query run **only** on that path. |
+
+**`StepHistoryEntry` fields:**
+
+| Field             | Type       | Description                                                                                                                                                                                     |
+| ----------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `executionId`     | `Id`       | The `Workflow_Step_Execution__c` record Id (stable identifier).                                                                                                                                |
+| `stepName`        | `String`   | Logical step name; compensation executions carry the `<step>_Compensate` name.                                                                                                                 |
+| `status`          | `String`   | Raw `Status__c`. Terminal: `Completed`, `Failed`, `Compensated`, `Cancelled`, `OperatorSkipped`, `ContinuedAsNew`. In flight: `Pending`, `Running`, `Retrying`, `Compensating`, `Cancelling`. |
+| `attempt`         | `Integer`  | Retry attempt count (`0` on the first attempt).                                                                                                                                                |
+| `startedAt`       | `Datetime` | When the execution was first appended to the trail.                                                                                                                                            |
+| `endedAt`         | `Datetime` | Last modification of the terminal step-execution row (the engine reuses one row across retries, so this is the last modification, not per-attempt); `null` while in flight.                     |
+| `totalDurationMs` | `Long`     | Total wall-clock `startedAt`→`endedAt` in ms, across **all** attempts including retry backoff (one row is reused per retry — not a single attempt); use `attempt` to disambiguate. `null` in flight. |
+| `isCompensation`  | `Boolean`  | `true` for a compensation (rollback) execution. Convention-derived from the step name's `_Compensate` suffix — a step an author manually names ending in `_Compensate` would be a false positive. |
+
+> **Errors are not on the timeline.** There is deliberately no per-entry error field: a heap-safe boolean would require filtering the `Error_Details__c` long-text (impossible in SOQL) or maintaining a separate flag across the engine's write path. Read whether a step ended badly from `status`, whether it was retried from `attempt`, and the full text from `getStepError(executionId)`.
+
+**`getStepError`:** `WorkflowHistoryRead.getStepError(Id executionId)` → the full `Error_Details__c` for one step-execution row, or `null` for an unknown Id or a row with no error recorded. One SOQL query, heap-bounded to a single row.
+
+**Key semantics:**
+
+- Single form returns `null` for an unknown Id (not an exception) and a `StepHistory` with an **empty** `entries` list for a known instance that has logged no steps. The bulk form omits unmatched Ids from the map and includes known-but-empty instances with empty entries.
+- **Metadata-only / heap-safe:** per-step input/output/error payload bodies are deliberately never loaded (terminal output comes from `getStatus`; per-step error text from `getStepError`).
+- Reading is **governor-bounded** and zero DML, with a documented per-instance row cap (`WorkflowHistoryRead.MAX_HISTORY_ROWS`); a longer history is reported as `isTruncated = true` (with the real size in `totalCount`) rather than silently cut. The single-Id read costs **one** SOQL query in the common case (rows present and within the cap), a second only when truncated (`COUNT()`) or when probing existence. `getStepError` is one more query for a single row. The bulk read is constant-SOQL regardless of batch size (a grouped `COUNT()`, the row scan, and an existence probe only when some requested Ids are step-less).
+- **Bulk input cap: at most `WorkflowHistoryRead.MAX_INSTANCES_PER_CALL` (2000) distinct instance Ids per call.** The bulk read totals each instance with a grouped aggregate `COUNT()`, and Apex aggregate SOQL cannot page beyond 2000 rows; passing more throws a `WorkflowEngine.WorkflowException` up front (before any query) naming the cap. Callers with more Ids must chunk them into batches of 2000 or fewer (which also matches the standard Batch Apex `execute()` scope). The single-Id form has no cap.
+- **For valid input, a bulk read never reports a step-bearing instance as empty, and never exceeds the SOQL row governor.** The small grouped `COUNT()` and existence probe run first; the large row scan runs last, sized from the row budget still available, so even a batch whose ideal scan would blow past the 50,000-row limit degrades to graceful truncation instead of throwing. The scan shares that budget, so a very large instance can starve a sibling of retrieved rows — but the authoritative `COUNT()` still gives every instance its real `totalCount`, so a starved (or budget-truncated) instance comes back with `isTruncated = true` and its true `totalCount` (with whatever rows were retrieved, possibly none), never as a false-empty history. To get the full `entries` of such a history, re-read that instance singly.
+
 ### 9. Validate a Workflow Definition (Apex)
 
 A `WorkflowDefinition` is otherwise only exercised at runtime: the engine resolves each step class lazily via `Type.forName` as it reaches it, so a typo'd successor, an entry point missing from `getSteps()`, or a step name that doesn't resolve to a real `WorkflowStep` only surfaces **mid-execution — after earlier forward steps (and their side effects) have already committed**, triggering a real compensation rollback in production. `WorkflowValidator` moves that detection to authoring/deploy time.
@@ -478,11 +533,167 @@ static void onboardingWorkflowIsWellFormed() {
 
 `validate` flags: a definition class that doesn't resolve or doesn't implement `WorkflowDefinition`; a `getInitialStep()` that is blank or not contained in `getSteps()`; any `getSteps()` entry that doesn't resolve to an instantiable `WorkflowStep`/`CompensatableStep`; and duplicate `getSteps()` entries. It additionally runs a **best-effort** transition probe that drives `getNextStep(...)` for each declared step and flags any returned successor not in `getSteps()` — best-effort because `getNextStep` is data-dependent and cannot be fully enumerated. Inspect `result.defects` (each has a `code`, `stepName`, and `message`) or `result.getMessages()` for the full list. This is why `getSteps()` is part of the `WorkflowDefinition` contract: it is the authoritative step inventory the validator checks the DAG against.
 
+Where `WorkflowValidator` checks the _definition's shape_, the next section validates _each invocation's payload_.
+
+---
+
+### 10. Validate Start Input Against a Contract (opt-in)
+
+`WorkflowEngine.start(name, key, json)` and the **Start Workflow** invocable accept an opaque payload: a missing or misspelled field (`accountId` vs `AccountId`) is invisible until the first step dereferences it deep inside an async Queueable, surfacing as a cryptic `NullPointerException` on a `Failed` instance that a Flow builder can't diagnose. A workflow can **opt in** to synchronous, field-level start-input validation by implementing **`ValidatedWorkflow`** alongside `WorkflowDefinition`:
+
+```java
+public class OnboardingWorkflow implements WorkflowDefinition, ValidatedWorkflow {
+    public WorkflowInputContract getInputContract() {
+        return new WorkflowInputContract()
+            .require('accountId', WorkflowInputType.STRING_TYPE)
+            .require('amount', WorkflowInputType.DECIMAL_TYPE)
+            .optional('vipOnboarding', WorkflowInputType.BOOLEAN_TYPE)
+            .optional('startDate', WorkflowInputType.DATE_TYPE);
+    }
+    // ... getSteps() / getInitialStep() / getNextStep() as usual
+}
+```
+
+A `WorkflowInputContract` is an ordered list of field specs — `require(name, type)` (must be present and non-null) and `optional(name, type)` (type-checked only when present). The seven `WorkflowInputType` primitives, each type-checked **strictly** and **without ever mutating the payload**:
+
+| `WorkflowInputType` | Accepts (JSON) |
+| ------------------- | -------------- |
+| `STRING_TYPE`            | A JSON string. |
+| `INTEGER_TYPE`           | A whole-number JSON value **within the signed 32-bit range** [-2147483648, 2147483647]; a whole number outside that range is rejected (use `LONG_TYPE`). Not a fractional number or a numeric string. |
+| `LONG_TYPE`              | Any whole-number JSON value, including values outside the 32-bit range (not a fractional number or a numeric string). |
+| `DECIMAL_TYPE`           | Any JSON number. |
+| `BOOLEAN_TYPE`           | A JSON boolean (`true`/`false`, not `"true"`). |
+| `DATE_TYPE`              | An ISO-8601 date (`yyyy-MM-dd`) — as a JSON string, **or** a native Apex `Date` in a `Map` input. |
+| `DATETIME_TYPE`          | An ISO-8601 datetime — as a JSON string, **or** a native Apex `Datetime` in a `Map` input. |
+
+The issue's generic **Number** maps to **`DECIMAL_TYPE`** (any JSON numeric); reach for `INTEGER_TYPE`/`LONG_TYPE` when the field must be a whole number.
+
+**Validation checks the exact graph the engine persists.** The engine stores `inputJson` verbatim when it is set, otherwise it stores `JSON.serialize(input)`; validation mirrors that byte-for-byte, so what you validate is exactly what the first step receives:
+
+- **`inputJson`** is validated as the raw object graph (it is preserved as-is). **Use `inputJson` to supply an object payload.**
+- **`input`** (any value) is validated as it will be JSON-serialized — through the same `JSON.serialize` → `JSON.deserializeUntyped` round-trip the engine uses to persist. A native Apex `Date`/`Datetime` in a `Map` is therefore checked by its ISO form (matching `DATE_TYPE`/`DATETIME_TYPE`), and numbers normalize to the same kinds, so a `Map`, a typed Apex object, and a JSON string never disagree. Note that a **JSON-object _string_ passed as `input`** (e.g. `start(wf, key, '{"accountId":"A"}')`) is serialized to a quoted scalar string — the step receives a `String`, not an object — so a contract expecting object fields correctly fails validation. Pass such a payload via `inputJson` instead.
+
+(Accepting a native `Date`/`Datetime` in a `Map` is an additive, permissive broadening; it rejects nothing that was previously accepted.)
+
+**Fully backward compatible and free for the simple case.** A definition that does _not_ implement `ValidatedWorkflow` is never inspected — detection is a single in-memory `instanceof` on the already-resolved definition. Validation adds **zero SOQL and zero DML** to the start path and nothing to the `WorkflowOrchestrator` Queueable hot path; it is a pure parse-and-check that runs **before any `Workflow_Instance__c` is inserted and before any job is enqueued**, so the append-only audit trail is untouched on rejection.
+
+**Only new instances are validated — dedup hits are never blocked.** Every start in Revenant is a get-or-start (it dedups on the correlation key), and `signalOrStart` folds a signal into that decision. The input contract is enforced **only for a request that actually creates a new instance** (whose start input will be persisted), and it still runs **before that insert**. A request that resolves to an **existing** instance — a get-or-start or signal-or-start dedup hit — is **not** validated: its fallback start input is never persisted, so an invalid/minimal fallback must not (and does not) block signal delivery or the return of the existing instance. This holds at both the engine layer (scalar and bulk) and the Flow layer.
+
+**Apex (scalar & bulk).** On invalid input for a **new** start, `start(...)` / `startOrGet(...)` throw a typed **`WorkflowInputException`** whose message enumerates **every** bad field (not just the first), with the structured list also available via `ex.getFieldErrors()` (each a `WorkflowInputFieldError` carrying `fieldName`, a `reason` of `MISSING` / `WRONG_TYPE` / `MALFORMED_JSON`, and the expected/actual type). Malformed JSON is reported as an input error, never as an uncaught `JSONException`. No instance row is created. A get-or-start / `signalOrStart` call that dedups to an existing instance returns/delivers normally even with an invalid fallback payload.
+
+```java
+try {
+    WorkflowEngine.start('OnboardingWorkflow', key, '{"amount":"lots"}');
+} catch (WorkflowInputException ex) {
+    // ex.getMessage() enumerates: accountId is required but missing;
+    //   amount expected DECIMAL_TYPE but was String
+    for (WorkflowInputFieldError fe : ex.getFieldErrors()) { /* fe.fieldName, fe.reason ... */ }
+}
+```
+
+The bulk `startOrGet(List<StartRequest>)` validates only the **fresh-start subset** (the requests that will create new instances), after the dedup decision and before the insert; consistent with the pipeline's all-or-none semantics, an invalid fresh start throws a single `WorkflowInputException` enumerating every bad field across every offending new-start request (tagged `request[i]`) and writes no rows. Requests that deduped to existing instances are unaffected.
+
+**Flow (Start Workflow / Signal or Start invocables).** Both invocables surface a **branchable** result (`Is Valid` / `Validation Error`) instead of a hard Flow fault, and both honor the new-instance-only rule. A row whose input is contract-valid is delivered with `Is Valid = true` (new or deduped). A row with invalid input is **not** blocked up front: it is delegated to the engine so its dedup decides — a row that resolves to an **existing** instance is delivered (`Is Valid = true`; its unused fallback was never persisted), while a row that would create a **new** instance is rejected with `Is Valid = false` and a `Validation Error` enumerating the bad fields (no fault, no insert). Contract-valid rows batch through one bulk engine call, so one invalid new-start row never aborts its valid siblings.
+
+A **debounced** `ValidatedWorkflow` start is armed immediately (`Is Valid = true` at arm time) and its input contract is enforced at **sweep time** — when the deferred start materializes as a new instance — **not** synchronously in Flow, because the dedup outcome is unknown when the debounce is armed. A contract failure at sweep is recorded on the debounce state (its `Error_Message__c` enumerates the bad fields) rather than surfaced as a synchronous `Is Valid = false`; the sweeper marks that debounce state failed with a bounded retry that quarantines instead of looping forever, and a failing debounced row never aborts its sibling debounce rows in the same sweep (each fires under its own savepoint). See [`ValidatedOnboardingWorkflowExample`](examples/main/default/classes/ValidatedOnboardingWorkflowExample.cls) for a copyable reference.
+
+**Two-layer semantics — atomic in bulk Apex, per-row at the invocable.** The two entry points reject invalid input on deliberately different contracts, and the difference is by design:
+
+- **Bulk Apex (`WorkflowEngine` bulk start): ATOMIC validation.** If any request's input is invalid, the whole batch is rejected with a single `WorkflowInputException` enumerating **every** bad field across **all** offending requests, and **zero** rows are written — fix all and retry. This preserves the engine's all-or-none bulk invariant: a validation-only partial-success would make bulk semantics mode-dependent (validation errors partial-succeeding while DML errors roll everything back), which is incoherent for programmatic callers.
+- **Flow invocable (`WorkflowStartInvocableAction`): PER-ROW routing.** Each row is validated independently; an invalid row returns `isValid=false` + `validationError` (no Flow fault) while valid sibling rows still start. Per-row independence lives here because this is where the acceptance criterion's motivation lives — Flow can't catch Apex exceptions.
+
+If a per-row, non-aborting **bulk Apex** API is ever needed, the additive path is a `validationError` field on `WorkflowEngine.StartResult` (deferred; not in v1).
+
+---
+
+### 10. List & Page Through Workflow Instances (Apex)
+
+`getStatus` answers "what is the outcome of the instance I already hold a key/Id for?" — it cannot **discover** instances you have no handle to. `WorkflowInstanceQuery.findInstances` is the supported **enumeration** contract: "give me every `Running` instance of `OnboardingWorkflow`", "every `Failed` instance in the last hour". Use it instead of querying `Workflow_Instance__c` directly — the field/relationship API names are internal and namespace-sensitive, so hard-coding them breaks across managed-package namespaces and schema revisions.
+
+It is **strictly read-only** (exactly **one** SOQL query per call, zero DML — regardless of page size or how many instances match) and **payload-free**: summaries deliberately omit the heavy long-text payloads (`Input__c` / `Output__c` / `Progress__c`), so a list call never materializes an offloaded-output storage pointer or exhausts the heap in bulk. Fetch a winner's full output per-Id via `getStatus`.
+
+```java
+// Page through every non-terminal instance of one definition (operator script / LWC controller path)
+WorkflowEngine.InstanceCriteria criteria = new WorkflowEngine.InstanceCriteria();
+criteria.definitionName = 'OnboardingWorkflow';
+criteria.statuses = new Set<String>{ 'Pending', 'Running', 'Suspended' };
+criteria.pageSize = 100; // null -> default (50); above the cap -> clamped to MAX_PAGE_SIZE (200)
+
+List<Id> allIds = new List<Id>();
+String cursor = null;
+do {
+  criteria.cursor = cursor; // pass the previous page's nextCursor back VERBATIM
+  WorkflowEngine.InstancePage page = WorkflowInstanceQuery.findInstances(criteria);
+  for (WorkflowEngine.WorkflowInstanceSummary s : page.entries) {
+    allIds.add(s.instanceId); // then WorkflowStatusRead.getStatus(s.instanceId) for full output
+  }
+  cursor = page.nextCursor; // null on the last page
+} while (cursor != null);
+```
+
+**`InstanceCriteria` (all fields optional; a null criteria or all-unset fields matches every instance):**
+
+| Field            | Type          | Null / empty semantics                                                                                             |
+| ---------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `definitionName` | `String`      | Exact `Workflow_Name__c` match; null/blank matches **any** definition.                                             |
+| `statuses`       | `Set<String>` | `Status__c IN` the set; null/empty matches **any** status.                                                         |
+| `createdAfter`   | `Datetime`    | **Inclusive** `CreatedDate >=`; null is unbounded below.                                                           |
+| `createdBefore`  | `Datetime`    | **Exclusive** `CreatedDate <`; null is unbounded above.                                                            |
+| `modifiedAfter`  | `Datetime`    | **Inclusive** `LastModifiedDate >=`; null is unbounded below.                                                      |
+| `modifiedBefore` | `Datetime`    | **Exclusive** `LastModifiedDate <`; null is unbounded above.                                                       |
+| `pageSize`       | `Integer`     | Null → `WorkflowInstanceQuery.DEFAULT_PAGE_SIZE` (50); above `MAX_PAGE_SIZE` (200) → clamped; `<= 0` → throws.     |
+| `cursor`         | `String`      | Opaque next-page token; null/blank starts at page one. Pass a page's `nextCursor` back **verbatim**; garbage throws. |
+
+**`WorkflowInstanceSummary` (lightweight, payload-free):**
+
+| Field            | Type       | Description                                                                                                          |
+| ---------------- | ---------- | ------------------------------------------------------------------------------------------------------------------ |
+| `instanceId`     | `Id`       | The `Workflow_Instance__c` record Id.                                                                               |
+| `definitionName` | `String`   | The workflow class name (`Workflow_Name__c`).                                                                       |
+| `correlationKey` | `String`   | The correlation key the instance was started with.                                                                 |
+| `status`         | `String`   | Raw `Status__c` value (e.g. `Running`, `Failed`).                                                                   |
+| `isTerminal`     | `Boolean`  | `true` for a terminal outcome (`Completed`, `Failed`, `Compensated`, `Cancelled`) — the **same** terminal set as `getStatus`. `ContinuedAsNew` is a non-terminal hand-off, so it reports `false`. |
+| `createdAt`      | `Datetime` | `CreatedDate`.                                                                                                      |
+| `lastModifiedAt` | `Datetime` | `LastModifiedDate`.                                                                                                 |
+
+**`InstancePage`:**
+
+| Field        | Type                            | Description                                                                                                       |
+| ------------ | ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `entries`    | `List<WorkflowInstanceSummary>` | The page's summaries, newest first (`CreatedDate DESC, Id DESC`), at most `pageSize`. Empty when nothing matched. |
+| `nextCursor` | `String`                        | Opaque cursor for the next page, or `null` on the last page. Pass back verbatim as `InstanceCriteria.cursor`.     |
+| `hasMore`    | `Boolean`                       | `true` when a further page exists (i.e. `nextCursor != null`). Page until this is `false`.                        |
+| `pageSize`   | `Integer`                       | The effective page size applied (after defaulting/clamping) — lets you observe when an over-cap request was clamped. |
+
+**Key semantics:**
+
+- **Time windows are half-open `[after, before)`.** The `after` bounds are **inclusive** (`CreatedDate`/`LastModifiedDate >=`) and the `before` bounds are **exclusive** (`<`). An instance whose timestamp lands exactly on `createdAfter`/`modifiedAfter` is **included**; one landing exactly on `createdBefore`/`modifiedBefore` is **excluded**. This lets adjacent windows (e.g. hour-by-hour sweeps) chain with no overlap and no gap.
+- **Deep pagination is keyset-based, not `OFFSET`.** SOQL `OFFSET` is capped at 2,000 rows by the platform and throws beyond it, so a definition with millions of historical instances could not be paged past that with `OFFSET`. `findInstances` orders by the stable total ordering `CreatedDate DESC, Id DESC` and pages via a keyset predicate on `(CreatedDate, Id)`, so you can walk the **entire** result set — however deep — one bounded page at a time, with **no duplicates and no gaps**. The cursor is **opaque**: pass it back verbatim; do not parse, build, or mutate it. A garbage/tampered cursor throws `WorkflowEngine.WorkflowException`.
+- **No exact total is exposed.** An unbounded, deeply-paged result set cannot be counted within a constant SOQL/heap budget, so there is deliberately no `totalCount`; page until `hasMore` is `false`. (A single `COUNT()` over a huge filtered set still counts rows against the 50,000 query-rows governor, so exposing it would break the constant-budget guarantee.)
+- **ContinueAsNew is consistent with `getStatus`.** `findInstances` is a raw row enumeration, **not** a chain resolution: it returns each matching row on its own and does **not** collapse a continue-as-new chain to a single winner the way `getStatus(correlationKey)` does. A `ContinuedAsNew` predecessor generation is its own row, returned only when the `statuses` filter admits it (unset/empty, or explicitly includes `ContinuedAsNew`); and — matching `getStatus` — `ContinuedAsNew` is a non-terminal hand-off, so its summary's `isTerminal` is `false`. To resolve a chain to its live/final successor, take a matching row's `correlationKey` and call `getStatus(correlationKey)`.
+- **Honest SOQL profile:** exactly **one** SOQL query per call and zero DML, no matter how many filters are set, the page size, or the total number of matching instances. Safe to call from any Apex context.
+
 ---
 
 ## Operations & Alerting Configuration
 
 Revenant supports Custom Metadata-driven failure alerting. Operators can configure notifications directly in Salesforce Setup without code modifications by creating **Workflow Alert Config** (`Workflow_Alert_Config__mdt`) records:
+
+### Access Model (Three-Tier Least-Privilege)
+
+Revenant ships least-privilege permission sets so that monitoring staff are granted exactly the access they need. The engine's replay correctness and saga integrity depend on the append-only `Workflow_Step_Execution__c` audit trail and the `Workflow_Instance__c.Compensation_Stack__c` LIFO field never being mutated out-of-band, so **do not** reach for `Revenant_Admin` just to let someone watch the dashboard. Pick the lowest tier that fits the persona:
+
+| Tier | Persona | Assign | Can do | Cannot do |
+| --- | --- | --- | --- | --- |
+| **1. Read-only Operator** | NOC / support tier-2 / on-call monitoring | `Revenant_Operator` permission set | Open the `workflowDashboard` LWC; read every `Workflow_Instance__c`, `Workflow_Step_Execution__c` and `Workflow_Signal__c` (including rehydrated offloaded payloads) | No create/edit/delete or `modifyAll` on any engine object; no recovery actions (re-drive, cancel, resume, compensate, pause/resume, redeliver, start, inject) |
+| **2. Action-capable Operator** | Ops engineer trusted to recover stuck runs | `Revenant_Operator` **plus** the `Workflow_Operator_Action` custom permission **and** Apex access to `WorkflowDashboardCommandController` (e.g. via a small supplemental permission set) | Everything in Tier 1, plus the guarded recovery actions that mutate engine state | Still no direct record edit/delete of the append-only trail or the compensation stack (mutations run through system-mode engine Apex, never raw DML) |
+| **3. Admin** | Revenant administrator / installer | `Revenant_Admin` permission set (unchanged) | Full Create/Edit/Delete + `modifyAll`/`viewAll` on all engine objects; every dashboard action; signal injection; step-skip | — |
+
+How the gates map to permissions:
+
+- **Dashboard visibility** is gated by `WorkflowDashboardSupport.checkAuthorization()`, which passes for holders of the `Workflow_Dashboard_View` custom permission (granted by `Revenant_Operator`), the `Workflow_Admin` custom permission (granted by `Revenant_Admin`), or the "Modify All Data" system permission.
+- **State-mutating recovery actions** are separately gated by `WorkflowDashboardSupport.checkOperatorAction()`, which passes only for holders of the `Workflow_Operator_Action` custom permission, `Workflow_Admin`, or "Modify All Data". Because the read-only tier holds `Workflow_Dashboard_View` (not `Workflow_Admin`), **granting dashboard visibility never implicitly grants the ability to re-drive, cancel, or delete.**
+- **Signal injection** (`Workflow_Signal_Injection`) and **step-skip** (`Workflow_Step_Skip`) remain independently gated on their own custom permissions, layered on top of the action gate.
 
 ### Mapping Workflow Definitions to Alert Configurations
 
@@ -574,6 +785,8 @@ Revenant settings can be configured without code modifications by editing the **
    - Active instances are always deduped regardless of this value. A blank correlation key is never deduped (a key is required to start).
    - Use `WorkflowEngine.startOrGet(...)` (or the **Start Workflow** Invocable's `Is New` output) to observe whether a call started a new instance or returned an existing one, without a re-query.
    - **Concurrency note:** the unique `Active_Correlation_Key__c` index is the hard backstop for two simultaneous _active_ starts (the loser receives the winner's Id). Terminal-window dedup is **best-effort under concurrent redelivery**: if a sibling run both starts and reaches a terminal state in the narrow window between a redelivery's lookup and its insert, a duplicate of the just-finished (in-window) run can still be created, because the unique index no longer applies once the original is terminal. Active redelivery and sequential post-completion redelivery are fully covered; closing the concurrent terminal race would require an extra per-start query and is intentionally not done to keep the start path to a single indexed SOQL.
+4. **Storage Warning Threshold Percent** (`Storage_Warning_Threshold_Percent__c` - Number, default `75`):
+   - The percentage of the org's data-storage allowance at or above which the System Doctor **Storage Footprint** panel flips to a warning state (see below). Operator-set, no code. Leave blank to use the documented default of 75%.
 
 ### Architectural Trade-offs
 
@@ -594,6 +807,8 @@ The Workflow Dashboard includes a **System Doctor** tab to monitor limits, check
 - **Watchdog Health**: Indicates whether the self-chaining watchdog Queueable chain is active (`Running`) or has stalled (`Stopped`).
 - **Bootstrap Action**: Includes an **Enqueue Watchdog** button to manually trigger and restart the Queueable chain if it ever halts (e.g., during major platform maintenance windows).
 - **Limits Auditing**: Displays active `CronTrigger` utilization (against the 100-job limit) and pending database sweeps (sleeping instances and step timeouts).
+- **Storage Footprint**: A strictly read-only, aggregate-only view of how much of the org's hard, billable data-storage allowance Revenant consumes and how fast it is growing. For each of the seven Revenant data objects (`Workflow_Instance__c`, `Workflow_Step_Execution__c`, `Workflow_Signal__c`, `Workflow_Log__c`, `Rate_Limit_State__c`, `Workflow_Pause_State__c`, `Workflow_Schedule__c`) it shows a live record count, an **estimated** storage size (record count × a standard ~2 KB/record estimate — labeled as an estimate), and **7-day and 30-day growth deltas** so operators can see acceleration, not just a static total. Offloaded large payloads are accounted separately as the summed byte volume of engine-owned `ContentVersion` files (real storage the record-count estimate misses). The combined estimate is expressed as a **percentage of the org's data-storage allowance** (via `System.OrgLimits` `DataStorageMB`) and flips the panel to a warning state once it crosses the operator-configurable `Storage_Warning_Threshold_Percent__c` threshold (default 75%). It writes no records, publishes no events, and enqueues no jobs.
+  - **Measure → decide → purge:** this panel _measures_ the footprint and warns _before_ the org hits its storage wall. To _act_ on that signal, reclaim storage with `CleanupWorkflow` (purge of terminal instances and their offloaded documents) or archive-before-purge (#105). The panel is early-warning only; remediation stays with those workflows.
 
 ---
 

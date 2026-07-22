@@ -173,6 +173,16 @@ public inherited sharing class WorkflowScalarStartService {
       }
     }
 
+    // Opt-in input-contract validation (INV-51): only a GENUINE new start reaches
+    // here (an existing get-or-start / signal-or-start hit returned above without
+    // being validated, since its input is never persisted). If the target workflow
+    // implements ValidatedWorkflow, reject a bad start payload now — before the
+    // instance insert or any enqueue — with a field-level WorkflowInputException. A
+    // non-ValidatedWorkflow workflow is a free no-op (an instanceof on the resolved
+    // definition; zero SOQL, zero DML). Validation runs after the dedup pre-query
+    // but adds no query/DML of its own.
+    WorkflowInputValidator.validate(req);
+
     Workflow_Instance__c instance = WorkflowStartInstanceBuilder.buildInstance(
       req
     );

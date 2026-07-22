@@ -29,6 +29,7 @@ public inherited sharing class WorkflowScheduleReadService {
         Input_Json__c,
         Enabled__c,
         Overlap_Policy__c,
+        Time_Zone__c,
         Dedicated_Slot__c,
         Last_Fired_Window__c,
         Last_Outcome__c,
@@ -63,6 +64,7 @@ public inherited sharing class WorkflowScheduleReadService {
           'Input_Json__c' => s.Input_Json__c,
           'Enabled__c' => s.Enabled__c,
           'Overlap_Policy__c' => s.Overlap_Policy__c,
+          'Time_Zone__c' => s.Time_Zone__c,
           'Dedicated_Slot__c' => s.Dedicated_Slot__c,
           'Last_Fired_Window__c' => s.Last_Fired_Window__c,
           'Last_Outcome__c' => s.Last_Outcome__c,
@@ -104,6 +106,7 @@ public inherited sharing class WorkflowScheduleReadService {
         Input_Json__c,
         Enabled__c,
         Overlap_Policy__c,
+        Time_Zone__c,
         Dedicated_Slot__c,
         Last_Fired_Window__c,
         Last_Outcome__c
@@ -147,39 +150,58 @@ public inherited sharing class WorkflowScheduleReadService {
       'logs' => logs,
       'nextFireTime' => WorkflowCronEvaluator.nextFireTime(
         sched.Cron_Expression__c,
-        DateTime.now()
+        DateTime.now(),
+        sched.Time_Zone__c
       ),
       'lastFireTime' => WorkflowCronEvaluator.previousFireTime(
         sched.Cron_Expression__c,
-        DateTime.now()
+        DateTime.now(),
+        sched.Time_Zone__c
       )
     };
   }
 
   /**
    * @description WorkflowDefinition class names for the editor combobox. Reuses the
-   * dashboard's discovery logic.
+   * shared discovery logic WITHOUT an authorization check; this service is gated on
+   * its own (Workflow_Schedule) permission, so it calls the discovery service directly.
    * @return The discoverable WorkflowDefinition class names.
    */
   public static List<String> listWorkflowDefinitions() {
-    return WorkflowDashboardController.getDefinitionsUnchecked();
+    return WorkflowDefinitionDiscoveryService.discover();
+  }
+
+  /**
+   * @description Supported IANA time-zone ids for the editor's time-zone picker.
+   * A blank selection stored on the schedule means UTC (the pre-existing behavior).
+   * @return The sorted list of supported IANA time-zone ids.
+   */
+  public static List<String> listTimeZones() {
+    return WorkflowCronEvaluator.supportedZones();
   }
 
   /**
    * @description Live cron preview for the editor: validity plus last/next fire
-   * instants.
+   * instants, evaluated in the given IANA time zone (blank = UTC). The preview is
+   * marked invalid when the cron is unparseable or the zone is unsupported.
    * @param cron The cron expression to preview.
+   * @param zoneId The IANA time zone the cron is interpreted in (blank = UTC).
    * @return A map with the valid flag and, when valid, last/next fire times.
    */
-  public static Map<String, Object> buildCronPreview(String cron) {
-    Boolean valid = WorkflowCronEvaluator.isValidCron(cron);
+  public static Map<String, Object> buildCronPreview(
+    String cron,
+    String zoneId
+  ) {
+    Boolean valid =
+      WorkflowCronEvaluator.isValidCron(cron) &&
+      WorkflowCronEvaluator.isValidZone(zoneId);
     return new Map<String, Object>{
       'valid' => valid,
       'lastFire' => valid
-        ? WorkflowCronEvaluator.previousFireTime(cron, DateTime.now())
+        ? WorkflowCronEvaluator.previousFireTime(cron, DateTime.now(), zoneId)
         : null,
       'nextFire' => valid
-        ? WorkflowCronEvaluator.nextFireTime(cron, DateTime.now())
+        ? WorkflowCronEvaluator.nextFireTime(cron, DateTime.now(), zoneId)
         : null
     };
   }

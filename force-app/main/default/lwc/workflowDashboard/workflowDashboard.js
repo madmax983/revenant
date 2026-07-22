@@ -14,6 +14,7 @@ import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.g
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
 import getInstanceDetails from "@salesforce/apex/WorkflowDashboardController.getInstanceDetails";
 import getDefinitions from "@salesforce/apex/WorkflowDashboardController.getDefinitions";
+import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog";
 import startWorkflow from "@salesforce/apex/WorkflowDashboardCommandController.startWorkflow";
 import retryWorkflowInstance from "@salesforce/apex/WorkflowDashboardCommandController.retryWorkflowInstance";
 import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardController.getRedriveEligibleCount";
@@ -35,6 +36,7 @@ import redeliverSignal from "@salesforce/apex/WorkflowDashboardCommandController
 import pauseDefinition from "@salesforce/apex/WorkflowDashboardCommandController.pauseDefinition";
 import resumeDefinition from "@salesforce/apex/WorkflowDashboardCommandController.resumeDefinition";
 import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
+import getStorageFootprint from "@salesforce/apex/WorkflowDashboardController.getStorageFootprint";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
 import getDefinitionLatency from "@salesforce/apex/WorkflowDashboardController.getDefinitionLatency";
@@ -78,6 +80,11 @@ export default class WorkflowDashboard extends LightningElement {
   loadingDoctor = false;
   doctorData = { config: {} };
   concurrencyRows = [];
+
+  // Storage Footprint panel state (System Doctor). storageData holds the shaped
+  // per-object rows and allowance metrics returned by getStorageFootprint.
+  storageData = null;
+  storageObjectRows = [];
 
   // Schedules view state (renders the standalone workflowScheduleManager component)
   viewingSchedules = false;
@@ -155,6 +162,11 @@ export default class WorkflowDashboard extends LightningElement {
     { label: "Last 24 hours", value: "24h" },
     { label: "Last 7 days", value: "7d" },
   ];
+
+  // Catalog view state (read-only deployed-workflow catalog with live health)
+  viewingCatalog = false;
+  loadingCatalog = false;
+  catalogRows = [];
 
   // Failure Breakdown view state
   viewingFailureBreakdown = false;
@@ -297,6 +309,10 @@ export default class WorkflowDashboard extends LightningElement {
       this.breakdownData.steps &&
       this.breakdownData.steps.length > 0
     );
+  }
+
+  get hasCatalogRows() {
+    return this.catalogRows && this.catalogRows.length > 0;
   }
 
   get breakdownRows() {
@@ -868,6 +884,7 @@ export default class WorkflowDashboard extends LightningElement {
   formatInstance(inst) {
     const idleLabel =
       inst.idleMinutes != null ? `${inst.idleMinutes}m idle` : null;
+    const waitDescriptor = inst.waitDescriptor || null;
     return {
       ...inst,
       formattedDate: this.formatDateTime(inst.CreatedDate),
@@ -876,6 +893,9 @@ export default class WorkflowDashboard extends LightningElement {
         : null,
       listItemClass: `slds-p-around_small list-item clickable ${this.selectedInstanceId === inst.Id ? "item-selected" : ""}`,
       statusBadgeClass: this.getStatusBadgeClass(inst.Status__c),
+      hasWaitDescriptor: !!waitDescriptor,
+      waitDescriptorLabel: waitDescriptor ? waitDescriptor.label : null,
+      awaitedSignalName: waitDescriptor ? waitDescriptor.signalName : null,
       isWatchdogWaiting: inst.waitingOn === "Watchdog",
       waitingOnBadgeClass:
         inst.waitingOn === "Watchdog"
@@ -918,10 +938,12 @@ export default class WorkflowDashboard extends LightningElement {
   handleSelectInstance(event) {
     this.stopPolling();
     this.viewingDoctor = false;
+    this.viewingSchedules = false;
     this.viewingDrain = false;
     this.viewingUnrouted = false;
-    this.viewingLatency = false;
+    this.viewingCatalog = false;
     this.viewingFailureBreakdown = false;
+    this.viewingLatency = false;
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
@@ -930,9 +952,12 @@ export default class WorkflowDashboard extends LightningElement {
   handleSelectRelatedInstance(event) {
     this.stopPolling();
     this.viewingDoctor = false;
+    this.viewingSchedules = false;
     this.viewingDrain = false;
     this.viewingUnrouted = false;
+    this.viewingCatalog = false;
     this.viewingFailureBreakdown = false;
+    this.viewingLatency = false;
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
@@ -980,6 +1005,13 @@ export default class WorkflowDashboard extends LightningElement {
             payloadFiles["instance.Progress"],
           ),
           waitingOn: result.waitingOn,
+          hasWaitDescriptor: !!result.waitDescriptor,
+          waitDescriptorLabel: result.waitDescriptor
+            ? result.waitDescriptor.label
+            : null,
+          awaitedSignalName: result.waitDescriptor
+            ? result.waitDescriptor.signalName
+            : null,
           isWatchdogWaiting: result.waitingOn === "Watchdog",
           waitingOnBadgeClass:
             result.waitingOn === "Watchdog"
@@ -1177,6 +1209,9 @@ export default class WorkflowDashboard extends LightningElement {
     if (this.viewingLatency) {
       this.fetchLatency();
     }
+    if (this.viewingCatalog) {
+      this.loadCatalog();
+    }
     this.fetchTrends();
     this.refreshInstances().then(() => {
       this.showToast("Success", "Workflow dashboard refreshed", "success");
@@ -1189,6 +1224,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingUnrouted = false;
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
+    this.viewingCatalog = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     this.loadDoctorStatus();
@@ -1204,6 +1240,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingUnrouted = false;
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
+    this.viewingCatalog = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     // Re-run the query if a workflow is already selected; the combobox value
@@ -1226,6 +1263,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingUnrouted = false;
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
+    this.viewingCatalog = false;
     this.selectedInstanceId = null;
   }
 
@@ -1240,6 +1278,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingSchedules = false;
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
+    this.viewingCatalog = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     this.loadUnroutedSignals();
@@ -1255,6 +1294,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDrain = false;
     this.viewingUnrouted = false;
     this.viewingSchedules = false;
+    this.viewingCatalog = false;
     this.viewingLatency = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
@@ -1268,6 +1308,77 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleCloseFailureBreakdown() {
     this.viewingFailureBreakdown = false;
+  }
+
+  handleOpenCatalog() {
+    this.viewingCatalog = true;
+    this.viewingDoctor = false;
+    this.viewingDrain = false;
+    this.viewingUnrouted = false;
+    this.viewingSchedules = false;
+    this.viewingFailureBreakdown = false;
+    this.viewingLatency = false;
+    this.selectedInstanceId = null;
+    this.filterInstancesList();
+    this.loadCatalog();
+  }
+
+  handleCloseCatalog() {
+    this.viewingCatalog = false;
+  }
+
+  loadCatalog() {
+    this.loadingCatalog = true;
+    getWorkflowCatalog()
+      .then((result) => {
+        this.catalogRows = (result || []).map((row) =>
+          this.formatCatalogRow(row),
+        );
+      })
+      .catch((error) => {
+        this.catalogRows = [];
+        this.showToast(
+          "Error",
+          "Failed to retrieve the workflow catalog: " +
+            this.reduceErrors(error),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.loadingCatalog = false;
+      });
+  }
+
+  // Shapes a raw catalog row for display: resolves the description/version placeholders and
+  // precomputes the deep-link dataset the template stamps onto the click targets.
+  formatCatalogRow(row) {
+    const description =
+      row.description && row.description.trim().length > 0
+        ? row.description
+        : "";
+    return {
+      ...row,
+      descriptionDisplay: description,
+      isUndocumented: !row.documented,
+      versionDisplay: row.versioned ? "v" + row.version : "—",
+    };
+  }
+
+  // Deep-links from a catalog row (or one of its status counts) to the instance list,
+  // filtered to that definition and — for a status count — that status. Reuses the existing
+  // selectedWorkflow / selectedStatus filter state rather than a parallel mechanism.
+  handleCatalogRowClick(event) {
+    const definition = event.currentTarget.dataset.definition;
+    const status = event.currentTarget.dataset.status || "";
+    if (!definition) {
+      return;
+    }
+    this.viewingCatalog = false;
+    this.showingStalled = false;
+    this.selectedWorkflow = definition;
+    this.selectedStatus = status;
+    this.selectedFailureCategory = "";
+    this.fetchInstances(false);
   }
 
   handleBreakdownWorkflowChange(event) {
@@ -1317,6 +1428,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDrain = false;
     this.viewingUnrouted = false;
     this.viewingSchedules = false;
+    this.viewingCatalog = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     if (this.selectedWorkflow) {
@@ -1589,10 +1701,104 @@ export default class WorkflowDashboard extends LightningElement {
           this.reduceErrors(error),
         );
       });
+
+    this.loadStorageFootprint();
   }
 
   get hasConcurrencyRows() {
     return this.concurrencyRows && this.concurrencyRows.length > 0;
+  }
+
+  // Loads the read-only Storage Footprint snapshot and shapes each per-object row with a
+  // human-readable size and formatted growth deltas for the panel. Best-effort: a failure
+  // clears the panel and logs, never blocking the rest of the System Doctor view.
+  loadStorageFootprint() {
+    getStorageFootprint()
+      .then((result) => {
+        if (!result) {
+          this.storageData = null;
+          this.storageObjectRows = [];
+          return;
+        }
+        this.storageData = result;
+        this.storageObjectRows = (result.objects || []).map((row) => ({
+          ...row,
+          estimatedSizeLabel: this.formatBytes(row.estimatedBytes),
+          delta7Label: this.formatDelta(row.delta7),
+          delta30Label: this.formatDelta(row.delta30),
+        }));
+      })
+      .catch((error) => {
+        this.storageData = null;
+        this.storageObjectRows = [];
+        console.error(
+          "Failed to load storage footprint:",
+          this.reduceErrors(error),
+        );
+      });
+  }
+
+  get hasStorageData() {
+    return !!this.storageData;
+  }
+
+  get storageContentSizeLabel() {
+    return this.storageData
+      ? this.formatBytes(this.storageData.contentVersionBytes)
+      : "—";
+  }
+
+  get storageTotalSizeLabel() {
+    return this.storageData
+      ? this.formatBytes(this.storageData.estimatedTotalBytes)
+      : "—";
+  }
+
+  // CSS class for the allowance meter: warning styling once the estimated footprint crosses
+  // the operator-configured threshold, otherwise the normal accent.
+  get storageAllowanceClass() {
+    return this.storageData && this.storageData.isOverThreshold
+      ? "storage-meter storage-meter_warning"
+      : "storage-meter";
+  }
+
+  get storagePercentLabel() {
+    if (!this.storageData || !this.storageData.hasStorageLimit) {
+      return "N/A";
+    }
+    return this.storageData.percentOfAllowance + "%";
+  }
+
+  // File-storage gauge: offloaded ContentVersion payloads bill against the org's FILE storage
+  // allowance, reported separately from the data-storage percentage. Informational only — the
+  // configurable warning threshold applies to the data percentage, not this one.
+  get storageFilePercentLabel() {
+    if (!this.storageData || !this.storageData.hasFileStorageLimit) {
+      return "N/A";
+    }
+    return this.storageData.filePercentOfAllowance + "%";
+  }
+
+  // Formats a byte count as a compact human-readable size (B / KB / MB / GB).
+  formatBytes(bytes) {
+    const value = Number(bytes) || 0;
+    if (value < 1024) {
+      return value + " B";
+    }
+    const units = ["KB", "MB", "GB", "TB"];
+    let size = value / 1024;
+    let unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex += 1;
+    }
+    return size.toFixed(1) + " " + units[unitIndex];
+  }
+
+  // Formats a trailing-window growth delta with an explicit "+" so acceleration reads clearly.
+  formatDelta(delta) {
+    const value = Number(delta) || 0;
+    return "+" + value;
   }
 
   handleEnqueueWatchdog() {
@@ -2052,7 +2258,12 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleOpenSignalModal() {
     this.signalModalOpen = true;
-    this.signalName = "";
+    // Pre-fill the awaited signal name (approval/child waits) so the operator can send it
+    // with no transformation; a generic/timer wait leaves it blank for manual entry.
+    this.signalName =
+      this.selectedInst && this.selectedInst.awaitedSignalName
+        ? this.selectedInst.awaitedSignalName
+        : "";
     this.signalPayload = "";
   }
 

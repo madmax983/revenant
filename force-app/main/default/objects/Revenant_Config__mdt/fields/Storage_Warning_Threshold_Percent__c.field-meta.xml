@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Storage_Warning_Threshold_Percent__c</fullName>
+    <defaultValue>75</defaultValue>
+    <description>Percentage of the org's data-storage allowance at or above which the System Doctor Storage Footprint panel flips to a warning state. Operator-set (no code). Leave blank to use the documented default of 75%.</description>
+    <externalId>false</externalId>
+    <fieldManageability>DeveloperControlled</fieldManageability>
+    <label>Storage Warning Threshold Percent</label>
+    <precision>5</precision>
+    <required>false</required>
+    <scale>2</scale>
+    <type>Number</type>
+</CustomField>

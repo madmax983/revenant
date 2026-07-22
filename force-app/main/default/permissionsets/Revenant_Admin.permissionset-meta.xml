@@ -314,6 +314,11 @@
     </fieldPermissions>
     <fieldPermissions>
         <editable>true</editable>
+        <field>Workflow_Schedule__c.Time_Zone__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
         <field>Workflow_Schedule__c.Dedicated_Slot__c</field>
         <readable>true</readable>
     </fieldPermissions>

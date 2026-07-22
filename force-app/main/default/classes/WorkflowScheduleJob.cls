@@ -42,6 +42,7 @@ public inherited sharing class WorkflowScheduleJob implements Schedulable {
         Input_Json__c,
         Enabled__c,
         Overlap_Policy__c,
+        Time_Zone__c,
         Dedicated_Slot__c
       FROM Workflow_Schedule__c
       WHERE Id = :scheduleId
@@ -79,7 +80,8 @@ public inherited sharing class WorkflowScheduleJob implements Schedulable {
     DateTime now = DateTime.now();
     DateTime fireTime = WorkflowCronEvaluator.previousFireTime(
       sched.Cron_Expression__c,
-      now
+      now,
+      sched.Time_Zone__c
     );
     if (fireTime == null) {
       fireTime = now;

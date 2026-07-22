@@ -9,6 +9,7 @@ public class WorkflowCronEvaluatorTest {
     37,
     0
   );
+  private static final String NY = 'America/New_York';
 
   // ── Exact-minute anchor ──────────────────────────────────────────────────
 
@@ -517,6 +518,339 @@ public class WorkflowCronEvaluatorTest {
         DateTime.newInstanceGmt(2026, 7, 1, 0, 0, 0),
         result,
         'First-of-month: next from Jun 17 should be Jul 1'
+      );
+    }
+  }
+
+  // ── Zone-aware evaluation (America/New_York) ──────────────────────────────
+
+  @IsTest
+  static void testZoneNightlyEst() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Winter: 02:00 US/Eastern (EST, UTC-5) resolves to 07:00Z. Reference is
+      // 2026-01-15 12:00Z (07:00 EST), so the previous 02:00 window is same day.
+      DateTime ref = DateTime.newInstanceGmt(2026, 1, 15, 12, 0, 0);
+      DateTime result = WorkflowCronEvaluator.previousFireTime(
+        '0 2 * * *',
+        ref,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 1, 15, 7, 0, 0),
+        result,
+        'EST nightly 02:00 should resolve to 07:00Z'
+      );
+    }
+  }
+
+  @IsTest
+  static void testZoneNightlyEdt() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Summer: 02:00 US/Eastern (EDT, UTC-4) resolves to 06:00Z. Reference is
+      // 2026-06-17 12:00Z (08:00 EDT).
+      DateTime ref = DateTime.newInstanceGmt(2026, 6, 17, 12, 0, 0);
+      DateTime result = WorkflowCronEvaluator.previousFireTime(
+        '0 2 * * *',
+        ref,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 6, 17, 6, 0, 0),
+        result,
+        'EDT nightly 02:00 should resolve to 06:00Z'
+      );
+    }
+  }
+
+  @IsTest
+  static void testZoneSpringGapFiresOnceAtBoundary() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Spring-forward day 2026-03-08: local clocks jump 02:00 → 03:00, so the
+      // 02:00 wall clock never occurs. Policy returns the gap boundary ONCE: the
+      // transition instant 07:00Z, which renders as 03:00 EDT. Reference is
+      // 2026-03-08 12:00Z (08:00 EDT).
+      DateTime ref = DateTime.newInstanceGmt(2026, 3, 8, 12, 0, 0);
+      DateTime result = WorkflowCronEvaluator.previousFireTime(
+        '0 2 * * *',
+        ref,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 3, 8, 7, 0, 0),
+        result,
+        'Spring gap 02:00 should resolve once to the boundary 07:00Z'
+      );
+      System.assertEquals(
+        '2026-03-08 03:00',
+        result.format('yyyy-MM-dd HH:mm', NY),
+        'Boundary instant renders as 03:00 New York wall clock'
+      );
+
+      // A time strictly inside the gap (02:30) also collapses to the boundary.
+      DateTime midGap = WorkflowCronEvaluator.previousFireTime(
+        '30 2 * * *',
+        ref,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 3, 8, 7, 0, 0),
+        midGap,
+        'A local time inside the gap resolves to the same boundary instant'
+      );
+    }
+  }
+
+  @IsTest
+  static void testZoneFallBackFiresOnce() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Fall-back day 2026-11-01: local 01:00–01:59 occurs twice. 02:00 occurs
+      // once (EST) → 07:00Z. Reference is 2026-11-01 12:00Z (07:00 EST).
+      DateTime ref = DateTime.newInstanceGmt(2026, 11, 1, 12, 0, 0);
+      DateTime nightly = WorkflowCronEvaluator.previousFireTime(
+        '0 2 * * *',
+        ref,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 1, 7, 0, 0),
+        nightly,
+        'Fall-back 02:00 EST should resolve to 07:00Z'
+      );
+
+      // 01:30 exists twice; policy picks the FIRST (pre-transition, EDT) at
+      // 05:30Z so the calendar day fires exactly once.
+      DateTime overlap = WorkflowCronEvaluator.previousFireTime(
+        '30 1 * * *',
+        ref,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 1, 5, 30, 0),
+        overlap,
+        'Overlapping 01:30 should resolve to the earliest (EDT) occurrence 05:30Z'
+      );
+
+      // Due-detection INSIDE the repeated hour's second (EST) occurrence. At the
+      // transition boundary 06:00Z (local 01:00 EST), the 01:30 window already
+      // fired at its earliest (EDT) occurrence 05:30Z — which is before now — so
+      // the most-recent fire at or before now is 2026-11-01 05:30Z, NOT the prior
+      // day. This is the linchpin the naive single-projection walk got wrong.
+      DateTime atBoundary = DateTime.newInstanceGmt(2026, 11, 1, 6, 0, 0);
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 1, 5, 30, 0),
+        WorkflowCronEvaluator.previousFireTime('30 1 * * *', atBoundary, NY),
+        'At 06:00Z (local 01:00 EST) previous must be Nov-1 05:30Z, not the prior day'
+      );
+
+      // Later in the second occurrence (06:45Z, local 01:45 EST): the 01:30 window
+      // still resolves to its earliest (EDT) 05:30Z. It must NOT return the second
+      // occurrence 06:30Z — that would carry a different Fire_Key and double-fire.
+      DateTime lateInHour = DateTime.newInstanceGmt(2026, 11, 1, 6, 45, 0);
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 1, 5, 30, 0),
+        WorkflowCronEvaluator.previousFireTime('30 1 * * *', lateInHour, NY),
+        'At 06:45Z the 01:30 window must fire once at 05:30Z, never at 06:30Z'
+      );
+
+      // Multi-fire-per-hour proves a single probe is insufficient: */15 in local
+      // hour 01 fires 01:00/01:15/01:30/01:45, whose earliest (EDT) occurrences are
+      // 05:00/05:15/05:30/05:45Z. At 06:10Z the latest earliest-UTC at or before
+      // now is 05:45Z, requiring a bounded walk of the overlap hour.
+      DateTime multiRef = DateTime.newInstanceGmt(2026, 11, 1, 6, 10, 0);
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 1, 5, 45, 0),
+        WorkflowCronEvaluator.previousFireTime('*/15 1 * * *', multiRef, NY),
+        'At 06:10Z the latest earliest-UTC */15 window at or before now is 05:45Z'
+      );
+
+      // No regression on a normal (non-overlap) summer day: 01:30 EDT is a single
+      // occurrence resolving to 05:30Z, with no overlap-walk influence.
+      DateTime normalRef = DateTime.newInstanceGmt(2026, 6, 17, 12, 0, 0);
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 6, 17, 5, 30, 0),
+        WorkflowCronEvaluator.previousFireTime('30 1 * * *', normalRef, NY),
+        'Normal-day 01:30 EDT resolves to 05:30Z unchanged'
+      );
+    }
+  }
+
+  @IsTest
+  static void testZoneFallBackForwardReturnsFutureInstant() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Fall-back day 2026-11-01: local 01:30 occurs twice — 05:30Z (EDT,
+      // pre-transition) and 06:30Z (EST, post-transition). With now at 06:00Z
+      // (between the two occurrences) the earliest occurrence 05:30Z is already
+      // in the past, so a forward search must NOT return it; it must skip to the
+      // next day's 01:30 fire, which under EST resolves to 2026-11-02 06:30Z.
+      DateTime nowBetween = DateTime.newInstanceGmt(2026, 11, 1, 6, 0, 0);
+      DateTime forward = WorkflowCronEvaluator.nextFireTime(
+        '30 1 * * *',
+        nowBetween,
+        NY
+      );
+      System.assert(
+        forward >= nowBetween,
+        'Forward search across a fall-back overlap must return a strictly-future instant, not the past 05:30Z occurrence (got ' +
+          forward +
+          ')'
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 2, 6, 30, 0),
+        forward,
+        'Forward search should skip to the next day 01:30 EST fire at 06:30Z'
+      );
+
+      // The backward/due-detection path is unchanged: previous still resolves the
+      // overlap to the earliest (EDT) occurrence 05:30Z at or before now.
+      DateTime backward = WorkflowCronEvaluator.previousFireTime(
+        '30 1 * * *',
+        nowBetween,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 11, 1, 5, 30, 0),
+        backward,
+        'Previous must still resolve the overlap to the earliest (EDT) 05:30Z occurrence'
+      );
+
+      // No regression on a normal (non-transition) summer day: no overlap, so the
+      // forward search accepts the first matched local wall clock. 2026-06-17
+      // 01:30 EDT (offset -4) resolves to 05:30Z and is returned unchanged.
+      DateTime normalRef = DateTime.newInstanceGmt(2026, 6, 17, 0, 0, 0);
+      DateTime normalForward = WorkflowCronEvaluator.nextFireTime(
+        '30 1 * * *',
+        normalRef,
+        NY
+      );
+      System.assert(
+        normalForward >= normalRef,
+        'Normal-day forward search must return an instant at or after now'
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 6, 17, 5, 30, 0),
+        normalForward,
+        'Normal-day 01:30 EDT should resolve to 05:30Z with no overlap skipping'
+      );
+
+      // Current-minute window must be KEPT when now carries seconds. Summer EDT
+      // (UTC-4): 09:00:30 local is 13:00:30Z. A "0 9 * * *" forward search must
+      // return TODAY's 09:00 fire (13:00:00Z), not push to tomorrow — the guard
+      // floors now to the minute so the minute-aligned candidate is accepted,
+      // matching the blank/UTC path which truncates now before matching.
+      DateTime nowWithSeconds = DateTime.newInstanceGmt(2026, 7, 19, 13, 0, 30);
+      DateTime currentMinute = WorkflowCronEvaluator.nextFireTime(
+        '0 9 * * *',
+        nowWithSeconds,
+        NY
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 7, 19, 13, 0, 0),
+        currentMinute,
+        'Zoned forward search at 09:00:30 must keep the current 09:00 minute (13:00Z), not skip to tomorrow'
+      );
+
+      // Blank/UTC path is unchanged: it already truncates now to the minute, so
+      // 09:00:30Z on "0 9 * * *" keeps the current 09:00Z window (the behavior
+      // the zoned path above is being made consistent with).
+      DateTime blankNowWithSeconds = DateTime.newInstanceGmt(
+        2026,
+        7,
+        19,
+        9,
+        0,
+        30
+      );
+      DateTime blankCurrentMinute = WorkflowCronEvaluator.nextFireTime(
+        '0 9 * * *',
+        blankNowWithSeconds,
+        ''
+      );
+      System.assertEquals(
+        DateTime.newInstanceGmt(2026, 7, 19, 9, 0, 0),
+        blankCurrentMinute,
+        'Blank-zone forward search keeps the current 09:00Z minute at 09:00:30Z'
+      );
+    }
+  }
+
+  // ── Backward compatibility: blank/null zone == the no-arg exact-GMT path ────
+
+  @IsTest
+  static void testBlankZoneMatchesNoArgExactly() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<String> crons = new List<String>{
+        '0 * * * *',
+        '*/15 * * * *',
+        '0 2 * * *',
+        '0 9 * * 1',
+        '0 0 1 * *',
+        '0-30/10 * * * *'
+      };
+      for (String cron : crons) {
+        DateTime baselinePrev = WorkflowCronEvaluator.previousFireTime(
+          cron,
+          REF
+        );
+        System.assertEquals(
+          baselinePrev,
+          WorkflowCronEvaluator.previousFireTime(cron, REF, null),
+          'Null zone previous must equal the no-arg result for ' + cron
+        );
+        System.assertEquals(
+          baselinePrev,
+          WorkflowCronEvaluator.previousFireTime(cron, REF, ''),
+          'Blank zone previous must equal the no-arg result for ' + cron
+        );
+
+        DateTime baselineNext = WorkflowCronEvaluator.nextFireTime(cron, REF);
+        System.assertEquals(
+          baselineNext,
+          WorkflowCronEvaluator.nextFireTime(cron, REF, null),
+          'Null zone next must equal the no-arg result for ' + cron
+        );
+        System.assertEquals(
+          baselineNext,
+          WorkflowCronEvaluator.nextFireTime(cron, REF, ''),
+          'Blank zone next must equal the no-arg result for ' + cron
+        );
+      }
+    }
+  }
+
+  // ── isValidZone ─────────────────────────────────────────────────────────────
+
+  @IsTest
+  static void testIsValidZone() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      System.assertEquals(
+        true,
+        WorkflowCronEvaluator.isValidZone(null),
+        'Null zone (UTC) is valid'
+      );
+      System.assertEquals(
+        true,
+        WorkflowCronEvaluator.isValidZone(''),
+        'Blank zone (UTC) is valid'
+      );
+      System.assertEquals(
+        true,
+        WorkflowCronEvaluator.isValidZone('America/New_York'),
+        'Supported IANA id is valid'
+      );
+      System.assertEquals(
+        true,
+        WorkflowCronEvaluator.isValidZone('UTC'),
+        'Explicit UTC is valid'
+      );
+      System.assertEquals(
+        false,
+        WorkflowCronEvaluator.isValidZone('Not/AZone'),
+        'Unsupported id is invalid'
+      );
+      System.assertEquals(
+        false,
+        WorkflowCronEvaluator.isValidZone('america/new_york'),
+        'Case-mismatched id is invalid'
       );
     }
   }
