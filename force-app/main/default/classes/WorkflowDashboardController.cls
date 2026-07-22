@@ -182,6 +182,18 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
+   * @description Returns the read-only Workflow Catalog: one row per concrete, startable
+   * definition the engine discovers, each carrying its class name, a human-readable label,
+   * a description (or "undocumented" marker), the current declared version for
+   * VersionedWorkflow implementations, and an active/failed/suspended health rollup.
+   * @return One catalog row map per discovered definition, sorted by class name.
+   */
+  @AuraEnabled(cacheable=true)
+  public static List<Map<String, Object>> getWorkflowCatalog() {
+    return WorkflowCatalogService.buildCatalog();
+  }
+
+  /**
    * @description Returns a per-Definition_Version__c drain view for the given workflow
    * name: non-terminal, failed (re-drivable), and clean-terminal counts plus a
    * safeToRetire flag per observed version.

@@ -12,6 +12,7 @@ import cancelMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandCo
 import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardController.getRedriveEligibleCount";
 import redriveMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandController.redriveMatchingInstances";
 import injectSignal from "@salesforce/apex/WorkflowDashboardCommandController.injectSignal";
+import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog";
 
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
@@ -41,6 +42,11 @@ jest.mock(
 jest.mock(
   "@salesforce/apex/WorkflowDashboardCommandController.injectSignal",
   () => ({ default: jest.fn() }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog",
+  () => ({ default: jest.fn(() => Promise.resolve([])) }),
   { virtual: true },
 );
 
@@ -1940,5 +1946,109 @@ describe("c-workflow-dashboard business attributes filters", () => {
 
     pills = element.shadowRoot.querySelectorAll(".slds-pill");
     expect(pills.length).toBe(2);
+  });
+});
+
+describe("c-workflow-dashboard workflow catalog", () => {
+  const CATALOG_TWO_DEFS = [
+    {
+      className: "PurchaseApprovalWorkflow",
+      label: "Purchase Approval Workflow",
+      description: "Routes purchases for approval.",
+      documented: true,
+      versioned: true,
+      version: 3,
+      active: 4,
+      failed: 2,
+      suspended: 1,
+      total: 7,
+    },
+    {
+      className: "Order.HTTPRetryWorkflow",
+      label: "Order HTTP Retry Workflow",
+      description: null,
+      documented: false,
+      versioned: false,
+      version: null,
+      active: 0,
+      failed: 0,
+      suspended: 0,
+      total: 0,
+    },
+  ];
+
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  async function openCatalog() {
+    getWorkflowCatalog.mockResolvedValue(CATALOG_TWO_DEFS);
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+
+    const catalogBtn = findButton(element, (b) => b.label === "Catalog");
+    catalogBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    return element;
+  }
+
+  it("lists every discovered definition with counts, version and undocumented marker", async () => {
+    const element = await openCatalog();
+
+    expect(getWorkflowCatalog).toHaveBeenCalled();
+    const rows = element.shadowRoot.querySelectorAll("tbody tr");
+    expect(rows.length).toBe(2);
+
+    // The undocumented definition is flagged rather than dropped.
+    const badges = Array.from(
+      element.shadowRoot.querySelectorAll(".badge-grey"),
+    ).map((b) => b.textContent.trim());
+    expect(badges).toContain("Undocumented");
+
+    // The versioned definition surfaces its declared version.
+    expect(element.shadowRoot.textContent).toContain("v3");
+  });
+
+  it("deep-links a definition click to the filtered instance list", async () => {
+    const element = await openCatalog();
+    getFilteredInstances.mockClear();
+
+    const defButton = element.shadowRoot.querySelector(
+      'button.link-button[data-definition="PurchaseApprovalWorkflow"]:not([data-status])',
+    );
+    defButton.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    expect(getFilteredInstances).toHaveBeenCalled();
+    const criteria =
+      getFilteredInstances.mock.calls[
+        getFilteredInstances.mock.calls.length - 1
+      ][0].criteria;
+    expect(criteria.workflowName).toBe("PurchaseApprovalWorkflow");
+  });
+
+  it("deep-links a status count click to that definition and status", async () => {
+    const element = await openCatalog();
+    getFilteredInstances.mockClear();
+
+    const failedButton = element.shadowRoot.querySelector(
+      'button.link-button[data-definition="PurchaseApprovalWorkflow"][data-status="Failed"]',
+    );
+    failedButton.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    expect(getFilteredInstances).toHaveBeenCalled();
+    const criteria =
+      getFilteredInstances.mock.calls[
+        getFilteredInstances.mock.calls.length - 1
+      ][0].criteria;
+    expect(criteria.workflowName).toBe("PurchaseApprovalWorkflow");
+    expect(criteria.status).toBe("Failed");
   });
 });

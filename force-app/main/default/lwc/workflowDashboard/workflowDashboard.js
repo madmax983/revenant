@@ -14,6 +14,7 @@ import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.g
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
 import getInstanceDetails from "@salesforce/apex/WorkflowDashboardController.getInstanceDetails";
 import getDefinitions from "@salesforce/apex/WorkflowDashboardController.getDefinitions";
+import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog";
 import startWorkflow from "@salesforce/apex/WorkflowDashboardCommandController.startWorkflow";
 import retryWorkflowInstance from "@salesforce/apex/WorkflowDashboardCommandController.retryWorkflowInstance";
 import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardController.getRedriveEligibleCount";
@@ -161,6 +162,11 @@ export default class WorkflowDashboard extends LightningElement {
     { label: "Last 7 days", value: "7d" },
   ];
 
+  // Catalog view state (read-only deployed-workflow catalog with live health)
+  viewingCatalog = false;
+  loadingCatalog = false;
+  catalogRows = [];
+
   // Failure Breakdown view state
   viewingFailureBreakdown = false;
   loadingFailureBreakdown = false;
@@ -286,6 +292,10 @@ export default class WorkflowDashboard extends LightningElement {
       this.breakdownData.steps &&
       this.breakdownData.steps.length > 0
     );
+  }
+
+  get hasCatalogRows() {
+    return this.catalogRows && this.catalogRows.length > 0;
   }
 
   get breakdownRows() {
@@ -855,6 +865,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDrain = false;
     this.viewingUnrouted = false;
     this.viewingFailureBreakdown = false;
+    this.viewingCatalog = false;
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
@@ -1096,6 +1107,9 @@ export default class WorkflowDashboard extends LightningElement {
     if (this.viewingFailureBreakdown) {
       this.fetchFailureBreakdown();
     }
+    if (this.viewingCatalog) {
+      this.loadCatalog();
+    }
     this.fetchTrends();
     this.refreshInstances().then(() => {
       this.showToast("Success", "Workflow dashboard refreshed", "success");
@@ -1107,6 +1121,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDrain = false;
     this.viewingUnrouted = false;
     this.viewingFailureBreakdown = false;
+    this.viewingCatalog = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     this.loadDoctorStatus();
@@ -1121,6 +1136,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDoctor = false;
     this.viewingUnrouted = false;
     this.viewingFailureBreakdown = false;
+    this.viewingCatalog = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     // Re-run the query if a workflow is already selected; the combobox value
@@ -1142,6 +1158,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDrain = false;
     this.viewingUnrouted = false;
     this.viewingFailureBreakdown = false;
+    this.viewingCatalog = false;
     this.selectedInstanceId = null;
   }
 
@@ -1155,6 +1172,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingDoctor = false;
     this.viewingSchedules = false;
     this.viewingFailureBreakdown = false;
+    this.viewingCatalog = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
     this.loadUnroutedSignals();
@@ -1182,6 +1200,76 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleCloseFailureBreakdown() {
     this.viewingFailureBreakdown = false;
+  }
+
+  handleOpenCatalog() {
+    this.viewingCatalog = true;
+    this.viewingDoctor = false;
+    this.viewingDrain = false;
+    this.viewingUnrouted = false;
+    this.viewingSchedules = false;
+    this.viewingFailureBreakdown = false;
+    this.selectedInstanceId = null;
+    this.filterInstancesList();
+    this.loadCatalog();
+  }
+
+  handleCloseCatalog() {
+    this.viewingCatalog = false;
+  }
+
+  loadCatalog() {
+    this.loadingCatalog = true;
+    getWorkflowCatalog()
+      .then((result) => {
+        this.catalogRows = (result || []).map((row) =>
+          this.formatCatalogRow(row),
+        );
+      })
+      .catch((error) => {
+        this.catalogRows = [];
+        this.showToast(
+          "Error",
+          "Failed to retrieve the workflow catalog: " +
+            this.reduceErrors(error),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.loadingCatalog = false;
+      });
+  }
+
+  // Shapes a raw catalog row for display: resolves the description/version placeholders and
+  // precomputes the deep-link dataset the template stamps onto the click targets.
+  formatCatalogRow(row) {
+    const description =
+      row.description && row.description.trim().length > 0
+        ? row.description
+        : "";
+    return {
+      ...row,
+      descriptionDisplay: description,
+      isUndocumented: !row.documented,
+      versionDisplay: row.versioned ? "v" + row.version : "—",
+    };
+  }
+
+  // Deep-links from a catalog row (or one of its status counts) to the instance list,
+  // filtered to that definition and — for a status count — that status. Reuses the existing
+  // selectedWorkflow / selectedStatus filter state rather than a parallel mechanism.
+  handleCatalogRowClick(event) {
+    const definition = event.currentTarget.dataset.definition;
+    const status = event.currentTarget.dataset.status || "";
+    if (!definition) {
+      return;
+    }
+    this.viewingCatalog = false;
+    this.showingStalled = false;
+    this.selectedWorkflow = definition;
+    this.selectedStatus = status;
+    this.selectedFailureCategory = "";
+    this.fetchInstances(false);
   }
 
   handleBreakdownWorkflowChange(event) {
