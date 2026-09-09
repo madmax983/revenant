@@ -50,6 +50,13 @@
                     class="slds-m-left_small">
                 </lightning-button>
                 <lightning-button
+                    label="Latency"
+                    icon-name="utility:clock"
+                    variant="neutral"
+                    onclick={handleOpenLatency}
+                    class="slds-m-left_small">
+                </lightning-button>
+                <lightning-button
                     label="Catalog"
                     icon-name="utility:apps"
                     variant="neutral"
@@ -996,6 +1003,129 @@
                         </template>
 
                         <template if:false={viewingFailureBreakdown}>
+                        <!-- Latency Panel -->
+                        <template if:true={viewingLatency}>
+                            <template if:true={loadingLatency}>
+                                <div class="slds-align_absolute-center slds-p-around_large spinner-height">
+                                    <lightning-spinner alternative-text="Loading latency metrics..." size="medium"></lightning-spinner>
+                                </div>
+                            </template>
+                            <template if:false={loadingLatency}>
+                                <div class="slds-p-around_medium">
+                                    <!-- Header -->
+                                    <div class="slds-grid slds-grid_align-spread slds-m-bottom_medium border-bottom slds-p-bottom_small">
+                                        <div>
+                                            <h2 class="slds-text-heading_medium font-outfit slds-grid slds-grid_vertical-align-center">
+                                                <lightning-icon icon-name="utility:clock" size="small" class="slds-m-right_small text-primary"></lightning-icon>
+                                                Latency
+                                            </h2>
+                                            <p class="slds-text-color_weak slds-m-top_xx-small">End-to-end duration percentiles and the slowest steps by median <strong>wall-clock</strong> time (includes durable waits: sleeps, retries, wait-for-signal &mdash; not active compute).</p>
+                                        </div>
+                                        <lightning-button
+                                            label="Close"
+                                            variant="neutral"
+                                            icon-name="utility:close"
+                                            onclick={handleCloseLatency}>
+                                        </lightning-button>
+                                    </div>
+
+                                    <!-- Selectors -->
+                                    <div class="slds-grid slds-wrap slds-gutters slds-m-bottom_medium">
+                                        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2 slds-m-bottom_small">
+                                            <lightning-combobox
+                                                label="Workflow Definition"
+                                                value={latencyWorkflow}
+                                                options={definitionOptions}
+                                                placeholder="-- Select a Definition --"
+                                                onchange={handleLatencyWorkflowChange}>
+                                            </lightning-combobox>
+                                        </div>
+                                        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2 slds-m-bottom_small">
+                                            <lightning-combobox
+                                                label="Time Window"
+                                                value={latencyTimeWindow}
+                                                options={latencyTimeWindowOptions}
+                                                onchange={handleLatencyTimeWindowChange}>
+                                            </lightning-combobox>
+                                        </div>
+                                    </div>
+
+                                    <template if:true={latencyWorkflow}>
+                                        <!-- Sampled / window-truncated indicator -->
+                                        <template if:true={latencyIsCapped}>
+                                            <div class="slds-scoped-notification slds-media slds-media_center slds-theme_warning slds-m-bottom_medium" role="status">
+                                                <div class="slds-media__figure">
+                                                    <lightning-icon icon-name="utility:warning" alternative-text="Warning" size="small" variant="inverse"></lightning-icon>
+                                                </div>
+                                                <div class="slds-media__body">
+                                                    <p>Sampled / window truncated: computed from the most recent <strong>{latencyData.capLimit}</strong> terminal instances. Widen or shorten the window for a complete picture.</p>
+                                                </div>
+                                            </div>
+                                        </template>
+
+                                        <template if:true={hasLatencyData}>
+                                            <!-- End-to-end percentile tiles -->
+                                            <div class="slds-grid slds-wrap slds-gutters slds-m-bottom_medium">
+                                                <template for:each={latencyPercentiles} for:item="pct">
+                                                    <div key={pct.key} class="slds-col slds-size_1-of-2 slds-medium-size_1-of-4 slds-m-bottom_small">
+                                                        <div class="stat-card border-left-blue">
+                                                            <div class="slds-text-title_caps slds-text-color_weak">{pct.label}</div>
+                                                            <div class="slds-text-heading_medium slds-m-top_xx-small">{pct.value}</div>
+                                                        </div>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                            <p class="slds-text-body_small slds-text-color_weak slds-m-bottom_medium">Based on <strong>{latencySampleSize}</strong> terminal instance(s). Wall-clock end-to-end duration (Terminal At &minus; Created Date).</p>
+
+                                            <!-- Slowest-step ranking -->
+                                            <div class="slds-text-title_caps slds-m-bottom_small">Steps ranked by median wall-clock (slowest first)</div>
+                                            <template if:true={hasLatencySteps}>
+                                                <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+                                                    <thead>
+                                                        <tr class="slds-line-height_reset">
+                                                            <th scope="col"><div class="slds-truncate" title="Step">Step</div></th>
+                                                            <th scope="col"><div class="slds-truncate" title="Median Wall-Clock">Median Wall-Clock</div></th>
+                                                            <th scope="col"><div class="slds-truncate" title="Samples">Samples</div></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <template for:each={latencyStepRows} for:item="step">
+                                                            <tr key={step.stepName} class="slds-hint-parent">
+                                                                <td><div class="slds-truncate font-mono" title={step.stepName}>{step.stepName}</div></td>
+                                                                <td><div class="slds-truncate">{step.medianDisplay}</div></td>
+                                                                <td><div class="slds-truncate">{step.sampleCount}</div></td>
+                                                            </tr>
+                                                        </template>
+                                                    </tbody>
+                                                </table>
+                                            </template>
+                                            <template if:false={hasLatencySteps}>
+                                                <div class="slds-text-color_weak slds-p-around_medium border-dashed slds-align_absolute-center">
+                                                    No step-execution deltas available for this definition in the selected window.
+                                                </div>
+                                            </template>
+                                        </template>
+                                        <template if:false={hasLatencyData}>
+                                            <div class="slds-align_absolute-center slds-p-around_large slds-text-align_center">
+                                                <div class="slds-flex_column">
+                                                    <lightning-icon icon-name="utility:clock" size="large" class="slds-m-bottom_medium text-weak-icon"></lightning-icon>
+                                                    <p class="slds-text-color_weak slds-text-heading_small">No terminal instances found for this definition in the selected window.</p>
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </template>
+                                    <template if:false={latencyWorkflow}>
+                                        <div class="slds-align_absolute-center slds-p-around_large slds-text-align_center">
+                                            <div class="slds-flex_column">
+                                                <lightning-icon icon-name="utility:clock" size="large" class="slds-m-bottom_medium text-weak-icon"></lightning-icon>
+                                                <p class="slds-text-color_weak">Select a workflow definition above to view its latency percentiles and slowest steps.</p>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                        </template>
+
                         <!-- Workflow Catalog Panel -->
                         <template if:true={viewingCatalog}>
                             <template if:true={loadingCatalog}>
@@ -1100,6 +1230,7 @@
                             </template>
                         </template>
 
+                        <template if:false={viewingLatency}>
                         <template if:false={viewingCatalog}>
                         <template if:true={selectedInstanceId}>
                         <template if:true={loadingDetails}>
@@ -1534,6 +1665,7 @@
                         </div>
                     </template>
                         </template><!-- /if:false viewingCatalog -->
+                        </template>
                         </template>
                         </template>
                         </template>

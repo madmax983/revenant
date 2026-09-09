@@ -163,11 +163,12 @@ public inherited sharing class WorkflowScheduleReadService {
 
   /**
    * @description WorkflowDefinition class names for the editor combobox. Reuses the
-   * dashboard's discovery logic.
+   * shared discovery logic WITHOUT an authorization check; this service is gated on
+   * its own (Workflow_Schedule) permission, so it calls the discovery service directly.
    * @return The discoverable WorkflowDefinition class names.
    */
   public static List<String> listWorkflowDefinitions() {
-    return WorkflowDashboardController.getDefinitionsUnchecked();
+    return WorkflowDefinitionDiscoveryService.discover();
   }
 
   /**
