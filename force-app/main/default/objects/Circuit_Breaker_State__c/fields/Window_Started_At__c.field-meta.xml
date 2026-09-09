@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Window_Started_At__c</fullName>
+    <description>When the current rolling failure-count window began. Once now exceeds this instant plus Rolling_Window_Seconds__c with the breaker still Closed, the failure count and window are reset.</description>
+    <externalId>false</externalId>
+    <label>Window Started At</label>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>DateTime</type>
+</CustomField>

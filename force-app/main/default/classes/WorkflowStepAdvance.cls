@@ -33,6 +33,23 @@ public inherited sharing class WorkflowStepAdvance {
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
+    // Circuit-breaker success sink (issue #128): a completed guarded step reports a
+    // healthy call, closing a half-open probe. No-op for an unguarded/unconfigured
+    // step (0 SOQL/0 DML). Best-effort — breaker accounting must never break the
+    // durable advance.
+    try {
+      CircuitBreakerGate.recordSuccessForStep(
+        instance.Workflow_Name__c,
+        stepExec.Step_Name__c
+      );
+    } catch (Exception breakerIgnored) {
+      WorkflowLog.error(
+        'CircuitBreaker',
+        'recordSuccessForStep failed: ' + breakerIgnored.getMessage(),
+        instance.Id
+      );
+    }
+
     // Tie signal consumption to the step's durable COMPLETE transition: only
     // now (not on yield/retry/suspend) are the signals this step observed
     // marked consumed, so an at-least-once redelivered duplicate cannot be

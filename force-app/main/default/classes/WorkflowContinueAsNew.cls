@@ -29,6 +29,13 @@ public inherited sharing class WorkflowContinueAsNew {
     }
     stepExec.Retry_Count__c += 1;
 
+    // Circuit-breaker failure sink (issue #128): every retry-triggering failure of a
+    // guarded step counts toward its dependency's rolling window (whether this
+    // attempt reschedules or exhausts below — exactly one recordFailure per failed
+    // attempt, so the window fills at the fleet's true failure rate with no double
+    // count). No-op for an unguarded/unconfigured step (0 SOQL/0 DML). Best-effort.
+    recordBreakerFailure(instance, stepExec);
+
     // Get and sanitize retry policy
     RetryPolicy policy = WorkflowRetryScheduling.sanitizePolicy(
       result.directive().retry.policy
@@ -315,6 +322,11 @@ public inherited sharing class WorkflowContinueAsNew {
       : result.directive().failureReason;
     WorkflowStepExecStore.saveStepExec(stepExec);
 
+    // Circuit-breaker failure sink (issue #128): a deliberate terminal failure of a
+    // guarded step also counts toward its dependency's breaker window. No-op for an
+    // unguarded/unconfigured step (0 SOQL/0 DML). Best-effort.
+    recordBreakerFailure(instance, stepExec);
+
     // Publish any domain events the step buffered via StepContext.emit() before
     // returning fail() — same commit-coupling contract as COMPLETE/SPLIT so
     // callers never silently lose events on deliberate terminal failures.
@@ -326,6 +338,27 @@ public inherited sharing class WorkflowContinueAsNew {
     explicitFailReq.errorMessage = result.directive().failureReason;
     explicitFailReq.failureCategory = WorkflowEngine.CAT_EXPLICIT_FAIL;
     WorkflowEngine.failWorkflowInstance(explicitFailReq);
+  }
+
+  // Records a guarded step's failure against its dependency's circuit breaker.
+  // Shared by the retry/exhausted path and the explicit-fail path. Best-effort so
+  // breaker accounting can never break the durable failure transition.
+  private static void recordBreakerFailure(
+    Workflow_Instance__c instance,
+    Workflow_Step_Execution__c stepExec
+  ) {
+    try {
+      CircuitBreakerGate.recordFailureForStep(
+        instance.Workflow_Name__c,
+        stepExec.Step_Name__c
+      );
+    } catch (Exception breakerIgnored) {
+      WorkflowLog.error(
+        'CircuitBreaker',
+        'recordFailureForStep failed: ' + breakerIgnored.getMessage(),
+        instance.Id
+      );
+    }
   }
 
   private static String resolveContinueAsNewKey(
