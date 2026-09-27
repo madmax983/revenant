@@ -169,6 +169,10 @@ endpoints moved). Both delegate to `inherited sharing` service classes.
   `WorkflowTrendService`, `WorkflowVersionDrainService`,
   `WorkflowFailureBreakdownService`, `WorkflowDashboardStatusService`,
   `WorkflowDashboardQueryBuilders`, `WorkflowDashboardSupport`
+- Rate Limits panel (#61): `WorkflowRateLimitController` →
+  `WorkflowRateLimitStatusService`. It is a separate controller because
+  `WorkflowDashboardController` is at the PMD `ExcessivePublicCount` limit. The
+  service uses the `RateLimiter` refill formula (`availableTokens`).
 - Command side: `WorkflowDashboardCommandController` (holds `CancelRequest` /
   `ApprovalRequest` DTOs) → `WorkflowInstanceCommandService`,
   `WorkflowBulkCommandService`, `WorkflowApprovalCommandService`,

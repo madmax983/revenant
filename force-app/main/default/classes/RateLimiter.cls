@@ -228,17 +228,14 @@ public inherited sharing class RateLimiter {
     return existingStates[0];
   }
 
-  // Refills the bucket for elapsed time and consumes one token when available.
+  // Refills the bucket for elapsed time and consumes one token when available. The
+  // refill and wait math is shared with the dashboard Rate Limits panel.
   private static AcquireResult refillAndConsume(
     Rate_Limit_State__c state,
     Rate_Limit_Config__mdt config,
     Long now
   ) {
-    Decimal elapsed = (Decimal) (now - state.Last_Refill_Time_Ms__c) / 1000.0;
-    elapsed = (elapsed < 0.0) ? 0.0 : elapsed;
-    Decimal calculatedTokens =
-      state.Tokens_Remaining__c + (elapsed * config.Refill_Rate_Per_Second__c);
-    Decimal currentTokens = Math.min(config.Capacity__c, calculatedTokens);
+    Decimal currentTokens = availableTokens(state, config, now);
 
     if (currentTokens >= 1.0) {
       state.Tokens_Remaining__c = currentTokens - 1.0;
@@ -254,7 +251,7 @@ public inherited sharing class RateLimiter {
     // Last_Refill_Time_Ms__c), which correctly refills the token bucket.
 
     // Calculate delay until next token is available
-    Decimal waitTime = (1.0 - currentTokens) / config.Refill_Rate_Per_Second__c;
+    Decimal waitTime = secondsUntilNextToken(currentTokens, config);
     Double jitter = 0.5 + (Math.random() * 1.0); // 0.5 to 1.5 seconds jitter
     Integer sleepSecs = (Integer) Math.ceil(waitTime + jitter);
     return throttled(sleepSecs);
