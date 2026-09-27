@@ -117,6 +117,8 @@ terminal/retry state, including transient-lock retry and backoff scheduling.
 - `WorkflowTransientLockRetry`
 - `WorkflowRetryService`, `WorkflowRetryScheduling`, `WorkflowRetryJob`,
   `WorkflowRetrySleepScheduler`
+- `WorkflowAutoRetry` + `AutoRetryConfigurable` interface: retry a thrown
+  step error under a declared policy (issue #101)
 
 ## Compensation & cancellation
 
@@ -183,7 +185,7 @@ sub-objects and helper classes.
 - `StepResult` (+ nested `StepDirective`/`RetryDirective`/`TimeoutDirective`/
   `ContinueDirective`, `ChildRequest`) + `StepResultJson`, `StepResultValidator`,
   `BusinessSleepCalculator`, `BusinessHoursCalendar`
-- `WorkflowDefinition`, `WorkflowStep`, `RetryPolicy`
+- `WorkflowDefinition`, `WorkflowStep`, `RetryPolicy`, `AutoRetryConfigurable`
 
 ---
 

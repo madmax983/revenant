@@ -3,8 +3,9 @@
  * step of the runStep orchestration. Resolves and instantiates the `WorkflowStep`,
  * asks `WorkflowStepContext` to hydrate the step's `StepContext`, executes the
  * step under its timeout bookkeeping (honoring test fault injection), and hands
- * the resulting `StepResult` to `WorkflowStepOutcome.handleStepResult`. All DML
- * and SOQL run in system mode.
+ * the resulting `StepResult` to `WorkflowStepOutcome.handleStepResult`. With an
+ * `AutoRetryConfigurable` policy, a thrown exception becomes a RETRY result
+ * (issue #101). All DML and SOQL run in system mode.
  */
 public inherited sharing class WorkflowStepInvoke {
   /**
