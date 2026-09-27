@@ -173,7 +173,9 @@ public inherited sharing class WorkflowDefinitionChangeGate {
   }
 
   // Engine-internal workflows (watchdog, cleanup, bulk jobs), with or without a
-  // namespace prefix. The pause gate exempts the same names.
+  // namespace prefix. The pause gate exempts the same names. A user inner class
+  // with a reserved name (for example Outer.CleanupWorkflow) is also exempt.
+  // That is the safe side: the engine can never park its own watchdog.
   private static Boolean isEngineWorkflow(String workflowName) {
     return String.isNotBlank(workflowName) &&
       (WorkflowPauseGate.isReserved(workflowName) ||

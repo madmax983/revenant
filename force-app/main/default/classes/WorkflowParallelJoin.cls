@@ -100,6 +100,8 @@ public inherited sharing class WorkflowParallelJoin {
         instance.Status__c == WorkflowDefinitionChangeGate.STATUS ||
         instance.Status__c == 'Paused'
       ) {
+        // Save the branch progress report, but keep the parked status.
+        Database.update(instance, true, AccessLevel.SYSTEM_MODE);
         return;
       }
       instance.Status__c = 'Suspended';

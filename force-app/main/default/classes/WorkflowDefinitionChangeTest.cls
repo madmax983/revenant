@@ -619,7 +619,10 @@ public class WorkflowDefinitionChangeTest {
             Workflow_Instance__c = inst.Id,
             Step_Name__c = STEP_B,
             Status__c = 'Pending',
-            Retry_Count__c = 0
+            Retry_Count__c = 0,
+            // A Pending row with CPU time is waiting work, so the verdict is
+            // SUSPEND. Without CPU time it counts as RUNNING and no write runs.
+            CPU_Time_Ms__c = 1
           )
         };
         WorkflowEngine.StepOutcomeContext outcome = new WorkflowEngine.StepOutcomeContext();
@@ -978,8 +981,8 @@ public class WorkflowDefinitionChangeTest {
         Correlation_Key__c = 'DefChg-ParRel-' + Datetime.now().getTime()
       );
       insert inst;
-      // No Test.stopTest(): the branch RUN_STEP events stay undelivered, so
-      // this test checks the release itself, not the branch runs.
+      // No Test.stopTest(): with disableQueueableInTest no branch runs, so this
+      // test checks the release itself.
       WorkflowDefinitionChangeService.release(inst.Id);
       Workflow_Instance__c released = load(inst.Id);
       System.assertEquals(
