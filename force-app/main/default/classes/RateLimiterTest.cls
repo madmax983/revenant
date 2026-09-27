@@ -1,5 +1,7 @@
 @IsTest
 public class RateLimiterTest {
+  private static final Long NOW_MS = 1790000000000L;
+
   @IsTest
   static void testRateLimiterAcquisitionAndRefill() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
@@ -213,8 +215,6 @@ public class RateLimiterTest {
     );
   }
 
-  private static final Long NOW_MS = 1790000000000L;
-
   /**
    * @description availableTokens adds elapsed seconds times the refill rate.
    */
@@ -268,11 +268,13 @@ public class RateLimiterTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       System.assertEquals(
         0.25,
-        RateLimiter.secondsUntilNextToken(0.5, config('K', 10, 2.0))
+        RateLimiter.secondsUntilNextToken(0.5, config('K', 10, 2.0)),
+        'Unexpected value of RateLimiter.secondsUntilNextToken(0.5, config(\'K\', 10, 2.0))'
       );
       System.assertEquals(
         10.0,
-        RateLimiter.secondsUntilNextToken(0.0, config('K', 10, 0.1))
+        RateLimiter.secondsUntilNextToken(0.0, config('K', 10, 0.1)),
+        'Unexpected value of RateLimiter.secondsUntilNextToken(0.0, config(\'K\', 10, 0.1))'
       );
     }
   }
@@ -291,7 +293,11 @@ public class RateLimiterTest {
         'Valid' => config('Valid', 5, 1.0)
       };
       RateLimiter.mockConfigs.putAll(cases);
-      System.assertEquals(false, RateLimiter.isValidConfig(null));
+      System.assertEquals(
+        false,
+        RateLimiter.isValidConfig(null),
+        'Unexpected value of RateLimiter.isValidConfig(null)'
+      );
       for (String key : cases.keySet()) {
         Boolean acquireAccepts = true;
         try {
@@ -317,7 +323,10 @@ public class RateLimiterTest {
       RateLimiter.mockConfigs.put('MockOnly', config('MockOnly', 3, 1.0));
       Map<String, Rate_Limit_Config__mdt> configs = RateLimiter.configuredLimits();
       System.assertEquals(1, configs.size(), 'Mocks replace the CMDT records');
-      System.assert(configs.containsKey('MockOnly'));
+      System.assert(
+        configs.containsKey('MockOnly'),
+        'Expected true: configs.containsKey(\'MockOnly\')'
+      );
     }
   }
 
@@ -329,9 +338,13 @@ public class RateLimiterTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       RateLimiter.mockConfigs.clear();
       Map<String, Rate_Limit_Config__mdt> configs = RateLimiter.configuredLimits();
-      System.assertNotEquals(null, configs);
+      System.assertNotEquals(null, configs, 'Unexpected value of configs');
       for (Rate_Limit_Config__mdt c : configs.values()) {
-        System.assertNotEquals(null, c.DeveloperName);
+        System.assertNotEquals(
+          null,
+          c.DeveloperName,
+          'Unexpected value of c.DeveloperName'
+        );
       }
     }
   }

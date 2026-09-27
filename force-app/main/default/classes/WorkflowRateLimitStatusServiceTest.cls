@@ -69,11 +69,31 @@ private class WorkflowRateLimitStatusServiceTest {
         new List<Rate_Limit_State__c>{ state('StripeApi', 1.0, NOW_MS - 1000) }
       );
       Map<String, Object> row = rowFor(rows, 'StripeApi');
-      System.assertEquals(3.0, (Decimal) row.get('availableTokens'));
-      System.assertEquals('AVAILABLE', row.get('status'));
-      System.assertEquals(10.0, (Decimal) row.get('capacity'));
-      System.assertEquals(2.0, (Decimal) row.get('refillRatePerSecond'));
-      System.assertEquals(null, row.get('secondsUntilNextToken'));
+      System.assertEquals(
+        3.0,
+        (Decimal) row.get('availableTokens'),
+        'Unexpected value of (Decimal) row.get(\'availableTokens\')'
+      );
+      System.assertEquals(
+        'AVAILABLE',
+        row.get('status'),
+        'Unexpected value of row.get(\'status\')'
+      );
+      System.assertEquals(
+        10.0,
+        (Decimal) row.get('capacity'),
+        'Unexpected value of (Decimal) row.get(\'capacity\')'
+      );
+      System.assertEquals(
+        2.0,
+        (Decimal) row.get('refillRatePerSecond'),
+        'Unexpected value of (Decimal) row.get(\'refillRatePerSecond\')'
+      );
+      System.assertEquals(
+        null,
+        row.get('secondsUntilNextToken'),
+        'Unexpected value of row.get(\'secondsUntilNextToken\')'
+      );
     }
   }
 
@@ -94,12 +114,32 @@ private class WorkflowRateLimitStatusServiceTest {
         }
       );
       Map<String, Object> fast = rowFor(rows, 'FastApi');
-      System.assertEquals('THROTTLING', fast.get('status'));
-      System.assertEquals(0.5, (Decimal) fast.get('availableTokens'));
-      System.assertEquals(1L, (Long) fast.get('secondsUntilNextToken'));
+      System.assertEquals(
+        'THROTTLING',
+        fast.get('status'),
+        'Unexpected value of fast.get(\'status\')'
+      );
+      System.assertEquals(
+        0.5,
+        (Decimal) fast.get('availableTokens'),
+        'Unexpected value of (Decimal) fast.get(\'availableTokens\')'
+      );
+      System.assertEquals(
+        1L,
+        (Long) fast.get('secondsUntilNextToken'),
+        'Unexpected value of (Long) fast.get(\'secondsUntilNextToken\')'
+      );
       Map<String, Object> slow = rowFor(rows, 'SlowApi');
-      System.assertEquals('THROTTLING', slow.get('status'));
-      System.assertEquals(10L, (Long) slow.get('secondsUntilNextToken'));
+      System.assertEquals(
+        'THROTTLING',
+        slow.get('status'),
+        'Unexpected value of slow.get(\'status\')'
+      );
+      System.assertEquals(
+        10L,
+        (Long) slow.get('secondsUntilNextToken'),
+        'Unexpected value of (Long) slow.get(\'secondsUntilNextToken\')'
+      );
     }
   }
 
@@ -121,10 +161,26 @@ private class WorkflowRateLimitStatusServiceTest {
         }
       );
       Map<String, Object> edge = rowFor(rows, 'EdgeApi');
-      System.assertEquals('THROTTLING', edge.get('status'));
-      System.assertEquals(0.99, (Decimal) edge.get('availableTokens'));
-      System.assertEquals(1L, (Long) edge.get('secondsUntilNextToken'));
-      System.assertEquals('AVAILABLE', rowFor(rows, 'OneApi').get('status'));
+      System.assertEquals(
+        'THROTTLING',
+        edge.get('status'),
+        'Unexpected value of edge.get(\'status\')'
+      );
+      System.assertEquals(
+        0.99,
+        (Decimal) edge.get('availableTokens'),
+        'Unexpected value of (Decimal) edge.get(\'availableTokens\')'
+      );
+      System.assertEquals(
+        1L,
+        (Long) edge.get('secondsUntilNextToken'),
+        'Unexpected value of (Long) edge.get(\'secondsUntilNextToken\')'
+      );
+      System.assertEquals(
+        'AVAILABLE',
+        rowFor(rows, 'OneApi').get('status'),
+        'Unexpected value of rowFor(rows, \'OneApi\').get(\'status\')'
+      );
     }
   }
 
@@ -141,9 +197,21 @@ private class WorkflowRateLimitStatusServiceTest {
         new List<Rate_Limit_State__c>()
       );
       Map<String, Object> row = rowFor(rows, 'NewApi');
-      System.assertEquals('IDLE', row.get('status'));
-      System.assertEquals(7.0, (Decimal) row.get('availableTokens'));
-      System.assertEquals(null, row.get('secondsUntilNextToken'));
+      System.assertEquals(
+        'IDLE',
+        row.get('status'),
+        'Unexpected value of row.get(\'status\')'
+      );
+      System.assertEquals(
+        7.0,
+        (Decimal) row.get('availableTokens'),
+        'Unexpected value of (Decimal) row.get(\'availableTokens\')'
+      );
+      System.assertEquals(
+        null,
+        row.get('secondsUntilNextToken'),
+        'Unexpected value of row.get(\'secondsUntilNextToken\')'
+      );
     }
   }
 
@@ -161,7 +229,8 @@ private class WorkflowRateLimitStatusServiceTest {
       );
       System.assertEquals(
         'THROTTLING',
-        rowFor(rows, 'StripeApi').get('status')
+        rowFor(rows, 'StripeApi').get('status'),
+        'Unexpected value of rowFor(rows, \'StripeApi\').get(\'status\')'
       );
     }
   }
@@ -181,9 +250,21 @@ private class WorkflowRateLimitStatusServiceTest {
       );
       for (String key : new List<String>{ 'NoCapacity', 'NoRate' }) {
         Map<String, Object> row = rowFor(rows, key);
-        System.assertEquals('INVALID', row.get('status'));
-        System.assertEquals(null, row.get('availableTokens'));
-        System.assertEquals(null, row.get('secondsUntilNextToken'));
+        System.assertEquals(
+          'INVALID',
+          row.get('status'),
+          'Unexpected value of row.get(\'status\')'
+        );
+        System.assertEquals(
+          null,
+          row.get('availableTokens'),
+          'Unexpected value of row.get(\'availableTokens\')'
+        );
+        System.assertEquals(
+          null,
+          row.get('secondsUntilNextToken'),
+          'Unexpected value of row.get(\'secondsUntilNextToken\')'
+        );
       }
     }
   }
@@ -213,7 +294,8 @@ private class WorkflowRateLimitStatusServiceTest {
       }
       System.assertEquals(
         new List<String>{ 'Broken', 'Busy', 'Ok', 'aIdle', 'bIdle' },
-        order
+        order,
+        'Unexpected value of order'
       );
     }
   }
@@ -230,7 +312,8 @@ private class WorkflowRateLimitStatusServiceTest {
             new Map<String, Rate_Limit_Config__mdt>(),
             new List<Rate_Limit_State__c>()
           )
-          .size()
+          .size(),
+        'Unexpected value of build( new Map<String, Rate_Limit_Config__mdt>(), new Lis...'
       );
     }
   }
@@ -258,27 +341,54 @@ private class WorkflowRateLimitStatusServiceTest {
       Test.stopTest();
 
       System.assertEquals(dmlBefore, dmlAfter, 'The panel must not write');
-      System.assert(result.get('asOfMs') instanceof Long);
+      System.assert(
+        result.get('asOfMs') instanceof Long,
+        'Expected true: result.get(\'asOfMs\') instanceof Long'
+      );
       List<Map<String, Object>> rows = (List<Map<String, Object>>) result.get(
         'rows'
       );
-      System.assertEquals(3, rows.size());
+      System.assertEquals(3, rows.size(), 'Unexpected value of rows.size()');
 
       Map<String, Object> live = rowFor(rows, 'LiveApi');
-      System.assertEquals('AVAILABLE', live.get('status'));
+      System.assertEquals(
+        'AVAILABLE',
+        live.get('status'),
+        'Unexpected value of live.get(\'status\')'
+      );
       System.assert(
         (Decimal) live.get('availableTokens') >= 5.0,
         'Live value must include refill: ' + live.get('availableTokens')
       );
 
       Map<String, Object> held = rowFor(rows, 'HeldApi');
-      System.assertEquals('THROTTLING', held.get('status'));
-      System.assertEquals(0.0, (Decimal) held.get('availableTokens'));
-      System.assertEquals(2L, (Long) held.get('secondsUntilNextToken'));
+      System.assertEquals(
+        'THROTTLING',
+        held.get('status'),
+        'Unexpected value of held.get(\'status\')'
+      );
+      System.assertEquals(
+        0.0,
+        (Decimal) held.get('availableTokens'),
+        'Unexpected value of (Decimal) held.get(\'availableTokens\')'
+      );
+      System.assertEquals(
+        2L,
+        (Long) held.get('secondsUntilNextToken'),
+        'Unexpected value of (Long) held.get(\'secondsUntilNextToken\')'
+      );
 
       Map<String, Object> idle = rowFor(rows, 'IdleApi');
-      System.assertEquals('IDLE', idle.get('status'));
-      System.assertEquals(4.0, (Decimal) idle.get('availableTokens'));
+      System.assertEquals(
+        'IDLE',
+        idle.get('status'),
+        'Unexpected value of idle.get(\'status\')'
+      );
+      System.assertEquals(
+        4.0,
+        (Decimal) idle.get('availableTokens'),
+        'Unexpected value of (Decimal) idle.get(\'availableTokens\')'
+      );
     }
   }
 
@@ -290,19 +400,28 @@ private class WorkflowRateLimitStatusServiceTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       RateLimiter.mockConfigs.put('PairApi', config('PairApi', 2, 0.0001));
       Test.startTest();
-      System.assert(RateLimiter.acquire('PairApi').isAllowed);
+      System.assert(
+        RateLimiter.acquire('PairApi').isAllowed,
+        'Expected true: RateLimiter.acquire(\'PairApi\').isAllowed'
+      );
       System.assertEquals(
         'AVAILABLE',
         statusOf('PairApi'),
         '1 token left: acquire() would allow'
       );
-      System.assert(RateLimiter.acquire('PairApi').isAllowed);
+      System.assert(
+        RateLimiter.acquire('PairApi').isAllowed,
+        'Expected true: RateLimiter.acquire(\'PairApi\').isAllowed'
+      );
       System.assertEquals(
         'THROTTLING',
         statusOf('PairApi'),
         '0 tokens left: acquire() would throttle'
       );
-      System.assert(!RateLimiter.acquire('PairApi').isAllowed);
+      System.assert(
+        !RateLimiter.acquire('PairApi').isAllowed,
+        'Expected true: !RateLimiter.acquire(\'PairApi\').isAllowed'
+      );
       Test.stopTest();
     }
   }
@@ -324,7 +443,11 @@ private class WorkflowRateLimitStatusServiceTest {
       List<Map<String, Object>> rows = (List<Map<String, Object>>) result.get(
         'rows'
       );
-      System.assertEquals(RateLimiter.configuredLimits().size(), rows.size());
+      System.assertEquals(
+        RateLimiter.configuredLimits().size(),
+        rows.size(),
+        'Unexpected value of rows.size()'
+      );
     }
   }
 }

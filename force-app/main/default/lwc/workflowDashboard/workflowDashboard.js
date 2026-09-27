@@ -37,6 +37,7 @@ import pauseDefinition from "@salesforce/apex/WorkflowDashboardCommandController
 import resumeDefinition from "@salesforce/apex/WorkflowDashboardCommandController.resumeDefinition";
 import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
 import getStorageFootprint from "@salesforce/apex/WorkflowDashboardController.getStorageFootprint";
+import getRateLimitStatus from "@salesforce/apex/WorkflowRateLimitController.getRateLimitStatus";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
 import getDefinitionLatency from "@salesforce/apex/WorkflowDashboardController.getDefinitionLatency";
@@ -44,6 +45,30 @@ import compensateWorkflow from "@salesforce/apex/WorkflowDashboardCommandControl
 import injectSignal from "@salesforce/apex/WorkflowDashboardCommandController.injectSignal";
 import resumePastStepInstance from "@salesforce/apex/WorkflowDashboardCommandController.resumePastStepInstance";
 import LightningConfirm from "lightning/confirm";
+
+// Rate Limits panel: status code to glyph, word and colour. Unknown is its own state.
+const RATE_LIMIT_STATUS = {
+  THROTTLING: {
+    label: "Throttling",
+    badgeClass: "badge badge-orange",
+    icon: "utility:warning",
+    iconClass: "slds-m-right_xx-small text-orange-icon",
+  },
+  INVALID: {
+    label: "Invalid config",
+    badgeClass: "badge badge-red",
+    icon: "utility:error",
+    iconClass: "slds-m-right_xx-small text-red-icon",
+  },
+  AVAILABLE: { label: "Available", badgeClass: "badge badge-green" },
+  IDLE: { label: "Idle", badgeClass: "badge badge-grey" },
+};
+const RATE_LIMIT_UNKNOWN = {
+  label: "Unknown",
+  badgeClass: "badge badge-grey",
+  icon: "utility:question",
+  iconClass: "slds-m-right_xx-small text-weak-icon",
+};
 
 const FAILURE_CATEGORY_LABELS = {
   STEP_EXCEPTION: "Step Exception",
@@ -85,6 +110,13 @@ export default class WorkflowDashboard extends LightningElement {
   // per-object rows and allowance metrics returned by getStorageFootprint.
   storageData = null;
   storageObjectRows = [];
+
+  // Rate Limits panel state (System Doctor, #61).
+  rateLimitRows = [];
+  rateLimitAsOfMs = null;
+  rateLimitError = null;
+  rateLimitLoaded = false;
+  rateLimitRequestSeq = 0;
 
   // Schedules view state (renders the standalone workflowScheduleManager component)
   viewingSchedules = false;
@@ -1703,6 +1735,7 @@ export default class WorkflowDashboard extends LightningElement {
       });
 
     this.loadStorageFootprint();
+    this.loadRateLimitStatus();
   }
 
   get hasConcurrencyRows() {
@@ -1736,6 +1769,94 @@ export default class WorkflowDashboard extends LightningElement {
           this.reduceErrors(error),
         );
       });
+  }
+
+  // Loads the live token buckets. A new cacheBuster on each load bypasses the Lightning
+  // cache. Best-effort: a failure shows an inline message and does not stop the view.
+  loadRateLimitStatus() {
+    this.rateLimitRequestSeq += 1;
+    getRateLimitStatus({
+      cacheBuster: `${Date.now()}-${this.rateLimitRequestSeq}`,
+    })
+      .then((result) => {
+        if (!result || !Array.isArray(result.rows)) {
+          this.setRateLimitError("No data was returned.");
+          return;
+        }
+        this.rateLimitError = null;
+        this.rateLimitAsOfMs = result.asOfMs;
+        this.rateLimitRows = result.rows.map((row) =>
+          this.shapeRateLimitRow(row),
+        );
+        this.rateLimitLoaded = true;
+      })
+      .catch((error) => {
+        const reason = this.reduceErrors(error);
+        this.setRateLimitError(reason);
+        console.error("Failed to load rate limit status:", reason);
+      });
+  }
+
+  setRateLimitError(reason) {
+    this.rateLimitRows = [];
+    this.rateLimitAsOfMs = null;
+    this.rateLimitError = reason;
+    this.rateLimitLoaded = true;
+  }
+
+  // Adds display labels to one row. Apex sets the status and the numbers.
+  shapeRateLimitRow(row) {
+    const status = RATE_LIMIT_STATUS[row.status] || RATE_LIMIT_UNKNOWN;
+    const hasTokens =
+      row.availableTokens !== null && row.availableTokens !== undefined;
+    const capacity =
+      row.capacity === null || row.capacity === undefined ? "—" : row.capacity;
+    const isThrottling = row.status === "THROTTLING";
+    return {
+      ...row,
+      statusLabel: status.label,
+      badgeClass: status.badgeClass,
+      icon: status.icon,
+      iconClass: status.iconClass,
+      configLabel: `Capacity ${capacity} · refill ${
+        row.refillRatePerSecond ?? "—"
+      }/s`,
+      tokensLabel: `${
+        hasTokens ? Number(row.availableTokens).toFixed(2) : "—"
+      } / ${capacity} tokens`,
+      nextTokenLabel:
+        isThrottling && row.secondsUntilNextToken != null
+          ? `Next token in ${row.secondsUntilNextToken} s`
+          : null,
+      isIdle: row.status === "IDLE",
+    };
+  }
+
+  get hasRateLimitRows() {
+    return this.rateLimitRows.length > 0;
+  }
+
+  get showRateLimitEmpty() {
+    return (
+      this.rateLimitLoaded && !this.rateLimitError && !this.hasRateLimitRows
+    );
+  }
+
+  get showRateLimitLoading() {
+    return !this.rateLimitLoaded;
+  }
+
+  get rateLimitSummary() {
+    const count = this.rateLimitRows.filter(
+      (row) => row.status === "THROTTLING",
+    ).length;
+    return count > 0 ? `· ${count} throttling` : "";
+  }
+
+  get rateLimitAsOfLabel() {
+    return this.rateLimitAsOfMs
+      ? `As of ${new Date(this.rateLimitAsOfMs).toLocaleTimeString()}`
+      : "";
   }
 
   get hasStorageData() {
