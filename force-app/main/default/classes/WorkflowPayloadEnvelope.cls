@@ -44,9 +44,8 @@ public inherited sharing class WorkflowPayloadEnvelope {
     return (kind != null && hasOnlyData(stored, markerAt)) ? kind : null;
   }
 
-  // True when `data` is the last and only other property. Engine data without
-  // escapes has no inner quote, so an index check is enough. Escaped data gets
-  // a full JSON check.
+  // True when `data` is the last and only other property, in the exact form
+  // the engine writes.
   private static Boolean hasOnlyData(String stored, Integer markerAt) {
     Integer dataStart = markerAt + DATA_MARKER.length();
     Integer dataEnd = stored.length() - ENVELOPE_END.length();
@@ -60,11 +59,12 @@ public inherited sharing class WorkflowPayloadEnvelope {
     if (stored.indexOf('\\', dataStart) < 0) {
       return stored.indexOf('"', dataStart) == dataEnd;
     }
+    // The data must be one JSON string in the exact form the engine writes.
+    // This rejects bad escapes, extra keys and duplicate keys.
+    String raw = stored.substring(dataStart, dataEnd);
     try {
-      Map<String, Object> parsed = (Map<String, Object>) JSON.deserializeUntyped(
-        stored
-      );
-      return parsed.size() == 2 && parsed.get('data') instanceof String;
+      String data = (String) JSON.deserialize('"' + raw + '"', String.class);
+      return escape(data).equals(raw);
     } catch (Exception e) {
       return false;
     }

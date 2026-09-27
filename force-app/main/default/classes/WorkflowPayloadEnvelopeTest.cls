@@ -69,6 +69,13 @@ private class WorkflowPayloadEnvelopeTest {
         ),
         'An invalid escape is not valid JSON, so this is plaintext'
       );
+      System.assertEquals(
+        null,
+        WorkflowPayloadEnvelope.kindOf(
+          '{"$codec":"STEP_OUTPUT","data":"first","data":"second\\n"}'
+        ),
+        'Duplicate keys are not the engine form, so this is plaintext'
+      );
       System.assertEquals(null, WorkflowPayloadEnvelope.kindOf(null));
     }
   }
