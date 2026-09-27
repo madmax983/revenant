@@ -186,4 +186,153 @@ public class RateLimiterTest {
       System.assertEquals(4.0, updatedState.Tokens_Remaining__c);
     }
   }
+
+  // Builds a config mock the same way the tests above do.
+  private static Rate_Limit_Config__mdt config(
+    String key,
+    Decimal capacity,
+    Decimal rate
+  ) {
+    return (Rate_Limit_Config__mdt) JSON.deserialize(
+      JSON.serialize(
+        new Map<String, Object>{
+          'DeveloperName' => key,
+          'Capacity__c' => capacity,
+          'Refill_Rate_Per_Second__c' => rate
+        }
+      ),
+      Rate_Limit_Config__mdt.class
+    );
+  }
+
+  private static Rate_Limit_State__c state(Decimal tokens, Long lastMs) {
+    return new Rate_Limit_State__c(
+      Integration_Key__c = 'Any',
+      Tokens_Remaining__c = tokens,
+      Last_Refill_Time_Ms__c = lastMs
+    );
+  }
+
+  private static final Long NOW_MS = 1790000000000L;
+
+  /**
+   * @description availableTokens adds elapsed seconds times the refill rate.
+   */
+  @IsTest
+  static void testAvailableTokensRefillsFromElapsedTime() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Decimal tokens = RateLimiter.availableTokens(
+        state(1.0, NOW_MS - 1500),
+        config('K', 10, 2.0),
+        NOW_MS
+      );
+      System.assertEquals(4.0, tokens, '1 + 1.5 s * 2/s = 4');
+    }
+  }
+
+  /**
+   * @description availableTokens never goes above capacity.
+   */
+  @IsTest
+  static void testAvailableTokensCapsAtCapacity() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Decimal tokens = RateLimiter.availableTokens(
+        state(9.0, NOW_MS - 10000),
+        config('K', 10, 2.0),
+        NOW_MS
+      );
+      System.assertEquals(10.0, tokens, 'Refill stops at capacity');
+    }
+  }
+
+  /**
+   * @description A future last-refill time counts as zero elapsed time.
+   */
+  @IsTest
+  static void testAvailableTokensClampsFutureTimestamp() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Decimal tokens = RateLimiter.availableTokens(
+        state(0.5, NOW_MS + 5000),
+        config('K', 10, 2.0),
+        NOW_MS
+      );
+      System.assertEquals(0.5, tokens, 'Negative elapsed time is clamped');
+    }
+  }
+
+  /**
+   * @description secondsUntilNextToken has no jitter.
+   */
+  @IsTest
+  static void testSecondsUntilNextToken() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      System.assertEquals(
+        0.25,
+        RateLimiter.secondsUntilNextToken(0.5, config('K', 10, 2.0))
+      );
+      System.assertEquals(
+        10.0,
+        RateLimiter.secondsUntilNextToken(0.0, config('K', 10, 0.1))
+      );
+    }
+  }
+
+  /**
+   * @description isValidConfig accepts a config only when acquire() accepts it.
+   */
+  @IsTest
+  static void testIsValidConfigMatchesAcquire() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Map<String, Rate_Limit_Config__mdt> cases = new Map<String, Rate_Limit_Config__mdt>{
+        'CapZero' => config('CapZero', 0, 1.0),
+        'CapHalf' => config('CapHalf', 0.5, 1.0),
+        'RateZero' => config('RateZero', 5, 0),
+        'RateNegative' => config('RateNegative', 5, -1),
+        'Valid' => config('Valid', 5, 1.0)
+      };
+      RateLimiter.mockConfigs.putAll(cases);
+      System.assertEquals(false, RateLimiter.isValidConfig(null));
+      for (String key : cases.keySet()) {
+        Boolean acquireAccepts = true;
+        try {
+          RateLimiter.acquire(key);
+        } catch (WorkflowEngine.WorkflowException e) {
+          acquireAccepts = false;
+        }
+        System.assertEquals(
+          acquireAccepts,
+          RateLimiter.isValidConfig(cases.get(key)),
+          'isValidConfig must match acquire() for ' + key
+        );
+      }
+    }
+  }
+
+  /**
+   * @description configuredLimits returns the test mocks when they exist.
+   */
+  @IsTest
+  static void testConfiguredLimitsUsesMocks() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      RateLimiter.mockConfigs.put('MockOnly', config('MockOnly', 3, 1.0));
+      Map<String, Rate_Limit_Config__mdt> configs = RateLimiter.configuredLimits();
+      System.assertEquals(1, configs.size(), 'Mocks replace the CMDT records');
+      System.assert(configs.containsKey('MockOnly'));
+    }
+  }
+
+  /**
+   * @description configuredLimits reads the CMDT records when no mocks exist.
+   */
+  @IsTest
+  static void testConfiguredLimitsReadsCmdtWithoutMocks() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      RateLimiter.mockConfigs.clear();
+      Map<String, Rate_Limit_Config__mdt> configs = RateLimiter.configuredLimits();
+      System.assertNotEquals(null, configs);
+      for (Rate_Limit_Config__mdt c : configs.values()) {
+        System.assertNotEquals(null, c.DeveloperName);
+      }
+    }
+  }
 }

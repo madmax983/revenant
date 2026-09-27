@@ -352,4 +352,33 @@ public class RevenantOperatorPermSetTest {
       'An operator with the action gate and signal-injection capability should inject a signal'
     );
   }
+
+  /**
+   * A read-only operator can open the Rate Limits panel (#61). The panel uses the same
+   * view gate as the other dashboard panels.
+   */
+  @IsTest
+  static void testOperatorCanReadRateLimitStatus() {
+    User operator = buildOperatorUser();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insert operator;
+      PermissionSet ps = [
+        SELECT Id
+        FROM PermissionSet
+        WHERE Name = 'Revenant_Operator'
+        LIMIT 1
+      ];
+      insert new PermissionSetAssignment(
+        AssigneeId = operator.Id,
+        PermissionSetId = ps.Id
+      );
+    }
+
+    System.runAs(operator) {
+      Map<String, Object> result = WorkflowRateLimitController.getRateLimitStatus(
+        'op'
+      );
+      System.assertNotEquals(null, result.get('rows'));
+    }
+  }
 }
