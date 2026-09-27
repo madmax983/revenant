@@ -12,10 +12,20 @@ public class AutoRetryWorkflowExampleTest {
   private static final String RECEIPT = 'AutoRetryWorkflowExample.SendReceiptStep';
 
   private static WorkflowTestHarness.Result runOrder(String key) {
+    return runOrder(key, 4200);
+  }
+
+  private static WorkflowTestHarness.Result runOrder(
+    String key,
+    Object amountCents
+  ) {
     Id instanceId = WorkflowEngine.start(
       WF,
       key,
-      new Map<String, Object>{ 'orderId' => 'O-1001', 'amountCents' => 4200 }
+      new Map<String, Object>{
+        'orderId' => 'O-1001',
+        'amountCents' => amountCents
+      }
     );
     return new WorkflowTestHarness(instanceId).drive();
   }
@@ -87,6 +97,31 @@ public class AutoRetryWorkflowExampleTest {
         1,
         MockFlakyOrderServices.effectiveCharges,
         'The idempotency key stops a second charge'
+      );
+    }
+  }
+
+  @IsTest
+  static void wholeDecimalAmountIsCharged() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      MockFlakyOrderServices.reset();
+      Test.startTest();
+      WorkflowTestHarness.Result result = runOrder(
+        'AutoRetry_Decimal',
+        Decimal.valueOf('4200.00')
+      );
+      Test.stopTest();
+
+      Assert.areEqual('Completed', result.status, 'A Decimal amount is valid');
+      Assert.areEqual(
+        1,
+        MockFlakyOrderServices.chargeAttempts,
+        'The amount does not cause a retry'
+      );
+      Assert.areEqual(
+        4200,
+        MockFlakyOrderServices.lastChargeAmountCents,
+        'The gateway gets the amount in cents'
       );
     }
   }

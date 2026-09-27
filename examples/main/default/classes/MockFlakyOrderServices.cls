@@ -19,6 +19,8 @@ public inherited sharing class MockFlakyOrderServices {
   public static Integer chargeAttempts = 0;
   /** @description Number of real charges. */
   public static Integer effectiveCharges = 0;
+  /** @description Amount of the last real charge, in cents. */
+  public static Integer lastChargeAmountCents;
   /** @description Number of refunds. */
   public static Integer refunds = 0;
   /** @description Charge id of the last refund. */
@@ -46,6 +48,7 @@ public inherited sharing class MockFlakyOrderServices {
     }
     if (!chargeIdByKey.containsKey(idempotencyKey)) {
       effectiveCharges++;
+      lastChargeAmountCents = amountCents;
       chargeIdByKey.put(idempotencyKey, 'ch_' + effectiveCharges);
     }
     if (lostResponsesLeft > 0) {
@@ -85,6 +88,7 @@ public inherited sharing class MockFlakyOrderServices {
     gatewayOutagesLeft = 0;
     lostResponsesLeft = 0;
     lastRefundedChargeId = null;
+    lastChargeAmountCents = null;
     receiptOutagesLeft = 0;
     chargeAttempts = 0;
     effectiveCharges = 0;
