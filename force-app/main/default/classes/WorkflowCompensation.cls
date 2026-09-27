@@ -158,18 +158,146 @@ public inherited sharing class WorkflowCompensation {
       LIMIT 1
     ];
 
+    Database.insert(
+      buildFirstCompensationStep(
+        instance.Id,
+        compensationStepLogName,
+        originalExecs.isEmpty() ? null : originalExecs[0]
+      ),
+      true,
+      AccessLevel.SYSTEM_MODE
+    );
+  }
+
+  /**
+   * @description Set-based {@link preCreateFirstCompensationStep}: seeds the first
+   * pending compensation step of each instance with the same rules. The SOQL/DML
+   * cost is constant in the instance count (issue #94).
+   * @param instances the instances beginning compensation
+   */
+  public static void preCreateFirstCompensationSteps(
+    List<Workflow_Instance__c> instances
+  ) {
+    // Top-of-stack forward step per instance.
+    Map<Id, String> activeById = new Map<Id, String>();
+    for (Workflow_Instance__c instance : instances) {
+      if (String.isBlank(instance.Compensation_Stack__c)) {
+        continue;
+      }
+      List<String> stack = (List<String>) JSON.deserialize(
+        instance.Compensation_Stack__c,
+        List<String>.class
+      );
+      if (!stack.isEmpty()) {
+        activeById.put(instance.Id, stack[stack.size() - 1]);
+      }
+    }
+    if (activeById.isEmpty()) {
+      return;
+    }
+    removeInstancesWithCompensationStep(activeById);
+    if (activeById.isEmpty()) {
+      return;
+    }
+
+    Map<Id, Id> sourceById = resolveForwardSourceInstanceIds(
+      activeById.keySet()
+    );
+    Map<String, Workflow_Step_Execution__c> latestForward = WorkflowCompensationStepLog.latestExecs(
+      new Set<Id>(sourceById.values()),
+      new Set<String>(activeById.values())
+    );
+
+    List<Workflow_Step_Execution__c> toInsert = new List<Workflow_Step_Execution__c>();
+    for (Id instanceId : activeById.keySet()) {
+      String active = activeById.get(instanceId);
+      toInsert.add(
+        buildFirstCompensationStep(
+          instanceId,
+          active + '_Compensate',
+          latestForward.get(sourceById.get(instanceId) + '|' + active)
+        )
+      );
+    }
+    Database.insert(toInsert, true, AccessLevel.SYSTEM_MODE);
+  }
+
+  // Drops each instance that already has its `_Compensate` step log (dedup).
+  private static void removeInstancesWithCompensationStep(
+    Map<Id, String> activeById
+  ) {
+    Set<Id> instanceIds = activeById.keySet();
+    Set<String> compNames = new Set<String>();
+    for (String active : activeById.values()) {
+      compNames.add(active + '_Compensate');
+    }
+    for (Workflow_Step_Execution__c existing : [
+      SELECT Workflow_Instance__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :instanceIds AND Step_Name__c IN :compNames
+      WITH SYSTEM_MODE
+    ]) {
+      String active = activeById.get(existing.Workflow_Instance__c);
+      if (active != null && existing.Step_Name__c == active + '_Compensate') {
+        activeById.remove(existing.Workflow_Instance__c);
+      }
+    }
+  }
+
+  // Set-based WorkflowCompensationRunner.resolveForwardSourceInstanceId: the
+  // predecessor run when it committed Completed, else the instance itself.
+  private static Map<Id, Id> resolveForwardSourceInstanceIds(
+    Set<Id> instanceIds
+  ) {
+    Map<Id, Id> sourceById = new Map<Id, Id>();
+    Map<Id, Id> prevById = new Map<Id, Id>();
+    for (Workflow_Instance__c instance : [
+      SELECT Id, Previous_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :instanceIds
+      WITH SYSTEM_MODE
+    ]) {
+      if (instance.Previous_Instance__c != null) {
+        prevById.put(instance.Id, instance.Previous_Instance__c);
+      }
+    }
+    Set<Id> completedPreds = new Set<Id>();
+    if (!prevById.isEmpty()) {
+      Set<Id> predIds = new Set<Id>(prevById.values());
+      for (Workflow_Instance__c pred : [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE Id IN :predIds AND Status__c = 'Completed'
+        WITH SYSTEM_MODE
+      ]) {
+        completedPreds.add(pred.Id);
+      }
+    }
+    for (Id instanceId : instanceIds) {
+      Id prevId = prevById.get(instanceId);
+      sourceById.put(
+        instanceId,
+        completedPreds.contains(prevId) ? prevId : instanceId
+      );
+    }
+    return sourceById;
+  }
+
+  // Builds the first Pending compensation step log, seeded from the latest
+  // forward execution (null when the forward step has no log).
+  private static Workflow_Step_Execution__c buildFirstCompensationStep(
+    Id instanceId,
+    String compensationStepLogName,
+    Workflow_Step_Execution__c forward
+  ) {
     Workflow_Step_Execution__c compStepExec = new Workflow_Step_Execution__c();
-    compStepExec.Workflow_Instance__c = instance.Id;
+    compStepExec.Workflow_Instance__c = instanceId;
     compStepExec.Step_Name__c = compensationStepLogName;
     compStepExec.Status__c = 'Pending';
-    compStepExec.Input__c = !originalExecs.isEmpty()
-      ? originalExecs[0].Input__c
-      : null;
-    compStepExec.Output__c = !originalExecs.isEmpty()
-      ? originalExecs[0].Output__c
-      : null;
+    compStepExec.Input__c = forward != null ? forward.Input__c : null;
+    compStepExec.Output__c = forward != null ? forward.Output__c : null;
     compStepExec.Retry_Count__c = 0;
-    Database.insert(compStepExec, true, AccessLevel.SYSTEM_MODE);
+    return compStepExec;
   }
 
   /**

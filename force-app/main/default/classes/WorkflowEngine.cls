@@ -16,6 +16,10 @@ public inherited sharing class WorkflowEngine {
   // Operator toggle (Revenant_Config__mdt.Publish_Lifecycle_Events__c): when true
   // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
   public static Boolean publishLifecycleEvents = true;
+  // Operator toggle (Revenant_Config__mdt.Cascade_Cancel_Children_On_Failure__c):
+  // when true, a parent that enters a failure state cancels its in-flight
+  // descendants.
+  public static Boolean cascadeCancelChildrenOnFailure = true;
 
   // Failure Category picklist API values
   public static final String CAT_STEP_EXCEPTION = 'STEP_EXCEPTION';
@@ -108,6 +112,7 @@ public inherited sharing class WorkflowEngine {
           Watchdog_Delay_Minutes__c,
           Use_Dynamic_Scheduling__c,
           Publish_Lifecycle_Events__c,
+          Cascade_Cancel_Children_On_Failure__c,
           Dedup_Window_Minutes__c,
           Stale_Threshold_Minutes__c,
           Reclaim_Threshold_Minutes__c
@@ -126,6 +131,10 @@ public inherited sharing class WorkflowEngine {
         }
         if (configs[0].Publish_Lifecycle_Events__c != null) {
           publishLifecycleEvents = configs[0].Publish_Lifecycle_Events__c;
+        }
+        if (configs[0].Cascade_Cancel_Children_On_Failure__c != null) {
+          cascadeCancelChildrenOnFailure = configs[0]
+            .Cascade_Cancel_Children_On_Failure__c;
         }
         if (configs[0].Dedup_Window_Minutes__c != null) {
           dedupWindowMinutes = configs[0].Dedup_Window_Minutes__c.intValue();

@@ -4,16 +4,41 @@
  * jobs and &mdash; on the compensating path &mdash; driving saga rollback of the
  * completed steps. Descendants are gathered breadth-first (one set-based query per
  * tree level) with a visited-id guard rather than by recursive cancel calls, so
- * deep/wide trees cannot exhaust the SOQL or stack-depth governors; parent-before
- * -child ordering and the FOR UPDATE locking are preserved from the pre-extraction
- * engine. Extracted from `WorkflowEngine`, which retains the thin public
- * `cancel` delegator. The resident
- * `WorkflowEngine.WorkflowException`, `WorkflowEngine.disableQueueableInTest`,
- * `WorkflowCompensation.preCreateFirstCompensationStep` and
- * `WorkflowCompensationStepLog.appendCompensationRetryStep` members are referenced fully
- * qualified. All SOQL/DML executes in system mode.
+ * deep/wide trees cannot exhaust the SOQL or stack-depth governors. The nodes are
+ * then cancelled set-based: the SOQL/DML cost does not grow with the node count
+ * (except best-effort timeout arming for each resumed rollback).
+ * Parent-before-child ordering and the FOR UPDATE locking are preserved from the
+ * pre-extraction engine. Extracted from `WorkflowEngine`, which retains the thin
+ * public `cancel` delegator. The cascade cancel of issue #94
+ * ({@link WorkflowCascadeCancel}) walks the same child query one page per event
+ * ({@link queryActiveChildrenPage}) and uses the same node cancel. The
+ * resident `WorkflowEngine.WorkflowException`, `WorkflowEngine.disableQueueableInTest`,
+ * `WorkflowCompensation.preCreateFirstCompensationSteps` and
+ * `WorkflowCompensationStepLog.appendCompensationRetrySteps` members are referenced
+ * fully qualified. All SOQL/DML executes in system mode.
  */
 public inherited sharing class WorkflowCancellation {
+  /**
+   * @description Child states that the descendant traversal walks through.
+   * `Compensating` is not in the set: that child already rolls back.
+   */
+  public static final Set<String> ACTIVE_CHILD_STATUSES = new Set<String>{
+    'Pending',
+    'Running',
+    'Suspended',
+    'Cancelling',
+    'CompensationFailed',
+    'Paused',
+    // A definition-change park (issue #89) is in flight, so a cascade reaches it.
+    'DefinitionChanged'
+  };
+
+  private static final String CANCELLED_MESSAGE = 'Cancelled by user.';
+  private static final String CANCELLING_MESSAGE = 'Cancelled by user. Compensating.';
+
+  // SOQL headroom kept when best-effort timeout arming runs for many nodes.
+  private static final Integer TIMEOUT_ARMING_SOQL_RESERVE = 20;
+
   /**
    * @description Cancels a workflow instance (and its active descendants) and
    * aborts scheduled jobs WITHOUT running saga compensations.
@@ -45,6 +70,18 @@ public inherited sharing class WorkflowCancellation {
   }
 
   /**
+   * @description Cascade entry (issue #94). Cancels the given nodes with saga
+   * compensation, in the given order. Skips terminal nodes and nodes already
+   * `Cancelling`, so a repeated cascade does not cancel a node two times. A
+   * `CompensationFailed` node resumes its rollback under the cancel phase, as in
+   * {@link cancelWithCompensations}.
+   * @param orderedIds the nodes to cancel, parent before child
+   */
+  public static void cascadeCancelNodes(List<Id> orderedIds) {
+    cancelNodes(orderedIds, true, null, new Set<String>{ 'Cancelling' });
+  }
+
+  /**
    * @description Cancels a workflow instance, aborts scheduled jobs, and optionally
    * runs saga compensations across the instance and its active descendant tree.
    * @param instanceId Id of the target instance to cancel (with its active
@@ -55,53 +92,43 @@ public inherited sharing class WorkflowCancellation {
     Id instanceId,
     Boolean runCompensations
   ) {
-    // Cancel the target instance and its entire active descendant tree. Descendants are
-    // gathered iteratively (one set-based query per tree level) rather than via recursive
-    // cancel() calls, so deep/wide trees cannot blow the SOQL or stack-depth governor
-    // limits through uncontrolled recursion. Parent-before-child ordering is preserved.
-    //
-    // Note: each node still costs a handful of SOQL/DML in cancelSingleInstance(); a tree
-    // with thousands of nodes would need async chunking. That is intentionally out of
-    // scope here — the goal is to remove the recursion-driven multiplication.
-    // The traversal always yields the target first, so it is cancelled with the original
-    // not-found semantics (throwIfMissing = true); descendants are best-effort.
-    //
-    // Lifecycle events are collected and published in a single bulk batch AFTER every
-    // node is cancelled, so the best-effort publish never spends a DML statement that a
-    // later child cancellation still needs.
-    List<Workflow_Instance__c> terminallyCancelled = new List<Workflow_Instance__c>();
-    for (Id targetId : collectInstanceAndActiveDescendants(instanceId)) {
-      Workflow_Instance__c cancelled = cancelSingleInstance(
-        targetId,
-        runCompensations,
-        targetId == instanceId
+    // The target keeps the original not-found semantics (it must exist);
+    // descendants are best-effort.
+    if (instanceId == null) {
+      throw new WorkflowEngine.WorkflowException(
+        'Workflow instance not found: ' + instanceId
       );
-      if (cancelled != null) {
-        terminallyCancelled.add(cancelled);
-      }
     }
-    WorkflowParentNotifier.notifyParentCompletion(terminallyCancelled);
-    WorkflowLifecyclePublisher.publish(terminallyCancelled);
+    cancelNodes(
+      collectActiveTree(new List<Id>{ instanceId }),
+      runCompensations,
+      instanceId,
+      new Set<String>()
+    );
   }
 
   /**
-   * @description Breadth-first collection of an instance plus all of its active
+   * @description Breadth-first collection of the roots plus all of their active
    * descendants using one set-based query per tree level. Returns IDs in
-   * parent-before-child order. A `seen` guard makes the traversal safe against
-   * accidental parent-reference cycles.
-   * @param rootId Id of the instance at the root of the traversal
-   * @return the root plus all active descendant Ids in parent-before-child order
+   * parent-before-child order, roots first. A `seen` guard makes the traversal
+   * safe against accidental parent-reference cycles and duplicate roots.
+   * @param rootIds Ids of the instances at the root of the traversal
+   * @return the roots plus all active descendant Ids in parent-before-child order
    */
-  private static List<Id> collectInstanceAndActiveDescendants(Id rootId) {
-    List<Id> ordered = new List<Id>{ rootId };
-    Set<Id> seen = new Set<Id>{ rootId };
-    List<Id> frontier = new List<Id>{ rootId };
+  private static List<Id> collectActiveTree(List<Id> rootIds) {
+    List<Id> ordered = new List<Id>();
+    Set<Id> seen = new Set<Id>();
+    for (Id rootId : rootIds) {
+      if (rootId != null && seen.add(rootId)) {
+        ordered.add(rootId);
+      }
+    }
+    List<Id> frontier = new List<Id>(ordered);
     while (!frontier.isEmpty()) {
       List<Workflow_Instance__c> children = queryActiveChildren(frontier);
       List<Id> nextFrontier = new List<Id>();
       for (Workflow_Instance__c child : children) {
-        if (!seen.contains(child.Id)) {
-          seen.add(child.Id);
+        if (seen.add(child.Id)) {
           ordered.add(child.Id);
           nextFrontier.add(child.Id);
         }
@@ -113,7 +140,7 @@ public inherited sharing class WorkflowCancellation {
 
   /**
    * @description Fetches the active child instances of one BFS frontier level for
-   * {@link collectInstanceAndActiveDescendants}.
+   * {@link collectActiveTree}.
    * <p><b>Intentional per-iteration SOQL.</b> This runs one SOQL query per
    * tree level of a breadth-first descendant traversal: the ids of level N+1
    * are only knowable after level N's children are read, so the traversal
@@ -134,16 +161,47 @@ public inherited sharing class WorkflowCancellation {
       FROM Workflow_Instance__c
       WHERE
         Parent_Instance__c IN :frontier
-        AND Status__c IN (
-          'Pending',
-          'Running',
-          'Suspended',
-          'Cancelling',
-          'CompensationFailed',
-          'Paused',
-          'DefinitionChanged'
-        )
+        AND Status__c IN :ACTIVE_CHILD_STATUSES
       WITH SYSTEM_MODE
+    ];
+  }
+
+  /**
+   * @description One page of {@link queryActiveChildren}, in Id order. The
+   * cascade cancel (issue #94) walks the same traversal one page per event, so
+   * one transaction never reads a whole wide level.
+   * @param frontier the instance ids to fetch children of
+   * @param afterId the cursor: return only Ids after it, or null for the start
+   * @param pageSize the maximum number of rows
+   * @return the active child instances of the page
+   */
+  public static List<Workflow_Instance__c> queryActiveChildrenPage(
+    List<Id> frontier,
+    Id afterId,
+    Integer pageSize
+  ) {
+    if (afterId == null) {
+      return [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE
+          Parent_Instance__c IN :frontier
+          AND Status__c IN :ACTIVE_CHILD_STATUSES
+        WITH SYSTEM_MODE
+        ORDER BY Id
+        LIMIT :pageSize
+      ];
+    }
+    return [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE
+        Parent_Instance__c IN :frontier
+        AND Status__c IN :ACTIVE_CHILD_STATUSES
+        AND Id > :afterId
+      WITH SYSTEM_MODE
+      ORDER BY Id
+      LIMIT :pageSize
     ];
   }
 
@@ -163,215 +221,291 @@ public inherited sharing class WorkflowCancellation {
   }
 
   /**
-   * @description Enqueues the orchestrator for an instance, honoring the in-test
-   * queueable disable flag so tests can drive the loop deterministically.
-   * @param instanceId the instance to enqueue an orchestrator for
+   * @description The cancel outcome of one node batch, split by the next action.
    */
-  private static void enqueueOrchestratorTestAware(Id instanceId) {
-    if (Test.isRunningTest()) {
-      if (!WorkflowEngine.disableQueueableInTest) {
-        System.enqueueJob(new WorkflowOrchestrator(instanceId));
-      }
-    } else {
-      WorkflowOrchestratorEnqueue.enqueueOrchestrator(instanceId, null);
-    }
+  private class NodePlan {
+    // Driven to terminal Cancelled now.
+    List<Workflow_Instance__c> terminal = new List<Workflow_Instance__c>();
+    // Starts a fresh cancel-phase rollback.
+    List<Workflow_Instance__c> compensating = new List<Workflow_Instance__c>();
+    // Resumes a stalled (CompensationFailed) rollback.
+    List<Workflow_Instance__c> resumed = new List<Workflow_Instance__c>();
+    // Non-terminal nodes that need an orchestrator, in node order.
+    List<Id> toEnqueue = new List<Id>();
   }
 
   /**
-   * @description Locks (FOR UPDATE) the active step executions for the instance's
-   * current step(s), supporting comma-separated parallel branch step names.
-   * Returns an empty list when the instance has no current step.
-   * @param instance the instance whose active steps are locked
-   * @return the locked active step executions
+   * @description Cancels a batch of nodes set-based. Each node gets the same
+   * outcome as the former per-node cancel:
+   * <ul>
+   * <li>terminal node, or node in `skipStatuses`: skipped;</li>
+   * <li>`CompensationFailed` with compensations and a remaining stack: resumes the
+   * rollback under the cancel phase;</li>
+   * <li>live compensation stack with compensations: starts the cancel-phase
+   * rollback;</li>
+   * <li>else: terminal `Cancelled`.</li>
+   * </ul>
+   * For each cancelled node, it cancels the active step executions, aborts the
+   * scheduled jobs and disarms the timed-wait deadline. At the end, it sends one
+   * bulk parent notification and one bulk lifecycle publish for the terminal
+   * nodes. The SOQL/DML cost is constant in the node count, except best-effort
+   * timeout arming for each resumed rollback.
+   * @param orderedIds the nodes to cancel, parent before child
+   * @param runCompensations true to roll back completed steps via saga compensation
+   * @param requiredId a node that must exist (else not-found exception), or null
+   * @param skipStatuses extra statuses to leave untouched
    */
-  private static List<Workflow_Step_Execution__c> lockActiveStepExecs(
-    Workflow_Instance__c instance
+  private static void cancelNodes(
+    List<Id> orderedIds,
+    Boolean runCompensations,
+    Id requiredId,
+    Set<String> skipStatuses
   ) {
-    List<Workflow_Step_Execution__c> stepExecs = new List<Workflow_Step_Execution__c>();
-    if (String.isNotBlank(instance.Current_Step__c)) {
-      List<String> activeStepNames = new List<String>();
-      if (instance.Current_Step__c.contains(',')) {
-        activeStepNames = instance.Current_Step__c.split(',');
-      } else {
-        activeStepNames.add(instance.Current_Step__c);
-      }
+    Map<Id, Workflow_Instance__c> locked = lockInstances(orderedIds);
+    if (requiredId != null && !locked.containsKey(requiredId)) {
+      throw new WorkflowEngine.WorkflowException(
+        'Workflow instance not found: ' + requiredId
+      );
+    }
 
-      Id instanceId = instance.Id;
-      stepExecs = [
-        SELECT Id, Status__c
-        FROM Workflow_Step_Execution__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Step_Name__c IN :activeStepNames
-          AND Status__c IN ('Running', 'Pending', 'Retrying')
+    List<Workflow_Instance__c> targets = new List<Workflow_Instance__c>();
+    Set<Id> seen = new Set<Id>();
+    for (Id nodeId : orderedIds) {
+      Workflow_Instance__c instance = seen.add(nodeId)
+        ? locked.get(nodeId)
+        : null;
+      // Note: CompensationFailed is intentionally NOT treated as terminal here — a
+      // stalled rollback is resumable and still holds un-reversed side effects, so
+      // cancellation must reach it rather than skip it.
+      if (
+        instance != null &&
+        !isTerminalForCancel(instance.Status__c) &&
+        !skipStatuses.contains(instance.Status__c)
+      ) {
+        targets.add(instance);
+      }
+    }
+    if (targets.isEmpty()) {
+      return;
+    }
+
+    // Plan first: it changes records in memory only, so a malformed stack throws
+    // before any side effect.
+    NodePlan plan = planNodes(targets, runCompensations);
+
+    cancelActiveStepExecs(targets);
+
+    // Abort all scheduled jobs for these nodes (sleeps, retries, timeouts)
+    WorkflowOrchestratorEnqueue.abortScheduledJobs(
+      new Map<Id, Workflow_Instance__c>(targets).keySet()
+    );
+
+    WorkflowCompensation.preCreateFirstCompensationSteps(plan.compensating);
+    Database.update(targets, true, AccessLevel.SYSTEM_MODE);
+
+    // Append a fresh attempt for each stalled top-of-stack step (the prior Failed
+    // attempt is preserved) so the existing compensation loop re-runs it.
+    WorkflowCompensationStepLog.appendCompensationRetrySteps(plan.resumed);
+    armResumedTimeouts(plan.resumed);
+    enqueueOrchestratorsTestAware(plan.toEnqueue);
+
+    // Non-terminal (Cancelling) nodes emit their lifecycle event from the
+    // orchestrator when the compensation stack drains to Cancelled. Terminal nodes
+    // publish one bulk batch here, after every node write, so the best-effort
+    // publish never spends DML that a node write still needs.
+    WorkflowParentNotifier.notifyParentCompletion(plan.terminal);
+    WorkflowLifecyclePublisher.publish(plan.terminal);
+  }
+
+  /**
+   * @description Locks (FOR UPDATE) the given instances in one query.
+   * @param instanceIds the instances to lock
+   * @return the locked instances by Id (missing Ids are absent)
+   */
+  private static Map<Id, Workflow_Instance__c> lockInstances(
+    List<Id> instanceIds
+  ) {
+    return new Map<Id, Workflow_Instance__c>(
+      [
+        SELECT
+          Id,
+          Status__c,
+          Current_Step__c,
+          Compensation_Stack__c,
+          Error_Message__c,
+          Workflow_Name__c,
+          Correlation_Key__c,
+          Root_Correlation_Key__c,
+          Previous_Instance__c,
+          Concurrency_Parked__c,
+          Concurrency_Slot_Held__c
+        FROM Workflow_Instance__c
+        WHERE Id IN :instanceIds
         WITH SYSTEM_MODE
         FOR UPDATE
-      ];
-    }
-    return stepExecs;
+      ]
+    );
   }
 
   /**
-   * @description Cancels an instance stalled in CompensationFailed. With
-   * compensations requested and remaining rollback work, it resumes the rollback
-   * under the cancel phase (returns null, non-terminal); otherwise it forces the
-   * instance terminal Cancelled (returns the instance for bulk lifecycle publish).
-   * @param instance the CompensationFailed instance being cancelled
-   * @param runCompensations true to drain remaining compensations before cancelling
-   * @return the instance when driven terminal, otherwise null
+   * @description Sets the cancel outcome on each node in memory (no DML) and
+   * groups the nodes by the next action.
+   * @param targets the non-terminal nodes to cancel, parent before child
+   * @param runCompensations true when the cancel requested saga compensation
+   * @return the plan for the batch
    */
-  private static Workflow_Instance__c cancelCompensationFailed(
+  private static NodePlan planNodes(
+    List<Workflow_Instance__c> targets,
+    Boolean runCompensations
+  ) {
+    NodePlan plan = new NodePlan();
+    for (Workflow_Instance__c instance : targets) {
+      // Disarm any armed timed-wait timeout so the watchdog cannot mis-route a
+      // cancelled (or compensating) instance to a fallback step (issue #35).
+      instance.Sleep_Until__c = null;
+      List<Workflow_Instance__c> rollback = rollbackGroup(
+        plan,
+        instance,
+        runCompensations
+      );
+      if (rollback != null) {
+        rollback.add(instance);
+        instance.Status__c = 'Cancelling';
+        instance.Error_Message__c = CANCELLING_MESSAGE;
+        plan.toEnqueue.add(instance.Id);
+      } else {
+        // Without compensations a stalled rollback is forced terminal: its un-run
+        // compensations are abandoned but its correlation key is released.
+        instance.Status__c = 'Cancelled';
+        instance.Error_Message__c = CANCELLED_MESSAGE;
+        plan.terminal.add(instance);
+      }
+    }
+    return plan;
+  }
+
+  /**
+   * @description Selects the rollback group of a node: a stalled rollback
+   * (`CompensationFailed`) resumes, a live stack starts the cancel phase. It
+   * parses the stack only where the former per-node cancel parsed it, so a
+   * malformed stack throws in the same cases.
+   * @param plan the batch plan that owns the groups
+   * @param instance the node to classify
+   * @param runCompensations true when the cancel requested saga compensation
+   * @return the group to add the node to, or null when the node goes terminal
+   */
+  private static List<Workflow_Instance__c> rollbackGroup(
+    NodePlan plan,
     Workflow_Instance__c instance,
     Boolean runCompensations
   ) {
-    List<String> remaining = parseCompensationStack(instance);
-    if (runCompensations && !remaining.isEmpty()) {
-      instance.Status__c = 'Cancelling';
-      instance.Error_Message__c = 'Cancelled by user. Compensating.';
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-      // Append a fresh attempt for the stalled top-of-stack step (the prior Failed
-      // attempt is preserved) so the existing compensation loop re-runs it.
-      WorkflowCompensationStepLog.appendCompensationRetryStep(
-        instance,
-        remaining
-      );
-      WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance.Id);
-      enqueueOrchestratorTestAware(instance.Id);
-      // Not terminal yet — the orchestrator emits the lifecycle event when the
-      // compensation stack drains to Cancelled.
-      return null;
-    }
-    instance.Status__c = 'Cancelled';
-    instance.Error_Message__c = 'Cancelled by user.';
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    // Terminal immediately — hand back to cancel() for bulk lifecycle publish.
-    return instance;
-  }
-
-  /**
-   * @description Determines whether a cancel should first drain a live
-   * compensation stack, i.e. compensations were requested and the instance has a
-   * non-empty stack.
-   * @param runCompensations true when the cancel requested saga compensation
-   * @param instance the instance being cancelled
-   * @return true when the cancel must run compensations before terminating
-   */
-  private static Boolean hasCancelCompensations(
-    Boolean runCompensations,
-    Workflow_Instance__c instance
-  ) {
-    if (!runCompensations || String.isBlank(instance.Compensation_Stack__c)) {
-      return false;
-    }
-    return !parseCompensationStack(instance).isEmpty();
-  }
-
-  /**
-   * @description Cancels a single workflow instance (no descendant traversal).
-   * When throwIfMissing is true the original not-found exception is preserved for
-   * the top-level target.
-   *
-   * Returns the instance when this call drove it to a terminal Cancelled state (the
-   * no-compensation path), otherwise null. The caller (cancelInstanceTree())
-   * collects these and publishes one bulk lifecycle batch AFTER the whole tree is
-   * cancelled, so a per-node publish can never spend the DML budget that a later
-   * child cancellation still needs. (The compensation path reaches Cancelled
-   * asynchronously and emits its own event from the orchestrator.)
-   * @param instanceId Id of the single instance to cancel
-   * @param runCompensations true to roll back completed steps via saga compensation
-   * @param throwIfMissing true to raise the not-found exception for the top-level
-   * target
-   * @return the instance when this call drove it to terminal Cancelled, otherwise
-   * null
-   */
-  private static Workflow_Instance__c cancelSingleInstance(
-    Id instanceId,
-    Boolean runCompensations,
-    Boolean throwIfMissing
-  ) {
-    List<Workflow_Instance__c> instances = [
-      SELECT
-        Id,
-        Status__c,
-        Current_Step__c,
-        Compensation_Stack__c,
-        Error_Message__c,
-        Workflow_Name__c,
-        Correlation_Key__c,
-        Root_Correlation_Key__c
-      FROM Workflow_Instance__c
-      WHERE Id = :instanceId
-      WITH SYSTEM_MODE
-      LIMIT 1
-      FOR UPDATE
-    ];
-    if (instances.isEmpty()) {
-      if (throwIfMissing) {
-        throw new WorkflowEngine.WorkflowException(
-          'Workflow instance not found: ' + instanceId
-        );
-      }
-      return null;
-    }
-
-    Workflow_Instance__c instance = instances[0];
-    if (isTerminalForCancel(instance.Status__c)) {
-      return null; // Already in terminal state
-    }
-    // Note: CompensationFailed is intentionally NOT treated as terminal here — a stalled
-    // rollback is resumable and still holds un-reversed side effects, so cancellation must
-    // reach it (handled explicitly below) rather than skip it.
-
-    // Lock active step executions FOR UPDATE second
-    List<Workflow_Step_Execution__c> stepExecs = lockActiveStepExecs(instance);
-
-    // Abort all scheduled jobs for this instance (sleeps, retries, timeouts)
-    WorkflowOrchestratorEnqueue.abortScheduledJobs(instanceId);
-
-    // Disarm any armed timed-wait timeout so the watchdog cannot mis-route a
-    // cancelled (or compensating) instance to a fallback step (issue #35). Every
-    // cancel branch below commits `instance`, so set it once here.
-    instance.Sleep_Until__c = null;
-
-    // Update step executions to Cancelled
-    for (Workflow_Step_Execution__c stepExec : stepExecs) {
-      stepExec.Status__c = 'Cancelled';
-    }
-    if (!stepExecs.isEmpty()) {
-      Database.update(stepExecs, true, AccessLevel.SYSTEM_MODE);
-    }
-
-    // A stalled rollback (CompensationFailed) being cancelled is handled per cancel mode:
-    // with compensations requested, resume the remaining rollback under the cancel phase so
-    // it drains to 'Cancelled' (every remaining side effect reversed); without, force it
-    // terminal 'Cancelled', abandoning the un-run compensations but releasing its key.
     if (instance.Status__c == 'CompensationFailed') {
-      return cancelCompensationFailed(instance, runCompensations);
+      Boolean hasRemaining = !parseCompensationStack(instance).isEmpty();
+      return runCompensations && hasRemaining ? plan.resumed : null;
     }
-
-    if (hasCancelCompensations(runCompensations, instance)) {
-      instance.Status__c = 'Cancelling';
-      instance.Error_Message__c = 'Cancelled by user. Compensating.';
-      WorkflowCompensation.preCreateFirstCompensationStep(instance);
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-
-      // Kick off rollback loop
-      enqueueOrchestratorTestAware(instance.Id);
-      // Not terminal yet (Cancelling); the orchestrator emits the lifecycle event
-      // when the compensation stack drains to Cancelled.
+    if (!runCompensations || String.isBlank(instance.Compensation_Stack__c)) {
       return null;
     }
+    return parseCompensationStack(instance).isEmpty()
+      ? null
+      : plan.compensating;
+  }
 
-    instance.Status__c = 'Cancelled';
-    instance.Error_Message__c = 'Cancelled by user.';
-    Database.update(instance, true, AccessLevel.SYSTEM_MODE);
-    // Terminal: hand the instance back to cancelInstanceTree() for a single bulk
-    // publish after the whole descendant tree is cancelled (preserves DML headroom
-    // mid-loop). Active child workflows are handled by the caller
-    // (cancelInstanceTree()) via iterative descendant traversal, so no recursive
-    // child cancellation happens here.
-    return instance;
+  /**
+   * @description Locks (FOR UPDATE) and cancels the active step executions of the
+   * current step(s) of each node, supporting comma-separated parallel branch step
+   * names. A node with no current step has no active step execution to cancel.
+   * @param targets the nodes whose active steps are cancelled
+   */
+  private static void cancelActiveStepExecs(
+    List<Workflow_Instance__c> targets
+  ) {
+    Map<Id, Set<String>> activeNamesById = new Map<Id, Set<String>>();
+    Set<String> allNames = new Set<String>();
+    for (Workflow_Instance__c instance : targets) {
+      if (String.isBlank(instance.Current_Step__c)) {
+        continue;
+      }
+      Set<String> names = new Set<String>(instance.Current_Step__c.split(','));
+      activeNamesById.put(instance.Id, names);
+      allNames.addAll(names);
+    }
+    if (activeNamesById.isEmpty()) {
+      return;
+    }
+    Set<Id> instanceIds = activeNamesById.keySet();
+    List<Workflow_Step_Execution__c> toCancel = new List<Workflow_Step_Execution__c>();
+    for (Workflow_Step_Execution__c stepExec : [
+      SELECT Id, Status__c, Workflow_Instance__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c IN :instanceIds
+        AND Step_Name__c IN :allNames
+        AND Status__c IN ('Running', 'Pending', 'Retrying')
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ]) {
+      // The set-based query can match a name of another node; keep own names only.
+      if (
+        activeNamesById.get(stepExec.Workflow_Instance__c)
+          .contains(stepExec.Step_Name__c)
+      ) {
+        stepExec.Status__c = 'Cancelled';
+        toCancel.add(stepExec);
+      }
+    }
+    if (!toCancel.isEmpty()) {
+      Database.update(toCancel, true, AccessLevel.SYSTEM_MODE);
+    }
+  }
+
+  /**
+   * @description Arms the step timeout of each resumed rollback. Best-effort:
+   * arming stops when SOQL headroom is low, and the watchdog heartbeat then
+   * enforces the timeout.
+   * @param resumed the nodes whose stalled rollback resumes
+   */
+  private static void armResumedTimeouts(List<Workflow_Instance__c> resumed) {
+    for (Workflow_Instance__c instance : resumed) {
+      if (
+        Limits.getQueries() >=
+        Limits.getLimitQueries() - TIMEOUT_ARMING_SOQL_RESERVE
+      ) {
+        return;
+      }
+      WorkflowTimeoutArming.scheduleTimeoutJobForInstance(instance);
+    }
+  }
+
+  /**
+   * @description Enqueues the orchestrator for each node, honoring the in-test
+   * queueable disable flag so tests can drive the loop deterministically.
+   * Outside tests, one bulk platform-event publish covers every node.
+   * @param instanceIds the instances to enqueue an orchestrator for
+   */
+  private static void enqueueOrchestratorsTestAware(List<Id> instanceIds) {
+    if (instanceIds.isEmpty()) {
+      return;
+    }
+    if (!Test.isRunningTest()) {
+      WorkflowOrchestratorEnqueue.enqueueOrchestrators(instanceIds);
+      return;
+    }
+    if (WorkflowEngine.disableQueueableInTest) {
+      return;
+    }
+    for (Id instanceId : instanceIds) {
+      enqueueTestOrchestrator(instanceId);
+    }
+  }
+
+  /**
+   * @description Enqueues one orchestrator job directly (test context). Kept as a
+   * helper so the per-node `System.enqueueJob` is not lexically inside the loop.
+   * @param instanceId the instance to enqueue an orchestrator for
+   */
+  private static void enqueueTestOrchestrator(Id instanceId) {
+    System.enqueueJob(new WorkflowOrchestrator(instanceId));
   }
 
   /**
