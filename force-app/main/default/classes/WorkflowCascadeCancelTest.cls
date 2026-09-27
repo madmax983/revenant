@@ -288,36 +288,50 @@ private class WorkflowCascadeCancelTest {
     }
   }
 
+  // Builds a child whose rollback stalled (CompensationFailed) with one failed
+  // undo attempt.
+  private static Workflow_Instance__c insertStalledChild(Id parentId) {
+    Workflow_Instance__c child = insertInstance(parentId, 'Compensating');
+    giveCompensationStack(child);
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = child.Id,
+      Step_Name__c = 'StepA_Compensate',
+      Status__c = 'Failed',
+      Retry_Count__c = 0
+    );
+    setStatus(child.Id, 'CompensationFailed');
+    return child;
+  }
+
+  // A stalled rollback runs no forward work and waits for an operator, so the
+  // cascade leaves it (it can still be resumed or cancelled explicitly).
   @IsTest
-  static void compensationFailedChildResumesRollback() {
+  static void compensationFailedChildIsLeftForOperator() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c parent = insertInstance(null, 'Running');
-      Workflow_Instance__c child = insertInstance(parent.Id, 'Compensating');
-      giveCompensationStack(child);
-      insert new Workflow_Step_Execution__c(
-        Workflow_Instance__c = child.Id,
-        Step_Name__c = 'StepA_Compensate',
-        Status__c = 'Failed',
-        Retry_Count__c = 0
-      );
-      setStatus(child.Id, 'CompensationFailed');
+      Workflow_Instance__c child = insertStalledChild(parent.Id);
+      Workflow_Instance__c grandchild = insertInstance(child.Id, 'Running');
 
       Test.startTest();
-      WorkflowCascadeCancel.publishedEvents.clear();
       setStatus(parent.Id, 'Failed');
       Test.getEventBus().deliver();
       Test.stopTest();
 
       System.assertEquals(
-        'Cancelling',
+        'CompensationFailed',
         statusOf(child.Id),
-        'A stalled child rollback resumes under the cancel phase'
+        'The cascade must not resume a stalled rollback'
       );
       System.assertEquals(
-        2,
+        1,
         compensateLogCount(child.Id),
-        'A fresh undo attempt is appended; the failed one stays'
+        'No undo attempt is appended'
+      );
+      System.assertEquals(
+        'Cancelled',
+        statusOf(grandchild.Id),
+        'The traversal still passes through the stalled child'
       );
     }
   }
@@ -607,6 +621,57 @@ private class WorkflowCascadeCancelTest {
       }
       System.assertEquals(1, compensateLogCount(parent.Id), 'Parent undo');
       System.assertEquals(1, compensateLogCount(child.Id), 'Child undo');
+    }
+  }
+
+  @IsTest
+  static void explicitCompensatingCancelResumesStalledChild() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      WorkflowEngine.cascadeCancelChildrenOnFailure = false;
+      Workflow_Instance__c parent = insertInstance(null, 'Running');
+      Workflow_Instance__c child = insertStalledChild(parent.Id);
+
+      Test.startTest();
+      WorkflowCancellation.cancelWithCompensations(parent.Id);
+      Test.stopTest();
+
+      System.assertEquals(
+        'Cancelled',
+        statusOf(parent.Id),
+        'No stack: Cancelled'
+      );
+      System.assertEquals(
+        'Cancelling',
+        statusOf(child.Id),
+        'An explicit compensating cancel still resumes a stalled rollback'
+      );
+      System.assertEquals(
+        2,
+        compensateLogCount(child.Id),
+        'A fresh undo attempt is appended; the failed one stays'
+      );
+    }
+  }
+
+  @IsTest
+  static void explicitPlainCancelForcesStalledChildTerminal() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      WorkflowEngine.cascadeCancelChildrenOnFailure = false;
+      Workflow_Instance__c parent = insertInstance(null, 'Running');
+      Workflow_Instance__c child = insertStalledChild(parent.Id);
+
+      Test.startTest();
+      WorkflowEngine.cancel(parent.Id);
+      Test.stopTest();
+
+      System.assertEquals(
+        'Cancelled',
+        statusOf(child.Id),
+        'A plain cancel forces a stalled rollback terminal'
+      );
+      System.assertEquals(1, compensateLogCount(child.Id), 'No new attempt');
     }
   }
 

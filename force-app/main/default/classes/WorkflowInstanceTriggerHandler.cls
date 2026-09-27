@@ -4,7 +4,9 @@
  * (AvoidLogicInTrigger). Behavior is identical to the original in-trigger implementation:
  * correlation-key defaulting, active-key reservation, terminal-timestamp stamping,
  * failure-category clearing, and the single centralized concurrency-slot release
- * chokepoint (issue #28) are all preserved in the same order.
+ * chokepoint (issue #28) are all preserved in the same order. After update, it
+ * requests the cascade cancel of in-flight children for each parent that enters a
+ * terminal failure state (issue #94).
  *
  * Sharing: inherited sharing. Triggers execute in system context; a handler with
  * inherited sharing runs with the sharing of its caller (the trigger, i.e. system) and
@@ -26,6 +28,13 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
     'Compensated',
     'Cancelled',
     'ContinuedAsNew'
+  };
+
+  // Terminal failure states that cancel in-flight descendants (issue #94).
+  private static final Set<String> CASCADE_FAILURE_STATUSES = new Set<String>{
+    'Failed',
+    'Compensated',
+    'CompensationFailed'
   };
 
   private final List<Workflow_Instance__c> newInstances;
@@ -56,6 +65,28 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
     this.oldMap = oldMap;
     this.isInsert = operationType == System.TriggerOperation.BEFORE_INSERT;
     this.isUpdate = operationType == System.TriggerOperation.BEFORE_UPDATE;
+  }
+
+  /**
+   * @description Requests the cascade cancel of in-flight children for each
+   * instance whose status changed into a terminal failure state. Insert does not
+   * request a cascade: a new record has no children.
+   */
+  public void handleAfterUpdate() {
+    if (oldMap == null || !WorkflowEngine.cascadeCancelChildrenOnFailure) {
+      return;
+    }
+    Set<Id> failedParentIds = new Set<Id>();
+    for (Workflow_Instance__c instance : newInstances) {
+      Workflow_Instance__c oldInstance = oldMap.get(instance.Id);
+      if (
+        CASCADE_FAILURE_STATUSES.contains(instance.Status__c) &&
+        instance.Status__c != oldInstance.Status__c
+      ) {
+        failedParentIds.add(instance.Id);
+      }
+    }
+    WorkflowCascadeCancel.requestCascade(failedParentIds);
   }
 
   /**
