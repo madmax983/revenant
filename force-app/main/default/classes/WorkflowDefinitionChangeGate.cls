@@ -79,7 +79,7 @@ public inherited sharing class WorkflowDefinitionChangeGate {
     List<String> liveSteps
   ) {
     Workflow_Instance__c locked = [
-      SELECT Id, Status__c, Current_Step__c
+      SELECT Id, Status__c, Current_Step__c, Definition_Fingerprint__c
       FROM Workflow_Instance__c
       WHERE Id = :instance.Id
       WITH SYSTEM_MODE
@@ -87,6 +87,13 @@ public inherited sharing class WorkflowDefinitionChangeGate {
     ];
     if (!PARKABLE_STATUSES.contains(locked.Status__c)) {
       return true; // Parked, finished or compensating by another thread.
+    }
+    // A release after this delivery loaded the row writes a new fingerprint.
+    // Do not undo that release. The release enqueues its own delivery, so stop.
+    if (
+      locked.Definition_Fingerprint__c != instance.Definition_Fingerprint__c
+    ) {
+      return true;
     }
     String detail =
       'Workflow definition step list changed while in flight. ' +

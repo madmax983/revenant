@@ -9,7 +9,7 @@
  *  3. VersionedWorkflow mismatch is advisory. The step runs.
  *  4. Null stored fingerprint is advisory. The step runs.
  *  5. Gate on a matched instance costs 0 SOQL and 0 DML.
- *  6. A stale delivery to a parked instance does nothing.
+ *  6. A stale delivery to a parked or just-released instance does nothing.
  *  7. Park keeps prior step rows and the compensation stack.
  *  8. Release re-stamps, resumes, and completes.
  *  9. Release refuses a current step that the live definition removed.
@@ -441,6 +441,35 @@ public class WorkflowDefinitionChangeTest {
       );
       System.assertEquals(0, stepBRuns, 'StepB must not run');
       System.assertEquals(1, markers(instId).size(), 'Only one marker');
+    }
+  }
+
+  // Regression (Codex review): a stale delivery that loaded the old
+  // fingerprint before a release must not park the released instance again.
+  @IsTest
+  static void testStaleDeliveryAfterReleaseDoesNotRepark() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instId = parkWithInsertedStep(
+        'DefChg-StaleRel-' + Datetime.now().getTime()
+      );
+      Workflow_Instance__c stale = [
+        SELECT Id, Status__c, Workflow_Name__c, Definition_Fingerprint__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instId
+      ];
+      stale.Status__c = 'Running'; // As loaded before the park.
+      WorkflowDefinitionChangeService.release(instId);
+      Boolean stopped = WorkflowDefinitionChangeGate.parkIfChanged(stale);
+      Test.stopTest();
+
+      System.assertEquals(true, stopped, 'The stale delivery must stop');
+      System.assertEquals(
+        'Running',
+        load(instId).Status__c,
+        'The release must win over the stale delivery'
+      );
+      System.assertEquals(1, markers(instId).size(), 'No second marker');
     }
   }
 
