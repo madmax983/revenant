@@ -107,6 +107,18 @@ detects stalled/orphaned instances, reclaims them, and raises stall alerts.
 - `WorkflowAlertManager`, `WorkflowAlertEmailBuilder`,
   `WorkflowFailureAlertEvaluator`
 
+## Payload persistence & codec
+
+The payload seam. Save encodes and offloads. Resolve rehydrates and decodes.
+Control data (markers, status, keys) is not encoded. See
+[docs/payload-codec.md](docs/payload-codec.md).
+
+- `WorkflowPayloadOffload` (save / resolve seam)
+- `WorkflowPayloadCodecs` (envelope, config, fail-closed decode)
+- `PayloadCodec`, `CodecContext`, `IdentityPayloadCodec` (public API)
+- Rehydrators that also decode: `WorkflowStatusProjection`,
+  `WorkflowStatusPayloadRehydrator`; `WorkflowPayloadService` redacts
+
 ## Crash recovery (`handleCrash` / `failWorkflowInstance`)
 
 Turns an uncaught exception or explicit failure into durable, categorized

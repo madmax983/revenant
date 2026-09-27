@@ -47,7 +47,10 @@ public inherited sharing class WorkflowStepContext {
       resolvedInput = stripJsonMapKey(resolvedInput, '$timeoutResume');
       // Persist the cleaned input back to the locked record so the engine marker
       // does not linger in the durable audit row (saved with the exec below).
-      stepExec.Input__c = resolvedInput;
+      stepExec.Input__c = WorkflowPayloadCodecs.encode(
+        resolvedInput,
+        CodecContext.PayloadKind.STEP_OUTPUT
+      );
     }
 
     Integer attempt = stepExec.Retry_Count__c != null

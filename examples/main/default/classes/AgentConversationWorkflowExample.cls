@@ -179,7 +179,10 @@ public with sharing class AgentConversationWorkflowExample {
       sig.Status__c = 'Consumed';
       update as user sig;
 
-      Map<String, Object> payload = parseJson(sig.Payload__c);
+      // Resolve the stored value: it can be offloaded or encoded by a payload codec.
+      Map<String, Object> payload = parseJson(
+        WorkflowPayloadOffload.resolvePayload(sig.Payload__c)
+      );
       return StepResult.complete(
         null,
         new Map<String, Object>{

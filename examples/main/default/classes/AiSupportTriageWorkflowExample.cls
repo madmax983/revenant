@@ -210,8 +210,9 @@ public with sharing class AiSupportTriageWorkflowExample {
       sig.Status__c = 'Consumed';
       update as user sig;
 
+      // Resolve the stored value: it can be offloaded or encoded by a payload codec.
       Map<String, Object> decision = (Map<String, Object>) JSON.deserializeUntyped(
-        sig.Payload__c
+        WorkflowPayloadOffload.resolvePayload(sig.Payload__c)
       );
       return StepResult.complete(
         null,

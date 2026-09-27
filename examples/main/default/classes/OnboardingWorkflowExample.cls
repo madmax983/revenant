@@ -222,8 +222,9 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
         sig.Status__c = 'Consumed';
         update as user sig;
 
+        // Resolve the stored value: it can be offloaded or encoded by a payload codec.
         Map<String, Object> payloadMap = (Map<String, Object>) JSON.deserializeUntyped(
-          sig.Payload__c
+          WorkflowPayloadOffload.resolvePayload(sig.Payload__c)
         );
         Boolean approved = (Boolean) payloadMap.get('approved');
         if (!approved) {

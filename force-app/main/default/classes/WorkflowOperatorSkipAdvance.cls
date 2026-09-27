@@ -126,7 +126,10 @@ public inherited sharing class WorkflowOperatorSkipAdvance {
     instance.Terminal_At__c = DateTime.now();
     instance.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       run.instanceId,
-      outputJson,
+      WorkflowPayloadCodecs.encode(
+        outputJson,
+        CodecContext.PayloadKind.STEP_OUTPUT
+      ),
       payloadName
     );
     instance.Current_Step__c = null;

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Payload_Codec__c</fullName>
+    <description>API name of the Apex class that implements PayloadCodec. The engine uses it to encode workflow input, step output, step state and signal payloads before it stores them, and to decode them after it reads them. Blank selects the identity codec: payloads are stored unchanged. A name that is not a valid PayloadCodec stops payload reads and writes until you correct it.</description>
+    <externalId>false</externalId>
+    <fieldManageability>SubscriberControlled</fieldManageability>
+    <label>Payload Codec</label>
+    <length>255</length>
+    <required>false</required>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>

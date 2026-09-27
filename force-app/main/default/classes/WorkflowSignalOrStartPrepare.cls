@@ -130,7 +130,11 @@ public inherited sharing class WorkflowSignalOrStartPrepare {
     Workflow_Signal__c sig = new Workflow_Signal__c(
       Workflow_Instance__c = instanceId,
       Signal_Name__c = req.signalName,
-      Payload__c = req.payload,
+      Payload__c = WorkflowPayloadOffload.saveSignalPayload(
+        instanceId,
+        req.payload,
+        req.signalName
+      ),
       Status__c = 'Received'
     );
 

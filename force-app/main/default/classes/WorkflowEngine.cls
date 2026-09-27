@@ -16,6 +16,9 @@ public inherited sharing class WorkflowEngine {
   // Operator toggle (Revenant_Config__mdt.Publish_Lifecycle_Events__c): when true
   // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
   public static Boolean publishLifecycleEvents = true;
+  // Operator setting (Revenant_Config__mdt.Payload_Codec__c): the PayloadCodec
+  // class name. Blank selects the identity codec. See WorkflowPayloadCodecs.
+  public static String payloadCodecClass = null;
 
   // Failure Category picklist API values
   public static final String CAT_STEP_EXCEPTION = 'STEP_EXCEPTION';
@@ -108,7 +111,8 @@ public inherited sharing class WorkflowEngine {
           Publish_Lifecycle_Events__c,
           Dedup_Window_Minutes__c,
           Stale_Threshold_Minutes__c,
-          Reclaim_Threshold_Minutes__c
+          Reclaim_Threshold_Minutes__c,
+          Payload_Codec__c
         FROM Revenant_Config__mdt
         WHERE DeveloperName = 'Default'
         WITH SYSTEM_MODE
@@ -136,6 +140,7 @@ public inherited sharing class WorkflowEngine {
           reclaimThresholdMinutes = configs[0]
             .Reclaim_Threshold_Minutes__c.intValue();
         }
+        payloadCodecClass = configs[0].Payload_Codec__c;
       }
     } catch (Exception ignored) {
       // Configuration metadata is optional; fall back to defaults on any read failure.

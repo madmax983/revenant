@@ -22,6 +22,7 @@ public inherited sharing class CleanupDocumentPurger {
     'Resume_',
     'ContinueInput_',
     'Captures_',
+    'Signal_',
     'VerificationPayload'
   };
 

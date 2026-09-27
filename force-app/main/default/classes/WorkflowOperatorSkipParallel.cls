@@ -117,7 +117,9 @@ public inherited sharing class WorkflowOperatorSkipParallel {
       : '';
     StepResult mockSpawningResult = StepResult.complete(
       'SENTINEL_NEXT_STEP',
-      !spawningSteps.isEmpty() ? spawningSteps[0].Output__c : null
+      !spawningSteps.isEmpty()
+        ? WorkflowPayloadCodecs.decode(spawningSteps[0].Output__c)
+        : null
     );
 
     String nextStepName;
@@ -170,7 +172,10 @@ public inherited sharing class WorkflowOperatorSkipParallel {
     joinStepExec.Status__c = 'Pending';
     joinStepExec.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      joinInputJson,
+      WorkflowPayloadCodecs.encode(
+        joinInputJson,
+        CodecContext.PayloadKind.STEP_OUTPUT
+      ),
       'Input_' + nextStepName.replaceAll('[^a-zA-Z0-9]', '_')
     );
     joinStepExec.Retry_Count__c = 0;

@@ -42,7 +42,10 @@ public inherited sharing class WorkflowRetryScheduling {
     captures.put('__maxAttempts', policy.maximumAttempts);
     stepExec.Captured_Values__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      JSON.serialize(captures),
+      WorkflowPayloadCodecs.encode(
+        JSON.serialize(captures),
+        CodecContext.PayloadKind.STEP_STATE
+      ),
       'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
   }

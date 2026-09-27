@@ -104,7 +104,7 @@ public inherited sharing class WorkflowDebounceSweeper {
           null
         )
         .withAttributes(attributes);
-      req.inputJson = state.Input_Json__c;
+      req.inputJson = WorkflowPayloadCodecs.decode(state.Input_Json__c);
       req.causationId = state.Causation_Id__c;
       startRequests.add(req);
     }

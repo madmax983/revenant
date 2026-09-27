@@ -150,7 +150,11 @@ public inherited sharing class WorkflowDebouncer {
       }
 
       state.Fire_At__c = computeFireAt(state, req, now);
-      state.Input_Json__c = req.inputJson;
+      // Pending input is workflow input at rest. The sweeper decodes it.
+      state.Input_Json__c = WorkflowPayloadCodecs.encode(
+        req.inputJson,
+        CodecContext.PayloadKind.WORKFLOW_INPUT
+      );
       state.Attributes_Json__c = req.attributesJson;
       state.Causation_Id__c = req.causationId;
 

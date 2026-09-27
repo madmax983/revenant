@@ -87,7 +87,10 @@ public inherited sharing class WorkflowContinueAsNew {
     stepExec.Status__c = 'ContinuedAsNew';
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      result.directive().continuation.nextInputJson,
+      WorkflowPayloadCodecs.encode(
+        result.directive().continuation.nextInputJson,
+        CodecContext.PayloadKind.WORKFLOW_INPUT
+      ),
       'ContinueInput_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
@@ -233,7 +236,10 @@ public inherited sharing class WorkflowContinueAsNew {
     // Set input and save payload
     nextInstance.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       nextInstance.Id,
-      result.directive().continuation.nextInputJson,
+      WorkflowPayloadCodecs.encode(
+        result.directive().continuation.nextInputJson,
+        CodecContext.PayloadKind.WORKFLOW_INPUT
+      ),
       'Input_' + nextInstance.Id
     );
 

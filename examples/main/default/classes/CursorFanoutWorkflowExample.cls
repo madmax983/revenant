@@ -246,12 +246,18 @@ public inherited sharing class CursorFanoutWorkflowExample {
 
       List<Object> aggregatedOutputs = new List<Object>();
       Integer totalProcessed = 0;
+      // Resolve stored outputs in bulk: they can be offloaded or encoded by a
+      // payload codec.
+      List<String> rawOutputs = new List<String>();
       for (Workflow_Instance__c child : childInstances) {
-        if (child.Output__c == null) {
+        rawOutputs.add(child.Output__c);
+      }
+      for (String output : WorkflowPayloadOffload.resolvePayloads(rawOutputs)) {
+        if (output == null) {
           continue;
         }
         Map<String, Object> chunkOutput = (Map<String, Object>) JSON.deserializeUntyped(
-          child.Output__c
+          output
         );
         aggregatedOutputs.add(chunkOutput);
         Integer chunkCount = (Integer) chunkOutput.get('count');
