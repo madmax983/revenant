@@ -68,6 +68,42 @@ private class WorkflowDashboardDefinitionChangeTest {
   }
 
   @IsTest
+  static void testDetailsWithoutStoredShapeReportNoDiff() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instId = parkInstance('DashDefChgNoShape-' + Datetime.now().getTime());
+      // A shape over the field size is not stored. Only the fingerprint is.
+      update new Workflow_Instance__c(Id = instId, Definition_Shape__c = null);
+      Map<String, Object> change = (Map<String, Object>) WorkflowDashboardController.getInstanceDetails(
+          instId
+        )
+        .get('definitionChange');
+      Test.stopTest();
+
+      System.assertEquals(
+        false,
+        change.get('storedAvailable'),
+        'Stored list must be flagged as not available'
+      );
+      System.assertEquals(
+        true,
+        change.get('liveAvailable'),
+        'Live list is readable'
+      );
+      System.assertEquals(
+        new List<String>(),
+        (List<String>) change.get('addedSteps'),
+        'No diff without a stored list'
+      );
+      System.assertEquals(
+        new List<String>(),
+        (List<String>) change.get('removedSteps'),
+        'No diff without a stored list'
+      );
+    }
+  }
+
+  @IsTest
   static void testDetailsOmitDiagnosisForOtherStatuses() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;

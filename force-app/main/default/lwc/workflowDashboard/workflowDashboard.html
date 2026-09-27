@@ -1460,12 +1460,25 @@
                                             <div class="slds-text-body_regular slds-m-bottom_x-small">
                                                 The workflow definition step list changed after this instance started.
                                                 The engine stopped the instance before the next step. No step ran against the new list.
-                                                Reconcile the change. Then use <strong>Release</strong> to continue on the live definition, or cancel the instance.
+                                                Correct the definition. Then use <strong>Release</strong> to continue on the live definition, or cancel the instance.
                                             </div>
                                             <template if:true={definitionChange}>
-                                                <template if:false={definitionChange.currentStepInLive}>
+                                                <div class="slds-text-body_small slds-m-bottom_x-small" data-id="definition-change-current-step">
+                                                    Current step: <strong>{definitionChange.currentStep}</strong>
+                                                </div>
+                                                <template if:true={definitionChange.showMissingStep}>
                                                     <div class="slds-text-body_small text-red slds-m-bottom_x-small">
                                                         The current step is not in the live definition. Restore the step or cancel the instance.
+                                                    </div>
+                                                </template>
+                                                <template if:true={definitionChange.showLiveUnavailable}>
+                                                    <div class="slds-text-body_small text-red slds-m-bottom_x-small">
+                                                        The engine cannot read the live definition. Deploy a valid definition or cancel the instance.
+                                                    </div>
+                                                </template>
+                                                <template if:true={definitionChange.showStoredUnavailable}>
+                                                    <div class="slds-text-body_small slds-text-color_weak slds-m-bottom_x-small">
+                                                        The stored step list is not available. Only the fingerprint was recorded.
                                                     </div>
                                                 </template>
                                                 <div class="slds-grid slds-gutters">

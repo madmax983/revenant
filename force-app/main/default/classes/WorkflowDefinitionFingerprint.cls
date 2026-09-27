@@ -3,7 +3,8 @@
  * definition (issue #89). The shape is the ordered `getSteps()` list. The
  * fingerprint is `v1:` plus the SHA-256 hex digest of the lower-case, trimmed
  * step names, one per line. All methods are in memory: no SOQL, no DML.
- * Compute errors fail open: the result is null, which means "unknown".
+ * `stamp`, `resolve` and `liveSteps` catch errors and leave or return null,
+ * which means "unknown".
  */
 public inherited sharing class WorkflowDefinitionFingerprint {
   /**

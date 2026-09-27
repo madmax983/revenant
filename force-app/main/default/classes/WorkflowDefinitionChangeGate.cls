@@ -2,14 +2,15 @@
  * @description Hot-path gate that stops a forward hop when the live definition
  * shape differs from the shape stored at start (issue #89).
  *
- * `WorkflowStepRunner` calls it after the pause gate and before concurrency
- * admission. On a match it adds no SOQL and no DML: it reads the stored
- * fingerprint from the already-loaded instance and computes the live one in
- * memory. On a HALT verdict it parks the instance in `DefinitionChanged` and
- * appends one marker step-execution row. It changes no prior step row and not
- * the compensation stack. A VersionedWorkflow mismatch and a blank stored
- * fingerprint are advisory only. Compute errors fail open. All DML and SOQL
- * run in system mode.
+ * `WorkflowStepRunner` calls it after the compensation route and before the
+ * pause gate and concurrency admission. On a match it adds no SOQL and no
+ * DML: it reads the stored fingerprint from the loaded instance and computes
+ * the live one in memory. On a HALT verdict it parks the instance in
+ * `DefinitionChanged`, appends one marker step-execution row and writes one
+ * Warn log row. It changes no prior step row and not the compensation stack.
+ * A VersionedWorkflow mismatch (ADVISORY) and a blank stored fingerprint
+ * (UNKNOWN) do not stop the hop. When the live definition cannot be read, the
+ * hop continues. All DML and SOQL run in system mode.
  */
 public inherited sharing class WorkflowDefinitionChangeGate {
   /** @description Instance status of a parked instance. */

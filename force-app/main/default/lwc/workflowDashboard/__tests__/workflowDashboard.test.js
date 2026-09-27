@@ -2523,7 +2523,7 @@ describe("c-workflow-dashboard definition changed", () => {
     jest.clearAllMocks();
   });
 
-  function mockParkedInstance(currentStepInLive) {
+  function mockParkedInstance(currentStepInLive, overrides = {}) {
     getFilteredInstances.mockResolvedValue([
       {
         Id: "a0G000000000089",
@@ -2539,19 +2539,23 @@ describe("c-workflow-dashboard definition changed", () => {
         Workflow_Name__c: "OnboardingWorkflow",
         Status__c: "DefinitionChanged",
         Current_Step__c: "StepB",
+        Error_Message__c: "Definition step list changed in flight.",
       },
       steps: [],
       children: [],
       payloadFiles: {},
       definitionChange: {
-        storedSteps: ["StepA", "StepB"],
+        storedSteps: ["StepA", "StepB", "StepOld"],
         liveSteps: ["StepA", "StepX", "StepB"],
         addedSteps: ["StepX"],
-        removedSteps: [],
+        removedSteps: ["StepOld"],
+        storedAvailable: true,
+        liveAvailable: true,
         storedFingerprint: "v1:aaa",
         liveFingerprint: "v1:bbb",
         currentStep: "StepB",
         currentStepInLive,
+        ...overrides,
       },
     });
   }
@@ -2601,7 +2605,10 @@ describe("c-workflow-dashboard definition changed", () => {
       panel.querySelectorAll('[data-id="stored-step"]'),
     ).map((n) => n.textContent.trim());
     const live = Array.from(panel.querySelectorAll('[data-id="live-step"]'));
-    expect(stored).toEqual(["StepA", "StepB"]);
+    expect(stored).toEqual(["StepA", "StepB", "StepOld"]);
+    const storedNodes = panel.querySelectorAll('[data-id="stored-step"]');
+    expect(storedNodes[2].className).toContain("step-removed");
+    expect(storedNodes[0].className).not.toContain("step-removed");
     expect(live.map((n) => n.textContent.trim())).toEqual([
       "StepA",
       "StepX",
@@ -2614,10 +2621,19 @@ describe("c-workflow-dashboard definition changed", () => {
     mockParkedInstance(true);
     const element = await openParked();
 
-    const badge = element.shadowRoot.querySelector(
+    const panel = element.shadowRoot.querySelector(
       '[data-id="definition-change-panel"]',
     );
-    expect(badge).not.toBeNull();
+    expect(panel).not.toBeNull();
+    // The park reason is not a failure: the failure block stays hidden.
+    expect(element.shadowRoot.textContent).not.toContain(
+      "Workflow Failure Message",
+    );
+    expect(
+      element.shadowRoot.querySelector(
+        '[data-id="definition-change-current-step"]',
+      ).textContent,
+    ).toContain("StepB");
     const retry = findButton(
       element,
       (b) => b.label && b.label.startsWith("Retry"),
@@ -2654,5 +2670,47 @@ describe("c-workflow-dashboard definition changed", () => {
     expect(element.shadowRoot.textContent).toContain(
       "The current step is not in the live definition",
     );
+  });
+
+  it("shows an unreadable live definition instead of a missing-step warning", async () => {
+    mockParkedInstance(false, {
+      liveAvailable: false,
+      liveSteps: [],
+      addedSteps: [],
+      removedSteps: [],
+      liveFingerprint: null,
+    });
+    const element = await openParked();
+
+    const text = element.shadowRoot.textContent;
+    expect(text).toContain("The engine cannot read the live definition");
+    expect(text).not.toContain(
+      "The current step is not in the live definition",
+    );
+    const release = element.shadowRoot.querySelector(
+      'lightning-button[data-id="release-definition-btn"]',
+    );
+    expect(release.disabled).toBe(true);
+  });
+
+  it("shows an error toast when release fails", async () => {
+    mockParkedInstance(true);
+    releaseDefinitionChangedInstance.mockRejectedValueOnce({
+      body: { message: "Current step StepB is not in the live definition." },
+    });
+    const element = await openParked();
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    element.shadowRoot
+      .querySelector('lightning-button[data-id="release-definition-btn"]')
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    expect(toastHandler).toHaveBeenCalled();
+    const detail = toastHandler.mock.calls[0][0].detail;
+    expect(detail.variant).toBe("error");
+    expect(detail.message).toContain("StepB");
   });
 });

@@ -113,6 +113,19 @@ public class RevenantOperatorPermSetTest {
         'Operator must NOT be able to edit the LIFO Compensation_Stack__c field'
       );
 
+      // Negative: the definition fingerprint (issue #89) is readable but NOT editable.
+      Schema.DescribeFieldResult fingerprint = Workflow_Instance__c.Definition_Fingerprint__c.getDescribe();
+      System.assertEquals(
+        true,
+        fingerprint.isAccessible(),
+        'Operator should be able to read Definition_Fingerprint__c'
+      );
+      System.assertEquals(
+        false,
+        fingerprint.isUpdateable(),
+        'Operator must NOT be able to edit Definition_Fingerprint__c'
+      );
+
       // Negative: a representative append-only audit field is readable but NOT editable.
       Schema.DescribeFieldResult stepOutput = Workflow_Step_Execution__c.Output__c.getDescribe();
       System.assertEquals(

@@ -429,7 +429,7 @@ export default class WorkflowDashboard extends LightningElement {
   // Release is safe only when every current step is still in the live list.
   get isReleaseDisabled() {
     const change = this.definitionChange;
-    return !change || !change.currentStepInLive;
+    return !change || !change.liveAvailable || !change.currentStepInLive;
   }
 
   get pendingCompensationCount() {
@@ -2438,7 +2438,7 @@ export default class WorkflowDashboard extends LightningElement {
       .then(() => {
         this.showToast(
           "Success",
-          "Instance released onto the live definition. The current step runs next.",
+          "The instance runs on the live definition. The current step runs next.",
           "success",
         );
         this.refreshInstances();
@@ -2478,6 +2478,10 @@ export default class WorkflowDashboard extends LightningElement {
       ...change,
       storedRows: mark(change.storedSteps, removed, "step-removed", "s"),
       liveRows: mark(change.liveSteps, added, "step-added", "l"),
+      // Warn about a missing current step only when the live list is readable.
+      showMissingStep: change.liveAvailable && !change.currentStepInLive,
+      showLiveUnavailable: !change.liveAvailable,
+      showStoredUnavailable: !change.storedAvailable,
     };
   }
 
@@ -2588,7 +2592,7 @@ export default class WorkflowDashboard extends LightningElement {
       case "Paused":
         return "badge badge-orange";
       case "DefinitionChanged":
-        return "badge badge-purple pulse-glow";
+        return "badge badge-purple";
       default:
         return "badge";
     }

@@ -40,7 +40,8 @@ public inherited sharing class WorkflowTimeoutSweep {
 
   /**
    * @description §1. Process Timed-out Steps. Exclude steps whose parent is
-   * Paused or DefinitionChanged: a parked parent is not runnable, so its step rows (e.g. parallel
+   * Paused or DefinitionChanged (both are parks): a parked parent is not
+   * runnable, so its step rows (e.g. parallel
    * branch rows the SPLIT path stamped with Timeout_At__c before their RUN_STEP
    * reached the gate, or a parked initial step) would otherwise be selected and
    * skipped, wasting the bounded batch and delaying real timeouts in other

@@ -9,7 +9,7 @@ Stop a plain `WorkflowDefinition` instance before it runs a step against a chang
 | # | Idea | Keep? |
 |---|------|-------|
 | B1 | Store a SHA-256 fingerprint of `getSteps()` on the instance at start. | Yes |
-| B2 | Also store the step list (JSON) so the dashboard can show stored vs live steps. A hash cannot show the steps. | Yes |
+| B2 | Also store the step list (JSON) so the dashboard can show stored and live steps. A hash cannot show the steps. | Yes |
 | B3 | Fingerprint also covers `getInitialStep()`. | No. A new initial step does not affect an instance past its start. It adds false halts. |
 | B4 | Probe `getNextStep()` with synthetic results to fingerprint routes. | No. Cost is high, author code can throw, and results are data-dependent. |
 | B5 | Put the check in a trigger. | No. The check must run per hop, not per save. |
@@ -19,7 +19,7 @@ Stop a plain `WorkflowDefinition` instance before it runs a step against a chang
 | B9 | Normalize step names to lower case before the hash. | Yes. Apex type names and `==` are case-insensitive. A case-only edit does not change execution. |
 | B10 | Release re-stamps the live fingerprint and shape, sets `Running`, re-arms timeouts, and enqueues. | Yes |
 | B11 | Release refuses when a current step is not in the live `getSteps()`. | Yes. Release must not route into a missing step. The operator can cancel. |
-| B12 | Bulk "release all" per workflow. | Service is bulk-safe. Dashboard gives a per-instance action. |
+| B12 | Bulk "release all" per workflow. | No. Release is per instance. A bulk release is a follow-up. |
 
 ## Reverse Brainstorming (how can this fail?)
 
@@ -28,7 +28,7 @@ Stop a plain `WorkflowDefinition` instance before it runs a step against a chang
 | Every deploy halts all instances (false positive). | Hash only the ordered step names. Lower-case them. Skip a null or foreign-version fingerprint. |
 | Old instances (null fingerprint) halt after upgrade. | Null means unknown. Unknown is advisory. |
 | The gate throws and breaks the hot path. | Catch all errors in compute. Fail open. |
-| The gate adds SOQL per hop. | Add one field to the existing instance query. Compute in memory. Cache the live fingerprint per transaction. |
+| The gate adds SOQL per hop. | Add one field to the existing instance query. Compute in memory. Do not cache: a hop computes once, and a cache goes stale when a test changes the shape in one transaction. |
 | The halt marker row is reused as the step row. | The marker has its own step name (`Workflow_Definition_Changed`). |
 | The halt marker feeds the next step input. | Marker status is `DefinitionChanged`, never `Completed`. |
 | The marker is re-driven as a failed step. | Marker status is not `Failed`. |
@@ -37,7 +37,7 @@ Stop a plain `WorkflowDefinition` instance before it runs a step against a chang
 | A signal to a parked instance is lost. | Signal routing treats `DefinitionChanged` like `Paused` (hold the signal). |
 | A duplicate start with the same key makes a second live run. | Add `DefinitionChanged` to the active sets. |
 | The operator cannot stop a parked instance. | Cancel accepts `DefinitionChanged`. |
-| Concurrency reconciler reclaims a parked slot. | Count `DefinitionChanged` as a slot holder. |
+| Concurrency reconciler reclaims a parked slot. | No change needed. The reconciler counts every non-terminal status as a slot holder. |
 | Two parallel branches both park and write two markers. | Re-read the instance `FOR UPDATE` before park. Skip when already parked. |
 | `VersionedWorkflow` instances halt. | Versioned mismatch is advisory only (debug log). |
 | Compensation halts. | The compensation route runs before the gate. |
@@ -45,10 +45,10 @@ Stop a plain `WorkflowDefinition` instance before it runs a step against a chang
 ## Six Thinking Hats
 
 - **White (facts):** `Definition_Version__c` is always `1` for plain definitions. No shape record exists. All in-repo `getSteps()` bodies are literal lists. `Paused` is the closest park pattern.
-- **Red (feelings):** Operators fear silent corruption more than an extra click. A loud, clear park builds trust.
+- **Red (feelings):** Operators fear silent corruption more than an extra click. A visible park with a clear reason is better than a silent resume.
 - **Black (risks):** New status values touch many status sets. A miss can strand or drop an instance. Review each set.
 - **Yellow (benefits):** Safe deploys. Clear audit marker. No new SOQL in the hot path. No public API break.
-- **Green (ideas):** Show stored vs live steps with added and removed steps marked. Guard release against a missing current step.
+- **Green (ideas):** Show stored and live steps with added and removed steps marked. Guard release against a missing current step.
 - **Blue (process):** RED tests first, then GREEN, then REFACTOR. Then a multi-angle review. Then map each AC to evidence.
 
 ## Decision Table (the spec)
@@ -67,7 +67,7 @@ Stop a plain `WorkflowDefinition` instance before it runs a step against a chang
 Invariants:
 
 1. A `HALT` verdict runs zero steps in that delivery.
-2. A park writes only one instance update and one appended marker row. It changes no prior step row and no `Compensation_Stack__c`.
+2. A park writes only one instance update, one appended marker row and one Warn log row. It changes no prior step row and no `Compensation_Stack__c`.
 3. A `DefinitionChanged` instance is not terminal. Release returns it to `Running`.
 
 ## Changes
@@ -78,7 +78,7 @@ Invariants:
 - `WorkflowDefinitionChangeService`: release and dashboard diagnosis.
 - `WorkflowDefinitionChangeService.release(Id)`: public API. The 19-method `WorkflowEngine` facade stays unchanged.
 - Stamp sites: start builder, child start, bulk child planner, continue-as-new, compensation instance (copy).
-- Status sets: active, cancel, signal routing, stall, timeout sweep, catalog, drain, reconciler.
+- Status sets: active, cancel, signal routing, stall, timeout sweep, catalog, drain. The concurrency reconciler needs no change.
 - Dashboard: status badge, filter, diagnosis panel, Release action.
 
 ## Verification

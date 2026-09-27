@@ -112,13 +112,19 @@ public inherited sharing class WorkflowDefinitionChangeService {
     );
     List<String> storedList = stored == null ? new List<String>() : stored;
     List<String> liveList = live == null ? new List<String>() : live;
+    // A diff needs both lists. Without one, report no added or removed steps.
+    Boolean canDiff = stored != null && live != null;
     return new Map<String, Object>{
       'storedSteps' => storedList,
       'liveSteps' => liveList,
       'storedAvailable' => stored != null,
       'liveAvailable' => live != null,
-      'addedSteps' => difference(liveList, storedList),
-      'removedSteps' => difference(storedList, liveList),
+      'addedSteps' => canDiff
+        ? difference(liveList, storedList)
+        : new List<String>(),
+      'removedSteps' => canDiff
+        ? difference(storedList, liveList)
+        : new List<String>(),
       'storedFingerprint' => instance.Definition_Fingerprint__c,
       'liveFingerprint' => live == null
         ? null
