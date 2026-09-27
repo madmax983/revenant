@@ -21,6 +21,7 @@ public inherited sharing class AutoRetryWorkflowExample {
   private static final String RESERVE = 'AutoRetryWorkflowExample.ReserveInventoryStep';
   private static final String CHARGE = 'AutoRetryWorkflowExample.ChargePaymentStep';
   private static final String RECEIPT = 'AutoRetryWorkflowExample.SendReceiptStep';
+  private static final Decimal MAX_CENTS = 2147483647;
 
   /**
    * @description Order saga: reserve, charge, receipt. It sets the default
@@ -172,11 +173,16 @@ public inherited sharing class AutoRetryWorkflowExample {
   }
 
   // Returns the amount in whole cents, or null for a bad amount. A Flow or a
-  // numeric field can give a Decimal such as 4200.00, which is valid.
+  // numeric field can give a Decimal such as 4200.00, which is valid. The
+  // amount must fit in an Integer.
   private static Integer toCents(Object amount) {
     try {
       Decimal value = Decimal.valueOf(String.valueOf(amount));
-      if (value > 0 && value == value.round(System.RoundingMode.FLOOR)) {
+      if (
+        value > 0 &&
+        value <= MAX_CENTS &&
+        value == value.round(System.RoundingMode.FLOOR)
+      ) {
         return value.intValue();
       }
     } catch (TypeException ignored) {
