@@ -53,7 +53,11 @@ public inherited sharing class WorkflowStepContext {
     Integer attempt = stepExec.Retry_Count__c != null
       ? (Integer) stepExec.Retry_Count__c + 1
       : 1;
-    CaptureContext cc = resolveCaptureContext(stepInstance, stepExec);
+    CaptureContext cc = resolveCaptureContext(
+      stepInstance,
+      stepExec,
+      ctx.autoRetryPolicy
+    );
 
     StepContext.Builder contextBuilder = new StepContext.Builder()
       .instanceId(ctx.instanceId)
@@ -126,10 +130,12 @@ public inherited sharing class WorkflowStepContext {
   }
 
   // Resolve the captured-values map and the effective max attempts (from a
-  // RetryConfigurable policy, or a persisted __maxAttempts, defaulting to 1).
+  // RetryConfigurable policy, a persisted __maxAttempts, or the auto-retry
+  // policy, defaulting to 1).
   private static CaptureContext resolveCaptureContext(
     WorkflowStep stepInstance,
-    Workflow_Step_Execution__c stepExec
+    Workflow_Step_Execution__c stepExec,
+    RetryPolicy autoRetryPolicy
   ) {
     CaptureContext cc = new CaptureContext();
     if (stepInstance instanceof RetryConfigurable) {
@@ -137,6 +143,9 @@ public inherited sharing class WorkflowStepContext {
         ((RetryConfigurable) stepInstance).getRetryPolicy()
       );
       cc.maxAttempts = policy.maximumAttempts;
+    } else if (autoRetryPolicy != null) {
+      cc.maxAttempts = WorkflowRetryScheduling.sanitizePolicy(autoRetryPolicy)
+        .maximumAttempts;
     }
     applyCapturedValues(cc, stepInstance, stepExec);
     return cc;

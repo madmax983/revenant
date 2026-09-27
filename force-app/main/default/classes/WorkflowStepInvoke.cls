@@ -29,6 +29,10 @@ public inherited sharing class WorkflowStepInvoke {
       return;
     }
 
+    ctx.autoRetryPolicy = WorkflowAutoRetry.resolvePolicy(
+      ctx.instance,
+      stepInstance
+    );
     StepContext context = WorkflowStepContext.buildStepContext(
       ctx,
       stepInstance,
@@ -42,6 +46,7 @@ public inherited sharing class WorkflowStepInvoke {
     outcome.stepExec = ctx.stepExec;
     outcome.result = result;
     outcome.context = context;
+    outcome.thrownError = ctx.thrownError;
     WorkflowStepOutcome.handleStepResult(outcome);
   }
 
@@ -134,16 +139,9 @@ public inherited sharing class WorkflowStepInvoke {
 
     StepResult result;
     try {
-      if (Test.isRunningTest() && WorkflowFaultInjection.hasArmedFaults()) {
-        result = WorkflowFaultInjection.checkAndInjectFault(
-          ctx.instanceId,
-          ctx.activeStepName,
-          stepInstance
-        );
-      }
-      if (result == null) {
-        result = stepInstance.execute(context);
-      }
+      result = ctx.autoRetryPolicy == null
+        ? executeStep(ctx, stepInstance, context)
+        : executeStepWithAutoRetry(ctx, stepInstance, context);
     } finally {
       if (timeoutSeconds != null && timeoutSeconds > 0) {
         stepExec.Timeout_At__c = null;
@@ -155,5 +153,44 @@ public inherited sharing class WorkflowStepInvoke {
       }
     }
     return result;
+  }
+
+  // Run the step once (honoring test fault injection). A throw goes up to the
+  // finalizer, which fails fast.
+  private static StepResult executeStep(
+    WorkflowStepRunner.RunStepContext ctx,
+    WorkflowStep stepInstance,
+    StepContext context
+  ) {
+    StepResult result;
+    if (Test.isRunningTest() && WorkflowFaultInjection.hasArmedFaults()) {
+      result = WorkflowFaultInjection.checkAndInjectFault(
+        ctx.instanceId,
+        ctx.activeStepName,
+        stepInstance
+      );
+    }
+    if (result == null) {
+      result = stepInstance.execute(context);
+    }
+    return result;
+  }
+
+  // Auto-retry (issue #101): change a catchable throw into a RETRY result under
+  // the declared policy, and keep the exception for the exhausted message. No
+  // savepoint is set, because a savepoint blocks callouts. DML done before the
+  // throw is kept, as with a manual try/catch. LimitException is not catchable,
+  // so it stays on the finalizer fail-fast path.
+  private static StepResult executeStepWithAutoRetry(
+    WorkflowStepRunner.RunStepContext ctx,
+    WorkflowStep stepInstance,
+    StepContext context
+  ) {
+    try {
+      return executeStep(ctx, stepInstance, context);
+    } catch (Exception ex) {
+      ctx.thrownError = ex;
+      return StepResult.retry(ctx.autoRetryPolicy);
+    }
   }
 }
