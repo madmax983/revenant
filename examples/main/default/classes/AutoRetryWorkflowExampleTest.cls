@@ -87,11 +87,7 @@ public class AutoRetryWorkflowExampleTest {
         MockFlakyOrderServices.chargeAttempts,
         'Gateway is called maximumAttempts (4) times'
       );
-      Assert.areEqual(
-        0,
-        MockFlakyOrderServices.effectiveCharges,
-        'No charge'
-      );
+      Assert.areEqual(0, MockFlakyOrderServices.effectiveCharges, 'No charge');
       Workflow_Step_Execution__c charge = chargeRow();
       Assert.areEqual('Failed', charge.Status__c, 'Charge step fails');
       Assert.isTrue(
