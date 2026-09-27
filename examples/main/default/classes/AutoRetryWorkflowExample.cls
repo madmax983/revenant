@@ -106,10 +106,10 @@ public inherited sharing class AutoRetryWorkflowExample {
      * @return A complete result with the charge id.
      */
     public StepResult execute(StepContext ctx) {
-      Object amount = readInput(ctx).get('amountCents');
+      Integer amountCents = toCents(readInput(ctx).get('amountCents'));
       String chargeId = MockFlakyOrderServices.charge(
         ctx.idempotencyKey,
-        Integer.valueOf(String.valueOf(amount))
+        amountCents
       );
       return StepResult.complete(
         null,
@@ -158,6 +158,12 @@ public inherited sharing class AutoRetryWorkflowExample {
     public RetryPolicy getAutoRetryPolicy() {
       return null;
     }
+  }
+
+  // Returns the amount in cents. A Flow or a numeric field can give a Decimal
+  // such as 4200.00, so do not use Integer.valueOf on the text.
+  private static Integer toCents(Object amount) {
+    return Decimal.valueOf(String.valueOf(amount)).intValue();
   }
 
   // Reads the workflow input map.
