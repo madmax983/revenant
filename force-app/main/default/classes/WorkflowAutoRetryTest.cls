@@ -1040,6 +1040,11 @@ public class WorkflowAutoRetryTest {
 
       Assert.isNotNull(thrown, 'Timeout fallback run fails fast');
       Assert.areEqual(1, runsOf(PROBE), 'Step runs once');
+      Assert.areEqual(
+        new List<Integer>{ 1 },
+        maxAttemptsSeen,
+        'Fallback run does not see the auto policy'
+      );
       Assert.areEqual(0, retryCount(PROBE), 'No retry is counted');
       Assert.isTrue(logsOfType('AutoRetry').isEmpty(), 'No auto-retry log');
     }

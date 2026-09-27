@@ -39,10 +39,6 @@ public inherited sharing class WorkflowStepInvoke {
       stepInstance,
       prevOutput
     );
-    // A timeout fallback run does not auto-retry: a retry loses the timeout marker.
-    if (context.retry().isTimeoutResume()) {
-      ctx.autoRetryPolicy = null;
-    }
     StepResult result = executeStepWithTimeout(ctx, stepInstance, context);
 
     // 6. Handle Step Outcome
