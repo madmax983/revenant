@@ -1,8 +1,9 @@
 /**
- * End-to-end tests for the payload codec (issue #99). A workflow moves a
+ * @description End-to-end tests for the payload codec (issue #99). A workflow moves a
  * sensitive value through workflow input, step output (inline and offloaded),
  * step state, captures, progress, inbound signals and child-completion
- * signals. The tests scan every persistence surface for plaintext.
+ * signals. The tests scan the payload fields of the three engine objects,
+ * the error fields and the offload files for plaintext.
  */
 @IsTest
 public class WorkflowPayloadCodecE2ETest {
@@ -11,7 +12,7 @@ public class WorkflowPayloadCodecE2ETest {
   private static final String ENVELOPE_PREFIX = '{"$codec":';
   private static Blob aesKey;
 
-  /** AES-256 codec. Tests load it by name, so it is public. */
+  /** @description AES-256 codec. Tests load it by name, so it is public. */
   public class AesCodec implements PayloadCodec {
     private Blob key() {
       if (aesKey == null) {
@@ -20,12 +21,24 @@ public class WorkflowPayloadCodecE2ETest {
       return aesKey;
     }
 
+    /**
+     * @description Encodes the payload.
+     * @param plaintext the payload text
+     * @param ctx the payload context
+     * @return the encoded text
+     */
     public String encode(String plaintext, CodecContext ctx) {
       return EncodingUtil.base64Encode(
         Crypto.encryptWithManagedIV('AES256', key(), Blob.valueOf(plaintext))
       );
     }
 
+    /**
+     * @description Decodes the payload.
+     * @param stored the encoded text
+     * @param ctx the payload context
+     * @return the payload text
+     */
     public String decode(String stored, CodecContext ctx) {
       return Crypto.decryptWithManagedIV(
           'AES256',
@@ -36,8 +49,12 @@ public class WorkflowPayloadCodecE2ETest {
     }
   }
 
-  /** Parent workflow: receive, then start a child, then finish. */
+  /** @description Parent workflow: receive, then start a child, then finish. */
   public class SecretWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the step names.
+     * @return the step names
+     */
     public List<String> getSteps() {
       return new List<String>{
         'WorkflowPayloadCodecE2ETest.ReceiveStep',
@@ -46,10 +63,20 @@ public class WorkflowPayloadCodecE2ETest {
       };
     }
 
+    /**
+     * @description Returns the first step.
+     * @return the first step name
+     */
     public String getInitialStep() {
       return 'WorkflowPayloadCodecE2ETest.ReceiveStep';
     }
 
+    /**
+     * @description Returns the next step.
+     * @param currentStepName the step that ran
+     * @param result the step result
+     * @return the next step name, or null at the end
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       if (currentStepName == 'WorkflowPayloadCodecE2ETest.ReceiveStep') {
         return 'WorkflowPayloadCodecE2ETest.ChildWaitStep';
@@ -61,18 +88,27 @@ public class WorkflowPayloadCodecE2ETest {
     }
   }
 
-  /** Produces a capture value that holds the secret. */
+  /** @description Produces a capture value that holds the secret. */
   public class SecretProducer implements CaptureProducer {
+    /**
+     * @description Produces the capture value.
+     * @return the capture value
+     */
     public Object produce() {
       return 'captured:' + SECRET;
     }
   }
 
   /**
-   * Writes the secret to captures, progress and step state. Waits for the
+   * @description Writes the secret to captures, progress and step state. Waits for the
    * signal. Then completes with a large output, so the engine offloads it.
    */
   public class ReceiveStep implements WorkflowStep {
+    /**
+     * @description Runs the step.
+     * @param ctx the step context
+     * @return the step result
+     */
     public StepResult execute(StepContext ctx) {
       Object captured = ctx.captures().once('secret', new SecretProducer());
       ctx.progress()
@@ -96,8 +132,13 @@ public class WorkflowPayloadCodecE2ETest {
     }
   }
 
-  /** Starts the child. Then reads the child outcome. */
+  /** @description Starts the child. Then reads the child outcome. */
   public class ChildWaitStep implements WorkflowStep {
+    /**
+     * @description Runs the step.
+     * @param ctx the step context
+     * @return the step result
+     */
     public StepResult execute(StepContext ctx) {
       String childKey = 'codec-child-' + ctx.workflowInstanceId;
       StepContext.ChildOutcome outcome = ctx.signals()
@@ -125,8 +166,13 @@ public class WorkflowPayloadCodecE2ETest {
     }
   }
 
-  /** Completes with the previous output, so the workflow output holds it. */
+  /** @description Completes with the previous output, so the workflow output holds it. */
   public class FinishStep implements WorkflowStep {
+    /**
+     * @description Runs the step.
+     * @param ctx the step context
+     * @return the step result
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
@@ -135,27 +181,122 @@ public class WorkflowPayloadCodecE2ETest {
     }
   }
 
-  /** One-step child workflow. It returns the secret. */
+  /** @description One-step child workflow. It returns the secret. */
   public class ChildWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the step names.
+     * @return the step names
+     */
     public List<String> getSteps() {
       return new List<String>{ 'WorkflowPayloadCodecE2ETest.ChildStep' };
     }
 
+    /**
+     * @description Returns the first step.
+     * @return the first step name
+     */
     public String getInitialStep() {
       return 'WorkflowPayloadCodecE2ETest.ChildStep';
     }
 
+    /**
+     * @description Returns the next step.
+     * @param currentStepName the step that ran
+     * @param result the step result
+     * @return the next step name, or null at the end
+     */
     public String getNextStep(String currentStepName, StepResult result) {
       return null;
     }
   }
 
-  /** Returns the child input. */
+  /** @description Returns the child input. */
   public class ChildStep implements WorkflowStep {
+    /**
+     * @description Runs the step.
+     * @param ctx the step context
+     * @return the step result
+     */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(
         null,
         new Map<String, Object>{ 'childInput' => ctx.workflowInputJson }
+      );
+    }
+  }
+
+  /** @description Saga: a compensatable step, then a step that fails with data. */
+  public class SagaWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the step names.
+     * @return the step names
+     */
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowPayloadCodecE2ETest.ReserveStep',
+        'WorkflowPayloadCodecE2ETest.FailWithDataStep'
+      };
+    }
+
+    /**
+     * @description Returns the first step.
+     * @return the first step name
+     */
+    public String getInitialStep() {
+      return 'WorkflowPayloadCodecE2ETest.ReserveStep';
+    }
+
+    /**
+     * @description Returns the next step.
+     * @param currentStepName the step that ran
+     * @param result the step result
+     * @return the next step name, or null at the end
+     */
+    public String getNextStep(String currentStepName, StepResult result) {
+      return currentStepName == 'WorkflowPayloadCodecE2ETest.ReserveStep'
+        ? 'WorkflowPayloadCodecE2ETest.FailWithDataStep'
+        : null;
+    }
+  }
+
+  /** @description Completes with the secret. Compensates with the secret. */
+  public class ReserveStep implements CompensatableStep {
+    /**
+     * @description Runs the step.
+     * @param ctx the step context
+     * @return the step result
+     */
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{ 'reserved' => SECRET }
+      );
+    }
+
+    /**
+     * @description Undoes the step.
+     * @param ctx the step context
+     * @return the step result
+     */
+    public StepResult compensate(StepContext ctx) {
+      return StepResult.complete(
+        null,
+        new Map<String, Object>{ 'released' => SECRET }
+      );
+    }
+  }
+
+  /** @description Fails with failure data that holds the secret. */
+  public class FailWithDataStep implements WorkflowStep {
+    /**
+     * @description Runs the step.
+     * @param ctx the step context
+     * @return the step result
+     */
+    public StepResult execute(StepContext ctx) {
+      return StepResult.fail(
+        'Declined',
+        new Map<String, Object>{ 'ssn' => SECRET }
       );
     }
   }
@@ -207,20 +348,22 @@ public class WorkflowPayloadCodecE2ETest {
   private static List<String> storedPayloads() {
     List<String> values = new List<String>();
     for (Workflow_Instance__c inst : [
-      SELECT Input__c, Output__c, Progress__c
+      SELECT Input__c, Output__c, Progress__c, Error_Message__c
       FROM Workflow_Instance__c
     ]) {
       values.add(inst.Input__c);
       values.add(inst.Output__c);
       values.add(inst.Progress__c);
+      values.add(inst.Error_Message__c);
     }
     for (Workflow_Step_Execution__c se : [
-      SELECT Input__c, Output__c, Captured_Values__c
+      SELECT Input__c, Output__c, Captured_Values__c, Error_Details__c
       FROM Workflow_Step_Execution__c
     ]) {
       values.add(se.Input__c);
       values.add(se.Output__c);
       values.add(se.Captured_Values__c);
+      values.add(se.Error_Details__c);
     }
     for (Workflow_Signal__c sig : [SELECT Payload__c FROM Workflow_Signal__c]) {
       values.add(sig.Payload__c);
@@ -290,6 +433,7 @@ public class WorkflowPayloadCodecE2ETest {
   @IsTest
   static void identityCodecKeepsLegacyBytes() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(null);
       WorkflowTestHarness.Result r = runSecretWorkflow('codec-identity');
 
       assertResolvedOutput(r);
@@ -317,9 +461,13 @@ public class WorkflowPayloadCodecE2ETest {
   @IsTest
   static void aesResultMatchesIdentityResult() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(null);
       WorkflowTestHarness.Result plain = runSecretWorkflow('codec-rt-plain');
+      // A second governor context for the AES run.
+      Test.startTest();
       WorkflowPayloadCodecs.setCodec(new AesCodec());
       WorkflowTestHarness.Result aes = runSecretWorkflow('codec-rt-aes');
+      Test.stopTest();
 
       System.assertEquals(plain.status, aes.status);
       System.assertEquals(plain.completedSteps, aes.completedSteps);
@@ -331,42 +479,53 @@ public class WorkflowPayloadCodecE2ETest {
   // ─── AC: append-only; decode is read-only ───────────────────────────────
 
   @IsTest
-  static void readsDoNotRewriteStoredPayloads() {
+  static void checkpointPayloadsAreWrittenOnce() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowPayloadCodecs.setCodec(new AesCodec());
-      WorkflowTestHarness.Result r = runSecretWorkflow('codec-append');
-      Map<Id, Workflow_Step_Execution__c> before = new Map<Id, Workflow_Step_Execution__c>(
-        [
-          SELECT Input__c, Output__c, Captured_Values__c
-          FROM Workflow_Step_Execution__c
-        ]
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowPayloadCodecE2ETest.SecretWorkflow',
+        'codec-append',
+        new Map<String, Object>{ 'ssn' => SECRET }
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      harness.drive();
+      WorkflowEngine.signal('codec-append', SIGNAL, '{"a":1}');
+      harness.driveUntilStep('WorkflowPayloadCodecE2ETest.ChildWaitStep');
+      Workflow_Step_Execution__c checkpoint = [
+        SELECT Id, Output__c, Captured_Values__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = 'WorkflowPayloadCodecE2ETest.ReceiveStep'
+          AND Status__c = 'Completed'
+      ];
+
+      WorkflowTestHarness.Result r = harness.drive();
+      Integer dmlBefore = Limits.getDmlStatements();
+      WorkflowStatusRead.getStatus(new List<Id>{ instanceId });
+      harness.inspect();
+      WorkflowPayloadOffload.resolvePayloads(
+        new List<String>{ checkpoint.Output__c, checkpoint.Captured_Values__c }
       );
 
-      Integer dmlBefore = Limits.getDmlStatements();
-      WorkflowStatusRead.getStatus(new List<Id>{ r.instanceId });
-      new WorkflowTestHarness(r.instanceId).inspect();
-      for (Workflow_Step_Execution__c se : before.values()) {
-        WorkflowPayloadOffload.resolvePayloads(
-          new List<String>{ se.Input__c, se.Output__c, se.Captured_Values__c }
-        );
-      }
+      System.assertEquals('Completed', r.status);
       System.assertEquals(
         dmlBefore,
         Limits.getDmlStatements(),
         'Reads do no DML'
       );
-
       // AES uses a random IV. A second encode gives new ciphertext, so equal
-      // values prove that no read wrote a step row again.
-      for (Workflow_Step_Execution__c se : [
-        SELECT Input__c, Output__c, Captured_Values__c
+      // values prove that the engine wrote the checkpoint once.
+      Workflow_Step_Execution__c after = [
+        SELECT Output__c, Captured_Values__c
         FROM Workflow_Step_Execution__c
-      ]) {
-        Workflow_Step_Execution__c old = before.get(se.Id);
-        System.assertEquals(old.Input__c, se.Input__c);
-        System.assertEquals(old.Output__c, se.Output__c);
-        System.assertEquals(old.Captured_Values__c, se.Captured_Values__c);
-      }
+        WHERE Id = :checkpoint.Id
+      ];
+      System.assertEquals(checkpoint.Output__c, after.Output__c);
+      System.assertEquals(
+        checkpoint.Captured_Values__c,
+        after.Captured_Values__c
+      );
     }
   }
 
@@ -398,7 +557,7 @@ public class WorkflowPayloadCodecE2ETest {
         WHERE Id = :r.instanceId
       ];
       List<Workflow_Step_Execution__c> steps = [
-        SELECT Id, Input__c, Output__c
+        SELECT Id, Step_Name__c, Status__c, Input__c, Output__c
         FROM Workflow_Step_Execution__c
         WHERE Workflow_Instance__c = :r.instanceId
       ];
@@ -417,7 +576,21 @@ public class WorkflowPayloadCodecE2ETest {
         WorkflowPayloadService.REDACTED_PAYLOAD,
         inst.Output__c
       );
+      System.assertEquals(
+        WorkflowPayloadService.REDACTED_PAYLOAD,
+        inst.Progress__c
+      );
       for (Workflow_Step_Execution__c se : steps) {
+        if (
+          se.Step_Name__c == 'WorkflowPayloadCodecE2ETest.ReceiveStep' &&
+          se.Status__c == 'Completed'
+        ) {
+          System.assertEquals(
+            WorkflowPayloadService.REDACTED_PAYLOAD,
+            se.Output__c,
+            'The offloaded output is redacted, not shown as a marker'
+          );
+        }
         System.assert(
           se.Output__c == null || !se.Output__c.contains(SECRET),
           'No step payload is decoded on the dashboard'
@@ -540,6 +713,149 @@ public class WorkflowPayloadCodecE2ETest {
           CodecContext.PayloadKind.WORKFLOW_INPUT
         )
       );
+    }
+  }
+
+  // ─── review fixes ───────────────────────────────────────────────────────
+
+  @IsTest
+  static void replayedEnvelopeIsNotDecodedForAnotherInstance() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(new AesCodec());
+      Id victimId = WorkflowEngine.start(
+        'WorkflowPayloadCodecE2ETest.SecretWorkflow',
+        'codec-victim',
+        new Map<String, Object>{ 'ssn' => SECRET }
+      );
+      String stolen = [
+        SELECT Input__c
+        FROM Workflow_Instance__c
+        WHERE Id = :victimId
+      ]
+      .Input__c;
+
+      Id attackerId = WorkflowEngine.start(
+        'WorkflowPayloadCodecE2ETest.SecretWorkflow',
+        'codec-attacker',
+        new Map<String, Object>{ 'ssn' => 'none' }
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(attackerId);
+      harness.drive();
+      Test.startTest();
+      WorkflowTestHarness.Result r = harness.injectSignal(
+        'codec-attacker',
+        SIGNAL,
+        stolen
+      );
+      Test.stopTest();
+
+      Map<String, Object> out = (Map<String, Object>) JSON.deserializeUntyped(
+        r.output
+      );
+      System.assertEquals(
+        stolen,
+        out.get('signal'),
+        'The step gets the envelope text it was sent'
+      );
+      System.assert(
+        !String.valueOf(out.get('signal')).contains(SECRET),
+        'No decrypt by replay'
+      );
+    }
+  }
+
+  @IsTest
+  static void sagaControlValuesStayPlaintext() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(new AesCodec());
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowPayloadCodecE2ETest.SagaWorkflow',
+        'codec-saga',
+        new Map<String, Object>{ 'ssn' => SECRET }
+      );
+
+      WorkflowTestHarness.Result r = new WorkflowTestHarness(instanceId)
+        .drive();
+
+      System.assertEquals('Compensated', r.status);
+      System.assertEquals(
+        new List<String>{ 'WorkflowPayloadCodecE2ETest.ReserveStep' },
+        r.compensatedSteps
+      );
+      Workflow_Instance__c inst = [
+        SELECT Terminal_At__c, Compensation_Stack__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instanceId
+      ];
+      System.assertNotEquals(null, inst.Terminal_At__c);
+      System.assert(
+        !WorkflowPayloadCodecs.isEncoded(inst.Compensation_Stack__c),
+        'The compensation stack is control data'
+      );
+      Workflow_Step_Execution__c failed = [
+        SELECT Error_Details__c
+        FROM Workflow_Step_Execution__c
+        WHERE
+          Workflow_Instance__c = :instanceId
+          AND Step_Name__c = 'WorkflowPayloadCodecE2ETest.FailWithDataStep'
+        LIMIT 1
+      ];
+      System.assert(
+        failed.Error_Details__c.startsWith('Declined\nfailureData: {"$codec":'),
+        'failureData is encoded: ' + failed.Error_Details__c
+      );
+      System.assertEquals(
+        0,
+        countContaining(storedPayloads(), SECRET),
+        'No plaintext secret after a saga rollback'
+      );
+    }
+  }
+
+  @IsTest
+  static void undecodableDebounceRowDoesNotBlockOthers() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(new AesCodec());
+      WorkflowEngine.disableQueueableInTest = true;
+      WorkflowEngine.mockNow = Datetime.now();
+      Test.startTest();
+      WorkflowStartService.startDebounced(
+        new WorkflowDebouncer.DebounceRequest(
+            'WorkflowPayloadCodecE2ETest.SecretWorkflow',
+            'codec-debounce-good',
+            '{"ssn":"' + SECRET + '"}'
+          )
+          .withDebounce(10)
+      );
+      Debounce_State__c bad = new Debounce_State__c(
+        Workflow_Name__c = 'WorkflowPayloadCodecE2ETest.SecretWorkflow',
+        Correlation_Key__c = 'codec-debounce-bad',
+        Debounce_Key__c = 'codec-debounce-bad',
+        Input_Json__c = '{"$codec":"WORKFLOW_INPUT","data":"not-cipher"}',
+        First_Triggered_At__c = WorkflowEngine.mockNow,
+        Fire_At__c = WorkflowEngine.mockNow.addSeconds(-60)
+      );
+      insert as system bad;
+
+      WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(11);
+      WorkflowEngine.processWatchdogHeartbeat();
+      Test.stopTest();
+
+      System.assertEquals(
+        1,
+        [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE Correlation_Key__c = 'codec-debounce-good'
+        ],
+        'The good row starts'
+      );
+      Debounce_State__c after = [
+        SELECT Retry_Count__c
+        FROM Debounce_State__c
+        WHERE Id = :bad.Id
+      ];
+      System.assertEquals(1, after.Retry_Count__c, 'The bad row is retried');
     }
   }
 }

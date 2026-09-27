@@ -103,9 +103,24 @@ public inherited sharing class WorkflowPayloadOffload {
    * @return the resolved control payload, or null for an encoded value
    */
   public static String resolveControlPayload(String textValue) {
-    return WorkflowPayloadCodecs.isEncoded(textValue)
-      ? null
-      : resolvePayload(textValue);
+    return resolveControlPayloads(new List<String>{ textValue })[0];
+  }
+
+  /**
+   * @description Bulk variant of {@link #resolveControlPayload}. It uses one
+   * ContentVersion query. It never calls the codec, so a value that cannot be
+   * decoded does not stop the batch.
+   * @param rawValues the raw stored values
+   * @return the control payloads (null for encoded values), index-aligned
+   */
+  public static List<String> resolveControlPayloads(List<String> rawValues) {
+    List<String> out = resolveStoredForms(rawValues);
+    for (Integer i = 0; i < out.size(); i++) {
+      if (WorkflowPayloadCodecs.isEncoded(out[i])) {
+        out[i] = null;
+      }
+    }
+    return out;
   }
 
   /**
@@ -122,6 +137,16 @@ public inherited sharing class WorkflowPayloadOffload {
    * @return the resolved payloads, index-aligned with rawValues
    */
   public static List<String> resolvePayloads(List<String> rawValues) {
+    List<String> out = resolveStoredForms(rawValues);
+    for (Integer i = 0; i < out.size(); i++) {
+      out[i] = WorkflowPayloadCodecs.decode(out[i]);
+    }
+    return out;
+  }
+
+  // Replaces each offload marker with its file text in one query. It does not
+  // decode. Values stay index-aligned with the input.
+  private static List<String> resolveStoredForms(List<String> rawValues) {
     Map<Integer, Id> markerDocByIndex = new Map<Integer, Id>();
     Set<Id> docIds = collectOffloadMarkers(rawValues, markerDocByIndex);
     Map<Id, String> resolvedByDoc = queryResolvedDocs(docIds);
@@ -129,11 +154,9 @@ public inherited sharing class WorkflowPayloadOffload {
     for (Integer i = 0; i < rawValues.size(); i++) {
       Id docId = markerDocByIndex.get(i);
       out.add(
-        WorkflowPayloadCodecs.decode(
-          (docId != null && resolvedByDoc.containsKey(docId))
-            ? resolvedByDoc.get(docId)
-            : rawValues[i]
-        )
+        (docId != null && resolvedByDoc.containsKey(docId))
+          ? resolvedByDoc.get(docId)
+          : rawValues[i]
       );
     }
     return out;
@@ -191,35 +214,6 @@ public inherited sharing class WorkflowPayloadOffload {
       resolvedByDoc.put(cv.ContentDocumentId, cv.VersionData.toString());
     }
     return resolvedByDoc;
-  }
-
-  /**
-   * @description Encodes a signal payload for `Workflow_Signal__c.Payload__c`.
-   * With the identity codec it returns the payload unchanged, so legacy bytes do
-   * not change. With a real codec it offloads encoded text that is too large for
-   * the field, when the target instance is known.
-   * @param ownerId Id of the target instance, or null when not known
-   * @param payload the signal payload text
-   * @param signalName the signal name, used in the offload file title
-   * @return the stored form
-   */
-  public static String saveSignalPayload(
-    Id ownerId,
-    String payload,
-    String signalName
-  ) {
-    String stored = WorkflowPayloadCodecs.encode(
-      payload,
-      CodecContext.PayloadKind.SIGNAL_PAYLOAD
-    );
-    if (WorkflowPayloadCodecs.isIdentity() || ownerId == null) {
-      return stored;
-    }
-    return savePayloadIfNeeded(
-      ownerId,
-      stored,
-      'Signal_' + String.valueOf(signalName).replaceAll('[^a-zA-Z0-9]', '_')
-    );
   }
 
   /**

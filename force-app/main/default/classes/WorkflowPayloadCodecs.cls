@@ -3,14 +3,18 @@
  * encodes author payloads before the engine writes them and decodes them after
  * the engine reads them.
  *
- * Stored form: `{"$codec":"<KIND>","data":"<codec output>"}`. The engine adds
- * this envelope, so it can find encoded values, skip a second encode, and give
- * `decode` the same {@link CodecContext}. Values without the envelope are
- * plaintext. They pass through unchanged, so rows written before the codec stay
- * readable. The identity codec adds no envelope, so stored bytes do not change.
+ * Stored form: {@link WorkflowPayloadEnvelope}. The envelope identifies encoded
+ * values and gives `decode` the same {@link CodecContext}. A value without a valid envelope is plaintext. It
+ * passes through unchanged, so rows written before the codec stay readable.
+ * The identity codec adds no envelope, so stored bytes do not change.
+ *
+ * `encode` always encodes non-blank external input, also when the input looks
+ * like an envelope. Only engine copy paths call `encodeStored`, which keeps a
+ * stored form unchanged.
  *
  * The engine does not encode control values: offload markers
- * (`{"$attachmentId":...}`), status, compensation stack, keys and timestamps.
+ * (`{"$attachmentId":...}`), wait markers, status, compensation stack, keys and
+ * timestamps.
  */
 public inherited sharing class WorkflowPayloadCodecs {
   /** @description The first characters of every encoded value. */
@@ -21,7 +25,6 @@ public inherited sharing class WorkflowPayloadCodecs {
    */
   public static final String REDACTED_PAYLOAD = '{"$redacted":"Encoded by the payload codec. Operator views do not decode it."}';
   private static final String OFFLOAD_PREFIX = '{"$attachmentId":';
-  private static final String DATA_KEY = 'data';
   // Matches a reserved stored-form key in JSON text.
   private static final Pattern RESERVED_KEY = Pattern.compile(
     '"(\\$attachmentId|\\$codec)"'
@@ -33,8 +36,9 @@ public inherited sharing class WorkflowPayloadCodecs {
 
   /**
    * @description Thrown when the codec configuration is not valid, or when a
-   * stored value cannot be decoded. The engine fails closed: it never gives
-   * ciphertext to a step as plaintext.
+   * stored value cannot be encoded or decoded. The engine fails closed: it never
+   * gives ciphertext to a step as plaintext. The message does not contain
+   * payload text.
    */
   public class PayloadCodecException extends Exception {
   }
@@ -48,46 +52,104 @@ public inherited sharing class WorkflowPayloadCodecs {
   }
 
   /**
-   * @description Returns true when the value has the codec envelope.
+   * @description Returns true when the value is a valid engine envelope.
    * @param stored a stored field value
    * @return true for an encoded value
    */
   public static Boolean isEncoded(String stored) {
-    return stored != null && stored.startsWith(ENVELOPE_PREFIX);
+    return WorkflowPayloadEnvelope.kindOf(stored) != null;
   }
 
   /**
    * @description Encodes a payload for storage. Returns the value unchanged
-   * when the codec is identity, the value is blank, or the value is already a
-   * stored form (an envelope or an offload marker).
+   * when it is blank, when the codec is identity, or when it is an offload
+   * marker. It encodes all other values, also values that look like an envelope.
    * @param plaintext the payload text
    * @param kind the payload class
    * @return the stored form
    */
   public static String encode(String plaintext, CodecContext.PayloadKind kind) {
-    PayloadCodec codec = active();
-    if (
-      codec == null ||
-      String.isBlank(plaintext) ||
-      isEncoded(plaintext) ||
-      plaintext.startsWith(OFFLOAD_PREFIX)
-    ) {
+    if (String.isBlank(plaintext) || plaintext.startsWith(OFFLOAD_PREFIX)) {
       return plaintext;
     }
-    String data = codec.encode(plaintext, new CodecContext(kind));
-    return ENVELOPE_PREFIX +
-      JSON.serialize(kind.name()) +
-      ',"' +
-      DATA_KEY +
-      '":' +
-      JSON.serialize(data) +
-      '}';
+    PayloadCodec codec = active();
+    if (codec == null) {
+      return plaintext;
+    }
+    String data;
+    try {
+      data = codec.encode(plaintext, new CodecContext(kind));
+    } catch (Exception e) {
+      throw new PayloadCodecException(
+        'Payload codec failed to encode ' + kind.name() + ': ' + e.getTypeName()
+      );
+    }
+    return WorkflowPayloadEnvelope.wrap(kind, data);
+  }
+
+  /**
+   * @description Encodes a value that can already be a stored form. An engine
+   * copy path uses it, for example a child output that becomes a signal
+   * payload. A valid envelope stays unchanged. Other values go to
+   * {@link #encode}.
+   * @param value the plaintext or stored form
+   * @param kind the payload class for plaintext
+   * @return the stored form
+   */
+  public static String encodeStored(
+    String value,
+    CodecContext.PayloadKind kind
+  ) {
+    return isEncoded(value) ? value : encode(value, kind);
+  }
+
+  /**
+   * @description Decodes a stored value. Returns the value unchanged when it
+   * has no valid envelope. This method is read-only.
+   * @param stored the stored field value or offload file text
+   * @return the payload text
+   * @throws PayloadCodecException when no codec is configured, or when the
+   *         codec cannot decode the value
+   */
+  public static String decode(String stored) {
+    CodecContext.PayloadKind kind = WorkflowPayloadEnvelope.kindOf(stored);
+    if (kind == null) {
+      return stored;
+    }
+    PayloadCodec codec = active();
+    if (codec == null) {
+      throw new PayloadCodecException(
+        'The payload is encoded, but no payload codec is configured. ' +
+        'Set Revenant_Config__mdt.Payload_Codec__c.'
+      );
+    }
+    try {
+      return codec.decode(
+        WorkflowPayloadEnvelope.dataOf(stored, kind),
+        new CodecContext(kind)
+      );
+    } catch (Exception e) {
+      throw new PayloadCodecException(
+        'Payload codec failed to decode ' + kind.name() + ': ' + e.getTypeName()
+      );
+    }
+  }
+
+  /**
+   * @description Estimates whether the engine can offload a payload. A payload
+   * codec makes the stored text larger, so the estimate assumes up to 2x growth
+   * when a codec is active. Use it for DML reserve estimates.
+   * @param payload the plaintext payload
+   * @return true when the payload can go to a file
+   */
+  public static Boolean mayOffload(String payload) {
+    Integer limitChars = WorkflowPayloadCodecs.isIdentity() ? 100000 : 50000;
+    return String.isNotBlank(payload) && payload.length() > limitChars;
   }
 
   /**
    * @description Finds a reserved stored-form key (`$attachmentId` or `$codec`)
-   * in JSON text. Operator input must not contain one, or the engine reads it as
-   * a stored form.
+   * in JSON text. Operator input must not contain one.
    * @param jsonText the JSON text to check
    * @return the reserved key, or null when none is present
    */
@@ -109,34 +171,10 @@ public inherited sharing class WorkflowPayloadCodecs {
   }
 
   /**
-   * @description Decodes a stored value. Returns the value unchanged when it
-   * has no envelope. This method is read-only.
-   * @param stored the stored field value or offload blob text
-   * @return the payload text
-   * @throws PayloadCodecException when no codec is configured or the envelope
-   *         is not valid
-   */
-  public static String decode(String stored) {
-    if (!isEncoded(stored)) {
-      return stored;
-    }
-    PayloadCodec codec = active();
-    if (codec == null) {
-      throw new PayloadCodecException(
-        'The payload is encoded, but no payload codec is configured. ' +
-        'Set Revenant_Config__mdt.Payload_Codec__c.'
-      );
-    }
-    Map<String, Object> envelope = parseEnvelope(stored);
-    return codec.decode(
-      (String) envelope.get(DATA_KEY),
-      new CodecContext(toKind((String) envelope.get('$codec')))
-    );
-  }
-
-  /**
    * @description Makes a codec from a class name. Blank returns null
-   * (identity). A name that does not give a {@link PayloadCodec} throws.
+   * (identity). A name that does not give a {@link PayloadCodec} throws. The
+   * lookup uses {@link WorkflowTypeResolver}, so namespaced and subscriber
+   * classes resolve.
    * @param className the codec class name, with namespace if necessary
    * @return the codec, or null for identity
    */
@@ -145,27 +183,24 @@ public inherited sharing class WorkflowPayloadCodecs {
     if (String.isBlank(className)) {
       return null;
     }
-    Type codecType = Type.forName(className.trim());
+    Type codecType = WorkflowTypeResolver.resolve(className.trim());
     if (codecType == null) {
       throw new PayloadCodecException(
         'Payload codec class not found: ' + className
       );
     }
-    Object instance;
-    try {
-      instance = codecType.newInstance();
-    } catch (Exception e) {
-      throw new PayloadCodecException(
-        'Payload codec class cannot be made: ' + className,
-        e
-      );
-    }
-    if (!(instance instanceof PayloadCodec)) {
+    if (!PayloadCodec.class.isAssignableFrom(codecType)) {
       throw new PayloadCodecException(
         'Class does not implement PayloadCodec: ' + className
       );
     }
-    return (PayloadCodec) instance;
+    try {
+      return (PayloadCodec) codecType.newInstance();
+    } catch (Exception e) {
+      throw new PayloadCodecException(
+        'Payload codec class cannot be made: ' + className
+      );
+    }
   }
 
   /**
@@ -180,6 +215,11 @@ public inherited sharing class WorkflowPayloadCodecs {
 
   private static PayloadCodec active() {
     if (!loaded) {
+      if (WorkflowEngine.payloadCodecConfigFailed) {
+        throw new PayloadCodecException(
+          'Revenant_Config__mdt could not be read. Payload access stops.'
+        );
+      }
       activeCodec = normalize(resolve(WorkflowEngine.payloadCodecClass));
       loaded = true;
     }
@@ -188,28 +228,5 @@ public inherited sharing class WorkflowPayloadCodecs {
 
   private static PayloadCodec normalize(PayloadCodec codec) {
     return (codec instanceof IdentityPayloadCodec) ? null : codec;
-  }
-
-  private static Map<String, Object> parseEnvelope(String stored) {
-    try {
-      Map<String, Object> envelope = (Map<String, Object>) JSON.deserializeUntyped(
-        stored
-      );
-      if (envelope.get(DATA_KEY) instanceof String) {
-        return envelope;
-      }
-    } catch (Exception e) {
-      throw new PayloadCodecException('The payload envelope is not valid.', e);
-    }
-    throw new PayloadCodecException('The payload envelope has no data.');
-  }
-
-  private static CodecContext.PayloadKind toKind(String name) {
-    for (CodecContext.PayloadKind kind : CodecContext.PayloadKind.values()) {
-      if (kind.name() == name) {
-        return kind;
-      }
-    }
-    throw new PayloadCodecException('Unknown payload kind: ' + name);
   }
 }

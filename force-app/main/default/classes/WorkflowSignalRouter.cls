@@ -284,11 +284,7 @@ public inherited sharing class WorkflowSignalRouter {
     Workflow_Signal__c sig = new Workflow_Signal__c();
     sig.Workflow_Instance__c = instance.Id;
     sig.Signal_Name__c = req.signalName;
-    sig.Payload__c = WorkflowPayloadOffload.saveSignalPayload(
-      instance.Id,
-      req.payload,
-      req.signalName
-    );
+    sig.Payload__c = WorkflowSignalPayloads.encode(req.signalName, req.payload);
     sig.Status__c = 'Received';
 
     if (String.isNotBlank(req.idempotencyKey)) {
@@ -298,9 +294,14 @@ public inherited sharing class WorkflowSignalRouter {
       );
       Savepoint sp = Database.setSavepoint();
       try {
+        WorkflowSignalPayloads.offloadOversized(
+          new List<Workflow_Signal__c>{ sig }
+        );
         Database.insert(sig, true, AccessLevel.SYSTEM_MODE);
       } catch (DmlException ex) {
         if (ex.getDmlStatusCode(0) == 'DUPLICATE_VALUE') {
+          // Roll back so a duplicate leaves no offload file.
+          Database.rollback(sp);
           return; // idempotent no-op: duplicate key already delivered
         }
         throw ex;
@@ -315,6 +316,9 @@ public inherited sharing class WorkflowSignalRouter {
       return;
     }
 
+    WorkflowSignalPayloads.offloadOversized(
+      new List<Workflow_Signal__c>{ sig }
+    );
     Database.insert(sig, true, AccessLevel.SYSTEM_MODE);
     WorkflowResumeEnqueue.wakeInstanceForSignal(instance);
   }

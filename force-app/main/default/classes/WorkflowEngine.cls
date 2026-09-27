@@ -19,6 +19,9 @@ public inherited sharing class WorkflowEngine {
   // Operator setting (Revenant_Config__mdt.Payload_Codec__c): the PayloadCodec
   // class name. Blank selects the identity codec. See WorkflowPayloadCodecs.
   public static String payloadCodecClass = null;
+  // True when the config read failed. The payload codec then fails closed: it
+  // does not fall back to identity.
+  public static Boolean payloadCodecConfigFailed = false;
 
   // Failure Category picklist API values
   public static final String CAT_STEP_EXCEPTION = 'STEP_EXCEPTION';
@@ -144,6 +147,8 @@ public inherited sharing class WorkflowEngine {
       }
     } catch (Exception ignored) {
       // Configuration metadata is optional; fall back to defaults on any read failure.
+      // The payload codec is the exception: it must not fall back to plaintext.
+      payloadCodecConfigFailed = true;
     }
   }
 

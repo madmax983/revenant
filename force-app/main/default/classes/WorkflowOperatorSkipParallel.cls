@@ -118,7 +118,7 @@ public inherited sharing class WorkflowOperatorSkipParallel {
     StepResult mockSpawningResult = StepResult.complete(
       'SENTINEL_NEXT_STEP',
       !spawningSteps.isEmpty()
-        ? WorkflowPayloadCodecs.decode(spawningSteps[0].Output__c)
+        ? WorkflowPayloadOffload.resolvePayload(spawningSteps[0].Output__c)
         : null
     );
 

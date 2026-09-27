@@ -129,7 +129,7 @@ public inherited sharing class WorkflowParallelJoin {
     StepResult mockResult = StepResult.complete(
       null,
       !spawningSteps.isEmpty()
-        ? WorkflowPayloadCodecs.decode(spawningSteps[0].Output__c)
+        ? WorkflowPayloadOffload.resolvePayload(spawningSteps[0].Output__c)
         : null
     );
 

@@ -130,11 +130,7 @@ public inherited sharing class WorkflowSignalOrStartPrepare {
     Workflow_Signal__c sig = new Workflow_Signal__c(
       Workflow_Instance__c = instanceId,
       Signal_Name__c = req.signalName,
-      Payload__c = WorkflowPayloadOffload.saveSignalPayload(
-        instanceId,
-        req.payload,
-        req.signalName
-      ),
+      Payload__c = WorkflowSignalPayloads.encode(req.signalName, req.payload),
       Status__c = 'Received'
     );
 
@@ -164,6 +160,8 @@ public inherited sharing class WorkflowSignalOrStartPrepare {
     if (run.signalsToInsert.isEmpty()) {
       return;
     }
+    // Offload large encoded payloads in bulk, after in-batch dedup.
+    WorkflowSignalPayloads.offloadOversized(run.signalsToInsert);
     // Insert signals using allOrNone=false so concurrent duplicates are swallowed as no-ops,
     // but genuine errors are rolled back and thrown.
     Database.SaveResult[] srs = Database.insert(

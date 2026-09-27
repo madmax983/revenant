@@ -375,7 +375,11 @@ public inherited sharing class WorkflowCompensationOutcome {
     stepExec.Error_Details__c = (result.directive().failureDataJson != null)
       ? result.directive().failureReason +
         '\nfailureData: ' +
-        result.directive().failureDataJson
+        // failureData is author data, so the payload codec encodes it.
+        WorkflowPayloadCodecs.encode(
+          result.directive().failureDataJson,
+          CodecContext.PayloadKind.STEP_OUTPUT
+        )
       : result.directive().failureReason;
     WorkflowStepExecStore.saveStepExec(stepExec);
 

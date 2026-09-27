@@ -134,7 +134,7 @@ public inherited sharing class WorkflowBreadcrumbs {
     }
     for (StepResult.ChildRequest req : childRequests) {
       reserve += 3;
-      if (String.isNotBlank(req.inputJson) && req.inputJson.length() > 100000) {
+      if (WorkflowPayloadCodecs.mayOffload(req.inputJson)) {
         reserve += 2; // ContentVersion + ContentDocumentLink
       }
     }
@@ -161,7 +161,7 @@ public inherited sharing class WorkflowBreadcrumbs {
       String inputPayload = result.directive().parallelInputJson != null
         ? result.directive().parallelInputJson
         : stepExec.Output__c;
-      if (String.isNotBlank(inputPayload) && inputPayload.length() > 100000) {
+      if (WorkflowPayloadCodecs.mayOffload(inputPayload)) {
         reserve += 2; // ContentVersion + ContentDocumentLink
       }
     }

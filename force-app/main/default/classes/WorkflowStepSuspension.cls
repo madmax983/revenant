@@ -354,12 +354,13 @@ public inherited sharing class WorkflowStepSuspension {
       pe.Status__c = 'Pending';
       pe.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         instance.Id,
-        WorkflowPayloadCodecs.encode(
-          result.directive().parallelInputJson != null
-            ? result.directive().parallelInputJson
-            : stepExec.Output__c,
-          CodecContext.PayloadKind.STEP_OUTPUT
-        ),
+        // The fallback is the stored form saved above, so it is not encoded again.
+        result.directive().parallelInputJson != null
+          ? WorkflowPayloadCodecs.encode(
+              result.directive().parallelInputJson,
+              CodecContext.PayloadKind.STEP_OUTPUT
+            )
+          : stepExec.Output__c,
         'Input_Parallel_' + ps.replaceAll('[^a-zA-Z0-9]', '_')
       );
       pe.Retry_Count__c = 0;

@@ -35,6 +35,12 @@ public inherited sharing class WorkflowSignalBatchWake {
       return null;
     }
     System.Savepoint sp = Database.setSavepoint();
+    // Offload large encoded payloads in bulk, after in-batch dedup.
+    List<Workflow_Signal__c> allRows = new List<Workflow_Signal__c>(
+      part.unkeyedSignals
+    );
+    allRows.addAll(part.keyedSignals);
+    WorkflowSignalPayloads.offloadOversized(allRows);
 
     // Insert unkeyed signals (plain insert, unchanged at-least-once behavior).
     if (!part.unkeyedSignals.isEmpty()) {
