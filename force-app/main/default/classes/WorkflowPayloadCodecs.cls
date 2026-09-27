@@ -24,7 +24,8 @@ public inherited sharing class WorkflowPayloadCodecs {
    * valid JSON, so JSON readers do not fail.
    */
   public static final String REDACTED_PAYLOAD = '{"$redacted":"Encoded by the payload codec. Operator views do not decode it."}';
-  private static final String OFFLOAD_PREFIX = '{"$attachmentId":';
+  /** @description The first characters of an offload marker. */
+  public static final String OFFLOAD_PREFIX = '{"$attachmentId":';
   // Matches a reserved stored-form key in JSON text.
   private static final Pattern RESERVED_KEY = Pattern.compile(
     '"(\\$attachmentId|\\$codec)"'
@@ -62,14 +63,16 @@ public inherited sharing class WorkflowPayloadCodecs {
 
   /**
    * @description Encodes a payload for storage. Returns the value unchanged
-   * when it is blank, when the codec is identity, or when it is an offload
-   * marker. It encodes all other values, also values that look like an envelope.
+   * when it is blank or when the codec is identity. It encodes all other
+   * values, also values that look like an envelope or an offload marker, so
+   * external input can never point the engine at a stored form. Engine copy
+   * paths copy stored forms field to field and do not call this method.
    * @param plaintext the payload text
    * @param kind the payload class
    * @return the stored form
    */
   public static String encode(String plaintext, CodecContext.PayloadKind kind) {
-    if (String.isBlank(plaintext) || plaintext.startsWith(OFFLOAD_PREFIX)) {
+    if (String.isBlank(plaintext)) {
       return plaintext;
     }
     PayloadCodec codec = active();

@@ -137,11 +137,13 @@ The engine wraps codec output in an envelope:
   envelope. If a user copies ciphertext into a signal or a start input, the
   step gets the copied text, not the plaintext.
 - A signal name gives no trust. A forged `ChildCompleted:<key>` signal with
-  copied ciphertext is not decoded, because the value is not the output of a
-  child of the reading instance.
-- Do not start a payload with `{"$codec":` or `{"$attachmentId":`. The engine
-  reads these as stored forms. With the identity codec, a value in the exact
-  envelope shape cannot be read.
+  copied ciphertext or a copied file marker is not decoded, because the value
+  is not the output of a child of the reading instance.
+- With a codec, the engine encodes input that starts with `{"$codec":` or
+  `{"$attachmentId":` like any other input, so input cannot point the engine
+  at a stored value or a file.
+- With the identity codec, do not start a payload with `{"$codec":` or
+  `{"$attachmentId":`. The engine reads these as stored forms. See #242.
 
 ## Behavior to know
 

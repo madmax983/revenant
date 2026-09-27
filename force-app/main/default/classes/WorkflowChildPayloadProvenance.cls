@@ -2,16 +2,17 @@
  * @description Checks child-completion payloads before a parent decodes them.
  * Any caller can send a signal named `ChildCompleted:<key>` or
  * `ChildFailed:<key>`, so the signal name proves nothing. A child payload that
- * is still an encoded stored form is trusted only when it is exactly the
- * `Output__c` of a child of the reading instance. A forged envelope (for
- * example ciphertext copied from another record) is not decoded.
+ * is still a stored form (an envelope or an offload marker) is trusted only
+ * when it is exactly the `Output__c` of a child of the reading instance. A
+ * forged stored form (for example ciphertext or a file marker copied from
+ * another record) is not resolved or decoded.
  *
- * With the identity codec no payload is encoded, so this class does no query.
+ * It queries only when a payload is still a stored form.
  */
 public inherited sharing class WorkflowChildPayloadProvenance {
   /**
    * @description Returns the payloads that are safe to resolve and decode. An
-   * untrusted encoded payload becomes null in the output list.
+   * untrusted stored form becomes null in the output list.
    * @param rawPayloads the child payloads after the signal read
    * @param signalIds the signal row Ids, index-aligned
    * @param childKeys the child keys, index-aligned
@@ -26,7 +27,7 @@ public inherited sharing class WorkflowChildPayloadProvenance {
     Set<Id> sigIds = new Set<Id>();
     Set<String> keys = new Set<String>();
     for (Integer i = 0; i < rawPayloads.size(); i++) {
-      if (WorkflowPayloadCodecs.isEncoded(rawPayloads[i])) {
+      if (isStoredForm(rawPayloads[i])) {
         sigIds.add(signalIds[i]);
         keys.add(childKeys[i]);
       }
@@ -38,10 +39,7 @@ public inherited sharing class WorkflowChildPayloadProvenance {
     Map<String, String> outputByKey = childOutputs(sigIds, keys);
     for (Integer i = 0; i < rawPayloads.size(); i++) {
       String expected = outputByKey.get(normalize(childKeys[i]));
-      if (
-        WorkflowPayloadCodecs.isEncoded(rawPayloads[i]) &&
-        !rawPayloads[i].equals(expected)
-      ) {
+      if (isStoredForm(rawPayloads[i]) && !rawPayloads[i].equals(expected)) {
         out[i] = null;
       }
     }
@@ -79,6 +77,13 @@ public inherited sharing class WorkflowChildPayloadProvenance {
       }
     }
     return outputByKey;
+  }
+
+  // An envelope or an offload marker. Signal reads decode external input one
+  // time, so a value that is still a stored form claims to be a child output.
+  private static Boolean isStoredForm(String value) {
+    return WorkflowPayloadCodecs.isEncoded(value) ||
+      (value != null && value.startsWith(WorkflowPayloadCodecs.OFFLOAD_PREFIX));
   }
 
   private static Set<Id> idsOf(Set<String> keys) {

@@ -212,11 +212,13 @@ private class WorkflowPayloadCodecsTest {
       );
       System.assertEquals(
         marker,
-        WorkflowPayloadCodecs.encode(
-          marker,
-          CodecContext.PayloadKind.STEP_OUTPUT
+        WorkflowPayloadCodecs.decode(
+          WorkflowPayloadCodecs.encode(
+            marker,
+            CodecContext.PayloadKind.STEP_OUTPUT
+          )
         ),
-        'Offload marker stays plaintext'
+        'An external offload marker is encoded, so it is never resolved'
       );
     }
   }
@@ -583,15 +585,32 @@ private class WorkflowPayloadCodecsTest {
         CodecContext.PayloadKind.WORKFLOW_INPUT
       );
 
+      String forgedMarker = '{"$attachmentId":"069000000000001AAA"}';
+
       List<String> trusted = WorkflowChildPayloadProvenance.trustedOnly(
-        new List<String>{ child.Output__c, forged, '{"plain":true}' },
-        new List<Id>{ sig.Id, sig.Id, sig.Id },
-        new List<String>{ 'CHILD-KEY-1', 'child-key-1', 'child-key-1' }
+        new List<String>{
+          child.Output__c,
+          forged,
+          '{"plain":true}',
+          forgedMarker
+        },
+        new List<Id>{ sig.Id, sig.Id, sig.Id, sig.Id },
+        new List<String>{
+          'CHILD-KEY-1',
+          'child-key-1',
+          'child-key-1',
+          'child-key-1'
+        }
       );
 
       System.assertEquals(child.Output__c, trusted[0], 'The real output');
       System.assertEquals(null, trusted[1], 'A forged envelope is not trusted');
       System.assertEquals('{"plain":true}', trusted[2], 'Plaintext passes');
+      System.assertEquals(
+        null,
+        trusted[3],
+        'A forged file marker is not trusted'
+      );
     }
   }
 
