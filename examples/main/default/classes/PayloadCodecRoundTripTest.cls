@@ -10,10 +10,8 @@
  * The AES run also reads the stored root Output__c. It must be an envelope, not
  * the plaintext output.
  *
- * Not covered here: examples that read Workflow_Signal__c.Payload__c or a child
- * Output__c directly with SOQL (Onboarding VIP approval, BatchFanout, the cursor
- * fan-outs, AgentConversation and AiSupportTriage). These reads skip the codec,
- * so the results change under an encrypting codec.
+ * Not covered here: RevenantCursorFanoutExample. Its dependency is not in this
+ * checkout.
  */
 @IsTest
 private class PayloadCodecRoundTripTest {
@@ -74,7 +72,8 @@ private class PayloadCodecRoundTripTest {
   }
 
   // Replaces run-specific values (key, instance Id, masked fields) with
-  // placeholders, so two runs can have the same output text.
+  // placeholders, so two runs can have the same output text. It also sorts
+  // the JSON keys, because a child query can return rows in a different order.
   private static String normalize(
     String output,
     String key,
@@ -86,18 +85,38 @@ private class PayloadCodecRoundTripTest {
     }
     String text = output.replace(String.valueOf(instanceId), '<instanceId>')
       .replace(key, '<key>');
-    if (maskedKeys.isEmpty()) {
+    Object data;
+    try {
+      data = JSON.deserializeUntyped(text);
+    } catch (JSONException e) {
       return text;
     }
-    Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
-      text
-    );
-    for (String maskedKey : maskedKeys) {
-      if (data.containsKey(maskedKey)) {
-        data.put(maskedKey, MASK);
+    return JSON.serialize(canonical(data, maskedKeys));
+  }
+
+  // Sorts map keys and masks the named fields at all levels.
+  private static Object canonical(Object value, Set<String> maskedKeys) {
+    if (value instanceof Map<String, Object>) {
+      Map<String, Object> source = (Map<String, Object>) value;
+      List<String> keys = new List<String>(source.keySet());
+      keys.sort();
+      Map<String, Object> sorted = new Map<String, Object>();
+      for (String k : keys) {
+        sorted.put(
+          k,
+          maskedKeys.contains(k) ? MASK : canonical(source.get(k), maskedKeys)
+        );
       }
+      return sorted;
     }
-    return JSON.serialize(data);
+    if (value instanceof List<Object>) {
+      List<Object> items = new List<Object>();
+      for (Object item : (List<Object>) value) {
+        items.add(canonical(item, maskedKeys));
+      }
+      return items;
+    }
+    return value;
   }
 
   private static void assertRoundTrip(
@@ -348,23 +367,115 @@ private class PayloadCodecRoundTripTest {
     return snap(harness.drive(), key, new Set<String>());
   }
 
-  // Source: OnboardingWorkflowExampleTest, with an amount below the VIP limit.
-  // The VIP approval step reads Payload__c with SOQL and skips the codec.
-  private static Snapshot runOnboarding(PayloadCodec codec, String key) {
+  // Source: OnboardingWorkflowExampleTest. An amount of 10000 or more waits for
+  // the VIP approval signal. A smaller amount does not wait.
+  private static Snapshot runOnboarding(
+    PayloadCodec codec,
+    String key,
+    Decimal amount
+  ) {
     useCodec(codec);
     Id instanceId = WorkflowEngine.start(
       'OnboardingWorkflowExample',
       key,
       new Map<String, Object>{
-        'amount' => 5000.0,
+        'amount' => amount,
         'customerName' => 'Acme Corp',
         'email' => 'admin@acme.com'
       }
     );
-    WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
-      .drive();
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    WorkflowTestHarness.Result result = harness.drive();
+    if (amount >= 10000) {
+      System.assertEquals('Suspended', result.status);
+      result = harness.injectSignal(
+        key,
+        'Approve:VIPOrderApproval',
+        '{"approved":true,"comments":"Approved VIP Customer"}'
+      );
+    }
     // completedDate is the current time, so mask it.
     return snap(result, key, new Set<String>{ 'completedDate' });
+  }
+
+  // Source: AgentConversationWorkflowExampleTest. The agent call uses the
+  // mock responses of the example.
+  private static Snapshot runAgentConversation(PayloadCodec codec, String key) {
+    useCodec(codec);
+    AgentConversationWorkflowExample.mockAgentResponses = new List<String>{
+      'Thanks for reaching out. Could you tell me more about your account?',
+      'I found your account. Your subscription has been renewed successfully.'
+    };
+    Id instanceId = WorkflowEngine.start(
+      'AgentConversationWorkflowExample.AgentConversationWorkflow',
+      key,
+      new Map<String, Object>{
+        'agentDeveloperName' => 'Support_Agent',
+        'userMessage' => 'I need help with my subscription renewal.'
+      }
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    WorkflowTestHarness.Result suspended = harness.drive();
+    System.assertEquals('Suspended', suspended.status);
+    WorkflowTestHarness.Result done = harness.injectSignal(
+      key,
+      'FollowUp',
+      '{"message":"My account number is ACC-12345"}'
+    );
+    return snap(done, key, new Set<String>());
+  }
+
+  // Source: AiSupportTriageWorkflowExampleTest (human review path).
+  private static Snapshot runTriageEscalation(PayloadCodec codec, String key) {
+    useCodec(codec);
+    AiSupportTriageWorkflowExample.mockAiClassification = 'escalate';
+    Id instanceId = WorkflowEngine.start(
+      'AiSupportTriageWorkflowExample.TriageWorkflow',
+      key,
+      new Map<String, Object>{
+        'inquiryText' => 'This is an urgent legal matter, please contact me immediately.'
+      }
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    WorkflowTestHarness.Result suspended = harness.drive();
+    System.assertEquals('Suspended', suspended.status);
+    WorkflowTestHarness.Result done = harness.injectSignal(
+      key,
+      'Approve:EscalationReview',
+      '{"approved":true,"comments":"Escalation reviewed and resolved","approver":"Jane Smith"}'
+    );
+    return snap(done, key, new Set<String>());
+  }
+
+  // Source: BatchFanoutWorkflowExampleTest. Both runs use the same accounts.
+  private static Snapshot runBatchFanout(PayloadCodec codec, String key) {
+    useCodec(codec);
+    Id parentId = WorkflowEngine.start(
+      'BatchFanoutWorkflowExample.BatchFanoutWorkflow',
+      key,
+      null
+    );
+    // Each child output has the current time, so mask it.
+    return snap(
+      new WorkflowTestHarness(parentId).drive(),
+      key,
+      new Set<String>{ 'timestamp' }
+    );
+  }
+
+  // Source: CursorFanoutWorkflowExampleTest. Both runs use the same accounts.
+  private static Snapshot runCursorFanout(PayloadCodec codec, String key) {
+    useCodec(codec);
+    Id instanceId = WorkflowEngine.start(
+      'CursorFanoutWorkflowExample.CursorFanoutWorkflow',
+      key,
+      null
+    );
+    return snap(
+      new WorkflowTestHarness(instanceId).drive(),
+      key,
+      new Set<String>()
+    );
   }
 
   // Source: OrderChoreographyWorkflowExampleTest. The order Id is the key, so
@@ -577,10 +688,10 @@ private class PayloadCodecRoundTripTest {
   @IsTest
   static void onboardingParallelChildSleepRoundTrips() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Snapshot identity = runOnboarding(null, 'CodecOnboarding_Identity');
+      Snapshot identity = runOnboarding(null, 'CodecOnboarding_Identity', 5000);
       Test.startTest();
       AesCodec aes = new AesCodec();
-      Snapshot encoded = runOnboarding(aes, 'CodecOnboarding_Aes');
+      Snapshot encoded = runOnboarding(aes, 'CodecOnboarding_Aes', 5000);
       Test.stopTest();
 
       System.assertEquals('Completed', identity.status);
@@ -631,6 +742,114 @@ private class PayloadCodecRoundTripTest {
 
       System.assertEquals('Completed', identity.status);
       System.assert(identity.output.contains('"legacy":false'));
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void onboardingVipApprovalRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runOnboarding(null, 'CodecVip_Identity', 15000);
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runOnboarding(aes, 'CodecVip_Aes', 15000);
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.completedSteps.contains(
+          'OnboardingWorkflowExample.VIPApprovalStep'
+        ),
+        'The VIP approval step must complete'
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void agentConversationRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runAgentConversation(null, 'CodecAgent_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runAgentConversation(aes, 'CodecAgent_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.output.contains('renewed successfully'),
+        'The output must carry the second agent turn, got: ' + identity.output
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void triageHumanReviewRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runTriageEscalation(null, 'CodecTriage_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runTriageEscalation(aes, 'CodecTriage_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.output.contains('"reviewedBy":"Jane Smith"'),
+        'The output must carry the signal payload, got: ' + identity.output
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void batchFanoutRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insert new List<Account>{
+        new Account(Name = 'Acme Corp'),
+        new Account(Name = 'Stark Industries'),
+        new Account(Name = 'Wayne Enterprises')
+      };
+      Snapshot identity = runBatchFanout(null, 'CodecBatch_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runBatchFanout(aes, 'CodecBatch_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.output.contains('"totalProcessed":3'),
+        'The output must count the child outputs, got: ' + identity.output
+      );
+      System.assert(
+        identity.output.contains('Audited & Updated'),
+        'The output must carry the child outputs, got: ' + identity.output
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void cursorFanoutRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insert new List<Account>{
+        new Account(Name = 'Account A'),
+        new Account(Name = 'Account B'),
+        new Account(Name = 'Account C'),
+        new Account(Name = 'Account D'),
+        new Account(Name = 'Account E')
+      };
+      Snapshot identity = runCursorFanout(null, 'CodecCursor_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runCursorFanout(aes, 'CodecCursor_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.output.contains('"totalProcessed":5'),
+        'The output must add the chunk counts, got: ' + identity.output
+      );
       assertRoundTrip(identity, encoded, aes);
     }
   }
