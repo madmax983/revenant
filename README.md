@@ -346,7 +346,7 @@ The engine ships full parent→child orchestration: `StepResult.startChild()` su
 **Parent failure cascades to children (issue #94).** When a parent becomes `Failed`, `Compensated` or `CompensationFailed`, the engine cancels its in-flight descendants.
 
 - **Same path as cancel.** The cascade walks the same `Parent_Instance__c` child query as `cancel()`, root first, one level per event. It cancels each node through the same node cancel as `WorkflowCancellation.cancelWithCompensations()`. A child with a `Compensation_Stack__c` rolls back: status `Cancelling`, then `Cancelled` (or `CompensationFailed` if an undo step fails). A stalled child rollback (`CompensationFailed`) resumes under the cancel phase.
-- **Asynchronous.** When the parent has an active child, its transition publishes a `CASCADE_CANCEL` `Workflow_Event__e`. The engine reaps the children in a new transaction. An error in the cascade does not fail the parent.
+- **Asynchronous.** The parent transition publishes one `CASCADE_CANCEL` `Workflow_Event__e`. It runs no query, so a child that is linked later is also covered. The engine reaps the children in a new transaction. An error in the cascade does not fail the parent.
 - **Left untouched:** terminal descendants (`Completed`, `Failed`, `Compensated`, `Cancelled`, `ContinuedAsNew`) and descendants already `Cancelling`.
 - **Idempotent.** A redelivered event does nothing more. Every event re-checks the parent: a parent that is redriven before an event arrives keeps its remaining children.
 - **Bulk-safe.** The cascade walks the tree one page at a time: each event reads at most 201 rows and cancels at most 200 nodes. A parent is cancelled before its children. The SOQL/DML cost of one pass does not grow with tree width.

@@ -232,20 +232,46 @@ private class WorkflowCascadeCancelTest {
     }
   }
 
+  // The request runs no query, so a child linked later is still covered. A
+  // childless parent costs one cheap pass that cancels nothing.
   @IsTest
-  static void childlessFailurePublishesNoEvent() {
+  static void childlessFailurePublishesOneHarmlessEvent() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c parent = insertInstance(null, 'Running');
 
       Test.startTest();
       setStatus(parent.Id, 'Failed');
+      System.assertEquals(
+        1,
+        WorkflowCascadeCancel.publishedEvents.size(),
+        'Every failed parent gets one event'
+      );
+      deliverAll();
       Test.stopTest();
 
+      System.assertEquals('Failed', statusOf(parent.Id), 'Parent unchanged');
       System.assertEquals(
-        0,
+        1,
         WorkflowCascadeCancel.publishedEvents.size(),
-        'A parent with no active child must not spend a platform event'
+        'A childless pass publishes no next level'
       );
+    }
+  }
+
+  // A child linked after the parent failed (same transaction) is reaped.
+  @IsTest
+  static void childLinkedAfterFailureIsReaped() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c parent = insertInstance(null, 'Running');
+
+      Test.startTest();
+      setStatus(parent.Id, 'Failed');
+      Workflow_Instance__c late = insertInstance(parent.Id, 'Running');
+      deliverAll();
+      Test.stopTest();
+
+      System.assertEquals('Cancelled', statusOf(late.Id), 'Late child reaped');
     }
   }
 
@@ -668,6 +694,31 @@ private class WorkflowCascadeCancelTest {
         ] >= 4,
         'The retry job reaps its first 4 requests without a savepoint error'
       );
+    }
+  }
+
+  // The rest of the tree is reachable only through the next-level events. A
+  // failed publish must roll back the pass and schedule a retry.
+  @IsTest
+  static void failedContinuationPublishRetries() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c parent = insertInstance(null, 'Failed');
+      Workflow_Instance__c child = insertInstance(parent.Id, 'Running');
+
+      Test.startTest();
+      WorkflowCascadeCancel.failContinuationPublish = true;
+      WorkflowCascadeCancel.handleEvents(
+        new List<Workflow_Event__e>{
+          WorkflowCascadeCancel.buildParentEvent(parent.Id)
+        }
+      );
+      System.assertEquals('Running', statusOf(child.Id), 'Pass rolled back');
+      System.assertEquals(1, Limits.getQueueableJobs(), 'Retry scheduled');
+      WorkflowCascadeCancel.failContinuationPublish = false;
+      Test.stopTest();
+
+      System.assertEquals('Cancelled', statusOf(child.Id), 'Retry reaps');
     }
   }
 
@@ -1132,9 +1183,9 @@ private class WorkflowCascadeCancelTest {
     }
   }
 
-  // AC7 request side: one bulk failure costs one guarded query.
+  // AC7 request side: a bulk failure costs no query and one publish.
   @IsTest
-  static void bulkParentFailureCostsOneQuery() {
+  static void bulkParentFailureCostsNoQuery() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       List<Workflow_Instance__c> parents = new List<Workflow_Instance__c>{
@@ -1152,9 +1203,9 @@ private class WorkflowCascadeCancelTest {
       Integer q0 = Limits.getQueries();
       update parents;
       System.assertEquals(
-        1,
+        0,
         Limits.getQueries() - q0,
-        'One guarded query for the whole batch'
+        'The failure transaction runs no cascade query'
       );
       System.assertEquals(
         2,

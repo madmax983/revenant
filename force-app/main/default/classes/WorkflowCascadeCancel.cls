@@ -6,8 +6,9 @@
  * 1. `WorkflowInstanceTrigger` (after update) calls {@link requestCascade} for
  *    each instance that enters `Failed`, `Compensated` or `CompensationFailed`.
  * 2. {@link requestCascade} publishes one `CASCADE_CANCEL` `Workflow_Event__e`
- *    for each such parent that has an active child. The event is
- *    `PublishAfterCommit`: a rolled-back failure sends no event.
+ *    for each such parent. It runs no query, so it also covers a child that is
+ *    linked later. The event is `PublishAfterCommit`: a rolled-back failure sends
+ *    no event.
  * 3. `WorkflowEventTriggerHandler` calls {@link handleEvents} in a new
  *    transaction with its own governor limits.
  * 4. Each pass walks one page of the cancel traversal: the active children of a
@@ -52,10 +53,6 @@ public inherited sharing class WorkflowCascadeCancel {
   // 5 savepoints per transaction; keep one slot free, as BulkCancelWorkflow does.
   private static final Integer RETRY_REQUESTS_PER_JOB = 4;
 
-  // Upper bound on the rows that the pre-filter reads in the parent's failure
-  // transaction.
-  private static final Integer PREFILTER_ROW_CAP = 2000;
-
   // Maximum nodes that one pass cancels. It bounds the rows, the DML and the
   // scheduled-job abort filter of one transaction.
   @TestVisible
@@ -69,9 +66,13 @@ public inherited sharing class WorkflowCascadeCancel {
   @TestVisible
   private static Boolean throwTestException = false;
 
+  // When true (test context only), makes the next-level publish fail.
+  @TestVisible
+  private static Boolean failContinuationPublish = false;
+
   /**
-   * @description Publishes a cascade event for each parent that has an active
-   * child. Fire-and-forget: it catches all catchable exceptions and guards its
+   * @description Publishes a cascade event for each failed parent. It runs no
+   * query. Fire-and-forget: it catches all catchable exceptions and guards its
    * budgets, so it does not roll back the parent's failure write.
    * @param parentIds instances that entered a failure state
    */
@@ -85,7 +86,7 @@ public inherited sharing class WorkflowCascadeCancel {
     }
     try {
       List<Workflow_Event__e> events = new List<Workflow_Event__e>();
-      for (Id parentId : parentsWithActiveChildren(parentIds)) {
+      for (Id parentId : parentIds) {
         events.add(buildParentEvent(parentId));
       }
       publish(events);
@@ -223,7 +224,9 @@ public inherited sharing class WorkflowCascadeCancel {
     if (Test.isRunningTest() && throwTestException) {
       throw new WorkflowEngine.WorkflowException('Simulated cascade failure');
     }
-    publish(next);
+    // The rest of the tree is reachable only through these events: a publish
+    // failure must fail the pass, so the rollback and retry path runs.
+    publishOrThrow(next);
   }
 
   private static Set<Id> stillFailedParents(Set<Id> parentIds) {
@@ -240,35 +243,6 @@ public inherited sharing class WorkflowCascadeCancel {
       stillFailed.add(parent.Id);
     }
     return stillFailed;
-  }
-
-  // Filters the parents to those with an active child. It reads at most
-  // PREFILTER_ROW_CAP rows. When the cap is hit, or headroom is low, it keeps all
-  // parents; the handler then finds no child for some and does nothing.
-  private static Set<Id> parentsWithActiveChildren(Set<Id> parentIds) {
-    Integer rowCap = Math.min(
-      PREFILTER_ROW_CAP,
-      (Limits.getLimitQueryRows() - Limits.getQueryRows()) / 2
-    );
-    if (Limits.getLimitQueries() - Limits.getQueries() < 2 || rowCap < 1) {
-      return parentIds;
-    }
-    Set<String> activeStatuses = WorkflowCancellation.ACTIVE_CHILD_STATUSES;
-    List<Workflow_Instance__c> children = [
-      SELECT Parent_Instance__c
-      FROM Workflow_Instance__c
-      WHERE Parent_Instance__c IN :parentIds AND Status__c IN :activeStatuses
-      WITH SYSTEM_MODE
-      LIMIT :rowCap
-    ];
-    if (children.size() >= rowCap) {
-      return parentIds;
-    }
-    Set<Id> withChildren = new Set<Id>();
-    for (Workflow_Instance__c child : children) {
-      withChildren.add(child.Parent_Instance__c);
-    }
-    return withChildren;
   }
 
   /**
@@ -449,16 +423,42 @@ public inherited sharing class WorkflowCascadeCancel {
     }
   }
 
+  // Publishes the events. It throws when the DML budget is spent or the bus
+  // rejects an event.
+  private static void publishOrThrow(List<Workflow_Event__e> events) {
+    if (events.isEmpty()) {
+      return;
+    }
+    if (
+      !hasDmlBudget(events.size()) ||
+      (Test.isRunningTest() && failContinuationPublish)
+    ) {
+      throw new WorkflowEngine.WorkflowException(
+        'Cascade cancel events not published'
+      );
+    }
+    List<Database.SaveResult> results = EventBus.publish(events);
+    if (Test.isRunningTest()) {
+      publishedEvents.addAll(events);
+    }
+    WorkflowOrchestratorEnqueue.throwOnPublishErrors(
+      results,
+      'Cascade cancel event publish failed: '
+    );
+  }
+
+  private static Boolean hasDmlBudget(Integer eventCount) {
+    return Limits.getDmlStatements() < Limits.getLimitDmlStatements() &&
+      Limits.getDmlRows() + eventCount <= Limits.getLimitDmlRows();
+  }
+
   // Publishes best-effort. It skips the publish when the DML budget is spent,
   // because an over-budget publish throws an uncatchable LimitException.
   private static void publish(List<Workflow_Event__e> events) {
     if (events.isEmpty()) {
       return;
     }
-    if (
-      Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
-      Limits.getDmlRows() + events.size() > Limits.getLimitDmlRows()
-    ) {
+    if (!hasDmlBudget(events.size())) {
       System.debug(
         LoggingLevel.ERROR,
         'Cascade cancel events skipped: DML budget spent'
