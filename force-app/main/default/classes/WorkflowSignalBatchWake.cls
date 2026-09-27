@@ -71,6 +71,7 @@ public inherited sharing class WorkflowSignalBatchWake {
       AccessLevel.SYSTEM_MODE
     );
     String genuineError = null;
+    List<Workflow_Signal__c> duplicates = new List<Workflow_Signal__c>();
     for (Integer i = 0; i < srs.size(); i++) {
       Database.SaveResult sr = srs[i];
       if (sr.isSuccess()) {
@@ -78,12 +79,15 @@ public inherited sharing class WorkflowSignalBatchWake {
         continue;
       }
       if (WorkflowStartService.isDuplicateSaveError(sr)) {
+        duplicates.add(part.keyedSignals[i]);
         continue;
       }
       if (genuineError == null) {
         genuineError = sr.getErrors()[0].getMessage();
       }
     }
+    // A duplicate made no signal, so its offload file is not needed.
+    WorkflowSignalPayloads.discardOffloads(duplicates);
     if (genuineError != null) {
       Database.rollback(sp);
       throw new WorkflowEngine.WorkflowException(

@@ -858,4 +858,43 @@ public class WorkflowPayloadCodecE2ETest {
       System.assertEquals(1, after.Retry_Count__c, 'The bad row is retried');
     }
   }
+
+  @IsTest
+  static void duplicateKeyedSignalLeavesNoOffloadFile() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(new AesCodec());
+      Id instanceId = WorkflowEngine.start(
+        'WorkflowPayloadCodecE2ETest.SecretWorkflow',
+        'codec-dup-offload',
+        new Map<String, Object>{ 'ssn' => SECRET }
+      );
+      new WorkflowTestHarness(instanceId).drive();
+      String big = '{"blob":"' + 'z'.repeat(100001) + '"}';
+
+      // Two separate bulk calls: the second one loses the unique-key race.
+      for (Integer i = 0; i < 2; i++) {
+        WorkflowEngine.SignalRequest req = new WorkflowEngine.SignalRequest(
+          'codec-dup-offload',
+          'Other',
+          big
+        );
+        req.idempotencyKey = 'same-big-key';
+        WorkflowEngine.signal(new List<WorkflowEngine.SignalRequest>{ req });
+      }
+
+      System.assertEquals(
+        1,
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE Workflow_Instance__c = :instanceId AND Signal_Name__c = 'Other'
+        ]
+      );
+      System.assertEquals(
+        1,
+        [SELECT COUNT() FROM ContentDocument WHERE Title LIKE 'Signal_Other%'],
+        'The duplicate delivery leaves no offload file'
+      );
+    }
+  }
 }

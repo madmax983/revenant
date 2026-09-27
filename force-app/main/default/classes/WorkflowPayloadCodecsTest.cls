@@ -521,6 +521,33 @@ private class WorkflowPayloadCodecsTest {
   }
 
   @IsTest
+  static void discardOffloadsDeletesFiles() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(new AesCodec());
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c row = new Workflow_Signal__c(
+        Workflow_Instance__c = inst.Id,
+        Signal_Name__c = 'Lost',
+        Payload__c = WorkflowSignalPayloads.encode('Lost', 'L'.repeat(100001))
+      );
+      WorkflowSignalPayloads.offloadOversized(
+        new List<Workflow_Signal__c>{ row }
+      );
+      System.assertEquals(1, [SELECT COUNT() FROM ContentDocument]);
+
+      WorkflowSignalPayloads.discardOffloads(
+        new List<Workflow_Signal__c>{ row }
+      );
+
+      System.assertEquals(
+        0,
+        [SELECT COUNT() FROM ContentDocument],
+        'A row that was not inserted keeps no file'
+      );
+    }
+  }
+
+  @IsTest
   static void childSignalsKeepStoredForm() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowPayloadCodecs.setCodec(new AesCodec());

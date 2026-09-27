@@ -83,6 +83,28 @@ public inherited sharing class WorkflowSignalPayloads {
     insertLinks(links);
   }
 
+  /**
+   * @description Deletes the offload files of signal rows that were not
+   * inserted, for example keyed rows that lost a duplicate race. One DML for
+   * all rows.
+   * @param rows the rows that were not inserted
+   */
+  public static void discardOffloads(List<Workflow_Signal__c> rows) {
+    Set<Id> docIds = new Set<Id>();
+    for (Workflow_Signal__c row : rows) {
+      String docId = WorkflowPayloadOffload.readJsonMapKey(
+        row.Payload__c,
+        '$attachmentId'
+      );
+      if (docId != null) {
+        docIds.add(docId);
+      }
+    }
+    if (!docIds.isEmpty()) {
+      Database.delete(new List<Id>(docIds), false, AccessLevel.SYSTEM_MODE);
+    }
+  }
+
   private static Boolean isChildOutcome(String signalName) {
     for (String prefix : STORED_FORM_PREFIXES) {
       if (signalName != null && signalName.startsWith(prefix)) {
