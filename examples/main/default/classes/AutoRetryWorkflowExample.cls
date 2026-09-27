@@ -7,6 +7,8 @@
  * short outage does not roll back the saga. ChargePaymentStep has no try/catch.
  * When all 4 charge attempts fail, the saga rolls back (LIFO). The idempotency
  * key stops a second charge when the gateway charged but the response was lost.
+ * A bad amount always fails, so the step returns fail(). The engine does not
+ * retry a returned fail().
  *
  * SendReceiptStep returns a null policy. A receipt email is not idempotent, so
  * a thrown exception there fails fast.
@@ -101,12 +103,17 @@ public inherited sharing class AutoRetryWorkflowExample {
    */
   public class ChargePaymentStep implements CompensatableStep {
     /**
-     * @description Charges the card. A gateway error throws.
+     * @description Charges the card. A gateway error throws. A bad amount
+     * returns fail().
      * @param ctx The step context.
-     * @return A complete result with the charge id.
+     * @return A complete result with the charge id, or a fail result.
      */
     public StepResult execute(StepContext ctx) {
-      Integer amountCents = toCents(readInput(ctx).get('amountCents'));
+      Object rawAmount = readInput(ctx).get('amountCents');
+      Integer amountCents = toCents(rawAmount);
+      if (amountCents == null) {
+        return StepResult.fail('Invalid amountCents: ' + rawAmount);
+      }
       String chargeId = MockFlakyOrderServices.charge(
         ctx.idempotencyKey,
         amountCents
@@ -118,7 +125,8 @@ public inherited sharing class AutoRetryWorkflowExample {
     }
 
     /**
-     * @description Refunds the charge from the step output.
+     * @description Refunds the charge from the step output. The key stops a
+     * second refund when compensation runs again.
      * @param ctx The step context. stepStateJson holds the step output.
      * @return A complete result.
      */
@@ -126,7 +134,10 @@ public inherited sharing class AutoRetryWorkflowExample {
       Map<String, Object> output = (Map<String, Object>) JSON.deserializeUntyped(
         ctx.stepStateJson
       );
-      MockFlakyOrderServices.refund((String) output.get('chargeId'));
+      MockFlakyOrderServices.refund(
+        ctx.idempotencyKey,
+        (String) output.get('chargeId')
+      );
       return StepResult.complete(
         null,
         new Map<String, Object>{ 'refunded' => true }
@@ -160,10 +171,18 @@ public inherited sharing class AutoRetryWorkflowExample {
     }
   }
 
-  // Returns the amount in cents. A Flow or a numeric field can give a Decimal
-  // such as 4200.00, so do not use Integer.valueOf on the text.
+  // Returns the amount in whole cents, or null for a bad amount. A Flow or a
+  // numeric field can give a Decimal such as 4200.00, which is valid.
   private static Integer toCents(Object amount) {
-    return Decimal.valueOf(String.valueOf(amount)).intValue();
+    try {
+      Decimal value = Decimal.valueOf(String.valueOf(amount));
+      if (value > 0 && value == value.round(System.RoundingMode.FLOOR)) {
+        return value.intValue();
+      }
+    } catch (TypeException ignored) {
+      // Not a number: a bad amount.
+    }
+    return null;
   }
 
   // Reads the workflow input map.

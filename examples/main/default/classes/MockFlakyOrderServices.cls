@@ -31,6 +31,7 @@ public inherited sharing class MockFlakyOrderServices {
   public static Integer receiptsSent = 0;
 
   private static Map<String, String> chargeIdByKey = new Map<String, String>();
+  private static Set<String> refundKeys = new Set<String>();
 
   /**
    * @description Charges a card. Throws a 503 while the gateway is down. A
@@ -59,10 +60,16 @@ public inherited sharing class MockFlakyOrderServices {
   }
 
   /**
-   * @description Refunds a charge.
+   * @description Refunds a charge. A repeat call with the same key does
+   * nothing.
+   * @param idempotencyKey The key that stops a double refund.
    * @param chargeId The charge to refund.
    */
-  public static void refund(String chargeId) {
+  public static void refund(String idempotencyKey, String chargeId) {
+    if (refundKeys.contains(idempotencyKey)) {
+      return;
+    }
+    refundKeys.add(idempotencyKey);
     refunds++;
     lastRefundedChargeId = chargeId;
   }
@@ -96,5 +103,6 @@ public inherited sharing class MockFlakyOrderServices {
     receiptAttempts = 0;
     receiptsSent = 0;
     chargeIdByKey = new Map<String, String>();
+    refundKeys = new Set<String>();
   }
 }

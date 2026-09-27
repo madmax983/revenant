@@ -158,14 +158,16 @@ public class AutoRetryWorkflowExampleTest {
 
   @IsTest
   static void refundIsIdempotentByKey() {
-    MockFlakyOrderServices.reset();
-    MockFlakyOrderServices.refund('refund-key', 'ch_1');
-    MockFlakyOrderServices.refund('refund-key', 'ch_1');
-    Assert.areEqual(
-      1,
-      MockFlakyOrderServices.refunds,
-      'A repeat refund with the same key does nothing'
-    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      MockFlakyOrderServices.reset();
+      MockFlakyOrderServices.refund('refund-key', 'ch_1');
+      MockFlakyOrderServices.refund('refund-key', 'ch_1');
+      Assert.areEqual(
+        1,
+        MockFlakyOrderServices.refunds,
+        'A repeat refund with the same key does nothing'
+      );
+    }
   }
 
   @IsTest
