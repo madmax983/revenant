@@ -55,11 +55,10 @@ public inherited sharing class WorkflowPayloadEnvelope {
     if (control.find()) {
       return false;
     }
-    if (stored.indexOf('"', dataStart) == dataEnd) {
-      return true;
-    }
+    // Data without a backslash needs only an index check. Any backslash gets
+    // a full JSON check, so a bad escape stays plaintext.
     if (stored.indexOf('\\', dataStart) < 0) {
-      return false;
+      return stored.indexOf('"', dataStart) == dataEnd;
     }
     try {
       Map<String, Object> parsed = (Map<String, Object>) JSON.deserializeUntyped(

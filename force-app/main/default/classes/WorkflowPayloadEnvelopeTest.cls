@@ -62,6 +62,13 @@ private class WorkflowPayloadEnvelopeTest {
         ),
         'Raw control characters are not valid JSON, so this is plaintext'
       );
+      System.assertEquals(
+        null,
+        WorkflowPayloadEnvelope.kindOf(
+          '{"$codec":"STEP_OUTPUT","data":"bad\\q"}'
+        ),
+        'An invalid escape is not valid JSON, so this is plaintext'
+      );
       System.assertEquals(null, WorkflowPayloadEnvelope.kindOf(null));
     }
   }
