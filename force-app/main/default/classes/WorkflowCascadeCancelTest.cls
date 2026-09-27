@@ -637,6 +637,40 @@ private class WorkflowCascadeCancelTest {
     }
   }
 
+  // Apex allows 5 savepoints per transaction. A retry job with 6 requests must
+  // not exceed it: it runs 4 and schedules the rest.
+  @IsTest
+  static void retryJobStaysUnderSavepointLimit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      List<Workflow_Instance__c> parents = new List<Workflow_Instance__c>();
+      for (Integer i = 0; i < 6; i++) {
+        parents.add(newInstance(null, 'Failed'));
+      }
+      insert parents;
+      insertChildren(parents, 1, 'Running');
+      List<Workflow_Event__e> events = new List<Workflow_Event__e>();
+      for (Workflow_Instance__c p : parents) {
+        events.add(WorkflowCascadeCancel.buildParentEvent(p.Id));
+      }
+
+      Test.startTest();
+      WorkflowCascadeCancel.throwTestException = true;
+      WorkflowCascadeCancel.handleEvents(events);
+      WorkflowCascadeCancel.throwTestException = false;
+      Test.stopTest();
+
+      System.assert(
+        [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE Parent_Instance__c IN :parents AND Status__c = 'Cancelled'
+        ] >= 4,
+        'The retry job reaps its first 4 requests without a savepoint error'
+      );
+    }
+  }
+
   // A redriven parent keeps the children that later pages would reap.
   @IsTest
   static void nextPageRechecksParent() {

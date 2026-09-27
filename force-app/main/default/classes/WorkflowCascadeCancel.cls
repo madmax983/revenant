@@ -48,8 +48,9 @@ public inherited sharing class WorkflowCascadeCancel {
   // for the next pass.
   private static final Integer MAX_REQUESTS_PER_PASS = 25;
 
-  // Requests that one retry job runs (one savepoint and pass each).
-  private static final Integer RETRY_REQUESTS_PER_JOB = 8;
+  // Requests that one retry job runs (one savepoint and pass each). Apex allows
+  // 5 savepoints per transaction; keep one slot free, as BulkCancelWorkflow does.
+  private static final Integer RETRY_REQUESTS_PER_JOB = 4;
 
   // Upper bound on the rows that the pre-filter reads in the parent's failure
   // transaction.
@@ -434,6 +435,7 @@ public inherited sharing class WorkflowCascadeCancel {
         Savepoint sp = Database.setSavepoint();
         try {
           runPass(new List<CascadeRequest>{ req });
+          Database.releaseSavepoint(sp);
         } catch (Exception ex) {
           Database.rollback(sp);
           System.debug(
