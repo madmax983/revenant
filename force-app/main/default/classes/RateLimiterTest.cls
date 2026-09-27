@@ -269,12 +269,12 @@ public class RateLimiterTest {
       System.assertEquals(
         0.25,
         RateLimiter.secondsUntilNextToken(0.5, config('K', 10, 2.0)),
-        'Unexpected value of RateLimiter.secondsUntilNextToken(0.5, config(\'K\', 10, 2.0))'
+        '(1 - 0.5) / 2 = 0.25 s'
       );
       System.assertEquals(
         10.0,
         RateLimiter.secondsUntilNextToken(0.0, config('K', 10, 0.1)),
-        'Unexpected value of RateLimiter.secondsUntilNextToken(0.0, config(\'K\', 10, 0.1))'
+        '(1 - 0) / 0.1 = 10 s'
       );
     }
   }
@@ -296,7 +296,7 @@ public class RateLimiterTest {
       System.assertEquals(
         false,
         RateLimiter.isValidConfig(null),
-        'Unexpected value of RateLimiter.isValidConfig(null)'
+        'A null config is not valid'
       );
       for (String key : cases.keySet()) {
         Boolean acquireAccepts = true;
@@ -325,7 +325,7 @@ public class RateLimiterTest {
       System.assertEquals(1, configs.size(), 'Mocks replace the CMDT records');
       System.assert(
         configs.containsKey('MockOnly'),
-        'Expected true: configs.containsKey(\'MockOnly\')'
+        'The mock key is returned'
       );
     }
   }
@@ -337,15 +337,11 @@ public class RateLimiterTest {
   static void testConfiguredLimitsReadsCmdtWithoutMocks() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       RateLimiter.mockConfigs.clear();
-      Map<String, Rate_Limit_Config__mdt> configs = RateLimiter.configuredLimits();
-      System.assertNotEquals(null, configs, 'Unexpected value of configs');
-      for (Rate_Limit_Config__mdt c : configs.values()) {
-        System.assertNotEquals(
-          null,
-          c.DeveloperName,
-          'Unexpected value of c.DeveloperName'
-        );
-      }
+      System.assertEquals(
+        Rate_Limit_Config__mdt.getAll().keySet(),
+        RateLimiter.configuredLimits().keySet(),
+        'Without mocks, all CMDT records are returned'
+      );
     }
   }
 }

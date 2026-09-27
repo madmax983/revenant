@@ -1,7 +1,7 @@
 /**
- * @description Read endpoint for the System Doctor Rate Limits panel (#61). It is a
- * separate class because WorkflowDashboardController is at the PMD public-member limit.
- * It uses the same view gate as the other dashboard panels.
+ * @description This class is the read endpoint of the Rate Limits panel in System Doctor
+ * (#61). It is a separate class because WorkflowDashboardController is at the PMD
+ * public-member limit. It uses the same view gate as the other dashboard panels.
  */
 public inherited sharing class WorkflowRateLimitController {
   /**

@@ -2517,6 +2517,15 @@ describe("c-workflow-dashboard workflow catalog", () => {
 });
 
 describe("c-workflow-dashboard rate limits panel (#61)", () => {
+  // System Doctor also loads trends. Give it data so these tests run alone.
+  beforeEach(() => {
+    getDefinitionTrends.mockResolvedValue({
+      windowKey: "24h",
+      windowHours: 24,
+      rows: [],
+    });
+  });
+
   afterEach(() => {
     while (document.body.firstChild) {
       document.body.removeChild(document.body.firstChild);
@@ -2728,5 +2737,87 @@ describe("c-workflow-dashboard rate limits panel (#61)", () => {
     const first = getRateLimitStatus.mock.calls[0][0].cacheBuster;
     const second = getRateLimitStatus.mock.calls[1][0].cacheBuster;
     expect(second).not.toBe(first);
+  });
+
+  it("shows the As of time of the snapshot", async () => {
+    getRateLimitStatus.mockResolvedValueOnce(RATE_LIMITS);
+    const element = await openDoctor();
+
+    const asOf = element.shadowRoot.querySelector(
+      '[data-id="rate-limit-asof"]',
+    );
+    expect(asOf.textContent).toContain("As of");
+  });
+
+  it("renders an unknown status as Unknown, never as healthy", async () => {
+    getRateLimitStatus.mockResolvedValueOnce({
+      asOfMs: 0,
+      rows: [{ ...RATE_LIMITS.rows[1], status: "SOMETHING_NEW" }],
+    });
+    const element = await openDoctor();
+
+    const row = element.shadowRoot.querySelector('[data-id="rate-limit-row"]');
+    const status = row.querySelector('[data-id="rate-limit-status"]');
+    expect(status.textContent).toContain("Unknown");
+    expect(status.className).toContain("badge-grey");
+    expect(status.className).not.toContain("badge-green");
+    const icon = row.querySelector("lightning-icon");
+    expect(icon.alternativeText).toBe("Unknown");
+  });
+
+  it("clears the error and shows rows after a good refresh", async () => {
+    getRateLimitStatus
+      .mockRejectedValueOnce({ body: { message: "Temporary failure" } })
+      .mockResolvedValueOnce(RATE_LIMITS);
+    const element = await openDoctor();
+    expect(
+      element.shadowRoot.querySelector('[data-id="rate-limit-error"]'),
+    ).not.toBeNull();
+
+    findButton(element, (btn) => btn.label === "Refresh Status").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="rate-limit-error"]'),
+    ).toBeNull();
+    expect(
+      element.shadowRoot.querySelectorAll('[data-id="rate-limit-row"]').length,
+    ).toBe(3);
+  });
+
+  it("ignores an older response that arrives after a newer one", async () => {
+    let resolveOld;
+    getRateLimitStatus
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOld = resolve;
+        }),
+      )
+      .mockResolvedValueOnce(RATE_LIMITS);
+    const element = await openDoctor();
+
+    findButton(element, (btn) => btn.label === "Refresh Status").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+    expect(
+      element.shadowRoot.querySelectorAll('[data-id="rate-limit-row"]').length,
+    ).toBe(3);
+
+    // The first (older) request resolves last with no rows.
+    resolveOld({ asOfMs: 1, rows: [] });
+    await flushPromises();
+    await flushPromises();
+
+    expect(
+      element.shadowRoot.querySelectorAll('[data-id="rate-limit-row"]').length,
+    ).toBe(3);
+    expect(
+      element.shadowRoot.querySelector('[data-id="rate-limit-empty"]'),
+    ).toBeNull();
   });
 });

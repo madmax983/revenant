@@ -354,8 +354,8 @@ public class RevenantOperatorPermSetTest {
   }
 
   /**
-   * @description A read-only operator can open the Rate Limits panel (#61). The panel uses the same
-   * view gate as the other dashboard panels.
+   * @description A read-only operator passes the view gate of the Rate Limits panel (#61)
+   * and gets data. WorkflowRateLimitControllerTest checks the class access.
    */
   @IsTest
   static void testOperatorCanReadRateLimitStatus() {
@@ -374,14 +374,21 @@ public class RevenantOperatorPermSetTest {
       );
     }
 
+    RateLimiter.mockConfigs.put(
+      'OpApi',
+      (Rate_Limit_Config__mdt) JSON.deserialize(
+        '{"DeveloperName":"OpApi","Capacity__c":3,"Refill_Rate_Per_Second__c":1.0}',
+        Rate_Limit_Config__mdt.class
+      )
+    );
     System.runAs(operator) {
       Map<String, Object> result = WorkflowRateLimitController.getRateLimitStatus(
         'op'
       );
-      System.assertNotEquals(
-        null,
-        result.get('rows'),
-        'Unexpected value of result.get(\'rows\')'
+      System.assertEquals(
+        1,
+        ((List<Object>) result.get('rows')).size(),
+        'The operator gets one row per config'
       );
     }
   }

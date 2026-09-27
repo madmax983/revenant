@@ -72,27 +72,27 @@ private class WorkflowRateLimitStatusServiceTest {
       System.assertEquals(
         3.0,
         (Decimal) row.get('availableTokens'),
-        'Unexpected value of (Decimal) row.get(\'availableTokens\')'
+        'Stored 1 + 1 s * 2/s: the row must show the refilled value'
       );
       System.assertEquals(
         'AVAILABLE',
         row.get('status'),
-        'Unexpected value of row.get(\'status\')'
+        '1 token or more is Available'
       );
       System.assertEquals(
         10.0,
         (Decimal) row.get('capacity'),
-        'Unexpected value of (Decimal) row.get(\'capacity\')'
+        'Row shows the configured capacity'
       );
       System.assertEquals(
         2.0,
         (Decimal) row.get('refillRatePerSecond'),
-        'Unexpected value of (Decimal) row.get(\'refillRatePerSecond\')'
+        'Row shows the configured refill rate'
       );
       System.assertEquals(
         null,
         row.get('secondsUntilNextToken'),
-        'Unexpected value of row.get(\'secondsUntilNextToken\')'
+        'Only Throttling rows have a wait'
       );
     }
   }
@@ -117,28 +117,28 @@ private class WorkflowRateLimitStatusServiceTest {
       System.assertEquals(
         'THROTTLING',
         fast.get('status'),
-        'Unexpected value of fast.get(\'status\')'
+        '0.5 tokens is Throttling'
       );
       System.assertEquals(
         0.5,
         (Decimal) fast.get('availableTokens'),
-        'Unexpected value of (Decimal) fast.get(\'availableTokens\')'
+        'Row shows the live 0.5 tokens'
       );
       System.assertEquals(
         1L,
         (Long) fast.get('secondsUntilNextToken'),
-        'Unexpected value of (Long) fast.get(\'secondsUntilNextToken\')'
+        '(1 - 0.5) / 2 = 0.25 s rounds up to 1 s'
       );
       Map<String, Object> slow = rowFor(rows, 'SlowApi');
       System.assertEquals(
         'THROTTLING',
         slow.get('status'),
-        'Unexpected value of slow.get(\'status\')'
+        '0 tokens is Throttling'
       );
       System.assertEquals(
         10L,
         (Long) slow.get('secondsUntilNextToken'),
-        'Unexpected value of (Long) slow.get(\'secondsUntilNextToken\')'
+        '(1 - 0) / 0.1 = 10 s'
       );
     }
   }
@@ -164,22 +164,22 @@ private class WorkflowRateLimitStatusServiceTest {
       System.assertEquals(
         'THROTTLING',
         edge.get('status'),
-        'Unexpected value of edge.get(\'status\')'
+        '0.9999 tokens is Throttling, as in acquire()'
       );
       System.assertEquals(
         0.99,
         (Decimal) edge.get('availableTokens'),
-        'Unexpected value of (Decimal) edge.get(\'availableTokens\')'
+        'The shown value rounds down to 0.99'
       );
       System.assertEquals(
         1L,
         (Long) edge.get('secondsUntilNextToken'),
-        'Unexpected value of (Long) edge.get(\'secondsUntilNextToken\')'
+        'A small wait rounds up to 1 s'
       );
       System.assertEquals(
         'AVAILABLE',
         rowFor(rows, 'OneApi').get('status'),
-        'Unexpected value of rowFor(rows, \'OneApi\').get(\'status\')'
+        'Exactly 1 token is Available, as in acquire()'
       );
     }
   }
@@ -197,20 +197,16 @@ private class WorkflowRateLimitStatusServiceTest {
         new List<Rate_Limit_State__c>()
       );
       Map<String, Object> row = rowFor(rows, 'NewApi');
-      System.assertEquals(
-        'IDLE',
-        row.get('status'),
-        'Unexpected value of row.get(\'status\')'
-      );
+      System.assertEquals('IDLE', row.get('status'), 'No state row is Idle');
       System.assertEquals(
         7.0,
         (Decimal) row.get('availableTokens'),
-        'Unexpected value of (Decimal) row.get(\'availableTokens\')'
+        'Idle shows full capacity'
       );
       System.assertEquals(
         null,
         row.get('secondsUntilNextToken'),
-        'Unexpected value of row.get(\'secondsUntilNextToken\')'
+        'Idle has no wait'
       );
     }
   }
@@ -230,7 +226,7 @@ private class WorkflowRateLimitStatusServiceTest {
       System.assertEquals(
         'THROTTLING',
         rowFor(rows, 'StripeApi').get('status'),
-        'Unexpected value of rowFor(rows, \'StripeApi\').get(\'status\')'
+        'A state row with other casing must join to its config'
       );
     }
   }
@@ -253,17 +249,17 @@ private class WorkflowRateLimitStatusServiceTest {
         System.assertEquals(
           'INVALID',
           row.get('status'),
-          'Unexpected value of row.get(\'status\')'
+          'Status of ' + key + ' must be INVALID'
         );
         System.assertEquals(
           null,
           row.get('availableTokens'),
-          'Unexpected value of row.get(\'availableTokens\')'
+          'Invalid ' + key + ' has no token value'
         );
         System.assertEquals(
           null,
           row.get('secondsUntilNextToken'),
-          'Unexpected value of row.get(\'secondsUntilNextToken\')'
+          'Invalid ' + key + ' has no wait'
         );
       }
     }
@@ -277,7 +273,7 @@ private class WorkflowRateLimitStatusServiceTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       List<Map<String, Object>> rows = build(
         new Map<String, Rate_Limit_Config__mdt>{
-          'bIdle' => config('bIdle', 5, 1.0),
+          'Bidle' => config('Bidle', 5, 1.0),
           'aIdle' => config('aIdle', 5, 1.0),
           'Ok' => config('Ok', 5, 1.0),
           'Busy' => config('Busy', 5, 1.0),
@@ -293,9 +289,9 @@ private class WorkflowRateLimitStatusServiceTest {
         order.add((String) row.get('integrationKey'));
       }
       System.assertEquals(
-        new List<String>{ 'Broken', 'Busy', 'Ok', 'aIdle', 'bIdle' },
+        new List<String>{ 'Broken', 'Busy', 'Ok', 'aIdle', 'Bidle' },
         order,
-        'Unexpected value of order'
+        'Bad news first, then keys A-Z without case'
       );
     }
   }
@@ -313,7 +309,7 @@ private class WorkflowRateLimitStatusServiceTest {
             new List<Rate_Limit_State__c>()
           )
           .size(),
-        'Unexpected value of build( new Map<String, Rate_Limit_Config__mdt>(), new Lis...'
+        'No configs give no rows'
       );
     }
   }
@@ -343,18 +339,18 @@ private class WorkflowRateLimitStatusServiceTest {
       System.assertEquals(dmlBefore, dmlAfter, 'The panel must not write');
       System.assert(
         result.get('asOfMs') instanceof Long,
-        'Expected true: result.get(\'asOfMs\') instanceof Long'
+        'asOfMs is the server clock in epoch ms'
       );
       List<Map<String, Object>> rows = (List<Map<String, Object>>) result.get(
         'rows'
       );
-      System.assertEquals(3, rows.size(), 'Unexpected value of rows.size()');
+      System.assertEquals(3, rows.size(), 'One row per mock config');
 
       Map<String, Object> live = rowFor(rows, 'LiveApi');
       System.assertEquals(
         'AVAILABLE',
         live.get('status'),
-        'Unexpected value of live.get(\'status\')'
+        'Refilled key is Available'
       );
       System.assert(
         (Decimal) live.get('availableTokens') >= 5.0,
@@ -365,29 +361,29 @@ private class WorkflowRateLimitStatusServiceTest {
       System.assertEquals(
         'THROTTLING',
         held.get('status'),
-        'Unexpected value of held.get(\'status\')'
+        'Empty key is Throttling'
       );
       System.assertEquals(
         0.0,
         (Decimal) held.get('availableTokens'),
-        'Unexpected value of (Decimal) held.get(\'availableTokens\')'
+        'Future timestamp clamps elapsed time to 0'
       );
       System.assertEquals(
         2L,
         (Long) held.get('secondsUntilNextToken'),
-        'Unexpected value of (Long) held.get(\'secondsUntilNextToken\')'
+        '(1 - 0) / 0.5 = 2 s'
       );
 
       Map<String, Object> idle = rowFor(rows, 'IdleApi');
       System.assertEquals(
         'IDLE',
         idle.get('status'),
-        'Unexpected value of idle.get(\'status\')'
+        'Key with no state row is Idle'
       );
       System.assertEquals(
         4.0,
         (Decimal) idle.get('availableTokens'),
-        'Unexpected value of (Decimal) idle.get(\'availableTokens\')'
+        'Idle shows full capacity'
       );
     }
   }
@@ -402,7 +398,7 @@ private class WorkflowRateLimitStatusServiceTest {
       Test.startTest();
       System.assert(
         RateLimiter.acquire('PairApi').isAllowed,
-        'Expected true: RateLimiter.acquire(\'PairApi\').isAllowed'
+        'The first acquire() must pass'
       );
       System.assertEquals(
         'AVAILABLE',
@@ -411,7 +407,7 @@ private class WorkflowRateLimitStatusServiceTest {
       );
       System.assert(
         RateLimiter.acquire('PairApi').isAllowed,
-        'Expected true: RateLimiter.acquire(\'PairApi\').isAllowed'
+        'The second acquire() must pass'
       );
       System.assertEquals(
         'THROTTLING',
@@ -420,7 +416,7 @@ private class WorkflowRateLimitStatusServiceTest {
       );
       System.assert(
         !RateLimiter.acquire('PairApi').isAllowed,
-        'Expected true: !RateLimiter.acquire(\'PairApi\').isAllowed'
+        'The third acquire() must throttle'
       );
       Test.stopTest();
     }
@@ -444,9 +440,9 @@ private class WorkflowRateLimitStatusServiceTest {
         'rows'
       );
       System.assertEquals(
-        RateLimiter.configuredLimits().size(),
+        Rate_Limit_Config__mdt.getAll().size(),
         rows.size(),
-        'Unexpected value of rows.size()'
+        'One row per CMDT record'
       );
     }
   }

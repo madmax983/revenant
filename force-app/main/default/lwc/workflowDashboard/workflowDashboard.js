@@ -1773,12 +1773,16 @@ export default class WorkflowDashboard extends LightningElement {
 
   // Loads the live token buckets. A new cacheBuster on each load bypasses the Lightning
   // cache. Best-effort: a failure shows an inline message and does not stop the view.
+  // Only the newest request can change the panel.
   loadRateLimitStatus() {
-    this.rateLimitRequestSeq += 1;
+    const requestId = ++this.rateLimitRequestSeq;
     getRateLimitStatus({
-      cacheBuster: `${Date.now()}-${this.rateLimitRequestSeq}`,
+      cacheBuster: `${Date.now()}-${requestId}`,
     })
       .then((result) => {
+        if (requestId !== this.rateLimitRequestSeq) {
+          return;
+        }
         if (!result || !Array.isArray(result.rows)) {
           this.setRateLimitError("No data was returned.");
           return;
@@ -1791,6 +1795,9 @@ export default class WorkflowDashboard extends LightningElement {
         this.rateLimitLoaded = true;
       })
       .catch((error) => {
+        if (requestId !== this.rateLimitRequestSeq) {
+          return;
+        }
         const reason = this.reduceErrors(error);
         this.setRateLimitError(reason);
         console.error("Failed to load rate limit status:", reason);

@@ -159,9 +159,9 @@ translation/evaluation.
 
 ## Dashboard services
 
-The LWC-facing API, split into a **read** controller and a **command**
+The LWC-facing API has two **read** controllers and one **command**
 controller (endpoint names unchanged; only the host class of the 16 command
-endpoints moved). Both delegate to `inherited sharing` service classes.
+endpoints moved). All three delegate to `inherited sharing` service classes.
 
 - Read side: `WorkflowDashboardController` (holds `InstanceQuery` / `StalledQuery`
   / `UnroutedQuery` DTOs) → `WorkflowInstanceListService`,

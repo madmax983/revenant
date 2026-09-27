@@ -825,8 +825,8 @@ The Workflow Dashboard includes a **System Doctor** tab to monitor limits, check
   - **Throttling**: fewer than 1 token. The row shows the seconds until the next token. `acquire()` adds 0.5–1.5 s of jitter, so a sleeping step waits a little longer.
   - **Idle**: the key has no `Rate_Limit_State__c` row yet. The row shows full capacity.
   - **Available**: 1 token or more.
-  - **Invalid config**: `acquire()` rejects the config (capacity less than 1, or refill rate 0 or less). This state also applies to a key that is not used yet.
-  - The panel reads only. It adds no SOQL to the orchestrator. It does not show state rows that have no config.
+  - **Invalid config**: `acquire()` rejects the config (capacity less than 1, or refill rate 0 or less). A key with an invalid config shows Invalid config, also when the key has no state row yet.
+  - The panel is read-only. It adds no SOQL to the orchestrator. It does not show state rows that have no config.
 
 ---
 

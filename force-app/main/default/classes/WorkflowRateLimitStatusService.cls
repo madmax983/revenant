@@ -1,7 +1,7 @@
 /**
- * @description Read service for the System Doctor Rate Limits panel (#61). It shows the
- * live token bucket of each Rate_Limit_Config__mdt key and uses the RateLimiter formula.
- * It writes no records and locks no rows.
+ * @description This class reads the data for the Rate Limits panel in System Doctor (#61).
+ * It returns the live token bucket of each Rate_Limit_Config__mdt key. It uses the
+ * RateLimiter formula. It writes no records and locks no rows.
  */
 public inherited sharing class WorkflowRateLimitStatusService {
   private static final String STATUS_INVALID = 'INVALID';
@@ -32,12 +32,12 @@ public inherited sharing class WorkflowRateLimitStatusService {
         'rows' => buildRows(configs, queryStates(configs.keySet()), nowMs)
       };
     } catch (Exception ex) {
-      throw new AuraHandledException(ex.getMessage());
+      throw WorkflowDashboardSupport.auraError(ex.getMessage());
     }
   }
 
-  // Reads the state rows of the configured keys. The IN match ignores case. No FOR UPDATE,
-  // so the read never blocks acquire().
+  // Reads the state rows of the configured keys. The IN match ignores case. The query
+  // does not use FOR UPDATE, so it does not block acquire().
   private static List<Rate_Limit_State__c> queryStates(Set<String> keys) {
     if (keys.isEmpty()) {
       return new List<Rate_Limit_State__c>();
@@ -106,8 +106,9 @@ public inherited sharing class WorkflowRateLimitStatusService {
     return RateLimiter.availableTokens(state, config, nowMs);
   }
 
-  // Builds the row for one key. Status precedence: INVALID, IDLE, THROTTLING, AVAILABLE.
-  // The status uses the value before rounding. The shown value rounds down.
+  // Builds the row for one key. The checks run in this order: INVALID, IDLE, AVAILABLE.
+  // Other rows are THROTTLING. The status uses the value before rounding. The shown value
+  // rounds down. The sort order is different (see STATUS_ORDER).
   private static Map<String, Object> buildRow(
     String key,
     Rate_Limit_Config__mdt config,

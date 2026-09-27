@@ -5,8 +5,8 @@
          only this set can open the workflowDashboard LWC and inspect instances, steps and
          signals but cannot reach any state-mutating recovery endpoint. Class-level security
          is enforced only at the LWC entry point, so the controller's downstream service
-         classes need no entry. WorkflowRateLimitController is the read-only Rate Limits
-         panel endpoint and uses the same view gate. -->
+         classes need no entry. WorkflowRateLimitController is the endpoint of the
+         Rate Limits panel. It only reads data and uses the same view gate. -->
     <classAccesses>
         <apexClass>WorkflowDashboardController</apexClass>
         <enabled>true</enabled>
