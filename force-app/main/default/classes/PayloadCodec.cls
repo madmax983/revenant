@@ -9,11 +9,15 @@
  *
  * Rules for an implementation:
  * - `decode(encode(p, ctx), ctx)` must return `p`.
- * - Both methods must be pure. Do no DML. `decode` must not change records.
+ * - Both methods must not change data. Do not do DML.
+ * - Do not make callouts. The engine calls `encode` after DML in the same
+ *   transaction.
+ * - Load key material without a query per call. For example, keep it in an
+ *   instance field. The engine calls `decode` once for each row it reads.
  * - Throw an exception when the data cannot be decoded. Do not return
- *   ciphertext as plaintext.
- * - The implementation must be a top-level class with a public no-argument
- *   constructor.
+ *   ciphertext as plaintext. The engine replaces the message, so the message
+ *   does not go into error fields.
+ * - Use a public class with a public no-argument constructor.
  */
 public interface PayloadCodec {
   /**

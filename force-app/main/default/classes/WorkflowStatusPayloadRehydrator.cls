@@ -51,7 +51,7 @@ public inherited sharing class WorkflowStatusPayloadRehydrator {
    * {@link WorkflowPayloadCodecs#decode}.
    * @param textValue The stored field value (an offload marker or an inline payload).
    * @param dataByAttachment The map of offload attachment Ids to rehydrated payload text.
-   * @return The rehydrated payload text, or the original text value when not offloaded.
+   * @return The rehydrated and decoded payload text.
    */
   public static String rehydrate(
     String textValue,

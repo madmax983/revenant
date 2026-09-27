@@ -306,8 +306,8 @@ public inherited sharing class BatchFanoutWorkflowExample {
       List<Workflow_Instance__c> childInstances
     ) {
       Map<String, Object> aggregatedResults = new Map<String, Object>();
-      // Resolve stored outputs in bulk: they can be offloaded or encoded by a
-      // payload codec.
+      // Resolve stored outputs in bulk. The engine can offload them. A payload
+      // codec can encode them.
       List<String> rawOutputs = new List<String>();
       for (Workflow_Instance__c child : childInstances) {
         rawOutputs.add(child.Output__c);

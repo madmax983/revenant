@@ -3,8 +3,9 @@
 **Goal:** Keep author payloads as ciphertext at rest. The engine calls an
 author-supplied `PayloadCodec` on every payload write and read.
 
-**Architecture:** Encode at the offload seam (`savePayloadIfNeeded`). Decode
-at the resolve seam (`resolvePayload`, `resolvePayloads`, status rehydrators).
+**Architecture:** Callers encode, then call the offload seam
+(`savePayloadIfNeeded`). Decode at the resolve seam (`resolvePayload`,
+`resolvePayloads`, status rehydrators).
 Wrap codec output in an engine envelope. Select the codec with
 `Revenant_Config__mdt.Payload_Codec__c`. Identity is the default.
 
@@ -23,8 +24,9 @@ Wrap codec output in an engine envelope. Select the codec with
   plaintext, stops a second encode, and carries the kind to `decode`.
 - **Offload.** Encode first. Then offload when the *encoded* text is longer
   than 100 000 characters. The file holds ciphertext. The marker stays plain.
-- **Signals.** Four direct inserts. Route them through `encodeForField`. It
-  keeps identity bytes and offloads large ciphertext when an owner is known.
+- **Signals.** Four direct inserts. `WorkflowSignalPayloads.encode` encodes
+  each row. `offloadOversized` moves large ciphertext to files in bulk before
+  the insert. Identity bytes do not change.
 - **Config.** One text field. Read it in the `WorkflowEngine` static block,
   like the other `Revenant_Config__mdt` fields.
 - **Dashboard.** Show a redacted JSON placeholder. Do not decode.
@@ -61,7 +63,23 @@ Wrap codec output in an engine envelope. Select the codec with
 - **Blue (process):** SPEC, RED, GREEN, REFACTOR. Type-check with apex-ls. Then
   a multi-angle agent review.
 
-## 4. TDD steps
+## 4. Review results
+
+Four review agents (correctness, security, platform limits, tests and docs)
+found issues. We fixed them:
+
+- Always encode external input, so a copied envelope is not decrypted.
+- Strict envelope detection. Codec errors are wrapped without payload text.
+- Control markers resolve without decode. One bad row cannot fail a batch.
+- Debounce input decodes per row.
+- Bulk signal offload after dedup.
+- `failureData` in `Error_Details__c` is encoded.
+- Namespace-safe codec lookup. Fail closed on a config read failure.
+
+Follow-ups (filed as issues): an owner check for `$attachmentId` markers, and
+record access checks for the decoding read APIs.
+
+## 5. TDD steps
 
 1. **SPEC.** `PayloadCodec` contract: round-trip, pure, fail closed.
 2. **RED.** `WorkflowPayloadCodecsTest` for the facade and offload seam.
@@ -74,14 +92,15 @@ Wrap codec output in an engine envelope. Select the codec with
 5. **GREEN.** Wire every write and read site from the audits.
 6. **REFACTOR.** Agent review from several angles. Fix the findings.
 
-## 5. Files
+## 6. Files
 
 - New: `PayloadCodec`, `CodecContext`, `IdentityPayloadCodec`,
   `WorkflowPayloadCodecs`, `Revenant_Config__mdt.Payload_Codec__c`.
 - Seams: `WorkflowPayloadOffload`, `WorkflowStatusProjection`,
   `WorkflowStatusPayloadRehydrator`, `WorkflowPayloadService`.
 - Write sites: every `savePayloadIfNeeded` caller with author data, the four
-  signal inserts, `WorkflowDebouncer`, `WorkflowStepContext`.
+  signal inserts (`WorkflowSignalPayloads`), `WorkflowDebouncer`,
+  `WorkflowStepContext`, the `failureData` writers.
 - Read sites: `WorkflowParallelJoin`, `WorkflowOperatorSkipParallel`,
   `WorkflowDebounceSweeper`, `WorkflowParentNotifier`,
   `WorkflowWaitDescriptorService`.

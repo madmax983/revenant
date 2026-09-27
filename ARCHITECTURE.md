@@ -109,12 +109,14 @@ detects stalled/orphaned instances, reclaims them, and raises stall alerts.
 
 ## Payload persistence & codec
 
-The payload seam. Save encodes and offloads. Resolve rehydrates and decodes.
-Control data (markers, status, keys) is not encoded. See
+The payload seam. Callers encode, then save. Save offloads. Resolve
+rehydrates and decodes. Control data (markers, status, keys) is not encoded. See
 [docs/payload-codec.md](docs/payload-codec.md).
 
 - `WorkflowPayloadOffload` (save / resolve seam)
-- `WorkflowPayloadCodecs` (envelope, config, fail-closed decode)
+- `WorkflowPayloadCodecs` (config, fail-closed encode/decode),
+  `WorkflowPayloadEnvelope` (stored form), `WorkflowSignalPayloads` (signal
+  encode and bulk offload)
 - `PayloadCodec`, `CodecContext`, `IdentityPayloadCodec` (public API)
 - Rehydrators that also decode: `WorkflowStatusProjection`,
   `WorkflowStatusPayloadRehydrator`; `WorkflowPayloadService` redacts

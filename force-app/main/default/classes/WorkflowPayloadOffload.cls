@@ -8,8 +8,9 @@
  * keys through {@link WorkflowPayloadOffload#validateCorrelationKey}. Extracted
  * from `WorkflowEngine`; all SOQL and DML execute in system mode so offload and
  * rehydration proceed regardless of the invoking user's object permissions.
- * It is also the codec seam: save encodes and resolve decodes through
- * {@link WorkflowPayloadCodecs}.
+ * It is also the codec seam. Resolve methods decode through
+ * {@link WorkflowPayloadCodecs}. Callers encode author data before they call
+ * `savePayloadIfNeeded`, so the offload check uses the encoded length.
  */
 public inherited sharing class WorkflowPayloadOffload {
   /**
@@ -65,7 +66,7 @@ public inherited sharing class WorkflowPayloadOffload {
    * the raw value if the offloaded document cannot be read. Then it decodes the
    * value with {@link WorkflowPayloadCodecs#decode}.
    * @param textValue the raw (possibly marker) payload string
-   * @return the resolved payload text, or the original value when not offloaded
+   * @return the resolved and decoded payload text
    */
   public static String resolvePayload(String textValue) {
     String resolved = textValue;
@@ -130,9 +131,9 @@ public inherited sharing class WorkflowPayloadOffload {
    * signals with large offloaded outputs) would otherwise issue a ContentVersion
    * query per offloaded payload and hit the SOQL-query governor limit after
    * ~100-200 rows, defeating the accessor's design of loading thousands in one
-   * call. Inline (non-marker) payloads and unresolved markers pass through
-   * unchanged, index for index with the input. Each value is then decoded with
-   * {@link WorkflowPayloadCodecs#decode}.
+   * call. Inline values and unresolved markers are not rehydrated. The method
+   * decodes each value with {@link WorkflowPayloadCodecs#decode}. The output is
+   * index-aligned with the input.
    * @param rawValues the raw (possibly marker) payload strings to resolve
    * @return the resolved payloads, index-aligned with rawValues
    */

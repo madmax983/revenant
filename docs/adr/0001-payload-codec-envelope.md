@@ -16,22 +16,25 @@ add-on. An ISV cannot assume that a subscriber org has it.
    `decode(stored, ctx)`. `CodecContext` carries the payload kind.
 2. Select the codec with `Revenant_Config__mdt.Payload_Codec__c`. Blank is the
    identity codec.
-3. Encode in `WorkflowPayloadOffload.savePayloadIfNeeded` before the offload
-   check. Decode in `resolvePayload` / `resolvePayloads` and the status
-   rehydrators. Most engine paths already use these seams.
+3. Callers encode author data before they call
+   `WorkflowPayloadOffload.savePayloadIfNeeded`. The offload check then uses
+   the encoded length. Decode in `resolvePayload` / `resolvePayloads` and the
+   status rehydrators. Most engine paths already use these seams.
 4. Wrap codec output in an engine envelope:
    `{"$codec":"<KIND>","data":"..."}`. The identity codec adds no envelope.
-5. Do not encode control data: offload markers, engine wait markers, status,
+5. Always encode external input, also input that looks like an envelope. Only
+   engine copy paths (child-completion signals) keep a stored form.
+6. Do not encode control data: offload markers, engine wait markers, status,
    compensation stack, keys and timestamps.
-6. Fail closed. Misconfiguration or a missing codec throws. The engine never
-   gives ciphertext to a step as plaintext.
-7. The dashboard does not decode. It shows a redacted placeholder.
+7. Fail closed. Misconfiguration, a config read failure or a missing codec
+   throws. The engine never gives ciphertext to a step as plaintext.
+8. The dashboard does not decode. It shows a redacted placeholder.
 
 ## Why an envelope
 
 - The engine can tell encoded values from legacy plaintext rows.
-- Encode is idempotent. Stored values that the engine copies (for example, a
-  child output that becomes a signal payload) do not get a second encode.
+- Engine copies of stored values (for example, a child output that becomes a
+  signal payload) do not get a second encode.
 - `decode` gets the same kind as `encode`, from the envelope.
 - The envelope is valid JSON, so JSON readers do not fail on it.
 
@@ -52,3 +55,5 @@ add-on. An ISV cannot assume that a subscriber org has it.
   owner record for an offload file, so they stay inline.
 - If an admin removes the codec, encoded rows cannot be read until the codec
   is set again.
+- A forged `$attachmentId` marker can point at a file of another instance.
+  This risk existed before the codec. A follow-up issue adds an owner check.

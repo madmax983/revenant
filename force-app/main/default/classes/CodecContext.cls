@@ -1,6 +1,8 @@
 /**
  * @description Tells a {@link PayloadCodec} which payload it encodes or
- * decodes. `decode` gets the same kind that `encode` got.
+ * decodes. `decode` gets the same kind that `encode` got. A copied value keeps
+ * the kind of its first encode. For example, a child output that becomes a
+ * signal payload keeps STEP_OUTPUT.
  */
 public inherited sharing class CodecContext {
   /**
@@ -8,7 +10,7 @@ public inherited sharing class CodecContext {
    * - WORKFLOW_INPUT: the input of a workflow instance.
    * - STEP_OUTPUT: a step output and the workflow output.
    * - STEP_STATE: step state: suspend state, captures and progress.
-   * - SIGNAL_PAYLOAD: an inbound or outbound signal payload.
+   * - SIGNAL_PAYLOAD: a signal payload or a resume payload.
    */
   public enum PayloadKind {
     WORKFLOW_INPUT,

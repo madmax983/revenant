@@ -179,7 +179,8 @@ public with sharing class AgentConversationWorkflowExample {
       sig.Status__c = 'Consumed';
       update as user sig;
 
-      // Resolve the stored value: it can be offloaded or encoded by a payload codec.
+      // Resolve the stored value. The engine can offload it. A payload codec can
+      // encode it.
       Map<String, Object> payload = parseJson(
         WorkflowPayloadOffload.resolvePayload(sig.Payload__c)
       );

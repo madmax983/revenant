@@ -246,8 +246,8 @@ public inherited sharing class CursorFanoutWorkflowExample {
 
       List<Object> aggregatedOutputs = new List<Object>();
       Integer totalProcessed = 0;
-      // Resolve stored outputs in bulk: they can be offloaded or encoded by a
-      // payload codec.
+      // Resolve stored outputs in bulk. The engine can offload them. A payload
+      // codec can encode them.
       List<String> rawOutputs = new List<String>();
       for (Workflow_Instance__c child : childInstances) {
         rawOutputs.add(child.Output__c);
